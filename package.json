@@ -1,0 +1,17 @@
+{
+  "name": "personal-agent",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/*"],
+  "engines": {"node": "24.15.x", "npm": "11.12.x"},
+  "scripts": {
+    "build": "npm run build --workspace=@personal-agent/storage && npm run build --workspace=@personal-agent/contracts && npm run build --workspace=@personal-agent/client && npm run build --workspace=@personal-agent/testkit",
+    "typecheck": "npm run build && npm run typecheck --workspaces",
+    "test": "npm run build && npm run test --workspaces",
+    "check": "npm run check:generated --workspace=@personal-agent/contracts && npm run typecheck && npm run test --workspaces",
+    "demo:protocol": "npm run build && node scripts/dev/protocol-demo.mjs",
+    "dev": "npm run build && node scripts/dev/storage-demo.mjs"
+  },
+  "devDependencies": {"@types/node": "24.10.1", "typescript": "5.9.3"}
+}

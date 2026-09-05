@@ -2,7 +2,7 @@
 
 版本：0.1.0-draft · 日期：2026-09-05 · 协议负责人：`goo122`
 
-状态：供 `goo122` 实现和冻结的文档草案。`zemeng` 负责消费端验证，未生成协议代码、SDK 或可运行底座。模块分工见 [MODULE_ASSIGNMENTS](MODULE_ASSIGNMENTS.md)。
+状态：MOD-02 已实现 0.1.0-alpha.1 公共包、JSON Schema、生成类型、客户端和 Fake 六场景并通过本地测试；wire 版本为 1.0.0。尚待 zemeng 实际消费端验证和交叉评审，协议未冻结。模块分工见 [MODULE_ASSIGNMENTS](MODULE_ASSIGNMENTS.md)，接入见 [testkit](../packages/testkit/README.md)。
 
 ## 1. 规范来源与冻结
 

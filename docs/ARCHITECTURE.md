@@ -1,6 +1,6 @@
 # 架构设计与技术契约
 
-版本：0.2 · 日期：2026-09-05 · 状态：建议基线，未实现
+版本：0.2 · 日期：2026-09-05 · 状态：整体建议基线；MOD-01 底座已本地验证、待评审
 
 模块所有权以 [模块分工](MODULE_ASSIGNMENTS.md) 为准；消息与接口语义以 [公共开发协议](DEVELOPMENT_PROTOCOL.md) 为准。`goo122`（A）持有底座和公共接口，`zemeng`（B）是消费端及执行模块负责人。
 
@@ -22,7 +22,7 @@
 | Secrets | Credential Manager / DPAPI | 密钥引用与用户范围凭据保护 |
 | IPC | Electron 安全桥、Named Pipe | 界面到 Runtime、Runtime 到 Windows Host |
 
-版本在技术验证后锁定，不在当前文档推定兼容性已通过。
+版本在技术验证后锁定，不在当前文档推定兼容性已通过。MOD-01 已在本机验证 Node 24.15.0、npm 11.12.1、TypeScript 5.9.3 与内置 SQLite 3.51.3；采用 npm 工作区和 node:sqlite，无额外运行时数据库依赖。该选择降低原生依赖构建成本，但不证明 Electron 内置 Node 或产品安装包兼容；相关验证仍留在对应模块。底座源码在 packages/storage，保留 src 占位目录，后续按模块登记扩展目录。详见 [存储说明](../packages/storage/README.md)。
 
 建议目录（尚未创建代码）：`apps/desktop`、`apps/runtime`、`apps/windows-host`、`plugins/obsidian`；共享模块放 `packages/contracts`、`packages/models`、`packages/connectors`、`packages/policy`、`packages/knowledge`。各子目录按模块分工独占；现有 src 占位骨架由 `goo122` 在底座工作中统一处理，不并行维护两套源代码布局。
 

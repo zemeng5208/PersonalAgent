@@ -1,0 +1,22 @@
+# 公共契约（MOD-02 / PA-004、PA-023）
+
+包版本 0.1.0-alpha.1；wire 版本 1.0.0；负责人 goo122，消费端评审 zemeng。当前是待消费端验证的预发布实现，未冻结。
+
+schema/protocol.json 是 JSON Schema Draft-07 单一来源；src/generated.ts 与 src/schema.ts 由脚本生成。覆盖 14 个操作的请求与结果、9 类事件、任务快照、工具、连接器、Evidence。fixtures/requests.json 包含 14 条有效消息与无效/伪造授权样例，可交给 C# Host 使用相同 Schema 验证。
+
+从根目录执行：
+
+```sh
+npm run generate --workspace=@personal-agent/contracts
+npm run check
+```
+
+check 会先检测生成文件漂移，再按 storage → contracts → client → testkit 顺序构建和检查。调用 parseResponse 时必须同时提供 operation 和 requestId，以校验操作对应的结果。请求业务幂等键与 requestId 分离；UI 请求中的 authorizationRef 被拒绝。
+
+encodeFrame 包含结尾 LF，帧总长最大 1 MiB；FrameDecoder 支持分片 UTF-8 和多帧输入，finish 拒绝残帧。解码只解析 JSON，宿主必须继续调用 parseRequest/parseResponse/parseEvent。FrameDecoder 不负责 Named Pipe 身份与会话权限检查。
+
+当前字段严格校验；新增可选字段也要通过同版本夹具做消费端兼容验证。尚未验证的未来版本不能仅凭主版本相同视为所有能力兼容；调用新操作先发现能力。
+
+公共端口类型见 src/ports.ts。它们是联调形状，不是权限隔离实现。StoragePort 的实际受限注入由 MOD-05 实现；连接器与工具的入参 Schema 校验不能替代账号授权。ToolContext 的 scopes/authorizationRef 只能由可信宿主注入；测试中使用固定值。
+
+新增依赖：Ajv 8.17.1（MIT）用于运行时校验，会增加客户端校验器代码和初始化成本；json-schema-to-typescript 15.0.4（MIT）仅开发时生成类型，不需进入产品包。替代方案是手写双份类型或编译期单独生成验证器；当前选择单一 Schema 和可测试生成流程。最终桌面打包体积和许可证声明留在分发验收中核验。
