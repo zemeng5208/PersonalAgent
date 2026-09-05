@@ -1,6 +1,8 @@
 # 架构设计与技术契约
 
-版本：0.1 · 日期：2026-09-05 · 状态：建议基线，未实现
+版本：0.2 · 日期：2026-09-05 · 状态：建议基线，未实现
+
+模块所有权以 [模块分工](MODULE_ASSIGNMENTS.md) 为准；消息与接口语义以 [公共开发协议](DEVELOPMENT_PROTOCOL.md) 为准。`goo122`（A）持有底座和公共接口，`zemeng`（B）是消费端及执行模块负责人。
 
 ## 1. 原则
 
@@ -22,7 +24,7 @@
 
 版本在技术验证后锁定，不在当前文档推定兼容性已通过。
 
-建议目录（尚未创建代码）：`apps/desktop`、`apps/runtime`、`apps/windows-host`、`plugins/obsidian`；共享模块放 `packages/contracts`、`packages/models`、`packages/connectors`、`packages/policy`、`packages/knowledge`。
+建议目录（尚未创建代码）：`apps/desktop`、`apps/runtime`、`apps/windows-host`、`plugins/obsidian`；共享模块放 `packages/contracts`、`packages/models`、`packages/connectors`、`packages/policy`、`packages/knowledge`。各子目录按模块分工独占；现有 src 占位骨架由 `goo122` 在底座工作中统一处理，不并行维护两套源代码布局。
 
 ## 3. 进程与信任边界
 
@@ -48,9 +50,9 @@ flowchart TD
 
 ## 4. 通用协议
 
-跨进程请求：`protocolVersion`、`requestId`、`taskId?`、`operation`、`payload`、`deadline`、`authorizationRef?`。
+跨进程请求：`kind`、`protocolVersion`、`requestId`、`taskId?`、`operation`、`payload`、`deadline`、`idempotencyKey?`。`authorizationRef` 仅由 Runtime 在内部执行调用中注入，UI 不得提交可信授权。
 
-结果：`requestId`、`status`、`data?`、`errorCode?`、`retryable`、`evidenceRefs`。
+结果：`kind`、`protocolVersion`、`requestId`、`outcome`、`data?`、`error?`、`evidenceRefs`；错误中包含 code、message、retryable。请求成功不代表任务完成。
 
 工具定义：`name`、`version`、`inputSchema`、`outputSchema`、`sideEffect`、`requiredScopes`、`idempotencySupport`、`recoverySupport`、`requiresPresence`。
 
@@ -68,7 +70,7 @@ flowchart TD
 
 ## 6. 任务、并发与恢复
 
-任务状态：`created → planning → running → waiting_approval/waiting_external → verifying → succeeded/failed/cancelled`。等待后回到执行或终止；错误状态不能直接映射为完成。
+任务主路径：`created → planning → running → verifying → succeeded`。还包括 waiting_approval、waiting_external、waiting_reconciliation、cancelling、failed、cancelled，转换规则见公共开发协议。未知写入结果必须核实；取消受理不等于已停止，错误状态不能映射为完成。
 
 只读请求可有限并发；鼠标键盘全局独占；文件、账号等写资源使用细粒度锁。取消信号贯穿模型、工具和执行器；不能取消的外部动作记录实际结果。
 
@@ -133,6 +135,8 @@ TraceGuard 通过适配层提供真实观测和受限动作，不在此阶段复
 | 平台能力矩阵 | 设计约束 | 每个平台逐项真实验证 |
 
 正式技术变更补充日期、负责人、原因、替代方案、影响和迁移方式。
+
+- 2026-09-05：按最新分工，`goo122`（A）负责底座、公共协议和 Obsidian，`zemeng`（B）负责桌面与执行模块。为支持 2—3 人独立开发，拆出模块所有权和公共协议文档；只更新文档，无代码迁移；原工作包对应关系保留在 ROADMAP。
 
 ## 13. 参考资料
 
