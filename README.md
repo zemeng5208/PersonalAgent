@@ -6,7 +6,7 @@
 
 ## 当前状态
 
-截至 2026-09-05，仓库处于需求与架构设计阶段，尚无应用实现或运行验证。文档中的技术选型为建议基线，不表示能力已接通。
+截至 2026-09-05，MOD-01 工程与存储底座、MOD-02 公共协议与 Fake 联调 SDK 已本地实现并通过 26 项联合测试，待交叉评审与集成。SDK 为 0.1.0-alpha.1，协议未冻结；尚无桌面应用或真实模型能力。完整进度见 ROADMAP。
 
 ## 文档入口
 
@@ -22,6 +22,21 @@
 
 ## 开发入口
 
-默认通过分支与 Pull Request 协作，不直接向主分支提交实现。仓库尚未建立构建、运行和测试命令；基础工程完成后再补充经实际执行验证的命令。
+默认通过分支与 Pull Request 协作，不直接向主分支提交实现。当前基线为 Node.js 24.15.0、npm 11.12.1；开发依赖由 package-lock.json 锁定。
+
+在仓库根目录运行（PowerShell 中如脚本策略阻止 npm，可使用 npm.cmd）：
+
+```sh
+npm ci
+npm run check
+npm run dev
+npm run demo:protocol
+```
+
+check 校验生成类型一致性，按依赖顺序构建并执行严格类型检查与两个模块的联合测试。dev 是一次性存储示例，结束后退出；重复启动时 persistedRuns 递增，数据位于 data/local/foundation-demo.sqlite。demo:protocol 展示 mock 消费者取消往返和连接器注册调用。这些不是桌面或真实 Runtime 启动命令。
+
+MOD-02 接入入口：[contracts](packages/contracts/README.md)、[client](packages/client/README.md)、[testkit 六场景与验证](packages/testkit/README.md)。
+
+当前源码入口为 packages/storage/src，保留的 src/.gitkeep 不承载另一套实现。模块测试和夹具位于 packages/storage/test；开发缓存与验证产物位于项目内 .cache，并已忽略。详见 [存储包说明](packages/storage/README.md)。
 
 文档相对链接以仓库内位置为准；不在可公开内容中记录个人绝对路径、账号或密钥。

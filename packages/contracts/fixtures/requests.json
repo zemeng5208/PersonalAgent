@@ -1,0 +1,223 @@
+{
+  "wireVersion": "1.0.0",
+  "verification": "mock",
+  "valid": [
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
+      "requestId": "fixture-0",
+      "operation": "system.handshake",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {
+        "supportedMajor": 1,
+        "clientCapabilities": []
+      }
+    },
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
+      "requestId": "fixture-1",
+      "operation": "task.submit",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {
+        "goal": "查找项目计划",
+        "conversationId": "fixture-conversation"
+      },
+      "idempotencyKey": "fixture-key"
+    },
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
+      "requestId": "fixture-2",
+      "operation": "task.get",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {
+        "taskId": "fixture-task"
+      }
+    },
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
+      "requestId": "fixture-3",
+      "operation": "task.cancel",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {
+        "taskId": "fixture-task",
+        "reason": "user"
+      }
+    },
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
+      "requestId": "fixture-4",
+      "operation": "event.subscribe",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {
+        "streamId": "tasks",
+        "afterSequence": 0
+      }
+    },
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
+      "requestId": "fixture-5",
+      "operation": "capability.list",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {}
+    },
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
+      "requestId": "fixture-6",
+      "operation": "settings.get",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {
+        "namespace": "ui"
+      }
+    },
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
+      "requestId": "fixture-7",
+      "operation": "settings.update",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {
+        "namespace": "ui",
+        "expectedRevision": 0,
+        "patch": {
+          "theme": "dark"
+        }
+      }
+    },
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
+      "requestId": "fixture-8",
+      "operation": "authorization.respond",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {
+        "approvalId": "fixture-approval",
+        "decision": "deny",
+        "expectedRevision": 1
+      }
+    },
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
+      "requestId": "fixture-9",
+      "operation": "tool.invoke",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {
+        "toolName": "knowledge.search",
+        "toolVersion": "1.0.0",
+        "arguments": {
+          "query": "计划"
+        },
+        "scopeRef": "fixture-scope"
+      }
+    },
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
+      "requestId": "fixture-10",
+      "operation": "connector.connect",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {
+        "connectorId": "fixture",
+        "accountLabel": "test"
+      }
+    },
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
+      "requestId": "fixture-11",
+      "operation": "connector.disconnect",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {
+        "accountRef": "fixture-account"
+      }
+    },
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
+      "requestId": "fixture-12",
+      "operation": "voice.start",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {
+        "mode": "push_to_talk",
+        "deviceRef": "fixture-device"
+      }
+    },
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
+      "requestId": "fixture-13",
+      "operation": "voice.stop",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {
+        "voiceSessionId": "fixture-voice",
+        "reason": "user"
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
+      "requestId": "fixture-1",
+      "operation": "task.submit",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {
+        "goal": "查找项目计划",
+        "conversationId": "fixture-conversation"
+      },
+      "idempotencyKey": "fixture-key",
+      "authorizationRef": "forged"
+    },
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
+      "requestId": "fixture-1",
+      "operation": "task.submit",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {
+        "goal": "  ",
+        "conversationId": "x"
+      },
+      "idempotencyKey": "fixture-key"
+    },
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
+      "requestId": "fixture-8",
+      "operation": "authorization.respond",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {
+        "approvalId": "x",
+        "decision": "allow_forever",
+        "expectedRevision": 1
+      }
+    },
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
+      "requestId": "fixture-3",
+      "operation": "task.cancel",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {
+        "taskId": 12
+      }
+    },
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
+      "requestId": "fixture-1",
+      "operation": "task.submit",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {
+        "goal": "查找项目计划",
+        "conversationId": "fixture-conversation"
+      }
+    }
+  ]
+}

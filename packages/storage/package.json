@@ -1,0 +1,12 @@
+{
+  "name": "@personal-agent/storage",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {".": {"types": "./dist/index.d.ts", "import": "./dist/index.js"}},
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test test/storage.test.mjs"
+  }
+}
