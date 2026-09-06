@@ -53,7 +53,7 @@ else {
   // voice provider, so it reports unavailable instead of claiming that speech stopped.
   stopButton.onclick=async()=>{window.speechSynthesis?.cancel();try{const result=await invoke('voice.stop');if(!result?.stopped)report(result?.reason??'语音供应商尚未连接');}catch(err){report(err);}};
   root.querySelector('#tasks').onclick=async e=>{const b=e.target.closest('[data-action]');if(!b)return;b.disabled=true;try{await invoke(b.dataset.action,b.dataset.id);}catch(err){report(err);}finally{b.disabled=false;}};
-  render=data=>{current=data;const task=data.tasks.at(-1);root.querySelector('#connection').textContent=data.connection;root.querySelector('#state').textContent=task?stateNames[task.state]:'待机';
+  render=data=>{current=data;const task=data.tasks.at(-1);root.querySelector('#connection').textContent=data.fakeModel?data.connection+' · Fake Model':data.connection;root.querySelector('#state').textContent=task?stateNames[task.state]:'待机';
     root.querySelector('#error').textContent=data.connectionError??'';
     const modelReady=data.model?.status==='ready';
     // Thinking controls are a local test surface.  They must remain draggable

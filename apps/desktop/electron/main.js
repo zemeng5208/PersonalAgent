@@ -5,11 +5,13 @@ import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'no
 import {EventCursor} from '@personal-agent/client';
 import {register} from './runtime.js';
 import {panelBounds, clampOrb} from './placement.js';
+import {createFakeTextProvider, startTextTask} from './text-task.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
 const fakeMode = process.argv.includes('--fake-runtime');
-if (fakeMode) app.setPath('userData', path.resolve(dir, '../.cache/user-data'));
+const fakeModelMode = process.argv.includes('--fake-model') || process.env.PA_DESKTOP_MODEL_MODE === 'fake';
+if (fakeMode || fakeModelMode) app.setPath('userData', path.resolve(dir, '../.cache/user-data'));
 
 let runtime;
 let runtimeConnection;
@@ -50,12 +52,14 @@ let model = {
 };
 let thinking = {depth: 1, fast: false, applied: false, reason: 'Runtime 尚未公开思考参数契约'};
 const tasks = new Map();
+const activeTextTasks = new Map();
 const approvals = new Map();
 
 function snapshot() {
   return {
     connection: connectionLabel,
     connectionError: runtimeError,
+    fakeModel: fakeModelMode,
     fake: fakeMode,
     pinned,
     audioLevel,
@@ -266,6 +270,16 @@ function updateThinking(input) {
 }
 
 async function initializeModelFromEnvironment() {
+  if (fakeModelMode) {
+    model = {
+      ...model,
+      provider: 'fake', label: 'Fake Model · 离线测试', status: 'ready', verification: 'mock',
+      configured: true, keyConfigured: false, persisted: false,
+      capabilities: {text: true, streaming: false, toolCalling: false, structuredOutput: false, vision: false},
+      reason: '显式 Fake Model 模式；不会调用真实 AI 或网络服务', lastTestAt: null, latencyMs: 0,
+    };
+    return;
+  }
   if (!modelConfig.baseUrl || !modelConfig.apiKey) return;
   try {
     await configurePangu(modelConfig, {publishState: false, persist: false});
@@ -274,6 +288,21 @@ async function initializeModelFromEnvironment() {
   }
 }
 
+async function executeTextTask(taskId, goal) {
+  if (fakeMode || activeTextTasks.has(taskId)) return;
+  const {UnavailableModelProvider} = await import('@personal-agent/models');
+  const provider = fakeModelMode
+    ? createFakeTextProvider()
+    : panguProvider ?? new UnavailableModelProvider('pangu', modelConfig.model);
+  const execution = startTextTask(runtime, taskId, goal, provider);
+  activeTextTasks.set(taskId, execution);
+  try {
+    await execution;
+  } finally {
+    activeTextTasks.delete(taskId);
+    await refresh(taskId).catch(() => {});
+  }
+}
 async function refresh(taskId) {
   const task = await client.call('task.get', {taskId});
   tasks.set(taskId, task);
@@ -388,9 +417,15 @@ async function action(event, name, payload) {
   if (!client) throw Error('Runtime 未连接，此操作尚不可用');
   if (name === 'task.submit') {
     if (typeof payload !== 'string' || !payload.trim() || payload.length > 10000) throw Error('请输入有效任务');
-    const result = await client.call('task.submit', {goal: payload.trim(), conversationId: 'desktop-session'}, {idempotencyKey: crypto.randomUUID()});
+    const goal = payload.trim();
+    const result = await client.call('task.submit', {goal, conversationId: 'desktop-session'}, {idempotencyKey: crypto.randomUUID()});
     pinned = true;
-    return refresh(result.taskId);
+    const task = await refresh(result.taskId);
+    if (!fakeMode) void executeTextTask(result.taskId, goal).catch(error => {
+      runtimeError = error instanceof Error ? error.message : '文字任务启动失败';
+      publish();
+    });
+    return task;
   }
   if (name === 'task.cancel') {
     if (typeof payload !== 'string' || !tasks.has(payload)) throw Error('Unknown task');
