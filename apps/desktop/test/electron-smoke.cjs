@@ -1,0 +1,113 @@
+const assert=require('node:assert/strict');
+const path=require('node:path');
+const fs=require('node:fs');
+const {_electron}=require('playwright');
+(async()=>{
+ const output=path.resolve(__dirname,'../.cache/qa');fs.mkdirSync(output,{recursive:true});
+ const localElectron=path.resolve(__dirname,'../node_modules/electron/dist/electron.exe');
+ const workspaceElectron=path.resolve(__dirname,'../../../node_modules/electron/dist/electron.exe');
+ const executablePath=fs.existsSync(localElectron)?localElectron:workspaceElectron;
+ const fake=process.env.PA_DESKTOP_FAKE!=='0';
+ const args=[path.resolve(__dirname,'..')];if(fake)args.push('--fake-runtime');
+ const app=await _electron.launch({executablePath,args,env:{...process.env,ELECTRON_RUN_AS_NODE:undefined,PA_DESKTOP_EPHEMERAL_MODEL:'1'}});
+ const errors=[];
+ try {
+   await app.firstWindow();
+   let orb;
+   for(let attempt=0;attempt<100;attempt++) {
+     orb=app.windows().find(page=>page.url().includes('mode=orb'));
+     if(orb) break;
+     await new Promise(resolve=>setTimeout(resolve,100));
+   }
+   assert.ok(orb,'orb window loaded');await orb.waitForSelector('canvas');
+   for(const page of app.windows())page.on('pageerror',e=>errors.push(e.message));
+   assert.equal(await orb.title(),'PersonalAgent');
+   assert.equal(await orb.evaluate(()=>typeof require),'undefined');
+   assert.equal(await orb.locator('canvas').evaluate(c=>getComputedStyle(c).filter),'none');
+   await orb.screenshot({path:path.join(output,'orb.png'),omitBackground:true});
+   // Test-only wallpaper makes the approved underlay visible on a light desktop.
+   await orb.evaluate(()=>document.body.style.background='linear-gradient(150deg,#e7e4dd,#d5dbdd)');
+   await orb.screenshot({path:path.join(output,'orb-light-underlay.png')});
+   await orb.evaluate(()=>document.body.style.background='');
+   await app.evaluate(({BrowserWindow,screen})=>{
+     const win=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('mode=orb'));
+     const p=screen.getCursorScreenPoint();win.setPosition(p.x-56,p.y-56);
+   });
+   await orb.waitForTimeout(200);
+   assert.equal(await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('mode=panel')).isVisible()),true);
+   await app.evaluate(({BrowserWindow,screen})=>{
+     const win=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('mode=orb'));
+     const p=screen.getCursorScreenPoint();win.setPosition(p.x-56,p.y-56-120);
+   });
+   await orb.waitForTimeout(800);
+   assert.equal(await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('mode=panel')).isVisible()),false);
+   await orb.evaluate(()=>window.desktop.invoke('orb.dragStart'));
+   await orb.waitForTimeout(200);
+   assert.equal(await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('mode=panel')).isVisible()),false);
+   await orb.evaluate(()=>window.desktop.invoke('orb.dragEnd'));
+   await orb.evaluate(()=>window.desktop.invoke('orb.open'));
+   let panel=app.windows().find(p=>p.url().includes('mode=panel'));
+   await panel.waitForSelector('textarea');
+   assert.equal(await panel.evaluate(()=>innerWidth),372);
+   assert.match(await panel.locator('#connection').innerText(),fake?/Fake Runtime/:/本地 Runtime/);
+   await panel.locator('#model').click();
+   assert.equal(await panel.locator('#mm-slider').isDisabled(),false);
+   await panel.locator('#mm-slider').fill('3');
+   await panel.locator('#mm-slider').dispatchEvent('input');
+   await panel.waitForTimeout(100);
+   const panelThinking=await panel.evaluate(()=>window.desktop.invoke('snapshot'));
+   assert.equal(panelThinking.value.thinking.depth,3);
+   await panel.locator('#model').click();
+   await panel.locator('textarea').fill('测试原版桌面方案接入');await panel.locator('#send').click();
+   await panel.waitForSelector('[data-action="task.cancel"]');
+   assert.match(await panel.locator('#tasks').innerText(),/已创建/);
+   if(fake){
+     await panel.locator('[data-action="test.advance"]').click();
+     await panel.waitForFunction(()=>document.querySelector('#state').textContent==='思考中');
+   } else {
+     await panel.waitForFunction(()=>document.querySelector('#state').textContent==='已创建');
+   }
+   await panel.screenshot({path:path.join(output,'panel.png')});
+   const opened=app.waitForEvent('window');
+   await panel.locator('#admin').click();
+   const admin=await opened;
+   await admin.waitForURL(/mode=admin/);
+   await admin.waitForSelector('[data-page="tasks"]');await admin.locator('[data-page="tasks"]').click();
+   assert.match(await admin.locator('tbody').innerText(),fake?/思考中/:/已创建/);
+   await admin.locator('[data-page="settings"]').click();
+   await admin.waitForSelector('#model-config-form');
+   assert.equal(await admin.locator('#thinking-depth').count(),1);
+   assert.equal(await admin.locator('#model-test').isDisabled(),true);
+   await admin.locator('#model-base-url').fill('https://pangu.example.test');
+   await admin.locator('#model-name').fill('pangu-nlp-n1-32k');
+   await admin.locator('#model-deployment').fill('desktop-test');
+   await admin.locator('#model-api-key').fill('test-key-not-used');
+   await admin.locator('#model-config-form').evaluate(form=>form.requestSubmit());
+   await admin.waitForTimeout(150);
+   assert.equal(await admin.locator('#model-test').isDisabled(),false);
+   await admin.locator('#thinking-depth').fill('4');
+   await admin.locator('#thinking-depth').dispatchEvent('input');
+   await admin.waitForTimeout(100);
+   const thinkingSnapshot=await admin.evaluate(()=>window.desktop.invoke('snapshot'));
+   assert.equal(thinkingSnapshot.value.thinking.depth,4);
+   await admin.locator('[data-page="tasks"]').click();
+   await admin.screenshot({path:path.join(output,'admin.png')});
+   await admin.close();
+   const preserved=await panel.evaluate(()=>window.desktop.invoke('snapshot'));
+   assert.equal(preserved.value.tasks.at(-1).state,fake?'planning':'created');
+   // Local Runtime persists earlier tasks. Cancel the newly submitted task, not a stale disabled row.
+   const currentCancel=panel.locator('[data-action="task.cancel"]:not(:disabled)').last();
+   const currentTaskId=await currentCancel.getAttribute('data-id');
+   const currentTaskCancel=panel.locator(`[data-action="task.cancel"][data-id="${currentTaskId}"]`);
+   await currentTaskCancel.click();
+   await panel.waitForFunction(()=>document.querySelector('#state').textContent==='正在取消');
+   if(fake){
+     await panel.locator('[data-action="test.advance"]').click();
+     await panel.waitForFunction(()=>document.querySelector('#state').textContent==='已取消');
+   }
+   assert.equal(await currentTaskCancel.isDisabled(),true);
+   assert.equal(await panel.locator('#stop').isDisabled(),true);
+   assert.deepEqual(errors,[]);
+   console.log(`PASS: ${fake?'Fake':'local'} Runtime Electron windows, native 90px hover/collapse, drag suppression, isolated preload, ORB-02, tray host, 372px panel, event-driven SDK submit/cancel, independent admin close, no page errors`);
+ } finally {await app.close();}
+})();
