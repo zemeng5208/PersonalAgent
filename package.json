@@ -3,10 +3,17 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/*", "packages/connectors/*", "apps/*"],
-  "engines": {"node": "24.15.x", "npm": "11.12.x"},
+  "workspaces": [
+    "packages/*",
+    "packages/connectors/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": "24.15.x",
+    "npm": "11.12.x"
+  },
   "scripts": {
-    "build": "npm run build --workspace=@personal-agent/storage && npm run build --workspace=@personal-agent/contracts && npm run build --workspace=@personal-agent/client && npm run build --workspace=@personal-agent/testkit && npm run build --workspace=@personal-agent/policy && npm run build --workspace=@personal-agent/tool-gateway && npm run build --workspace=@personal-agent/connector-host && npm run build --workspace=@personal-agent/runtime && npm run build --workspace=@personal-agent/weather && npm run build --workspace=@personal-agent/feeds",
+    "build": "npm run build --workspace=@personal-agent/storage && npm run build --workspace=@personal-agent/contracts && npm run build --workspace=@personal-agent/client && npm run build --workspace=@personal-agent/testkit && npm run build --workspace=@personal-agent/policy && npm run build --workspace=@personal-agent/tool-gateway && npm run build --workspace=@personal-agent/connector-host && npm run build --workspace=@personal-agent/weather && npm run build --workspace=@personal-agent/feeds && npm run build --workspace=@personal-agent/runtime && npm run build --workspace=@personal-agent/models && npm run build --workspace=@personal-agent/agents",
     "typecheck": "npm run build && npm run typecheck --workspaces",
     "test": "npm run build && npm run test --workspaces",
     "check": "npm run check:generated --workspace=@personal-agent/contracts && npm run typecheck && npm run test --workspaces",
@@ -14,5 +21,8 @@
     "demo:runtime": "npm run build && node apps/runtime/examples/task-lifecycle.mjs",
     "dev": "npm run build && node scripts/dev/storage-demo.mjs"
   },
-  "devDependencies": {"@types/node": "24.10.1", "typescript": "5.9.3"}
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "typescript": "5.9.3"
+  }
 }
