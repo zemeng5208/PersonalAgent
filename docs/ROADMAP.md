@@ -31,9 +31,9 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；`Pot
 | MOD-08 | M2 | todo | 未启动 |
 | MOD-09 | M4 | todo | 未启动 |
 | MOD-10 | M4 后研究，无交付日期承诺 | todo | 未启动 |
-| MOD-11 | M1 | todo | `zemeng` 已确定，未启动 |
-| MOD-12 | M1 | todo | `zemeng` 已确定，未启动 |
-| MOD-13 | M1 基础页面、M2 配置闭环 | todo | `zemeng` 已确定，未启动 |
+| MOD-11 | M1 | in_progress | `zemeng`：桌面窗口增量待评审；托盘、根装配未完成 |
+| MOD-12 | M1 | in_progress | `zemeng`：原版 ORB-02 / 面板增量待评审；真实事件接入未完成 |
+| MOD-13 | M1 基础页面、M2 配置闭环 | in_progress | `zemeng`：独立后台与真实空状态增量待评审；配置闭环未完成 |
 | MOD-14 | M1 基础、M2 验收 | todo | `zemeng` 已确定，未启动 |
 | MOD-15 | M4 后扩展 | todo | `zemeng` 已确定，未启动 |
 | MOD-16 | M2 TraceGuard 所需只读端口、M4 电脑操作 | todo | `zemeng` 已确定，未启动 |
@@ -171,3 +171,13 @@ MOD-03 已通过 PR #5 集成，PR #4 与 PR #7 已合并；当前由 goo122 在
 - 验收：模型测试 4/4；Agent 测试 4/4；Fake 天气请求经过 Runtime、Policy、ToolGateway；模型不能提供授权；unknown 不生成成功回答；仓库 npm run check、npm run dev、npm run demo:protocol、npm run demo:runtime 均通过。
 - 证据：仅使用 Fake Provider 和本地 Runtime；没有真实盘古、付费模型或网络调用。
 - 限制：真实盘古适配与 PA-003 真实请求验收、多 Agent 专家调度、流式输出和真实连接器仍未完成；需创建 PR 并由非作者评审。
+
+### DESKTOP-01 当前工作包（2026-09-05）
+
+- 任务：原版定稿移植；MOD-11/12/13；PA-001/002/004。负责人 zemeng；待评审者 goo122（未发出评审请求）。
+- 分支 codex/desktop-final；依赖底座提交 002e88a，公共客户端/契约 0.1.0-alpha.1。根配置、锁文件与公共 Schema 保持原样。
+- 范围：apps/desktop 内 Electron 窗口、orb/conversation/admin/ui、模块入口与测试；状态 review，未提交、未合并，不代表整个模块完成。
+- 实测：底座 build；关键测试 2/2；Electron 44.2.0 原生 90px 热区、离开收起、拖动抑制、372px 面板、SDK 提交取消、独立后台关闭后任务保留及取消确认终态；无页面异常。实际截图已直接观察。
+- 外观证据：恢复后的原版与产品待机球体在原稿 132px 画布下逐像素一致，170 点。恢复覆盖 10 个设计源码/说明文件，修改前内容另留备份。
+- 环境：Windows，Node 26.3.0 / npm 11.16.0；与底座声明的 Node 24.15.x 不同，目标 Node 版本待集成环境验证。
+- 继续入口：[桌面模块说明](../apps/desktop/README.md)。真实 Runtime、语音、模型、账号配置、物理多屏/DPI、系统背景模糊及分发仍待接入/验收；fake 仅在显式联调模式使用。

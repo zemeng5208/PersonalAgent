@@ -1,0 +1,533 @@
+/* Shared tokens ported from the approved PersonalAgent design. */
+
+/* ============ 主题 A：墨核 · 冷光（默认） ============ */
+:root {
+  color-scheme: dark;
+
+  --bg: #0b0d10;
+  --bg-2: #0e1116;
+  --surface: #12161c;
+  --surface-2: #171c23;
+  --surface-3: #1d232b;
+  --fg: #f5f8fb;
+  --fg-2: #dbe2ea;
+  --muted: #a4aeb9;
+  --faint: #808a97;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.15);
+
+  --accent: #52c7bd;
+  --accent-hover: #6bd6cd;
+  --accent-ink: #05201e;
+  --accent-soft: rgba(82, 199, 189, 0.14);
+
+  --success: #4fbf7a;
+  --warn: #e6b955;
+  --danger: #ef6a72;
+  --info: #79a6e8;
+
+  --orb-core-1: #05070a;
+  --orb-core-2: #10151c;
+  --orb-particle: #ffffff;
+
+  /* 苹果式玻璃材质：面板层统一用它，密集数据表用较实的 surface 层 */
+  --glass-bg: rgba(23, 26, 31, 0.66);
+  --glass-bg-strong: rgba(17, 20, 25, 0.82);
+  --glass-tint: rgba(255, 255, 255, 0.045);
+  --glass-border: rgba(255, 255, 255, 0.16);
+  --glass-hairline: rgba(255, 255, 255, 0.09);
+  --glass-filter: blur(42px) saturate(1.8);
+  --glass-inner: inset 0 1px 0 rgba(255, 255, 255, 0.16), inset 0 -1px 0 rgba(0, 0, 0, 0.34);
+  --glass-scene: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0) 26%);
+  --composer-bg: rgba(255, 255, 255, 0.055);
+  --fg-placeholder: rgba(245, 248, 251, 0.42);
+  --r-glass: 20px;
+  --r-glass-sm: 13px;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 12px 32px -8px rgba(0, 0, 0, 0.62);
+  --shadow-3: 0 24px 64px -12px rgba(0, 0, 0, 0.72);
+
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-pill: 999px;
+
+  --font-ui: "Segoe UI Variable Text", "Microsoft YaHei UI", "Microsoft YaHei",
+    "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
+  --font-num: "Segoe UI Variable Display", "Cascadia Mono", "JetBrains Mono",
+    Consolas, monospace;
+
+  --fs-11: 11px;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-16: 16px;
+  --fs-20: 20px;
+  --fs-26: 26px;
+  --fs-34: 34px;
+
+  --dur-instant: 80ms;
+  --dur-fast: 150ms;
+  --dur-enter: 240ms;
+  --dur-morph: 400ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-exit: cubic-bezier(0.2, 0, 0.6, 1);
+}
+
+/* ============ 主题 B：墨核 · 琥珀 ============ */
+:root[data-theme="amber"] {
+  --accent: #e5a13c;
+  --accent-hover: #f0b45c;
+  --accent-ink: #241503;
+  --accent-soft: rgba(229, 161, 60, 0.14);
+  --warn: #f0c86b;
+}
+
+/* ============ 主题 B2：墨核 · 赤铜 ============ */
+:root[data-theme="vermilion"] {
+  --accent: #e2725b;
+  --accent-hover: #ef8a74;
+  --accent-ink: #2a0e08;
+  --accent-soft: rgba(226, 114, 91, 0.14);
+  --danger: #f062c0; /* 失败色让位给洋红，避免与赤铜混淆 */
+}
+
+/* ============ 主题 B3：墨核 · 石绿 ============ */
+:root[data-theme="lime"] {
+  --accent: #a3c644;
+  --accent-hover: #b6d75f;
+  --accent-ink: #16200a;
+  --accent-soft: rgba(163, 198, 68, 0.14);
+  --success: #4fbf7a;
+}
+
+/* ============ 玻璃档位（材质强度，不改变语义色） ============ */
+:root[data-glass="thin"] {
+  --glass-bg: rgba(26, 30, 37, 0.34);
+  --glass-bg-strong: rgba(20, 24, 30, 0.5);
+  --glass-filter: blur(14px) saturate(1.5);
+  --glass-inner: inset 0 1px 0 rgba(255, 255, 255, 0.1), inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+}
+
+:root[data-glass="thick"] {
+  --glass-bg: rgba(24, 28, 34, 0.74);
+  --glass-bg-strong: rgba(18, 21, 26, 0.86);
+  --glass-filter: blur(44px) saturate(1.9);
+  --glass-inner: inset 0 1px 0 rgba(255, 255, 255, 0.16), inset 0 -1px 0 rgba(0, 0, 0, 0.32);
+}
+
+/* ============ 主题 C：素白 · 深青 ============ */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #f6f6f4;
+  --bg-2: #efefec;
+  --surface: #fdfdfb;
+  --surface-2: #f4f4f1;
+  --surface-3: #eaeae6;
+  --fg: #15181b;
+  --fg-2: #3d434b;
+  --muted: #6a7179;
+  --faint: #949aa2;
+  --border: rgba(0, 0, 0, 0.1);
+  --border-strong: rgba(0, 0, 0, 0.2);
+
+  --accent: #0f6b62;
+  --accent-hover: #0b544d;
+  --accent-ink: #f2fbf9;
+  --accent-soft: rgba(15, 107, 98, 0.1);
+
+  --success: #2c7a4b;
+  --warn: #92610f;
+  --danger: #b0374a;
+  --info: #2f5f9e;
+
+  --orb-core-1: #16191d;
+  --orb-core-2: #2a3038;
+  --orb-particle: #151a1f;
+
+  --glass-bg: rgba(253, 253, 251, 0.62);
+  --glass-bg-strong: rgba(252, 252, 250, 0.8);
+  --glass-tint: rgba(0, 0, 0, 0.02);
+  --glass-border: rgba(0, 0, 0, 0.09);
+  --glass-hairline: rgba(0, 0, 0, 0.06);
+  --glass-inner: inset 0 1px 0 rgba(255, 255, 255, 0.85), inset 0 -1px 0 rgba(0, 0, 0, 0.05);
+  --glass-scene: linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 30%);
+  --composer-bg: rgba(0, 0, 0, 0.035);
+  --fg-placeholder: rgba(21, 24, 27, 0.42);
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --shadow-2: 0 12px 32px -10px rgba(0, 0, 0, 0.18);
+  --shadow-3: 0 24px 64px -14px rgba(0, 0, 0, 0.22);
+}
+
+/* ============ 基础排版 ============ */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: var(--fs-14);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+h1 {
+  font-size: var(--fs-26);
+}
+h2 {
+  font-size: var(--fs-20);
+}
+h3 {
+  font-size: var(--fs-16);
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--fg);
+  text-decoration: none;
+  border-bottom: 1px solid var(--border-strong);
+}
+
+a:hover {
+  color: var(--accent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-xs);
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+svg {
+  display: block;
+}
+
+.mono {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+}
+
+.eyebrow {
+  font-size: var(--fs-11);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+  font-family: var(--font-num);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: var(--fs-12);
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+}
+.skip-link:focus {
+  left: 12px;
+  top: 12px;
+  z-index: 999;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+}
+
+/* ============ 按钮 ============ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--fs-13);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard),
+    transform var(--dur-instant) var(--ease-standard);
+}
+
+.btn:hover {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn[disabled],
+.btn[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.btn-primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--fg-2);
+}
+
+.btn-danger {
+  background: transparent;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.btn-sm {
+  padding: 4px 9px;
+  font-size: var(--fs-12);
+}
+
+.btn-icon {
+  padding: 6px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.btn-icon:hover {
+  color: var(--fg);
+  background: var(--surface-3);
+}
+
+kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--r-xs);
+  background: var(--surface-3);
+  font-family: var(--font-num);
+  font-size: var(--fs-11);
+  color: var(--fg-2);
+}
+
+/* ============ 容器 / 标记 ============ */
+.orb-stage { position: relative; display: block; }
+.orb-stage canvas { display: block; width: 100%; height: 100%; pointer-events: none; }
+
+/* 苹果式玻璃：所有面板容器统一使用 */
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-filter);
+  -webkit-backdrop-filter: var(--glass-filter);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-inner), var(--shadow-2);
+  border-radius: var(--r-glass);
+}
+
+.glass-strong {
+  background: var(--glass-bg-strong);
+  backdrop-filter: var(--glass-filter);
+  -webkit-backdrop-filter: var(--glass-filter);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-inner), var(--shadow-3);
+  border-radius: var(--r-glass);
+}
+
+.card {
+  padding: 16px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-glass-sm);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-filter);
+  -webkit-backdrop-filter: var(--glass-filter);
+  box-shadow: var(--glass-inner);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wrap {
+  flex-wrap: wrap;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  font-size: var(--fs-12);
+  color: var(--fg-2);
+  white-space: nowrap;
+}
+
+.badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+.badge[data-tone="ready"] {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 40%, transparent);
+}
+.badge[data-tone="warn"] {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+}
+.badge[data-tone="danger"] {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+.badge[data-tone="info"] {
+  color: var(--info);
+  border-color: color-mix(in srgb, var(--info) 40%, transparent);
+}
+.badge[data-tone="off"] {
+  color: var(--muted);
+}
+
+/* 草案水印：所有页面可见，明确证据等级 */
+.draft-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-sm);
+  font-family: var(--font-num);
+  font-size: var(--fs-11);
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.chip {
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  color: var(--fg-2);
+  font: inherit;
+  font-size: var(--fs-12);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--dur-fast) var(--ease-standard);
+}
+
+.chip:hover {
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+
+.chip[aria-pressed="true"],
+.chip[data-active="true"] {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+  color: var(--fg);
+  font-weight: 600;
+}
+
+/* ============ 表格 ============ */
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-13);
+}
+
+table.data th {
+  padding: 8px 10px;
+  text-align: left;
+  font-weight: 500;
+  font-size: var(--fs-11);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+table.data td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-2);
+  vertical-align: top;
+}
+
+table.data tbody tr:hover {
+  background: var(--surface-2);
+}
+
+/* ============ 动效降级 ============ */
+/* 系统偏好或用户手动「降低动效」：轨道动画静止，状态改用颜色 + 标签表达 */
+:root[data-calm="true"] .orb-stage,
+:root[data-calm="true"] .anim-pulse {
+  animation-play-state: paused !important;
+}
+
+:root[data-calm="true"] * {
+  transition-duration: var(--dur-fast) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

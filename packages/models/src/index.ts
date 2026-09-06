@@ -240,6 +240,23 @@ function panguError(status: number, retryAfter: string | null): ProtocolError {
   return new ProtocolError('EXTERNAL_FAILURE', `Pangu request failed with HTTP ${status}`, status === 408 || status >= 500);
 }
 
+/**
+ * Resolve the chat-completions path without making callers duplicate provider
+ * URL knowledge.  The original Pangu endpoint is rooted at the host and uses
+ * `/api/v2/chat/completions`; ModelArts MaaS exposes the OpenAI-compatible
+ * surface under an endpoint such as `/openai/v1`, where the endpoint already
+ * contains the version prefix and only `/chat/completions` should be added.
+ */
+function panguCompletionsUrl(baseUrl: string): string {
+  const normalized = baseUrl.replace(/\/+$/, '');
+  let pathname = '';
+  try { pathname = new URL(normalized).pathname.replace(/\/+$/, '').toLowerCase(); } catch { /* constructor validates the URL */ }
+  if (pathname.endsWith('/openai/v1') || pathname.endsWith('/api/v2') || pathname.endsWith('/v1')) {
+    return `${normalized}/chat/completions`;
+  }
+  return `${normalized}/api/v2/chat/completions`;
+}
+
 /** Pangu V2 OpenAI-format text provider. Credentials are supplied by the trusted host. */
 export class PanguModelProvider implements ModelProvider {
   readonly deployment: ModelDeployment;
@@ -284,7 +301,7 @@ export class PanguModelProvider implements ModelProvider {
     request.signal.addEventListener('abort', abort, {once: true});
     const started = Date.now();
     try {
-      const response = await this.request(`${this.baseUrl}/api/v2/chat/completions`, {
+      const response = await this.request(panguCompletionsUrl(this.baseUrl), {
         method: 'POST',
         headers: {'content-type': 'application/json', authorization: `Bearer ${key}`},
         body: JSON.stringify({model: this.model, messages, max_tokens: request.maxOutputTokens, stream: false}),

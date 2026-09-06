@@ -66,6 +66,16 @@ test('Pangu V2 provider maps a text completion and keeps usage metadata', async 
   assert.equal(result.deployment.verification, 'conditional');
 });
 
+test('Pangu provider preserves an OpenAI-compatible versioned endpoint', async () => {
+  let receivedUrl;
+  const provider = new PanguModelProvider(panguOptions(async url => {
+    receivedUrl = url;
+    return panguResponse({choices: [{message: {content: 'hello'}, finish_reason: 'stop'}]});
+  }, {baseUrl: 'https://api.modelarts-maas.com/openai/v1'}));
+  await provider.complete(request());
+  assert.equal(receivedUrl, 'https://api.modelarts-maas.com/openai/v1/chat/completions');
+});
+
 test('Pangu provider requires a non-empty injected API key and never logs it in errors', async () => {
   let calls = 0;
   const provider = new PanguModelProvider(panguOptions(async () => {
