@@ -1,0 +1,12 @@
+export function panelBounds(orb, area) {
+  const width = Math.min(372, area.width);
+  const height = Math.min(520, area.height);
+  const right = orb.x + orb.width + 8;
+  const x = right + width <= area.x + area.width ? right : orb.x - width - 8;
+  return { x: Math.round(Math.max(area.x, Math.min(x, area.x + area.width - width))),
+    y: Math.round(Math.max(area.y, Math.min(orb.y - 60, area.y + area.height - height))), width, height };
+}
+export function clampOrb(bounds, area) {
+  return { ...bounds, x: Math.round(Math.max(area.x, Math.min(bounds.x, area.x + area.width - bounds.width))),
+    y: Math.round(Math.max(area.y, Math.min(bounds.y, area.y + area.height - bounds.height))) };
+}
