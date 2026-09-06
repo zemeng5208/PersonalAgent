@@ -1,6 +1,6 @@
 # 开发计划与进度
 
-更新：2026-09-06 · 当前阶段：M1 权限与工具宿主待启动、M2 天气连接器合并后审计 · 应用实现：MOD-01/02/03 已集成，MOD-25 源码已合并、保持 review
+更新：2026-09-06 · 当前阶段：M1 权限与工具宿主、M2 天气连接器垂直集成 · 应用实现：MOD-01/02/03 已集成，MOD-05 首片与 MOD-25 源码已合并，垂直集成待评审
 
 本文维护工作状态，需求以 PRD 为准。模块负责人和独占目录唯一登记在 [模块分工](MODULE_ASSIGNMENTS.md)，契约见 [公共开发协议](DEVELOPMENT_PROTOCOL.md)。`goo122`（A）负责底座、公共协议和 Obsidian；`zemeng`（B）负责桌面与执行模块；`Potatos498`（C）负责分配到的信息连接器。阶段不代表承诺日期；正式排期需根据比赛时间、团队人数和接口验证结果确定。
 
@@ -98,7 +98,7 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；`Pot
 
 ## 5. 继续入口
 
-MOD-03 已通过 PR #5 集成，PR #4 已合并为 main `9f27e9b`，其批准后新增提交也已由 `goo122` 补做合并后审计。下一步按依赖顺序执行：先由 `goo122` 实现 MOD-05 最小权限、工具与连接器宿主；再将 `register(host, {provider: new OpenMeteoProvider({locationResolution: 'strict'})})` 接入 Runtime 根装配。接线前由 `Potatos498` 修复或明确拒绝简体国外城市误解析，并修正未传日期时按 UTC 取默认日的问题。MOD-25 在这些条件满足前保持 review；不得因源码已合并或一次真实读回通过而标为 done。之后再启动 MOD-04 模型网关，形成文本任务→模型→权限检查→天气工具→证据的首条真实闭环。
+MOD-03 已通过 PR #5 集成，PR #4 与 PR #7 已合并；当前由 goo122 在独立工作包完成 MOD-05 与 MOD-25 的 Runtime 垂直集成。已验证 Fake Provider 下的 Client→Runtime→Policy→ToolGateway→weather.forecast 链路，生产 Open-Meteo 仅以 strict 组合入口注册，真实网络读回仍需单独验证。MOD-05 与 MOD-25 继续保持 review，待非作者评审、城市解析/日期语义问题处理及持久化权限能力另行完成。
 
 ### MOD-25 当前工作包
 
@@ -151,3 +151,13 @@ MOD-03 已通过 PR #5 集成，PR #4 已合并为 main `9f27e9b`，其批准后
 - 验收：无授权或伪造引用拒绝；调用者不能自报 scope；一次性授权只在通过输入与权限检查后消耗；外部写入中断不盲目重试；未声明凭据拒绝；并发连接只创建一个实例；全部测试只使用内存策略、假工具和假 SecretStore。
 - 证据：[授权策略](../packages/policy/README.md)、[工具网关](../packages/tool-gateway/README.md)、[连接器宿主](../packages/connector-host/README.md)；Node 24.15.0 / npm 11.12.1 下根 `npm run check` 通过，全仓 82 项为 81 通过＋1 项天气真实读回默认跳过，其中 MOD-05 定向 14 项、Runtime 8 项（含公共 Client→授权工具闭环）；`npm run dev`、`demo:protocol`、`demo:runtime` 均通过。
 - 限制：授权和账号会话尚未持久化，重启后失效；无审批 UI、持续授权管理、真实 SecretStore、工具运行证据存储和恢复执行器；这些条件未满足前 MOD-05 不得转为 done。
+
+### MOD-05 × MOD-25 垂直集成当前工作包
+
+- 任务：M1-A-005I / MOD-05 与 MOD-25 首条 Runtime 垂直集成；关联 PA-010、PA-023。
+- 负责人：`goo122`；评审者：`zemeng` 或 `Potatos498`；状态：review。
+- 范围：`apps/runtime/src/weather-runtime.ts`、Runtime package/export、根 workspace/build 装配和 Runtime 集成测试；不修改 `packages/connectors/weather/` 内部实现。
+- 交付：`createWeatherRuntime` 组合入口、严格模式 `createOpenMeteoRuntime`、显式 Provider 注入、Client→Runtime→Policy→ToolGateway→weather.forecast 链路测试。
+- 验收证据：Runtime 定向测试 11/11；根 `npm run check` 通过；`npm run dev`、`npm run demo:protocol`、`npm run demo:runtime` 通过；weather 全包 34 项为 33 通过 + 1 项真实读回默认跳过。
+- 已验证：授权成功、撤销后拒绝、非 running 任务在 Provider 调用前拒绝、生产严格 Open-Meteo 注册不发起网络请求；测试仅使用显式 `FakeWeatherProvider`。
+- 剩余限制：授权、连接器会话和 Evidence 仍为内存能力；MOD-25 的简体国外城市解析和省略日期时的 UTC 日期语义仍未修复；真实 Open-Meteo 读回未在本工作包执行；MOD-05/25 不得因此转为 done。
