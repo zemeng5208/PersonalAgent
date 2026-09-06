@@ -12,6 +12,21 @@ const request = (overrides = {}) => ({
   ...overrides,
 });
 
+const panguResponse = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), {
+  status,
+  headers: {'content-type': 'application/json', ...headers},
+});
+
+const panguOptions = (fetch, overrides = {}) => ({
+  baseUrl: 'https://pangu.example.test/',
+  model: 'pangu-nlp-n1-32k',
+  deployment: 'deployment-a',
+  apiKey: () => 'secret-key',
+  fetch,
+  timeoutMs: 100,
+  ...overrides,
+});
+
 test('FakeModelProvider returns explicit deployment and records a sanitized request', async () => {
   const provider = new FakeModelProvider([{kind: 'final', text: 'hello'}], {provider: 'fake', deployment: 'fixture-a', model: 'fixture-model'});
   const gateway = new ModelGateway(provider);
@@ -34,11 +49,85 @@ test('tool requests require declared tool calling and structured output capabili
   assert.equal(provider.requests.length, 0);
 });
 
-test('unavailable Pangu is explicit and never silently replaced by Fake', async () => {
-  const gateway = new ModelGateway(new PanguModelProvider());
-  await assert.rejects(gateway.complete(request()), {code: 'UNSUPPORTED_CAPABILITY'});
-  assert.equal(gateway.deployment.provider, 'pangu');
-  assert.equal(gateway.deployment.verification, 'conditional');
+test('Pangu V2 provider maps a text completion and keeps usage metadata', async () => {
+  let received;
+  const provider = new PanguModelProvider(panguOptions(async (url, options) => {
+    received = {url, options, body: JSON.parse(options.body)};
+    return panguResponse({id: 'response-1', model: 'pangu-nlp-n1-32k', choices: [{message: {role: 'assistant', content: 'hello'}, finish_reason: 'stop'}], usage: {prompt_tokens: 3, completion_tokens: 2, total_tokens: 5}});
+  }));
+  const result = await new ModelGateway(provider).complete(request());
+  assert.equal(received.url, 'https://pangu.example.test/api/v2/chat/completions');
+  assert.equal(received.options.headers.authorization, 'Bearer secret-key');
+  assert.deepEqual(received.body, {model: 'pangu-nlp-n1-32k', messages: [{role: 'user', content: 'hello'}], max_tokens: 20, stream: false});
+  assert.deepEqual(result.response, {kind: 'final', text: 'hello'});
+  assert.deepEqual(result.usage, {promptTokens: 3, completionTokens: 2, totalTokens: 5});
+  assert.equal(result.deployment.provider, 'pangu');
+  assert.equal(result.deployment.deployment, 'deployment-a');
+  assert.equal(result.deployment.verification, 'conditional');
+});
+
+test('Pangu provider requires a non-empty injected API key and never logs it in errors', async () => {
+  let calls = 0;
+  const provider = new PanguModelProvider(panguOptions(async () => {
+    calls++;
+    return panguResponse({});
+  }, {apiKey: () => ''}));
+  await assert.rejects(provider.complete(request()), error => error.code === 'UNAUTHORIZED' && !error.message.includes('secret-key'));
+  assert.equal(calls, 0);
+});
+
+test('Pangu provider maps authentication and rate-limit errors without retrying', async () => {
+  let calls = 0;
+  const unauthorized = new PanguModelProvider(panguOptions(async () => {
+    calls++;
+    return panguResponse({error: {message: 'no'}}, 401);
+  }));
+  await assert.rejects(unauthorized.complete(request()), {code: 'UNAUTHORIZED'});
+  assert.equal(calls, 1);
+
+  const limited = new PanguModelProvider(panguOptions(async () => {
+    calls++;
+    return panguResponse({error: {message: 'slow'}}, 429, {'retry-after': '2'});
+  }));
+  await assert.rejects(limited.complete(request()), error => error.code === 'RATE_LIMITED' && error.retryable === true && error.retryAfterMs === 2000);
+  assert.equal(calls, 2);
+});
+
+test('Pangu provider exposes malformed responses and server failures as external failures', async () => {
+  const malformed = new PanguModelProvider(panguOptions(async () => new Response('not-json', {
+    status: 200,
+    headers: {'content-type': 'application/json'},
+  })));
+  await assert.rejects(malformed.complete(request()), {code: 'EXTERNAL_FAILURE'});
+
+  const missingChoices = new PanguModelProvider(panguOptions(async () => panguResponse({})));
+  await assert.rejects(missingChoices.complete(request()), {code: 'EXTERNAL_FAILURE'});
+
+  const unavailable = new PanguModelProvider(panguOptions(async () => panguResponse({error: {message: 'temporary'}}, 503)));
+  await assert.rejects(unavailable.complete(request()), error => error.code === 'EXTERNAL_FAILURE' && error.retryable === true);
+});
+
+test('Pangu provider maps timeout and caller cancellation distinctly', async () => {
+  const waitForAbort = (_url, options) => new Promise((resolve, reject) => {
+    options.signal.addEventListener('abort', () => reject(options.signal.reason), {once: true});
+  });
+  const timedOut = new PanguModelProvider(panguOptions(waitForAbort, {timeoutMs: 5}));
+  await assert.rejects(timedOut.complete(request()), {code: 'TIMEOUT'});
+
+  const controller = new AbortController();
+  const cancelled = new PanguModelProvider(panguOptions(waitForAbort, {timeoutMs: 1000}));
+  const pending = cancelled.complete(request({signal: controller.signal}));
+  controller.abort();
+  await assert.rejects(pending, {code: 'CANCELLED'});
+});
+
+test('Pangu provider rejects tool messages and unsupported capabilities', async () => {
+  const provider = new PanguModelProvider(panguOptions(async () => panguResponse({})));
+  await assert.rejects(provider.complete(request({messages: [{role: 'tool', content: 'result'}]})), {code: 'UNSUPPORTED_CAPABILITY'});
+  await assert.rejects(provider.complete(request({requiredCapabilities: ['toolCalling']})), {code: 'UNSUPPORTED_CAPABILITY'});
+});
+
+test('unavailable provider is explicit and is not silently replaced by Fake', async () => {
   const unavailable = new UnavailableModelProvider();
   await assert.rejects(new ModelGateway(unavailable).complete(request()), {code: 'UNSUPPORTED_CAPABILITY'});
 });
