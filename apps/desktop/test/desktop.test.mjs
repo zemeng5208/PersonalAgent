@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Client} from '@personal-agent/client';
 import {FakeRuntime} from '@personal-agent/testkit';
-import {panelBounds,clampOrb} from '../electron/placement.js';
+import {panelBounds,clampOrb,draggedGroupBounds} from '../electron/placement.js';
 import {orbState} from '../src/features/conversation/state.js';
 test('panel stays within negative-origin and small display work areas',()=>{
   for(const area of [{x:-1920,y:0,width:1920,height:1080},{x:0,y:-800,width:1280,height:800},{x:0,y:0,width:320,height:480}]) {
@@ -11,6 +11,19 @@ test('panel stays within negative-origin and small display work areas',()=>{
     assert.ok(panel.x>=area.x&&panel.y>=area.y);
     assert.ok(panel.x+panel.width<=area.x+area.width&&panel.y+panel.height<=area.y+area.height);
     assert.equal(panel.width,Math.min(372,area.width));
+  }
+});
+test('dragged panel and orb reach right corners while panel automatically flips left',()=>{
+  const area={x:0,y:0,width:1920,height:1080};
+  const orbStart={x:500,y:400,width:112,height:112};
+  const pointerStart={x:550,y:450};
+  for(const point of [{x:2500,y:-500},{x:2500,y:1800}]) {
+    const next=draggedGroupBounds(orbStart,pointerStart,point,area);
+    assert.equal(next.orb.x,1808);
+    assert.equal(next.panel.x,1428);
+    assert.ok(next.panel.x+next.panel.width<=next.orb.x);
+    assert.ok(next.orb.y===0||next.orb.y===968);
+    assert.ok(next.panel.y>=area.y&&next.panel.y+next.panel.height<=area.height);
   }
 });
 test('public client cancel remains waiting until runtime confirms terminal state',async()=>{

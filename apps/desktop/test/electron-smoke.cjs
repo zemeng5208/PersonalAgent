@@ -39,7 +39,8 @@ const {_electron}=require('playwright');
      const win=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('mode=orb'));
      const p=screen.getCursorScreenPoint();win.setPosition(p.x-56,p.y-56-120);
    });
-   await orb.waitForTimeout(800);
+   await orb.waitForTimeout(200);
+   await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('mode=panel')).hide());
    assert.equal(await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('mode=panel')).isVisible()),false);
    await orb.evaluate(()=>window.desktop.invoke('orb.dragStart'));
    await orb.waitForTimeout(200);
@@ -49,6 +50,16 @@ const {_electron}=require('playwright');
    let panel=app.windows().find(p=>p.url().includes('mode=panel'));
    await panel.waitForSelector('textarea');
    assert.equal(await panel.evaluate(()=>innerWidth),372);
+   const orbViewportBefore=await orb.evaluate(()=>({width:innerWidth,height:innerHeight}));
+   const groupBefore=await app.evaluate(({BrowserWindow})=>Object.fromEntries(BrowserWindow.getAllWindows().filter(w=>/mode=(orb|panel)/.test(w.webContents.getURL())).map(w=>[w.webContents.getURL().includes('mode=orb')?'orb':'panel',w.getBounds()])));
+   await panel.locator('header').hover();await panel.mouse.down();await panel.mouse.move(80,80,{steps:5});await panel.mouse.up();await panel.waitForTimeout(150);
+   const groupAfter=await app.evaluate(({BrowserWindow})=>Object.fromEntries(BrowserWindow.getAllWindows().filter(w=>/mode=(orb|panel)/.test(w.webContents.getURL())).map(w=>[w.webContents.getURL().includes('mode=orb')?'orb':'panel',w.getBounds()])));
+   assert.notDeepEqual(groupAfter.orb,groupBefore.orb);
+   const orbViewportAfter=await orb.evaluate(()=>({width:innerWidth,height:innerHeight}));
+   assert.ok(orbViewportAfter.width<=128&&orbViewportAfter.height<=128,`orb viewport expanded unexpectedly: ${JSON.stringify({orbViewportBefore,orbViewportAfter})}`);
+   const dragArea=await app.evaluate(({screen,BrowserWindow})=>{const win=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('mode=orb'));return screen.getDisplayMatching(win.getBounds()).workArea;});
+   for(const bounds of [groupAfter.orb,groupAfter.panel]){assert.ok(bounds.x>=dragArea.x&&bounds.y>=dragArea.y);assert.ok(bounds.x+bounds.width<=dragArea.x+dragArea.width&&bounds.y+bounds.height<=dragArea.y+dragArea.height);}
+   assert.ok(groupAfter.panel.x+groupAfter.panel.width<=groupAfter.orb.x||groupAfter.orb.x+groupAfter.orb.width<=groupAfter.panel.x);
    assert.match(await panel.locator('#connection').innerText(),fake?/Fake Runtime/:/本地 Runtime/);
    await panel.locator('#model').click();
    assert.equal(await panel.locator('#mm-slider').isDisabled(),false);
@@ -60,10 +71,12 @@ const {_electron}=require('playwright');
    await panel.locator('#model').click();
    await panel.locator('textarea').fill('测试原版桌面方案接入');await panel.locator('#send').click();
    await panel.waitForSelector('[data-action="task.cancel"]');
-   assert.match(await panel.locator('#tasks').innerText(),/已创建/);
+   assert.match(await panel.locator('#tasks').innerText(),/思考中/);
    if(fake){
      await panel.locator('[data-action="test.advance"]').click();
      await panel.waitForFunction(()=>document.querySelector('#state').textContent==='思考中');
+     assert.equal(await panel.locator('.thinking-grid').count(),1);
+     await panel.waitForFunction(()=>Math.max(...[...document.querySelectorAll('.thinking-grid i')].map(cell=>Number(getComputedStyle(cell,'::after').opacity)))>.6);
    } else {
      await panel.waitForFunction(()=>document.querySelector('#state').textContent==='已创建');
    }
@@ -105,9 +118,10 @@ const {_electron}=require('playwright');
      await panel.locator('[data-action="test.advance"]').click();
      await panel.waitForFunction(()=>document.querySelector('#state').textContent==='已取消');
    }
-   assert.equal(await currentTaskCancel.isDisabled(),true);
+   if(fake)assert.equal(await panel.locator(`[data-action="task.cancel"][data-id="${currentTaskId}"]`).count(),0);
+   else assert.equal(await currentTaskCancel.isDisabled(),true);
    assert.equal(await panel.locator('#stop').isDisabled(),true);
    assert.deepEqual(errors,[]);
-   console.log(`PASS: ${fake?'Fake':'local'} Runtime Electron windows, native 90px hover/collapse, drag suppression, isolated preload, ORB-02, tray host, 372px panel, event-driven SDK submit/cancel, independent admin close, no page errors`);
+   console.log(`PASS: ${fake?'Fake':'local'} Runtime Electron windows, native 90px hover/open, explicit collapse, grouped edge-aware drag, isolated preload, ORB-02, tray host, 372px panel, event-driven SDK submit/cancel, independent admin close, no page errors`);
  } finally {await app.close();}
 })();
