@@ -801,6 +801,27 @@ test('live read-back against Open-Meteo', {skip: LIVE_SKIP}, async () => {
   }));
 });
 
+test('live read-back defaults the date to the destination local day', {skip: LIVE_SKIP}, async () => {
+  const now = Date.now();
+  const service = new WeatherService({provider: new OpenMeteoProvider(), now: () => now});
+  // Cross-checked through a different locale and `format()` rather than the `formatToParts` path
+  // the implementation uses, so the assertion cannot agree with a bug in that path.
+  const localDay = timeZone => new Intl.DateTimeFormat('zh-CN', {timeZone, year: 'numeric', month: 'numeric', day: 'numeric'})
+    .format(now).split('/').map(part => part.padStart(2, '0')).join('-');
+  const utcDay = new Date(now).toISOString().slice(0, 10);
+  const report = {utcDay};
+
+  for (const [location, timeZone] of [['北京', 'Asia/Shanghai'], ['New York', 'America/New_York']]) {
+    const result = await service.getForecast({location});
+    assert.equal(result.forecast.resolved.timezone, timeZone, `${location} resolved where expected`);
+    assert.equal(result.forecast.date, localDay(timeZone), `${location} defaults to its own local day`);
+    assert.ok(result.record.dedupeKey.endsWith(`:${result.forecast.date}:metric`), 'the identity carries the local day');
+    report[location] = {localDay: localDay(timeZone), forecastDate: result.forecast.date, differsFromUtcDay: result.forecast.date !== utcDay};
+  }
+
+  console.log('live default-date read-back:', JSON.stringify(report));
+});
+
 test('live read-back labels the reported misresolutions and the hint that repairs them', {skip: LIVE_SKIP}, async () => {
   const provider = new OpenMeteoProvider();
   const sig = signal();
