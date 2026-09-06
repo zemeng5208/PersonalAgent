@@ -6,7 +6,7 @@
 
 ## 当前状态
 
-截至 2026-09-06，MOD-01 工程与存储底座、MOD-02 公共协议与 Fake 联调 SDK 已通过 PR #1 评审并集成；MOD-03 持久任务与事件核心已完成本地实现和测试，待非作者评审。SDK 为 0.1.0-alpha.1，协议仍未冻结；尚无桌面应用、真实模型或真实平台能力。完整进度见 ROADMAP。
+截至 2026-09-06，MOD-01/02/03 已评审并集成，MOD-25 天气源码已合并但仍待正确性与根装配验收；MOD-05 权限、工具和连接器宿主已完成首个本地验证切片，待非作者评审。SDK 为 0.1.0-alpha.1，协议仍未冻结；尚无桌面应用、真实模型或完整生产闭环。完整进度见 ROADMAP。
 
 ## 文档入口
 
@@ -39,6 +39,8 @@ check 校验生成类型一致性，按依赖顺序构建并执行严格类型�
 MOD-02 接入入口：[contracts](packages/contracts/README.md)、[client](packages/client/README.md)、[testkit 六场景与验证](packages/testkit/README.md)。
 
 MOD-03 接入入口：[Runtime 任务核心](apps/runtime/README.md)。
+
+MOD-05 接入入口：[授权策略](packages/policy/README.md)、[工具网关](packages/tool-gateway/README.md)、[连接器宿主](packages/connector-host/README.md)。
 
 当前源码入口为 packages/storage/src，保留的 src/.gitkeep 不承载另一套实现。模块测试和夹具位于 packages/storage/test；开发缓存与验证产物位于项目内 .cache，并已忽略。详见 [存储包说明](packages/storage/README.md)。
 

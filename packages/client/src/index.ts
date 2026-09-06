@@ -4,7 +4,7 @@ import type {Operation, Payload, Result, Request, Event} from '@personal-agent/c
 export interface Transport {
   send(request: Request, signal: AbortSignal): Promise<unknown>;
 }
-export interface CallOptions { signal?: AbortSignal; timeoutMs?: number; idempotencyKey?: string }
+export interface CallOptions { signal?: AbortSignal; timeoutMs?: number; idempotencyKey?: string; taskId?: string }
 export class Client {
   private capabilities = new Set<string>();
   private connected = false;
@@ -27,6 +27,7 @@ export class Client {
       kind: 'request', protocolVersion: PROTOCOL_VERSION, requestId: crypto.randomUUID(),
       operation, deadline: new Date(this.now() + timeoutMs).toISOString(), payload,
       ...(options.idempotencyKey ? {idempotencyKey: options.idempotencyKey} : {}),
+      ...(options.taskId ? {taskId: options.taskId} : {}),
     });
     if (options.signal?.aborted) throw new ProtocolError('CANCELLED', 'Call aborted');
     const controller = new AbortController();

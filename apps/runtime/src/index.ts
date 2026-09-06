@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import type {DatabaseSync} from 'node:sqlite';
 import {parseEvent, parseRequest, parseResponse, PROTOCOL_VERSION, ProtocolError, validateContract} from '@personal-agent/contracts';
-import type {Event, Operation, Request, Response, TaskSnapshot} from '@personal-agent/contracts';
+import type {Event, Operation, Request, Response, TaskSnapshot, ToolDescriptor} from '@personal-agent/contracts';
 import {openStorage} from '@personal-agent/storage';
 import type {Migration} from '@personal-agent/storage';
 
@@ -70,6 +70,29 @@ export interface ScheduleDispatch {
   task?: TaskSnapshot;
 }
 
+export interface RuntimeToolInvocation {
+  toolName: string;
+  toolVersion: string;
+  arguments: unknown;
+  taskId: string;
+  runId: string;
+  authorizationRef: string;
+  deadline: string;
+  signal: AbortSignal;
+  userPresent?: boolean;
+}
+
+export interface RuntimeToolGateway {
+  list(): ToolDescriptor[];
+  invoke(invocation: RuntimeToolInvocation): Promise<unknown>;
+}
+
+export interface RuntimeOptions {
+  now?: () => Date;
+  idFactory?: () => string;
+  toolGateway?: RuntimeToolGateway;
+}
+
 export interface TaskPort {
   submitTask(input: SubmitTaskInput): TaskSnapshot;
   getTask(taskId: string): TaskSnapshot;
@@ -125,7 +148,7 @@ interface ScheduleRow {
 }
 
 const terminal = new Set<TaskState>(['succeeded', 'failed', 'cancelled']);
-const capabilities: Operation[] = ['system.handshake', 'task.submit', 'task.get', 'task.cancel', 'event.subscribe'];
+const baseCapabilities: Operation[] = ['system.handshake', 'task.submit', 'task.get', 'task.cancel', 'event.subscribe'];
 const interrupted = ['planning', 'running', 'waiting_external', 'verifying', 'cancelling'] as const;
 const allowed: Record<TaskState, readonly TaskState[]> = {
   created: ['planning', 'cancelling', 'failed'],
@@ -216,13 +239,15 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
   private readonly db: DatabaseSync;
   private readonly now: () => Date;
   private readonly idFactory: () => string;
+  private readonly toolGateway: RuntimeToolGateway | undefined;
   private readonly sessionRef = 'runtime-' + randomUUID();
   private readonly active = new Map<string, AbortController>();
 
-  constructor(path: string, options: {now?: () => Date; idFactory?: () => string} = {}) {
+  constructor(path: string, options: RuntimeOptions = {}) {
     this.db = openStorage(path, RUNTIME_MIGRATIONS);
     this.now = options.now ?? (() => new Date());
     this.idFactory = options.idFactory ?? randomUUID;
+    this.toolGateway = options.toolGateway;
   }
 
   close(): void {
@@ -265,7 +290,11 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
       switch (request.operation) {
         case 'system.handshake':
           if (request.payload.supportedMajor !== 1) throw new RuntimeError('PROTOCOL_MISMATCH', 'Unsupported protocol major');
-          data = {protocolVersion: PROTOCOL_VERSION, capabilities, sessionRef: this.sessionRef};
+          data = {
+            protocolVersion: PROTOCOL_VERSION,
+            capabilities: this.toolGateway ? [...baseCapabilities, 'capability.list', 'tool.invoke'] : baseCapabilities,
+            sessionRef: this.sessionRef
+          };
           break;
         case 'task.submit': {
           const task = this.submitTask({
@@ -290,8 +319,53 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
           data = {subscriptionId: 'subscription-' + randomUUID(), replayFrom: afterSequence + 1};
           break;
         }
+        case 'capability.list': {
+          if (!this.toolGateway) throw new RuntimeError('UNSUPPORTED_CAPABILITY', 'Tool gateway is not configured');
+          const manifests = request.payload.kind === undefined || request.payload.kind === 'tool'
+            ? this.toolGateway.list()
+            : [];
+          data = {
+            manifests,
+            health: manifests.map(manifest => ({id: manifest.name, state: 'ready' as const}))
+          };
+          break;
+        }
+        case 'tool.invoke': {
+          if (!this.toolGateway) throw new RuntimeError('UNSUPPORTED_CAPABILITY', 'Tool gateway is not configured');
+          if (!request.taskId) throw new RuntimeError('INVALID_ARGUMENT', 'tool.invoke requires a taskId');
+          const task = this.getTask(request.taskId);
+          if (task.state !== 'running') {
+            throw new RuntimeError('REVISION_CONFLICT', 'Tools can only be invoked for a running task');
+          }
+          const runId = this.idFactory();
+          try {
+            const result = await this.toolGateway.invoke({
+              toolName: request.payload.toolName,
+              toolVersion: request.payload.toolVersion,
+              arguments: request.payload.arguments,
+              taskId: request.taskId,
+              runId,
+              authorizationRef: request.payload.scopeRef,
+              deadline: request.deadline,
+              signal,
+            });
+            data = {runId, state: 'confirmed', result, evidenceRefs: []};
+            this.emit('tool.completed', {runId, state: 'confirmed', evidenceRefs: []}, request.taskId);
+          } catch (error) {
+            if (error instanceof ProtocolError && error.code === 'RESULT_UNKNOWN') {
+              this.transitionTask(request.taskId, 'waiting_reconciliation', {
+                error: {code: 'RESULT_UNKNOWN', message: error.message, retryable: false}
+              });
+              data = {runId, state: 'unknown', evidenceRefs: []};
+              this.emit('tool.completed', {runId, state: 'unknown', evidenceRefs: []}, request.taskId);
+              break;
+            }
+            throw error;
+          }
+          break;
+        }
         default:
-          throw new RuntimeError('UNSUPPORTED_CAPABILITY', 'Operation is not provided by MOD-03');
+          throw new RuntimeError('UNSUPPORTED_CAPABILITY', 'Operation is not configured in this Runtime');
       }
       const response = {
         kind: 'response',
@@ -311,7 +385,8 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
         error: {
           code: error instanceof RuntimeError || error instanceof ProtocolError ? error.code : 'EXTERNAL_FAILURE',
           message: error instanceof Error ? error.message : 'Runtime request failed',
-          retryable: false
+          retryable: error instanceof ProtocolError ? error.retryable : false,
+          ...(error instanceof ProtocolError && error.retryAfterMs !== undefined ? {retryAfterMs: error.retryAfterMs} : {})
         },
         evidenceRefs: []
       } as Response;
