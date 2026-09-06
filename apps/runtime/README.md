@@ -26,7 +26,7 @@ The test suite uses local fixtures and temporary SQLite files under the ignored 
 
 Consumers create one TaskRuntime for a SQLite file, submit a task with an idempotency key, and call runTask with an injected worker. Workers receive an AbortSignal, deadline, checkpoint methods and progress reporting. MOD-04 and MOD-05 will provide model and policy-checked tool workers; they must not bypass this Runtime with a second task store.
 
-TaskRuntime also implements the MOD-02 Transport shape for handshake, task.submit, task.get, task.cancel and event.subscribe, so the public Client can use it directly. Other operations remain unavailable until their owning modules are registered.
+TaskRuntime also implements the MOD-02 Transport shape for handshake, task.submit, task.get, task.cancel and event.subscribe, so the public Client can use it directly. When a MOD-05 RuntimeToolGateway is injected, handshake additionally advertises capability.list and tool.invoke; tool scopes come from the authorization reference rather than the client.
 
 dispatchDueSchedules() handles due schedules during normal operation. recoverMissedSchedules() is called after a stopped period and applies each schedule's run_once or skip policy atomically.
 
@@ -37,4 +37,4 @@ dispatchDueSchedules() handles due schedules during normal operation. recoverMis
 - Event history is retained without pruning, so CURSOR_EXPIRED is not produced yet.
 - Restart recovery is intentionally conservative because MOD-05 side-effect evidence is not available: interrupted active work requires reconciliation.
 - SQLite migration ownership remains with goo122; other modules must not add competing root migration sequences.
-- No real model, desktop, authorization engine, connector or external write has been verified.
+- No real model, desktop, connector or external write has been verified. MOD-05 authorization and tool execution are currently an in-process, fake-backed integration without persistent grants.
