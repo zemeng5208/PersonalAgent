@@ -2,13 +2,16 @@ import type { RegisteredTool, ToolDescriptor, ToolHost } from '@personal-agent/c
 import { WeatherConnector, WEATHER_CONNECTOR_VERSION } from './connector.js';
 export { WeatherConnector, WEATHER_CONNECTOR_VERSION } from './connector.js';
 export { FakeWeatherProvider, defaultWeatherFixtures } from './provider.js';
-export type { FixtureForecast, ForecastFetch, ForecastRequest, WeatherProvider, WeatherUnits } from './provider.js';
+export type { FixtureForecast, ForecastFetch, ForecastRequest, PublishedTimeKind, ResolvedPlace, WeatherProvider, WeatherUnits } from './provider.js';
+export { OpenMeteoProvider } from './open-meteo.js';
+export type { FetchLike, FetchResponseLike, LocationResolution, OpenMeteoOptions } from './open-meteo.js';
 export { WeatherService } from './service.js';
 export type { CacheState, ForecastPayload, WeatherQuery, WeatherRecord, WeatherResult, WeatherServiceOptions } from './service.js';
 import { WeatherService } from './service.js';
 import type { WeatherQuery, WeatherServiceOptions } from './service.js';
-import { FakeWeatherProvider } from './provider.js';
 import type { WeatherProvider } from './provider.js';
+import { OpenMeteoProvider } from './open-meteo.js';
+import type { LocationResolution, OpenMeteoOptions } from './open-meteo.js';
 
 const PROTOCOL_ID = 'https://personalagent.local/protocol/1.0.0';
 
@@ -30,7 +33,7 @@ const forecastOutputSchema: ToolDescriptor['outputSchema'] = {
     record: {$ref: `${PROTOCOL_ID}#/definitions/ConnectorItem`},
     forecast: {
       type: 'object',
-      required: ['location', 'date', 'units', 'summary', 'temperatureMin', 'temperatureMax', 'precipitationProbability'],
+      required: ['location', 'date', 'units', 'summary', 'temperatureMin', 'temperatureMax', 'precipitationProbability', 'publishedTimeKind'],
       additionalProperties: false,
       properties: {
         location: {type: 'string', minLength: 1},
@@ -39,7 +42,23 @@ const forecastOutputSchema: ToolDescriptor['outputSchema'] = {
         summary: {type: 'string', minLength: 1},
         temperatureMin: {type: 'number'},
         temperatureMax: {type: 'number'},
-        precipitationProbability: {type: 'integer', minimum: 0, maximum: 100},
+        precipitationProbability: {type: ['integer', 'null'], minimum: 0, maximum: 100},
+        publishedTimeKind: {enum: ['provider_published', 'coverage_start']},
+        resolved: {
+          type: 'object',
+          required: ['name', 'latitude', 'longitude', 'timezone', 'ambiguous', 'alternatives'],
+          additionalProperties: false,
+          properties: {
+            name: {type: 'string', minLength: 1},
+            admin1: {type: 'string', minLength: 1},
+            country: {type: 'string', minLength: 1},
+            latitude: {type: 'number', minimum: -90, maximum: 90},
+            longitude: {type: 'number', minimum: -180, maximum: 180},
+            timezone: {type: 'string', minLength: 1},
+            ambiguous: {type: 'boolean'},
+            alternatives: {type: 'array', maxItems: 4, items: {type: 'string', minLength: 1}},
+          },
+        },
       },
     },
     cache: {
@@ -71,11 +90,20 @@ export interface WeatherModuleOptions {
   now?: () => number;
   defaultLocation?: string;
   cacheTtlMs?: number;
+  language?: string;
+  locationResolution?: LocationResolution;
+}
+
+function buildDefaultProvider(options: WeatherModuleOptions): WeatherProvider {
+  const openMeteo: OpenMeteoOptions = {};
+  if (options.language !== undefined) openMeteo.language = options.language;
+  if (options.locationResolution !== undefined) openMeteo.locationResolution = options.locationResolution;
+  return new OpenMeteoProvider(openMeteo);
 }
 
 export function register(host: ToolHost, options: WeatherModuleOptions = {}): () => void {
   const serviceOptions: WeatherServiceOptions = {
-    provider: options.provider ?? new FakeWeatherProvider(),
+    provider: options.provider ?? buildDefaultProvider(options),
     now: options.now ?? Date.now,
   };
   if (options.defaultLocation !== undefined) serviceOptions.defaultLocation = options.defaultLocation;

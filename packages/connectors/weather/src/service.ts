@@ -1,6 +1,6 @@
 import { ProtocolError, validateContract } from '@personal-agent/contracts';
 import type { ProtocolContracts } from '@personal-agent/contracts';
-import type { ForecastFetch, WeatherProvider, WeatherUnits } from './provider.js';
+import type { ForecastFetch, PublishedTimeKind, ResolvedPlace, WeatherProvider, WeatherUnits } from './provider.js';
 
 export type WeatherRecord = ProtocolContracts['connectorItem'];
 
@@ -17,7 +17,9 @@ export interface ForecastPayload {
   summary: string;
   temperatureMin: number;
   temperatureMax: number;
-  precipitationProbability: number;
+  precipitationProbability: number | null;
+  publishedTimeKind: PublishedTimeKind;
+  resolved?: ResolvedPlace;
 }
 
 export interface CacheState {
@@ -70,6 +72,8 @@ export class WeatherService {
     this.defaultLocation = options.defaultLocation?.trim() || undefined;
   }
 
+  get providerVerification(): WeatherProvider['verification'] { return this.options.provider.verification; }
+
   async getForecast(query: WeatherQuery, signal?: AbortSignal): Promise<WeatherResult> {
     const location = (query.location ?? this.defaultLocation ?? '').trim();
     if (!location) throw new ProtocolError('INVALID_ARGUMENT', 'Weather location must come from the request or a configured default; refusing to guess');
@@ -99,6 +103,9 @@ export class WeatherService {
     }
 
     const fetchedAtMs = this.options.now();
+    const validFor = fetch.coverage
+      ? `${fetch.coverage.start}/${fetch.coverage.end}`
+      : `${date}T00:00:00.000Z/${nextUtcDate(date)}T00:00:00.000Z`;
     const record: WeatherRecord = {
       source: this.options.provider.source,
       accountRef: 'weather',
@@ -108,10 +115,18 @@ export class WeatherService {
       contentRef: `weather://forecast/${encodeURIComponent(location)}/${date}?units=${units}`,
       sensitivity: 'public',
       dedupeKey: `${this.options.provider.source}:${location}:${date}:${units}`,
-      validFor: `${date}T00:00:00.000Z/${nextUtcDate(date)}T00:00:00.000Z`,
+      validFor,
     };
     validateContract('connectorItem', record);
-    const forecast: ForecastPayload = {location, date, units, summary: fetch.summary, temperatureMin: fetch.temperatureMin, temperatureMax: fetch.temperatureMax, precipitationProbability: fetch.precipitationProbability};
+    const forecast: ForecastPayload = {
+      location, date, units,
+      summary: fetch.summary,
+      temperatureMin: fetch.temperatureMin,
+      temperatureMax: fetch.temperatureMax,
+      precipitationProbability: fetch.precipitationProbability,
+      publishedTimeKind: fetch.publishedTimeKind,
+    };
+    if (fetch.resolved) forecast.resolved = fetch.resolved;
     const fresh: CacheEntry = {record, forecast, fetchedAtMs};
     this.cache.set(key, fresh);
     return {record: structuredClone(fresh.record), forecast: structuredClone(fresh.forecast), cache: cacheState('fetched', fresh, fetchedAtMs, this.ttlMs)};

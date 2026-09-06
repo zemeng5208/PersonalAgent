@@ -19,13 +19,15 @@ export class WeatherConnector implements ConnectorPort {
         properties: {
           defaultLocation: {type: 'string', minLength: 1},
           cacheTtlMs: {type: 'integer', minimum: 1},
+          language: {type: 'string', minLength: 2},
+          locationResolution: {enum: ['ranked', 'strict']},
         },
         additionalProperties: false,
       },
       authentication: 'none',
       requiresPresence: false,
       syncStrategy: 'on-demand',
-      verification: 'mock',
+      verification: service.providerVerification,
     };
   }
 

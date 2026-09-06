@@ -2,6 +2,23 @@ import { ProtocolError } from '@personal-agent/contracts';
 
 export type WeatherUnits = 'metric' | 'imperial';
 
+/**
+ * `coverage_start` means the provider exposed no issuance timestamp, so `publishedAt`
+ * is the start of the covered local day rather than a real publish instant.
+ */
+export type PublishedTimeKind = 'provider_published' | 'coverage_start';
+
+export interface ResolvedPlace {
+  name: string;
+  admin1?: string;
+  country?: string;
+  latitude: number;
+  longitude: number;
+  timezone: string;
+  ambiguous: boolean;
+  alternatives: string[];
+}
+
 export interface ForecastRequest {
   location: string;
   date: string;
@@ -12,12 +29,16 @@ export interface ForecastFetch {
   summary: string;
   temperatureMin: number;
   temperatureMax: number;
-  precipitationProbability: number;
+  precipitationProbability: number | null;
   publishedAt: string;
+  publishedTimeKind: PublishedTimeKind;
+  coverage?: {start: string; end: string};
+  resolved?: ResolvedPlace;
 }
 
 export interface WeatherProvider {
   readonly source: string;
+  readonly verification: 'mock' | 'verified' | 'conditional';
   fetchForecast(request: ForecastRequest, signal: AbortSignal): Promise<ForecastFetch>;
 }
 
@@ -42,6 +63,7 @@ const toFahrenheit = (celsius: number): number => Math.round((celsius * 9 / 5 + 
 
 export class FakeWeatherProvider implements WeatherProvider {
   readonly source = 'fixture-weather';
+  readonly verification = 'mock' as const;
   private calls = 0;
   private failure: ProtocolError | null = null;
   constructor(private readonly fixtures: FixtureForecast[] = defaultWeatherFixtures) {}
@@ -58,6 +80,7 @@ export class FakeWeatherProvider implements WeatherProvider {
       temperatureMax: request.units === 'imperial' ? toFahrenheit(fixture.temperatureMaxC) : fixture.temperatureMaxC,
       precipitationProbability: fixture.precipitationProbability,
       publishedAt: fixture.publishedAt,
+      publishedTimeKind: 'provider_published',
     };
   }
 }
