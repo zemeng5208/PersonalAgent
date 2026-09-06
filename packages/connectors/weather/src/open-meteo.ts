@@ -22,12 +22,25 @@ export interface OpenMeteoOptions {
 }
 
 interface GeoCandidate {
+  id?: number;
   name: string;
   latitude: number;
   longitude: number;
   timezone: string;
   admin1?: string;
   country?: string;
+  population?: number;
+}
+
+/** A place after merging every language pass that returned it. */
+interface MergedPlace {
+  /** From the preferred language pass when it carried the place, otherwise the fallback. */
+  candidate: GeoCandidate;
+  /** Normalized name variants across passes, used for exact matching. */
+  names: string[];
+  population: number;
+  /** First-seen position, so ranking stays stable when population is unknown. */
+  order: number;
 }
 
 const USER_AGENT = 'personal-agent-weather/0.1.0-alpha.1';
@@ -88,6 +101,9 @@ const asNumberArray = (value: unknown): (number | null)[] | undefined => {
 
 const label = (candidate: GeoCandidate): string =>
   [candidate.name, candidate.admin1, candidate.country].filter((part): part is string => typeof part === 'string' && part.length > 0).join(', ');
+
+/** Different coordinates under the same admin region often produce identical labels; repeating them discloses nothing. */
+const distinctLabels = (labels: string[]): string[] => [...new Set(labels)];
 
 function offsetAt(utcMs: number, timeZone: string): number {
   const format = new Intl.DateTimeFormat('en-US', {
@@ -190,42 +206,35 @@ export class OpenMeteoProvider implements WeatherProvider {
   }
 
   private async geocode(location: string, signal: AbortSignal): Promise<ResolvedPlace> {
-    if (!location.trim()) throw new ProtocolError('INVALID_ARGUMENT', 'Weather location must not be empty; refusing to guess', false);
+    const trimmed = location.trim();
+    if (!trimmed) throw new ProtocolError('INVALID_ARGUMENT', 'Weather location must not be empty; refusing to guess', false);
     const cacheKey = `${this.language}|${normalize(location)}`;
     const cached = this.geocodeCache.get(cacheKey);
     if (cached) return structuredClone(cached);
 
-    const url = `${this.geocodingBaseUrl}/v1/search`
-      + `?name=${encodeURIComponent(location.trim())}&count=${MAX_CANDIDATES}`
-      + `&language=${encodeURIComponent(this.language)}&format=json`;
-    const body = asRecord(await this.getJson(url, signal));
-    const candidates = readCandidates(body?.results);
-    if (candidates.length === 0) throw new ProtocolError('NOT_FOUND', `Open-Meteo geocoding found no place named "${location}"`, false);
+    const places = await this.searchAllLanguages(trimmed, signal);
+    if (places.length === 0) throw new ProtocolError('NOT_FOUND', `Open-Meteo geocoding found no place named "${location}"`, false);
 
-    const query = normalize(location);
-    const exact = candidates.filter(candidate =>
-      normalize(candidate.name) === query
-      || (candidate.admin1 !== undefined && normalize(candidate.admin1) === query)
-      || (candidate.country !== undefined && normalize(candidate.country) === query));
-    const distinct = dedupeByCoordinate(exact.length > 0 ? exact : candidates);
+    const distinct = rankPlaces(places, normalize(location));
     const top = distinct[0];
     if (!top) throw new ProtocolError('NOT_FOUND', `Open-Meteo geocoding found no usable place for "${location}"`, false);
     const ambiguous = distinct.length > 1;
     if (ambiguous && this.locationResolution === 'strict') {
       throw new ProtocolError('INVALID_ARGUMENT',
-        `Location "${location}" matches ${distinct.length} places; refusing to guess. Specify one of: ${distinct.map(label).join(' / ')}`, false);
+        `Location "${location}" matches ${distinct.length} places; refusing to guess. Specify one of: ${distinct.map(place => label(place.candidate)).join(' / ')}`, false);
     }
 
+    const best = top.candidate;
     const place: ResolvedPlace = {
-      name: top.name,
-      latitude: top.latitude,
-      longitude: top.longitude,
-      timezone: top.timezone,
+      name: best.name,
+      latitude: best.latitude,
+      longitude: best.longitude,
+      timezone: best.timezone,
       ambiguous,
-      alternatives: distinct.slice(1, 1 + MAX_ALTERNATIVES).map(label),
+      alternatives: distinctLabels(distinct.slice(1).map(entry => label(entry.candidate))).slice(0, MAX_ALTERNATIVES),
     };
-    if (top.admin1 !== undefined) place.admin1 = top.admin1;
-    if (top.country !== undefined) place.country = top.country;
+    if (best.admin1 !== undefined) place.admin1 = best.admin1;
+    if (best.country !== undefined) place.country = best.country;
 
     if (this.geocodeCache.size >= this.geocodeCacheLimit) {
       const oldest = this.geocodeCache.keys().next().value;
@@ -233,6 +242,32 @@ export class OpenMeteoProvider implements WeatherProvider {
     }
     this.geocodeCache.set(cacheKey, place);
     return structuredClone(place);
+  }
+
+  /**
+   * Open-Meteo indexes place names per language and never matches across scripts: a
+   * Chinese query returns nothing from the `en` index, and the `zh` index is traditional
+   * and incomplete, so it omits New York City entirely while still carrying a village in
+   * England literally named "New York". Querying both passes and merging by GeoNames id
+   * makes resolution language-independent while still localizing the displayed name.
+   */
+  private async searchAllLanguages(location: string, signal: AbortSignal): Promise<MergedPlace[]> {
+    if (this.language.toLowerCase().startsWith('en')) {
+      return mergePlaces(await this.searchPlaces(location, this.language, signal), []);
+    }
+    const [preferred, fallback] = await Promise.all([
+      this.searchPlaces(location, this.language, signal),
+      this.searchPlaces(location, 'en', signal),
+    ]);
+    return mergePlaces(preferred, fallback);
+  }
+
+  private async searchPlaces(location: string, language: string, signal: AbortSignal): Promise<GeoCandidate[]> {
+    const url = `${this.geocodingBaseUrl}/v1/search`
+      + `?name=${encodeURIComponent(location)}&count=${MAX_CANDIDATES}`
+      + `&language=${encodeURIComponent(language)}&format=json`;
+    const body = asRecord(await this.getJson(url, signal));
+    return readCandidates(body?.results);
   }
 
   private async getJson(url: string, signal: AbortSignal): Promise<unknown> {
@@ -286,21 +321,52 @@ function readCandidates(value: unknown): GeoCandidate[] {
     if (latitude === undefined || longitude === undefined) continue;
     if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) continue;
     const candidate: GeoCandidate = {name, latitude, longitude, timezone};
+    const id = asFiniteNumber(record.id);
+    if (id !== undefined) candidate.id = Math.trunc(id);
     if (typeof record.admin1 === 'string' && record.admin1.length > 0) candidate.admin1 = record.admin1;
     if (typeof record.country === 'string' && record.country.length > 0) candidate.country = record.country;
+    const population = asFiniteNumber(record.population);
+    if (population !== undefined && population >= 0) candidate.population = population;
     candidates.push(candidate);
   }
   return candidates;
 }
 
-function dedupeByCoordinate(candidates: GeoCandidate[]): GeoCandidate[] {
-  const seen = new Set<string>();
-  const result: GeoCandidate[] = [];
-  for (const candidate of candidates) {
-    const key = `${candidate.latitude.toFixed(2)},${candidate.longitude.toFixed(2)}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    result.push(candidate);
+/**
+ * Keyed by GeoNames id, falling back to rounded coordinates for entries without one, so
+ * the same place returned by both language passes collapses into a single candidate.
+ * The preferred pass is consumed first and therefore supplies the displayed name.
+ */
+function mergePlaces(preferred: GeoCandidate[], fallback: GeoCandidate[]): MergedPlace[] {
+  const byKey = new Map<string, MergedPlace>();
+  let order = 0;
+  for (const pass of [preferred, fallback]) {
+    for (const candidate of pass) {
+      const key = candidate.id !== undefined
+        ? `id:${candidate.id}`
+        : `co:${candidate.latitude.toFixed(2)},${candidate.longitude.toFixed(2)}`;
+      const existing = byKey.get(key);
+      if (!existing) {
+        byKey.set(key, {candidate, names: [normalize(candidate.name)], population: candidate.population ?? 0, order: order++});
+        continue;
+      }
+      const variant = normalize(candidate.name);
+      if (!existing.names.includes(variant)) existing.names.push(variant);
+      if (existing.population === 0 && candidate.population !== undefined) existing.population = candidate.population;
+    }
   }
-  return result;
+  return [...byKey.values()];
+}
+
+/**
+ * Exact matches outrank the provider's fuzzy ones, and population breaks ties because the
+ * provider's own ranking is unreliable across languages: for "New York" the `zh` pass puts
+ * York, Nebraska first and omits New York City, which only the `en` pass returns.
+ */
+function rankPlaces(places: MergedPlace[], query: string): MergedPlace[] {
+  const fieldMatches = (value: string | undefined): boolean => value !== undefined && normalize(value) === query;
+  const exact = places.filter(place =>
+    place.names.includes(query) || fieldMatches(place.candidate.admin1) || fieldMatches(place.candidate.country));
+  const pool = exact.length > 0 ? exact : places;
+  return [...pool].sort((a, b) => b.population - a.population || a.order - b.order);
 }

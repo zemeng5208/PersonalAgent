@@ -101,14 +101,102 @@ test('strict resolution refuses an ambiguous place and lists the candidates', as
   });
 });
 
+const geoRoutesByLanguage = byLanguage => ['geocoding-api.open-meteo.com', url => {
+  const language = new URL(url).searchParams.get('language');
+  return jsonResponse({results: byLanguage[language] ?? []});
+}];
+
 test('geocoding is cached per location', async () => {
   const fetchImpl = stubFetch([geoRoute(beijingCandidates), forecastRoute(healthyDaily)]);
   const provider = new OpenMeteoProvider({fetchImpl});
   const service = new WeatherService({provider, now: () => Date.parse('2026-09-06T02:00:00.000Z'), cacheTtlMs: 1});
   await service.getForecast({location: '北京', date: DATE, units: 'metric'});
   await service.getForecast({location: '北京', date: DATE, units: 'imperial'});
-  assert.equal(fetchImpl.calls.filter(url => url.includes('geocoding-api')).length, 1);
+  const geocoding = fetchImpl.calls.filter(url => url.includes('geocoding-api'));
+  assert.equal(geocoding.length, 2, 'one pass per language on the first resolution');
+  assert.equal(geocoding.filter(url => url.includes('language=zh')).length, 1);
+  assert.equal(geocoding.filter(url => url.includes('language=en')).length, 1);
   assert.equal(fetchImpl.calls.filter(url => url.includes('api.open-meteo.com/v1/forecast')).length, 2);
+});
+
+test('an English-configured provider issues a single geocoding pass', async () => {
+  const fetchImpl = stubFetch([geoRoute(beijingCandidates), forecastRoute(healthyDaily)]);
+  const service = new WeatherService({provider: new OpenMeteoProvider({fetchImpl, language: 'en'}), now: () => Date.parse('2026-09-06T02:00:00.000Z')});
+  await service.getForecast({location: 'Beijing', date: DATE});
+  const geocoding = fetchImpl.calls.filter(url => url.includes('geocoding-api'));
+  assert.equal(geocoding.length, 1);
+  assert.equal(geocoding.filter(url => url.includes('language=en')).length, 1);
+});
+
+// Captured from the production endpoints on 2026-09-06: the `zh` index is traditional and
+// incomplete, so it omits New York City while still carrying a village in England literally
+// named "New York". The old exact-name filter picked that village.
+test('a place missing from the configured language index still resolves via the English pass', async () => {
+  const routes = geoRoutesByLanguage({
+    zh: [
+      {name: '约克', admin1: '內布拉斯加州', country: '美国', latitude: 40.86807, longitude: -97.592, timezone: 'America/Chicago', population: 7864},
+      {name: 'New York', admin1: '英格兰', country: '英国', latitude: 53.07897, longitude: -0.14008, timezone: 'Europe/London'},
+      {name: 'New York', admin1: '聖安娜區', country: '牙买加', latitude: 18.25397, longitude: -77.17683, timezone: 'America/Jamaica'},
+    ],
+    en: [
+      {id: 5128581, name: 'New York', admin1: 'New York', country: 'United States', latitude: 40.71427, longitude: -74.00597, timezone: 'America/New_York', population: 8804190},
+      {name: 'York', admin1: 'Nebraska', country: 'United States', latitude: 40.86807, longitude: -97.592, timezone: 'America/Chicago', population: 7864},
+      {name: 'New York', admin1: 'England', country: 'United Kingdom', latitude: 53.07897, longitude: -0.14008, timezone: 'Europe/London'},
+    ],
+  });
+  const {service} = makeService([routes, forecastRoute(healthyDaily)]);
+  const result = await service.getForecast({location: 'New York', date: DATE});
+
+  assert.equal(result.forecast.resolved.name, 'New York');
+  assert.equal(result.forecast.resolved.admin1, 'New York');
+  assert.equal(result.forecast.resolved.country, 'United States');
+  assert.equal(result.forecast.resolved.timezone, 'America/New_York', 'not Europe/London');
+  assert.equal(result.forecast.resolved.latitude, 40.71427);
+  assert.equal(result.forecast.resolved.ambiguous, true, 'the other same-name places stay disclosed');
+  assert.ok(result.forecast.resolved.alternatives.some(entry => entry.includes('英格兰')), 'the village it used to pick is now an alternative');
+});
+
+test('population decides between exact matches, not the provider order', async () => {
+  const routes = geoRoutesByLanguage({
+    zh: [{name: 'New York', admin1: '英格兰', country: '英国', latitude: 53.07897, longitude: -0.14008, timezone: 'Europe/London'}],
+    en: [{id: 5128581, name: 'New York', admin1: 'New York', country: 'United States', latitude: 40.71427, longitude: -74.00597, timezone: 'America/New_York', population: 8804190}],
+  });
+  const {service} = makeService([routes, forecastRoute(healthyDaily)]);
+  const result = await service.getForecast({location: 'New York', date: DATE});
+  assert.equal(result.forecast.resolved.timezone, 'America/New_York');
+  assert.deepEqual(result.forecast.resolved.alternatives, ['New York, 英格兰, 英国']);
+});
+
+test('both passes returning the same place collapse into one and keep the localized name', async () => {
+  const routes = geoRoutesByLanguage({
+    zh: [{id: 1816670, name: '北京', admin1: '北京市', country: '中国', latitude: 39.9075, longitude: 116.39723, timezone: 'Asia/Shanghai', population: 21893095}],
+    en: [{id: 1816670, name: 'Beijing', admin1: 'Beijing', country: 'China', latitude: 39.9075, longitude: 116.39723, timezone: 'Asia/Shanghai', population: 21893095}],
+  });
+  const {service} = makeService([routes, forecastRoute(healthyDaily)]);
+  const result = await service.getForecast({location: '北京', date: DATE});
+  assert.equal(result.forecast.resolved.name, '北京');
+  assert.equal(result.forecast.resolved.admin1, '北京市');
+  assert.equal(result.forecast.resolved.country, '中国');
+  assert.equal(result.forecast.resolved.ambiguous, false, 'merged by GeoNames id, not duplicated per language');
+  assert.deepEqual(result.forecast.resolved.alternatives, []);
+});
+
+test('identical alternative labels are disclosed once', async () => {
+  // Real `zh` result for 上海: three distinct coordinates in Yunnan sharing one label.
+  const routes = geoRoutesByLanguage({
+    zh: [
+      {id: 2038349, name: '上海', admin1: '上海市', country: '中国', latitude: 31.22222, longitude: 121.45806, timezone: 'Asia/Shanghai', population: 24874500},
+      {name: '上海', admin1: '云南', country: '中国', latitude: 23.1, longitude: 103.2, timezone: 'Asia/Shanghai'},
+      {name: '上海', admin1: '云南', country: '中国', latitude: 24.5, longitude: 102.1, timezone: 'Asia/Shanghai'},
+      {name: '上海', admin1: '云南', country: '中国', latitude: 22.8, longitude: 104.9, timezone: 'Asia/Shanghai'},
+    ],
+    en: [],
+  });
+  const {service} = makeService([routes, forecastRoute(healthyDaily)]);
+  const result = await service.getForecast({location: '上海', date: DATE});
+  assert.equal(result.forecast.resolved.admin1, '上海市');
+  assert.equal(result.forecast.resolved.ambiguous, true);
+  assert.deepEqual(result.forecast.resolved.alternatives, ['上海, 云南, 中国']);
 });
 
 test('requests fahrenheit only for imperial units', async () => {

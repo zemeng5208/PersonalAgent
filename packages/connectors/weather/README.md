@@ -21,7 +21,9 @@
 ## 行为规则
 
 - **地点不静默猜测**：地点只能来自本次请求或已配置的 `defaultLocation`（用户设置），两者都缺时返回 `INVALID_ARGUMENT`。
-- **地点解析必须披露**：真实地理编码天然有同名歧义（"北京" 返回北京市／重庆市／四川三个同名地点，"朝阳" 返回五个）。`ranked`（默认）取提供商相关性首位，但在 `forecast.resolved` 中披露解析到的具体地点（名称、行政区、国家、经纬度、时区）、`ambiguous` 标记与最多 4 条 `alternatives`；`strict` 直接返回 `INVALID_ARGUMENT` 并列出全部候选，拒绝任何猜测。
+- **地点解析跨语言进行**：Open-Meteo 的地理编码**按语言分别建索引，不跨文字系统匹配**——中文查询在 `en` 索引里返回 0 条，而 `zh` 索引是繁体且不完整。实测：`New York` 在 `zh` 索引中查不到纽约市，却查到英格兰一个真名叫 "New York" 的村庄，只查 `zh` 就会把时区解析成 `Europe/London`。因此非英文配置下并行查询「配置语言 + `en`」两轮，按 GeoNames `id`（无 `id` 时退化为两位小数坐标）合并同一地点；展示名优先取配置语言那一轮，该轮未命中时用英文。
+- **排序不依赖提供商顺序**：提供商的相关性排序跨语言不可靠（`New York` 的 `zh` 轮把内布拉斯加州 York 排第一，人口 7864，而纽约市人口 8,804,190 只在 `en` 轮出现）。改为先筛名称／行政区／国家与查询完全相等的条目，再按人口降序，人口相同时按首次出现顺序，避免把小地名排在真正的大城市前面。
+- **地点解析必须披露**：真实地理编码天然有同名歧义（"北京" 返回北京市／重庆市／四川三个同名地点，"朝阳" 返回五个）。`ranked`（默认）取排序首位，但在 `forecast.resolved` 中披露解析到的具体地点（名称、行政区、国家、经纬度、时区）、`ambiguous` 标记与最多 4 条 `alternatives`；标签在截断到 4 条前先去重，因为同一行政区下的不同坐标常产生完全相同的标签，重复披露等于没有披露。`strict` 直接返回 `INVALID_ARGUMENT` 并列出全部候选，拒绝任何猜测。
 - **三个时间分开**：`record.occurredAt` 是来源时间，`record.fetchedAt` 是获取时间，`record.validFor` 是预报覆盖区间（ISO 8601 UTC 区间）。
 - **时间来源必须标注**：Open-Meteo **不返回预报发布时间**（只有 `generationtime_ms`，那是响应生成耗时）。因此 `forecast.publishedTimeKind` 显式区分 `provider_published`（提供商给出真实发布时刻，如夹具）与 `coverage_start`（Open-Meteo：取覆盖日本地零点的 UTC 时刻）。不用抓取时间冒充发布时间。
 - **覆盖区间按地点时区**：真实提供商给出时区时，`validFor` 是该地本地日对应的真实 UTC 区间（北京 2026-09-06 → `2026-09-05T16:00:00.000Z/2026-09-06T16:00:00.000Z`）。按 UTC 日界推算会偏 8 小时。日界用 `Intl` 计算，跨夏令时正确（纽约 7 月 → `T04:00Z`，1 月 → `T05:00Z`）。
@@ -32,7 +34,7 @@
 
 ## 真实提供商：Open-Meteo
 
-调用两个免密钥端点：地理编码 `geocoding-api.open-meteo.com/v1/search`（结果按 `location|language` 缓存，上限 500 条，超出淘汰最早项）与预报 `api.open-meteo.com/v1/forecast`（`daily=temperature_2m_min,temperature_2m_max,precipitation_probability_max,weather_code`，`timezone` 取解析地点的 IANA 时区）。
+调用两个免密钥端点：地理编码 `geocoding-api.open-meteo.com/v1/search`（非英文配置下并行发两轮，`language` 分别取配置语言与 `en`，按 GeoNames `id` 合并；合并结果按 `location|language` 缓存，上限 500 条，超出淘汰最早项）与预报 `api.open-meteo.com/v1/forecast`（`daily=temperature_2m_min,temperature_2m_max,precipitation_probability_max,weather_code`，`timezone` 取解析地点的 IANA 时区）。代价是每个未命中缓存的地名产生两次地理编码请求，命中后为 0 次。
 
 错误映射：
 
@@ -65,28 +67,30 @@ npm run test --workspaces
 
 本轮结果：6 个工作区类型检查全部通过；根 `npm run check` **整体通过**（退出码 0）——此前卡住的 `check:generated` 漂移误报是 Windows CRLF 造成的，已由 PR #5 修复。
 
-全仓 62 项测试，61 通过、1 跳过（weather 29：28 通过 + 1 项真实读回默认跳过；runtime 7、testkit 13、client 5、contracts 4、storage 4）。
+全仓 67 项测试，66 通过、1 跳过（weather 34：33 通过 + 1 项真实读回默认跳过；runtime 7、testkit 13、client 5、contracts 4、storage 4）。
 
-本包 29 项测试中，`test/weather.test.mjs` 13 项覆盖：地点拒绝猜测与默认地点、三个时间与单位、记录通过契约校验、缓存命中/过期/stale（含 `retryAfterMs`）、取消不返回缓存或成功结果、拒绝静默启用 Fake、输入校验、工具 scope 与 dispose、manifest 与生命周期。
+本包 34 项测试中，`test/weather.test.mjs` 13 项覆盖：地点拒绝猜测与默认地点、三个时间与单位、记录通过契约校验、缓存命中/过期/stale（含 `retryAfterMs`）、取消不返回缓存或成功结果、拒绝静默启用 Fake、输入校验、工具 scope 与 dispose、manifest 与生命周期。
 
-`test/open-meteo.test.mjs` 16 项覆盖真实提供商，其中 15 项为离线测试（默认运行，无网络），用注入的 `fetchImpl` 覆盖时间来源标注、夏令时日界、歧义披露、`strict` 拒绝、地理编码缓存、单位参数、降水缺失、未知天气代码、错误码映射、网络失败与取消、畸形响应、空地点拒绝、manifest `conditional`，以及经 `FakeToolHost` 的 ajv 实际校验工具输出 schema（含 `resolved` 与可空降水概率）。
+`test/open-meteo.test.mjs` 21 项覆盖真实提供商，其中 20 项为离线测试（默认运行，无网络），用注入的 `fetchImpl` 覆盖时间来源标注、夏令时日界、歧义披露、`strict` 拒绝、地理编码缓存、单位参数、降水缺失、未知天气代码、错误码映射、网络失败与取消、畸形响应、空地点拒绝、manifest `conditional`，以及经 `FakeToolHost` 的 ajv 实际校验工具输出 schema（含 `resolved` 与可空降水概率）。
 
-第 16 项是真实读回，**与模拟测试分开**，需显式开启：
+其中 5 项固定跨语言解析行为，夹具取自真实生产端点响应而非手写：英文配置只发一轮地理编码、配置语言索引缺失的地点仍能经英文轮解析到（`New York` 断言 `America/New_York` 而非 `Europe/London`）、人口而非提供商顺序决定同名精确匹配的取舍、两轮返回同一地点时按 `id` 合并并保留本地化名、完全相同的 `alternatives` 标签只披露一次。
+
+第 21 项是真实读回，**与模拟测试分开**，需显式开启：
 
 ```sh
 PA_WEATHER_LIVE=1 node --test packages/connectors/weather/test/open-meteo.test.mjs
 ```
 
-未设 `PA_WEATHER_LIVE=1` 时该测试跳过，保证 CI 与离线环境确定性。本轮实际执行结果：16 项全部通过，证据见下。
+未设 `PA_WEATHER_LIVE=1` 时该测试跳过，保证 CI 与离线环境确定性。本轮实际执行结果：21 项全部通过，证据见下。
 
 ## 真实读回证据
 
-2026-09-06 于 Windows 本机对生产端点实际执行（`PA_WEATHER_LIVE=1`），合并评审修复后重跑，查询「北京」当日：
+2026-09-06 于 Windows 本机对生产端点实际执行（`PA_WEATHER_LIVE=1`），跨语言地理编码修复后重跑，查询「北京」当日：
 
 ```json
 {
   "occurredAt": "2026-09-05T16:00:00.000Z",
-  "fetchedAt": "2026-09-06T03:59:28.796Z",
+  "fetchedAt": "2026-09-06T05:09:02.205Z",
   "validFor": "2026-09-05T16:00:00.000Z/2026-09-06T16:00:00.000Z",
   "summary": "阴",
   "min": 22.3,
@@ -103,13 +107,30 @@ PA_WEATHER_LIVE=1 node --test packages/connectors/weather/test/open-meteo.test.m
 
 同一次查询另经 `curl` 直接核对原始响应（`temperature_2m_min` 22.3、`temperature_2m_max` 31.4、`weather_code` 3 → 阴），与连接器输出一致。`record` 通过 `validateContract('connectorItem')`。
 
+同日对生产地理编码端点实测的解析结果（`language: 'zh'`，即两轮查询「`zh` + `en`」合并后的行为）：
+
+| 查询 | 解析到 | 时区 | 歧义 |
+| --- | --- | --- | --- |
+| 北京 | 北京, 北京市, 中国 | `Asia/Shanghai` | 是（候选：重庆市、四川） |
+| 上海 | 上海, 上海市, 中国 | `Asia/Shanghai` | 是（候选：浙江、云南） |
+| 广州 | 广州, 广东, 中国 | `Asia/Shanghai` | 否 |
+| New York | New York, New York, United States | `America/New_York` | 是 |
+| London | 倫敦, 英格兰, 英国 | `Europe/London` | 否 |
+| Paris | 巴黎, 法兰西岛, 法国 | `Europe/Paris` | 否 |
+| Tokyo | 東京, 东京都, 日本 | `Asia/Tokyo` | 否 |
+| Los Angeles | 洛杉矶, 加州, 美国 | `America/Los_Angeles` | 否 |
+| 东京 | 东京, 江苏, 中国 | `Asia/Shanghai` | **解析错误，见已知限制** |
+| 纽约 | — | — | **`NOT_FOUND`，见已知限制** |
+
 ## 已知限制
 
 - **Open-Meteo 不提供预报发布时间**，`occurredAt` 是覆盖日起点而非真实发布时刻，已由 `publishedTimeKind: 'coverage_start'` 显式标注。需要真实发布时间的提供商（如和风天气返回 `forecastStartTime`）可作为第二个 `WeatherProvider` 实现接入，届时标注为 `provider_published`。
-- `verification` 为 `conditional` 而非 `verified`：真实读回依赖出站网络可达，且本轮仅验证了北京、上海、纽约等少量地点与当日/近日日期，未做长期或多地点覆盖。
+- `verification` 为 `conditional` 而非 `verified`：真实读回依赖出站网络可达。本轮实测覆盖 8 个正确地名的解析（跨 4 个国家、多个时区）与当日/次日日期，另记录 2 个已知失败地名；未做长时段、多日重复采样或大范围地名覆盖。
 - 预报范围受提供商模式限制（本轮实测允许区间约当日前 3 个月至后 15 天）；超出返回 `NOT_FOUND` 并附提供商给出的允许范围。历史气候查询不属本模块。
 - 摘要文本仅提供中英两套；`language` 设为其他值时地名按该语言本地化，但摘要回退英文。
 - 地理编码歧义在 `ranked` 模式下仍会选一个结果（已披露但未拒绝）；对准确性要求高的调用方应使用 `strict` 或由上层让用户从 `alternatives` 中选择。
+- **简体书写的外国地名可能解析不到或解析错**：`zh` 索引是繁体且不完整，`en` 索引不匹配中文文字系统，两轮合并也补不上这个缺口。实测 `东京` 命中江苏的同名地点（`Asia/Shanghai`），`纽约` 两轮均 0 条而返回 `NOT_FOUND`；`東京`、`New York`、`Tokyo` 则正确。当前处置：外国城市请用英文名或罗马字输入，中文名仅对国内地点可靠。彻底修复需要简繁映射表，与「无新增外部依赖」约束冲突，故本轮不做，也不通过猜测掩盖。
+- 非英文配置下每个未命中缓存的地名产生两次地理编码请求（配置语言 + `en` 并行）；命中缓存后为 0 次，预报请求次数不变。
 - 日期按地点时区解释，但请求中的 `date` 仍是无时区的日历日字符串；用户本地时区语义待 MOD-13/MOD-20 时区配置确定后接入。
 - 缓存为实例内存级，无持久化与跨进程共享；TTL 到期前不感知真实数据更新。地理编码缓存无 TTL，地名变更不会自动刷新。
 - 无凭据、无密钥，因此不涉及凭据存储；但真实调用会产生出站请求，Open-Meteo 免费额度（约 600 次/分、10000 次/日）耗尽时返回 `RATE_LIMITED`。
