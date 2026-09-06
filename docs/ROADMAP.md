@@ -24,7 +24,7 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；`Pot
 | MOD-01 | M1 起步门槛 | done | goo122 / PR #1 / 合并提交 dbbc547 / 构建、迁移和存储测试通过 |
 | MOD-02 | M1 起步门槛 | done | goo122 / PR #1 / 合并提交 dbbc547 / 26 项联合测试及评审通过；协议待多消费端冻结 |
 | MOD-03 | M1/M2 | done | goo122 / PR #5 / 合并提交 e14aebf / 7 项 Runtime 测试及评审通过 |
-| MOD-04 | M1 主模型、M3 专业协作 | todo | 未启动 |
+| MOD-04 | M1 主模型、M3 专业协作 | review | goo122 / codex/feat-mod-04-model-gateway / Fake 垂直集成与仓库 check 通过，待 PR 评审 |
 | MOD-05 | M1/M2 | review | goo122 / codex/feat-mod-05-tool-host / 任务绑定授权、策略校验工具网关、受限凭据连接器宿主及公共 Client→Runtime→工具闭环已本地验证，待非作者评审 |
 | MOD-06 | M2 | todo | 未启动 |
 | MOD-07 | M2 | todo | 未启动 |
@@ -161,3 +161,13 @@ MOD-03 已通过 PR #5 集成，PR #4 与 PR #7 已合并；当前由 goo122 在
 - 验收证据：Runtime 定向测试 11/11；根 `npm run check` 通过；`npm run dev`、`npm run demo:protocol`、`npm run demo:runtime` 通过；weather 全包 34 项为 33 通过 + 1 项真实读回默认跳过。
 - 已验证：授权成功、撤销后拒绝、非 running 任务在 Provider 调用前拒绝、生产严格 Open-Meteo 注册不发起网络请求；测试仅使用显式 `FakeWeatherProvider`。
 - 剩余限制：授权、连接器会话和 Evidence 仍为内存能力；MOD-25 的简体国外城市解析和省略日期时的 UTC 日期语义仍未修复；真实 Open-Meteo 读回未在本工作包执行；MOD-05/25 不得因此转为 done。
+
+### MOD-04 当前工作包
+
+- 任务：M1-A-004A / 模型网关与单主 Agent 有界执行循环；关联 MOD-04 / PA-003、PA-012。
+- 负责人：goo122；分支：codex/feat-mod-04-model-gateway；状态：review。
+- 范围：packages/models、packages/agents、根构建入口与对应测试/说明。
+- 交付：能力声明与验证等级、Fake/Unavailable/Pangu 占位 Provider、模型 deployment/usage 记录、工具提案校验、一次修复上限、maxSteps/maxTokens/deadline/取消边界、RuntimeToolInvoker 和 unknown reconciliation 回调。
+- 验收：模型测试 4/4；Agent 测试 4/4；Fake 天气请求经过 Runtime、Policy、ToolGateway；模型不能提供授权；unknown 不生成成功回答；仓库 npm run check、npm run dev、npm run demo:protocol、npm run demo:runtime 均通过。
+- 证据：仅使用 Fake Provider 和本地 Runtime；没有真实盘古、付费模型或网络调用。
+- 限制：真实盘古适配与 PA-003 真实请求验收、多 Agent 专家调度、流式输出和真实连接器仍未完成；需创建 PR 并由非作者评审。
