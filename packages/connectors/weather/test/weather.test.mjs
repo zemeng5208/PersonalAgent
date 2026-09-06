@@ -76,6 +76,36 @@ test('provider failure serves stale cache with explicit marking', async () => {
   assert.equal(result.cache.lastError.code, 'EXTERNAL_FAILURE');
   assert.equal(result.cache.lastError.retryable, true);
   assert.equal(result.forecast.summary, '晴转多云');
+
+  provider.setFailure(new ProtocolError('RATE_LIMITED', 'slow down', true, 30_000));
+  const rateLimited = await service.getForecast({});
+  assert.equal(rateLimited.cache.lastError.code, 'RATE_LIMITED');
+  assert.equal(rateLimited.cache.lastError.retryAfterMs, 30_000);
+});
+
+test('cancellation never returns stale cache or a successful forecast', async () => {
+  const cached = makeService({defaultLocation: 'Beijing'});
+  await cached.service.getForecast({});
+  cached.clock.advance(ttl + 1);
+  cached.provider.setFailure(new ProtocolError('CANCELLED', 'cancelled'));
+  await assert.rejects(cached.service.getForecast({}), {code: 'CANCELLED'});
+
+  const controller = new AbortController();
+  const ignoringProvider = {
+    source: 'ignoring-weather',
+    async fetchForecast() {
+      controller.abort();
+      return {
+        summary: 'must not escape',
+        temperatureMin: 1,
+        temperatureMax: 2,
+        precipitationProbability: 0,
+        publishedAt: '2026-09-05T08:30:00.000Z',
+      };
+    },
+  };
+  const service = new WeatherService({provider: ignoringProvider, now: () => Date.parse('2026-09-05T12:00:00.000Z')});
+  await assert.rejects(service.getForecast({location: 'Beijing'}, controller.signal), {code: 'CANCELLED'});
 });
 
 test('provider failure without cache propagates', async () => {
@@ -90,6 +120,12 @@ test('rejects invalid dates, units and unknown fixtures', async () => {
   await assert.rejects(service.getForecast({date: '2026-02-30'}), {code: 'INVALID_ARGUMENT'});
   await assert.rejects(service.getForecast({units: 'kelvin'}), {code: 'INVALID_ARGUMENT'});
   await assert.rejects(service.getForecast({location: 'Nowhere', date: '2026-09-05'}), {code: 'NOT_FOUND'});
+});
+
+test('registration refuses to silently enable the fake provider', () => {
+  const host = new FakeToolHost();
+  assert.throws(() => register(host), {code: 'INVALID_ARGUMENT'});
+  assert.equal(host.verification, 'mock');
 });
 
 test('tool registration enforces scope and disposal', async () => {

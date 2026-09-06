@@ -1,3 +1,4 @@
+import { ProtocolError } from '@personal-agent/contracts';
 import type { RegisteredTool, ToolDescriptor, ToolHost } from '@personal-agent/contracts';
 import { WeatherConnector, WEATHER_CONNECTOR_VERSION } from './connector.js';
 export { WeatherConnector, WEATHER_CONNECTOR_VERSION } from './connector.js';
@@ -10,8 +11,6 @@ export type { CacheState, ForecastPayload, WeatherQuery, WeatherRecord, WeatherR
 import { WeatherService } from './service.js';
 import type { WeatherQuery, WeatherServiceOptions } from './service.js';
 import type { WeatherProvider } from './provider.js';
-import { OpenMeteoProvider } from './open-meteo.js';
-import type { LocationResolution, OpenMeteoOptions } from './open-meteo.js';
 
 const PROTOCOL_ID = 'https://personalagent.local/protocol/1.0.0';
 
@@ -78,6 +77,7 @@ const forecastOutputSchema: ToolDescriptor['outputSchema'] = {
             code: {type: 'string', minLength: 1},
             message: {type: 'string', minLength: 1},
             retryable: {type: 'boolean'},
+            retryAfterMs: {type: 'integer', minimum: 0},
           },
         },
       },
@@ -86,24 +86,16 @@ const forecastOutputSchema: ToolDescriptor['outputSchema'] = {
 };
 
 export interface WeatherModuleOptions {
-  provider?: WeatherProvider;
+  provider: WeatherProvider;
   now?: () => number;
   defaultLocation?: string;
   cacheTtlMs?: number;
-  language?: string;
-  locationResolution?: LocationResolution;
 }
 
-function buildDefaultProvider(options: WeatherModuleOptions): WeatherProvider {
-  const openMeteo: OpenMeteoOptions = {};
-  if (options.language !== undefined) openMeteo.language = options.language;
-  if (options.locationResolution !== undefined) openMeteo.locationResolution = options.locationResolution;
-  return new OpenMeteoProvider(openMeteo);
-}
-
-export function register(host: ToolHost, options: WeatherModuleOptions = {}): () => void {
+export function register(host: ToolHost, options: WeatherModuleOptions): () => void {
+  if (!options?.provider) throw new ProtocolError('INVALID_ARGUMENT', 'Weather provider must be explicitly configured; fake providers are test-only');
   const serviceOptions: WeatherServiceOptions = {
-    provider: options.provider ?? buildDefaultProvider(options),
+    provider: options.provider,
     now: options.now ?? Date.now,
   };
   if (options.defaultLocation !== undefined) serviceOptions.defaultLocation = options.defaultLocation;

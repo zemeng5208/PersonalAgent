@@ -27,7 +27,7 @@ export interface CacheState {
   fetchedAt: string;
   ageMs: number;
   ttlMs: number;
-  lastError?: { code: string; message: string; retryable: boolean };
+  lastError?: { code: string; message: string; retryable: boolean; retryAfterMs?: number };
 }
 
 export interface WeatherResult {
@@ -46,6 +46,7 @@ export interface WeatherServiceOptions {
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const DEFAULT_TTL_MS = 600_000;
 const UNITS: readonly WeatherUnits[] = ['metric', 'imperial'];
+const STALE_FALLBACK_ERRORS = new Set(['RATE_LIMITED', 'TIMEOUT', 'EXTERNAL_FAILURE']);
 
 const isValidDate = (date: string): boolean => {
   if (!DATE_PATTERN.test(date)) return false;
@@ -94,14 +95,17 @@ export class WeatherService {
     try {
       fetch = await this.options.provider.fetchForecast({location, date, units}, signal ?? new AbortController().signal);
     } catch (error) {
-      if (entry && error instanceof ProtocolError) {
+      if (signal?.aborted) throw new ProtocolError('CANCELLED', 'Weather query cancelled');
+      if (entry && error instanceof ProtocolError && STALE_FALLBACK_ERRORS.has(error.code)) {
         const stale = cacheState('stale', entry, now, this.ttlMs);
         stale.lastError = {code: error.code, message: error.message, retryable: error.retryable};
+        if (error.retryAfterMs !== undefined) stale.lastError.retryAfterMs = error.retryAfterMs;
         return {record: structuredClone(entry.record), forecast: structuredClone(entry.forecast), cache: stale};
       }
       throw error;
     }
 
+    if (signal?.aborted) throw new ProtocolError('CANCELLED', 'Weather query cancelled');
     const fetchedAtMs = this.options.now();
     const validFor = fetch.coverage
       ? `${fetch.coverage.start}/${fetch.coverage.end}`
