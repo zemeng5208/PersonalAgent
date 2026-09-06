@@ -7,7 +7,8 @@ const runtime = '// Generated from schema/protocol.json. Do not edit.\nexport de
 for (const [file, content] of [['generated.ts', output], ['schema.ts', runtime]]) {
   const path = new URL('../src/' + file, import.meta.url);
   if (process.argv.includes('--check')) {
-    if (await readFile(path, 'utf8') !== content) throw new Error('Generated files are stale; run contracts generate');
+    const current = (await readFile(path, 'utf8')).replaceAll('\r\n', '\n');
+    if (current !== content.replaceAll('\r\n', '\n')) throw new Error('Generated files are stale; run contracts generate');
   } else await writeFile(path, content);
 }
 if (!process.argv.includes('--check')) await writeFile(schemaPath, JSON.stringify(schema, null, 2) + '\n');
