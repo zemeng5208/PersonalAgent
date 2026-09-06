@@ -45,7 +45,7 @@
 | MOD-22 | M3 | todo | 未启动 |
 | MOD-23 | M3 | todo | 未启动 |
 | MOD-24 | M2 | todo | 未启动 |
-| MOD-25 | M2 | review | `Potatos498` / feat/mod-25-weather / 本地 11 项测试通过，待评审与根装配集成 |
+| MOD-25 | M2 | review | `Potatos498` / PR #4（feat/mod-25-weather）/ 本地 27 项测试通过（含真实读回），待评审与根装配集成 |
 | MOD-26 | M4 起逐平台验收 | todo | 未启动 |
 
 ### 2.1 开工顺序与阻塞边界
@@ -79,7 +79,7 @@
 - 模型：未验证盘古账号、具体部署、工具调用、成本与限流。
 - 平台：首批邮箱/日历/社交账号类型未知；先做可替换契约，不虚构全平台能力。
 - 运行环境：Windows 兼容范围和基准机器待定。
-- 工程：合并后的 main 上根 `npm run check` 在 `packages/contracts` 的 `check:generated` 步骤失败（提示生成文件陈旧），已在不含 MOD-25 改动的干净检出上复现，属既有问题；需 `goo122` 重新生成或修正漂移检查，否则各 PR 的 CI 验收受阻。
+- 工程：合并后的 main 上根 `npm run check` 在 `packages/contracts` 的 `check:generated` 步骤失败（提示生成文件陈旧），`typecheck` 与 `test` 因此根本不执行。已在不含 MOD-25 改动的干净检出上复现，main 的 CI 运行 34006560474（PR #1 合并）与 34006694534（PR #3 合并）也失败在同一步，属既有问题；需 `goo122` 重新生成或修正漂移检查，否则各 PR 的 CI 验收受阻。
 - 自训练：首期仅偏好与流程学习；参数训练作为研究项。
 - 视觉：尚无渲染稿；进入设计时使用用户指定的 Open Design 位置。
 
@@ -89,6 +89,7 @@
 - 2026-09-05：新增模块分工与公共开发协议草案；拆为 26 个模块并同步 `goo122`、`zemeng` 与待认领协作者职责，保留旧 W 编号映射。协议尚未冻结、SDK 尚未实现。
 - 2026-09-05：检查 10 份 Markdown 文档，仓库链接及编号检查通过；23 项需求全部有模块承接，26 个模块全部进入台账，无重复模块编号或冲突标记。已跟踪差异空白检查通过。
 - 2026-09-06：登记 MOD-25 天气连接器工作包与执行人 `Potatos498`，同步台账状态、开工顺序与风险项；ROADMAP 相对链接与模块编号一致性检查通过。
+- 2026-09-06：MOD-25 接入 Open-Meteo 真实提供商，更新工作包的交付、验收、证据与限制及台账证据；真实读回与模拟验证分开记录，manifest `verification` 由 `mock` 改为 `conditional`。ROADMAP 相对链接检查通过。
 - 此记录不构成任何运行时能力通过证明。
 
 ## 5. 继续入口
@@ -100,11 +101,11 @@ MOD-01、MOD-02 已在当前 feat/mod-01-foundation 实现。MOD-01 原有未提
 - 任务：M2-C-025 / 天气连接器；关联 MOD-25 / PA-010。
 - 负责人：`Potatos498`；评审者：`goo122` 或 `zemeng`（待评审）；状态以模块台账为准。
 - 范围：`packages/connectors/weather/` 独占目录。根 `package.json` 工作区通配和锁文件归 `goo122` 所有，本 PR 附带最小改动待其确认集成；不涉及公共契约修改。
-- 输入与依赖：明确地点或配置的默认地点、日期、单位；依赖 MOD-02 的 `ConnectorItem` 契约与 `ConnectorPort`，以及 testkit 的假时钟和假 ToolHost。
-- 交付：天气提供商抽象与 4 条固定预报夹具、`WeatherService`（地点不静默猜测、缓存状态 fresh/fetched/stale 可见、发布/抓取/有效期三个时间分离）、`WeatherConnector` 清单与生命周期、`register(host)` 注册只读工具 `weather.forecast`、11 项测试与包 README。
-- 验收：`npm run typecheck --workspaces` 与 `npm run test --workspaces` 全绿（weather 11 项，全仓 37 项）；地点缺失时抛 `INVALID_ARGUMENT` 而非猜测；缓存命中不调用提供商；提供商失败时返回 stale 缓存并带 `lastError`。
-- 证据：[weather 说明](../packages/connectors/weather/README.md)；清单 `verification` 为 `mock`，PR 待创建。根 `npm run check` 因上述既有 `check:generated` 失败未能整体通过。
-- 限制：无真实天气提供商调用，模拟结果不能证明外部平台已连通；缓存仅进程内、不跨重启；日期按 UTC 解释；未接入根装配，也未实现 MOD-05 权限隔离。
+- 输入与依赖：明确地点或配置的默认地点、日期、单位；依赖 MOD-02 的 `ConnectorItem` 契约与 `ConnectorPort`，以及 testkit 的假时钟和假 ToolHost。真实数据来自 Open-Meteo（免密钥、无账号）。
+- 交付：可替换的 `WeatherProvider` 抽象、**Open-Meteo 真实提供商**（地理编码＋预报、错误码映射、单位与 WMO 天气代码映射）、4 条离线夹具、`WeatherService`（地点不静默猜测、地点解析结果显式披露、缓存状态 fresh/fetched/stale 可见、发布/抓取/有效期三个时间分离且时间来源类型显式标注）、`WeatherConnector` 清单与生命周期、`register(host)` 注册只读工具 `weather.forecast`、27 项测试与包 README。
+- 验收：`npm run typecheck --workspaces` 与 `npm run test --workspaces` 全绿（weather 27 项：26 通过 + 1 项真实读回默认跳过；全仓 53 项）。地点缺失时抛 `INVALID_ARGUMENT` 而非猜测；地名歧义时 `ranked` 披露解析结果与候选、`strict` 直接拒绝；缓存命中不调用提供商；提供商失败时返回 stale 缓存并带 `lastError`。真实读回与模拟测试分开，需 `PA_WEATHER_LIVE=1` 显式开启。
+- 证据：[weather 说明](../packages/connectors/weather/README.md)（含 2026-09-06 对生产端点的真实读回原始输出，并与 `curl` 直取的响应交叉核对）。manifest `verification` 为 `conditional`。根 `npm run check` 因下述既有 `check:generated` 失败未能整体通过。
+- 限制：Open-Meteo 不返回预报发布时间，`occurredAt` 是覆盖日起点，已由 `publishedTimeKind: 'coverage_start'` 显式标注而非用抓取时间冒充；`conditional` 依赖出站网络可达，本轮仅验证少量地点与近日日期；摘要文本仅中英两套；缓存为实例内存级；未接入根装配，也未实现 MOD-05 权限隔离。
 
 ### MOD-02 当前工作包
 
