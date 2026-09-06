@@ -1,7 +1,7 @@
 const assert=require('node:assert/strict');
 const path=require('node:path');
 const fs=require('node:fs');
-const {_electron}=require(path.join(process.env.USERPROFILE,'.npm-global/node_modules/playwright'));
+const {_electron}=require('playwright');
 (async()=>{
  const output=path.resolve(__dirname,'../.cache/qa');fs.mkdirSync(output,{recursive:true});
  const localElectron=path.resolve(__dirname,'../node_modules/electron/dist/electron.exe');
