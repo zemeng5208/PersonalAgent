@@ -103,7 +103,7 @@ PA_FEEDS_LIVE=1 node --test packages/connectors/feeds/test/live-feeds.test.mjs
 
 本轮结果（2026-09-06，Windows 本机，node v24.18.0 / npm 11.16.0，**已合并 main `fae0706` 之后的树上**）：`npm ci` 成功；根 `npm run check` **退出码 0**；10 个工作区类型检查全部通过。全仓 **156 项测试，154 通过、2 跳过**（feeds 74：73 通过 + 1 项真实读回默认跳过；weather 34：33 + 1 跳过；testkit 13、runtime 8、tool-gateway 7、client 5、connector-host 4、contracts 4、storage 4、policy 3）。
 
-**注意**：本机 node/npm 版本高于 `engines` 声明的 `24.15.x` / `11.12.x`，`npm ci` 报 `EBADENGINE` 警告但不失败；CI 用 `.node-version` 指定的 24.15.0。
+**注意**：本机 node/npm 版本高于 `engines` 声明的 `24.15.x` / `11.12.x`，`npm ci` 报 `EBADENGINE` 警告但不失败。**声明版本由 CI 覆盖**：PR #8 在 head `f4bf05c` 上的两次 `Foundation` 工作流运行均在 `windows-latest` / node **v24.15.0**（取自 `.node-version`）下通过，5 个命令步骤——`npm ci`、`npm run check`、`npm run dev`、`npm run demo:protocol`、`npm run demo:runtime`——全部 success（run `34023109254` 用时 4m7s、`34023106553` 用时 4m12s）。
 
 本包 74 项按文件分布：
 
