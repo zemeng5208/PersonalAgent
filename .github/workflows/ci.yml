@@ -15,3 +15,4 @@ jobs:
       - run: npm run check
       - run: npm run dev
       - run: npm run demo:protocol
+      - run: npm run demo:runtime
