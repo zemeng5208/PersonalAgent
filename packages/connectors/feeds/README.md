@@ -101,7 +101,7 @@ npm run test --workspaces
 PA_FEEDS_LIVE=1 node --test packages/connectors/feeds/test/live-feeds.test.mjs
 ```
 
-本轮结果（2026-09-06，Windows 本机，node v24.18.0 / npm 11.16.0）：`npm ci` 成功；根 `npm run check` **退出码 0**；7 个工作区类型检查全部通过。全仓 **141 项测试，139 通过、2 跳过**（feeds 74：73 通过 + 1 项真实读回默认跳过；weather 34：33 + 1 跳过；testkit 13、runtime 7、client 5、contracts 4、storage 4）。
+本轮结果（2026-09-06，Windows 本机，node v24.18.0 / npm 11.16.0，**已合并 main `fae0706` 之后的树上**）：`npm ci` 成功；根 `npm run check` **退出码 0**；10 个工作区类型检查全部通过。全仓 **156 项测试，154 通过、2 跳过**（feeds 74：73 通过 + 1 项真实读回默认跳过；weather 34：33 + 1 跳过；testkit 13、runtime 8、tool-gateway 7、client 5、connector-host 4、contracts 4、storage 4、policy 3）。
 
 **注意**：本机 node/npm 版本高于 `engines` 声明的 `24.15.x` / `11.12.x`，`npm ci` 报 `EBADENGINE` 警告但不失败；CI 用 `.node-version` 指定的 24.15.0。
 
@@ -125,7 +125,7 @@ PA_FEEDS_LIVE=1 node --test packages/connectors/feeds/test/live-feeds.test.mjs
 ]
 ```
 
-恰好 4 次请求：无重定向、无重试。**第二轮对阮一峰真实观察到 304**；少数派两轮都是 200，因为它根本不发验证器，第二轮是全量重取后由 `seen` 过滤到零。下文引用的完整输出取自 `2026-09-06T08:26:39Z` 那次运行；`08:34:25Z` 的第二次完整运行给出**相同的状态序列与相同的验证器取值**。
+恰好 4 次请求：无重定向、无重试。**第二轮对阮一峰真实观察到 304**；少数派两轮都是 200，因为它根本不发验证器，第二轮是全量重取后由 `seen` 过滤到零。下文引用的完整输出取自 `2026-09-06T08:26:39Z` 那次运行；`08:34:25Z` 的第二次完整运行给出**相同的状态序列与相同的验证器取值**；合并 main `fae0706` 之后于 `08:45:03Z` 又完整重跑一次，状态序列与验证器取值仍**完全一致**，即合并后的树依然能真实连通两个生产源。
 
 ```json
 {
@@ -187,6 +187,6 @@ PA_FEEDS_LIVE=1 node --test packages/connectors/feeds/test/live-feeds.test.mjs
 - `summary` 限长 280 字符、`title` 限长 200 字符，超出以 `…` 结尾；这是纯文本摘要而非全文。
 - 摘要与标题的实体解码**只覆盖 5 个预定义 XML 实体与数字字符引用**，HTML 命名实体（如 `&nbsp;`、`&mdash;`）原样保留。这是刻意的：支持 HTML 实体表等于引入一张可被源影响的映射表。
 - **少数派的 channel 级 `<pubDate>` 存在**（计划阶段记录为「无 `lastBuildDate`」，不完整）：因此该源一条没有自身日期的 item 会带 `occurredAtKind: 'feed_build'` 投递，而不是被跳过。
-- 未实现 MOD-05 权限隔离，scope 校验目前由 testkit 的 `FakeToolHost` 承担；本包尚未接入 `apps/runtime`（MOD-03）的根装配，装配时需显式传入 `new HttpFeedProvider()` 与订阅列表（归 `goo122`）。
-- `verification` 为 `conditional` 而非 `verified`：真实读回依赖出站网络可达，本轮只覆盖 2 个源、各 2 轮、相隔约 8 分钟的两次完整运行；未做长时段、多源、跨小时的重复采样，也未验证源在真实更新时间点上的增量投递（那需要等待源发布新条目）。
+- **scope 校验未经真实网关验证**：MOD-05 已交付 `packages/policy`、`tool-gateway`、`connector-host`（main `f69a745`，台账状态 `review`），其 `ToolGateway` 实现的是 `@personal-agent/contracts` 里同一个 `ToolHost` 接口，`register(host, options)` 结构上可直接接入。但本包测试只用 testkit 的 `FakeToolHost` 验 `feeds:read`，从未跑过真实网关与策略端口，因此不能声称权限隔离已通过。本包也尚未接入 `apps/runtime`（MOD-03）的根装配，装配时需显式传入 `new HttpFeedProvider()` 与订阅列表（归 `goo122`）。
+- `verification` 为 `conditional` 而非 `verified`：真实读回依赖出站网络可达，本轮只覆盖 2 个源、各 2 轮、约 19 分钟内的三次完整运行（`08:26:39Z`、`08:34:25Z`、合并 main 后 `08:45:03Z`）；未做长时段、多源、跨小时的重复采样，也未验证源在真实更新时间点上的增量投递（那需要等待源发布新条目）。
 - 真实调用会产生出站请求。源返回 429 时映射为 `RATE_LIMITED` 并带 `retryAfterMs`，但**本包不做请求节流与调度**，频率控制归 MOD-23 与宿主。
