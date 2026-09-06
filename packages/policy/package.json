@@ -1,5 +1,5 @@
 {
-  "name": "@personal-agent/runtime",
+  "name": "@personal-agent/policy",
   "version": "0.1.0-alpha.1",
   "private": true,
   "type": "module",
@@ -15,12 +15,6 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@personal-agent/contracts": "0.1.0-alpha.1",
-    "@personal-agent/storage": "0.0.0"
-  },
-  "devDependencies": {
-    "@personal-agent/client": "0.1.0-alpha.1",
-    "@personal-agent/policy": "0.1.0-alpha.1",
-    "@personal-agent/tool-gateway": "0.1.0-alpha.1"
+    "@personal-agent/contracts": "0.1.0-alpha.1"
   }
 }

@@ -4,6 +4,9 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {test} from 'node:test';
 import {Client, EventCursor} from '@personal-agent/client';
+import {ProtocolError} from '@personal-agent/contracts';
+import {InMemoryAuthorizationPolicy} from '@personal-agent/policy';
+import {ToolGateway} from '@personal-agent/tool-gateway';
 import {RuntimeError, TaskRuntime} from '../dist/index.js';
 
 const root = fileURLToPath(new URL('../../../.cache/runtime-tests/', import.meta.url));
@@ -72,6 +75,128 @@ test('public Client negotiates and uses the persisted Runtime task operations', 
     const cursor = new EventCursor('tasks');
     assert.equal(cursor.accept(runtime.readEvents()).at(-1).type, 'task.cancelled');
     await assert.rejects(client.call('capability.list', {}), {code: 'UNSUPPORTED_CAPABILITY'});
+  } finally {
+    runtime.close();
+  }
+});
+
+test('public Client discovers and invokes a policy-checked tool', async () => {
+  const setup = fixture();
+  const policy = new InMemoryAuthorizationPolicy();
+  const gateway = new ToolGateway({policy, now: () => setup.options.now().getTime()});
+  gateway.register({
+    descriptor: {
+      name: 'fixture.echo',
+      version: '1.0.0',
+      inputSchema: {type: 'object', required: ['value'], additionalProperties: false, properties: {value: {type: 'string'}}},
+      outputSchema: {type: 'object', required: ['value'], additionalProperties: false, properties: {value: {type: 'string'}}},
+      sideEffect: 'read',
+      requiredScopes: ['fixture:read'],
+      idempotencySupport: true,
+      recoverySupport: true,
+      requiresPresence: false,
+    },
+    execute: async (input, context) => {
+      assert.deepEqual(context.scopes, ['fixture:read']);
+      return input;
+    },
+  });
+  gateway.register({
+    descriptor: {
+      name: 'fixture.unknown-write',
+      version: '1.0.0',
+      inputSchema: {type: 'object', additionalProperties: false},
+      outputSchema: {type: 'object'},
+      sideEffect: 'external_write',
+      requiredScopes: ['fixture:write'],
+      idempotencySupport: false,
+      recoverySupport: true,
+      requiresPresence: false,
+    },
+    execute: async () => {
+      throw new ProtocolError('RESULT_UNKNOWN', 'External write result requires reconciliation');
+    },
+  });
+  const runtime = new TaskRuntime(setup.path, {...setup.options, toolGateway: gateway});
+  try {
+    const client = new Client(runtime, () => setup.options.now().getTime());
+    const handshake = await client.connect();
+    assert.equal(handshake.capabilities.includes('capability.list'), true);
+    assert.equal(handshake.capabilities.includes('tool.invoke'), true);
+    const task = await client.call('task.submit', {
+      goal: 'invoke an authorized fixture tool',
+      conversationId: 'conversation-tool',
+    }, {idempotencyKey: 'tool-task'});
+    runtime.transitionTask(task.taskId, 'planning');
+    runtime.transitionTask(task.taskId, 'running');
+    policy.grant({
+      authorizationRef: 'auth-tool',
+      taskId: task.taskId,
+      toolName: 'fixture.echo',
+      scopes: ['fixture:read'],
+      expiresAt: '2026-09-06T02:01:00.000Z',
+    });
+    const capabilities = await client.call('capability.list', {kind: 'tool'});
+    assert.equal(capabilities.manifests[0].name, 'fixture.echo');
+    assert.deepEqual(capabilities.health, [
+      {id: 'fixture.echo', state: 'ready'},
+      {id: 'fixture.unknown-write', state: 'ready'},
+    ]);
+    const result = await client.call('tool.invoke', {
+      toolName: 'fixture.echo',
+      toolVersion: '1.0.0',
+      arguments: {value: 'verified'},
+      scopeRef: 'auth-tool',
+    }, {taskId: task.taskId});
+    assert.equal(result.state, 'confirmed');
+    assert.deepEqual(result.result, {value: 'verified'});
+    assert.equal(runtime.readEvents().at(-1).type, 'tool.completed');
+    assert.equal(runtime.readEvents().at(-1).taskId, task.taskId);
+    await assert.rejects(client.call('tool.invoke', {
+      toolName: 'fixture.echo',
+      toolVersion: '1.0.0',
+      arguments: {value: 'forged'},
+      scopeRef: 'forged',
+    }, {taskId: task.taskId}), {code: 'UNAUTHORIZED'});
+
+    policy.grant({
+      authorizationRef: 'auth-unknown',
+      taskId: task.taskId,
+      toolName: 'fixture.unknown-write',
+      scopes: ['fixture:write'],
+      expiresAt: '2026-09-06T02:01:00.000Z',
+    });
+    const unknown = await client.call('tool.invoke', {
+      toolName: 'fixture.unknown-write',
+      toolVersion: '1.0.0',
+      arguments: {},
+      scopeRef: 'auth-unknown',
+    }, {taskId: task.taskId});
+    assert.equal(unknown.state, 'unknown');
+    assert.equal(runtime.getTask(task.taskId).state, 'waiting_reconciliation');
+    assert.equal(runtime.getTask(task.taskId).error.code, 'RESULT_UNKNOWN');
+    assert.equal(runtime.readEvents().at(-1).type, 'tool.completed');
+    await assert.rejects(client.call('tool.invoke', {
+      toolName: 'fixture.unknown-write',
+      toolVersion: '1.0.0',
+      arguments: {},
+      scopeRef: 'auth-unknown',
+    }, {taskId: task.taskId}), {code: 'REVISION_CONFLICT'});
+
+    const inactive = runtime.submitTask({...submission, idempotencyKey: 'inactive-tool-task'});
+    policy.grant({
+      authorizationRef: 'auth-inactive',
+      taskId: inactive.taskId,
+      toolName: 'fixture.echo',
+      scopes: ['fixture:read'],
+      expiresAt: '2026-09-06T02:01:00.000Z',
+    });
+    await assert.rejects(client.call('tool.invoke', {
+      toolName: 'fixture.echo',
+      toolVersion: '1.0.0',
+      arguments: {value: 'must not run'},
+      scopeRef: 'auth-inactive',
+    }, {taskId: inactive.taskId}), {code: 'REVISION_CONFLICT'});
   } finally {
     runtime.close();
   }
