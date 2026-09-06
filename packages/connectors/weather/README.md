@@ -32,10 +32,16 @@
 
 ```sh
 npm ci
-npm run check
+npm run build
+npm run typecheck --workspaces
+npm run test --workspaces
 ```
 
-`npm run check` 覆盖本包 11 项测试：地点拒绝猜测与默认地点、三个时间与单位、记录通过契约校验、缓存命中/过期/stale、输入校验、工具 scope 与 dispose、manifest 与生命周期。
+本轮结果：5 个工作区类型检查全部通过；测试 37 项全绿（weather 11、testkit 13、client 5、contracts 4、storage 4）。
+
+本包 11 项测试覆盖：地点拒绝猜测与默认地点、三个时间与单位、记录通过契约校验、缓存命中/过期/stale、输入校验、工具 scope 与 dispose、manifest 与生命周期。
+
+根 `npm run check` 当前无法整体通过：它在第一步 `packages/contracts` 的 `check:generated` 即失败（提示生成文件陈旧）。该失败已用 `git stash` 在不含本包任何改动的干净 main 检出上复现，属既有问题、与本包无关，需 `goo122` 重新生成或修正漂移检查。本包未改动 `packages/contracts/` 下任何文件。
 
 ## 已知限制
 
