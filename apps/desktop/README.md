@@ -36,3 +36,17 @@ npm start --prefix apps/desktop
 `npm test --prefix apps/desktop` 检查跨屏工作区定位和公共客户端取消到终态的语义。`npm run test:smoke --workspace=@personal-agent/desktop` 使用项目锁定的 Playwright 启动真实 Electron 进行界面验收；截图保存在模块 `.cache/qa`。
 
 后台未连接的业务页显示真实空状态，不把设计稿的手写业务数据带入产品。盘古 Provider 已接入，但真实 Endpoint/API Key 需要在设置页显式配置和测试；思考参数仍待 Runtime 公共契约与根装配接入。语音供应商、外部 Runtime 进程/Named Pipe、全局快捷键、安装卸载仍待对应模块接入。当前玻璃为 CSS 材质；原生 Windows 桌面背景模糊未验收。多屏位置算法已测，物理多显示器/DPI 切换未实机验收。此工作包处于 review，不代表 P0 全部完成。
+
+## 文字交互垂直链路
+
+普通启动时，提交文字任务会通过本地 `TaskRuntime` 执行 `runAgent`，再由 `ModelGateway` 调用已配置的盘古 Provider。没有 Provider 时任务会如实失败，不会静默生成假回答。
+
+离线验收使用显式 Fake Model：
+
+```powershell
+npm run dev:text-fake --prefix apps/desktop
+npm run test:text-task --workspace=@personal-agent/desktop
+npm run test:text-smoke --workspace=@personal-agent/desktop
+```
+
+Fake Model 只验证 Runtime、Agent、持久化和桌面显示链路，不代表真实盘古连接已经验收。真实调用仍需在设置页配置并手动点击连接测试。
