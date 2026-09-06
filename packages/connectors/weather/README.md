@@ -6,7 +6,7 @@
 
 `@personal-agent/weather`（ESM，类型声明在 `dist/index.d.ts`）：
 
-- `register(host, options?)`：向 ToolHost 注册 `weather.forecast` 工具（scope `weather:read`），返回 dispose。`options`：`provider`、`now`、`defaultLocation`、`cacheTtlMs`（默认 10 分钟）。
+- `register(host, options)`：向 ToolHost 注册 `weather.forecast` 工具（scope `weather:read`），返回 dispose。`options.provider` 必须显式提供；`now`、`defaultLocation`、`cacheTtlMs`（默认 10 分钟）可选。
 - `WeatherService`：领域服务。`getForecast(query, signal?)` 返回 `{record, forecast, cache}`。
 - `WeatherConnector`：ConnectorPort 适配（manifest `id: 'weather'`，capabilities `['forecast']`，verification `mock`）。
 - `FakeWeatherProvider` / `defaultWeatherFixtures`：最小夹具，见下。
@@ -37,11 +37,11 @@ npm run typecheck --workspaces
 npm run test --workspaces
 ```
 
-本轮结果：5 个工作区类型检查全部通过；测试 37 项全绿（weather 11、testkit 13、client 5、contracts 4、storage 4）。
+本轮结果：6 个工作区类型检查全部通过；测试 46 项全绿（weather 13、runtime 7、testkit 13、client 5、contracts 4、storage 4）。
 
-本包 11 项测试覆盖：地点拒绝猜测与默认地点、三个时间与单位、记录通过契约校验、缓存命中/过期/stale、输入校验、工具 scope 与 dispose、manifest 与生命周期。
+本包 13 项测试覆盖：地点拒绝猜测与默认地点、三个时间与单位、记录通过契约校验、缓存命中/过期/stale、取消不返回缓存或成功结果、拒绝静默启用 Fake、输入校验、工具 scope 与 dispose、manifest 与生命周期。
 
-根 `npm run check` 当前无法整体通过：它在第一步 `packages/contracts` 的 `check:generated` 即失败（提示生成文件陈旧）。该失败已用 `git stash` 在不含本包任何改动的干净 main 检出上复现，属既有问题、与本包无关，需 `goo122` 重新生成或修正漂移检查。本包未改动 `packages/contracts/` 下任何文件。
+根 `npm run check` 已在合并最新 main 后通过；Windows CRLF 下的生成漂移误报由 PR #5 修复。
 
 ## 已知限制
 
