@@ -11,13 +11,13 @@
 | M0 设计基线 | PRD、架构、协作规范、工作包 | 文档检查通过；待决项登记 | 文档已建立，见下方检查记录 |
 | M1 基础闭环 | 窗口、Runtime、盘古、工具、语音基础 | 真实请求到工具与验证链路；取消有效 | MOD-01/02 已集成；MOD-03 本地验证通过，闭环未完成 |
 | M2 首次可用 | Obsidian、提醒、研究天气、TraceGuard 只读、全部 P0 | 所有 P0 逐项验收，不只演示单场景 | 未开始 |
-| M3 信息管家 | 邮件、日历、订阅、通知、专业协作 | 真实连接器增量同步与授权写入验证 | 未开始 |
+| M3 信息管家 | 邮件、日历、订阅、通知、专业协作 | 真实连接器增量同步与授权写入验证 | MOD-22 订阅采集已授权启动；邮件、日历、通知与专业协作未开始 |
 | M4 行动与扩展 | 电脑控制、编程、治理、流程学习、社交扩展 | 指定应用可控可验证；平台能力矩阵有证据 | 未开始 |
 | M5 参赛/分发 | 演示、打包、技术贡献材料 | 规则核验、真实证据、隔离安装运行卸载 | 未开始 |
 
 ## 2. 模块执行台账
 
-MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；`Potatos498` 已启动 MOD-25 并提交 PR #4。其他具体模块仍需用户明确授权后开工。每行可拆多个子任务，只有全部约定交付通过后模块才为 done。
+MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；`Potatos498` 已启动 MOD-25 并提交 PR #4，随后又获用户 2026-09-06 明确授权启动 MOD-22 订阅采集。其他具体模块仍需用户明确授权后开工。每行可拆多个子任务，只有全部约定交付通过后模块才为 done。
 
 | 模块 ID | 计划阶段 | 状态 | 当前执行人 / PR / 证据 |
 | --- | --- | --- | --- |
@@ -42,7 +42,7 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；`Pot
 | MOD-19 | M5 | todo | `zemeng` 已确定，未启动 |
 | MOD-20 | M2 本地提醒、M3 日历 | todo | `Potatos498` 已登记，未授权启动 |
 | MOD-21 | M3 | todo | `Potatos498` 已登记，未授权启动 |
-| MOD-22 | M3 | todo | `Potatos498` 已登记，未授权启动 |
+| MOD-22 | M3 | in_progress | `Potatos498` / 用户 2026-09-06 明确授权启动 / 拥有 `packages/connectors/feeds/`；依赖 MOD-02 已集成，MOD-05 未交付故 scope 校验暂由 testkit `FakeToolHost` 承担 / 工作包与范围已登记于下方，实现未开始、无 PR、无证据 |
 | MOD-23 | M3 | todo | `Potatos498` 已登记，未授权启动 |
 | MOD-24 | M2 | todo | `Potatos498` 已登记，未授权启动 |
 | MOD-25 | M2 | review | `Potatos498` / PR #4 / goo122 评审修复已合入，Open-Meteo 真实提供商已接入并完成真实读回；修复地理编码跨语言解析（双语言查询＋按 id 合并＋人口排序），解析逻辑已变需重新评审；模块 34 项、全仓 67 项测试通过，根 `check` 通过；待合并与根装配集成 |
@@ -55,6 +55,7 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；`Pot
 3. 真实联调依赖盘古凭据、授权测试 Vault 和 Runtime。缺少账号时可继续无账号模块，但不标记真实连接通过。
 4. 首次联调为面板→盘古→知识检索→来源展示。语音、提醒、天气、MCP、Skills、TraceGuard 只读及权限的 P0 验收随后逐项完成。
 5. 公共目录、锁文件和迁移由 `goo122` 集成；`zemeng` 与待认领协作者交付注册入口，不同时编辑应用根装配。
+6. MOD-22 订阅采集已获授权，可用 fake 依赖开工，但有三条边界：MOD-05 未交付，`feeds:read` scope 校验暂由 testkit `FakeToolHost` 承担，不等于真实权限隔离；游标与批次的持久化归宿主（`goo122`），连接器与工具本身不存订阅级游标状态；汇总、安静时段、暂停与频率设置归 MOD-23，不在本工作包。
 
 ### 2.2 原工作包迁移关系
 
@@ -92,6 +93,7 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；`Pot
 - 2026-09-06：PR #5 已合并，MOD-03 转为 done；PR #4 合并最新 main、修复取消语义和静默启用 Fake 的问题，全仓 46 项测试通过，MOD-25 保持 review。
 - 2026-09-06：MOD-25 接入 Open-Meteo 真实提供商，并合并上述评审修复（`provider` 必填、stale 回退收窄至可重试外部失败、取消语义、`retryAfterMs`）；更新工作包的交付、验收、证据与限制及台账证据。真实读回与模拟验证分开记录，manifest `verification` 由 `mock` 改为 `conditional`。实测：根 `npm run check` 退出码 0，模块 29 项（28 通过 + 1 项真实读回默认跳过）、全仓 62 项测试通过。ROADMAP 相对链接检查通过。
 - 2026-09-06：MOD-25 修复地理编码跨语言解析缺陷。对生产端点实测发现：Open-Meteo 按语言分别建索引且不跨文字系统匹配，`zh` 索引为繁体且不完整，`New York` 在 `zh` 轮查不到纽约市却查到英格兰同名村庄，原实现因此把时区解析成 `Europe/London`。改为非英文配置下并行查询「配置语言＋`en`」两轮、按 GeoNames `id` 合并、名称完全相等优先再按人口降序排序，展示名仍取配置语言。模块测试由 29 项增至 34 项（新增 5 项离线测试，夹具取自真实响应）。实测：根 `npm run check` 退出码 0，全仓 67 项（66 通过＋1 项真实读回默认跳过）；`PA_WEATHER_LIVE=1` 下 21 项全部通过。仍未解决且已记入已知限制：简体书写的外国地名（`东京` 命中江苏同名地点、`纽约` 返回 `NOT_FOUND`），修复需简繁映射表，与零新增依赖约束冲突。ROADMAP 相对链接检查通过。
+- 2026-09-06：登记 MOD-22 订阅采集工作包。用户本轮明确授权启动，台账由 `todo` 改为 `in_progress`，M3 里程碑状态与开工边界同步更新。开工前已对本机可达的候选真实源实测并据此选定取证来源：`ruanyifeng.com/blog/atom.xml` 为真 Atom，每条 entry 有 `<published>` 与 `tag:` 形式 `<id>`，带 ETag 与 Last-Modified 且条件请求真实返回 304 空 body；`sspai.com/feed` 为 RSS 2.0，10 条 item 全部无 `<guid>`、无 `lastBuildDate`、无 ETag 与 Last-Modified；`36kr.com/feed` 返回 200 但 body 是 HTML，作为「200 但不是订阅源」的夹具保留。`github.com` 的 `*.atom` 在本机取不到（Node fetch `UNABLE_TO_VERIFY_LEAF_SIGNATURE`、curl `CRYPT_E_NO_REVOCATION_CHECK`），`v2ex.com/index.xml` 连接超时，均不作为取证来源。本条只是登记，MOD-22 尚无实现、无测试、无真实读回证据。
 - 此记录不构成任何运行时能力通过证明。
 
 ## 5. 继续入口
@@ -108,6 +110,18 @@ MOD-03 已通过 PR #5 集成。PR #4 已合并最新 main 与 `goo122` 的评�
 - 验收：根 `npm run check` 退出码 0；`npm run typecheck --workspaces` 与 `npm run test --workspaces` 全绿（weather 34 项：33 通过 + 1 项真实读回默认跳过；全仓 67 项）。地点缺失时抛 `INVALID_ARGUMENT` 而非猜测；地名歧义时 `ranked` 披露解析结果与去重后的候选、`strict` 直接拒绝；配置语言索引缺失的地名仍能经英文轮解析到正确时区（`New York` → `America/New_York` 而非 `Europe/London`）；同名精确匹配由人口而非提供商顺序决定；缓存命中不调用提供商；仅可重试的外部失败回退 stale 缓存并带 `lastError`（含 `retryAfterMs`）；取消不返回 stale 或成功结果；Fake 不会在缺省配置时静默启用（`provider` 必填）；模拟与真实状态分开，真实读回需 `PA_WEATHER_LIVE=1` 显式开启。
 - 证据：[weather 说明](../packages/connectors/weather/README.md)（含 2026-09-06 对生产端点的真实读回原始输出、与 `curl` 直取响应的交叉核对，以及 10 个地名的实测解析表——8 个正确、2 个已知失败）。manifest `verification` 为 `conditional`。
 - 限制：Open-Meteo 不返回预报发布时间，`occurredAt` 是覆盖日起点，已由 `publishedTimeKind: 'coverage_start'` 显式标注而非用抓取时间冒充；`conditional` 依赖出站网络可达，本轮仅验证少量地点与近日日期；**简体书写的外国地名解析不到或解析错**（`纽约` → `NOT_FOUND`、`东京` → 江苏同名地点），因 `zh` 索引为繁体且不完整、`en` 索引不匹配中文，修复需简繁映射表而与零新增依赖约束冲突；非英文配置下每个未命中缓存的地名产生两次地理编码请求；摘要文本仅中英两套；缓存仅进程内，地理编码缓存无 TTL；`ranked` 模式仍会在披露后选定一个候选；尚未接入 MOD-03 根装配，也未实现 MOD-05 权限隔离。
+
+### MOD-22 当前工作包
+
+- 任务：M3-C-022 / 订阅采集连接器；关联 MOD-22 / PA-015。
+- 负责人：`Potatos498`；评审者：`goo122`；用户 2026-09-06 明确授权启动；尚无 PR。
+- 范围：`packages/connectors/feeds/`，以及需由 `goo122` 集成的根 `build` 脚本一行与 `package-lock.json`；不修改公共契约。**本工作包新增依赖 `fast-xml-parser`**——Node 无内置 XML 解析器，手写 RSS/Atom 解析器的正确性与安全风险更高；这是连接器包首次打破 MOD-25 的「零新增依赖」，版本、license、依赖树与 `npm audit` 结果将在实现时核实后写入包 README，不预先当成事实。
+- 输入与依赖：装配方显式配置的订阅列表（`id`、`url`、可选 `title`／`sensitivity`）与宿主回传的游标。依赖 MOD-02 的 `ConnectorItem` 契约与 `ConnectorPort`、testkit 的假时钟与假 ToolHost、`node:crypto` 的 SHA-256 与 Node 内置 `fetch`。真实数据来自公开 RSS 2.0 / Atom 源，无密钥、无账号。MOD-05 未交付，`feeds:read` scope 校验暂由 `FakeToolHost` 承担。
+- 交付：可替换的 `FeedProvider` 抽象与显式注入的 `FakeFeedProvider`；真实 `HttpFeedProvider`（条件请求、响应体大小上限、重定向复验并复验 scheme、错误码映射、**错误原因脱敏**）；RSS 2.0 / Atom 归一化解析器；显式 RFC 822 / RFC 3339 日期解析（不用 `new Date(str)`，其 RFC 822 行为是实现定义的）；有界 `seen` 不透明游标（base64url，**不含 watermark**，回填条目不会被永久漏掉）；`FeedService`（增量过滤、`limit`/`hasMore`、`dedupeKey` 去重、`dedupeKeyKind` 与 `occurredAtKind` 显式标注来源、`skipped[]` 带 `{index, reason}`）；`FeedsConnector` 清单与生命周期；`register(host, options)` 注册只读工具 `feeds.collect` 与 `feeds.subscriptions`；离线与真实分离的测试；包 README。
+- 交付物不在范围内：汇总、安静时段、暂停与频率设置（MOD-23）；通知展示（`zemeng`）；常驻调度器与轮询驱动（宿主 / MOD-03）；游标与批次的持久化（宿主 `goo122`）；JSON Feed、Webhook、带凭据的私有订阅、正文全文抓取。
+- 验收：根 `npm run check` 退出码 0；`npm run typecheck --workspaces` 与 `npm run test --workspaces` 全绿。同一批投递两次按 `dedupeKey` 不重复；发布时刻早于上次 `seen` 窗口的回填条目仍被投递；304 → `items: []` 且 `collection.state: 'unchanged'`；无验证器 → 全量抓取且零新条目；200 但 body 是 HTML → `EXTERNAL_FAILURE` 且 `retryable: false`；**订阅 URL 及其可能携带的 token 不出现在记录、工具输出、错误信息与 `skipped[]` 中**；游标被篡改或版本不符 → `CURSOR_EXPIRED`；`register` 缺 provider／订阅为空／id 重复 → `INVALID_ARGUMENT`；抓取失败时抛错而非返回原游标，使宿主游标自然停在原处；每条 `record` 过 `validateContract('connectorItem')`；真实读回需 `PA_FEEDS_LIVE=1` 显式开启，未设时离线测试确定性通过。
+- 证据：待补。取证计划为对两个真实源各跑两轮：阮一峰 Atom（有 ETag 与 Last-Modified，2026-09-06 实测条件请求真实返回 304 空 body，可演示增量路径）与少数派 RSS（10 条 item 零 `<guid>`、无任何验证器，可演示 `dedupeKeyKind: 'item_link'` 与无验证器退化路径）。留证内容包含两轮原始输出与 `fetchedAt`、第二轮的 304 状态行、以及两种 `dedupeKeyKind` 的实际取值。manifest `verification` 计划取自注入的 provider：`FakeFeedProvider` 为 `mock`，`HttpFeedProvider` 为 `conditional`，**不声称 `verified`**。
+- 限制：走 `ConnectorPort.fetchChanges` 的消费者只拿得到 `ConnectorItem`（契约 `additionalProperties: false`），没有纯文本 summary、没有来源标注、没有正文，MOD-23 若要正文需用 `contentRef` 自取；`feeds.collect` 严格无状态，游标从入参来、`nextCursor` 从出参走，包内不存订阅级游标，否则会与宿主的游标写权冲突；`health()` 受契约返回类型限制只能给 `{state}`，无法附 `DEVELOPMENT_PROTOCOL` 要求的「最后成功时间与脱敏原因」，属契约缺口；不做 stale 回退（与 weather 不同），重发上一批有重复投递风险；地理与时间语义上，条目日期按源给出的时区偏移解析，不换算到用户本地时区（待 MOD-13/MOD-20 时区配置确定）。
 
 ### MOD-03 完成记录
 
