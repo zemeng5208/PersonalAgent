@@ -35,6 +35,13 @@ Thumbs.db
 logs/
 tmp/
 temp/
-data/local/
+data/*
+!data/README.md
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.db-shm
+*.db-wal
 .cache/
 .worktrees/

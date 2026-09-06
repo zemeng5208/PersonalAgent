@@ -1,8 +1,41 @@
 import { ProtocolError, PROTOCOL_VERSION } from '@personal-agent/contracts';
-import type { Request, Response, ToolDescriptor } from '@personal-agent/contracts';
-import type { RuntimeToolInvocation, WorkerContext, WorkerResult } from '@personal-agent/runtime';
+import type { Request, Response, TaskSnapshot, ToolDescriptor } from '@personal-agent/contracts';
 import { validateToolArguments, validateToolProposal } from '@personal-agent/models';
 import type { ModelGateway, ModelMessage, ModelResult, ToolProposal } from '@personal-agent/models';
+
+export interface AgentProgressInput {
+  stepId: string;
+  label: string;
+  completedUnits?: number;
+  totalUnits?: number;
+}
+
+/** Runtime-facing port owned by the Agent package, not a concrete Runtime type. */
+export interface AgentWorkerContext {
+  taskId: string;
+  deadline: string;
+  signal: AbortSignal;
+  saveCheckpoint(key: string, value: unknown): void;
+  loadCheckpoint(key: string): unknown;
+  reportProgress(progress: AgentProgressInput): TaskSnapshot;
+}
+
+export interface AgentWorkerResult {
+  resultSummary: string;
+  evidenceRefs?: readonly string[];
+}
+
+export interface AgentToolInvocation {
+  toolName: string;
+  toolVersion: string;
+  arguments: unknown;
+  taskId: string;
+  runId: string;
+  authorizationRef: string;
+  deadline: string;
+  signal: AbortSignal;
+  userPresent?: boolean;
+}
 
 export interface ToolInvocationResult {
   state: 'confirmed' | 'pending' | 'unknown';
@@ -12,7 +45,7 @@ export interface ToolInvocationResult {
 
 export interface AgentToolPort {
   list(): ToolDescriptor[];
-  invoke(invocation: RuntimeToolInvocation): Promise<ToolInvocationResult>;
+  invoke(invocation: AgentToolInvocation): Promise<ToolInvocationResult>;
 }
 
 export interface AgentRuntimeRequestPort {
@@ -31,7 +64,7 @@ export class RuntimeToolInvoker implements AgentToolPort {
 
   list(): ToolDescriptor[] { return this.descriptors.map(descriptor => structuredClone(descriptor)); }
 
-  async invoke(invocation: RuntimeToolInvocation): Promise<ToolInvocationResult> {
+  async invoke(invocation: AgentToolInvocation): Promise<ToolInvocationResult> {
     const request: Request = {
       kind: 'request', protocolVersion: PROTOCOL_VERSION, requestId: this.requestIdFactory(), taskId: invocation.taskId,
       deadline: invocation.deadline, operation: 'tool.invoke',
@@ -55,11 +88,11 @@ export interface AgentRunOptions {
   goal: string;
   model: ModelGateway;
   tools: AgentToolPort;
-  authorizationRefFor: (toolName: string, context: WorkerContext) => string;
+  authorizationRefFor: (toolName: string, context: AgentWorkerContext) => string;
   maxSteps: number;
   maxTokens: number;
   maxRepairAttempts?: number;
-  onUnknownResult?: (context: WorkerContext, result: ToolInvocationResult) => void | Promise<void>;
+  onUnknownResult?: (context: AgentWorkerContext, result: ToolInvocationResult) => void | Promise<void>;
 }
 
 export interface AgentOutcome {
@@ -78,7 +111,7 @@ function validateBounds(options: AgentRunOptions): void {
   if (options.maxRepairAttempts !== undefined && (!Number.isSafeInteger(options.maxRepairAttempts) || options.maxRepairAttempts < 0)) throw new ProtocolError('INVALID_ARGUMENT', 'maxRepairAttempts must be a non-negative integer');
 }
 
-function checkRuntime(context: WorkerContext): void {
+function checkRuntime(context: AgentWorkerContext): void {
   if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Agent task was cancelled');
 }
 
@@ -98,12 +131,12 @@ function withModelMetadata(deployment: ModelResult['deployment'], usage: ModelRe
   return `${text} [model=${deployment.provider}/${deployment.deployment}/${deployment.model}; verification=${deployment.verification}; tokens=${tokens}]`;
 }
 
-async function complete(context: WorkerContext, options: AgentRunOptions, messages: readonly ModelMessage[], remainingTokens: number): Promise<ModelResult> {
+async function complete(context: AgentWorkerContext, options: AgentRunOptions, messages: readonly ModelMessage[], remainingTokens: number): Promise<ModelResult> {
   checkRuntime(context);
   return options.model.complete({messages, tools: options.tools.list(), maxOutputTokens: remainingTokens, deadline: context.deadline, signal: context.signal});
 }
 
-export async function runAgent(context: WorkerContext, options: AgentRunOptions): Promise<AgentOutcome> {
+export async function runAgent(context: AgentWorkerContext, options: AgentRunOptions): Promise<AgentOutcome> {
   validateBounds(options);
   let messages: ModelMessage[] = [{role: 'user', content: options.goal}];
   let usedTokens = 0;
@@ -161,7 +194,7 @@ export async function runAgent(context: WorkerContext, options: AgentRunOptions)
   throw new ProtocolError('TIMEOUT', `Agent reached maxSteps=${options.maxSteps} without a final answer`);
 }
 
-export function createAgentWorker(options: AgentRunOptions): (context: WorkerContext) => Promise<WorkerResult> {
+export function createAgentWorker(options: AgentRunOptions): (context: AgentWorkerContext) => Promise<AgentWorkerResult> {
   return async context => {
     const outcome = await runAgent(context, options);
     return {resultSummary: outcome.resultSummary, evidenceRefs: outcome.evidenceRefs};

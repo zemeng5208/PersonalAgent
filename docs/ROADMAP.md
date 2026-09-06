@@ -4,6 +4,14 @@
 
 本文维护工作状态，需求以 PRD 为准。模块负责人和独占目录唯一登记在 [模块分工](MODULE_ASSIGNMENTS.md)，契约见 [公共开发协议](DEVELOPMENT_PROTOCOL.md)。`goo122`（A）负责底座、公共协议和 Obsidian；`zemeng`（B）负责桌面与执行模块；`Potatos498`（C）负责分配到的信息连接器。阶段不代表承诺日期；正式排期需根据比赛时间、团队人数和接口验证结果确定。
 
+### ARCH-01：目录与依赖治理
+
+- 负责人：`goo122`；评审者：`zemeng` 或 `Potatos498`。
+- 分支：`codex/architecture-standard`；状态：`review`。
+- 范围：项目目录规范、ADR、模块模板、架构门禁，以及移除 `packages/agents → apps/runtime` 反向生产依赖；不新增业务能力、不拆 Runtime 进程、不移动其他协作者 worktree。
+- 验收：根级生产 `src/` 移除；`npm run check:architecture` 已检查 11 个 workspace 的 README、公开入口、依赖声明、依赖方向、连接器边界、公共 exports、跨包相对导入和循环依赖；全 workspace 类型检查通过，测试 106 项为 105 通过、1 项真实 Open-Meteo 验收按设计跳过。
+- 完成边界：本地通过后进入 review，非作者评审并合并前不视为完成。
+
 ## 1. 里程碑
 
 | 阶段 | 交付 | 退出条件 | 当前状态 |
