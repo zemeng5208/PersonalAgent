@@ -212,9 +212,121 @@ export class UnavailableModelProvider implements ModelProvider {
   }
 }
 
-/** Real Pangu endpoint/SDK details are deliberately deferred to an authorized integration task. */
-export class PanguModelProvider extends UnavailableModelProvider {
-  constructor() { super('pangu', 'not-configured'); }
+export interface PanguModelProviderOptions {
+  baseUrl: string;
+  model: string;
+  deployment?: string;
+  apiKey: () => string | Promise<string>;
+  fetch?: typeof globalThis.fetch;
+  timeoutMs?: number;
+}
+
+function panguCapabilities(): ModelCapabilities {
+  return {text: true, streaming: false, toolCalling: false, structuredOutput: false, vision: false};
+}
+
+function panguText(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !value.trim()) throw new ProtocolError('EXTERNAL_FAILURE', `Pangu response is missing ${field}`);
+  return value;
+}
+
+function panguError(status: number, retryAfter: string | null): ProtocolError {
+  if (status === 401 || status === 403) return new ProtocolError('UNAUTHORIZED', 'Pangu authentication failed');
+  if (status === 429) {
+    const seconds = retryAfter === null ? undefined : Number(retryAfter);
+    const retryAfterMs = seconds !== undefined && Number.isFinite(seconds) ? Math.max(0, Math.round(seconds * 1000)) : undefined;
+    return new ProtocolError('RATE_LIMITED', 'Pangu rate limit exceeded', true, retryAfterMs);
+  }
+  return new ProtocolError('EXTERNAL_FAILURE', `Pangu request failed with HTTP ${status}`, status === 408 || status >= 500);
+}
+
+/** Pangu V2 OpenAI-format text provider. Credentials are supplied by the trusted host. */
+export class PanguModelProvider implements ModelProvider {
+  readonly deployment: ModelDeployment;
+  private readonly request: typeof globalThis.fetch;
+  private readonly baseUrl: string;
+  private readonly model: string;
+  private readonly deploymentName: string;
+  private readonly apiKey: () => string | Promise<string>;
+  private readonly timeoutMs: number;
+
+  constructor(options: PanguModelProviderOptions) {
+    this.baseUrl = requiredText(options.baseUrl, 'baseUrl').replace(/\/+$/, '');
+    this.model = requiredText(options.model, 'model');
+    this.deploymentName = requiredText(options.deployment ?? options.model, 'deployment');
+    if (typeof options.apiKey !== 'function') throw new ProtocolError('INVALID_ARGUMENT', 'apiKey provider is required');
+    this.apiKey = options.apiKey;
+    this.request = options.fetch ?? globalThis.fetch;
+    this.timeoutMs = options.timeoutMs ?? 30_000;
+    if (!this.request) throw new ProtocolError('INVALID_ARGUMENT', 'fetch is required for Pangu provider');
+    if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs < 1) throw new ProtocolError('INVALID_ARGUMENT', 'timeoutMs must be a positive integer');
+    this.deployment = {provider: 'pangu', deployment: this.deploymentName, model: this.model, verification: 'conditional', capabilities: panguCapabilities()};
+  }
+
+  async complete(request: ModelRequest): Promise<ModelResult> {
+    validateRequest(request);
+    if (request.tools.length > 0 || request.requiredCapabilities?.some(capability => capability !== 'text')) {
+      throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Pangu provider currently supports text completion only');
+    }
+    const messages = request.messages.map(message => {
+      if (message.role === 'tool') throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Pangu text provider does not accept tool messages');
+      return {role: message.role, content: message.content};
+    });
+    const key = await this.apiKey();
+    if (request.signal.aborted) throw new ProtocolError('CANCELLED', 'Model request was cancelled');
+    if (!key || !key.trim()) throw new ProtocolError('UNAUTHORIZED', 'Pangu API key is not configured');
+    const deadlineMs = Date.parse(request.deadline) - Date.now();
+    if (deadlineMs <= 0) throw new ProtocolError('TIMEOUT', 'Pangu request deadline has expired', true);
+    const controller = new AbortController();
+    const abort = () => controller.abort(request.signal.reason);
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; controller.abort('Pangu request timed out'); }, Math.min(this.timeoutMs, deadlineMs));
+    request.signal.addEventListener('abort', abort, {once: true});
+    const started = Date.now();
+    try {
+      const response = await this.request(`${this.baseUrl}/api/v2/chat/completions`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json', authorization: `Bearer ${key}`},
+        body: JSON.stringify({model: this.model, messages, max_tokens: request.maxOutputTokens, stream: false}),
+        signal: controller.signal,
+      });
+      if (!response.ok) throw panguError(response.status, response.headers.get('retry-after'));
+      let body: unknown;
+      try { body = await response.json(); } catch { throw new ProtocolError('EXTERNAL_FAILURE', 'Pangu returned invalid JSON'); }
+      if (!body || typeof body !== 'object') throw new ProtocolError('EXTERNAL_FAILURE', 'Pangu returned an invalid response');
+      const record = body as Record<string, unknown>;
+      const choices = record.choices;
+      if (!Array.isArray(choices) || !choices[0] || typeof choices[0] !== 'object') throw new ProtocolError('EXTERNAL_FAILURE', 'Pangu response is missing choices');
+      const choice = choices[0] as Record<string, unknown>;
+      const message = choice.message;
+      if (!message || typeof message !== 'object') throw new ProtocolError('EXTERNAL_FAILURE', 'Pangu response is missing message');
+      const text = panguText((message as Record<string, unknown>).content, 'message content');
+      const usageValue = record.usage;
+      const usage = usageValue && typeof usageValue === 'object' ? usageValue as Record<string, unknown> : undefined;
+      const toCount = (value: unknown): number | undefined => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+      const promptTokens = toCount(usage?.prompt_tokens);
+      const completionTokens = toCount(usage?.completion_tokens);
+      const totalTokens = toCount(usage?.total_tokens);
+      const parsedUsage: ModelUsage = {
+        ...(promptTokens === undefined ? {} : {promptTokens}),
+        ...(completionTokens === undefined ? {} : {completionTokens}),
+        ...(totalTokens === undefined ? {} : {totalTokens}),
+      };
+      return {
+        response: {kind: 'final', text}, deployment: structuredClone(this.deployment),
+        ...(Object.keys(parsedUsage).length === 0 ? {} : {usage: parsedUsage}),
+        latencyMs: Date.now() - started, stopReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : 'stop',
+      };
+    } catch (error) {
+      if (error instanceof ProtocolError) throw error;
+      if (request.signal.aborted) throw new ProtocolError('CANCELLED', 'Model request was cancelled');
+      if (timedOut) throw new ProtocolError('TIMEOUT', 'Pangu request timed out', true);
+      throw new ProtocolError('EXTERNAL_FAILURE', 'Pangu request failed', true);
+    } finally {
+      clearTimeout(timer);
+      request.signal.removeEventListener('abort', abort);
+    }
+  }
 }
 
 export function validateToolProposal(value: unknown): ToolProposal {
