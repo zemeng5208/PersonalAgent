@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {chromium} = require(path.join(process.env.USERPROFILE, '.npm-global/node_modules/playwright'));
+const {chromium} = require('playwright');
 
 (async () => {
   const browser = await chromium.launch();

@@ -5,11 +5,16 @@
   "type": "module",
   "main": "electron/main.js",
   "scripts": {
+    "postinstall": "node -e \"require('electron/install.js')\"",
     "start": "electron .",
     "dev:fake": "electron . --fake-runtime",
     "typecheck": "node --check electron/main.js && node --check electron/runtime.js && node --check electron/preload.cjs && node --check src/app/renderer.js && node --check src/features/admin/view.js && node --check src/features/orb/orb.js && node --check src/features/conversation/state.js",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "test:smoke": "node test/electron-smoke.cjs"
   },
   "dependencies": { "@personal-agent/models": "0.1.0-alpha.1" },
-  "devDependencies": { "electron": "44.2.0" }
+  "devDependencies": {
+    "electron": "44.2.0",
+    "playwright": "1.63.0"
+  }
 }
