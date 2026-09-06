@@ -8,6 +8,13 @@ export type WeatherUnits = 'metric' | 'imperial';
  */
 export type PublishedTimeKind = 'provider_published' | 'coverage_start';
 
+/**
+ * `low` means the best match is a small same-name place or a non-city record, so the
+ * intended location was probably not found. It is a verdict on the match, not on the
+ * weather data, and it is deliberately not corrected in place.
+ */
+export type PlaceConfidence = 'high' | 'low';
+
 export interface ResolvedPlace {
   name: string;
   admin1?: string;
@@ -17,12 +24,21 @@ export interface ResolvedPlace {
   timezone: string;
   ambiguous: boolean;
   alternatives: string[];
+  confidence: PlaceConfidence;
+  /** GeoNames feature class behind `confidence`, disclosed so the verdict is auditable. */
+  featureCode?: string;
 }
 
 export interface ForecastRequest {
   location: string;
   date: string;
   units: WeatherUnits;
+  /**
+   * Latin or local-script spelling used only to search when `location` matched nothing
+   * usable. The geocoding index never matches across scripts, so a Chinese `location`
+   * needs this to reach the intended foreign city.
+   */
+  locationQuery?: string;
 }
 
 export interface ForecastFetch {

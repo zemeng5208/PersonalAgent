@@ -1,6 +1,6 @@
 import { ProtocolError, validateContract } from '@personal-agent/contracts';
 import type { ProtocolContracts } from '@personal-agent/contracts';
-import type { ForecastFetch, PublishedTimeKind, ResolvedPlace, WeatherProvider, WeatherUnits } from './provider.js';
+import type { ForecastFetch, ForecastRequest, PublishedTimeKind, ResolvedPlace, WeatherProvider, WeatherUnits } from './provider.js';
 
 export type WeatherRecord = ProtocolContracts['connectorItem'];
 
@@ -8,6 +8,11 @@ export interface WeatherQuery {
   location?: string;
   date?: string;
   units?: WeatherUnits;
+  /**
+   * Latin or local-script spelling, searched only when `location` matched nothing usable.
+   * It can change which place is resolved, so it becomes part of the record identity.
+   */
+  locationQuery?: string;
 }
 
 export interface ForecastPayload {
@@ -84,16 +89,21 @@ export class WeatherService {
     if (!isValidDate(date)) throw new ProtocolError('INVALID_ARGUMENT', 'date must be a valid YYYY-MM-DD calendar date');
     if (signal?.aborted) throw new ProtocolError('CANCELLED', 'Weather query cancelled');
     const units: WeatherUnits = query.units ?? 'metric';
+    const locationQuery = query.locationQuery?.trim() || undefined;
+    const identity = locationQuery === undefined ? location : `${location}|${locationQuery}`;
 
-    const key = `${location}|${date}|${units}`;
+    const key = `${identity}|${date}|${units}`;
     const entry = this.cache.get(key);
     if (entry && now - entry.fetchedAtMs < this.ttlMs) {
       return {record: structuredClone(entry.record), forecast: structuredClone(entry.forecast), cache: cacheState('fresh', entry, now, this.ttlMs)};
     }
 
+    const request: ForecastRequest = {location, date, units};
+    if (locationQuery !== undefined) request.locationQuery = locationQuery;
+
     let fetch: ForecastFetch;
     try {
-      fetch = await this.options.provider.fetchForecast({location, date, units}, signal ?? new AbortController().signal);
+      fetch = await this.options.provider.fetchForecast(request, signal ?? new AbortController().signal);
     } catch (error) {
       if (signal?.aborted) throw new ProtocolError('CANCELLED', 'Weather query cancelled');
       if (entry && error instanceof ProtocolError && STALE_FALLBACK_ERRORS.has(error.code)) {
@@ -113,12 +123,12 @@ export class WeatherService {
     const record: WeatherRecord = {
       source: this.options.provider.source,
       accountRef: 'weather',
-      externalId: `${location}|${date}|${units}`,
+      externalId: `${identity}|${date}|${units}`,
       occurredAt: fetch.publishedAt,
       fetchedAt: new Date(fetchedAtMs).toISOString(),
-      contentRef: `weather://forecast/${encodeURIComponent(location)}/${date}?units=${units}`,
+      contentRef: `weather://forecast/${encodeURIComponent(identity)}/${date}?units=${units}`,
       sensitivity: 'public',
-      dedupeKey: `${this.options.provider.source}:${location}:${date}:${units}`,
+      dedupeKey: `${this.options.provider.source}:${identity}:${date}:${units}`,
       validFor,
     };
     validateContract('connectorItem', record);
