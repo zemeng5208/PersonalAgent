@@ -13,7 +13,7 @@
     "npm": "11.12.x"
   },
   "scripts": {
-    "build": "npm run build --workspace=@personal-agent/storage && npm run build --workspace=@personal-agent/contracts && npm run build --workspace=@personal-agent/client && npm run build --workspace=@personal-agent/testkit && npm run build --workspace=@personal-agent/policy && npm run build --workspace=@personal-agent/tool-gateway && npm run build --workspace=@personal-agent/connector-host && npm run build --workspace=@personal-agent/weather && npm run build --workspace=@personal-agent/runtime && npm run build --workspace=@personal-agent/models && npm run build --workspace=@personal-agent/agents",
+    "build": "npm run build --workspace=@personal-agent/storage && npm run build --workspace=@personal-agent/contracts && npm run build --workspace=@personal-agent/client && npm run build --workspace=@personal-agent/testkit && npm run build --workspace=@personal-agent/policy && npm run build --workspace=@personal-agent/tool-gateway && npm run build --workspace=@personal-agent/connector-host && npm run build --workspace=@personal-agent/weather && npm run build --workspace=@personal-agent/productivity && npm run build --workspace=@personal-agent/calendar && npm run build --workspace=@personal-agent/runtime && npm run build --workspace=@personal-agent/models && npm run build --workspace=@personal-agent/agents",
     "typecheck": "npm run build && npm run typecheck --workspaces",
     "test": "npm run build && npm run test --workspaces",
     "check:architecture": "node --test tests/architecture/*.test.mjs",
