@@ -555,7 +555,7 @@ async function action(event, name, payload) {
   if (!client) throw Error('Runtime 未连接，此操作尚不可用');
   if (name === 'task.submit') {
     if (sender !== panel && sender !== workspace) throw Error('请在对话工作区发送消息');
-    if (typeof payload !== 'string' || !payload.trim() || payload.length > 10000) throw Error('请输入有效任务');
+    if (typeof payload !== 'string' || !payload.trim()) throw Error('请输入有效任务');
     if (!fakeMode && model.enabled === false) throw Error('模型已停用，请先在模型设置中启用');
     const surface = sender === workspace ? 'workspace' : 'panel';
     if (submitting.has(surface) || [...tasks.values()].some(task => conversations.surface(task.taskId) === surface && !['succeeded','failed','cancelled'].includes(task.state))) throw Error('请等待当前回答完成，或先停止当前任务');

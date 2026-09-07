@@ -44,6 +44,7 @@ test('task.submit alone dispatches one explicit Fake Model execution', async () 
     assert.equal(task.state, 'succeeded');
     assert.match(task.resultSummary, /回答：你好/);
     assert.equal(provider.requests.length, 1);
+    assert.equal(Object.hasOwn(provider.requests[0], 'maxOutputTokens'), false);
     assert.equal(application.activeTaskCount, 0);
   });
 });

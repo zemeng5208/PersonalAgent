@@ -35,6 +35,17 @@ test('Agent enforces token and repair-step budgets', async () => {
   assert.equal(provider.requests.length, 1);
 });
 
+test('Agent has no local token budget when maxTokens is omitted', async () => {
+  const provider = new FakeModelProvider([{kind: 'final', text: 'x'.repeat(4096)}]);
+  const outcome = await runAgent(context(), {
+    goal: 'unbounded locally', model: new ModelGateway(provider),
+    tools: {list: () => [], invoke: async () => assert.fail('must not invoke')},
+    authorizationRefFor: () => 'unused', maxSteps: 1,
+  });
+  assert.equal(outcome.status, 'succeeded');
+  assert.equal(Object.hasOwn(provider.requests[0], 'maxOutputTokens'), false);
+});
+
 test('main Agent returns a final answer without a tool', async () => {
   const model = new ModelGateway(new FakeModelProvider([{kind: 'final', text: 'done'}]));
   const outcome = await runAgent(context(), {

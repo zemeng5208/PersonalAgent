@@ -115,7 +115,7 @@ export function startTextTask(
     tools: options.tools ?? NO_TOOLS,
     authorizationRefFor: () => 'runtime-text-chat-no-tools',
     maxSteps: options.tools ? 8 : 1,
-    maxTokens: options.maxTokens ?? 512,
+    ...(options.maxTokens === undefined ? {} : {maxTokens: options.maxTokens}),
   }), {deadline: taskDeadline, sideEffect: options.tools?.list().some(tool => tool.sideEffect !== 'read') ? 'external_write' : 'read', ...(options.resume ? {resume: true} : {})});
 }
 
