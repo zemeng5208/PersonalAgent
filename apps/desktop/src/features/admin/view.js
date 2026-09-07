@@ -62,8 +62,13 @@ export function mountAdmin(root, invoke, escape) {
   }
 
   function authorizationList(data) {
-    const rows = data.approvals.map(item => `<tr><td>${escape(item.approvalId)}</td><td>${escape(item.taskId)}</td><td>${escape(item.action)}</td><td>${item.revision}<br><button class="btn btn-sm" data-approval="allow_once" data-id="${escape(item.approvalId)}" data-task="${escape(item.taskId)}" data-revision="${item.revision}">允许一次</button> <button class="btn btn-sm btn-danger" data-approval="deny" data-id="${escape(item.approvalId)}" data-task="${escape(item.taskId)}" data-revision="${item.revision}">拒绝</button></td></tr>`).join('');
-    return `<div class="sheet"><h2>待处理授权</h2><div class="table-scroll"><table><thead><tr><th>授权</th><th>任务</th><th>动作</th><th>决定</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="empty">没有待处理授权。授权决定由 Runtime 校验，界面不直接授予权限。</td></tr>'}</tbody></table></div></div>`;
+    const rows = data.approvals.map(item => {
+      const tool = item.toolName ?? item.action;
+      const args = item.arguments === undefined ? 'Runtime 未公开参数' : JSON.stringify(item.arguments);
+      const scopes = item.scopes?.length ? item.scopes.join(', ') : 'Runtime 未公开范围';
+      return `<tr><td>${escape(item.approvalId)}</td><td>${escape(item.taskId)}</td><td><b>${escape(tool)}</b><br><small>参数：${escape(args)}</small><br><small>范围：${escape(scopes)}</small></td><td>${item.revision}<br><button class="btn btn-sm" data-approval="allow_once" data-id="${escape(item.approvalId)}" data-task="${escape(item.taskId)}" data-revision="${item.revision}">允许一次</button> <button class="btn btn-sm btn-danger" data-approval="deny" data-id="${escape(item.approvalId)}" data-task="${escape(item.taskId)}" data-revision="${item.revision}">拒绝</button></td></tr>`;
+    }).join('');
+    return `<div class="sheet"><h2>待处理授权</h2><div class="table-scroll"><table><thead><tr><th>授权</th><th>任务</th><th>工具、参数与范围</th><th>决定</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="empty">没有待处理授权。授权决定由 Runtime 校验，界面不直接授予权限。</td></tr>'}</tbody></table></div></div>`;
   }
 
   function modelEditor(data) {

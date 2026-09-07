@@ -1,5 +1,6 @@
 import { ProtocolError, validateToolValue } from '@personal-agent/contracts';
 import type { ToolDescriptor } from '@personal-agent/contracts';
+export {StructuredToolProvider} from './structured-tools.js';
 
 export type ModelCapability = 'text' | 'streaming' | 'toolCalling' | 'structuredOutput' | 'vision';
 export type Verification = 'mock' | 'verified' | 'conditional';
@@ -98,6 +99,7 @@ function supports(capabilities: ModelCapabilities, capability: ModelCapability):
 }
 
 function validateResponse(response: ModelResponse): void {
+  if (!response || typeof response !== 'object') throw new ProtocolError('INVALID_ARGUMENT', 'Model response must be an object');
   if (response.kind === 'final') {
     requiredText(response.text, 'model response text');
     return;
@@ -157,12 +159,35 @@ export class ModelGateway implements ModelPort {
         throw new ProtocolError('UNSUPPORTED_CAPABILITY', `${this.deployment.provider}/${this.deployment.model} does not support ${capability}`);
       }
     }
-    const result = await this.provider.complete({...request, tools: structuredClone(request.tools)});
+    const remaining = Date.parse(request.deadline) - Date.now();
+    if (remaining <= 0) throw new ProtocolError('TIMEOUT', 'Model request deadline expired');
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let abort = (): void => {};
+    const interrupted = new Promise<never>((_, reject) => {
+      abort = () => { controller.abort(); reject(new ProtocolError('CANCELLED', 'Model request was cancelled')); };
+      request.signal.addEventListener('abort', abort, {once: true});
+      timer = setTimeout(() => { controller.abort(); reject(new ProtocolError('TIMEOUT', 'Model request deadline expired')); }, Math.min(remaining, 2_147_483_647));
+      if (request.signal.aborted) abort();
+    });
+    let result: ModelResult;
+    try {
+      result = await Promise.race([this.provider.complete({...request, signal: controller.signal, tools: structuredClone(request.tools)}), interrupted]);
+    } catch (error) {
+      if (error instanceof ProtocolError) throw error;
+      throw new ProtocolError('EXTERNAL_FAILURE', 'Model provider request failed');
+    } finally {
+      if (timer) clearTimeout(timer);
+      request.signal.removeEventListener('abort', abort);
+    }
     validateResponse(result.response);
     if (result.deployment.provider !== this.deployment.provider || result.deployment.deployment !== this.deployment.deployment || result.deployment.model !== this.deployment.model) {
       throw new ProtocolError('EXTERNAL_FAILURE', 'Model provider returned a different deployment identity');
     }
     if (!Number.isFinite(result.latencyMs) || result.latencyMs < 0) throw new ProtocolError('EXTERNAL_FAILURE', 'Model provider returned an invalid latency');
+    for (const count of Object.values(result.usage ?? {})) {
+      if (!Number.isSafeInteger(count) || count < 0) throw new ProtocolError('EXTERNAL_FAILURE', 'Model provider returned invalid usage');
+    }
     return structuredClone(result);
   }
 }

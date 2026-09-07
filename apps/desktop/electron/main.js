@@ -5,7 +5,6 @@ import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'no
 import {EventCursor} from '@personal-agent/client';
 import {register} from './runtime.js';
 import {panelBounds, clampOrb, draggedGroupBounds} from './placement.js';
-import {createFakeTextProvider, startTextTask} from './text-task.js';
 import {Conversations} from './conversations.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
@@ -47,7 +46,6 @@ const modelConfig = {
   apiKey: process.env.PANGU_API_KEY ?? '',
 };
 const modelStorage = {persisted: false};
-let panguProvider;
 let model = {
   provider: 'pangu', label: '盘古大模型 2.0', status: 'unavailable', verification: 'conditional',
   baseUrl: modelConfig.baseUrl, model: modelConfig.model, deployment: modelConfig.deployment,
@@ -61,9 +59,9 @@ const tasks = new Map();
 const taskGoals = new Map();
 let conversations;
 const submitting = new Set();
-const activeTextTasks = new Map();
 const approvals = new Map();
 const notifications = new Map();
+let runtimeApplication;
 
 function snapshot(surface) {
   return {
@@ -244,36 +242,49 @@ function restoreModelConfig() {
   }
 }
 
+function runtimeTextOptions(state = model, config = modelConfig) {
+  if (state.enabled === false) return {mode: 'unavailable', model: config.model};
+  if (state.provider === 'fake') return {mode: 'fake'};
+  if (state.configured && config.baseUrl && config.apiKey) {
+    return {
+      mode: 'pangu', baseUrl: config.baseUrl, model: config.model,
+      deployment: config.deployment, apiKey: () => modelConfig.apiKey,
+    };
+  }
+  return {mode: 'unavailable', model: config.model};
+}
+
 async function configurePangu(input, {publishState = true, persist = true} = {}) {
   const baseUrl = modelEndpoint(input?.baseUrl);
   const modelName = requiredModelText(input?.model, '模型名称');
   const deployment = requiredModelText(input?.deployment || modelName, '部署名称');
   const apiKey = typeof input?.apiKey === 'string' && input.apiKey.trim() ? input.apiKey.trim() : modelConfig.apiKey;
   if (!apiKey) throw Error('API Key 未配置；密钥只会保留在主进程内存中');
-  const {PanguModelProvider} = await import('@personal-agent/models');
-  const provider = new PanguModelProvider({baseUrl, model: modelName, deployment, apiKey: () => modelConfig.apiKey});
-  const previous = {...modelConfig};
-  const previousEnabled = model.enabled;
+  const previousConfig = {...modelConfig};
+  const previousModel = model;
   modelConfig.baseUrl = baseUrl;
   modelConfig.model = modelName;
   modelConfig.deployment = deployment;
   modelConfig.apiKey = apiKey;
-  model.enabled = true;
   let storage = {saved: modelStorage.persisted, reason: modelStorage.persisted ? '配置已从本机加密存储恢复' : '配置仅保留在本次运行'};
   try {
+    const configuredDeployment = runtimeApplication.configureText(runtimeTextOptions({provider: 'pangu', configured: true, enabled: true}, modelConfig));
+    model = {
+      ...model,
+      provider: 'pangu', label: '盘古大模型 2.0', status: 'configured', verification: configuredDeployment.verification,
+      baseUrl, model: modelName, deployment, configured: true, keyConfigured: true, enabled: true,
+      capabilities: structuredClone(configuredDeployment.capabilities),
+    };
     if (persist) storage = persistModelConfig();
   } catch (error) {
-    Object.assign(modelConfig, previous);
-    model.enabled = previousEnabled;
+    Object.assign(modelConfig, previousConfig);
+    model = previousModel;
+    try { runtimeApplication.configureText(runtimeTextOptions(previousModel, previousConfig)); } catch {}
     throw error;
   }
-  panguProvider = provider;
   model = {
     ...model,
-    provider: 'pangu', label: '盘古大模型 2.0', status: 'configured', verification: provider.deployment.verification,
-    baseUrl, model: modelName, deployment, configured: true, keyConfigured: true, enabled: true,
     persisted: storage.saved,
-    capabilities: structuredClone(provider.deployment.capabilities),
     reason: `${storage.reason}，尚未发起真实连接测试`, lastTestAt: null, latencyMs: null,
   };
   if (publishState) publish();
@@ -281,16 +292,12 @@ async function configurePangu(input, {publishState = true, persist = true} = {})
 }
 
 async function testPangu() {
-  if (!panguProvider) throw Error('请先保存盘古模型配置');
+  if (!runtimeApplication || runtimeApplication.deployment.provider !== 'pangu') throw Error('请先保存盘古模型配置');
   if (model.enabled === false) throw Error('模型已停用，请先启用');
   const controller = new AbortController();
   const started = Date.now();
   try {
-    const result = await panguProvider.complete({
-      messages: [{role: 'user', content: 'Reply with exactly OK.'}],
-      tools: [], maxOutputTokens: 4,
-      deadline: new Date(Date.now() + 15_000).toISOString(), signal: controller.signal,
-    });
+    const result = await runtimeApplication.testTextConnection({signal: controller.signal});
     const latencyMs = Number.isFinite(result.latencyMs) ? result.latencyMs : Date.now() - started;
     model = {...model, status: 'ready', reason: `连接测试通过 · ${latencyMs}ms`, lastTestAt: new Date().toISOString(), latencyMs};
     publish();
@@ -318,10 +325,18 @@ function openWorkspace() {
 function toggleModel(input) {
   if (!model.configured) throw Error('请先保存模型配置');
   const enabled = Boolean(input?.enabled);
+  if (enabled === (model.enabled !== false)) return structuredClone(model);
   const previous = model;
-  model = {...model, enabled, status: enabled ? 'configured' : 'disabled', reason: enabled ? '模型已启用，请重新测试真实连接' : '模型已停用，不会用于新任务'};
-  try { persistModelConfig(); }
-  catch (error) { model = previous; throw error; }
+  const next = {...model, enabled, status: enabled ? 'configured' : 'disabled', reason: enabled ? '模型已启用，请重新测试真实连接' : '模型已停用，不会用于新任务'};
+  try {
+    runtimeApplication.configureText(runtimeTextOptions(next));
+    model = next;
+    if (model.provider !== 'fake') persistModelConfig();
+  } catch (error) {
+    model = previous;
+    try { runtimeApplication.configureText(runtimeTextOptions(previous)); } catch {}
+    throw error;
+  }
   publish();
   return structuredClone(model);
 }
@@ -336,6 +351,7 @@ function updateThinking(input) {
 
 async function initializeModelFromEnvironment() {
   if (fakeModelMode) {
+    runtimeApplication.configureText({mode: 'fake'});
     model = {
       ...model,
       provider: 'fake', label: 'Fake Model · 离线测试', status: 'ready', verification: 'mock',
@@ -349,27 +365,15 @@ async function initializeModelFromEnvironment() {
   const shouldEnable = !modelStorage.persisted || model.enabled !== false;
   try {
     await configurePangu(modelConfig, {publishState: false, persist: false});
-    if (!shouldEnable) model = {...model, enabled: false, status: 'disabled', reason: '模型已停用，不会用于新任务'};
+    if (!shouldEnable) {
+      model = {...model, enabled: false, status: 'disabled', reason: '模型已停用，不会用于新任务'};
+      runtimeApplication.configureText(runtimeTextOptions(model));
+    }
   } catch (error) {
     model = {...model, status: 'error', reason: error instanceof Error ? error.message : '盘古配置无效'};
   }
 }
 
-async function executeTextTask(taskId, goal) {
-  if (fakeMode || activeTextTasks.has(taskId)) return;
-  const {UnavailableModelProvider} = await import('@personal-agent/models');
-  const provider = fakeModelMode && model.enabled !== false
-    ? createFakeTextProvider()
-    : model.enabled !== false && panguProvider ? panguProvider : new UnavailableModelProvider('pangu', modelConfig.model);
-  const execution = startTextTask(runtime, taskId, goal, provider, {history:conversations.history([...tasks.values()],taskId)});
-  activeTextTasks.set(taskId, execution);
-  try {
-    await execution;
-  } finally {
-    activeTextTasks.delete(taskId);
-    await refresh(taskId).catch(() => {});
-  }
-}
 async function refresh(taskId) {
   const task = await client.call('task.get', {taskId});
   tasks.set(taskId, task);
@@ -383,7 +387,20 @@ function applyEvent(event) {
     tasks.set(event.taskId, structuredClone(event.payload));
   }
   if (event.type === 'approval.requested' && event.payload) {
-    approvals.set(event.payload.approvalId, structuredClone(event.payload));
+    const view = structuredClone(event.payload);
+    try {
+      const approval = runtimeApplication?.runtime?.getApproval(event.payload.approvalId);
+      const checkpoint = runtimeApplication?.runtime?.loadCheckpoint(event.payload.taskId, 'agent-loop');
+      const proposal = checkpoint?.pending?.response?.kind === 'tool_proposal' ? checkpoint.pending.response.proposal : undefined;
+      if (approval) {
+        view.toolName = approval.toolName;
+        view.scopes = [...approval.scopes];
+        view.argumentsDigest = approval.argumentsDigest;
+        view.expiresAt = approval.expiresAt;
+      }
+      if (proposal?.toolName === approval?.toolName) view.arguments = structuredClone(proposal.arguments);
+    } catch {}
+    approvals.set(event.payload.approvalId, view);
   }
   if (event.type === 'task.cancelled' && event.payload?.taskId) {
     for (const [id, approval] of approvals) if (approval.taskId === event.payload.taskId) approvals.delete(id);
@@ -421,20 +438,31 @@ async function syncCapabilities() {
 }
 
 async function initializeRuntime() {
+  const {createRuntimeApplication} = await import('@personal-agent/runtime/application');
   let readEvents;
   if (fakeMode) {
     const {FakeRuntime} = await import('@personal-agent/testkit');
     runtime = new FakeRuntime({mode: 'test', scenario: 'success'});
+    runtimeApplication = createRuntimeApplication({
+      path: path.resolve(dir, '../.cache/fake-runtime-application.sqlite'),
+      text: {mode: 'unavailable', model: modelConfig.model},
+    });
     readEvents = after => runtime.readEvents('tasks', after);
   } else {
-    const {TaskRuntime} = await import('@personal-agent/runtime');
     const dbPath = process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1' ? path.join(app.getPath('userData'),'runtime.sqlite') : path.resolve(dir, '../.cache/runtime.sqlite');
     mkdirSync(path.dirname(dbPath), {recursive: true});
-    runtime = new TaskRuntime(dbPath);
-    readEvents = after => runtime.readEvents(after);
+    const createApplication = process.argv.includes('--weather-tools')
+      ? (await import('@personal-agent/runtime/weather')).createOpenMeteoApplication
+      : createRuntimeApplication;
+    runtimeApplication = createApplication({
+      path: dbPath,
+      text: {mode: 'unavailable', model: modelConfig.model},
+    });
+    runtime = runtimeApplication.runtime;
+    readEvents = after => runtimeApplication.readEvents(after);
   }
   runtimeConnection = await register({
-    transport: runtime,
+    transport: fakeMode ? runtime : runtimeApplication,
     now: () => fakeMode ? runtime.clock.now() : Date.now(),
     readEvents,
     attachClient: value => { client = value; return () => { client = undefined; }; },
@@ -445,6 +473,18 @@ async function initializeRuntime() {
   await syncCapabilities();
   await pumpEvents();
   eventPoll = setInterval(() => void pumpEvents(), 120);
+}
+
+async function waitForTerminalTask(taskId, timeoutMs = 5_000) {
+  const terminal = new Set(['succeeded', 'failed', 'cancelled']);
+  const deadline = Date.now() + timeoutMs;
+  let task = await refresh(taskId);
+  while (!terminal.has(task.state) && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 25));
+    task = await refresh(taskId);
+  }
+  if (!terminal.has(task.state)) throw Error('Runtime 未在限定时间内确认任务终态');
+  return task;
 }
 
 async function action(event, name, payload) {
@@ -515,6 +555,7 @@ async function action(event, name, payload) {
   if (name === 'task.submit') {
     if (sender !== panel && sender !== workspace) throw Error('请在对话工作区发送消息');
     if (typeof payload !== 'string' || !payload.trim() || payload.length > 10000) throw Error('请输入有效任务');
+    if (!fakeMode && model.enabled === false) throw Error('模型已停用，请先在模型设置中启用');
     const surface = sender === workspace ? 'workspace' : 'panel';
     if (submitting.has(surface) || [...tasks.values()].some(task => conversations.surface(task.taskId) === surface && !['succeeded','failed','cancelled'].includes(task.state))) throw Error('请等待当前回答完成，或先停止当前任务');
     submitting.add(surface);
@@ -525,10 +566,6 @@ async function action(event, name, payload) {
     taskGoals.set(result.taskId, goal);
     if (sender === panel) pinned = true;
     const task = await refresh(result.taskId);
-    if (!fakeMode) void executeTextTask(result.taskId, goal).catch(error => {
-      runtimeError = error instanceof Error ? error.message : '文字任务启动失败';
-      publish();
-    });
     return task;
     } finally { submitting.delete(surface); }
   }
@@ -536,8 +573,8 @@ async function action(event, name, payload) {
     if (typeof payload !== 'string' || !tasks.has(payload)) throw Error('Unknown task');
     if (sender !== admin && conversations.surface(payload) !== (sender === workspace ? 'workspace' : 'panel')) throw Error('无法停止其他工作区的任务');
     const result = await client.call('task.cancel', {taskId: payload, reason: '用户取消任务'});
-    await refresh(payload);
-    return result;
+    const task = fakeMode ? await refresh(payload) : await waitForTerminalTask(payload);
+    return {...result, state: task.state};
   }
   if (name === 'task.refresh') {
     if (!tasks.has(payload)) throw Error('Unknown task');
@@ -549,7 +586,7 @@ async function action(event, name, payload) {
   if (name === 'settings.update') return client.call('settings.update', payload);
   if (name === 'authorization.respond') {
     if (!payload || typeof payload.approvalId !== 'string' || !['allow_once', 'deny'].includes(payload.decision) || !Number.isSafeInteger(payload.expectedRevision)) throw Error('授权决定格式无效');
-    const result = await client.call('authorization.respond', payload);
+    const result = await client.call('authorization.respond', {approvalId: payload.approvalId, decision: payload.decision, expectedRevision: payload.expectedRevision});
     approvals.delete(payload.approvalId);
     if (payload.taskId && tasks.has(payload.taskId)) await refresh(payload.taskId);
     publish();
@@ -617,13 +654,27 @@ app.whenReady().then(async () => {
     if (near || inside || pinned) { away = 0; if (near && !panel.isVisible()) openPanel(); }
     else if (panel.isVisible()) { if (!away) away = Date.now(); else if (Date.now() - away > 520) { panel.hide(); away = 0; } }
   }, 80);
-  app.on('before-quit', () => {
+  app.on('before-quit', event => {
+    if ((runtimeApplication?.activeTaskCount ?? 0) > 0) {
+      event.preventDefault();
+      app.isQuitting = false;
+      runtimeError = 'Runtime 仍有活动任务；请先等待完成或停止任务后再退出';
+      publish();
+      return;
+    }
     app.isQuitting = true;
     clearInterval(poll);
     clearInterval(eventPoll);
     tray?.destroy();
     runtimeConnection?.dispose?.();
-    try { runtime?.close?.(); } catch { /* active task recovery remains owned by Runtime */ }
+    try {
+      if (runtimeApplication) runtimeApplication.close();
+      else runtime?.close?.();
+    } catch (error) {
+      event.preventDefault();
+      runtimeError = error instanceof Error ? error.message : 'Runtime 仍有活动任务，无法安全退出';
+      publish();
+    }
   });
   app.on('window-all-closed', event => event.preventDefault());
 }).catch(error => { console.error(error); app.exit(1); });

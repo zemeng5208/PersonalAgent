@@ -1,6 +1,6 @@
 import { ProtocolError, validateContract } from '@personal-agent/contracts';
 import type { ProtocolContracts } from '@personal-agent/contracts';
-import type { ForecastFetch, PublishedTimeKind, ResolvedPlace, WeatherProvider, WeatherUnits } from './provider.js';
+import type { ForecastFetch, ForecastRequest, PublishedTimeKind, ResolvedPlace, WeatherProvider, WeatherUnits } from './provider.js';
 
 export type WeatherRecord = ProtocolContracts['connectorItem'];
 
@@ -8,6 +8,11 @@ export interface WeatherQuery {
   location?: string;
   date?: string;
   units?: WeatherUnits;
+  /**
+   * Latin or local-script spelling, searched only when `location` matched nothing usable.
+   * It can change which place is resolved, so it becomes part of the record identity.
+   */
+  locationQuery?: string;
 }
 
 export interface ForecastPayload {
@@ -80,20 +85,36 @@ export class WeatherService {
     if (!location) throw new ProtocolError('INVALID_ARGUMENT', 'Weather location must come from the request or a configured default; refusing to guess');
     if (query.units !== undefined && !UNITS.includes(query.units)) throw new ProtocolError('INVALID_ARGUMENT', 'units must be metric or imperial');
     const now = this.options.now();
-    const date = query.date ?? new Date(now).toISOString().slice(0, 10);
-    if (!isValidDate(date)) throw new ProtocolError('INVALID_ARGUMENT', 'date must be a valid YYYY-MM-DD calendar date');
     if (signal?.aborted) throw new ProtocolError('CANCELLED', 'Weather query cancelled');
     const units: WeatherUnits = query.units ?? 'metric';
+    const locationQuery = query.locationQuery?.trim() || undefined;
+    const identity = locationQuery === undefined ? location : `${location}|${locationQuery}`;
+    const abortSignal = signal ?? new AbortController().signal;
 
-    const key = `${location}|${date}|${units}`;
+    let date: string;
+    if (query.date === undefined) {
+      // "Today" belongs to the destination, not to UTC: after 16:00Z it is already tomorrow in
+      // Beijing and before 05:00Z still yesterday in New York. Resolving first means the cache
+      // key is not known until the provider answers, so a failure here cannot fall back to
+      // stale data — there is no key to look an entry up by.
+      date = localDate((await this.options.provider.resolvePlace(location, locationQuery, abortSignal)).timezone, now);
+    } else {
+      date = query.date;
+      if (!isValidDate(date)) throw new ProtocolError('INVALID_ARGUMENT', 'date must be a valid YYYY-MM-DD calendar date');
+    }
+
+    const key = `${identity}|${date}|${units}`;
     const entry = this.cache.get(key);
     if (entry && now - entry.fetchedAtMs < this.ttlMs) {
       return {record: structuredClone(entry.record), forecast: structuredClone(entry.forecast), cache: cacheState('fresh', entry, now, this.ttlMs)};
     }
 
+    const request: ForecastRequest = {location, date, units};
+    if (locationQuery !== undefined) request.locationQuery = locationQuery;
+
     let fetch: ForecastFetch;
     try {
-      fetch = await this.options.provider.fetchForecast({location, date, units}, signal ?? new AbortController().signal);
+      fetch = await this.options.provider.fetchForecast(request, abortSignal);
     } catch (error) {
       if (signal?.aborted) throw new ProtocolError('CANCELLED', 'Weather query cancelled');
       if (entry && error instanceof ProtocolError && STALE_FALLBACK_ERRORS.has(error.code)) {
@@ -113,12 +134,12 @@ export class WeatherService {
     const record: WeatherRecord = {
       source: this.options.provider.source,
       accountRef: 'weather',
-      externalId: `${location}|${date}|${units}`,
+      externalId: `${identity}|${date}|${units}`,
       occurredAt: fetch.publishedAt,
       fetchedAt: new Date(fetchedAtMs).toISOString(),
-      contentRef: `weather://forecast/${encodeURIComponent(location)}/${date}?units=${units}`,
+      contentRef: `weather://forecast/${encodeURIComponent(identity)}/${date}?units=${units}`,
       sensitivity: 'public',
-      dedupeKey: `${this.options.provider.source}:${location}:${date}:${units}`,
+      dedupeKey: `${this.options.provider.source}:${identity}:${date}:${units}`,
       validFor,
     };
     validateContract('connectorItem', record);
@@ -139,4 +160,23 @@ export class WeatherService {
 
 function cacheState(state: CacheState['state'], entry: CacheEntry, now: number, ttlMs: number): CacheState {
   return {state, fetchedAt: new Date(entry.fetchedAtMs).toISOString(), ageMs: Math.max(0, now - entry.fetchedAtMs), ttlMs};
+}
+
+/**
+ * Assembled from `formatToParts` rather than a locale format shortcut such as `en-CA`, whose
+ * field order is implementation-defined. The zone arrives from the provider, so a platform that
+ * cannot resolve it is an upstream data fault rather than a bad argument.
+ */
+function localDate(timeZone: string, nowMs: number): string {
+  let format: Intl.DateTimeFormat;
+  try {
+    format = new Intl.DateTimeFormat('en-US', {timeZone, year: 'numeric', month: '2-digit', day: '2-digit'});
+  } catch {
+    throw new ProtocolError('EXTERNAL_FAILURE', `Cannot resolve timezone ${timeZone}`, false);
+  }
+  const fields: Record<string, string> = {};
+  for (const part of format.formatToParts(new Date(nowMs))) fields[part.type] = part.value;
+  const year = fields.year; const month = fields.month; const day = fields.day;
+  if (!year || !month || !day) throw new ProtocolError('EXTERNAL_FAILURE', `Cannot resolve timezone ${timeZone}`, false);
+  return `${year}-${month}-${day}`;
 }

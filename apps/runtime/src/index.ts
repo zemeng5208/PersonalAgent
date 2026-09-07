@@ -1,13 +1,31 @@
-import {randomUUID} from 'node:crypto';
+import {createHash, randomUUID} from 'node:crypto';
 import type {DatabaseSync} from 'node:sqlite';
 import {parseEvent, parseRequest, parseResponse, PROTOCOL_VERSION, ProtocolError, validateContract} from '@personal-agent/contracts';
 import type {Event, Operation, Request, Response, TaskSnapshot, ToolDescriptor} from '@personal-agent/contracts';
 import {openStorage} from '@personal-agent/storage';
 import type {Migration} from '@personal-agent/storage';
+import {AuthorizationPolicy} from '@personal-agent/policy';
+import {SqliteAuthorizationStore} from './authorization-store.js';
 
 type TaskState = TaskSnapshot['state'];
 type TaskError = NonNullable<TaskSnapshot['error']>;
 type SideEffect = 'read' | 'local_write' | 'external_write';
+
+export interface ToolExecutionRecord {
+  protocolVersion: string;
+  policyDecision: 'not_evaluated' | 'allow' | 'deny';
+  executionStarted: boolean;
+  inputDigest: string;
+  evidenceId: string;
+  requestId: string;
+  taskId: string;
+  toolName: string;
+  toolVersion: string;
+  startedAt: string;
+  finishedAt?: string;
+  state: 'started' | 'confirmed' | 'failed' | 'unknown';
+  errorCode?: string;
+}
 
 export interface SubmitTaskInput {
   goal: string;
@@ -33,6 +51,18 @@ export interface TransitionPatch {
 export interface RunOptions {
   deadline: string;
   sideEffect: SideEffect;
+  resume?: boolean;
+}
+
+export interface ToolApproval {
+  argumentsDigest: string;
+  approvalId: string;
+  taskId: string;
+  toolName: string;
+  scopes: string[];
+  expiresAt: string;
+  revision: number;
+  state: 'pending' | 'allowed' | 'denied';
 }
 
 export interface WorkerContext {
@@ -71,6 +101,7 @@ export interface ScheduleDispatch {
 }
 
 export interface RuntimeToolInvocation {
+  onAuthorized?: () => void;
   toolName: string;
   toolVersion: string;
   arguments: unknown;
@@ -91,6 +122,7 @@ export interface RuntimeOptions {
   now?: () => Date;
   idFactory?: () => string;
   toolGateway?: RuntimeToolGateway;
+  createToolGateway?: (policy: AuthorizationPolicy) => RuntimeToolGateway;
 }
 
 export interface TaskPort {
@@ -175,6 +207,15 @@ export const RUNTIME_MIGRATIONS: readonly Migration[] = [{
     "CREATE TABLE task_schedules (schedule_id TEXT PRIMARY KEY, goal TEXT NOT NULL, conversation_id TEXT NOT NULL, run_at TEXT NOT NULL, time_zone TEXT NOT NULL, missed_run_policy TEXT NOT NULL CHECK (missed_run_policy IN ('run_once', 'skip')), task_idempotency_key TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('pending', 'fired', 'skipped')), task_id TEXT REFERENCES tasks(task_id)) STRICT;",
     "CREATE INDEX task_schedules_due ON task_schedules(status, run_at);"
   ].join('\n')
+}, {
+  version: 2,
+  sql: 'CREATE TABLE authorization_grants (authorization_ref TEXT PRIMARY KEY, value_json TEXT NOT NULL) STRICT;'
+}, {
+  version: 3,
+  sql: 'CREATE TABLE tool_execution_records (evidence_id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(task_id), record_json TEXT NOT NULL) STRICT; CREATE INDEX tool_execution_task ON tool_execution_records(task_id);'
+}, {
+  version: 4,
+  sql: 'CREATE TABLE tool_approvals (approval_id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(task_id), value_json TEXT NOT NULL) STRICT;'
 }];
 
 export class RuntimeError extends Error {
@@ -236,6 +277,7 @@ function scheduleFromRow(row: ScheduleRow): ScheduleSnapshot {
 }
 
 export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
+  readonly policy: AuthorizationPolicy;
   private readonly db: DatabaseSync;
   private readonly now: () => Date;
   private readonly idFactory: () => string;
@@ -247,7 +289,8 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     this.db = openStorage(path, RUNTIME_MIGRATIONS);
     this.now = options.now ?? (() => new Date());
     this.idFactory = options.idFactory ?? randomUUID;
-    this.toolGateway = options.toolGateway;
+    this.policy = new AuthorizationPolicy(new SqliteAuthorizationStore(this.db));
+    this.toolGateway = options.createToolGateway?.(this.policy) ?? options.toolGateway;
   }
 
   close(): void {
@@ -281,6 +324,86 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     return structuredClone(taskFromRow(this.taskRow(requireText(taskId, 'taskId'))));
   }
 
+  readToolExecutions(taskId: string): ToolExecutionRecord[] {
+    this.getTask(taskId);
+    return this.db.prepare('SELECT record_json FROM tool_execution_records WHERE task_id = ? ORDER BY rowid').all(taskId).map(row => JSON.parse(row.record_json as string) as ToolExecutionRecord);
+  }
+
+  readEvidence(taskId: string): import('@personal-agent/contracts').ProtocolContracts['evidence'][] {
+    return this.readToolExecutions(taskId).map(record => {
+      const evidence: import('@personal-agent/contracts').ProtocolContracts['evidence'] = {
+        evidenceId: record.evidenceId, kind: 'execution', sourceRef: record.toolName,
+        capturedAt: record.finishedAt ?? record.startedAt,
+        summary: 'Tool execution ' + record.state + '; policy=' + record.policyDecision,
+        verification: 'conditional', sensitivity: 'internal',
+      };
+      validateContract('evidence', evidence);
+      return evidence;
+    });
+  }
+
+  getApproval(approvalId: string): ToolApproval {
+    const row = this.db.prepare('SELECT value_json FROM tool_approvals WHERE approval_id = ?').get(approvalId);
+    if (!row) throw new RuntimeError('NOT_FOUND', 'Approval not found');
+    return JSON.parse(row.value_json as string) as ToolApproval;
+  }
+
+  requestToolApproval(approvalId: string, taskId: string, tool: ToolDescriptor, expiresAt: string, argumentsDigest: string): ToolApproval {
+    return this.transaction(() => {
+      const existing = this.db.prepare('SELECT value_json FROM tool_approvals WHERE approval_id = ?').get(approvalId);
+      if (existing) {
+        const approval = JSON.parse(existing.value_json as string) as ToolApproval;
+        if (approval.taskId !== taskId || approval.toolName !== tool.name || approval.argumentsDigest !== argumentsDigest) throw new RuntimeError('REVISION_CONFLICT', 'Approval identity conflict');
+        return approval;
+      }
+      if (this.getTask(taskId).state !== 'running') throw new RuntimeError('REVISION_CONFLICT', 'Task is not running');
+      const approval: ToolApproval = {approvalId, taskId, toolName: tool.name, scopes: [...tool.requiredScopes], expiresAt, revision: 1, state: 'pending', argumentsDigest};
+      this.db.prepare('INSERT INTO tool_approvals (approval_id, task_id, value_json) VALUES (?, ?, ?)').run(approvalId, taskId, JSON.stringify(approval));
+      this.updateTask(taskId, 'waiting_approval', {}, true);
+      this.emit('approval.requested', {approvalId, taskId, revision: 1, action: tool.name}, taskId);
+      return approval;
+    });
+  }
+
+  respondApproval(approvalId: string, decision: 'allow_once' | 'deny', expectedRevision: number): {accepted: boolean; approvalState: 'allowed' | 'denied'} {
+    return this.transaction(() => {
+      const approval = this.getApproval(approvalId);
+      const state = decision === 'allow_once' ? 'allowed' : 'denied';
+      if (approval.state !== 'pending') {
+        if (approval.state !== state || expectedRevision !== approval.revision - 1) throw new RuntimeError('REVISION_CONFLICT', 'Approval was already resolved');
+        return {accepted: true, approvalState: state};
+      }
+      if (approval.revision !== expectedRevision) throw new RuntimeError('REVISION_CONFLICT', 'Approval revision mismatch');
+      if (this.getTask(approval.taskId).state !== 'waiting_approval') throw new RuntimeError('REVISION_CONFLICT', 'Task is not awaiting approval');
+      if (Date.parse(approval.expiresAt) <= this.now().getTime()) throw new RuntimeError('TIMEOUT', 'Approval expired');
+      approval.state = state;
+      approval.revision++;
+      if (state === 'allowed') this.policy.grant({authorizationRef: approvalId, taskId: approval.taskId, toolName: approval.toolName, scopes: approval.scopes, expiresAt: approval.expiresAt, maxUses: 1, argumentsDigest: approval.argumentsDigest});
+      this.db.prepare('UPDATE tool_approvals SET value_json = ? WHERE approval_id = ?').run(JSON.stringify(approval), approvalId);
+      if (state === 'denied') {
+        const evidenceId = approvalId + '-decision';
+        const record: ToolExecutionRecord = {evidenceId, inputDigest: createHash('sha256').update(approvalId).digest('hex'), protocolVersion: PROTOCOL_VERSION,
+          requestId: approvalId, taskId: approval.taskId, toolName: approval.toolName, toolVersion: 'approval',
+          startedAt: this.timestamp(), finishedAt: this.timestamp(), state: 'failed', errorCode: 'SCOPE_DENIED', policyDecision: 'deny', executionStarted: false};
+        this.db.prepare('INSERT INTO tool_execution_records (evidence_id, task_id, record_json) VALUES (?, ?, ?)').run(evidenceId, approval.taskId, JSON.stringify(record));
+        this.updateTask(approval.taskId, 'cancelled', {evidenceRefs: [...this.getTask(approval.taskId).evidenceRefs, evidenceId]}, true);
+      }
+      return {accepted: true, approvalState: state};
+    });
+  }
+
+  private saveToolExecution(record: ToolExecutionRecord, result?: unknown): void {
+    this.transaction(() => {
+      if (record.state === 'confirmed') this.saveCheckpoint(record.taskId, 'tool-result-' + record.evidenceId, {result: result ?? null});
+      this.db.prepare('INSERT INTO tool_execution_records (evidence_id, task_id, record_json) VALUES (?, ?, ?) ON CONFLICT(evidence_id) DO UPDATE SET record_json = excluded.record_json').run(record.evidenceId, record.taskId, JSON.stringify(record));
+      const task = taskFromRow(this.taskRow(record.taskId));
+      if (!task.evidenceRefs.includes(record.evidenceId)) task.evidenceRefs.push(record.evidenceId);
+      task.revision++;
+      task.updatedAt = this.timestamp();
+      this.writeSnapshot(task);
+    });
+  }
+
   async send(input: Request, signal: AbortSignal): Promise<Response> {
     const request = parseRequest(structuredClone(input));
     try {
@@ -292,7 +415,7 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
           if (request.payload.supportedMajor !== 1) throw new RuntimeError('PROTOCOL_MISMATCH', 'Unsupported protocol major');
           data = {
             protocolVersion: PROTOCOL_VERSION,
-            capabilities: this.toolGateway ? [...baseCapabilities, 'capability.list', 'tool.invoke'] : baseCapabilities,
+            capabilities: this.toolGateway ? [...baseCapabilities, 'capability.list', 'tool.invoke', 'authorization.respond'] : baseCapabilities,
             sessionRef: this.sessionRef
           };
           break;
@@ -311,6 +434,9 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
           break;
         case 'task.cancel':
           data = this.requestCancel(request.payload.taskId, request.payload.reason);
+          break;
+        case 'authorization.respond':
+          data = this.respondApproval(request.payload.approvalId, request.payload.decision, request.payload.expectedRevision);
           break;
         case 'event.subscribe': {
           if (request.payload.streamId !== 'tasks') throw new RuntimeError('NOT_FOUND', 'Event stream not found');
@@ -337,7 +463,31 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
           if (task.state !== 'running') {
             throw new RuntimeError('REVISION_CONFLICT', 'Tools can only be invoked for a running task');
           }
-          const runId = this.idFactory();
+          const runId = request.idempotencyKey ?? this.idFactory();
+          const inputDigest = createHash('sha256').update(canonical({taskId: request.taskId, payload: request.payload})).digest('hex');
+          const previousRow = this.db.prepare('SELECT record_json FROM tool_execution_records WHERE evidence_id = ?').get(runId);
+          if (previousRow) {
+            const previous = JSON.parse(previousRow.record_json as string) as ToolExecutionRecord;
+            if (previous.inputDigest !== inputDigest) throw new RuntimeError('REVISION_CONFLICT', 'Tool run ID was reused with different input');
+            if (previous.state === 'confirmed') {
+              const saved = this.loadCheckpoint(request.taskId, 'tool-result-' + runId) as {result: unknown};
+              data = {runId, state: 'confirmed', result: saved.result, evidenceRefs: [runId]};
+            } else if (previous.state === 'failed') {
+              throw new RuntimeError('EXTERNAL_FAILURE', 'Previous tool attempt failed; it will not be repeated automatically');
+            } else {
+              this.transitionTask(request.taskId, 'waiting_reconciliation');
+              data = {runId, state: 'unknown', evidenceRefs: [runId]};
+            }
+            break;
+          }
+          const record: ToolExecutionRecord = {
+            protocolVersion: PROTOCOL_VERSION, policyDecision: 'not_evaluated', executionStarted: false,
+            inputDigest,
+            evidenceId: runId, requestId: request.requestId, taskId: request.taskId,
+            toolName: request.payload.toolName, toolVersion: request.payload.toolVersion,
+            startedAt: this.timestamp(), state: 'started',
+          };
+          this.saveToolExecution(record);
           try {
             const result = await this.toolGateway.invoke({
               toolName: request.payload.toolName,
@@ -348,16 +498,21 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
               authorizationRef: request.payload.scopeRef,
               deadline: request.deadline,
               signal,
+              onAuthorized: () => { record.policyDecision = 'allow'; record.executionStarted = true; this.saveToolExecution(record); },
             });
-            data = {runId, state: 'confirmed', result, evidenceRefs: []};
-            this.emit('tool.completed', {runId, state: 'confirmed', evidenceRefs: []}, request.taskId);
+            this.saveToolExecution({...record, state: 'confirmed', finishedAt: this.timestamp()}, result);
+            data = {runId, state: 'confirmed', result, evidenceRefs: [runId]};
+            this.emit('tool.completed', {runId, state: 'confirmed', evidenceRefs: [runId]}, request.taskId);
           } catch (error) {
+            const errorCode = error instanceof ProtocolError ? error.code : 'EXTERNAL_FAILURE';
+            if (!record.executionStarted) record.policyDecision = 'deny';
+            this.saveToolExecution({...record, state: errorCode === 'RESULT_UNKNOWN' ? 'unknown' : 'failed', errorCode, finishedAt: this.timestamp()});
             if (error instanceof ProtocolError && error.code === 'RESULT_UNKNOWN') {
               this.transitionTask(request.taskId, 'waiting_reconciliation', {
                 error: {code: 'RESULT_UNKNOWN', message: error.message, retryable: false}
               });
-              data = {runId, state: 'unknown', evidenceRefs: []};
-              this.emit('tool.completed', {runId, state: 'unknown', evidenceRefs: []}, request.taskId);
+              data = {runId, state: 'unknown', evidenceRefs: [runId]};
+              this.emit('tool.completed', {runId, state: 'unknown', evidenceRefs: [runId]}, request.taskId);
               break;
             }
             throw error;
@@ -544,6 +699,7 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
   }
 
   requestCancel(taskId: string, _reason?: string): {taskId: string; state: TaskState; cancelAccepted: boolean} {
+    const wasWaitingApproval = this.getTask(taskId).state === 'waiting_approval';
     const result = this.transaction(() => {
       const task = taskFromRow(this.taskRow(taskId));
       if (terminal.has(task.state)) return {taskId, state: task.state, cancelAccepted: false};
@@ -554,6 +710,9 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
       return {taskId, state: next.state, cancelAccepted: true};
     });
     this.active.get(taskId)?.abort();
+    if (wasWaitingApproval && !this.active.has(taskId) && result.state === 'cancelling') {
+      return {taskId, state: this.confirmCancellation(taskId).state, cancelAccepted: true};
+    }
     return result;
   }
 
@@ -564,7 +723,7 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
   async runTask(taskId: string, worker: (context: WorkerContext) => Promise<WorkerResult>, options: RunOptions): Promise<TaskSnapshot> {
     const deadlineMs = parseTime(options.deadline, 'deadline');
     const initial = this.getTask(taskId);
-    if (initial.state !== 'created' || this.active.has(taskId)) {
+    if ((initial.state !== 'created' && !(options.resume && initial.state === 'waiting_approval')) || this.active.has(taskId)) {
       throw new RuntimeError('REVISION_CONFLICT', 'Task is not ready to start');
     }
     const controller = new AbortController();
@@ -572,7 +731,7 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     let timer: NodeJS.Timeout | undefined;
     let timedOut = false;
     try {
-      this.transitionTask(taskId, 'planning');
+      if (initial.state === 'created') this.transitionTask(taskId, 'planning');
       this.transitionTask(taskId, 'running');
       const remaining = deadlineMs - this.now().getTime();
       if (remaining <= 0) {
@@ -600,14 +759,15 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
       ]);
       const current = this.getTask(taskId);
       if (current.state === 'cancelling') return this.confirmCancellation(taskId);
-      if (current.state === 'waiting_reconciliation') return current;
+      if (current.state === 'waiting_reconciliation' || current.state === 'waiting_approval' || terminal.has(current.state)) return current;
       this.transitionTask(taskId, 'verifying');
       return this.transitionTask(taskId, 'succeeded', {
         resultSummary: result.resultSummary,
-        evidenceRefs: result.evidenceRefs ?? []
+        evidenceRefs: [...new Set([...current.evidenceRefs, ...(result.evidenceRefs ?? [])])]
       });
     } catch (error) {
       const current = this.getTask(taskId);
+      if (terminal.has(current.state)) return current;
       if (timedOut) {
         if (options.sideEffect === 'external_write') {
           return this.transitionTask(taskId, 'waiting_reconciliation', {
@@ -622,7 +782,7 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
       if (current.state === 'waiting_reconciliation') return current;
       return this.transitionTask(taskId, 'failed', {
         error: {
-          code: error instanceof RuntimeError ? error.code : 'EXTERNAL_FAILURE',
+          code: error instanceof RuntimeError || error instanceof ProtocolError ? error.code as TaskError['code'] : 'EXTERNAL_FAILURE',
           message: error instanceof Error ? error.message : 'Task worker failed',
           retryable: false
         }

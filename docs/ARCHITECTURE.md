@@ -1,6 +1,6 @@
 # 架构设计与技术契约
 
-版本：0.2 · 日期：2026-09-06 · 状态：整体建议基线；MOD-01/02/03 已集成，MOD-25 源码已合并、待权限与根装配集成
+版本：0.5 · 日期：2026-09-07 · 状态：模块化单体、目录与依赖治理基线；ARCH-03 已将 Runtime Application 设为任务提交与文本执行生命周期边界；模块实现状态以 ROADMAP 为准
 
 模块所有权以 [模块分工](MODULE_ASSIGNMENTS.md) 为准；消息与接口语义以 [公共开发协议](DEVELOPMENT_PROTOCOL.md) 为准。`goo122`（A）持有底座和公共接口，`zemeng`（B）是消费端及执行模块负责人。
 
@@ -14,7 +14,7 @@
 
 | 模块 | 技术建议 | 职责 |
 | --- | --- | --- |
-| Desktop | Electron、React、TypeScript、WebGL/CSS | 窗口、悬浮球、后台、状态展示 |
+| Desktop | Electron；当前原生 HTML/CSS/JavaScript | 窗口、悬浮球、后台、状态展示；不假定 React 已采用 |
 | Runtime | Node.js、TypeScript | 会话、任务、事件、连接器、模型与工具调度 |
 | Windows Host | C#、.NET | UI Automation、窗口/输入、系统观测 |
 | Knowledge | Markdown、FTS5、可替换向量索引 | Obsidian 增量索引、混合检索、来源 |
@@ -22,9 +22,20 @@
 | Secrets | Credential Manager / DPAPI | 密钥引用与用户范围凭据保护 |
 | IPC | Electron 安全桥、Named Pipe | 界面到 Runtime、Runtime 到 Windows Host |
 
-版本在技术验证后锁定，不在当前文档推定兼容性已通过。MOD-01 已在本机验证 Node 24.15.0、npm 11.12.1、TypeScript 5.9.3 与内置 SQLite 3.51.3；采用 npm 工作区和 node:sqlite，无额外运行时数据库依赖。该选择降低原生依赖构建成本，但不证明 Electron 内置 Node 或产品安装包兼容；相关验证仍留在对应模块。底座源码在 packages/storage，保留 src 占位目录，后续按模块登记扩展目录。详见 [存储说明](../packages/storage/README.md)。
+版本在技术验证后锁定，不在当前文档推定兼容性已通过。MOD-01 已在本机验证 Node 24.15.0、npm 11.12.1、TypeScript 5.9.3 与内置 SQLite 3.51.3；采用 npm 工作区和 node:sqlite，无额外运行时数据库依赖。该选择降低原生依赖构建成本，但不证明 Electron 内置 Node 或产品安装包兼容；相关验证仍留在对应模块。底座源码在 `packages/storage/`，根目录不再保留第二套 `src/`。详见 [存储说明](../packages/storage/README.md)。
 
-建议目录（尚未创建代码）：`apps/desktop`、`apps/runtime`、`apps/windows-host`、`plugins/obsidian`；共享模块放 `packages/contracts`、`packages/models`、`packages/connectors`、`packages/policy`、`packages/knowledge`。各子目录按模块分工独占；现有 src 占位骨架由 `goo122` 在底座工作中统一处理，不并行维护两套源代码布局。
+当前实现统一放在 `apps/*`、`packages/*` 和 `packages/connectors/*`；新模块目录、依赖方向、测试位置和未来 Runtime 拆分条件见 [项目目录规范](PROJECT_STRUCTURE.md) 与 [架构决策记录](adr/README.md)。不为未开工模块创建空目录。
+
+### 2.1 模块依赖边界
+
+- `apps` 是进程和装配入口，可以依赖 `packages`；可复用 `packages` 不能反向依赖 `apps`。
+- Agent 只持有模型与工具端口，不导入具体 Runtime 实现。
+- Runtime 核心不导入 Electron 或具体连接器；具体 Weather 等只出现在明确组合入口。
+- Runtime Application 层负责持有 TaskRuntime、组合 Agent/ModelGateway/Provider、接收 task.submit 并自动分派文本任务；Desktop 主进程只负责可信配置、IPC、事件订阅和 UI 生命周期，不复制 Agent/Model 编排。
+- 连接器只实现公共连接器/工具契约，不能拥有任务状态、授权决定或 UI。
+- 跨包调用只能使用包的公开 `exports`，生产依赖图必须无环。
+
+这些边界由根命令 `npm run check:architecture` 检查；当前门禁还禁止 Desktop 直接导入 Agent/Model 实现、旧文本入口或调用 `runTask`。Runtime Application 的关闭会在存在活动任务时拒绝静默退出。当前仍保持模块化单体，不把目录边界描述成进程安全沙箱。
 
 ## 3. 进程与信任边界
 

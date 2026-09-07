@@ -116,6 +116,8 @@ TaskSnapshot 必含 `taskId`、`state`、`revision`、`updatedAt`、`steps`、`e
 
 模块导出 `register(host): dispose`。host 提供公共端口；模块通过接口调用，不导入 Runtime 内部实现或其他模块私有存储。
 
+目录和依赖遵循 [项目目录规范](PROJECT_STRUCTURE.md)：`apps` 负责进程与装配，`packages` 不反向依赖 `apps`，连接器位于 `packages/connectors/<capability>/`。模块专用端口由消费模块拥有，只有稳定跨进程数据进入 `packages/contracts`。跨包禁止相对路径和未声明的私有深层导入。
+
 工具描述包含：`name`（如 knowledge.search）、`version`、`inputSchema`、`outputSchema`、`sideEffect`（read/local_write/external_write）、`requiredScopes`、`idempotencySupport`、`recoverySupport`、`requiresPresence`。一个工具包含多种动作时按最强副作用声明，优先拆成独立工具。
 
 `execute(input, context)` 的 context 由宿主注入：`taskId`、`runId`、`deadline`、`signal`、`authorizationRef`、受限 logger 和所需端口。回传数据需 outputSchema 校验，并保存结果与证据；调用返回不一定代表业务已验证。
