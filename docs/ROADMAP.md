@@ -25,7 +25,7 @@
 
 ## 2. 模块执行台账
 
-MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；`Potatos498` 的 MOD-25 源码已通过 PR #4 合并。PR #4 在 `goo122` 原批准后追加了真实提供商与跨语言解析提交，因此已补做合并后审计；模块仍需修复地点正确性并完成 MOD-05 权限宿主和 Runtime 根装配后才能转为 done。其他具体模块仍需用户明确授权后开工。每行可拆多个子任务，只有全部约定交付通过后模块才为 done。
+MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；`Potatos498` 的 MOD-25 源码已通过 PR #4 合并。PR #4 在 `goo122` 原批准后追加了真实提供商与跨语言解析提交，因此已补做合并后审计；审计登记的两项阻碍（地点正确性、缺省日期语义）已由 `Potatos498` 在 `fix/mod-25-geocoding` 修复并待评审，Runtime 根装配已由 `goo122` 于 PR #9 接入，MOD-05 首片已合并但模块整体仍待非作者评审，因此 MOD-25 尚不能转为 done。其他具体模块仍需用户明确授权后开工。每行可拆多个子任务，只有全部约定交付通过后模块才为 done。
 
 | 模块 ID | 计划阶段 | 状态 | 当前执行人 / PR / 证据 |
 | --- | --- | --- | --- |
@@ -53,13 +53,13 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；`Pot
 | MOD-22 | M3 | todo | `Potatos498` 已登记，未授权启动 |
 | MOD-23 | M3 | todo | `Potatos498` 已登记，未授权启动 |
 | MOD-24 | M2 | todo | `Potatos498` 已登记，未授权启动 |
-| MOD-25 | M2 | review | `Potatos498` / PR #4 已合并（main `9f27e9b`）/ `goo122` 已补做最终提交审计；Open-Meteo 真实读回 21/21、离线全仓 66 通过＋1 跳过。仍有简体国外城市误解析、默认日期按 UTC 取值、MOD-05 权限宿主与 Runtime 根装配未完成，不能转为 done |
+| MOD-25 | M2 | review | `Potatos498` / PR #4 已合并（main `9f27e9b`）；`goo122` 合并后审计登记的两项完成阻碍（简体国外城市误解析、缺省日期按 UTC 取值）已在分支 `fix/mod-25-geocoding` 修复，待评审。实测：根 `npm run check` 退出码 0，全仓 119 项 116 通过＋3 跳过；`PA_WEATHER_LIVE=1` 下 38/38 通过。Runtime 根装配已由 `goo122` 于 PR #9 接入（`createOpenMeteoRuntime` 用 `strict`），MOD-05 权限宿主首片见 PR #7；转 done 仍需本修复通过非作者评审 |
 | MOD-26 | M4 起逐平台验收 | todo | `Potatos498` 已登记，未授权启动 |
 
 ### 2.1 开工顺序与阻塞边界
 
 1. `goo122` 已交付并集成 MOD-01/MOD-02/MOD-03；协议包可用于开发联调，但尚未冻结。
-2. `Potatos498` 已推进 MOD-25 并接入 Open-Meteo 真实提供商，假时钟与假 ToolHost 仅用于离线测试；`zemeng` 和其他模块仍需获得用户授权后开工。
+2. `Potatos498` 已推进 MOD-25 并接入 Open-Meteo 真实提供商，假时钟与假 ToolHost 仅用于离线测试；`goo122` 合并后审计登记的两项阻碍（简体国外城市误解析、缺省日期按 UTC 取值）已修复并待评审；`zemeng` 和其他模块仍需获得用户授权后开工。
 3. 真实联调依赖盘古凭据、授权测试 Vault 和 Runtime。缺少账号时可继续无账号模块，但不标记真实连接通过。
 4. 首次联调为面板→盘古→知识检索→来源展示。语音、提醒、天气、MCP、Skills、TraceGuard 只读及权限的 P0 验收随后逐项完成。
 5. 公共目录、锁文件和迁移由 `goo122` 集成；`zemeng` 与待认领协作者交付注册入口，不同时编辑应用根装配。
@@ -102,22 +102,23 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；`Pot
 - 2026-09-06：MOD-25 接入 Open-Meteo 真实提供商，并合并上述评审修复（`provider` 必填、stale 回退收窄至可重试外部失败、取消语义、`retryAfterMs`）；更新工作包的交付、验收、证据与限制及台账证据。真实读回与模拟验证分开记录，manifest `verification` 由 `mock` 改为 `conditional`。实测：根 `npm run check` 退出码 0，模块 29 项（28 通过 + 1 项真实读回默认跳过）、全仓 62 项测试通过。ROADMAP 相对链接检查通过。
 - 2026-09-06：MOD-25 修复地理编码跨语言解析缺陷。对生产端点实测发现：Open-Meteo 按语言分别建索引且不跨文字系统匹配，`zh` 索引为繁体且不完整，`New York` 在 `zh` 轮查不到纽约市却查到英格兰同名村庄，原实现因此把时区解析成 `Europe/London`。改为非英文配置下并行查询「配置语言＋`en`」两轮、按 GeoNames `id` 合并、名称完全相等优先再按人口降序排序，展示名仍取配置语言。模块测试由 29 项增至 34 项（新增 5 项离线测试，夹具取自真实响应）。实测：根 `npm run check` 退出码 0，全仓 67 项（66 通过＋1 项真实读回默认跳过）；`PA_WEATHER_LIVE=1` 下 21 项全部通过。仍未解决且已记入已知限制：简体书写的外国地名（`东京` 命中江苏同名地点、`纽约` 返回 `NOT_FOUND`），修复需简繁映射表，与零新增依赖约束冲突。ROADMAP 相对链接检查通过。
 - 2026-09-06：PR #4 已合并为 main `9f27e9b`。由于 `0da1ccc`、`145fea0`、`b5eed33`、`4c0ec0f` 晚于 `goo122` 原批准，`goo122` 在独立工作树从最终 main 补做合并后审计：Node 24.15.0 / npm 11.12.1 下根 `npm run check` 通过，全仓 67 项为 66 通过＋1 项默认跳过；显式启用真实读回后 Open-Meteo 测试 21/21 通过。审计未发现新增提交破坏既有取消、错误映射或显式 Provider 注入，但确认两项完成阻碍：简体国外城市可误解析；未传日期时 `WeatherService` 按 UTC 日历日取默认值，可能与用户或目标地点当天不一致。MOD-25 保持 review。
+- 2026-09-06：MOD-25 修复地点正确性与缺省日期两项审计阻碍（分支 `fix/mod-25-geocoding`，PR #12）。对生产端点实测确认前一轮「两轮查询使解析与语言无关」的声称对中文输入不成立：`language` 同时决定搜索名字集，任何中文串在 `en` 轮恒返回空。改为检索轮由输入文字决定；用 `feature_code` 与人口下限 500000（实测空档 422324↔8804190）判 `confidence`；`locationQuery` 作兜底轮；`strict` 改拒绝低置信度；缺省日期按目标地时区取当地日。实测：根 `npm run check` 退出码 0，全仓 119 项 116 通过＋3 跳过；`PA_WEATHER_LIVE=1` 下 38/38 通过。ROADMAP 相对链接检查通过。
 - 此记录不构成任何运行时能力通过证明。
 
 ## 5. 继续入口
 
-MOD-03 已通过 PR #5 集成，PR #4 与 PR #7 已合并；当前由 goo122 在独立工作包完成 MOD-05 与 MOD-25 的 Runtime 垂直集成。已验证 Fake Provider 下的 Client→Runtime→Policy→ToolGateway→weather.forecast 链路，生产 Open-Meteo 仅以 strict 组合入口注册，真实网络读回仍需单独验证。MOD-05 与 MOD-25 继续保持 review，待非作者评审、城市解析/日期语义问题处理及持久化权限能力另行完成。
+MOD-03 已通过 PR #5 集成，PR #4、PR #7、PR #9 已合并；goo122 的 MOD-05×MOD-25 Runtime 垂直集成已验证 Fake Provider 下的 Client→Runtime→Policy→ToolGateway→weather.forecast 链路，生产 Open-Meteo 以 `strict` 组合入口注册。城市解析与缺省日期两项审计阻碍已由 `Potatos498` 在 `fix/mod-25-geocoding` 修复并待评审；真实网络读回本工作包已执行（38/38）。MOD-05 与 MOD-25 继续保持 review，待本修复的非作者评审与持久化权限能力另行完成。
 
 ### MOD-25 当前工作包
 
 - 任务：M2-C-025 / 天气连接器；关联 MOD-25 / PA-010。
-- 负责人：`Potatos498`；评审者：`goo122`；PR #4 已合并（main `9f27e9b`），最终提交已补做合并后审计。
-- 范围：`packages/connectors/weather/`、经 `goo122` 确认的根工作区与锁文件；不修改公共契约。
-- 输入与依赖：明确地点或配置的默认地点、日期、单位；依赖 MOD-02 的 `ConnectorItem` 契约与 `ConnectorPort`，以及 testkit 的假时钟和假 ToolHost。真实数据来自 Open-Meteo（免密钥、无账号）。
-- 交付：可替换的 `WeatherProvider` 抽象、**Open-Meteo 真实提供商**（**跨语言地理编码**：非英文配置下并行两轮查询、按 GeoNames `id` 合并、精确匹配优先再按人口降序；预报抓取、错误码映射、单位与 WMO 天气代码映射）、显式注入的 4 条离线夹具、`WeatherService`（地点不静默猜测、地点解析结果显式披露、缓存状态 fresh/fetched/stale 可见、发布/抓取/有效期三个时间分离且时间来源类型显式标注、取消处理）、`WeatherConnector` 清单与生命周期、`register(host, options)` 注册只读工具 `weather.forecast`、34 项测试与包 README。
-- 验收：根 `npm run check` 退出码 0；`npm run typecheck --workspaces` 与 `npm run test --workspaces` 全绿（weather 34 项：33 通过 + 1 项真实读回默认跳过；全仓 67 项）。地点缺失时抛 `INVALID_ARGUMENT` 而非猜测；地名歧义时 `ranked` 披露解析结果与去重后的候选、`strict` 直接拒绝；配置语言索引缺失的地名仍能经英文轮解析到正确时区（`New York` → `America/New_York` 而非 `Europe/London`）；同名精确匹配由人口而非提供商顺序决定；缓存命中不调用提供商；仅可重试的外部失败回退 stale 缓存并带 `lastError`（含 `retryAfterMs`）；取消不返回 stale 或成功结果；Fake 不会在缺省配置时静默启用（`provider` 必填）；模拟与真实状态分开，真实读回需 `PA_WEATHER_LIVE=1` 显式开启。
-- 证据：[weather 说明](../packages/connectors/weather/README.md)（含 2026-09-06 对生产端点的真实读回原始输出、与 `curl` 直取响应的交叉核对，以及 10 个地名的实测解析表——8 个正确、2 个已知失败）。manifest `verification` 为 `conditional`。
-- 限制：Open-Meteo 不返回预报发布时间，`occurredAt` 是覆盖日起点，已由 `publishedTimeKind: 'coverage_start'` 显式标注而非用抓取时间冒充；`conditional` 依赖出站网络可达，本轮仅验证少量地点与近日日期；**简体书写的外国地名解析不到或解析错**（`纽约` → `NOT_FOUND`、`东京` → 江苏同名地点），因 `zh` 索引为繁体且不完整、`en` 索引不匹配中文；未传 `date` 时当前按 Runtime 的 UTC 日历日取默认值，目标地点处于另一日时可能请求错误日期；非英文配置下每个未命中缓存的地名产生两次地理编码请求；摘要文本仅中英两套；缓存仅进程内，地理编码缓存无 TTL；`ranked` 模式仍会在披露后选定一个候选；尚未接入 MOD-03 根装配，也未实现 MOD-05 权限隔离。
+- 负责人：`Potatos498`；评审者：`goo122`；PR #4 已合并（main `9f27e9b`），本轮修复在分支 `fix/mod-25-geocoding`，PR #12。
+- 范围：`packages/connectors/weather/`；不修改公共契约、根锁文件与根装配（均归 `goo122`）。
+- 输入与依赖：明确地点或配置的默认地点、可选 `locationQuery`（拉丁/英文名提示）、日期、单位；依赖 MOD-02 的 `ConnectorItem` 契约与 `ConnectorPort`，以及 testkit 的假时钟和假 ToolHost。真实数据来自 Open-Meteo（免密钥、无账号）。
+- 交付：`WeatherProvider` 新增必需方法 `resolvePlace`（解析与取预报共用同一地点，避免缺省日期与坐标裂脑）；`ResolvedPlace` 新增 `confidence` 与 `featureCode`；`ForecastRequest`/`WeatherQuery` 新增 `locationQuery`；地理编码检索轮由输入文字决定（配置语言 + `en` + 输入含汉字时的 `zh`），按 GeoNames `id` 合并、保留配置语言的显示名、删去按 `admin1`/`country` 相等的排名子句；`assessConfidence` 用 `feature_code` + 人口下限 500000（可经 `minCorroboratedPopulation` 配置）判 `high`/`low`；`locationQuery` 是兜底轮（仅原始输入零候选或 `low` 时并入）；`strict` 语义改为拒绝 `low` 而非拒绝同名；缺省日期按目标地时区取当地日；工具入出参 schema 同步（`locationQuery`、`confidence`、三处 `description` 注解）；59 项测试与包 README。
+- 验收：根 `npm run check` 退出码 0；weather 59 项 56 通过 + 3 项真实读回默认跳过（全仓 119 项 116 通过 + 3 跳过）。汉字输入在 `language:'en'` 下仍解析到正确地点；`东京`/`伦敦`/`罗马`/`丽江`/`广东` 判 `low`，`北京`/`巴黎`/`纽约市`（`PPL` 8.8M）判 `high`；`England`/`Texas`/`France` 判 `low`；`strict` 下 `北京`/`巴黎` 可用、`东京`/`England` 被拒且消息含候选与「改用英文名」提示；`婺源`（high）忽略会排错的 `Wuyuan`、`丽江`（low）+ `Lijiang` → 云南；`feature_code` 缺失保守判 `low`；缺省日期 `Pacific/Kiritimati` 在 `2026-09-05T12:00Z` 取 `2026-09-06`、显式 `date` 不触发解析；解析失败无 stale 回退、显式 `date` 保留 stale 回退；`FakeToolHost` 经 ajv 真校验工具入参与出参。
+- 证据：[weather 说明](../packages/connectors/weather/README.md)（含 2026-09-06 对生产端点的真实读回原始输出、`curl` 直取交叉核对、20 行地名实测解析表与置信度误判清单）。manifest `verification` 保持 `conditional`。
+- 限制：见包 README「已知限制」——简体外国城市是「被检出并标注」而非「被纠正」，`ranked` 仍会返回 伦敦/安大略（带 `confidence:'low'`）；置信度有实测误报（阳朔、同里）与漏报（凤凰、Pingyao、Wuyuan），最差组合是零候选 + 提示串落错省却标 `high`（平遥）；显示名简繁混杂（D7）不可在包内修；`locationResolution:'strict'` 的语义改变影响 `apps/runtime` 生产装配，已在 PR 点名；`record.externalId`/`dedupeKey`/`contentRef` 取值语义变更（并入 `locationQuery`、缺省日期变当地日）；缺省日期时解析自身失败无法回退 stale。
 
 ### MOD-03 完成记录
 
@@ -168,7 +169,7 @@ MOD-03 已通过 PR #5 集成，PR #4 与 PR #7 已合并；当前由 goo122 在
 - 交付：`createWeatherRuntime` 组合入口、严格模式 `createOpenMeteoRuntime`、显式 Provider 注入、Client→Runtime→Policy→ToolGateway→weather.forecast 链路测试。
 - 验收证据：Runtime 定向测试 11/11；根 `npm run check` 通过；`npm run dev`、`npm run demo:protocol`、`npm run demo:runtime` 通过；weather 全包 34 项为 33 通过 + 1 项真实读回默认跳过。
 - 已验证：授权成功、撤销后拒绝、非 running 任务在 Provider 调用前拒绝、生产严格 Open-Meteo 注册不发起网络请求；测试仅使用显式 `FakeWeatherProvider`。
-- 剩余限制：授权、连接器会话和 Evidence 仍为内存能力；MOD-25 的简体国外城市解析和省略日期时的 UTC 日期语义仍未修复；真实 Open-Meteo 读回未在本工作包执行；MOD-05/25 不得因此转为 done。
+- 剩余限制：授权、连接器会话和 Evidence 仍为内存能力；MOD-25 的简体国外城市解析与省略日期时的 UTC 日期语义已由 `Potatos498` 在 `fix/mod-25-geocoding` 修复并待评审（本工作包记录时尚未修复）；真实 Open-Meteo 读回未在本工作包执行；MOD-05/25 不得因此转为 done。
 
 ### MOD-04 当前工作包
 

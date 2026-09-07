@@ -1,5 +1,5 @@
 import { ProtocolError } from '@personal-agent/contracts';
-import type { ForecastFetch, ForecastRequest, ResolvedPlace, WeatherProvider } from './provider.js';
+import type { ForecastFetch, ForecastRequest, PlaceConfidence, ResolvedPlace, WeatherProvider } from './provider.js';
 
 export interface FetchResponseLike {
   readonly ok: boolean;
@@ -9,7 +9,7 @@ export interface FetchResponseLike {
 
 export type FetchLike = (url: string, init: {signal: AbortSignal; headers: Record<string, string>}) => Promise<FetchResponseLike>;
 
-/** `strict` refuses an ambiguous place name instead of accepting the provider's top ranking. */
+/** `strict` refuses a low-confidence match instead of accepting the provider's top ranking. */
 export type LocationResolution = 'ranked' | 'strict';
 
 export interface OpenMeteoOptions {
@@ -19,6 +19,8 @@ export interface OpenMeteoOptions {
   forecastBaseUrl?: string;
   geocodingBaseUrl?: string;
   geocodeCacheLimit?: number;
+  /** Population floor for trusting a match that is not an administrative seat. See `assessConfidence`. */
+  minCorroboratedPopulation?: number;
 }
 
 interface GeoCandidate {
@@ -30,6 +32,7 @@ interface GeoCandidate {
   admin1?: string;
   country?: string;
   population?: number;
+  featureCode?: string;
 }
 
 /** A place after merging every language pass that returned it. */
@@ -39,6 +42,7 @@ interface MergedPlace {
   /** Normalized name variants across passes, used for exact matching. */
   names: string[];
   population: number;
+  featureCode: string | undefined;
   /** First-seen position, so ranking stays stable when population is unknown. */
   order: number;
 }
@@ -50,6 +54,34 @@ const MS_PER_DAY = 86_400_000;
 const MAX_CANDIDATES = 5;
 const MAX_ALTERNATIVES = 4;
 const DEFAULT_GEOCODE_CACHE_LIMIT = 500;
+
+/**
+ * Calibrated on a gap measured against the production endpoint on 2026-09-06, not on a round
+ * number: the worst misresolution (伦敦 → London, Ontario) carried 422324 people, while the
+ * correct non-admin-seat city (New York) carried 8804190. Anything between those two figures
+ * is unmeasured territory. Known false positives (阳朔, 同里 — correct places GeoNames gives no
+ * population) and false negatives (`Pingyao` → Zhejiang, 凤凰 → Chongqing — wrong places that
+ * are admin seats) are listed in the README. The rule detects a bad match; it does not repair it.
+ */
+const DEFAULT_MIN_CORROBORATED_POPULATION = 500_000;
+
+/** GeoNames marks every inhabited place `PPL*`; `PCLI`, `PCL*`, `ADM*` and `MT` are not places a forecast can answer for. */
+const POPULATED_PLACE_PREFIX = 'PPL';
+
+/** A seat of government is corroborated by its own record, however small its population. */
+const ADMIN_SEAT_CODES: ReadonlySet<string> = new Set(['PPLC', 'PPLA', 'PPLA2', 'PPLA3', 'PPLA4', 'PPLA5']);
+
+/**
+ * Han ideographs including the compatibility block. Japanese kanji match, which is intended:
+ * GeoNames' `zh` index carries 東京. Kana and Hangul do not match, and their coverage is unmeasured.
+ */
+const HAN_PATTERN = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
+
+function assessConfidence(featureCode: string | undefined, population: number, minCorroboratedPopulation: number): PlaceConfidence {
+  if (featureCode === undefined || !featureCode.startsWith(POPULATED_PLACE_PREFIX)) return 'low';
+  if (ADMIN_SEAT_CODES.has(featureCode)) return 'high';
+  return population >= minCorroboratedPopulation ? 'high' : 'low';
+}
 
 const WMO_SUMMARY_ZH: Readonly<Record<number, string>> = {
   0: '晴', 1: '大致晴朗', 2: '局部多云', 3: '阴',
@@ -146,6 +178,7 @@ export class OpenMeteoProvider implements WeatherProvider {
   private readonly forecastBaseUrl: string;
   private readonly geocodingBaseUrl: string;
   private readonly geocodeCacheLimit: number;
+  private readonly minCorroboratedPopulation: number;
   private readonly geocodeCache = new Map<string, ResolvedPlace>();
 
   constructor(options: OpenMeteoOptions = {}) {
@@ -157,10 +190,13 @@ export class OpenMeteoProvider implements WeatherProvider {
     const limit = options.geocodeCacheLimit ?? DEFAULT_GEOCODE_CACHE_LIMIT;
     if (!Number.isInteger(limit) || limit < 1) throw new Error('geocodeCacheLimit must be a positive integer');
     this.geocodeCacheLimit = limit;
+    const floor = options.minCorroboratedPopulation ?? DEFAULT_MIN_CORROBORATED_POPULATION;
+    if (!Number.isFinite(floor) || floor < 0) throw new Error('minCorroboratedPopulation must be a non-negative number');
+    this.minCorroboratedPopulation = floor;
   }
 
   async fetchForecast(request: ForecastRequest, signal: AbortSignal): Promise<ForecastFetch> {
-    const place = await this.geocode(request.location, signal);
+    const place = await this.resolvePlace(request.location, request.locationQuery, signal);
     const temperatureUnit = request.units === 'imperial' ? 'fahrenheit' : 'celsius';
     const url = `${this.forecastBaseUrl}/v1/forecast`
       + `?latitude=${place.latitude}&longitude=${place.longitude}`
@@ -205,23 +241,35 @@ export class OpenMeteoProvider implements WeatherProvider {
     return fetch;
   }
 
-  private async geocode(location: string, signal: AbortSignal): Promise<ResolvedPlace> {
+  /**
+   * Resolves a place name, disclosing how much the match can be trusted.
+   *
+   * The hint is a fallback tier and never an equal one: measured on 2026-09-06, `婺源`
+   * resolves correctly from Chinese while its Latin hint `Wuyuan` ranks a different county
+   * in Zhejiang first. Merging both pools would let a wrong hint outrank a right input, so
+   * the hint is only consulted when the original matched nothing or matched weakly.
+   */
+  async resolvePlace(location: string, locationQuery: string | undefined, signal: AbortSignal): Promise<ResolvedPlace> {
     const trimmed = location.trim();
     if (!trimmed) throw new ProtocolError('INVALID_ARGUMENT', 'Weather location must not be empty; refusing to guess', false);
-    const cacheKey = `${this.language}|${normalize(location)}`;
+    const hint = locationQuery?.trim() || undefined;
+    // The hint changes which place a string resolves to, so it has to be part of the key.
+    const cacheKey = `${this.language}|${normalize(location)}|${normalize(hint ?? '')}`;
     const cached = this.geocodeCache.get(cacheKey);
     if (cached) return structuredClone(cached);
 
-    const places = await this.searchAllLanguages(trimmed, signal);
-    if (places.length === 0) throw new ProtocolError('NOT_FOUND', `Open-Meteo geocoding found no place named "${location}"`, false);
+    let ranked = rankPlaces(await this.searchPasses(trimmed, signal), normalize(trimmed));
+    if (hint !== undefined && (ranked[0] === undefined || this.confidenceOf(ranked[0]) === 'low')) {
+      const hinted = rankPlaces(await this.searchPasses(hint, signal), normalize(hint));
+      if (hinted[0] !== undefined && this.confidenceOf(hinted[0]) === 'high') ranked = hinted;
+    }
 
-    const distinct = rankPlaces(places, normalize(location));
-    const top = distinct[0];
-    if (!top) throw new ProtocolError('NOT_FOUND', `Open-Meteo geocoding found no usable place for "${location}"`, false);
-    const ambiguous = distinct.length > 1;
-    if (ambiguous && this.locationResolution === 'strict') {
-      throw new ProtocolError('INVALID_ARGUMENT',
-        `Location "${location}" matches ${distinct.length} places; refusing to guess. Specify one of: ${distinct.map(place => label(place.candidate)).join(' / ')}`, false);
+    const top = ranked[0];
+    if (!top) throw new ProtocolError('NOT_FOUND', `Open-Meteo geocoding found no place named "${location}"`, false);
+
+    const confidence = this.confidenceOf(top);
+    if (confidence === 'low' && this.locationResolution === 'strict') {
+      throw new ProtocolError('INVALID_ARGUMENT', strictRefusal(location, top, ranked), false);
     }
 
     const best = top.candidate;
@@ -230,11 +278,15 @@ export class OpenMeteoProvider implements WeatherProvider {
       latitude: best.latitude,
       longitude: best.longitude,
       timezone: best.timezone,
-      ambiguous,
-      alternatives: distinctLabels(distinct.slice(1).map(entry => label(entry.candidate))).slice(0, MAX_ALTERNATIVES),
+      ambiguous: ranked.length > 1,
+      alternatives: distinctLabels(ranked.slice(1).map(entry => label(entry.candidate))).slice(0, MAX_ALTERNATIVES),
+      confidence,
     };
     if (best.admin1 !== undefined) place.admin1 = best.admin1;
     if (best.country !== undefined) place.country = best.country;
+    // From the merged entry, not the display candidate: this is the value `confidence` was
+    // computed from, and disclosing a different one would make the verdict unauditable.
+    if (top.featureCode !== undefined) place.featureCode = top.featureCode;
 
     if (this.geocodeCache.size >= this.geocodeCacheLimit) {
       const oldest = this.geocodeCache.keys().next().value;
@@ -244,22 +296,27 @@ export class OpenMeteoProvider implements WeatherProvider {
     return structuredClone(place);
   }
 
+  private confidenceOf(place: MergedPlace): PlaceConfidence {
+    return assessConfidence(place.featureCode, place.population, this.minCorroboratedPopulation);
+  }
+
   /**
-   * Open-Meteo indexes place names per language and never matches across scripts: a
-   * Chinese query returns nothing from the `en` index, and the `zh` index is traditional
-   * and incomplete, so it omits New York City entirely while still carrying a village in
-   * England literally named "New York". Querying both passes and merging by GeoNames id
-   * makes resolution language-independent while still localizing the displayed name.
+   * Open-Meteo indexes place names per language and never matches across scripts. Measured on
+   * 2026-09-06: a Chinese string returns zero results under `language=en` — including the
+   * traditional spellings 東京 and 倫敦 — and `zh-TW`/`zh-Hant` are empty as well. So the pass set
+   * has to follow the input's script, not the configured language; the previous single pass under
+   * an English configuration made every Chinese input fail outright.
+   *
+   * Merge order is the display-name preference: configured language first, then `zh` for Han
+   * input, then `en`. This still does not make resolution script-independent — the `zh` index is
+   * incomplete in both directions, which is what the hint tier exists for.
    */
-  private async searchAllLanguages(location: string, signal: AbortSignal): Promise<MergedPlace[]> {
-    if (this.language.toLowerCase().startsWith('en')) {
-      return mergePlaces(await this.searchPlaces(location, this.language, signal), []);
+  private async searchPasses(query: string, signal: AbortSignal): Promise<MergedPlace[]> {
+    const languages: string[] = [];
+    for (const language of [this.language, ...(HAN_PATTERN.test(query) ? ['zh'] : []), 'en']) {
+      if (!languages.some(known => known.toLowerCase() === language.toLowerCase())) languages.push(language);
     }
-    const [preferred, fallback] = await Promise.all([
-      this.searchPlaces(location, this.language, signal),
-      this.searchPlaces(location, 'en', signal),
-    ]);
-    return mergePlaces(preferred, fallback);
+    return mergePlaces(await Promise.all(languages.map(language => this.searchPlaces(query, language, signal))));
   }
 
   private async searchPlaces(location: string, language: string, signal: AbortSignal): Promise<GeoCandidate[]> {
@@ -327,46 +384,71 @@ function readCandidates(value: unknown): GeoCandidate[] {
     if (typeof record.country === 'string' && record.country.length > 0) candidate.country = record.country;
     const population = asFiniteNumber(record.population);
     if (population !== undefined && population >= 0) candidate.population = population;
+    if (typeof record.feature_code === 'string' && record.feature_code.length > 0) candidate.featureCode = record.feature_code;
     candidates.push(candidate);
   }
   return candidates;
 }
 
 /**
- * Keyed by GeoNames id, falling back to rounded coordinates for entries without one, so
- * the same place returned by both language passes collapses into a single candidate.
- * The preferred pass is consumed first and therefore supplies the displayed name.
+ * Keyed by GeoNames id, falling back to rounded coordinates for entries without one, so the
+ * same place returned by several language passes collapses into a single candidate. Passes are
+ * consumed in display-preference order, so the first one carrying a place supplies its name.
  */
-function mergePlaces(preferred: GeoCandidate[], fallback: GeoCandidate[]): MergedPlace[] {
+function mergePlaces(passes: GeoCandidate[][]): MergedPlace[] {
   const byKey = new Map<string, MergedPlace>();
   let order = 0;
-  for (const pass of [preferred, fallback]) {
+  for (const pass of passes) {
     for (const candidate of pass) {
       const key = candidate.id !== undefined
         ? `id:${candidate.id}`
         : `co:${candidate.latitude.toFixed(2)},${candidate.longitude.toFixed(2)}`;
       const existing = byKey.get(key);
       if (!existing) {
-        byKey.set(key, {candidate, names: [normalize(candidate.name)], population: candidate.population ?? 0, order: order++});
+        byKey.set(key, {
+          candidate,
+          names: [normalize(candidate.name)],
+          population: candidate.population ?? 0,
+          featureCode: candidate.featureCode,
+          order: order++,
+        });
         continue;
       }
       const variant = normalize(candidate.name);
       if (!existing.names.includes(variant)) existing.names.push(variant);
       if (existing.population === 0 && candidate.population !== undefined) existing.population = candidate.population;
+      if (existing.featureCode === undefined && candidate.featureCode !== undefined) existing.featureCode = candidate.featureCode;
     }
   }
   return [...byKey.values()];
 }
 
 /**
- * Exact matches outrank the provider's fuzzy ones, and population breaks ties because the
+ * Exact name matches outrank the provider's fuzzy ones, and population breaks ties because the
  * provider's own ranking is unreliable across languages: for "New York" the `zh` pass puts
  * York, Nebraska first and omits New York City, which only the `en` pass returns.
+ *
+ * Region names are deliberately not matched against `admin1` or `country`. Doing so let
+ * `Texas` or `France` masquerade as an exact place match; those lookups are surfaced as
+ * low confidence by `assessConfidence` instead of being quietly promoted here.
  */
 function rankPlaces(places: MergedPlace[], query: string): MergedPlace[] {
-  const fieldMatches = (value: string | undefined): boolean => value !== undefined && normalize(value) === query;
-  const exact = places.filter(place =>
-    place.names.includes(query) || fieldMatches(place.candidate.admin1) || fieldMatches(place.candidate.country));
+  const exact = places.filter(place => place.names.includes(query));
   const pool = exact.length > 0 ? exact : places;
   return [...pool].sort((a, b) => b.population - a.population || a.order - b.order);
+}
+
+/**
+ * Names the evidence behind the refusal so the caller can act on it. Listing candidates
+ * without saying why none of them was trusted reads as an arbitrary rejection.
+ */
+function strictRefusal(location: string, top: MergedPlace, ranked: MergedPlace[]): string {
+  const reason = top.featureCode === undefined
+    ? 'the best match carries no feature classification'
+    : top.featureCode.startsWith(POPULATED_PLACE_PREFIX)
+      ? `the best match is a ${top.featureCode} with population ${top.population}`
+      : `the best match is a ${top.featureCode} record, not an inhabited place`;
+  const options = ranked.slice(0, MAX_ALTERNATIVES + 1).map(place => label(place.candidate)).join(' / ');
+  return `Refusing to guess a location for "${location}": ${reason} (${label(top.candidate)}). `
+    + `Pass locationQuery with the English or local spelling to search again, or name one of: ${options}`;
 }
