@@ -12,6 +12,7 @@ const entry = path.resolve(dir, '../src/app/index.html');
 const fakeMode = process.argv.includes('--fake-runtime');
 const fakeModelMode = process.argv.includes('--fake-model') || process.env.PA_DESKTOP_MODEL_MODE === 'fake';
 if (fakeMode || fakeModelMode) app.setPath('userData', path.resolve(dir, '../.cache/user-data'));
+if (process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1') app.setPath('userData', path.resolve(dir, `../.cache/test-user-data-${process.pid}`));
 
 let runtime;
 let runtimeConnection;
@@ -22,6 +23,9 @@ let eventBusy = false;
 let orb;
 let panel;
 let admin;
+let workspace;
+let workspaceDraft = '';
+let adminNavigation = {page: 'settings', revision: 0};
 let tray;
 let poll;
 let pinned = false;
@@ -48,8 +52,8 @@ let model = {
   baseUrl: modelConfig.baseUrl, model: modelConfig.model, deployment: modelConfig.deployment,
   configured: false, keyConfigured: Boolean(modelConfig.apiKey),
   capabilities: {text: true, streaming: false, toolCalling: false, structuredOutput: false, vision: false},
-  persisted: false,
-  reason: '盘古 Provider 已接入；请在设置中配置 Endpoint、模型和 API Key', lastTestAt: null, latencyMs: null,
+  persisted: false, enabled: false,
+  reason: '盘古 Provider 已接入；请在“模型”页配置 Endpoint、模型和 API Key', lastTestAt: null, latencyMs: null,
 };
 let thinking = {depth: 1, fast: false, applied: false, reason: 'Runtime 尚未公开思考参数契约'};
 const tasks = new Map();
@@ -64,6 +68,8 @@ function snapshot() {
     fakeModel: fakeModelMode,
     fake: fakeMode,
     pinned,
+    workspaceDraft,
+    adminNavigation: {...adminNavigation},
     audioLevel,
     orbStateOverride,
     tasks: [...tasks.values()].map(task => ({...structuredClone(task), userMessage: taskGoals.get(task.taskId)})),
@@ -77,7 +83,7 @@ function snapshot() {
 }
 
 function publish() {
-  for (const win of [orb, panel, admin]) {
+  for (const win of [orb, panel, admin, workspace]) {
     if (win && !win.isDestroyed()) win.webContents.send('desktop:update', snapshot());
   }
 }
@@ -89,13 +95,18 @@ function windowFor(mode, bounds, options = {}) {
   win.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
   win.webContents.on('will-navigate', event => event.preventDefault());
   win.loadFile(entry, {query: {mode}});
-  win.once('ready-to-show', () => { if (mode !== 'panel') win.show(); publish(); });
+  win.once('ready-to-show', () => {
+    if (['panel','admin','workspace'].includes(mode)) applyShape(win, mode === 'panel' ? 20 : 12);
+    if (mode !== 'panel') win.show();
+    publish();
+  });
   return win;
 }
 
 /* roundedCorners 不会裁切透明窗口的实际区域，用窗口区域把整窗裁成圆角。 */
 function roundedRects(width, height, radius) {
   const r = Math.min(radius, Math.floor(width / 2), Math.floor(height / 2));
+  if (r <= 0) return [{x:0,y:0,width,height}];
   const rects = [
     {x: 0, y: r, width, height: height - 2 * r},
     {x: r, y: 0, width: width - 2 * r, height: r},
@@ -117,6 +128,7 @@ function applyShape(win, radius) {
 
 function openPanel(focus = false) {
   if (!orb || !panel || orb.isDestroyed() || panel.isDestroyed()) return;
+  if (!focus && workspace && !workspace.isDestroyed() && workspace.isVisible()) return;
   panel.setBounds(panelBounds(orb.getBounds(), screen.getDisplayMatching(orb.getBounds()).workArea));
   applyShape(panel, 20);
   if (focus) panel.show(); else panel.showInactive();
@@ -135,8 +147,11 @@ function movePanelGroup(point) {
   applyShape(panel, 20);
 }
 
-function openAdmin() {
-  if (admin && !admin.isDestroyed()) { admin.show(); admin.focus(); return; }
+function openAdmin(page) {
+  if (page && ['settings','profile','models','tasks','capabilities','authorizations','git','connections'].includes(page)) {
+    adminNavigation = {page, revision:adminNavigation.revision + 1};
+  }
+  if (admin && !admin.isDestroyed()) { admin.show(); admin.focus(); publish(); return; }
   const area = screen.getDisplayMatching(orb.getBounds()).workArea;
   admin = windowFor('admin', {width: Math.min(1120, area.width), height: Math.min(760, area.height)},
     {title: 'PersonalAgent · 管理后台', frame: false, transparent: true, backgroundMaterial: 'none', roundedCorners: true, minWidth: 600, minHeight: 400});
@@ -191,10 +206,11 @@ function persistModelConfig() {
   mkdirSync(path.dirname(target), {recursive: true});
   const temporary = `${target}.tmp-${process.pid}`;
   const payload = {
-    version: 1,
+    version: 2,
     baseUrl: modelConfig.baseUrl,
     model: modelConfig.model,
     deployment: modelConfig.deployment,
+    enabled: model.enabled,
     apiKey: safeStorage.encryptString(modelConfig.apiKey).toString('base64'),
   };
   writeFileSync(temporary, JSON.stringify(payload), {encoding: 'utf8'});
@@ -209,12 +225,13 @@ function restoreModelConfig() {
   if (!existsSync(target) || !safeStorage.isEncryptionAvailable()) return;
   try {
     const payload = JSON.parse(readFileSync(target, 'utf8'));
-    if (payload?.version !== 1 || typeof payload.apiKey !== 'string') return;
+    if (![1, 2].includes(payload?.version) || typeof payload.apiKey !== 'string') return;
     const restoredKey = safeStorage.decryptString(Buffer.from(payload.apiKey, 'base64'));
     if (!modelConfig.baseUrl && typeof payload.baseUrl === 'string') modelConfig.baseUrl = payload.baseUrl;
     if (!process.env.PANGU_MODEL && typeof payload.model === 'string') modelConfig.model = payload.model;
     if (!process.env.PANGU_DEPLOYMENT && typeof payload.deployment === 'string') modelConfig.deployment = payload.deployment;
     if (!modelConfig.apiKey) modelConfig.apiKey = restoredKey;
+    model.enabled = payload.enabled !== false;
     modelStorage.persisted = true;
   } catch {
     model = {...model, reason: '已找到保存的模型配置，但无法解密；请重新输入 API Key'};
@@ -230,22 +247,25 @@ async function configurePangu(input, {publishState = true, persist = true} = {})
   const {PanguModelProvider} = await import('@personal-agent/models');
   const provider = new PanguModelProvider({baseUrl, model: modelName, deployment, apiKey: () => modelConfig.apiKey});
   const previous = {...modelConfig};
+  const previousEnabled = model.enabled;
   modelConfig.baseUrl = baseUrl;
   modelConfig.model = modelName;
   modelConfig.deployment = deployment;
   modelConfig.apiKey = apiKey;
+  model.enabled = true;
   let storage = {saved: modelStorage.persisted, reason: modelStorage.persisted ? '配置已从本机加密存储恢复' : '配置仅保留在本次运行'};
   try {
     if (persist) storage = persistModelConfig();
   } catch (error) {
     Object.assign(modelConfig, previous);
+    model.enabled = previousEnabled;
     throw error;
   }
   panguProvider = provider;
   model = {
     ...model,
     provider: 'pangu', label: '盘古大模型 2.0', status: 'configured', verification: provider.deployment.verification,
-    baseUrl, model: modelName, deployment, configured: true, keyConfigured: true,
+    baseUrl, model: modelName, deployment, configured: true, keyConfigured: true, enabled: true,
     persisted: storage.saved,
     capabilities: structuredClone(provider.deployment.capabilities),
     reason: `${storage.reason}，尚未发起真实连接测试`, lastTestAt: null, latencyMs: null,
@@ -256,6 +276,7 @@ async function configurePangu(input, {publishState = true, persist = true} = {})
 
 async function testPangu() {
   if (!panguProvider) throw Error('请先保存盘古模型配置');
+  if (model.enabled === false) throw Error('模型已停用，请先启用');
   const controller = new AbortController();
   const started = Date.now();
   try {
@@ -275,6 +296,32 @@ async function testPangu() {
   }
 }
 
+function openWorkspace(draft) {
+  if (draft != null && (typeof draft !== 'string' || draft.length > 10000)) throw Error('输入内容无效');
+  if (typeof draft === 'string') workspaceDraft = draft;
+  pinned = false;
+  panel?.hide();
+  if (workspace && !workspace.isDestroyed()) { workspace.show(); workspace.focus(); publish(); return; }
+  const area = screen.getDisplayMatching(orb.getBounds()).workArea;
+  const width = Math.min(1280, area.width - 32), height = Math.min(820, area.height - 32);
+  workspace = windowFor('workspace', {width, height, x: area.x + Math.round((area.width-width)/2), y: area.y + Math.round((area.height-height)/2)},
+    {title: 'PersonalAgent · 工作区', frame: false, transparent: true, backgroundMaterial: 'none', roundedCorners: true, minWidth: Math.min(760,width), minHeight: Math.min(540,height)});
+  workspace.once('ready-to-show', () => { applyShape(workspace, 12); workspace.focus(); });
+  workspace.on('resize', () => applyShape(workspace, workspace.isMaximized() ? 0 : 12));
+  workspace.on('closed', () => { workspace = undefined; });
+}
+
+function toggleModel(input) {
+  if (!model.configured) throw Error('请先保存模型配置');
+  const enabled = Boolean(input?.enabled);
+  const previous = model;
+  model = {...model, enabled, status: enabled ? 'configured' : 'disabled', reason: enabled ? '模型已启用，请重新测试真实连接' : '模型已停用，不会用于新任务'};
+  try { persistModelConfig(); }
+  catch (error) { model = previous; throw error; }
+  publish();
+  return structuredClone(model);
+}
+
 function updateThinking(input) {
   const depth = Number(input?.depth);
   if (!Number.isInteger(depth) || depth < 0 || depth > 5) throw Error('思考深度必须是 0 到 5');
@@ -288,15 +335,17 @@ async function initializeModelFromEnvironment() {
     model = {
       ...model,
       provider: 'fake', label: 'Fake Model · 离线测试', status: 'ready', verification: 'mock',
-      configured: true, keyConfigured: false, persisted: false,
+      configured: true, keyConfigured: false, persisted: false, enabled: true,
       capabilities: {text: true, streaming: false, toolCalling: false, structuredOutput: false, vision: false},
       reason: '显式 Fake Model 模式；不会调用真实 AI 或网络服务', lastTestAt: null, latencyMs: 0,
     };
     return;
   }
   if (!modelConfig.baseUrl || !modelConfig.apiKey) return;
+  const shouldEnable = !modelStorage.persisted || model.enabled !== false;
   try {
     await configurePangu(modelConfig, {publishState: false, persist: false});
+    if (!shouldEnable) model = {...model, enabled: false, status: 'disabled', reason: '模型已停用，不会用于新任务'};
   } catch (error) {
     model = {...model, status: 'error', reason: error instanceof Error ? error.message : '盘古配置无效'};
   }
@@ -305,9 +354,9 @@ async function initializeModelFromEnvironment() {
 async function executeTextTask(taskId, goal) {
   if (fakeMode || activeTextTasks.has(taskId)) return;
   const {UnavailableModelProvider} = await import('@personal-agent/models');
-  const provider = fakeModelMode
+  const provider = fakeModelMode && model.enabled !== false
     ? createFakeTextProvider()
-    : panguProvider ?? new UnavailableModelProvider('pangu', modelConfig.model);
+    : model.enabled !== false && panguProvider ? panguProvider : new UnavailableModelProvider('pangu', modelConfig.model);
   const execution = startTextTask(runtime, taskId, goal, provider);
   activeTextTasks.set(taskId, execution);
   try {
@@ -394,10 +443,18 @@ async function initializeRuntime() {
 }
 
 async function action(event, name, payload) {
-  const sender = [orb, panel, admin].find(win => win && !win.isDestroyed() && win.webContents === event.sender);
+  const sender = [orb, panel, admin, workspace].find(win => win && !win.isDestroyed() && win.webContents === event.sender);
   if (!sender || event.senderFrame !== sender.webContents.mainFrame) throw Error('Untrusted sender');
   if (name === 'snapshot') return snapshot();
-  if (name === 'admin.open') { openAdmin(); return; }
+  if (name === 'admin.open') { openAdmin(payload?.page); return; }
+  if (name === 'workspace.open' && sender === panel) { openWorkspace(payload?.draft); return; }
+  if (name === 'workspace.draft' && sender === workspace) {
+    if (typeof payload !== 'string' || payload.length > 10000) throw Error('输入内容无效');
+    workspaceDraft = payload; return;
+  }
+  if (name === 'workspace.close' && sender === workspace) { workspace.close(); return; }
+  if (name === 'workspace.minimize' && sender === workspace) { workspace.minimize(); return; }
+  if (name === 'workspace.maximize' && sender === workspace) { if(workspace.isMaximized()) workspace.unmaximize(); else workspace.maximize(); return; }
   if (name === 'admin.close') {
     if (sender !== admin) throw Error('Untrusted sender');
     admin.close(); return;
@@ -428,7 +485,7 @@ async function action(event, name, payload) {
     return {available: false, stopped: false, reason: '语音供应商尚未连接'};
   }
   if (name === 'clipboard.writeText') {
-    if (sender !== panel || typeof payload !== 'string' || payload.length > 50000) throw Error('剪贴板内容无效');
+    if ((sender !== panel && sender !== workspace) || typeof payload !== 'string' || payload.length > 50000) throw Error('剪贴板内容无效');
     clipboard.writeText(payload);
     return {copied: true};
   }
@@ -440,8 +497,12 @@ async function action(event, name, payload) {
     if (sender !== admin) throw Error('模型测试只能从管理后台调用');
     return testPangu();
   }
+  if (name === 'model.toggle') {
+    if (sender !== admin) throw Error('模型启停只能从管理后台调用');
+    return toggleModel(payload);
+  }
   if (name === 'thinking.update') {
-    if (sender !== panel && sender !== admin) throw Error('思考设置来源不受信任');
+    if (sender !== panel && sender !== admin && sender !== workspace) throw Error('思考设置来源不受信任');
     return updateThinking(payload);
   }
   if (sender === orb) throw Error('Action unavailable from orb');
@@ -451,7 +512,7 @@ async function action(event, name, payload) {
     const goal = payload.trim();
     const result = await client.call('task.submit', {goal, conversationId: 'desktop-session'}, {idempotencyKey: crypto.randomUUID()});
     taskGoals.set(result.taskId, goal);
-    pinned = true;
+    if (sender === panel) pinned = true;
     const task = await refresh(result.taskId);
     if (!fakeMode) void executeTextTask(result.taskId, goal).catch(error => {
       runtimeError = error instanceof Error ? error.message : '文字任务启动失败';
