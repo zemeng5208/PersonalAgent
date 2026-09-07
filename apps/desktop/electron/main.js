@@ -5,12 +5,15 @@ import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'no
 import {EventCursor} from '@personal-agent/client';
 import {register} from './runtime.js';
 import {panelBounds, clampOrb, draggedGroupBounds} from './placement.js';
+import {Conversations} from './conversations.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
 const fakeMode = process.argv.includes('--fake-runtime');
 const fakeModelMode = process.argv.includes('--fake-model') || process.env.PA_DESKTOP_MODEL_MODE === 'fake';
 if (fakeMode || fakeModelMode) app.setPath('userData', path.resolve(dir, '../.cache/user-data'));
+if (process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1') app.setPath('userData', path.resolve(dir, `../.cache/test-user-data-${process.pid}`));
+if (process.env.PA_DESKTOP_TEST_USER_DATA) app.setPath('userData', path.resolve(process.env.PA_DESKTOP_TEST_USER_DATA));
 
 let runtime;
 let runtimeConnection;
@@ -21,6 +24,8 @@ let eventBusy = false;
 let orb;
 let panel;
 let admin;
+let workspace;
+let adminNavigation = {page: 'settings', revision: 0};
 let tray;
 let poll;
 let pinned = false;
@@ -46,28 +51,34 @@ let model = {
   baseUrl: modelConfig.baseUrl, model: modelConfig.model, deployment: modelConfig.deployment,
   configured: false, keyConfigured: Boolean(modelConfig.apiKey),
   capabilities: {text: true, streaming: false, toolCalling: false, structuredOutput: false, vision: false},
-  persisted: false,
-  reason: '盘古 Provider 已接入；请在设置中配置 Endpoint、模型和 API Key', lastTestAt: null, latencyMs: null,
+  persisted: false, enabled: false,
+  reason: '盘古 Provider 已接入；请在“模型”页配置 Endpoint、模型和 API Key', lastTestAt: null, latencyMs: null,
 };
 let thinking = {depth: 1, fast: false, applied: false, reason: 'Runtime 尚未公开思考参数契约'};
 const tasks = new Map();
 const taskGoals = new Map();
+let conversations;
+const submitting = new Set();
 const approvals = new Map();
+const notifications = new Map();
 let runtimeApplication;
 
-function snapshot() {
+function snapshot(surface) {
   return {
     connection: connectionLabel,
     connectionError: runtimeError,
     fakeModel: fakeModelMode,
     fake: fakeMode,
     pinned,
+    adminNavigation: {...adminNavigation},
     audioLevel,
     orbStateOverride,
-    tasks: [...tasks.values()].map(task => ({...structuredClone(task), userMessage: taskGoals.get(task.taskId)})),
+    tasks: [...tasks.values()].filter(task => !surface || conversations?.surface(task.taskId) === surface).map(task => ({...structuredClone(task), userMessage: taskGoals.get(task.taskId) ?? conversations?.goal(task.taskId)})),
+    conversation: surface ?? 'all',
     capabilities: structuredClone(capabilities),
     health: structuredClone(health),
     approvals: [...approvals.values()],
+    notifications: [...notifications.values()],
     model: structuredClone(model),
     thinking: structuredClone(thinking),
     voice: {available: false, status: 'unavailable', reason: '语音供应商尚未连接'},
@@ -75,8 +86,8 @@ function snapshot() {
 }
 
 function publish() {
-  for (const win of [orb, panel, admin]) {
-    if (win && !win.isDestroyed()) win.webContents.send('desktop:update', snapshot());
+  for (const win of [orb, panel, admin, workspace]) {
+    if (win && !win.isDestroyed()) win.webContents.send('desktop:update', snapshot(win === workspace ? 'workspace' : win === admin ? undefined : 'panel'));
   }
 }
 
@@ -87,13 +98,18 @@ function windowFor(mode, bounds, options = {}) {
   win.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
   win.webContents.on('will-navigate', event => event.preventDefault());
   win.loadFile(entry, {query: {mode}});
-  win.once('ready-to-show', () => { if (mode !== 'panel') win.show(); publish(); });
+  win.once('ready-to-show', () => {
+    if (['panel','admin','workspace'].includes(mode)) applyShape(win, mode === 'panel' ? 20 : 12);
+    if (mode !== 'panel') win.show();
+    publish();
+  });
   return win;
 }
 
 /* roundedCorners 不会裁切透明窗口的实际区域，用窗口区域把整窗裁成圆角。 */
 function roundedRects(width, height, radius) {
   const r = Math.min(radius, Math.floor(width / 2), Math.floor(height / 2));
+  if (r <= 0) return [{x:0,y:0,width,height}];
   const rects = [
     {x: 0, y: r, width, height: height - 2 * r},
     {x: r, y: 0, width: width - 2 * r, height: r},
@@ -115,6 +131,7 @@ function applyShape(win, radius) {
 
 function openPanel(focus = false) {
   if (!orb || !panel || orb.isDestroyed() || panel.isDestroyed()) return;
+  if (!focus && workspace && !workspace.isDestroyed() && workspace.isVisible()) return;
   panel.setBounds(panelBounds(orb.getBounds(), screen.getDisplayMatching(orb.getBounds()).workArea));
   applyShape(panel, 20);
   if (focus) panel.show(); else panel.showInactive();
@@ -133,8 +150,11 @@ function movePanelGroup(point) {
   applyShape(panel, 20);
 }
 
-function openAdmin() {
-  if (admin && !admin.isDestroyed()) { admin.show(); admin.focus(); return; }
+function openAdmin(page) {
+  if (page && ['settings','profile','models','tasks','capabilities','authorizations','git','connections'].includes(page)) {
+    adminNavigation = {page, revision:adminNavigation.revision + 1};
+  }
+  if (admin && !admin.isDestroyed()) { admin.show(); admin.focus(); publish(); return; }
   const area = screen.getDisplayMatching(orb.getBounds()).workArea;
   admin = windowFor('admin', {width: Math.min(1120, area.width), height: Math.min(760, area.height)},
     {title: 'PersonalAgent · 管理后台', frame: false, transparent: true, backgroundMaterial: 'none', roundedCorners: true, minWidth: 600, minHeight: 400});
@@ -189,10 +209,11 @@ function persistModelConfig() {
   mkdirSync(path.dirname(target), {recursive: true});
   const temporary = `${target}.tmp-${process.pid}`;
   const payload = {
-    version: 1,
+    version: 2,
     baseUrl: modelConfig.baseUrl,
     model: modelConfig.model,
     deployment: modelConfig.deployment,
+    enabled: model.enabled,
     apiKey: safeStorage.encryptString(modelConfig.apiKey).toString('base64'),
   };
   writeFileSync(temporary, JSON.stringify(payload), {encoding: 'utf8'});
@@ -207,16 +228,29 @@ function restoreModelConfig() {
   if (!existsSync(target) || !safeStorage.isEncryptionAvailable()) return;
   try {
     const payload = JSON.parse(readFileSync(target, 'utf8'));
-    if (payload?.version !== 1 || typeof payload.apiKey !== 'string') return;
+    if (![1, 2].includes(payload?.version) || typeof payload.apiKey !== 'string') return;
     const restoredKey = safeStorage.decryptString(Buffer.from(payload.apiKey, 'base64'));
     if (!modelConfig.baseUrl && typeof payload.baseUrl === 'string') modelConfig.baseUrl = payload.baseUrl;
     if (!process.env.PANGU_MODEL && typeof payload.model === 'string') modelConfig.model = payload.model;
     if (!process.env.PANGU_DEPLOYMENT && typeof payload.deployment === 'string') modelConfig.deployment = payload.deployment;
     if (!modelConfig.apiKey) modelConfig.apiKey = restoredKey;
+    model.enabled = payload.enabled !== false;
     modelStorage.persisted = true;
   } catch {
     model = {...model, reason: '已找到保存的模型配置，但无法解密；请重新输入 API Key'};
   }
+}
+
+function runtimeTextOptions(state = model, config = modelConfig) {
+  if (state.enabled === false) return {mode: 'unavailable', model: config.model};
+  if (state.provider === 'fake') return {mode: 'fake'};
+  if (state.configured && config.baseUrl && config.apiKey) {
+    return {
+      mode: 'pangu', baseUrl: config.baseUrl, model: config.model,
+      deployment: config.deployment, apiKey: () => modelConfig.apiKey,
+    };
+  }
+  return {mode: 'unavailable', model: config.model};
 }
 
 async function configurePangu(input, {publishState = true, persist = true} = {}) {
@@ -225,25 +259,31 @@ async function configurePangu(input, {publishState = true, persist = true} = {})
   const deployment = requiredModelText(input?.deployment || modelName, '部署名称');
   const apiKey = typeof input?.apiKey === 'string' && input.apiKey.trim() ? input.apiKey.trim() : modelConfig.apiKey;
   if (!apiKey) throw Error('API Key 未配置；密钥只会保留在主进程内存中');
-  const previous = {...modelConfig};
+  const previousConfig = {...modelConfig};
+  const previousModel = model;
   modelConfig.baseUrl = baseUrl;
   modelConfig.model = modelName;
   modelConfig.deployment = deployment;
   modelConfig.apiKey = apiKey;
   let storage = {saved: modelStorage.persisted, reason: modelStorage.persisted ? '配置已从本机加密存储恢复' : '配置仅保留在本次运行'};
   try {
+    const configuredDeployment = runtimeApplication.configureText(runtimeTextOptions({provider: 'pangu', configured: true, enabled: true}, modelConfig));
+    model = {
+      ...model,
+      provider: 'pangu', label: '盘古大模型 2.0', status: 'configured', verification: configuredDeployment.verification,
+      baseUrl, model: modelName, deployment, configured: true, keyConfigured: true, enabled: true,
+      capabilities: structuredClone(configuredDeployment.capabilities),
+    };
     if (persist) storage = persistModelConfig();
   } catch (error) {
-    Object.assign(modelConfig, previous);
+    Object.assign(modelConfig, previousConfig);
+    model = previousModel;
+    try { runtimeApplication.configureText(runtimeTextOptions(previousModel, previousConfig)); } catch {}
     throw error;
   }
-  const configuredDeployment = runtimeApplication.configureText({mode: 'pangu', baseUrl, model: modelName, deployment, apiKey: () => modelConfig.apiKey});
   model = {
     ...model,
-    provider: 'pangu', label: '盘古大模型 2.0', status: 'configured', verification: configuredDeployment.verification,
-    baseUrl, model: modelName, deployment, configured: true, keyConfigured: true,
     persisted: storage.saved,
-    capabilities: structuredClone(configuredDeployment.capabilities),
     reason: `${storage.reason}，尚未发起真实连接测试`, lastTestAt: null, latencyMs: null,
   };
   if (publishState) publish();
@@ -252,6 +292,7 @@ async function configurePangu(input, {publishState = true, persist = true} = {})
 
 async function testPangu() {
   if (!runtimeApplication || runtimeApplication.deployment.provider !== 'pangu') throw Error('请先保存盘古模型配置');
+  if (model.enabled === false) throw Error('模型已停用，请先启用');
   const controller = new AbortController();
   const started = Date.now();
   try {
@@ -265,6 +306,38 @@ async function testPangu() {
     publish();
     throw error;
   }
+}
+
+function openWorkspace() {
+  pinned = false;
+  panel?.hide();
+  if (workspace && !workspace.isDestroyed()) { workspace.show(); workspace.focus(); publish(); return; }
+  const area = screen.getDisplayMatching(orb.getBounds()).workArea;
+  const width = Math.min(1280, area.width - 32), height = Math.min(820, area.height - 32);
+  workspace = windowFor('workspace', {width, height, x: area.x + Math.round((area.width-width)/2), y: area.y + Math.round((area.height-height)/2)},
+    {title: 'PersonalAgent · 工作区', frame: false, transparent: true, backgroundMaterial: 'none', roundedCorners: true, minWidth: Math.min(760,width), minHeight: Math.min(540,height)});
+  workspace.once('ready-to-show', () => { applyShape(workspace, 12); workspace.focus(); });
+  workspace.on('resize', () => applyShape(workspace, workspace.isMaximized() ? 0 : 12));
+  workspace.on('closed', () => { workspace = undefined; });
+}
+
+function toggleModel(input) {
+  if (!model.configured) throw Error('请先保存模型配置');
+  const enabled = Boolean(input?.enabled);
+  if (enabled === (model.enabled !== false)) return structuredClone(model);
+  const previous = model;
+  const next = {...model, enabled, status: enabled ? 'configured' : 'disabled', reason: enabled ? '模型已启用，请重新测试真实连接' : '模型已停用，不会用于新任务'};
+  try {
+    runtimeApplication.configureText(runtimeTextOptions(next));
+    model = next;
+    if (model.provider !== 'fake') persistModelConfig();
+  } catch (error) {
+    model = previous;
+    try { runtimeApplication.configureText(runtimeTextOptions(previous)); } catch {}
+    throw error;
+  }
+  publish();
+  return structuredClone(model);
 }
 
 function updateThinking(input) {
@@ -281,20 +354,24 @@ async function initializeModelFromEnvironment() {
     model = {
       ...model,
       provider: 'fake', label: 'Fake Model · 离线测试', status: 'ready', verification: 'mock',
-      configured: true, keyConfigured: false, persisted: false,
+      configured: true, keyConfigured: false, persisted: false, enabled: true,
       capabilities: {text: true, streaming: false, toolCalling: false, structuredOutput: false, vision: false},
       reason: '显式 Fake Model 模式；不会调用真实 AI 或网络服务', lastTestAt: null, latencyMs: 0,
     };
     return;
   }
   if (!modelConfig.baseUrl || !modelConfig.apiKey) return;
+  const shouldEnable = !modelStorage.persisted || model.enabled !== false;
   try {
     await configurePangu(modelConfig, {publishState: false, persist: false});
+    if (!shouldEnable) {
+      model = {...model, enabled: false, status: 'disabled', reason: '模型已停用，不会用于新任务'};
+      runtimeApplication.configureText(runtimeTextOptions(model));
+    }
   } catch (error) {
     model = {...model, status: 'error', reason: error instanceof Error ? error.message : '盘古配置无效'};
   }
 }
-
 
 async function refresh(taskId) {
   const task = await client.call('task.get', {taskId});
@@ -304,11 +381,25 @@ async function refresh(taskId) {
 }
 
 function applyEvent(event) {
+  if (event.type === 'notification.created' && event.payload) notifications.set(event.payload.notificationId, {...event.payload,occurredAt:event.occurredAt});
   if (event.taskId && event.payload && ['task.created', 'task.state_changed', 'task.completed', 'task.failed', 'task.cancelled'].includes(event.type)) {
     tasks.set(event.taskId, structuredClone(event.payload));
   }
   if (event.type === 'approval.requested' && event.payload) {
-    approvals.set(event.payload.approvalId, structuredClone(event.payload));
+    const view = structuredClone(event.payload);
+    try {
+      const approval = runtimeApplication?.runtime?.getApproval(event.payload.approvalId);
+      const checkpoint = runtimeApplication?.runtime?.loadCheckpoint(event.payload.taskId, 'agent-loop');
+      const proposal = checkpoint?.pending?.response?.kind === 'tool_proposal' ? checkpoint.pending.response.proposal : undefined;
+      if (approval) {
+        view.toolName = approval.toolName;
+        view.scopes = [...approval.scopes];
+        view.argumentsDigest = approval.argumentsDigest;
+        view.expiresAt = approval.expiresAt;
+      }
+      if (proposal?.toolName === approval?.toolName) view.arguments = structuredClone(proposal.arguments);
+    } catch {}
+    approvals.set(event.payload.approvalId, view);
   }
   if (event.type === 'task.cancelled' && event.payload?.taskId) {
     for (const [id, approval] of approvals) if (approval.taskId === event.payload.taskId) approvals.delete(id);
@@ -357,7 +448,9 @@ async function initializeRuntime() {
     });
     readEvents = after => runtime.readEvents('tasks', after);
   } else {
-    const dbPath = path.resolve(dir, '../.cache/runtime.sqlite');
+    const dbPath = process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1' || process.env.PA_DESKTOP_TEST_USER_DATA
+      ? path.join(app.getPath('userData'), 'runtime.sqlite')
+      : path.resolve(dir, '../.cache/runtime.sqlite');
     mkdirSync(path.dirname(dbPath), {recursive: true});
     const createApplication = process.argv.includes('--weather-tools')
       ? (await import('@personal-agent/runtime/weather')).createOpenMeteoApplication
@@ -383,11 +476,31 @@ async function initializeRuntime() {
   eventPoll = setInterval(() => void pumpEvents(), 120);
 }
 
+async function waitForTerminalTask(taskId, timeoutMs = 5_000) {
+  const terminal = new Set(['succeeded', 'failed', 'cancelled']);
+  const deadline = Date.now() + timeoutMs;
+  let task = await refresh(taskId);
+  while (!terminal.has(task.state) && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 25));
+    task = await refresh(taskId);
+  }
+  if (!terminal.has(task.state)) throw Error('Runtime 未在限定时间内确认任务终态');
+  if (runtimeError === 'Runtime 仍有活动任务；请先等待完成或停止任务后再退出') {
+    runtimeError = '';
+    publish();
+  }
+  return task;
+}
+
 async function action(event, name, payload) {
-  const sender = [orb, panel, admin].find(win => win && !win.isDestroyed() && win.webContents === event.sender);
+  const sender = [orb, panel, admin, workspace].find(win => win && !win.isDestroyed() && win.webContents === event.sender);
   if (!sender || event.senderFrame !== sender.webContents.mainFrame) throw Error('Untrusted sender');
-  if (name === 'snapshot') return snapshot();
-  if (name === 'admin.open') { openAdmin(); return; }
+  if (name === 'snapshot') return snapshot(sender === workspace ? 'workspace' : sender === admin ? undefined : 'panel');
+  if (name === 'admin.open') { openAdmin(payload?.page); return; }
+  if (name === 'workspace.open' && sender === panel) { openWorkspace(); return; }
+  if (name === 'workspace.close' && sender === workspace) { workspace.close(); return; }
+  if (name === 'workspace.minimize' && sender === workspace) { workspace.minimize(); return; }
+  if (name === 'workspace.maximize' && sender === workspace) { if(workspace.isMaximized()) workspace.unmaximize(); else workspace.maximize(); return; }
   if (name === 'admin.close') {
     if (sender !== admin) throw Error('Untrusted sender');
     admin.close(); return;
@@ -418,7 +531,7 @@ async function action(event, name, payload) {
     return {available: false, stopped: false, reason: '语音供应商尚未连接'};
   }
   if (name === 'clipboard.writeText') {
-    if (sender !== panel || typeof payload !== 'string' || payload.length > 50000) throw Error('剪贴板内容无效');
+    if ((sender !== panel && sender !== workspace) || typeof payload !== 'string' || payload.length > 50000) throw Error('剪贴板内容无效');
     clipboard.writeText(payload);
     return {copied: true};
   }
@@ -430,29 +543,43 @@ async function action(event, name, payload) {
     if (sender !== admin) throw Error('模型测试只能从管理后台调用');
     return testPangu();
   }
+  if (name === 'model.toggle') {
+    if (sender !== admin) throw Error('模型启停只能从管理后台调用');
+    return toggleModel(payload);
+  }
   if (name === 'thinking.update') {
-    if (sender !== panel && sender !== admin) throw Error('思考设置来源不受信任');
+    if (sender !== panel && sender !== admin && sender !== workspace) throw Error('思考设置来源不受信任');
     return updateThinking(payload);
   }
   if (sender === orb) throw Error('Action unavailable from orb');
   if (!client) throw Error('Runtime 未连接，此操作尚不可用');
   if (name === 'task.submit') {
+    if (sender !== panel && sender !== workspace) throw Error('请在对话工作区发送消息');
     if (typeof payload !== 'string' || !payload.trim() || payload.length > 10000) throw Error('请输入有效任务');
+    if (!fakeMode && model.enabled === false) throw Error('模型已停用，请先在模型设置中启用');
+    const surface = sender === workspace ? 'workspace' : 'panel';
+    if (submitting.has(surface) || [...tasks.values()].some(task => conversations.surface(task.taskId) === surface && !['succeeded','failed','cancelled'].includes(task.state))) throw Error('请等待当前回答完成，或先停止当前任务');
+    submitting.add(surface);
+    try {
     const goal = payload.trim();
-    const result = await client.call('task.submit', {goal, conversationId: 'desktop-session'}, {idempotencyKey: crypto.randomUUID()});
+    const result = await client.call('task.submit', {goal, conversationId: `desktop-${surface}`}, {idempotencyKey: crypto.randomUUID()});
+    conversations.add(result.taskId, surface, goal);
     taskGoals.set(result.taskId, goal);
-    pinned = true;
+    if (sender === panel) pinned = true;
     const task = await refresh(result.taskId);
     return task;
+    } finally { submitting.delete(surface); }
   }
   if (name === 'task.cancel') {
     if (typeof payload !== 'string' || !tasks.has(payload)) throw Error('Unknown task');
+    if (sender !== admin && conversations.surface(payload) !== (sender === workspace ? 'workspace' : 'panel')) throw Error('无法停止其他工作区的任务');
     const result = await client.call('task.cancel', {taskId: payload, reason: '用户取消任务'});
-    await refresh(payload);
-    return result;
+    const task = fakeMode ? await refresh(payload) : await waitForTerminalTask(payload);
+    return {...result, state: task.state};
   }
   if (name === 'task.refresh') {
     if (!tasks.has(payload)) throw Error('Unknown task');
+    if (sender !== admin && conversations.surface(payload) !== (sender === workspace ? 'workspace' : 'panel')) throw Error('无法读取其他工作区的任务');
     return refresh(payload);
   }
   if (name === 'capability.list') { await syncCapabilities(); publish(); return {manifests: capabilities, health}; }
@@ -485,6 +612,12 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
   try {
+    const conversationPath = fakeMode || fakeModelMode || process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1'
+      ? null
+      : process.env.PA_DESKTOP_TEST_USER_DATA
+        ? path.join(app.getPath('userData'), 'conversations.json')
+        : path.resolve(dir, '../.cache/conversations.json');
+    conversations = new Conversations(conversationPath);
     restoreModelConfig();
     await initializeRuntime();
     await initializeModelFromEnvironment();
@@ -528,6 +661,13 @@ app.whenReady().then(async () => {
     else if (panel.isVisible()) { if (!away) away = Date.now(); else if (Date.now() - away > 520) { panel.hide(); away = 0; } }
   }, 80);
   app.on('before-quit', event => {
+    if ((runtimeApplication?.activeTaskCount ?? 0) > 0) {
+      event.preventDefault();
+      app.isQuitting = false;
+      runtimeError = 'Runtime 仍有活动任务；请先等待完成或停止任务后再退出';
+      publish();
+      return;
+    }
     app.isQuitting = true;
     clearInterval(poll);
     clearInterval(eventPoll);
