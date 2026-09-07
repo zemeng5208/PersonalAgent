@@ -1,13 +1,13 @@
 # 开发计划与进度
 
-更新：2026-09-07 · 当前阶段：M1 Runtime Application 与权限/工具宿主、M2 天气连接器垂直集成 · 应用实现：MOD-01/02/03/25 已按当前边界集成，ARCH-03 进入评审，MOD-04/05 与桌面增量继续评审
+更新：2026-09-07 · 当前阶段：M1 Runtime Application 与权限/工具宿主、M2 天气连接器垂直集成 · 应用实现：ARCH-01/02/03、MOD-01/02/03/25、MOD-04/05 离线增量与桌面 PR #25 已集成；真实盘古、完整持续授权与桌面剩余验收继续推进
 
 本文维护工作状态，需求以 PRD 为准。模块负责人和独占目录唯一登记在 [模块分工](MODULE_ASSIGNMENTS.md)，契约见 [公共开发协议](DEVELOPMENT_PROTOCOL.md)。`goo122`（A）负责底座、公共协议和 Obsidian；`zemeng`（B）负责桌面与执行模块；`Potatos498`（C）负责分配到的信息连接器。阶段不代表承诺日期；正式排期需根据比赛时间、团队人数和接口验证结果确定。
 
 ### ARCH-03：Runtime Application 自主管理任务分派
 
 - 负责人：`goo122`；评审者：`zemeng` 或 `Potatos498`。
-- 分支：`codex/arch-03-runtime-dispatch`；状态：`review`（基于已合并到 DOC-01 堆叠分支的 ARCH-02）。
+- 分支：`codex/arch-03-runtime-dispatch`；状态：`done`（PR #24 已合并为 `0f7dc1e`）。
 - 范围：Runtime Application 持有 `TaskRuntime`、文本应用和活动执行注册表；`task.submit` 成功后由 Runtime 自动启动文本任务；Desktop 只提交任务、订阅事件、展示状态和管理可信模型配置。
 - 验收：公开 `@personal-agent/runtime/application` 入口；重复提交不重复执行；Unavailable、取消、事件顺序和活动任务关闭保护有测试；Desktop 架构门禁禁止 Agent/Model 直连、旧 `runtime/text` 入口和直接 `runTask`。
 - 限制：仍是 Electron 主进程内的 Runtime Application，不是独立守护进程或 IPC 服务；当前文本切片不注册工具，思考参数尚未进入 Runtime 公共契约；真实盘古和外部账号未在本轮调用。
@@ -22,7 +22,7 @@
 ### ARCH-02：Runtime Application 编排边界
 
 - 负责人：`goo122`；评审者：`zemeng` 或 `Potatos498`。
-- 分支：`codex/arch-02-runtime-application`；状态：`merged-to-stack`（PR #21 已合并到 DOC-01 堆叠分支，待随集成分支回流 main）。
+- 分支：`codex/arch-02-runtime-application`；状态：`done`（PR #21 随堆叠集成在 PR #24 回流 `main`）。
 - 范围：将 Agent/Model 选择、ModelGateway、文字 Agent 执行、Fake/Unavailable/Pangu 模式和连接测试移入 `apps/runtime/src/application/`；通过 `@personal-agent/runtime/text` 公开入口供 Desktop 调用。
 - 不在范围：不拆 Runtime 进程、不新增 IPC 协议、不把 API Key 暴露给 Renderer、不接入工具调用或真实付费模型。
 - 验收：Desktop Electron 生产代码不再导入 `@personal-agent/agents` 或 `@personal-agent/models`；Runtime 显式声明 Agent/Model 依赖；Fake、Unavailable、取消语义保持有效；架构门禁、全 workspace 类型检查和全仓测试通过。
@@ -30,11 +30,11 @@
 
 ## 1. 里程碑
 
-### MOD-04/05 离线验收增量（2026-09-07，待评审）
+### MOD-04/05 离线验收增量（2026-09-07，已集成）
 
-负责人 goo122；分支 `codex/mod-04-05-acceptance`，工作树 `.worktrees/mod-04-05-acceptance`；基线 `0f7dc1e` 已包含合并后的 ARCH-03 / PR #24。本轮新增文字 JSON 工具提案、模型网关超时取消、SQLite 授权与参数绑定、持久审批和 Agent 恢复、工具执行证据与幂等重放。全仓 check、18 项定向测试和两项桌面 smoke 通过，详见 [本轮验收记录](modules/MOD-04-05-ACCEPTANCE.md)。
+负责人 goo122；分支 `codex/mod-04-05-acceptance`；PR #26 已合并为 `29bf54a`。本轮新增文字 JSON 工具提案、模型网关超时取消、SQLite 授权与参数绑定、持久审批和 Agent 恢复、工具执行证据与幂等重放。全仓 check、18 项定向测试和两项桌面 smoke 通过，详见 [本轮验收记录](modules/MOD-04-05-ACCEPTANCE.md)。
 
-用户选择先完成离线交付，真实模型与天气调用未执行。MOD-04/05 保持 review；历史记录中的“授权完全为内存”描述由本轮增量补齐，但不代表跨任务持续授权、真实 SecretStore、流式、多 Agent 或真实写入恢复已经完成。后续先评审本地提交，再安排真实盘古验收。
+离线工作包已完成非作者评审并集成。真实模型与天气组合调用仍未执行，因此 MOD-04/05 整体保持 review；已补齐任务级持久授权、审批恢复和 Evidence，但不代表跨任务持续授权、真实 SecretStore、流式、多 Agent 或真实写入恢复已经完成。后续优先安排真实盘古验收。
 
 | 阶段 | 交付 | 退出条件 | 当前状态 |
 | --- | --- | --- | --- |
@@ -47,23 +47,23 @@
 
 ## 2. 模块执行台账
 
-MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；MOD-25 的源码、Runtime 根装配和地理编码/缺省日期修复已分别通过 PR #4、PR #9、PR #12 完成非作者评审并合并。MOD-04/05 的本地 Fake 验收已完成，但真实模型、持久化授权和 Evidence 等边界仍保持 review。桌面 PR #18 已合并为交互里程碑，MOD-11/12/13 仍按未完成项保持 in_progress。PR #8 已通过代码评审但当前与 main 冲突，PR #19 已通过 CI 但作者为 `goo122`，仍等待非作者评审。其他具体模块仍需用户明确授权后开工。每行可拆多个子任务，只有全部约定交付通过后模块才为 done。
+MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；MOD-25 的源码、Runtime 根装配和地理编码/缺省日期修复已分别通过 PR #4、PR #9、PR #12 完成非作者评审并合并。MOD-04/05 的离线持久审批、Evidence 与 Fake 垂直链路已随 PR #26 集成，但真实模型和完整持续授权仍未验收。桌面 PR #18 与 PR #25 已合并为交互和工作区增量，MOD-11/12/13 仍按未完成项保持 in_progress。PR #8 已通过代码评审但当前与 main 冲突，PR #19 已合并并移除误提交报告。其他具体模块仍需用户明确授权后开工。每行可拆多个子任务，只有全部约定交付通过后模块才为 done。
 
 | 模块 ID | 计划阶段 | 状态 | 当前执行人 / PR / 证据 |
 | --- | --- | --- | --- |
 | MOD-01 | M1 起步门槛 | done | goo122 / PR #1 / 合并提交 dbbc547 / 构建、迁移和存储测试通过 |
 | MOD-02 | M1 起步门槛 | done | goo122 / PR #1 / 合并提交 dbbc547 / 26 项联合测试及评审通过；协议待多消费端冻结 |
 | MOD-03 | M1/M2 | done | goo122 / PR #5 / 合并提交 e14aebf / 7 项 Runtime 测试及评审通过 |
-| MOD-04 | M1 主模型、M3 专业协作 | review | goo122 / PR #10、#11 已由 `zemeng` 评审并合并；Fake 垂直集成与仓库 check 通过，真实盘古、流式输出、多 Agent 尚未验收 |
-| MOD-05 | M1/M2 | review | goo122 / PR #7 已由 `zemeng` 评审并合并；任务绑定授权、策略校验工具网关、受限凭据连接器宿主及公共 Client→Runtime→工具闭环已本地验证，持久化权限与 Evidence 尚未完成 |
+| MOD-04 | M1 主模型、M3 专业协作 | review | goo122 / PR #10、#11、#26 已合并；有界 Agent、模型网关、JSON 工具提案和 Fake 垂直链路已验证，真实盘古、流式输出、多 Agent 尚未验收 |
+| MOD-05 | M1/M2 | review | goo122 / PR #7、#26 已合并；任务级 SQLite 授权、参数绑定、审批恢复、工具 Evidence 与幂等重放已离线验证；跨任务持续授权、真实 SecretStore 和真实写入恢复尚未完成 |
 | MOD-06 | M2 | todo | 未启动 |
 | MOD-07 | M2 | todo | 未启动 |
 | MOD-08 | M2 | todo | 未启动 |
 | MOD-09 | M4 | todo | 未启动 |
 | MOD-10 | M4 后研究，无交付日期承诺 | todo | 未启动 |
-| MOD-11 | M1 | in_progress | `zemeng` / PR #13、#14、#18 已合并；窗口与安全桥可运行，但托盘、真实 Runtime 稳定性和 DPI 透明命中区域问题仍未关闭 |
-| MOD-12 | M1 | in_progress | `zemeng` / PR #18 已合并；文字交互、状态展示和取消入口可用，连续上下文、真实事件与语音仍未接入 |
-| MOD-13 | M1 基础页面、M2 配置闭环 | in_progress | `zemeng` / PR #13、#18 已合并；后台骨架与空状态可用，模型/连接器配置和授权闭环未完成 |
+| MOD-11 | M1 | in_progress | `zemeng` / PR #13、#14、#18、#25 已合并；窗口、安全桥、托盘与 Runtime Application 组合可运行，DPI/窗口定位回归仍待修复和实机验收 |
+| MOD-12 | M1 | in_progress | `zemeng` / PR #18、#25 已合并；文字交互、对话记录、状态展示、取消和大工作区可用，真实盘古对话与语音仍未验收 |
+| MOD-13 | M1 基础页面、M2 配置闭环 | in_progress | `zemeng` / PR #13、#18、#25 已合并；后台导航、模型配置/启停、授权入口和明确空状态可用，连接器配置及完整授权管理仍未完成 |
 | MOD-14 | M1 基础、M2 验收 | todo | `zemeng` 已确定，未启动 |
 | MOD-15 | M4 后扩展 | todo | `zemeng` 已确定，未启动 |
 | MOD-16 | M2 TraceGuard 所需只读端口、M4 电脑操作 | todo | `zemeng` 已确定，未启动 |
@@ -128,6 +128,7 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；MOD-
 - 2026-09-07：现有 PR 验收同步：PR #12 已由 `goo122` 批准并合并为 `5b833c9`；PR #8 已通过 `goo122` 代码评审且 Foundation CI 通过，但因 PR #12 先合并而与 main 冲突，等待 `Potatos498` 更新分支；PR #19 的 CI 通过但作者为 `goo122`，按协作规范等待非作者评审。PR #16（ARCH-01）与 PR #18（桌面交互里程碑）均已合并，相关模块状态按当前未完成边界更新。
 - 2026-09-07：登记 MOD-25 增强工作包「地理编码 GeoNames 第二源」（分支 `feat/mod-25-geonames`，用户明确授权）。动机与实测证据：合并 main 后对 26 个世界大城市以简体中文查询，16 高置信命中、7 个 `NOT_FOUND`（纽约/首尔/温哥华/利马/内罗毕/伊斯坦布尔/胡志明市）、3 个低置信误解析（东京→江苏、伦敦→安大略、罗马→昆士兰）、1 个高置信静默错误（开罗→美国伊利诺伊州 Cairo，PPLA2 人口 1733 被 `ADMIN_SEAT_CODES` 无条件信任，而埃及开罗根本不在 `zh` 索引返回里）。范围：`OpenMeteoProvider` 增加可选 `geonamesUsername`（装配层注入，不进仓库），配置后对汉字输入增加 GeoNames 官方 API `name_equals` 精确名检索层——返回 geonameId 再经 Open-Meteo `/v1/get?id=` 取规范记录（时区/人口/feature_code 齐全，两源同为 GeoNames id 可按 id 合并），命中即「输入串是该地点已知名」的精确语义，参与 exact-match 排序。`secure.geonames.org` 已实测可达（免费账号，日 3 万次额度）；Wikidata/Nominatim 从本机不可达已排除。失败语义：GeoNames 层任何错误降级为跳过该层，回退现有 Open-Meteo 行为。不在范围：`ADMIN_SEAT_CODES` 置信度规则收紧与提示串 exact-match 修复（另行授权）、显示名简繁统一、非汉字输入的第二源检索。本条只是登记，本工作包尚无实现、无测试证据。
 - 2026-09-07：MOD-25 增强工作包「地理编码 GeoNames 第二源」实现完成。交付：`OpenMeteoProvider` 新增可选 `geonamesUsername`/`geonamesBaseUrl` 装配项；配置后汉字输入增加 GeoNames 官方 API `name_equals` 精确名检索层（并行于既有语言轮，展示名优先序置于最前），命中 id 经 Open-Meteo `/v1/get` 规范化（与搜索同 id 体系、同字段），`name_equals` 命中作为「输入串是已知名」参与 exact-match 排序（`伦敦`→`倫敦` 不同写法不阻断）；该层尽力而为——账号缺失不发请求、401/额度超限/网络失败降级为仅 Open-Meteo、`/v1/get` 404 只丢该候选、层内取消不被吞。manifest `configSchema` 与工具描述同步。实测：**26 个世界大城市简体查询从 16/26 高置信（7 个 NOT_FOUND、3 个误解析、1 个开罗静默错）提升到 26/26 高置信**（纽约→America/New_York、开罗→Africa/Cairo、东京→Asia/Tokyo 等）；根 `npm run check` 退出码 0；weather 包离线 66 项 62 通过＋4 项门控跳过，`PA_WEATHER_LIVE=1 PA_GEONAMES_USERNAME=<账号>` 下 66/66 全过（新增 GeoNames 端到端 live 测试）。账号不进仓库，由装配层从环境变量注入（README 已写明 `PA_GEONAMES_USERNAME` 约定与 `apps/runtime` 接线归 `goo122`）。未在本工作包内：`ADMIN_SEAT_CODES` 置信度规则收紧、提示串 exact-match 修复（`开罗+Cairo` 类场景现由 GeoNames 层覆盖，机制 bug 仍在）、显示名简繁统一。ROADMAP 相对链接检查通过。
+- 2026-09-07：PR #24（ARCH-03）、PR #26（MOD-04/05 离线审批与工具执行）和 PR #25（Desktop 工作区与模型管理）已进入 `main`。合并后复查中，完整 `npm run check`、Runtime Application smoke 与文字 smoke 通过；基础 Electron smoke 仍保留 372px 旧断言而与 420px 实现不一致，workspace smoke 在当前 Windows/DPI 下出现 1.5px 居中偏差。用户决定先保留合并结果，这两项作为 Desktop 回归债务继续跟踪，不据此把 MOD-11/12/13 标为 done。
 - 此记录不构成任何运行时能力通过证明。
 
 ## 5. 继续入口
@@ -204,7 +205,7 @@ MOD-03 已通过 PR #5 集成，PR #4、#7、#9、#12 已合并；goo122 的 MOD
 - 交付：能力声明与验证等级、Fake/Unavailable/Pangu 占位 Provider、模型 deployment/usage 记录、工具提案校验、一次修复上限、maxSteps/maxTokens/deadline/取消边界、RuntimeToolInvoker 和 unknown reconciliation 回调。
 - 验收：模型测试 4/4；Agent 测试 4/4；Fake 天气请求经过 Runtime、Policy、ToolGateway；模型不能提供授权；unknown 不生成成功回答；仓库 npm run check、npm run dev、npm run demo:protocol、npm run demo:runtime 均通过。
 - 证据：仅使用 Fake Provider 和本地 Runtime；没有真实盘古、付费模型或网络调用。
-- 限制：真实盘古适配与 PA-003 真实请求验收、多 Agent 专家调度、流式输出和真实连接器仍未完成；后续 ARCH-03 将把 task.submit 后的执行分派和生命周期管理收归 Runtime Application。
+- 限制：真实盘古适配与 PA-003 真实请求验收、多 Agent 专家调度、流式输出和真实连接器仍未完成；ARCH-03 已将 `task.submit` 后的执行分派和生命周期管理收归 Runtime Application。
 
 ### DESKTOP-01 当前工作包（2026-09-05）
 
