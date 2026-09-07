@@ -91,7 +91,7 @@ export interface AgentRunOptions {
   tools: AgentToolPort;
   authorizationRefFor: (toolName: string, context: AgentWorkerContext) => string;
   maxSteps: number;
-  maxTokens: number;
+  maxTokens?: number;
   maxRepairAttempts?: number;
   onUnknownResult?: (context: AgentWorkerContext, result: ToolInvocationResult) => void | Promise<void>;
 }
@@ -108,7 +108,7 @@ export interface AgentOutcome {
 function validateBounds(options: AgentRunOptions): void {
   if (!options.goal.trim()) throw new ProtocolError('INVALID_ARGUMENT', 'Agent goal must not be empty');
   if (!Number.isSafeInteger(options.maxSteps) || options.maxSteps < 1) throw new ProtocolError('INVALID_ARGUMENT', 'maxSteps must be a positive integer');
-  if (!Number.isSafeInteger(options.maxTokens) || options.maxTokens < 1) throw new ProtocolError('INVALID_ARGUMENT', 'maxTokens must be a positive integer');
+  if (options.maxTokens !== undefined && (!Number.isSafeInteger(options.maxTokens) || options.maxTokens < 1)) throw new ProtocolError('INVALID_ARGUMENT', 'maxTokens must be a positive integer');
   if (options.maxRepairAttempts !== undefined && (!Number.isSafeInteger(options.maxRepairAttempts) || options.maxRepairAttempts < 0)) throw new ProtocolError('INVALID_ARGUMENT', 'maxRepairAttempts must be a non-negative integer');
 }
 
@@ -132,9 +132,15 @@ function withModelMetadata(deployment: ModelResult['deployment'], usage: ModelRe
   return `${text} [model=${deployment.provider}/${deployment.deployment}/${deployment.model}; verification=${deployment.verification}; tokens=${tokens}]`;
 }
 
-async function complete(context: AgentWorkerContext, options: AgentRunOptions, messages: readonly ModelMessage[], remainingTokens: number): Promise<ModelResult> {
+async function complete(context: AgentWorkerContext, options: AgentRunOptions, messages: readonly ModelMessage[], remainingTokens?: number): Promise<ModelResult> {
   checkRuntime(context);
-  return options.model.complete({messages, tools: options.tools.list(), maxOutputTokens: remainingTokens, deadline: context.deadline, signal: context.signal});
+  return options.model.complete({
+    messages,
+    tools: options.tools.list(),
+    ...(remainingTokens === undefined ? {} : {maxOutputTokens: remainingTokens}),
+    deadline: context.deadline,
+    signal: context.signal,
+  });
 }
 
 export async function runAgent(context: AgentWorkerContext, options: AgentRunOptions): Promise<AgentOutcome> {
@@ -148,11 +154,11 @@ export async function runAgent(context: AgentWorkerContext, options: AgentRunOpt
 
   for (let step = saved?.step ?? 1; step <= options.maxSteps; step++) {
     context.reportProgress({stepId: `agent-${step}`, label: 'model planning', completedUnits: step - 1, totalUnits: options.maxSteps});
-    if (!pending && usedTokens >= options.maxTokens) throw new ProtocolError('TIMEOUT', 'Agent token budget exhausted');
-    const result = pending ?? await complete(context, options, messages, options.maxTokens - usedTokens);
+    if (!pending && options.maxTokens !== undefined && usedTokens >= options.maxTokens) throw new ProtocolError('TIMEOUT', 'Agent token budget exhausted');
+    const result = pending ?? await complete(context, options, messages, options.maxTokens === undefined ? undefined : options.maxTokens - usedTokens);
     if (!pending) usedTokens += estimateTokens(result);
     pending = undefined;
-    if (usedTokens > options.maxTokens) throw new ProtocolError('TIMEOUT', 'Agent token budget exhausted');
+    if (options.maxTokens !== undefined && usedTokens > options.maxTokens) throw new ProtocolError('TIMEOUT', 'Agent token budget exhausted');
 
     if (result.response.kind === 'final') {
       context.reportProgress({stepId: `agent-${step}`, label: 'model answer ready', completedUnits: options.maxSteps, totalUnits: options.maxSteps});
