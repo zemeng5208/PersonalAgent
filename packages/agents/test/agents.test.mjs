@@ -11,7 +11,7 @@ import {RuntimeToolInvoker, runAgent} from '../dist/index.js';
 const root = fileURLToPath(new URL('../../../.cache/mod-04-agent-tests/', import.meta.url));
 mkdirSync(root, {recursive: true});
 const file = () => join(mkdtempSync(join(root, 'case-')), 'runtime.sqlite');
-const deadline = '2026-09-06T02:00:00.500Z';
+const deadline = new Date(Date.now() + 60_000).toISOString();
 
 function context(taskId = 'task-1') {
   const progress = [];
@@ -23,8 +23,17 @@ function context(taskId = 'task-1') {
 }
 
 function weatherBundle() {
-  return createWeatherRuntime({path: file(), now: () => new Date('2026-09-06T02:00:00.000Z'), provider: new FakeWeatherProvider()});
+  return createWeatherRuntime({path: file(), provider: new FakeWeatherProvider()});
 }
+
+test('Agent enforces token and repair-step budgets', async () => {
+  const options = {goal: 'test bounds', tools: {list: () => [], invoke: async () => assert.fail('must not invoke')}, authorizationRefFor: () => 'unused', maxSteps: 1, maxTokens: 1};
+  await assert.rejects(runAgent(context(), {...options, model: new ModelGateway(new FakeModelProvider([{kind: 'final', text: 'too expensive'}]))}), {code: 'TIMEOUT'});
+  const invalid = {kind: 'tool_proposal', proposal: {toolName: 'missing', toolVersion: '1', arguments: {}}};
+  const provider = new FakeModelProvider([invalid, {kind: 'final', text: 'must not reach'}]);
+  await assert.rejects(runAgent(context(), {...options, maxTokens: 10, model: new ModelGateway(provider)}), {code: 'TIMEOUT'});
+  assert.equal(provider.requests.length, 1);
+});
 
 test('main Agent returns a final answer without a tool', async () => {
   const model = new ModelGateway(new FakeModelProvider([{kind: 'final', text: 'done'}]));
