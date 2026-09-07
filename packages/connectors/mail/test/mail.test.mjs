@@ -264,6 +264,66 @@ test('多账号工具：mail.inbox 必须指定 account；mail.accounts 列出�
   dispose2();
 });
 
+
+test('分页验收：limit=4 而提供商每页 3 条，依次返回 1–4、5–8（游标不提前推进）', async () => {
+  const {service} = makeService(undefined, {pageSize: 3});
+  const page1 = await service.fetchInbox(ACCOUNT, {limit: 4});
+  assert.deepEqual(page1.items.map(i => i.externalId), ['INBOX:1', 'INBOX:2', 'INBOX:3', 'INBOX:4']);
+  assert.equal(page1.nextCursor, '1725686400:4', '游标推进到实际返回的最后一条，而不是超额取回的第 6 条');
+  assert.equal(page1.hasMore, true);
+  const page2 = await service.fetchInbox(ACCOUNT, {cursor: decodeMailCursor(page1.nextCursor), limit: 4});
+  assert.deepEqual(page2.items.map(i => i.externalId), ['INBOX:5', 'INBOX:6', 'INBOX:7', 'INBOX:8']);
+  assert.equal(page2.hasMore, false, '5–8 已取尽；此前游标提前推进时这里会因跳页而误报 false 的反面');
+  const page3 = await service.fetchInbox(ACCOUNT, {cursor: decodeMailCursor(page2.nextCursor), limit: 4});
+  assert.equal(page3.items.length, 0);
+  assert.equal(page3.hasMore, false);
+});
+
+test('并发同键发送只调用一次 SMTP（异步 stub，禁止真实发送）', async () => {
+  let sendCalls = 0;
+  const slowProvider = new FakeMailProvider();
+  slowProvider.send = async (accountRef, input) => {
+    sendCalls += 1;
+    await new Promise(resolve => setTimeout(resolve, 5));
+    return {state: 'confirmed', messageId: '<slow-' + input.idempotencyKey + '>'};
+  };
+  const service = new MailService(slowProvider, {now: () => NOW});
+  const [first, second] = await Promise.all([
+    service.send(ACCOUNT, {to: 'a@b.c', subject: 's', text: 't', idempotencyKey: 'concurrent-1'}),
+    service.send(ACCOUNT, {to: 'a@b.c', subject: 's', text: 't', idempotencyKey: 'concurrent-1'}),
+  ]);
+  assert.equal(sendCalls, 1, '两次并发只调用一次提供商 sendMail');
+  assert.deepEqual(first, second);
+  assert.equal(first.state, 'confirmed');
+});
+
+test('同幂等键更换收件人/主题/正文 → 参数冲突拒绝', async () => {
+  const {service} = makeService();
+  await service.send(ACCOUNT, {to: 'a@b.c', subject: 's', text: 't', idempotencyKey: 'kx'});
+  await assert.rejects(service.send(ACCOUNT, {to: 'other@b.c', subject: 's', text: 't', idempotencyKey: 'kx'}), err => err.code === 'INVALID_ARGUMENT' && /different recipient/.test(err.message));
+  await assert.rejects(service.send(ACCOUNT, {to: 'a@b.c', subject: 's2', text: 't', idempotencyKey: 'kx'}), /different recipient/);
+  await assert.rejects(service.send(ACCOUNT, {to: 'a@b.c', subject: 's', text: 't2', idempotencyKey: 'kx'}), /different recipient/);
+});
+
+test('两个邮箱的相同 UID 不产生相同 dedupeKey（含账号与 uidValidity）', async () => {
+  const {MailAccountRegistry, RegistryMailProvider} = await import('../dist/index.js');
+  const registry = new MailAccountRegistry();
+  registry.bind('work', new FakeMailProvider(), 'work@qq.com');
+  registry.bind('personal', new FakeMailProvider(), 'me@qq.com');
+  const service = new MailService(new RegistryMailProvider(registry), {now: () => NOW});
+  const work = await service.fetchInbox('work', {limit: 8});
+  const personal = await service.fetchInbox('personal', {limit: 8});
+  const workKeys = new Set(work.items.map(i => i.dedupeKey));
+  for (const item of personal.items) assert.ok(!workKeys.has(item.dedupeKey), '跨账号同 UID 必须不撞 dedupeKey');
+  assert.ok(work.items[0].dedupeKey.startsWith('work:'), 'dedupeKey 以账号开头');
+
+  const {provider, service: single} = makeService();
+  const before = (await single.fetchInbox(ACCOUNT, {limit: 1})).items[0].dedupeKey;
+  provider.rotateUidValidity();
+  const after = (await single.fetchInbox(ACCOUNT, {limit: 1})).items[0].dedupeKey;
+  assert.notEqual(before, after, 'uidValidity 轮换后同一 UID 的 dedupeKey 改变');
+});
+
 const LIVE = process.env.PA_MAIL_LIVE === '1';
 const LIVE_SKIP = LIVE ? false : 'set PA_MAIL_LIVE=1, PA_QQ_MAIL_USER and PA_QQ_MAIL_AUTH_CODE to run the real QQ read-back';
 

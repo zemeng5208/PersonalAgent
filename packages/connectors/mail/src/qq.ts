@@ -134,7 +134,9 @@ export class QQMailProvider implements MailProvider {
       const messages: MailMessage[] = [];
       if (fresh.length > 0) {
         for await (const message of client.fetch(fresh, {uid: true, envelope: true, flags: true}, {uid: true})) {
-          messages.push(messageFromImap(message.uid, folder, message.envelope ?? {}, message.flags?.has('\\Seen') ?? false));
+          const stamped = messageFromImap(message.uid, folder, message.envelope ?? {}, message.flags?.has('\\Seen') ?? false);
+          stamped.uidValidity = uidValidity;
+          messages.push(stamped);
         }
       }
       const consumed = messages.map(entry => entry.uid).reduce((max, uid) => Math.max(max, uid), lastUid);
@@ -157,7 +159,9 @@ export class QQMailProvider implements MailProvider {
     const lock = await client.getMailboxLock(folder);
     try {
       for await (const message of client.fetch(String(uid), {uid: true, envelope: true, flags: true}, {uid: true})) {
-        return messageFromImap(message.uid, folder, message.envelope ?? {}, message.flags?.has('\\Seen') ?? false);
+        const stamped = messageFromImap(message.uid, folder, message.envelope ?? {}, message.flags?.has('\\Seen') ?? false);
+        stamped.uidValidity = typeof client.mailbox === 'object' && client.mailbox !== null && client.mailbox.uidValidity ? Number(client.mailbox.uidValidity) : 0;
+        return stamped;
       }
       return undefined;
     } catch (error) {

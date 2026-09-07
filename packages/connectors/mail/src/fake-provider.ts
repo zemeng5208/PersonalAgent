@@ -76,8 +76,9 @@ export class FakeMailProvider implements MailProvider {
     const size = Math.min(this.pageSize, input.limit);
     const page = fresh.slice(0, size);
     const consumed = page.map(message => message.uid).reduce((max, uid) => Math.max(max, uid), lastUid);
+    const stamped = page.map(message => ({...message, uidValidity: validity}));
     return {
-      messages: structuredClone(page),
+      messages: structuredClone(stamped),
       uidValidity: validity,
       nextCursor: {uidValidity: validity, lastUid: consumed},
       hasMore: fresh.length > page.length,
@@ -87,7 +88,9 @@ export class FakeMailProvider implements MailProvider {
   getMessage(_accountRef: string, folder: string, uid: number): MailMessage | undefined {
     const pool = folder === 'INBOX' ? this.inbox : this.sent;
     const message = pool.find(entry => entry.uid === uid && entry.folder === folder);
-    return message === undefined ? undefined : structuredClone(message);
+    if (message === undefined) return undefined;
+    const validity = folder === 'INBOX' ? this.uidValidity : 1725686401;
+    return structuredClone({...message, uidValidity: validity});
   }
 
   markSeen(_accountRef: string, input: MailMarkSeenInput): {uid: number; seen: boolean} {

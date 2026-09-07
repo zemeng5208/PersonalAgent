@@ -28,11 +28,13 @@ export function messageToItem(message: MailMessage, accountRef: string, fetchedA
     fetchedAt,
     contentRef: `${message.fromName ?? message.from} → ${message.to}｜${message.seen ? '已读' : '未读'}｜${message.subject}${noDate}`,
     sensitivity: 'private',
-    dedupeKey: `${message.folder}:${message.uid}:${message.messageId ?? ''}`,
+    dedupeKey: `${accountRef}:${message.uidValidity ?? 0}:${message.folder}:${message.uid}:${message.messageId ?? ''}`,
   };
 }
 
 export class MailService {
+  private readonly sendIdempotency = new Map<string, {fingerprint: string; inflight: MailSendResult | Promise<MailSendResult>}>();
+
   constructor(
     private readonly provider: MailProvider,
     private readonly options: MailServiceOptions,
@@ -45,8 +47,8 @@ export class MailService {
     const collected: MailMessage[] = [];
     let cursor = options.cursor;
     let uidValidity = options.cursor?.uidValidity ?? 0;
-    let hasMore = true;
-    for (let round = 0; round < 10 && hasMore && collected.length < limit; round += 1) {
+    let providerHasMore = true;
+    for (let round = 0; round < 10 && providerHasMore && collected.length < limit; round += 1) {
       const args: {folder?: string; cursor?: MailCursor; limit: number} = {limit};
       if (options.folder !== undefined) args.folder = options.folder;
       if (cursor !== undefined) args.cursor = cursor;
@@ -54,14 +56,18 @@ export class MailService {
       collected.push(...page.messages);
       uidValidity = page.uidValidity;
       cursor = page.nextCursor;
-      hasMore = page.hasMore;
+      providerHasMore = page.hasMore;
     }
-    const page = {messages: collected.slice(0, limit), uidValidity, nextCursor: cursor as MailCursor, hasMore: hasMore || collected.length > limit};
+    // 游标只推进到实际返回的最后一条：聚合可能超额取回（页边界越过 limit），
+    // 那些多取但未返回的条目必须留在游标之后，否则会漏邮件。
+    const returned = collected.slice(0, limit);
+    const lastReturnedUid = returned.reduce((max, message) => Math.max(max, message.uid), options.cursor?.lastUid ?? 0);
+    const nextCursor: MailCursor = {uidValidity, lastUid: lastReturnedUid};
     const fetchedAt = this.isoNow();
     return {
-      items: page.messages.map(message => messageToItem(message, accountRef, fetchedAt)),
-      nextCursor: `${page.nextCursor.uidValidity}:${page.nextCursor.lastUid}`,
-      hasMore: page.hasMore,
+      items: returned.map(message => messageToItem(message, accountRef, fetchedAt)),
+      nextCursor: `${nextCursor.uidValidity}:${nextCursor.lastUid}`,
+      hasMore: providerHasMore || collected.length > returned.length,
       folder: options.folder ?? 'INBOX',
     };
   }
@@ -109,7 +115,12 @@ export class MailService {
     };
   }
 
-  /** 发送是外部写：结果只可能是 confirmed 或 unknown——unknown 时必须先核对，重试须带同一幂等键。 */
+  /**
+   * 发送是外部写：结果只可能是 confirmed 或 unknown——unknown 时必须先核对，重试须带同一幂等键。
+   * 幂等键绑定账号＋收件人＋主题＋正文：并发同键请求复用在途 Promise 只调一次提供商；
+   * 同键不同输入复用一律拒绝（参数冲突）。跨重启的持久化归宿主（Runtime 按 actionId
+   * 存证据；unknown 进入人工核实流程，不自动重发——见 README「重启与恢复」）。
+   */
   async send(accountRef: string, input: {to: string; subject: string; text: string; timeoutMs?: number; idempotencyKey: string}): Promise<ConnectorAction> {
     if (typeof input.to !== 'string' || !input.to.includes('@')) throw new ProtocolError('INVALID_ARGUMENT', 'to must be an email address');
     if (typeof input.subject !== 'string' || input.subject.length === 0 || input.subject.length > 500) {
@@ -117,14 +128,34 @@ export class MailService {
     }
     if (typeof input.text !== 'string') throw new ProtocolError('INVALID_ARGUMENT', 'text must be a string');
     if (typeof input.idempotencyKey !== 'string' || input.idempotencyKey.length === 0) throw new ProtocolError('INVALID_ARGUMENT', 'idempotencyKey is required');
-    const timeoutMs = input.timeoutMs ?? 30_000;
-    const result: MailSendResult = await this.provider.send(accountRef, {to: input.to, subject: input.subject, text: input.text, timeoutMs, idempotencyKey: input.idempotencyKey});
+    const fingerprint = `${input.to}\n${input.subject}\n${input.text}`;
+    const mapKey = `${accountRef}:${input.idempotencyKey}`;
+    const prior = this.sendIdempotency.get(mapKey);
+    if (prior !== undefined) {
+      if (prior.fingerprint !== fingerprint) {
+        throw new ProtocolError('INVALID_ARGUMENT', `idempotencyKey "${input.idempotencyKey}" was used with a different recipient/subject/body; refusing to reuse it`);
+      }
+      return this.actionFromResult(input.idempotencyKey, input.to, await prior.inflight);
+    }
+    const inflight = this.provider.send(accountRef, {
+      to: input.to,
+      subject: input.subject,
+      text: input.text,
+      timeoutMs: input.timeoutMs ?? 30_000,
+      idempotencyKey: input.idempotencyKey,
+    });
+    this.sendIdempotency.set(mapKey, {fingerprint, inflight});
+    const result = await inflight;
+    return this.actionFromResult(input.idempotencyKey, input.to, result);
+  }
+
+  private actionFromResult(idempotencyKey: string, to: string, result: MailSendResult): ConnectorAction {
     const action: ConnectorAction = {
-      actionId: `mail-send:${input.idempotencyKey}`,
+      actionId: `mail-send:${idempotencyKey}`,
       state: result.state,
       evidenceRefs: result.state === 'confirmed'
         ? [`mail:send:${result.messageId ?? 'confirmed'}`]
-        : [`mail:send:${input.idempotencyKey}:unconfirmed`, `smtp:${input.to}`],
+        : [`mail:send:${idempotencyKey}:unconfirmed`, `smtp:${to}`],
     };
     if (result.state === 'confirmed' && result.messageId !== undefined) action.externalId = result.messageId;
     return action;

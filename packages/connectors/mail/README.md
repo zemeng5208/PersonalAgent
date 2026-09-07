@@ -45,6 +45,12 @@ manifest：`id=mail`、`accountTypes=['qq']`、`capabilities=['fetchChanges','se
 - 新增外部依赖 `imapflow@1.7.8`（MIT）与 `nodemailer@10.0.0`（MIT-0）：真实账号集成需要协议正确的客户端，自写 TLS 协议栈未经真实验证风险更高；`fast-xml-parser` 已有获批先例。归 `goo122` 评审确认。
 - 网络错误映射：认证失败 → `UNAUTHORIZED`（不可重试）；超时 → `TIMEOUT`（可重试）；连接类故障 → `EXTERNAL_FAILURE`（可重试）。
 
+## 重启与恢复
+
+- **发送记录由 Runtime（宿主）持久化**：本包不落盘。宿主按 `actionId`（`mail-send:<幂等键>`）与 `evidenceRefs` 保存动作证据； 进入**核实状态**——到已发送文件夹核对结果后再决定重发（换新幂等键）或放弃，不自动重发。
+- 进程内的幂等表（并发单飞 + 输入绑定）随实例存活；跨重启的正确性由「宿主持久化的 actionId」+「同键同输入重放安全」共同保证。
+- 读侧游标由宿主持久化；重启后从上次游标继续增量，uidValidity 变化按 `CURSOR_EXPIRED` 从头同步。
+
 ## 取消、超时与重试
 
 读侧由宿主 `ToolContext.signal`/deadline 门禁；写侧超时语义见上（unknown，不盲重试）。

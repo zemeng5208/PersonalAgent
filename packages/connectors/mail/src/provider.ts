@@ -11,6 +11,8 @@ export interface MailFolder {
 export interface MailMessage {
   uid: number;
   folder: string;
+  /** 所属文件夹的 UIDVALIDITY；参与 dedupeKey，文件夹重建后同一 UID 不会撞车。 */
+  uidValidity?: number;
   from: string;
   fromName?: string;
   to: string;
