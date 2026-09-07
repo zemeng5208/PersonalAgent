@@ -1,6 +1,6 @@
 # 架构设计与技术契约
 
-版本：0.3 · 日期：2026-09-06 · 状态：模块化单体、目录与依赖治理基线；模块实现状态以 ROADMAP 为准
+版本：0.5 · 日期：2026-09-07 · 状态：模块化单体、目录与依赖治理基线；ARCH-03 已将 Runtime Application 设为任务提交与文本执行生命周期边界；模块实现状态以 ROADMAP 为准
 
 模块所有权以 [模块分工](MODULE_ASSIGNMENTS.md) 为准；消息与接口语义以 [公共开发协议](DEVELOPMENT_PROTOCOL.md) 为准。`goo122`（A）持有底座和公共接口，`zemeng`（B）是消费端及执行模块负责人。
 
@@ -31,10 +31,11 @@
 - `apps` 是进程和装配入口，可以依赖 `packages`；可复用 `packages` 不能反向依赖 `apps`。
 - Agent 只持有模型与工具端口，不导入具体 Runtime 实现。
 - Runtime 核心不导入 Electron 或具体连接器；具体 Weather 等只出现在明确组合入口。
+- Runtime Application 层负责持有 TaskRuntime、组合 Agent/ModelGateway/Provider、接收 task.submit 并自动分派文本任务；Desktop 主进程只负责可信配置、IPC、事件订阅和 UI 生命周期，不复制 Agent/Model 编排。
 - 连接器只实现公共连接器/工具契约，不能拥有任务状态、授权决定或 UI。
 - 跨包调用只能使用包的公开 `exports`，生产依赖图必须无环。
 
-这些边界由根命令 `npm run check:architecture` 检查。当前仍保持模块化单体，不把目录边界描述成进程安全沙箱。
+这些边界由根命令 `npm run check:architecture` 检查；当前门禁还禁止 Desktop 直接导入 Agent/Model 实现、旧文本入口或调用 `runTask`。Runtime Application 的关闭会在存在活动任务时拒绝静默退出。当前仍保持模块化单体，不把目录边界描述成进程安全沙箱。
 
 ## 3. 进程与信任边界
 

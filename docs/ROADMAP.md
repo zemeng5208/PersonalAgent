@@ -1,9 +1,16 @@
 # 开发计划与进度
 
-更新：2026-09-07 · 当前阶段：M1 权限与工具宿主、M2 天气连接器垂直集成 · 应用实现：MOD-01/02/03/25 已按当前边界集成，MOD-04/05 与桌面增量继续评审
+更新：2026-09-07 · 当前阶段：M1 Runtime Application 与权限/工具宿主、M2 天气连接器垂直集成 · 应用实现：MOD-01/02/03/25 已按当前边界集成，ARCH-03 进入评审，MOD-04/05 与桌面增量继续评审
 
 本文维护工作状态，需求以 PRD 为准。模块负责人和独占目录唯一登记在 [模块分工](MODULE_ASSIGNMENTS.md)，契约见 [公共开发协议](DEVELOPMENT_PROTOCOL.md)。`goo122`（A）负责底座、公共协议和 Obsidian；`zemeng`（B）负责桌面与执行模块；`Potatos498`（C）负责分配到的信息连接器。阶段不代表承诺日期；正式排期需根据比赛时间、团队人数和接口验证结果确定。
 
+### ARCH-03：Runtime Application 自主管理任务分派
+
+- 负责人：`goo122`；评审者：`zemeng` 或 `Potatos498`。
+- 分支：`codex/arch-03-runtime-dispatch`；状态：`review`（基于已合并到 DOC-01 堆叠分支的 ARCH-02）。
+- 范围：Runtime Application 持有 `TaskRuntime`、文本应用和活动执行注册表；`task.submit` 成功后由 Runtime 自动启动文本任务；Desktop 只提交任务、订阅事件、展示状态和管理可信模型配置。
+- 验收：公开 `@personal-agent/runtime/application` 入口；重复提交不重复执行；Unavailable、取消、事件顺序和活动任务关闭保护有测试；Desktop 架构门禁禁止 Agent/Model 直连、旧 `runtime/text` 入口和直接 `runTask`。
+- 限制：仍是 Electron 主进程内的 Runtime Application，不是独立守护进程或 IPC 服务；当前文本切片不注册工具，思考参数尚未进入 Runtime 公共契约；真实盘古和外部账号未在本轮调用。
 ### ARCH-01：目录与依赖治理
 
 - 负责人：`goo122`；评审者：`zemeng` 或 `Potatos498`。
@@ -12,7 +19,22 @@
 - 验收：根级生产 `src/` 移除；`npm run check:architecture` 已检查 11 个 workspace 的 README、公开入口、依赖声明、依赖方向、连接器边界、公共 exports、跨包相对导入和循环依赖；全 workspace 类型检查通过，测试 106 项为 105 通过、1 项真实 Open-Meteo 验收按设计跳过。
 - 完成边界：已满足目录、依赖门禁和测试验收，并完成非作者评审与主分支合并；ARCH-01 不包含 Runtime 进程拆分或 Agent/Model 编排迁移。
 
+### ARCH-02：Runtime Application 编排边界
+
+- 负责人：`goo122`；评审者：`zemeng` 或 `Potatos498`。
+- 分支：`codex/arch-02-runtime-application`；状态：`merged-to-stack`（PR #21 已合并到 DOC-01 堆叠分支，待随集成分支回流 main）。
+- 范围：将 Agent/Model 选择、ModelGateway、文字 Agent 执行、Fake/Unavailable/Pangu 模式和连接测试移入 `apps/runtime/src/application/`；通过 `@personal-agent/runtime/text` 公开入口供 Desktop 调用。
+- 不在范围：不拆 Runtime 进程、不新增 IPC 协议、不把 API Key 暴露给 Renderer、不接入工具调用或真实付费模型。
+- 验收：Desktop Electron 生产代码不再导入 `@personal-agent/agents` 或 `@personal-agent/models`；Runtime 显式声明 Agent/Model 依赖；Fake、Unavailable、取消语义保持有效；架构门禁、全 workspace 类型检查和全仓测试通过。
+- 剩余限制：模型配置与 Windows 加密存储仍由可信 Desktop 主进程负责；文字任务当前只读且不注册工具；Runtime 仍是 Electron 进程内的模块化应用层，不等同于独立守护进程。
+
 ## 1. 里程碑
+
+### MOD-04/05 离线验收增量（2026-09-07，待评审）
+
+负责人 goo122；分支 `codex/mod-04-05-acceptance`，工作树 `.worktrees/mod-04-05-acceptance`；基线 `0f7dc1e` 已包含合并后的 ARCH-03 / PR #24。本轮新增文字 JSON 工具提案、模型网关超时取消、SQLite 授权与参数绑定、持久审批和 Agent 恢复、工具执行证据与幂等重放。全仓 check、18 项定向测试和两项桌面 smoke 通过，详见 [本轮验收记录](modules/MOD-04-05-ACCEPTANCE.md)。
+
+用户选择先完成离线交付，真实模型与天气调用未执行。MOD-04/05 保持 review；历史记录中的“授权完全为内存”描述由本轮增量补齐，但不代表跨任务持续授权、真实 SecretStore、流式、多 Agent 或真实写入恢复已经完成。后续先评审本地提交，再安排真实盘古验收。
 
 | 阶段 | 交付 | 退出条件 | 当前状态 |
 | --- | --- | --- | --- |
@@ -53,7 +75,7 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；MOD-
 | MOD-22 | M3 | review | `Potatos498` / PR #8；RSS 2.0/Atom 增量、去重、脱敏和 Fake 验收已完成，当前与最新 main 冲突，等待负责人更新分支后合并 |
 | MOD-23 | M3 | todo | `Potatos498` 已登记，未授权启动 |
 | MOD-24 | M2 | todo | `Potatos498` 已登记，未授权启动 |
-| MOD-25 | M2 | done | `Potatos498` / PR #4（`9f27e9b`）、PR #12（`5b833c9`）与 Runtime 装配 PR #9（`89c0464`）均已合并并完成非作者评审；根 `npm run check` 退出码 0，全仓 119 项 116 通过＋3 跳过，`PA_WEATHER_LIVE=1` 下 38/38 通过。manifest 仍为 `conditional`，不等同于长期生产稳定性验收 |
+| MOD-25 | M2 | done | `Potatos498` / PR #4（`9f27e9b`）、PR #12（`5b833c9`）与 Runtime 装配 PR #9（`89c0464`）均已合并并完成非作者评审；根 `npm run check` 退出码 0，全仓 119 项 116 通过＋3 跳过，`PA_WEATHER_LIVE=1` 下 38/38 通过。manifest 仍为 `conditional`，不等同于长期生产稳定性验收。后续增强工作包进行中：地理编码 GeoNames 第二源（分支 `feat/mod-25-geonames`，用户 2026-09-07 授权，见下方变更记录） |
 | MOD-26 | M4 起逐平台验收 | todo | `Potatos498` 已登记，未授权启动 |
 
 ### 2.1 开工顺序与阻塞边界
@@ -104,6 +126,8 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；MOD-
 - 2026-09-06：PR #4 已合并为 main `9f27e9b`。由于 `0da1ccc`、`145fea0`、`b5eed33`、`4c0ec0f` 晚于 `goo122` 原批准，`goo122` 在独立工作树从最终 main 补做合并后审计：Node 24.15.0 / npm 11.12.1 下根 `npm run check` 通过，全仓 67 项为 66 通过＋1 项默认跳过；显式启用真实读回后 Open-Meteo 测试 21/21 通过。审计未发现新增提交破坏既有取消、错误映射或显式 Provider 注入，但确认两项完成阻碍：简体国外城市可误解析；未传日期时 `WeatherService` 按 UTC 日历日取默认值，可能与用户或目标地点当天不一致。MOD-25 保持 review。
 - 2026-09-06：MOD-25 修复地点正确性与缺省日期两项审计阻碍（分支 `fix/mod-25-geocoding`，PR #12）。对生产端点实测确认前一轮「两轮查询使解析与语言无关」的声称对中文输入不成立：`language` 同时决定搜索名字集，任何中文串在 `en` 轮恒返回空。改为检索轮由输入文字决定；用 `feature_code` 与人口下限 500000（实测空档 422324↔8804190）判 `confidence`；`locationQuery` 作兜底轮；`strict` 改拒绝低置信度；缺省日期按目标地时区取当地日。实测：根 `npm run check` 退出码 0，全仓 119 项 116 通过＋3 跳过；`PA_WEATHER_LIVE=1` 下 38/38 通过。ROADMAP 相对链接检查通过。
 - 2026-09-07：现有 PR 验收同步：PR #12 已由 `goo122` 批准并合并为 `5b833c9`；PR #8 已通过 `goo122` 代码评审且 Foundation CI 通过，但因 PR #12 先合并而与 main 冲突，等待 `Potatos498` 更新分支；PR #19 的 CI 通过但作者为 `goo122`，按协作规范等待非作者评审。PR #16（ARCH-01）与 PR #18（桌面交互里程碑）均已合并，相关模块状态按当前未完成边界更新。
+- 2026-09-07：登记 MOD-25 增强工作包「地理编码 GeoNames 第二源」（分支 `feat/mod-25-geonames`，用户明确授权）。动机与实测证据：合并 main 后对 26 个世界大城市以简体中文查询，16 高置信命中、7 个 `NOT_FOUND`（纽约/首尔/温哥华/利马/内罗毕/伊斯坦布尔/胡志明市）、3 个低置信误解析（东京→江苏、伦敦→安大略、罗马→昆士兰）、1 个高置信静默错误（开罗→美国伊利诺伊州 Cairo，PPLA2 人口 1733 被 `ADMIN_SEAT_CODES` 无条件信任，而埃及开罗根本不在 `zh` 索引返回里）。范围：`OpenMeteoProvider` 增加可选 `geonamesUsername`（装配层注入，不进仓库），配置后对汉字输入增加 GeoNames 官方 API `name_equals` 精确名检索层——返回 geonameId 再经 Open-Meteo `/v1/get?id=` 取规范记录（时区/人口/feature_code 齐全，两源同为 GeoNames id 可按 id 合并），命中即「输入串是该地点已知名」的精确语义，参与 exact-match 排序。`secure.geonames.org` 已实测可达（免费账号，日 3 万次额度）；Wikidata/Nominatim 从本机不可达已排除。失败语义：GeoNames 层任何错误降级为跳过该层，回退现有 Open-Meteo 行为。不在范围：`ADMIN_SEAT_CODES` 置信度规则收紧与提示串 exact-match 修复（另行授权）、显示名简繁统一、非汉字输入的第二源检索。本条只是登记，本工作包尚无实现、无测试证据。
+- 2026-09-07：MOD-25 增强工作包「地理编码 GeoNames 第二源」实现完成。交付：`OpenMeteoProvider` 新增可选 `geonamesUsername`/`geonamesBaseUrl` 装配项；配置后汉字输入增加 GeoNames 官方 API `name_equals` 精确名检索层（并行于既有语言轮，展示名优先序置于最前），命中 id 经 Open-Meteo `/v1/get` 规范化（与搜索同 id 体系、同字段），`name_equals` 命中作为「输入串是已知名」参与 exact-match 排序（`伦敦`→`倫敦` 不同写法不阻断）；该层尽力而为——账号缺失不发请求、401/额度超限/网络失败降级为仅 Open-Meteo、`/v1/get` 404 只丢该候选、层内取消不被吞。manifest `configSchema` 与工具描述同步。实测：**26 个世界大城市简体查询从 16/26 高置信（7 个 NOT_FOUND、3 个误解析、1 个开罗静默错）提升到 26/26 高置信**（纽约→America/New_York、开罗→Africa/Cairo、东京→Asia/Tokyo 等）；根 `npm run check` 退出码 0；weather 包离线 66 项 62 通过＋4 项门控跳过，`PA_WEATHER_LIVE=1 PA_GEONAMES_USERNAME=<账号>` 下 66/66 全过（新增 GeoNames 端到端 live 测试）。账号不进仓库，由装配层从环境变量注入（README 已写明 `PA_GEONAMES_USERNAME` 约定与 `apps/runtime` 接线归 `goo122`）。未在本工作包内：`ADMIN_SEAT_CODES` 置信度规则收紧、提示串 exact-match 修复（`开罗+Cairo` 类场景现由 GeoNames 层覆盖，机制 bug 仍在）、显示名简繁统一。ROADMAP 相对链接检查通过。
 - 2026-09-07：登记 MOD-20 待办与日历工作包（分支 `feat/mod-20-productivity`）。用户本轮明确授权启动，台账由 `todo` 改为 `in_progress`。按 PROJECT_STRUCTURE §11 登记要素：负责人 `Potatos498`、评审者 `goo122`、独占目录 `packages/productivity/` 与 `packages/connectors/calendar/`、生产依赖仅 `@personal-agent/contracts`。公共输入输出：待办/时间 → 条目（含状态机与 revision）＋触发定义（结构兼容 Runtime `ScheduleInput`，`missedRunPolicy` 对应 PA-009 的补跑/标记错过，`taskIdempotencyKey` 防重复提醒）；日历账号/时间窗 → `ConnectorItem` 事件（`validFor` 承载起止区间）与 `respond` 动作结果（幂等键）。Fake 验收：注入 fake 时钟/日历/FakeStorage/FakeToolHost 验证 CRUD 读回、时区与 DST、触发确定性、窗口增量去重与动作幂等。真实验收：PA-013 的真实日历提供商授权读回留待独立后续工作包。本条只是登记，MOD-20 尚无实现、无测试、无真实读回证据。
 - 2026-09-07：MOD-20 实现完成，台账由 `in_progress` 改为 `review`，模块设计补 [mod-20](modules/mod-20.md)。交付两个 workspace：`packages/productivity`（TodoService 状态机 open→done/cancelled 单向、revision 读回；时间解析 UTC↔本地双表示，DST 边界策略＝回拨取较早/跳跃向前推，单测固定纽约与悉尼的四个边界；ReminderTrigger 结构兼容 Runtime `ScheduleInput` 且不导入 apps——ADR-0002；`scheduleId=taskIdempotencyKey` 确定性防重复提醒；`missedRunPolicy` 对应补跑/标记错过；dispatch 回执映射 delivered/missed；StoragePort 注入持久化，不自建任务库）与 `packages/connectors/calendar`（Fake 提供商先行：窗口增量+分页聚合、dedupeKey 含 sequence、validFor 承载起止区间、跨 DST 夹具验证时区、`respond` 幂等键、ConnectorPort 全方法）。工具三个读/本地写（`todo.list/create/update`）+ 一个读（`calendar.events`），provider/storage 必填不静默降级。根 `package.json` build 脚本加两行、锁文件纯增量工作区链接（+28 行，无新外部依赖），归 `goo122` 集成确认。实测：根 `npm run check` 退出码 0（架构门禁通过），全仓 157 项为 154 通过＋3 跳过（weather 3 项真实读回默认跳过；本分支基于 main `e5a16c0`，不含未合并的 feeds）。未满足项：真实日历授权读回（后续工作包）、Runtime 接线（goo122）。ROADMAP 相对链接与模块编号一致性检查通过。
 - 此记录不构成任何运行时能力通过证明。
@@ -182,7 +206,7 @@ MOD-03 已通过 PR #5 集成，PR #4、#7、#9、#12 已合并；goo122 的 MOD
 - 交付：能力声明与验证等级、Fake/Unavailable/Pangu 占位 Provider、模型 deployment/usage 记录、工具提案校验、一次修复上限、maxSteps/maxTokens/deadline/取消边界、RuntimeToolInvoker 和 unknown reconciliation 回调。
 - 验收：模型测试 4/4；Agent 测试 4/4；Fake 天气请求经过 Runtime、Policy、ToolGateway；模型不能提供授权；unknown 不生成成功回答；仓库 npm run check、npm run dev、npm run demo:protocol、npm run demo:runtime 均通过。
 - 证据：仅使用 Fake Provider 和本地 Runtime；没有真实盘古、付费模型或网络调用。
-- 限制：真实盘古适配与 PA-003 真实请求验收、多 Agent 专家调度、流式输出和真实连接器仍未完成；后续 ARCH-02 将把现有 Agent/Model 编排移出 Desktop，进入 Runtime Application 层。
+- 限制：真实盘古适配与 PA-003 真实请求验收、多 Agent 专家调度、流式输出和真实连接器仍未完成；后续 ARCH-03 将把 task.submit 后的执行分派和生命周期管理收归 Runtime Application。
 
 ### DESKTOP-01 当前工作包（2026-09-05）
 
