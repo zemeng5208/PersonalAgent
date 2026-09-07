@@ -131,7 +131,8 @@ export class MailService {
   }
 
   providerVerification(): 'mock' | 'conditional' {
-    return this.provider.providerKind === 'fixture' ? 'mock' : 'conditional';
+    const declared = (this.provider as {verification?: 'mock' | 'conditional'}).verification;
+    return declared ?? (this.provider.providerKind === 'fixture' ? 'mock' : 'conditional');
   }
 
   private isoNow(): string {

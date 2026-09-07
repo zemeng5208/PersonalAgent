@@ -189,6 +189,7 @@ test('工具 mail.inbox 经 FakeToolHost 的 schema 与 scope 校验', async () 
   const page = await host.invoke('mail.inbox', {limit: 3}, context);
   assert.equal(page.items.length, 3);
   assert.equal(page.folder, 'INBOX');
+  assert.equal(page.account, ACCOUNT, '单账号绑定时省略 account 即默认路由');
   for (const item of page.items) validateContract('connectorItem', item);
   const page2 = await host.invoke('mail.inbox', {cursor: page.nextCursor, limit: 3}, context);
   assert.equal(page2.items.length, 3);
@@ -196,6 +197,71 @@ test('工具 mail.inbox 经 FakeToolHost 的 schema 与 scope 校验', async () 
   await assert.rejects(host.invoke('mail.inbox', {cursor: 'garbage'}, context), err => err.code === 'INVALID_ARGUMENT');
   assert.throws(() => register(host, {}), /provider must be explicitly configured/);
   dispose();
+});
+
+test('多账号：同一实例绑定两个邮箱，游标与幂等键按账号隔离', async () => {
+  const {MailAccountRegistry, RegistryMailProvider, MailService} = await import('../dist/index.js');
+  const work = new FakeMailProvider();
+  const personal = new FakeMailProvider();
+  const registry = new MailAccountRegistry();
+  registry.bind('work', work, 'work@qq.com');
+  registry.bind('personal', personal, 'me@qq.com');
+  assert.deepEqual(registry.list().map(a => a.accountRef), ['work', 'personal']);
+  assert.equal(registry.bind('work', work, 'work@qq.com').rebound, true, '重复 bind 为换绑');
+
+  const provider = new RegistryMailProvider(registry);
+  const service = new MailService(provider, {now: () => NOW});
+  const pageWork = await service.fetchInbox('work', {limit: 4});
+  const pagePersonal = await service.fetchInbox('personal', {limit: 4});
+  assert.equal(pageWork.items.length, 4);
+  assert.equal(pagePersonal.items.length, 4);
+  assert.equal(new Set([...pageWork.items, ...pagePersonal.items].map(i => `${i.accountRef}:${i.externalId}`)).size, 8, '条目按账号归属');
+
+  // 游标隔离：账号 A 的游标推到 4，账号 B 仍从头
+  const personalFirst = await service.fetchInbox('personal', {cursor: undefined, limit: 1});
+  assert.ok(personalFirst.items.length === 1);
+
+  // 同一幂等键在不同账号互不影响（各自的提供商实例）
+  const w = await service.markSeen('work', {folder: 'INBOX', uid: 2, idempotencyKey: 'same-key'});
+  const p = await service.markSeen('personal', {folder: 'INBOX', uid: 3, idempotencyKey: 'same-key'});
+  assert.equal(w.state, 'confirmed');
+  assert.equal(p.state, 'confirmed');
+
+  await assert.rejects(service.fetchInbox('nobody', {limit: 3}), err => err.code === 'UNAUTHORIZED' && /bound: work, personal/.test(err.message));
+  assert.equal(registry.unbind('personal'), true);
+  await assert.rejects(service.fetchInbox('personal', {limit: 3}), err => err.code === 'UNAUTHORIZED' && /bound: work/.test(err.message));
+  assert.equal(new RegistryMailProvider(registry).verification, 'mock', '全 Fake 绑定时 verification 诚实为 mock');
+});
+
+test('多账号工具：mail.inbox 必须指定 account；mail.accounts 列出绑定', async () => {
+  const clock = new FakeClock(NOW);
+  const host = new FakeToolHost(clock.now);
+  const {MailAccountRegistry} = await import('../dist/index.js');
+  const registry = new MailAccountRegistry();
+  registry.bind('work', new FakeMailProvider(), 'work@qq.com');
+  registry.bind('personal', new FakeMailProvider(), 'me@qq.com');
+  const dispose = register(host, {provider: new FakeMailProvider(), accountRef: 'main', registry, now: clock.now});
+  const context = {taskId: 't', runId: 'r', signal: new AbortController().signal, deadline: '2026-09-07T03:00:00.000Z', authorizationRef: 'test', scopes: ['mail:read']};
+
+  const listed = await host.invoke('mail.accounts', {}, context);
+  assert.deepEqual(listed.accounts.map(a => a.accountRef), ['work', 'personal', 'main'], '注册表按绑定插入序列出');
+
+  const toDefault = await host.invoke('mail.inbox', {limit: 2}, context);
+  assert.equal(toDefault.account, 'main', '显式默认账号（accountRef）优先');
+  const routed = await host.invoke('mail.inbox', {account: 'personal', limit: 2}, context);
+  assert.equal(routed.account, 'personal');
+  await assert.rejects(host.invoke('mail.inbox', {account: 'ghost', limit: 2}, context), err => err.code === 'UNAUTHORIZED');
+  dispose();
+
+  // 默认账号被解绑且剩多个账号时，省略 account 必须报错并列出可选项
+  const host2 = new FakeToolHost(clock.now);
+  const registry2 = new MailAccountRegistry();
+  registry2.bind('a1', new FakeMailProvider(), 'a1@qq.com');
+  registry2.bind('a2', new FakeMailProvider(), 'a2@qq.com');
+  const dispose2 = register(host2, {provider: new FakeMailProvider(), accountRef: 'main2', registry: registry2, now: clock.now});
+  registry2.unbind('main2');
+  await assert.rejects(host2.invoke('mail.inbox', {limit: 2}, context), err => err.code === 'INVALID_ARGUMENT' && /a1, a2/.test(err.message));
+  dispose2();
 });
 
 const LIVE = process.env.PA_MAIL_LIVE === '1';

@@ -4,6 +4,7 @@ MOD-21 · 邮件连接器——QQ 邮箱提供商工作包（PA-014，P1）。�
 
 ## 职责
 
+- **多账号绑定**：`MailAccountRegistry` 支持同一实例绑定多个邮箱（bind/unbind/按 `accountRef` 分发；重复 bind 同 ref 为换绑）；凭据的持久化与加密存储归宿主（桌面端 safeStorage 模式，参照既有 Pangu API Key 设置），本包只在运行时持有已构造的提供商实例。
 - 邮件增量同步：游标 `uidValidity:lastUid`，只返回 UID 更大的新邮件；`uidValidity` 变化（文件夹重建）→ `CURSOR_EXPIRED`，需从头同步（与 feeds 同规则）。
 - 条目规范化（`ConnectorItem`）：`occurredAt` 取邮件 Date 头的 UTC 瞬间（缺失回退抓取时刻并在 `contentRef` 标注）；**`sensitivity: 'private'`（邮件内容敏感，条目只含发件人/收件人/主题/已读状态，不含正文）**；`dedupeKey = folder:uid:messageId`。
 - 动作：`mark_seen`（幂等，本地化确认）；`send`（外部写，见下）。
@@ -29,8 +30,9 @@ MOD-21 · 邮件连接器——QQ 邮箱提供商工作包（PA-014，P1）。�
 | 工具 | 版本 | Scope | 副作用 | 幂等 | 恢复 |
 | --- | --- | --- | --- | --- | --- |
 | `mail.inbox` | 0.1.0-alpha.1 | `mail:read` | read | ✓ | ✓ |
+| `mail.accounts` | 0.1.0-alpha.1 | `mail:read` | read | ✓ | ✓ |
 
-`register(host, {provider, accountRef?, now?})`：`provider` 必填（缺失抛 `INVALID_ARGUMENT`，Fake 仅测试用）。入参 `cursor`（上一页 `nextCursor`）、`limit` 1..100（默认 20）、`folder`（默认 INBOX）。
+`register(host, {provider, accountRef?, registry?, now?})`：`provider` 必填（缺失抛 `INVALID_ARGUMENT`，Fake 仅测试用），作为默认账号绑定（`accountRef` 缺省 `local`）；可传入宿主维护的 `registry` 实现多账号。入参 `account`（绑定多个账号时指定，可用 `mail.accounts` 查询；只绑一个或存在显式默认时可省略——默认账号被解绑且剩多个账号时省略会报 `INVALID_ARGUMENT` 并列出可选项）、`cursor`（按账号隔离）、`limit` 1..100（默认 20）、`folder`（默认 INBOX）。
 
 ### 连接器（ConnectorPort）
 
