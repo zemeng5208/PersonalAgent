@@ -229,12 +229,17 @@ export class FeedService {
       });
     }
 
-    // Newest first, ties broken by document position so a feed that reorders between polls still
-    // produces the same sequence for the same set of entries.
-    resolved.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt) || a.index - b.index);
+    // Newest first, ties broken by `externalId` so the sequence is a stable function of the entry
+    // set — document position shifts when a feed inserts or reorders, which would move a
+    // pagination watermark mid-pass.
+    resolved.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt) || a.externalId.localeCompare(b.externalId));
 
     const seen = new Set(cursor.seen);
-    const unseen = resolved.filter(item => !seen.has(item.dedupeKey));
+    // During an open pass everything sorting at or above the watermark was already delivered in
+    // this pass; `seen` cannot be relied on there because its 200-key bound evicts the head of a
+    // long pass, which used to re-enter pagination and loop forever.
+    const pass = cursor.pass;
+    const unseen = resolved.filter(item => !seen.has(item.dedupeKey) && !(pass !== undefined && deliveredInPass(item, pass)));
     const delivered = unseen.slice(0, limit);
     const hasMore = unseen.length > delivered.length;
 
@@ -269,9 +274,20 @@ export class FeedService {
       // then filters down to exactly the remainder.
       if (cursor.etag !== undefined) nextState.etag = cursor.etag;
       if (cursor.lastModified !== undefined) nextState.lastModified = cursor.lastModified;
+      const last = delivered[delivered.length - 1];
+      if (last !== undefined) {
+        nextState.pass = {
+          lastTime: last.occurredAt,
+          lastId: last.externalId,
+          delivered: (cursor.pass?.delivered ?? 0) + delivered.length,
+        };
+      }
     } else {
-      // Assigned from the response, not merged: a validator that disappears between polls has to be
-      // dropped, otherwise the next conditional request could 304 against a changed document.
+      // Pass exhausted: drop the watermark so backfilled entries older than it stay deliverable
+      // (the `seen` window alone governs cross-poll dedup again).
+      // Validators are assigned from the response, not merged: a validator that disappears between
+      // polls has to be dropped, otherwise the next conditional request could 304 against a changed
+      // document.
       if (fetched.etag !== undefined) nextState.etag = fetched.etag;
       if (fetched.lastModified !== undefined) nextState.lastModified = fetched.lastModified;
     }
@@ -313,7 +329,21 @@ function carryValidators(cursor: CursorState, fetched: FeedFetch): CursorState {
   const lastModified = fetched.lastModified ?? cursor.lastModified;
   if (etag !== undefined) state.etag = etag;
   if (lastModified !== undefined) state.lastModified = lastModified;
+  // A 304 mid-pass leaves the document unchanged, so the pass watermark survives untouched.
+  if (cursor.pass !== undefined) state.pass = cursor.pass;
   return state;
+}
+
+/**
+ * Whether the entry sorts strictly above the pass watermark — i.e. at a later `occurredAt`, or the
+ * same instant with a smaller `externalId` — meaning this pass has already delivered it. Entries
+ * inserted above the watermark mid-pass are genuinely new and are picked up after the pass ends
+ * (they are not in `seen`), never silently skipped.
+ */
+function deliveredInPass(entry: ResolvedEntry, pass: CursorState['pass']): boolean {
+  if (pass === undefined) return false;
+  const byTime = entry.occurredAt.localeCompare(pass.lastTime);
+  return byTime > 0 || (byTime === 0 && entry.externalId.localeCompare(pass.lastId) < 0);
 }
 
 /**

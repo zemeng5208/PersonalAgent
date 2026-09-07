@@ -516,3 +516,115 @@ test('getItem locates an entry by externalId, not by dedupeKey', async () => {
   await assert.rejects(connector.getItem('sspai', 'https://sspai.com/post/does-not-exist'), {code: 'NOT_FOUND'});
   await assert.rejects(connector.getItem('unknown', 'x'), {code: 'NOT_FOUND'});
 });
+
+// --------------------------------------------------- long-feed pagination (2026-09-07 fix)
+
+/** RSS 2.0 with `count` entries, each a distinct minute, newest written last like a real feed. */
+const bigFeedBody = (count, extraNewest = 0) => {
+  const base = Date.parse('2026-08-01T00:00:00Z');
+  const item = i => {
+    const pub = new Date(base + i * 60_000).toUTCString();
+    return `<item><title>Entry ${i}</title><link>https://example.test/e/${i}</link><guid>fixture-big-${i}</guid><pubDate>${pub}</pubDate></item>`;
+  };
+  let entries = '';
+  for (let i = 1; i <= count; i += 1) entries += item(i);
+  for (let i = count + 1; i <= count + extraNewest; i += 1) entries = item(i) + entries;
+  return `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>Big feed</title><link>https://example.test/feed</link><description>pagination fixture</description>${entries}</channel></rss>`;
+};
+
+const bigFeedService = (count, extraNewest = 0) => {
+  const provider = new FakeFeedProvider([{url: FIXTURE_URL, body: bigFeedBody(count, extraNewest)}]);
+  const service = new FeedService({provider, subscriptions: [{id: 'fixture', url: FIXTURE_URL}], now: () => Date.parse('2026-09-07T00:00:00Z')});
+  return {provider, service, collect: (query = {}) => service.collect({subscriptionId: 'fixture', ...query})};
+};
+
+test('300 条订阅、每页 50 条：6 页完整取尽，无重复且每页都是新条目', async () => {
+  const {collect} = bigFeedService(300);
+  const all = [];
+  let cursor;
+  let polls = 0;
+  for (;;) {
+    const page = await collect({limit: 50, cursor});
+    polls += 1;
+    assert.ok(polls <= 10, '必须在有限页内取尽（旧行为会在 200 条淘汰后死循环）');
+    all.push(...page.items);
+    cursor = page.nextCursor;
+    if (!page.hasMore) break;
+  }
+  assert.equal(polls, 6);
+  assert.equal(all.length, 300);
+  const keys = all.map(item => item.record.dedupeKey);
+  assert.equal(new Set(keys).size, 300, '跨页不得重复投递');
+});
+
+test('1000 条订阅在有限页数内取尽', async () => {
+  const {collect} = bigFeedService(1000);
+  let delivered = 0;
+  let cursor;
+  let polls = 0;
+  for (;;) {
+    const page = await collect({limit: 50, cursor});
+    polls += 1;
+    assert.ok(polls <= 25, '1000/50 最多 20 页 + 1 次收尾');
+    delivered += page.items.length;
+    cursor = page.nextCursor;
+    if (!page.hasMore) break;
+  }
+  assert.equal(delivered, 1000);
+});
+
+test('相同游标重放结果一致', async () => {
+  const {collect} = bigFeedService(120);
+  const first = await collect({limit: 50});
+  const replayA = await collect({limit: 50, cursor: first.nextCursor});
+  const replayB = await collect({limit: 50, cursor: first.nextCursor});
+  assert.deepEqual(replayA.items, replayB.items);
+  assert.equal(replayA.nextCursor, replayB.nextCursor);
+  assert.equal(replayA.hasMore, replayB.hasMore);
+});
+
+test('取尽后 feed 更新只返回新增条目（seen 窗口内规模）', async () => {
+  const {provider, collect} = bigFeedService(100);
+  let cursor;
+  let pages = 0;
+  for (;;) {
+    const page = await collect({limit: 50, cursor});
+    pages += 1;
+    cursor = page.nextCursor;
+    if (!page.hasMore) break;
+  }
+  assert.equal(pages, 2);
+  provider.setFixtures([{url: FIXTURE_URL, body: bigFeedBody(100, 3)}]);
+  const afterUpdate = await collect({limit: 50, cursor});
+  assert.equal(afterUpdate.items.length, 3, '只投递 3 条新增');
+  assert.equal(afterUpdate.hasMore, false);
+  assert.ok(afterUpdate.items.every(item => /Entry 10[123]/.test(item.title)), '新增的是最新三条');
+});
+
+test('分页中途 304（带校验器）保持趟状态继续翻页', async () => {
+  const provider = new FakeFeedProvider([]);
+  const clock = new FakeClock();
+  const service = new FeedService({provider, subscriptions: [{id: 'fixture', url: FIXTURE_URL}], now: clock.now});
+  // 第一步：小 feed 完整取尽，建立校验器 v1（趟结束，游标无 pass）
+  provider.setFixtures([{url: FIXTURE_URL, body: bigFeedBody(10), etag: 'W/"v1"'}]);
+  const done = await service.collect({subscriptionId: 'fixture', limit: 50});
+  assert.equal(done.hasMore, false);
+  // 第二步：feed 长大到 300 条且换了 etag v2 → 新一趟开启（51-100…截断在 50），校验器保持 v1
+  provider.setFixtures([{url: FIXTURE_URL, body: bigFeedBody(300), etag: 'W/"v2"'}]);
+  const page1 = await service.collect({subscriptionId: 'fixture', limit: 50, cursor: done.nextCursor});
+  assert.equal(page1.items.length, 50);
+  assert.equal(page1.hasMore, true);
+  // 第三步：服务端把 etag 改回 v1（内容同 300 条）→ 中途请求条件命中 304 unchanged，
+  // 游标必须原样携带趟状态继续
+  provider.setFixtures([{url: FIXTURE_URL, body: bigFeedBody(300), etag: 'W/"v1"'}]);
+  const page2 = await service.collect({subscriptionId: 'fixture', limit: 50, cursor: page1.nextCursor});
+  assert.equal(page2.collection.state, 'unchanged');
+  assert.equal(page2.items.length, 0);
+  assert.equal(page2.nextCursor, page1.nextCursor, '304 后游标（含趟水位线）原样返回');
+  // 第四步：内容真变了（新 etag）→ 从水位线继续（Entry 250–201）而不是从头再来
+  provider.setFixtures([{url: FIXTURE_URL, body: bigFeedBody(300), etag: 'W/"v3"'}]);
+  const page3 = await service.collect({subscriptionId: 'fixture', limit: 50, cursor: page2.nextCursor});
+  assert.equal(page3.items.length, 50);
+  const titles = page3.items.map(item => item.title);
+  assert.ok(titles.includes('Entry 250') && titles.includes('Entry 201'), `从 Entry 250 继续，实际首条 ${titles[0]} 末条 ${titles[49]}`);
+});

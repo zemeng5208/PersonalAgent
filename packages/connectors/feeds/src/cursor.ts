@@ -24,6 +24,24 @@ export interface CursorState {
   lastModified?: string;
   /** Bounded FIFO of every `dedupeKey` actually delivered, newest last. */
   seen: string[];
+  /**
+   * Progress of the CURRENT pagination pass, independent of the bounded `seen` window.
+   * While a pass is open, everything sorting above the watermark counts as delivered even
+   * after `seen` evicts it — that eviction is what used to let the head of a >200-entry
+   * feed re-enter pagination and loop forever. Cleared when the pass exhausts, so the
+   * no-timestamp-watermark argument for backfilled entries (see `appendSeen`) is unaffected.
+   */
+  pass?: PassState;
+}
+
+/** Watermark of a pagination pass: the sort key of the last entry delivered in it. */
+export interface PassState {
+  /** `occurredAt` of the last delivered entry (pass walks descending by time). */
+  lastTime: string;
+  /** `externalId` of that entry (ascending tiebreak). */
+  lastId: string;
+  /** Entries delivered in this pass so far; for diagnostics only. */
+  delivered: number;
 }
 
 export function emptyCursor(): CursorState {
@@ -49,6 +67,7 @@ export function encodeCursor(state: CursorState): string {
   const lastModified = safeValidator(state.lastModified);
   if (etag !== undefined) payload.etag = etag;
   if (lastModified !== undefined) payload.lastModified = lastModified;
+  if (state.pass !== undefined) payload.pass = state.pass;
   return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
 }
 
@@ -82,7 +101,25 @@ export function decodeCursor(raw: string | undefined): CursorState {
   const lastModified = decodedValidator(record['lastModified'], 'Last-Modified');
   if (etag !== undefined) state.etag = etag;
   if (lastModified !== undefined) state.lastModified = lastModified;
+  const pass = decodedPass(record['pass']);
+  if (pass !== undefined) state.pass = pass;
   return state;
+}
+
+/** A pass watermark is optional; a present-but-malformed one means the cursor was tampered with. */
+function decodedPass(value: unknown): PassState | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw cursorExpired('its pagination watermark is not an object');
+  }
+  const record = value as Record<string, unknown>;
+  const lastTime = record['lastTime'];
+  const lastId = record['lastId'];
+  const delivered = record['delivered'];
+  if (typeof lastTime !== 'string' || lastTime.length === 0) throw cursorExpired('its pagination watermark has no timestamp');
+  if (typeof lastId !== 'string' || lastId.length === 0) throw cursorExpired('its pagination watermark has no entry id');
+  if (!Number.isSafeInteger(delivered) || (delivered as number) < 0) throw cursorExpired('its pagination watermark has no delivered count');
+  return {lastTime, lastId, delivered: delivered as number};
 }
 
 function decodedValidator(value: unknown, label: string): string | undefined {
