@@ -1,0 +1,85 @@
+/** 邮件提供商端口：实现方负责真实协议（QQ IMAP/SMTP）或 Fake 夹具，本包只做规范化。 */
+import { ProtocolError } from '@personal-agent/contracts';
+
+export interface MailFolder {
+  path: string;
+  role: 'inbox' | 'sent' | 'drafts' | 'archive' | 'other';
+  uidValidity: number;
+}
+
+/** 提供商侧邮件：UID 是文件夹内稳定标识，uidValidity 变化意味着 UID 全部失效。 */
+export interface MailMessage {
+  uid: number;
+  folder: string;
+  from: string;
+  fromName?: string;
+  to: string;
+  subject: string;
+  /** 邮件 Date 头的 UTC 瞬间；缺失时由服务层回退 fetchedAt 并在 contentRef 标注。 */
+  sentAt: string | null;
+  messageId?: string;
+  seen: boolean;
+}
+
+/** 增量游标：`uidValidity:lastUid`——只返回 UID 更大的邮件；uidValidity 变化 → CURSOR_EXPIRED。 */
+export interface MailCursor {
+  uidValidity: number;
+  lastUid: number;
+}
+
+export interface MailFetchInput {
+  folder?: string;
+  cursor?: MailCursor;
+  limit: number;
+}
+
+export interface MailPage {
+  messages: MailMessage[];
+  uidValidity: number;
+  nextCursor: MailCursor;
+  hasMore: boolean;
+}
+
+export interface MailSendInput {
+  to: string;
+  subject: string;
+  text: string;
+  timeoutMs: number;
+}
+
+/** 发送结果：超时/未知 ≠ 失败——必须先核对结果（PA-014），重试须携带同一幂等键。 */
+export interface MailSendResult {
+  state: 'confirmed' | 'unknown';
+  messageId?: string;
+  reason?: string;
+}
+
+export interface MailMarkSeenInput {
+  folder: string;
+  uid: number;
+  idempotencyKey: string;
+}
+
+export interface MailProvider {
+  /** 提供商标识（进 manifest.accountTypes），Fake 为 'fixture'，QQ 为 'qq'。 */
+  readonly providerKind: string;
+  listFolders(accountRef: string): MailFolder[] | Promise<MailFolder[]>;
+  fetchPage(accountRef: string, input: MailFetchInput): MailPage | Promise<MailPage>;
+  getMessage(accountRef: string, folder: string, uid: number): MailMessage | undefined | Promise<MailMessage | undefined>;
+  markSeen(accountRef: string, input: MailMarkSeenInput): {uid: number; seen: boolean} | Promise<{uid: number; seen: boolean}>;
+  send(accountRef: string, input: MailSendInput & {idempotencyKey: string}): MailSendResult | Promise<MailSendResult>;
+}
+
+export function encodeMailCursor(cursor: MailCursor): string {
+  return `${cursor.uidValidity}:${cursor.lastUid}`;
+}
+
+export function decodeMailCursor(value: string): MailCursor {
+  const match = /^(\d+):(\d+)$/.exec(value);
+  const uidValidity = match === null ? Number.NaN : Number(match[1]);
+  const lastUid = match === null ? Number.NaN : Number(match[2]);
+  if (!Number.isSafeInteger(uidValidity) || !Number.isSafeInteger(lastUid)) {
+    throw new ProtocolError('INVALID_ARGUMENT', 'Malformed mail cursor; expected uidValidity:lastUid');
+  }
+  return {uidValidity, lastUid};
+}
