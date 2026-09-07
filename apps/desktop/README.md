@@ -1,6 +1,6 @@
 # PersonalAgent Desktop
 
-MOD-11 / MOD-12 / MOD-13，负责人 `zemeng`，待 `goo122` 评审与根装配。关联 PA-001、PA-002、PA-004。基于底座提交 `002e88a`，消费公共客户端和契约 `0.1.0-alpha.1`，没有修改根配置、锁文件或公共 Schema。
+MOD-11 / MOD-12 / MOD-13，负责人 `zemeng`。最新桌面增量已随 PR #25 合并到 `main`（`cef4d08`）；模块仍按未完成边界保持 `in_progress`。关联 PA-001、PA-002、PA-004，消费公共客户端和契约 `0.1.0-alpha.1`。
 
 ## 已落地的界面
 
@@ -8,7 +8,7 @@ MOD-11 / MOD-12 / MOD-13，负责人 `zemeng`，待 `goo122` 评审与根装配�
 
 原版 ORB-02 示例引擎移植到 `src/features/orb/orb.js`：170 个 Fibonacci 球壳点、matrix 渲染。原版比选卡片没有使用 lattice 纬度环分布；不能把同名“规则点阵”布局替换进去。待机绘制参数保持原样，只在产品代码修正状态切换的 shape 取值及减少动效时的重绘。
 
-球体窗口 112px，画布按原版卡片保持 132px 并居中（球面约 70px），避免缩小画布后点距变密。无窗口阴影、无球体模糊，透明边缘用径向渐隐。以球心 90px 检测靠近，372px 面板按工作区左右避让；拖动抑制展开，输入/点击固定。独立后台关闭不销毁 Runtime。冷光青与标准毛玻璃令牌来自恢复后的原稿；后台表格共享父层玻璃材质。
+球体窗口 112px，画布按原版卡片保持 132px 并居中（球面约 70px），避免缩小画布后点距变密。无窗口阴影、无球体模糊，透明边缘用径向渐隐。以球心 90px 检测靠近，420px 面板按工作区左右避让；拖动抑制展开，输入/点击固定。独立后台关闭不销毁 Runtime。冷光青与标准毛玻璃令牌来自恢复后的原稿；后台表格共享父层玻璃材质。
 
 任务提交、快照读取、事件订阅、能力目录、授权决定和取消调用公共 SDK。桌面主进程普通启动使用项目内持久化 `TaskRuntime`，显式 `--fake-runtime` 才使用测试 Runtime；两者都通过 `@personal-agent/client` 握手。没有 UI 计时器伪造任务进度，状态由 `event.subscribe` 后的 Runtime 事件回读驱动。取消受理显示“正在取消”，终态以 Runtime 快照为准。停止播报是独立的 `voice.stop` 操作，不调用 `task.cancel`；当前无语音提供者，因此按钮保持不可用并明确提示未连接。
 
@@ -35,9 +35,19 @@ npm start --prefix apps/desktop
 
 2026-09-05：Windows / Electron 44.2.0；公共底座 build 通过；关键测试 2/2；Electron smoke 通过原生热区、收起、拖动抑制、面板/后台和任务取消流程。`orb-fidelity.cjs <原版设计目录>` 在 132px 原稿尺寸验证产品待机球体逐像素一致（170 点）。已直接观察实际窗口截图。Node 26.3.0 与底座声明的 Node 24.15.x 不同，目标 Node 版本待集成环境验证。
 
-`npm test --prefix apps/desktop` 检查跨屏工作区定位和公共客户端取消到终态的语义。`npm run test:smoke --workspace=@personal-agent/desktop` 使用项目锁定的 Playwright 启动真实 Electron 进行界面验收；截图保存在模块 `.cache/qa`。
 
-后台未连接的业务页显示真实空状态，不把设计稿的手写业务数据带入产品。盘古 Provider 已接入，但真实 Endpoint/API Key 需要在“模型”页显式配置和测试；思考参数仍待 Runtime 公共契约与根装配接入。语音供应商、外部 Runtime 进程/Named Pipe、全局快捷键、安装卸载仍待对应模块接入。当前玻璃为 CSS 材质；原生 Windows 桌面背景模糊未验收。多屏位置算法已测，物理多显示器/DPI 切换未实机验收。此工作包处于 review，不代表 P0 全部完成。
+`npm test --prefix apps/desktop` 检查跨屏工作区定位和公共客户端取消到终态的语义。Desktop 改动按范围运行以下 Electron 验收：
+
+```powershell
+npm run test:smoke --workspace=@personal-agent/desktop
+npm run test:workspace-smoke --workspace=@personal-agent/desktop
+npm run test:runtime-application-smoke --workspace=@personal-agent/desktop
+npm run test:text-smoke --workspace=@personal-agent/desktop
+```
+
+截图保存在模块 `.cache` 下的对应 QA 目录。真实模型、付费服务和外部账号仍需用户另行授权。
+
+后台未连接的业务页显示真实空状态，不把设计稿的手写业务数据带入产品。盘古 Provider 已接入，但真实 Endpoint/API Key 需要在“模型”页显式配置和测试；思考参数仍待 Runtime 公共契约与根装配接入。语音供应商、外部 Runtime 进程/Named Pipe、全局快捷键、安装卸载仍待对应模块接入。当前玻璃为 CSS 材质；原生 Windows 桌面背景模糊未验收。多屏位置算法已测，物理多显示器/DPI 切换未实机验收。PR #25 已合并，但不代表 MOD-11/12/13 或 P0 全部完成。
 
 ## 文字交互垂直链路
 
