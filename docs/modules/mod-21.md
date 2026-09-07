@@ -10,15 +10,15 @@
 
 ## 职责
 
-QQ 邮箱增量同步（IMAP，游标 uidValidity:lastUid）、邮件条目规范化（sensitivity private，不含正文）、mark_seen 与 send 动作（发送超时→unknown，先核对结果不盲重试）。
+同一实例多账号绑定（MailAccountRegistry：bind/unbind/按 accountRef 分发，游标与幂等键按账号隔离）；QQ 邮箱增量同步（IMAP，游标 uidValidity:lastUid）、邮件条目规范化（sensitivity private，不含正文）、mark_seen 与 send 动作（发送超时→unknown，先核对结果不盲重试）。
 
 ## 非职责
 
-分类/摘要/草稿（MOD-04）、其他提供商（后续拆分）、授权码管理（装配层环境注入）、通知（MOD-23）。
+分类/摘要/草稿（MOD-04）、其他提供商（后续拆分）、凭据的持久化存储（桌面端 safeStorage）、通知（MOD-23）。
 
 ## 输入、输出与公共入口
 
-- 入口：工具 `mail.inbox`（读）；ConnectorPort `fetchChanges/search/getItem/performAction`。
+- 入口：工具 `mail.inbox`（读，多账号时需 account 参数）与 `mail.accounts`（列出绑定）；ConnectorPort `fetchChanges/search/getItem/performAction`。
 - 输入：账号游标/查询/动作；输出：邮件页（ConnectorItem）与动作结果（ConnectorAction，send 可能 unknown）。
 
 ## 依赖
