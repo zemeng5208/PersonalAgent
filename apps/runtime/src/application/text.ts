@@ -62,9 +62,8 @@ export interface TextApplication {
  * explicitly asks for `mode: 'fake'`; a missing Pangu configuration never falls back to it.
  */
 export function createFakeTextProvider(): FakeModelProvider {
-  return new FakeModelProvider([
-    request => ({kind: 'final', text: `Fake Model 回答：${request.messages.at(-1)?.content ?? ''}`}),
-  ], {
+  const response = (request: ModelRequest) => ({kind: 'final' as const, text: `Fake Model 回答：${request.messages.at(-1)?.content ?? ''}`});
+  return new FakeModelProvider(Array.from({length: 32}, () => response), {
     provider: 'fake', deployment: 'desktop-fake-text', model: 'fake-text-model', verification: 'mock',
     capabilities: {text: true, streaming: false, toolCalling: false, structuredOutput: false, vision: false},
   });

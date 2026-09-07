@@ -15,6 +15,10 @@
     "./text": {
       "types": "./dist/text.d.ts",
       "import": "./dist/text.js"
+    },
+    "./application": {
+      "types": "./dist/application.d.ts",
+      "import": "./dist/application.js"
     }
   },
   "scripts": {
@@ -23,11 +27,11 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@personal-agent/contracts": "0.1.0-alpha.1",
-    "@personal-agent/storage": "0.0.0",
     "@personal-agent/agents": "0.1.0-alpha.1",
+    "@personal-agent/contracts": "0.1.0-alpha.1",
     "@personal-agent/models": "0.1.0-alpha.1",
     "@personal-agent/policy": "0.1.0-alpha.1",
+    "@personal-agent/storage": "0.0.0",
     "@personal-agent/tool-gateway": "0.1.0-alpha.1",
     "@personal-agent/weather": "0.1.0-alpha.1"
   },

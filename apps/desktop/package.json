@@ -12,7 +12,6 @@
     "dev:text-fake": "electron . --fake-model",
     "test": "node --test test/*.test.mjs",
     "test:smoke": "node test/electron-smoke.cjs",
-    "test:text-task": "node --test test/text-task.test.mjs",
     "test:text-smoke": "node test/text-chat-smoke.cjs"
   },
   "dependencies": {
@@ -20,7 +19,6 @@
     "@personal-agent/runtime": "0.1.0-alpha.1"
   },
   "devDependencies": {
-    "@personal-agent/models": "0.1.0-alpha.1",
     "@personal-agent/testkit": "0.1.0-alpha.1",
     "electron": "44.2.0",
     "playwright": "1.63.0"

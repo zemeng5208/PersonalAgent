@@ -40,6 +40,7 @@ const {_electron} = require('playwright');
     await panel.waitForFunction(expected => document.querySelector('#tasks')?.innerText.includes(`Fake Model 回答：${expected}`), buttonGoal, {timeout: 10_000});
     assert.doesNotMatch(await panel.locator('#tasks').innerText(), /model=|verification=|tokens=/);
     const lastTurn = panel.locator('#tasks .turn').last();
+    await panel.waitForFunction(() => document.querySelector('#tasks .turn:last-child .response-actions button'));
     assert.equal(await lastTurn.locator('.response-actions button').count(), 3);
     const priorClipboard = await app.evaluate(({clipboard}) => clipboard.readText());
     await lastTurn.locator('[data-ui-action="copy"]').click();

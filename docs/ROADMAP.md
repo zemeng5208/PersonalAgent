@@ -1,9 +1,16 @@
 # 开发计划与进度
 
-更新：2026-09-07 · 当前阶段：M1 权限与工具宿主、M2 天气连接器垂直集成 · 应用实现：MOD-01/02/03/25 已按当前边界集成，MOD-04/05 与桌面增量继续评审
+更新：2026-09-07 · 当前阶段：M1 Runtime Application 与权限/工具宿主、M2 天气连接器垂直集成 · 应用实现：MOD-01/02/03/25 已按当前边界集成，ARCH-03 进入评审，MOD-04/05 与桌面增量继续评审
 
 本文维护工作状态，需求以 PRD 为准。模块负责人和独占目录唯一登记在 [模块分工](MODULE_ASSIGNMENTS.md)，契约见 [公共开发协议](DEVELOPMENT_PROTOCOL.md)。`goo122`（A）负责底座、公共协议和 Obsidian；`zemeng`（B）负责桌面与执行模块；`Potatos498`（C）负责分配到的信息连接器。阶段不代表承诺日期；正式排期需根据比赛时间、团队人数和接口验证结果确定。
 
+### ARCH-03：Runtime Application 自主管理任务分派
+
+- 负责人：`goo122`；评审者：`zemeng` 或 `Potatos498`。
+- 分支：`codex/arch-03-runtime-dispatch`；状态：`review`（基于已合并到 DOC-01 堆叠分支的 ARCH-02）。
+- 范围：Runtime Application 持有 `TaskRuntime`、文本应用和活动执行注册表；`task.submit` 成功后由 Runtime 自动启动文本任务；Desktop 只提交任务、订阅事件、展示状态和管理可信模型配置。
+- 验收：公开 `@personal-agent/runtime/application` 入口；重复提交不重复执行；Unavailable、取消、事件顺序和活动任务关闭保护有测试；Desktop 架构门禁禁止 Agent/Model 直连、旧 `runtime/text` 入口和直接 `runTask`。
+- 限制：仍是 Electron 主进程内的 Runtime Application，不是独立守护进程或 IPC 服务；当前文本切片不注册工具，思考参数尚未进入 Runtime 公共契约；真实盘古和外部账号未在本轮调用。
 ### ARCH-01：目录与依赖治理
 
 - 负责人：`goo122`；评审者：`zemeng` 或 `Potatos498`。
@@ -15,7 +22,7 @@
 ### ARCH-02：Runtime Application 编排边界
 
 - 负责人：`goo122`；评审者：`zemeng` 或 `Potatos498`。
-- 分支：`codex/arch-02-runtime-application`；状态：`review`（依赖 DOC-01 状态同步 PR）。
+- 分支：`codex/arch-02-runtime-application`；状态：`merged-to-stack`（PR #21 已合并到 DOC-01 堆叠分支，待随集成分支回流 main）。
 - 范围：将 Agent/Model 选择、ModelGateway、文字 Agent 执行、Fake/Unavailable/Pangu 模式和连接测试移入 `apps/runtime/src/application/`；通过 `@personal-agent/runtime/text` 公开入口供 Desktop 调用。
 - 不在范围：不拆 Runtime 进程、不新增 IPC 协议、不把 API Key 暴露给 Renderer、不接入工具调用或真实付费模型。
 - 验收：Desktop Electron 生产代码不再导入 `@personal-agent/agents` 或 `@personal-agent/models`；Runtime 显式声明 Agent/Model 依赖；Fake、Unavailable、取消语义保持有效；架构门禁、全 workspace 类型检查和全仓测试通过。
@@ -189,7 +196,7 @@ MOD-03 已通过 PR #5 集成，PR #4、#7、#9、#12 已合并；goo122 的 MOD
 - 交付：能力声明与验证等级、Fake/Unavailable/Pangu 占位 Provider、模型 deployment/usage 记录、工具提案校验、一次修复上限、maxSteps/maxTokens/deadline/取消边界、RuntimeToolInvoker 和 unknown reconciliation 回调。
 - 验收：模型测试 4/4；Agent 测试 4/4；Fake 天气请求经过 Runtime、Policy、ToolGateway；模型不能提供授权；unknown 不生成成功回答；仓库 npm run check、npm run dev、npm run demo:protocol、npm run demo:runtime 均通过。
 - 证据：仅使用 Fake Provider 和本地 Runtime；没有真实盘古、付费模型或网络调用。
-- 限制：真实盘古适配与 PA-003 真实请求验收、多 Agent 专家调度、流式输出和真实连接器仍未完成；后续 ARCH-02 将把现有 Agent/Model 编排移出 Desktop，进入 Runtime Application 层。
+- 限制：真实盘古适配与 PA-003 真实请求验收、多 Agent 专家调度、流式输出和真实连接器仍未完成；后续 ARCH-03 将把 task.submit 后的执行分派和生命周期管理收归 Runtime Application。
 
 ### DESKTOP-01 当前工作包（2026-09-05）
 
