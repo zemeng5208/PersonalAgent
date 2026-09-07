@@ -5,6 +5,7 @@ import {
   ModelGateway,
   PanguModelProvider,
   UnavailableModelProvider,
+  StructuredToolProvider,
 } from '@personal-agent/models';
 import type {
   ModelDeployment,
@@ -23,6 +24,7 @@ const NO_TOOLS: AgentToolPort = {
 export type TextModelMode = 'fake' | 'pangu' | 'unavailable';
 
 export interface TextApplicationOptions {
+  tools?: AgentToolPort;
   mode?: TextModelMode;
   provider?: ModelProvider | ModelGatewayType;
   baseUrl?: string;
@@ -35,11 +37,13 @@ export interface TextTaskRuntime {
   runTask(
     taskId: string,
     worker: (context: AgentWorkerContext) => Promise<AgentWorkerResult>,
-    options: {deadline: string; sideEffect: 'read'},
+    options: {deadline: string; sideEffect: 'read' | 'external_write'; resume?: boolean},
   ): Promise<TaskSnapshot>;
 }
 
 export interface TextTaskOptions {
+  tools?: AgentToolPort;
+  resume?: boolean;
   now?: () => number;
   deadlineMs?: number;
   maxTokens?: number;
@@ -75,12 +79,13 @@ function createProvider(options: TextApplicationOptions): ModelProvider | ModelG
   if (mode === 'fake') return createFakeTextProvider();
   if (mode === 'pangu') {
     if (!options.apiKey) throw new Error('Pangu text application requires an API key provider');
-    return new PanguModelProvider({
+    const provider = new PanguModelProvider({
       baseUrl: options.baseUrl ?? '',
       model: options.model ?? '',
       ...(options.deployment === undefined ? {} : {deployment: options.deployment}),
       apiKey: options.apiKey,
     });
+    return options.tools ? new StructuredToolProvider(provider) : provider;
   }
   return new UnavailableModelProvider('pangu', options.model ?? 'not-configured');
 }
@@ -107,11 +112,11 @@ export function startTextTask(
   return runtime.runTask(taskId, context => runAgent(context, {
     goal,
     model,
-    tools: NO_TOOLS,
+    tools: options.tools ?? NO_TOOLS,
     authorizationRefFor: () => 'runtime-text-chat-no-tools',
-    maxSteps: 1,
+    maxSteps: options.tools ? 8 : 1,
     maxTokens: options.maxTokens ?? 512,
-  }), {deadline: taskDeadline, sideEffect: 'read'});
+  }), {deadline: taskDeadline, sideEffect: options.tools?.list().some(tool => tool.sideEffect !== 'read') ? 'external_write' : 'read', ...(options.resume ? {resume: true} : {})});
 }
 
 export function createTextApplication(options: TextApplicationOptions): TextApplication {
@@ -119,7 +124,7 @@ export function createTextApplication(options: TextApplicationOptions): TextAppl
   return {
     deployment: structuredClone(model.deployment),
     startTask(runtime, taskId, goal, taskOptions = {}) {
-      return startTextTask(runtime, taskId, goal, model, taskOptions);
+      return startTextTask(runtime, taskId, goal, model, {...taskOptions, ...(options.tools ? {tools: options.tools} : {})});
     },
     async testConnection(testOptions = {}) {
       const now = testOptions.now ?? Date.now;
