@@ -3,21 +3,20 @@ import {stateNames,isTerminal} from '../conversation/state.js';
 import {mountConversationRail} from '../conversation/rail.js';
 import {connectorCards} from './connectors.js';
 
-const paths={settings:'M4 7h10m4 0h2M4 17h2m4 0h10M16 4v6M8 14v6',connectors:'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zm11 3h7m-3-3v7',send:'M12 20V4m-7 7 7-7 7 7',close:'m6 6 12 12M6 18 18 6',maximize:'M5 5h14v14H5z',minimize:'M5 12h14',copy:'M8 8h12v12H8zM16 8V4H4v12h4',view:'M3 5h18v14H3zM9 5v14'};
+const paths={settings:'M4 7h10m4 0h2M4 17h2m4 0h10M16 4v6M8 14v6',connectors:'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zm11 3h7m-3-3v7',close:'m6 6 12 12M6 18 18 6',maximize:'M5 5h14v14H5z',minimize:'M5 12h14',copy:'M8 8h12v12H8zM16 8V4H4v12h4',view:'M3 5h18v14H3zM9 5v14'};
 const icon=name=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${paths[name]}"/></svg>`;
 const resultText=value=>String(value||'').replace(/\s*\[model=[^;\]]+;\s*verification=[^;\]]+;\s*tokens=[^\]]+\]\s*$/,'').trim();
 
 export function mountWorkspace(root,invoke,escape){
-  let current={tasks:[]},pending=false,draftInitialized=false,lastSignature='',cardsSignature='',inspected=null;
+  let current={tasks:[]},lastSignature='',cardsSignature='',inspected=null;
   root.innerHTML=`<section class="workspace focused-workspace">
     <header class="workspace-titlebar"><span class="workspace-app-title">PersonalAgent</span><span class="spacer"></span><button class="window-button" data-window="minimize" aria-label="最小化">${icon('minimize')}</button><button class="window-button" data-window="maximize" aria-label="最大化或还原">${icon('maximize')}</button><button class="window-button window-close" data-window="close" aria-label="关闭工作区">${icon('close')}</button></header>
     <main class="workspace-main"><header class="workspace-top"><strong>悬浮球对话</strong><span class="spacer"></span><button class="icon-btn" id="connectors-toggle" aria-label="显示或隐藏连接器" aria-expanded="true">${icon('connectors')}</button><button class="icon-btn" data-open-settings="settings" aria-label="打开设置">${icon('settings')}</button></header>
-    <div class="workspace-layout"><section class="workspace-chat"><div class="workspace-stage" id="workspace-stage"><div class="workspace-welcome" id="workspace-welcome"><button class="workspace-orb" id="workspace-orb" aria-label="激活粒子扩散" aria-pressed="false"><canvas aria-hidden="true"></canvas></button><h1 id="workspace-greeting">从一个想法开始</h1><p id="workspace-intro">在这里对话、查看结果，让信息保持井然有序。</p></div><div class="workspace-conversation" id="workspace-conversation" aria-live="polite"></div></div>
-      <div class="workspace-compose-area"><div class="workspace-context"><span id="workspace-runtime">正在连接…</span><span class="spacer"></span><span id="workspace-model-name">模型待分配</span></div><form class="composer workspace-composer" id="workspace-form"><textarea id="workspace-input" aria-label="任务内容" placeholder="继续这段对话…" maxlength="10000"></textarea><div class="composer-bar"><span class="assignment-note" title="后续由悬浮球小工作区的盘古主助理分配模型、思考深度和工作；当前为独立文字对话。">由主助理分配 · 待接入</span><span class="spacer"></span><button class="send-btn" id="workspace-send" type="submit" aria-label="发送消息">${icon('send')}</button></div></form><p class="workspace-error" id="workspace-error" role="alert"></p></div></section>
+    <div class="workspace-layout"><section class="workspace-chat"><p class="workspace-error" id="workspace-error" role="alert"></p><div class="workspace-stage" id="workspace-stage"><div class="workspace-welcome" id="workspace-welcome"><button class="workspace-orb" id="workspace-orb" aria-label="激活粒子扩散" aria-pressed="false"><canvas aria-hidden="true"></canvas></button><h1 id="workspace-greeting">从一个想法开始</h1><p id="workspace-intro">在这里查看对话与连接器信息。</p></div><div class="workspace-conversation" id="workspace-conversation" aria-live="polite"></div></div></section>
       <aside class="connector-board" aria-label="连接器信息"><header><div><h2>连接器</h2><p>你的信息，一处查看</p></div><button class="icon-btn" id="connectors-refresh" aria-label="刷新连接器">↻</button></header><div id="connector-cards"></div></aside>
       <aside class="conversation-inspector" id="conversation-inspector" aria-label="对话内部查看" hidden><header><h2>对话详情</h2><button class="icon-btn" id="inspector-close" aria-label="关闭对话详情">${icon('close')}</button></header><div id="inspector-content"></div></aside></div>
     </main></section>`;
-  const input=root.querySelector('#workspace-input'),conversation=root.querySelector('#workspace-conversation'),stage=root.querySelector('#workspace-stage');
+  const conversation=root.querySelector('#workspace-conversation'),stage=root.querySelector('#workspace-stage');
   const updateRail=mountConversationRail(root.querySelector('.workspace-chat'),stage);
   const orbButton=root.querySelector('#workspace-orb');
   const orb=new Orb(orbButton.querySelector('canvas'),{variant:'matrix',layout:'shell',count:170});
@@ -36,18 +35,10 @@ export function mountWorkspace(root,invoke,escape){
   root.querySelector('#connectors-toggle').onclick=event=>{const hidden=root.querySelector('.connector-board').hidden;root.querySelector('.connector-board').hidden=!hidden;event.currentTarget.setAttribute('aria-expanded',String(hidden));};
   root.querySelector('#connectors-refresh').onclick=async event=>{event.currentTarget.disabled=true;try{await invoke('capability.list');update(await invoke('snapshot'));}catch(error){report(error);}finally{root.querySelector('#connectors-refresh').disabled=false;}};
   root.querySelector('#inspector-close').onclick=()=>{inspected=null;root.querySelector('#conversation-inspector').hidden=true;};
-  input.oninput=()=>{syncSend();void invoke('workspace.draft',input.value).catch(report);};
-  input.onkeydown=event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();if(!root.querySelector('#workspace-send').disabled)root.querySelector('#workspace-form').requestSubmit();}};
-  root.querySelector('#workspace-form').onsubmit=async event=>{
-    event.preventDefault();if(pending||!input.value.trim()||current.tasks.some(task=>!isTerminal(task)))return;
-    pending=true;syncSend();
-    try{await invoke('task.submit',input.value);input.value='';await invoke('workspace.draft','');root.querySelector('#workspace-error').textContent='';update(await invoke('snapshot'));requestAnimationFrame(()=>{stage.scrollTop=stage.scrollHeight;});}catch(error){report(error);}finally{pending=false;syncSend();}
-  };
   conversation.onclick=async event=>{
     const button=event.target.closest('[data-cancel],[data-view],[data-copy]');if(!button)return;
     try{if(button.dataset.view){inspected=button.dataset.view;renderInspector();}else if(button.dataset.copy){await invoke('clipboard.writeText',resultText(current.tasks.find(task=>task.taskId===button.dataset.copy)?.resultSummary));button.title='已复制';}else{button.disabled=true;await invoke('task.cancel',button.dataset.cancel);}}catch(error){report(error);button.disabled=false;}
   };
-  function syncSend(){root.querySelector('#workspace-send').disabled=pending||!input.value.trim()||current.tasks.some(task=>!isTerminal(task));}
   function renderInspector(){
     const task=current.tasks.find(item=>item.taskId===inspected);if(!task)return;
     root.querySelector('#conversation-inspector').hidden=false;
@@ -55,8 +46,6 @@ export function mountWorkspace(root,invoke,escape){
   }
   function update(data){
     current=data;current.tasks ||= [];
-    if(!draftInitialized){input.value=data.workspaceDraft||'';draftInitialized=true;}
-    syncSend();root.querySelector('#workspace-runtime').textContent=data.fake?'离线联调':data.connectionError?'连接异常':'独立对话';root.querySelector('#workspace-model-name').textContent=data.model?.configured?`当前：${data.model.model}`:'模型待配置';
     root.querySelector('#workspace-greeting').hidden=current.tasks.length>0;root.querySelector('#workspace-intro').hidden=current.tasks.length>0;root.querySelector('#workspace-welcome').classList.toggle('compact',current.tasks.length>0);
     const signature=JSON.stringify(data.tasks);
     if(signature!==lastSignature){

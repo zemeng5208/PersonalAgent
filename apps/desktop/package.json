@@ -13,6 +13,7 @@
     "test": "node --test test/*.test.mjs",
     "test:smoke": "node test/electron-smoke.cjs",
     "test:workspace-smoke": "node test/workspace-smoke.cjs",
+    "test:runtime-application-smoke": "node test/runtime-application-smoke.cjs",
     "test:text-smoke": "node test/text-chat-smoke.cjs"
   },
   "dependencies": {

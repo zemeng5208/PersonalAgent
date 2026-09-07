@@ -13,6 +13,7 @@ const fakeMode = process.argv.includes('--fake-runtime');
 const fakeModelMode = process.argv.includes('--fake-model') || process.env.PA_DESKTOP_MODEL_MODE === 'fake';
 if (fakeMode || fakeModelMode) app.setPath('userData', path.resolve(dir, '../.cache/user-data'));
 if (process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1') app.setPath('userData', path.resolve(dir, `../.cache/test-user-data-${process.pid}`));
+if (process.env.PA_DESKTOP_TEST_USER_DATA) app.setPath('userData', path.resolve(process.env.PA_DESKTOP_TEST_USER_DATA));
 
 let runtime;
 let runtimeConnection;
@@ -24,7 +25,6 @@ let orb;
 let panel;
 let admin;
 let workspace;
-let workspaceDraft = '';
 let adminNavigation = {page: 'settings', revision: 0};
 let tray;
 let poll;
@@ -70,7 +70,6 @@ function snapshot(surface) {
     fakeModel: fakeModelMode,
     fake: fakeMode,
     pinned,
-    workspaceDraft,
     adminNavigation: {...adminNavigation},
     audioLevel,
     orbStateOverride,
@@ -449,7 +448,9 @@ async function initializeRuntime() {
     });
     readEvents = after => runtime.readEvents('tasks', after);
   } else {
-    const dbPath = process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1' ? path.join(app.getPath('userData'),'runtime.sqlite') : path.resolve(dir, '../.cache/runtime.sqlite');
+    const dbPath = process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1' || process.env.PA_DESKTOP_TEST_USER_DATA
+      ? path.join(app.getPath('userData'), 'runtime.sqlite')
+      : path.resolve(dir, '../.cache/runtime.sqlite');
     mkdirSync(path.dirname(dbPath), {recursive: true});
     const createApplication = process.argv.includes('--weather-tools')
       ? (await import('@personal-agent/runtime/weather')).createOpenMeteoApplication
@@ -484,6 +485,10 @@ async function waitForTerminalTask(taskId, timeoutMs = 5_000) {
     task = await refresh(taskId);
   }
   if (!terminal.has(task.state)) throw Error('Runtime 未在限定时间内确认任务终态');
+  if (runtimeError === 'Runtime 仍有活动任务；请先等待完成或停止任务后再退出') {
+    runtimeError = '';
+    publish();
+  }
   return task;
 }
 
@@ -492,11 +497,7 @@ async function action(event, name, payload) {
   if (!sender || event.senderFrame !== sender.webContents.mainFrame) throw Error('Untrusted sender');
   if (name === 'snapshot') return snapshot(sender === workspace ? 'workspace' : sender === admin ? undefined : 'panel');
   if (name === 'admin.open') { openAdmin(payload?.page); return; }
-  if (name === 'workspace.open' && sender === panel) { openWorkspace(payload?.draft); return; }
-  if (name === 'workspace.draft' && sender === workspace) {
-    if (typeof payload !== 'string' || payload.length > 10000) throw Error('输入内容无效');
-    workspaceDraft = payload; return;
-  }
+  if (name === 'workspace.open' && sender === panel) { openWorkspace(); return; }
   if (name === 'workspace.close' && sender === workspace) { workspace.close(); return; }
   if (name === 'workspace.minimize' && sender === workspace) { workspace.minimize(); return; }
   if (name === 'workspace.maximize' && sender === workspace) { if(workspace.isMaximized()) workspace.unmaximize(); else workspace.maximize(); return; }
@@ -611,7 +612,12 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
   try {
-    conversations = new Conversations(fakeMode || fakeModelMode || process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1' ? null : path.resolve(dir,'../.cache/conversations.json'));
+    const conversationPath = fakeMode || fakeModelMode || process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1'
+      ? null
+      : process.env.PA_DESKTOP_TEST_USER_DATA
+        ? path.join(app.getPath('userData'), 'conversations.json')
+        : path.resolve(dir, '../.cache/conversations.json');
+    conversations = new Conversations(conversationPath);
     restoreModelConfig();
     await initializeRuntime();
     await initializeModelFromEnvironment();
