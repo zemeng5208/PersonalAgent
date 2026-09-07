@@ -3,9 +3,9 @@ import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
 import {EventCursor} from '@personal-agent/client';
+import {createTextApplication} from '@personal-agent/runtime/text';
 import {register} from './runtime.js';
 import {panelBounds, clampOrb, draggedGroupBounds} from './placement.js';
-import {createFakeTextProvider, startTextTask} from './text-task.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -42,7 +42,7 @@ const modelConfig = {
   apiKey: process.env.PANGU_API_KEY ?? '',
 };
 const modelStorage = {persisted: false};
-let panguProvider;
+let textApplication;
 let model = {
   provider: 'pangu', label: '盘古大模型 2.0', status: 'unavailable', verification: 'conditional',
   baseUrl: modelConfig.baseUrl, model: modelConfig.model, deployment: modelConfig.deployment,
@@ -51,6 +51,7 @@ let model = {
   persisted: false,
   reason: '盘古 Provider 已接入；请在设置中配置 Endpoint、模型和 API Key', lastTestAt: null, latencyMs: null,
 };
+textApplication = createTextApplication({mode: 'unavailable', model: modelConfig.model});
 let thinking = {depth: 1, fast: false, applied: false, reason: 'Runtime 尚未公开思考参数契约'};
 const tasks = new Map();
 const taskGoals = new Map();
@@ -227,8 +228,7 @@ async function configurePangu(input, {publishState = true, persist = true} = {})
   const deployment = requiredModelText(input?.deployment || modelName, '部署名称');
   const apiKey = typeof input?.apiKey === 'string' && input.apiKey.trim() ? input.apiKey.trim() : modelConfig.apiKey;
   if (!apiKey) throw Error('API Key 未配置；密钥只会保留在主进程内存中');
-  const {PanguModelProvider} = await import('@personal-agent/models');
-  const provider = new PanguModelProvider({baseUrl, model: modelName, deployment, apiKey: () => modelConfig.apiKey});
+  const application = createTextApplication({mode: 'pangu', baseUrl, model: modelName, deployment, apiKey: () => modelConfig.apiKey});
   const previous = {...modelConfig};
   modelConfig.baseUrl = baseUrl;
   modelConfig.model = modelName;
@@ -241,13 +241,13 @@ async function configurePangu(input, {publishState = true, persist = true} = {})
     Object.assign(modelConfig, previous);
     throw error;
   }
-  panguProvider = provider;
+  textApplication = application;
   model = {
     ...model,
-    provider: 'pangu', label: '盘古大模型 2.0', status: 'configured', verification: provider.deployment.verification,
+    provider: 'pangu', label: '盘古大模型 2.0', status: 'configured', verification: application.deployment.verification,
     baseUrl, model: modelName, deployment, configured: true, keyConfigured: true,
     persisted: storage.saved,
-    capabilities: structuredClone(provider.deployment.capabilities),
+    capabilities: structuredClone(application.deployment.capabilities),
     reason: `${storage.reason}，尚未发起真实连接测试`, lastTestAt: null, latencyMs: null,
   };
   if (publishState) publish();
@@ -255,15 +255,11 @@ async function configurePangu(input, {publishState = true, persist = true} = {})
 }
 
 async function testPangu() {
-  if (!panguProvider) throw Error('请先保存盘古模型配置');
+  if (!textApplication || textApplication.deployment.provider !== 'pangu') throw Error('请先保存盘古模型配置');
   const controller = new AbortController();
   const started = Date.now();
   try {
-    const result = await panguProvider.complete({
-      messages: [{role: 'user', content: 'Reply with exactly OK.'}],
-      tools: [], maxOutputTokens: 4,
-      deadline: new Date(Date.now() + 15_000).toISOString(), signal: controller.signal,
-    });
+    const result = await textApplication.testConnection({signal: controller.signal});
     const latencyMs = Number.isFinite(result.latencyMs) ? result.latencyMs : Date.now() - started;
     model = {...model, status: 'ready', reason: `连接测试通过 · ${latencyMs}ms`, lastTestAt: new Date().toISOString(), latencyMs};
     publish();
@@ -285,6 +281,7 @@ function updateThinking(input) {
 
 async function initializeModelFromEnvironment() {
   if (fakeModelMode) {
+    textApplication = createTextApplication({mode: 'fake'});
     model = {
       ...model,
       provider: 'fake', label: 'Fake Model · 离线测试', status: 'ready', verification: 'mock',
@@ -304,11 +301,7 @@ async function initializeModelFromEnvironment() {
 
 async function executeTextTask(taskId, goal) {
   if (fakeMode || activeTextTasks.has(taskId)) return;
-  const {UnavailableModelProvider} = await import('@personal-agent/models');
-  const provider = fakeModelMode
-    ? createFakeTextProvider()
-    : panguProvider ?? new UnavailableModelProvider('pangu', modelConfig.model);
-  const execution = startTextTask(runtime, taskId, goal, provider);
+  const execution = textApplication.startTask(runtime, taskId, goal);
   activeTextTasks.set(taskId, execution);
   try {
     await execution;

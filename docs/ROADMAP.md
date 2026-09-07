@@ -12,6 +12,15 @@
 - 验收：根级生产 `src/` 移除；`npm run check:architecture` 已检查 11 个 workspace 的 README、公开入口、依赖声明、依赖方向、连接器边界、公共 exports、跨包相对导入和循环依赖；全 workspace 类型检查通过，测试 106 项为 105 通过、1 项真实 Open-Meteo 验收按设计跳过。
 - 完成边界：已满足目录、依赖门禁和测试验收，并完成非作者评审与主分支合并；ARCH-01 不包含 Runtime 进程拆分或 Agent/Model 编排迁移。
 
+### ARCH-02：Runtime Application 编排边界
+
+- 负责人：`goo122`；评审者：`zemeng` 或 `Potatos498`。
+- 分支：`codex/arch-02-runtime-application`；状态：`review`（依赖 DOC-01 状态同步 PR）。
+- 范围：将 Agent/Model 选择、ModelGateway、文字 Agent 执行、Fake/Unavailable/Pangu 模式和连接测试移入 `apps/runtime/src/application/`；通过 `@personal-agent/runtime/text` 公开入口供 Desktop 调用。
+- 不在范围：不拆 Runtime 进程、不新增 IPC 协议、不把 API Key 暴露给 Renderer、不接入工具调用或真实付费模型。
+- 验收：Desktop Electron 生产代码不再导入 `@personal-agent/agents` 或 `@personal-agent/models`；Runtime 显式声明 Agent/Model 依赖；Fake、Unavailable、取消语义保持有效；架构门禁、全 workspace 类型检查和全仓测试通过。
+- 剩余限制：模型配置与 Windows 加密存储仍由可信 Desktop 主进程负责；文字任务当前只读且不注册工具；Runtime 仍是 Electron 进程内的模块化应用层，不等同于独立守护进程。
+
 ## 1. 里程碑
 
 | 阶段 | 交付 | 退出条件 | 当前状态 |

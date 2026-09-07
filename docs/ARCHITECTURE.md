@@ -1,6 +1,6 @@
 # 架构设计与技术契约
 
-版本：0.3 · 日期：2026-09-06 · 状态：模块化单体、目录与依赖治理基线；模块实现状态以 ROADMAP 为准
+版本：0.4 · 日期：2026-09-07 · 状态：模块化单体、目录与依赖治理基线；ARCH-02 已将 Agent/Model 文字编排收归 Runtime Application；模块实现状态以 ROADMAP 为准
 
 模块所有权以 [模块分工](MODULE_ASSIGNMENTS.md) 为准；消息与接口语义以 [公共开发协议](DEVELOPMENT_PROTOCOL.md) 为准。`goo122`（A）持有底座和公共接口，`zemeng`（B）是消费端及执行模块负责人。
 
@@ -31,6 +31,7 @@
 - `apps` 是进程和装配入口，可以依赖 `packages`；可复用 `packages` 不能反向依赖 `apps`。
 - Agent 只持有模型与工具端口，不导入具体 Runtime 实现。
 - Runtime 核心不导入 Electron 或具体连接器；具体 Weather 等只出现在明确组合入口。
+- Runtime Application 层负责把 Agent、ModelGateway 和 Provider 组合成可运行任务；Desktop 主进程只负责可信配置、IPC 和 UI 生命周期，不复制 Agent/Model 编排。
 - 连接器只实现公共连接器/工具契约，不能拥有任务状态、授权决定或 UI。
 - 跨包调用只能使用包的公开 `exports`，生产依赖图必须无环。
 

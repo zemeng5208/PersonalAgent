@@ -11,6 +11,10 @@
     "./weather": {
       "types": "./dist/weather-runtime.d.ts",
       "import": "./dist/weather-runtime.js"
+    },
+    "./text": {
+      "types": "./dist/text.d.ts",
+      "import": "./dist/text.js"
     }
   },
   "scripts": {
@@ -21,6 +25,8 @@
   "dependencies": {
     "@personal-agent/contracts": "0.1.0-alpha.1",
     "@personal-agent/storage": "0.0.0",
+    "@personal-agent/agents": "0.1.0-alpha.1",
+    "@personal-agent/models": "0.1.0-alpha.1",
     "@personal-agent/policy": "0.1.0-alpha.1",
     "@personal-agent/tool-gateway": "0.1.0-alpha.1",
     "@personal-agent/weather": "0.1.0-alpha.1"
