@@ -1,16 +1,16 @@
 # 开发计划与进度
 
-更新：2026-09-06 · 当前阶段：M1 权限与工具宿主、M2 天气连接器垂直集成 · 应用实现：MOD-01/02/03 已集成，MOD-05 首片与 MOD-25 源码已合并，垂直集成待评审
+更新：2026-09-07 · 当前阶段：M1 权限与工具宿主、M2 天气连接器垂直集成 · 应用实现：MOD-01/02/03/25 已按当前边界集成，MOD-04/05 与桌面增量继续评审
 
 本文维护工作状态，需求以 PRD 为准。模块负责人和独占目录唯一登记在 [模块分工](MODULE_ASSIGNMENTS.md)，契约见 [公共开发协议](DEVELOPMENT_PROTOCOL.md)。`goo122`（A）负责底座、公共协议和 Obsidian；`zemeng`（B）负责桌面与执行模块；`Potatos498`（C）负责分配到的信息连接器。阶段不代表承诺日期；正式排期需根据比赛时间、团队人数和接口验证结果确定。
 
 ### ARCH-01：目录与依赖治理
 
 - 负责人：`goo122`；评审者：`zemeng` 或 `Potatos498`。
-- 分支：`codex/architecture-standard`；状态：`review`。
+- 分支：`codex/architecture-standard`；状态：`done`（PR #16 已由非作者评审并于 `87d0974` 合并）。
 - 范围：项目目录规范、ADR、模块模板、架构门禁，以及移除 `packages/agents → apps/runtime` 反向生产依赖；不新增业务能力、不拆 Runtime 进程、不移动其他协作者 worktree。
 - 验收：根级生产 `src/` 移除；`npm run check:architecture` 已检查 11 个 workspace 的 README、公开入口、依赖声明、依赖方向、连接器边界、公共 exports、跨包相对导入和循环依赖；全 workspace 类型检查通过，测试 106 项为 105 通过、1 项真实 Open-Meteo 验收按设计跳过。
-- 完成边界：本地通过后进入 review，非作者评审并合并前不视为完成。
+- 完成边界：已满足目录、依赖门禁和测试验收，并完成非作者评审与主分支合并；ARCH-01 不包含 Runtime 进程拆分或 Agent/Model 编排迁移。
 
 ## 1. 里程碑
 
@@ -25,23 +25,23 @@
 
 ## 2. 模块执行台账
 
-MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；`Potatos498` 的 MOD-25 源码已通过 PR #4 合并。PR #4 在 `goo122` 原批准后追加了真实提供商与跨语言解析提交，因此已补做合并后审计；审计登记的两项阻碍（地点正确性、缺省日期语义）已由 `Potatos498` 在 `fix/mod-25-geocoding` 修复并待评审，Runtime 根装配已由 `goo122` 于 PR #9 接入，MOD-05 首片已合并但模块整体仍待非作者评审，因此 MOD-25 尚不能转为 done。其他具体模块仍需用户明确授权后开工。每行可拆多个子任务，只有全部约定交付通过后模块才为 done。
+MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；MOD-25 的源码、Runtime 根装配和地理编码/缺省日期修复已分别通过 PR #4、PR #9、PR #12 完成非作者评审并合并。MOD-04/05 的本地 Fake 验收已完成，但真实模型、持久化授权和 Evidence 等边界仍保持 review。桌面 PR #18 已合并为交互里程碑，MOD-11/12/13 仍按未完成项保持 in_progress。PR #8 已通过代码评审但当前与 main 冲突，PR #19 已通过 CI 但作者为 `goo122`，仍等待非作者评审。其他具体模块仍需用户明确授权后开工。每行可拆多个子任务，只有全部约定交付通过后模块才为 done。
 
 | 模块 ID | 计划阶段 | 状态 | 当前执行人 / PR / 证据 |
 | --- | --- | --- | --- |
 | MOD-01 | M1 起步门槛 | done | goo122 / PR #1 / 合并提交 dbbc547 / 构建、迁移和存储测试通过 |
 | MOD-02 | M1 起步门槛 | done | goo122 / PR #1 / 合并提交 dbbc547 / 26 项联合测试及评审通过；协议待多消费端冻结 |
 | MOD-03 | M1/M2 | done | goo122 / PR #5 / 合并提交 e14aebf / 7 项 Runtime 测试及评审通过 |
-| MOD-04 | M1 主模型、M3 专业协作 | review | goo122 / codex/feat-mod-04-model-gateway / Fake 垂直集成与仓库 check 通过，待 PR 评审 |
-| MOD-05 | M1/M2 | review | goo122 / codex/feat-mod-05-tool-host / 任务绑定授权、策略校验工具网关、受限凭据连接器宿主及公共 Client→Runtime→工具闭环已本地验证，待非作者评审 |
+| MOD-04 | M1 主模型、M3 专业协作 | review | goo122 / PR #10、#11 已由 `zemeng` 评审并合并；Fake 垂直集成与仓库 check 通过，真实盘古、流式输出、多 Agent 尚未验收 |
+| MOD-05 | M1/M2 | review | goo122 / PR #7 已由 `zemeng` 评审并合并；任务绑定授权、策略校验工具网关、受限凭据连接器宿主及公共 Client→Runtime→工具闭环已本地验证，持久化权限与 Evidence 尚未完成 |
 | MOD-06 | M2 | todo | 未启动 |
 | MOD-07 | M2 | todo | 未启动 |
 | MOD-08 | M2 | todo | 未启动 |
 | MOD-09 | M4 | todo | 未启动 |
 | MOD-10 | M4 后研究，无交付日期承诺 | todo | 未启动 |
-| MOD-11 | M1 | in_progress | `zemeng`：桌面窗口增量待评审；托盘、根装配未完成 |
-| MOD-12 | M1 | in_progress | `zemeng`：原版 ORB-02 / 面板增量待评审；真实事件接入未完成 |
-| MOD-13 | M1 基础页面、M2 配置闭环 | in_progress | `zemeng`：独立后台与真实空状态增量待评审；配置闭环未完成 |
+| MOD-11 | M1 | in_progress | `zemeng` / PR #13、#14、#18 已合并；窗口与安全桥可运行，但托盘、真实 Runtime 稳定性和 DPI 透明命中区域问题仍未关闭 |
+| MOD-12 | M1 | in_progress | `zemeng` / PR #18 已合并；文字交互、状态展示和取消入口可用，连续上下文、真实事件与语音仍未接入 |
+| MOD-13 | M1 基础页面、M2 配置闭环 | in_progress | `zemeng` / PR #13、#18 已合并；后台骨架与空状态可用，模型/连接器配置和授权闭环未完成 |
 | MOD-14 | M1 基础、M2 验收 | todo | `zemeng` 已确定，未启动 |
 | MOD-15 | M4 后扩展 | todo | `zemeng` 已确定，未启动 |
 | MOD-16 | M2 TraceGuard 所需只读端口、M4 电脑操作 | todo | `zemeng` 已确定，未启动 |
@@ -50,16 +50,16 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；`Pot
 | MOD-19 | M5 | todo | `zemeng` 已确定，未启动 |
 | MOD-20 | M2 本地提醒、M3 日历 | todo | `Potatos498` 已登记，未授权启动 |
 | MOD-21 | M3 | todo | `Potatos498` 已登记，未授权启动 |
-| MOD-22 | M3 | review | `Potatos498` / PR #8（分支 `feat/mod-22-feeds`，已指定 `goo122` 评审，评审未完成） / 用户 2026-09-06 明确授权启动；依赖 MOD-02 已集成；MOD-05 已于 main `f69a745` 交付，但本包未接入其 `ToolGateway`，`feeds:read` 只经 testkit `FakeToolHost` 验证。实测：根 `npm run check` 退出码 0，全仓 207 项为 203 通过＋4 项真实读回默认跳过（feeds 74 项，合并 main `5b833c9` 后）；`PA_FEEDS_LIVE=1` 下阮一峰 Atom 与少数派 RSS 各两轮，状态序列 `[200, 304, 200, 200]`；CI 在 `windows-latest` / node v24.15.0 下五个命令步骤全部通过。根装配接线归 `goo122`，未接线前不得转 done |
+| MOD-22 | M3 | review | `Potatos498` / PR #8（分支 `feat/mod-22-feeds`，已通过 `goo122` 代码评审与 Foundation CI——2026-09-07 main 台账同步记录） / 用户 2026-09-06 明确授权启动；依赖 MOD-02 已集成；MOD-05 已于 main `f69a745` 交付，但本包未接入其 `ToolGateway`，`feeds:read` 只经 testkit `FakeToolHost` 验证。实测：根 `npm run check` 退出码 0，全仓 207 项为 203 通过＋4 项真实读回默认跳过（feeds 74 项，合并 main `e5a16c0` 后）；`PA_FEEDS_LIVE=1` 下阮一峰 Atom 与少数派 RSS 各两轮，状态序列 `[200, 304, 200, 200]`；CI 在 `windows-latest` / node v24.15.0 下五个命令步骤全部通过。根装配接线归 `goo122`，未接线前不得转 done |
 | MOD-23 | M3 | todo | `Potatos498` 已登记，未授权启动 |
 | MOD-24 | M2 | todo | `Potatos498` 已登记，未授权启动 |
-| MOD-25 | M2 | review | `Potatos498` / PR #4 已合并（main `9f27e9b`）；`goo122` 合并后审计登记的两项完成阻碍（简体国外城市误解析、缺省日期按 UTC 取值）已在分支 `fix/mod-25-geocoding` 修复，待评审。实测：根 `npm run check` 退出码 0，全仓 119 项 116 通过＋3 跳过；`PA_WEATHER_LIVE=1` 下 38/38 通过。Runtime 根装配已由 `goo122` 于 PR #9 接入（`createOpenMeteoRuntime` 用 `strict`），MOD-05 权限宿主首片见 PR #7；转 done 仍需本修复通过非作者评审 |
+| MOD-25 | M2 | done | `Potatos498` / PR #4（`9f27e9b`）、PR #12（`5b833c9`）与 Runtime 装配 PR #9（`89c0464`）均已合并并完成非作者评审；根 `npm run check` 退出码 0，全仓 119 项 116 通过＋3 跳过，`PA_WEATHER_LIVE=1` 下 38/38 通过。manifest 仍为 `conditional`，不等同于长期生产稳定性验收 |
 | MOD-26 | M4 起逐平台验收 | todo | `Potatos498` 已登记，未授权启动 |
 
 ### 2.1 开工顺序与阻塞边界
 
 1. `goo122` 已交付并集成 MOD-01/MOD-02/MOD-03；协议包可用于开发联调，但尚未冻结。
-2. `Potatos498` 已推进 MOD-25 并接入 Open-Meteo 真实提供商，假时钟与假 ToolHost 仅用于离线测试；`goo122` 合并后审计登记的两项阻碍（简体国外城市误解析、缺省日期按 UTC 取值）已修复并待评审；`zemeng` 和其他模块仍需获得用户授权后开工。
+2. MOD-25 已由 `Potatos498` 完成当前工作包边界并合并；假时钟与假 ToolHost 用于离线测试，Open-Meteo 真实读回保持 `conditional`。`zemeng` 和其他未启动模块仍需获得用户授权后开工。
 3. 真实联调依赖盘古凭据、授权测试 Vault 和 Runtime。缺少账号时可继续无账号模块，但不标记真实连接通过。
 4. 首次联调为面板→盘古→知识检索→来源展示。语音、提醒、天气、MCP、Skills、TraceGuard 只读及权限的 P0 验收随后逐项完成。
 5. 公共目录、锁文件和迁移由 `goo122` 集成；`zemeng` 与待认领协作者交付注册入口，不同时编辑应用根装配。
@@ -109,18 +109,20 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；`Pot
 - 2026-09-06：PR #8 解决与最新 main `c6e3e47` 的合并冲突（此前 `CONFLICTING`），恢复可合并。带入 PR #9（MOD-05×MOD-25 的 Runtime 垂直集成：`apps/runtime`）、PR #10（models 网关）与 PR #11（Pangu V2 provider）。三处冲突中根 `package.json` 取 main 的 build 顺序（`weather` 在 `runtime` 前、含 `models`/`agents`）并在 `weather` 后加回 `feeds` 一行；`package-lock.json` 以 main 为底经 `npm install` 重新生成，仅新增 `fast-xml-parser` 及其 6 个传递依赖（diff 对 main 为纯增量，未改动 goo122 的依赖）；本文档自动合并，MOD-22 与 MOD-05×MOD-25 两侧记录均保留。未使用 `reset --hard`、强制推送或清理未跟踪文件。实测：根 `npm run check` 退出码 0，全仓 174 项为 172 通过＋2 项真实读回默认跳过，其中 feeds 74 项（73 通过＋1 跳过）与两次真实读回证据不受本次合并影响。ROADMAP 相对链接检查通过。
 - 2026-09-06：PR #8 第二次解决与最新 main 的合并冲突（桌面线 PR #13／#14／#15 合入后再度 `CONFLICTING`），恢复可合并。带入 PR #13（zemeng 桌面模块 MOD-11~13，新增 `apps/desktop` 工作区）、PR #14（可复现干净安装修复）与 PR #15（runtime 文字聊天）。本次仅 `package-lock.json` 一处冲突：以 main 为底经 `npm install` 重新生成，diff 对 main `4d29e3d` 为纯增量（`fast-xml-parser` 及其 7 个传递依赖＋`@personal-agent/feeds` 工作区链接，未改动 goo122 的依赖）；根 `package.json`（main 的 build 顺序与 `feeds` 行自动并存）与本文档自动合并，双方记录保留。未使用 `reset --hard`、强制推送或清理未跟踪文件。实测：根 `npm run check` 退出码 0，全仓 180 项为 178 通过＋2 项真实读回默认跳过（feeds 74 项不变）；`PA_FEEDS_LIVE=1` 在合并后的树上重跑 74/74 通过（含两项真实读回）。ROADMAP 相对链接检查通过。
 - 2026-09-07：PR #8 第三次解决与最新 main 的合并冲突（PR #16 架构规范化与 PR #18 桌面交互里程碑合入后再度 `CONFLICTING`），恢复可合并。带入 PR #16（`docs/PROJECT_STRUCTURE.md` v1.0、ADR 0001~0003、`docs/modules/` 模板、`tests/architecture/` 依赖边界门禁并入根 `check`、agents 改自有端口）与 PR #18（桌面文字交互里程碑）；PR #12 的 MOD-25 修复已在 main。本次仅 `docs/ROADMAP.md` 一处冲突：状态概述段取 main 的最新表述（MOD-22 用户授权记录保留于台账行），变更记录按时间序交错保留双方条目；根 `package.json`（main 的 `check` 脚本新增 `check:architecture` 步骤与 `feeds` 的 build 行自动并存）与锁文件自动合并；main 侧删除根 `src/`、`tests/` 的 `.gitkeep`（新规范要求根目录不留生产 `src/`）。未使用 `reset --hard`、强制推送或清理未跟踪文件。实测：根 `npm run check` 退出码 0（新架构门禁通过），全仓 207 项为 203 通过＋4 项真实读回默认跳过（feeds 74 项不变，weather 增至 59、desktop 增至 6）；`PA_FEEDS_LIVE=1` 在合并后的树上重跑 74/74 通过（含两项真实读回）。ROADMAP 相对链接检查通过。
+- 2026-09-07：现有 PR 验收同步：PR #12 已由 `goo122` 批准并合并为 `5b833c9`；PR #8 已通过 `goo122` 代码评审且 Foundation CI 通过，但因 PR #12 先合并而与 main 冲突，等待 `Potatos498` 更新分支；PR #19 的 CI 通过但作者为 `goo122`，按协作规范等待非作者评审。PR #16（ARCH-01）与 PR #18（桌面交互里程碑）均已合并，相关模块状态按当前未完成边界更新。
+- 2026-09-07：PR #8 第四次解决与最新 main 的合并冲突（PR #19 删除无关报告、PR #20 状态同步、PR #21 Runtime 文字编排合入后再度 `CONFLICTING`），恢复可合并。仍仅 `docs/ROADMAP.md` 一处冲突：MOD-22 台账行按 main 侧同步记录更新评审状态（`goo122` 代码评审与 Foundation CI 已通过）并保留本侧完整证据链，main 侧「当前与最新 main 冲突、等待负责人更新分支」的表述随本次合并失效；变更记录保留双方条目。根 `package.json` 与锁文件自动合并。未使用 `reset --hard`、强制推送或清理未跟踪文件。实测：根 `npm run check` 退出码 0（架构门禁通过），全仓 207 项为 203 通过＋4 项真实读回默认跳过（与上一轮相同，PR #19/#20/#21 未改变测试计数）；`PA_FEEDS_LIVE=1` 重跑 74/74 通过（含两项真实读回）。ROADMAP 相对链接检查通过。
 - 此记录不构成任何运行时能力通过证明。
 
 ## 5. 继续入口
 
-MOD-03 已通过 PR #5 集成，PR #4、PR #7、PR #9 已合并；goo122 的 MOD-05×MOD-25 Runtime 垂直集成已验证 Fake Provider 下的 Client→Runtime→Policy→ToolGateway→weather.forecast 链路，生产 Open-Meteo 以 `strict` 组合入口注册。城市解析与缺省日期两项审计阻碍已由 `Potatos498` 在 `fix/mod-25-geocoding` 修复并待评审；真实网络读回本工作包已执行（38/38）。MOD-05 与 MOD-25 继续保持 review，待本修复的非作者评审与持久化权限能力另行完成。
+MOD-03 已通过 PR #5 集成，PR #4、#7、#9、#12 已合并；goo122 的 MOD-05×MOD-25 Runtime 垂直集成已验证 Fake Provider 下的 Client→Runtime→Policy→ToolGateway→weather.forecast 链路，生产 Open-Meteo 以 `strict` 组合入口注册。MOD-25 当前工作包已完成；MOD-05 仍因权限持久化、真实 SecretStore、Evidence 和恢复执行器保持 review。PR #8 等待负责人解决合并冲突，PR #19 等待非作者评审。
 
 MOD-22 订阅采集已实现完成并开为 PR #8（分支 `feat/mod-22-feeds`），已指定 `goo122` 评审，等待非作者评审。评审通过后由 `goo122` 集成根 `build` 脚本一行与 `package-lock.json`（本包新增 `fast-xml-parser`），再将 `register(host, {provider: new HttpFeedProvider(), subscriptions: [...]})` 接入 Runtime 根装配——订阅是配置，永远不是工具入参。交给 MOD-23 的边界：走 `ConnectorPort.fetchChanges` 的消费者只拿得到 `ConnectorItem`，要正文须自行按 `contentRef` 取，纯文本 summary 只在工具通道可用；汇总、安静时段、暂停与频率设置归 MOD-23，该模块尚未获用户授权启动。MOD-22 在接线前保持 review；不得因源码已完成或一次真实读回通过而标为 done。
 
 ### MOD-25 当前工作包
 
 - 任务：M2-C-025 / 天气连接器；关联 MOD-25 / PA-010。
-- 负责人：`Potatos498`；评审者：`goo122`；PR #4 已合并（main `9f27e9b`），本轮修复在分支 `fix/mod-25-geocoding`，PR #12。
+- 负责人：`Potatos498`；评审者：`goo122`；PR #4 已合并（main `9f27e9b`），本轮修复 PR #12 已由非作者评审并合并（main `5b833c9`）；状态：`done`（仅针对本工作包边界）。
 - 范围：`packages/connectors/weather/`；不修改公共契约、根锁文件与根装配（均归 `goo122`）。
 - 输入与依赖：明确地点或配置的默认地点、可选 `locationQuery`（拉丁/英文名提示）、日期、单位；依赖 MOD-02 的 `ConnectorItem` 契约与 `ConnectorPort`，以及 testkit 的假时钟和假 ToolHost。真实数据来自 Open-Meteo（免密钥、无账号）。
 - 交付：`WeatherProvider` 新增必需方法 `resolvePlace`（解析与取预报共用同一地点，避免缺省日期与坐标裂脑）；`ResolvedPlace` 新增 `confidence` 与 `featureCode`；`ForecastRequest`/`WeatherQuery` 新增 `locationQuery`；地理编码检索轮由输入文字决定（配置语言 + `en` + 输入含汉字时的 `zh`），按 GeoNames `id` 合并、保留配置语言的显示名、删去按 `admin1`/`country` 相等的排名子句；`assessConfidence` 用 `feature_code` + 人口下限 500000（可经 `minCorroboratedPopulation` 配置）判 `high`/`low`；`locationQuery` 是兜底轮（仅原始输入零候选或 `low` 时并入）；`strict` 语义改为拒绝 `low` 而非拒绝同名；缺省日期按目标地时区取当地日；工具入出参 schema 同步（`locationQuery`、`confidence`、三处 `description` 注解）；59 项测试与包 README。
@@ -189,17 +191,17 @@ MOD-22 订阅采集已实现完成并开为 PR #8（分支 `feat/mod-22-feeds`�
 - 交付：`createWeatherRuntime` 组合入口、严格模式 `createOpenMeteoRuntime`、显式 Provider 注入、Client→Runtime→Policy→ToolGateway→weather.forecast 链路测试。
 - 验收证据：Runtime 定向测试 11/11；根 `npm run check` 通过；`npm run dev`、`npm run demo:protocol`、`npm run demo:runtime` 通过；weather 全包 34 项为 33 通过 + 1 项真实读回默认跳过。
 - 已验证：授权成功、撤销后拒绝、非 running 任务在 Provider 调用前拒绝、生产严格 Open-Meteo 注册不发起网络请求；测试仅使用显式 `FakeWeatherProvider`。
-- 剩余限制：授权、连接器会话和 Evidence 仍为内存能力；MOD-25 的简体国外城市解析与省略日期时的 UTC 日期语义已由 `Potatos498` 在 `fix/mod-25-geocoding` 修复并待评审（本工作包记录时尚未修复）；真实 Open-Meteo 读回未在本工作包执行；MOD-05/25 不得因此转为 done。
+- 剩余限制：授权、连接器会话和 Evidence 仍为内存能力；真实 Open-Meteo 长期稳定性与多时段采样未验收；这些是 MOD-05 或真实生产验收边界，不否定 MOD-25 当前工作包已完成。
 
 ### MOD-04 当前工作包
 
 - 任务：M1-A-004A / 模型网关与单主 Agent 有界执行循环；关联 MOD-04 / PA-003、PA-012。
-- 负责人：goo122；分支：codex/feat-mod-04-model-gateway；状态：review。
+- 负责人：goo122；PR #10、#11 已由非作者评审并合并；状态：review（当前工作包已合并，真实盘古与完整 Agent 能力仍未验收）。
 - 范围：packages/models、packages/agents、根构建入口与对应测试/说明。
 - 交付：能力声明与验证等级、Fake/Unavailable/Pangu 占位 Provider、模型 deployment/usage 记录、工具提案校验、一次修复上限、maxSteps/maxTokens/deadline/取消边界、RuntimeToolInvoker 和 unknown reconciliation 回调。
 - 验收：模型测试 4/4；Agent 测试 4/4；Fake 天气请求经过 Runtime、Policy、ToolGateway；模型不能提供授权；unknown 不生成成功回答；仓库 npm run check、npm run dev、npm run demo:protocol、npm run demo:runtime 均通过。
 - 证据：仅使用 Fake Provider 和本地 Runtime；没有真实盘古、付费模型或网络调用。
-- 限制：真实盘古适配与 PA-003 真实请求验收、多 Agent 专家调度、流式输出和真实连接器仍未完成；需创建 PR 并由非作者评审。
+- 限制：真实盘古适配与 PA-003 真实请求验收、多 Agent 专家调度、流式输出和真实连接器仍未完成；后续 ARCH-02 将把现有 Agent/Model 编排移出 Desktop，进入 Runtime Application 层。
 
 ### DESKTOP-01 当前工作包（2026-09-05）
 
