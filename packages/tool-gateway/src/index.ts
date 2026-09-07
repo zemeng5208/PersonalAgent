@@ -1,6 +1,17 @@
 import { ProtocolError, validateContract, validateToolValue } from '@personal-agent/contracts';
 import type { RegisteredTool, ToolContext, ToolDescriptor, ToolHost } from '@personal-agent/contracts';
 import type { PolicyPort } from '@personal-agent/policy';
+import {createHash} from 'node:crypto';
+
+export function toolArgumentsDigest(value: unknown): string {
+  const canonical = (item: unknown): string => {
+    if (item === null || typeof item !== 'object') return JSON.stringify(item);
+    if (Array.isArray(item)) return '[' + item.map(canonical).join(',') + ']';
+    const record = item as Record<string, unknown>;
+    return '{' + Object.keys(record).sort().map(key => JSON.stringify(key) + ':' + canonical(record[key])).join(',') + '}';
+  };
+  return createHash('sha256').update(canonical(value)).digest('hex');
+}
 
 export interface ToolInvocation {
   toolName: string;
@@ -12,6 +23,7 @@ export interface ToolInvocation {
   deadline: string;
   signal: AbortSignal;
   userPresent?: boolean;
+  onAuthorized?: () => void;
 }
 
 export interface ToolGatewayOptions {
@@ -72,7 +84,9 @@ export class ToolGateway implements ToolHost {
       toolName,
       requiredScopes: tool.descriptor.requiredScopes,
       now: this.now(),
+      argumentsDigest: toolArgumentsDigest(invocation.arguments),
     });
+    invocation.onAuthorized?.();
 
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -80,7 +94,7 @@ export class ToolGateway implements ToolHost {
     const interruption = new Promise<never>((_, reject) => {
       const rejectFor = (code: 'CANCELLED' | 'TIMEOUT', message: string): void => {
         controller.abort();
-        if (tool.descriptor.sideEffect === 'external_write') {
+        if (tool.descriptor.sideEffect !== 'read') {
           reject(new ProtocolError('RESULT_UNKNOWN', `${message}; reconcile the external result before retrying`));
           return;
         }
@@ -107,6 +121,10 @@ export class ToolGateway implements ToolHost {
       ]);
       validateToolValue(tool.descriptor.outputSchema, result);
       return structuredClone(result);
+    } catch (error) {
+      if (tool.descriptor.sideEffect !== 'read') throw new ProtocolError('RESULT_UNKNOWN', 'Write tool did not return a verified result; reconcile before retrying');
+      if (error instanceof ProtocolError) throw error;
+      throw new ProtocolError('EXTERNAL_FAILURE', 'Tool execution failed');
     } finally {
       if (timer) clearTimeout(timer);
       invocation.signal.removeEventListener('abort', onAbort);

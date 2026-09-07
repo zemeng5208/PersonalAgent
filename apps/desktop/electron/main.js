@@ -359,7 +359,10 @@ async function initializeRuntime() {
   } else {
     const dbPath = path.resolve(dir, '../.cache/runtime.sqlite');
     mkdirSync(path.dirname(dbPath), {recursive: true});
-    runtimeApplication = createRuntimeApplication({
+    const createApplication = process.argv.includes('--weather-tools')
+      ? (await import('@personal-agent/runtime/weather')).createOpenMeteoApplication
+      : createRuntimeApplication;
+    runtimeApplication = createApplication({
       path: dbPath,
       text: {mode: 'unavailable', model: modelConfig.model},
     });
@@ -457,7 +460,7 @@ async function action(event, name, payload) {
   if (name === 'settings.update') return client.call('settings.update', payload);
   if (name === 'authorization.respond') {
     if (!payload || typeof payload.approvalId !== 'string' || !['allow_once', 'deny'].includes(payload.decision) || !Number.isSafeInteger(payload.expectedRevision)) throw Error('授权决定格式无效');
-    const result = await client.call('authorization.respond', payload);
+    const result = await client.call('authorization.respond', {approvalId: payload.approvalId, decision: payload.decision, expectedRevision: payload.expectedRevision});
     approvals.delete(payload.approvalId);
     if (payload.taskId && tasks.has(payload.taskId)) await refresh(payload.taskId);
     publish();

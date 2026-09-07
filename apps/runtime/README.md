@@ -26,9 +26,11 @@ The test suite uses local fixtures and temporary SQLite files under the ignored 
 
 Consumers create one TaskRuntime for a SQLite file, submit a task with an idempotency key, and call runTask with an injected worker. Workers receive an AbortSignal, deadline, checkpoint methods and progress reporting. MOD-04 and MOD-05 provide model and policy-checked tool workers; they must not bypass this Runtime with a second task store.
 
-The Runtime Application text entrypoint is exported as `@personal-agent/runtime/text`. The higher-level `@personal-agent/runtime/application` entrypoint owns `TaskRuntime`, the text application and active executions. A successful `task.submit` is dispatched automatically from this layer; Desktop only supplies trusted model configuration, submits tasks and subscribes to events. Duplicate submissions never start a second execution, cancellation is delegated to Runtime, and close rejects active work instead of silently abandoning it. The current text slice intentionally registers no tools and does not expose thinking parameters as a public contract.
+The Runtime Application text entrypoint is exported as `@personal-agent/runtime/text`. The higher-level `@personal-agent/runtime/application` entrypoint owns `TaskRuntime`, model composition and active executions. A successful `task.submit` dispatches automatically; optional trusted `tools` enable the approval-checked Agent loop. Desktop supplies configuration, submits tasks and subscribes to events. Duplicate submissions never start a second execution, cancellation is delegated to Runtime, and close rejects active work.
 
-TaskRuntime also implements the MOD-02 Transport shape for handshake, task.submit, task.get, task.cancel and event.subscribe, so the public Client can use it directly. When a MOD-05 RuntimeToolGateway is injected, handshake additionally advertises capability.list and tool.invoke; tool scopes come from the authorization reference rather than the client. The `@personal-agent/runtime/weather` composition entrypoint wires an explicit weather provider through `InMemoryAuthorizationPolicy` and `ToolGateway`. Production composition uses `OpenMeteoProvider` in strict location mode; tests must pass `FakeWeatherProvider` explicitly.
+TaskRuntime implements the MOD-02 transport. With a tool gateway it also advertises capability.list, tool.invoke and authorization.respond. The weather entrypoint now uses Runtime-owned persistent policy. `createWeatherApplication` accepts an explicit provider; `createOpenMeteoApplication` uses strict location resolution. Tests pass Fake providers explicitly.
+
+Approvals persist for ten minutes and grant one use bound to task, tool and argument digest. Agent checkpoints retain the original proposal. After restart, repeating the matching approval response resumes an approved waiting task. Tool run IDs return confirmed stored results; unfinished runs require reconciliation. `readToolExecutions(taskId)` returns execution metadata and `readEvidence(taskId)` returns schema-valid summaries. Raw approved tool results are local task checkpoints, not public Evidence or logs.
 
 dispatchDueSchedules() handles due schedules during normal operation. recoverMissedSchedules() is called after a stopped period and applies each schedule's run_once or skip policy atomically.
 
@@ -37,6 +39,6 @@ dispatchDueSchedules() handles due schedules during normal operation. recoverMis
 - This is an in-process Runtime core, not a daemon or IPC server.
 - Schedules are one-shot; recurring rules, wake timers and sleep detection are not implemented.
 - Event history is retained without pruning, so CURSOR_EXPIRED is not produced yet.
-- Restart recovery is intentionally conservative because MOD-05 side-effect evidence is not available: interrupted active work requires reconciliation.
+- Restart recovery remains conservative: interrupted active work requires reconciliation; waiting approvals have an explicit resume path.
 - SQLite migration ownership remains with goo122; other modules must not add competing root migration sequences.
-- No real model, desktop or external write has been verified. Weather production composition is conditional on outbound Open-Meteo access; the vertical integration test is fake-backed. MOD-05 authorization and tool execution remain in-process without persistent grants.
+- This work package verifies Fake model/tool behavior and Desktop smoke tests. Real model and external-write acceptance remain separate. Cross-task continuing grants and the Windows SecretStore adapter remain outside this slice.
