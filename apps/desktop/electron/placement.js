@@ -1,6 +1,6 @@
 export function panelBounds(orb, area) {
-  const width = Math.min(372, area.width);
-  const height = Math.min(520, area.height);
+  const width = Math.min(420, area.width);
+  const height = Math.min(640, area.height);
   const right = orb.x + orb.width + 8;
   const x = right + width <= area.x + area.width ? right : orb.x - width - 8;
   return { x: Math.round(Math.max(area.x, Math.min(x, area.x + area.width - width))),

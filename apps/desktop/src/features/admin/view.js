@@ -10,10 +10,10 @@ export const sections = {
 };
 
 const navGroups = [
-  {label: '个人', items: ['settings', 'import', 'profile', 'appearance', 'voice', 'configuration', 'personalization', 'pets', 'shortcuts', 'usage', 'analytics', 'account', 'models', 'memory']},
-  {label: '集成', items: ['computer', 'capabilities', 'browser']},
+  {label: '个人', items: ['settings', 'profile', 'appearance', 'voice', 'configuration', 'personalization', 'pets', 'shortcuts', 'analytics', 'models', 'memory']},
+  {label: '集成', items: ['computer', 'capabilities']},
   {label: '编码', items: ['hooks', 'connections', 'git', 'environment', 'worktrees', 'authorizations']},
-  {label: '任务', items: ['tasks', 'archive']},
+  {label: '任务', items: ['archive']},
 ];
 
 const iconPaths = {
@@ -101,7 +101,7 @@ export function mountAdmin(root, invoke, escape) {
         settingRow('ORB-02', '黑核、白色规则点阵、球体模糊关闭', '<span class="value-pill">当前方案</span>')],
       interaction: ['交互', '悬浮球、面板与输入行为',
         settingRow('靠近展开', '指针进入 ORB 周围 90px 后展开面板', '<span class="value-pill">90px</span>') +
-        settingRow('对话面板宽度', '桌面固定宽度，窄屏自动收缩', '<span class="value-pill">372px</span>') +
+        settingRow('对话面板宽度', '桌面固定宽度，窄屏自动收缩', '<span class="value-pill">420px</span>') +
         settingRow('任务取消', '只显示 Runtime 回读后的最终状态', '<span class="value-pill">严格确认</span>') +
         settingRow('默认终端', '终端连接器尚未提供选择接口', '<span class="status-note">待接入</span>', 'is-unavailable')],
       voice: ['语音', '语音输入、播报与设备选择',

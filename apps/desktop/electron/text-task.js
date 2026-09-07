@@ -17,9 +17,15 @@ export function createFakeTextProvider() {
 
 export function startTextTask(runtime, taskId, goal, provider, options = {}) {
   const model = provider instanceof ModelGateway ? provider : new ModelGateway(provider);
+  const history = structuredClone(options.history ?? []);
+  const outputTokens = options.maxTokens ?? 512;
+  const contextualModel = {complete: request => model.complete({...request, maxOutputTokens:outputTokens, messages:[...history,...request.messages]})};
+  // Agent counts provider-reported input + output usage. Reserve room for the
+  // context without increasing the established completion-token allowance.
+  const inputAllowance = Buffer.byteLength(JSON.stringify([...history,{role:'user',content:goal}]),'utf8') + 128;
   const deadline = new Date((options.now ?? Date.now)() + (options.deadlineMs ?? 30_000)).toISOString();
   return runtime.runTask(taskId, context => runAgent(context, {
-    goal, model, tools: NO_TOOLS,
-    authorizationRefFor: () => 'desktop-text-chat-no-tools', maxSteps: 1, maxTokens: options.maxTokens ?? 512,
+    goal, model: contextualModel, tools: NO_TOOLS,
+    authorizationRefFor: () => 'desktop-text-chat-no-tools', maxSteps: 1, maxTokens: outputTokens + inputAllowance,
   }), {deadline, sideEffect: 'read'});
 }

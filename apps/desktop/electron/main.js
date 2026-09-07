@@ -6,6 +6,7 @@ import {EventCursor} from '@personal-agent/client';
 import {register} from './runtime.js';
 import {panelBounds, clampOrb, draggedGroupBounds} from './placement.js';
 import {createFakeTextProvider, startTextTask} from './text-task.js';
+import {Conversations} from './conversations.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -58,10 +59,13 @@ let model = {
 let thinking = {depth: 1, fast: false, applied: false, reason: 'Runtime 尚未公开思考参数契约'};
 const tasks = new Map();
 const taskGoals = new Map();
+let conversations;
+const submitting = new Set();
 const activeTextTasks = new Map();
 const approvals = new Map();
+const notifications = new Map();
 
-function snapshot() {
+function snapshot(surface) {
   return {
     connection: connectionLabel,
     connectionError: runtimeError,
@@ -72,10 +76,12 @@ function snapshot() {
     adminNavigation: {...adminNavigation},
     audioLevel,
     orbStateOverride,
-    tasks: [...tasks.values()].map(task => ({...structuredClone(task), userMessage: taskGoals.get(task.taskId)})),
+    tasks: [...tasks.values()].filter(task => !surface || conversations?.surface(task.taskId) === surface).map(task => ({...structuredClone(task), userMessage: taskGoals.get(task.taskId) ?? conversations?.goal(task.taskId)})),
+    conversation: surface ?? 'all',
     capabilities: structuredClone(capabilities),
     health: structuredClone(health),
     approvals: [...approvals.values()],
+    notifications: [...notifications.values()],
     model: structuredClone(model),
     thinking: structuredClone(thinking),
     voice: {available: false, status: 'unavailable', reason: '语音供应商尚未连接'},
@@ -84,7 +90,7 @@ function snapshot() {
 
 function publish() {
   for (const win of [orb, panel, admin, workspace]) {
-    if (win && !win.isDestroyed()) win.webContents.send('desktop:update', snapshot());
+    if (win && !win.isDestroyed()) win.webContents.send('desktop:update', snapshot(win === workspace ? 'workspace' : win === admin ? undefined : 'panel'));
   }
 }
 
@@ -296,9 +302,7 @@ async function testPangu() {
   }
 }
 
-function openWorkspace(draft) {
-  if (draft != null && (typeof draft !== 'string' || draft.length > 10000)) throw Error('输入内容无效');
-  if (typeof draft === 'string') workspaceDraft = draft;
+function openWorkspace() {
   pinned = false;
   panel?.hide();
   if (workspace && !workspace.isDestroyed()) { workspace.show(); workspace.focus(); publish(); return; }
@@ -357,7 +361,7 @@ async function executeTextTask(taskId, goal) {
   const provider = fakeModelMode && model.enabled !== false
     ? createFakeTextProvider()
     : model.enabled !== false && panguProvider ? panguProvider : new UnavailableModelProvider('pangu', modelConfig.model);
-  const execution = startTextTask(runtime, taskId, goal, provider);
+  const execution = startTextTask(runtime, taskId, goal, provider, {history:conversations.history([...tasks.values()],taskId)});
   activeTextTasks.set(taskId, execution);
   try {
     await execution;
@@ -374,6 +378,7 @@ async function refresh(taskId) {
 }
 
 function applyEvent(event) {
+  if (event.type === 'notification.created' && event.payload) notifications.set(event.payload.notificationId, {...event.payload,occurredAt:event.occurredAt});
   if (event.taskId && event.payload && ['task.created', 'task.state_changed', 'task.completed', 'task.failed', 'task.cancelled'].includes(event.type)) {
     tasks.set(event.taskId, structuredClone(event.payload));
   }
@@ -423,7 +428,7 @@ async function initializeRuntime() {
     readEvents = after => runtime.readEvents('tasks', after);
   } else {
     const {TaskRuntime} = await import('@personal-agent/runtime');
-    const dbPath = path.resolve(dir, '../.cache/runtime.sqlite');
+    const dbPath = process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1' ? path.join(app.getPath('userData'),'runtime.sqlite') : path.resolve(dir, '../.cache/runtime.sqlite');
     mkdirSync(path.dirname(dbPath), {recursive: true});
     runtime = new TaskRuntime(dbPath);
     readEvents = after => runtime.readEvents(after);
@@ -445,7 +450,7 @@ async function initializeRuntime() {
 async function action(event, name, payload) {
   const sender = [orb, panel, admin, workspace].find(win => win && !win.isDestroyed() && win.webContents === event.sender);
   if (!sender || event.senderFrame !== sender.webContents.mainFrame) throw Error('Untrusted sender');
-  if (name === 'snapshot') return snapshot();
+  if (name === 'snapshot') return snapshot(sender === workspace ? 'workspace' : sender === admin ? undefined : 'panel');
   if (name === 'admin.open') { openAdmin(payload?.page); return; }
   if (name === 'workspace.open' && sender === panel) { openWorkspace(payload?.draft); return; }
   if (name === 'workspace.draft' && sender === workspace) {
@@ -508,9 +513,15 @@ async function action(event, name, payload) {
   if (sender === orb) throw Error('Action unavailable from orb');
   if (!client) throw Error('Runtime 未连接，此操作尚不可用');
   if (name === 'task.submit') {
+    if (sender !== panel && sender !== workspace) throw Error('请在对话工作区发送消息');
     if (typeof payload !== 'string' || !payload.trim() || payload.length > 10000) throw Error('请输入有效任务');
+    const surface = sender === workspace ? 'workspace' : 'panel';
+    if (submitting.has(surface) || [...tasks.values()].some(task => conversations.surface(task.taskId) === surface && !['succeeded','failed','cancelled'].includes(task.state))) throw Error('请等待当前回答完成，或先停止当前任务');
+    submitting.add(surface);
+    try {
     const goal = payload.trim();
-    const result = await client.call('task.submit', {goal, conversationId: 'desktop-session'}, {idempotencyKey: crypto.randomUUID()});
+    const result = await client.call('task.submit', {goal, conversationId: `desktop-${surface}`}, {idempotencyKey: crypto.randomUUID()});
+    conversations.add(result.taskId, surface, goal);
     taskGoals.set(result.taskId, goal);
     if (sender === panel) pinned = true;
     const task = await refresh(result.taskId);
@@ -519,15 +530,18 @@ async function action(event, name, payload) {
       publish();
     });
     return task;
+    } finally { submitting.delete(surface); }
   }
   if (name === 'task.cancel') {
     if (typeof payload !== 'string' || !tasks.has(payload)) throw Error('Unknown task');
+    if (sender !== admin && conversations.surface(payload) !== (sender === workspace ? 'workspace' : 'panel')) throw Error('无法停止其他工作区的任务');
     const result = await client.call('task.cancel', {taskId: payload, reason: '用户取消任务'});
     await refresh(payload);
     return result;
   }
   if (name === 'task.refresh') {
     if (!tasks.has(payload)) throw Error('Unknown task');
+    if (sender !== admin && conversations.surface(payload) !== (sender === workspace ? 'workspace' : 'panel')) throw Error('无法读取其他工作区的任务');
     return refresh(payload);
   }
   if (name === 'capability.list') { await syncCapabilities(); publish(); return {manifests: capabilities, health}; }
@@ -560,6 +574,7 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
   try {
+    conversations = new Conversations(fakeMode || fakeModelMode || process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1' ? null : path.resolve(dir,'../.cache/conversations.json'));
     restoreModelConfig();
     await initializeRuntime();
     await initializeModelFromEnvironment();

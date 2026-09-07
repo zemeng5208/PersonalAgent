@@ -59,6 +59,18 @@ test('unavailable Provider fails truthfully without a Fake fallback', async () =
   });
 });
 
+test('a continuing turn sends previous user and assistant messages through the model gateway',async()=>{
+  await withRuntime(async({runtime,client})=>{
+    const provider=new FakeModelProvider([request=>({kind:'final',text:request.messages[0].content})]);
+    const submitted=await submit(client,'我刚才说了什么？');
+    await startTextTask(runtime,submitted.taskId,'我刚才说了什么？',provider,{history:[{role:'user',content:'记住这次的项目名称'},{role:'assistant',content:'好的'}]});
+    assert.deepEqual(provider.requests[0].messages.map(message=>message.role),['user','assistant','user']);
+    assert.equal(provider.requests[0].messages[0].content,'记住这次的项目名称');
+    assert.equal(provider.requests[0].messages.at(-1).content,'我刚才说了什么？');
+    assert.equal((await waitForTerminal(runtime,submitted.taskId)).state,'succeeded');
+  });
+});
+
 test('cancelling a text task aborts the in-flight model request', async () => {
   await withRuntime(async ({runtime, client}) => {
     let signal;

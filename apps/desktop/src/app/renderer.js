@@ -3,13 +3,14 @@ import {orbState,stateNames,isTerminal} from '../features/conversation/state.js'
 import {mountAdmin} from '../features/admin/view.js';
 import {mountWorkspace} from '../features/workspace/view.js';
 import {applyPreferences} from '../ui/preferences.js';
+import {mountConversationRail} from '../features/conversation/rail.js';
 
 applyPreferences();
 const root = document.querySelector('#root');
 const mode = new URLSearchParams(location.search).get('mode');
 const bridge = window.desktop;
 const escape = value => String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const visibleResult = value => String(value ?? '').replace(/\s*\[model=[^;\]]+;\s*verification=[^;\]]+;\s*tokens=\d+\]\s*$/,'').trim();
+const visibleResult = value => String(value ?? '').replace(/\s*\[model=[^;\]]+;\s*verification=[^;\]]+;\s*tokens=[^\]]+\]\s*$/,'').trim();
 const responseIcons={copy:'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>',share:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="m8.2 10.8 7.6-4.5M8.2 13.2l7.6 4.5"/></svg>',like:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10v10H4V10h3Zm3 10h7.2a2 2 0 0 0 1.9-1.4l1.5-5A2 2 0 0 0 18.7 11H15l.6-3.1A3.2 3.2 0 0 0 12.5 4L10 10v10Z"/></svg>'};
 async function invoke(action,payload) {
   if(!bridge) throw Error('桌面桥未连接，请从 PersonalAgent 桌面应用启动');
@@ -40,10 +41,11 @@ else {
   expand.title='放大到工作区';expand.setAttribute('aria-label','放大到工作区');
   expand.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6m0-6-7 7M10 20H4v-6m0 6 7-7"/></svg>';
   root.querySelector('#close').before(expand);
-  expand.onclick=()=>invoke('workspace.open',{draft:root.querySelector('textarea').value}).catch(error=>{root.querySelector('#error').textContent=error.message;});
+  expand.onclick=()=>invoke('workspace.open').catch(error=>{root.querySelector('#error').textContent=error.message;});
   let current,pending=false,lastTaskSignature='';const likedTasks=new Set();
   const report=e=>root.querySelector('#error').textContent=e.message;
   const form=root.querySelector('form'),input=root.querySelector('textarea'),thread=root.querySelector('.thread'),tasksNode=root.querySelector('#tasks');
+  const updateRail=mountConversationRail(root.querySelector('.panel'),thread);
   const sendBtn=root.querySelector('#send'),modelBtn=root.querySelector('#model'),modelMenu=root.querySelector('#model-menu');
   const bellBtn=root.querySelector('#bell'),bellMenu=root.querySelector('#bell-menu');
   const slider=root.querySelector('#mm-slider'),depthLabel=root.querySelector('#mm-depth-label'),fastBtn=root.querySelector('#mm-fast');
@@ -55,7 +57,7 @@ else {
   const finishPanelDrag=()=>{if(panelDragging)panelDragReady?.then(()=>invoke('panel.dragEnd').catch(report));panelDragStart=undefined;panelDragging=false;panelDragReady=undefined;};
   header.addEventListener('pointerup',finishPanelDrag);header.addEventListener('pointercancel',finishPanelDrag);header.addEventListener('lostpointercapture',finishPanelDrag);
   const syncSlider=()=>{const v=Number(slider.value);const labels=['最低','低','平衡','深入','高','最高'];const fill=6+(88*v/5);slider.style.setProperty('--fill',fill+'%');depthLabel.textContent=labels[v]??'平衡';modelMenu.classList.toggle('maxed',v===5);};
-  const setSendMode=hasText=>{sendBtn.dataset.mode=hasText?'send':'voice';sendBtn.title=hasText?'发送':'语音模式（语音模型未连接）';sendBtn.setAttribute('aria-label',hasText?'发送消息':'语音模式（语音模型未连接）');sendBtn.disabled=pending;};
+  const setSendMode=hasText=>{sendBtn.dataset.mode=hasText?'send':'voice';sendBtn.title=hasText?'发送':'语音模式（语音模型未连接）';sendBtn.setAttribute('aria-label',hasText?'发送消息':'语音模式（语音模型未连接）');sendBtn.disabled=pending || Boolean(current?.tasks.some(task=>!isTerminal(task)));};
   root.querySelector('#admin').onclick=()=>invoke('admin.open').catch(report);
   root.querySelector('#close').onclick=()=>invoke('panel.hide').catch(report);
   modelBtn.onclick=e=>{e.stopPropagation();const open=modelMenu.hidden;closeModel();closeBell();if(open){modelMenu.hidden=false;modelBtn.setAttribute('aria-expanded','true');}};
@@ -67,7 +69,7 @@ else {
   input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();if(input.value.trim()&&!pending)form.requestSubmit();}});
   sendBtn.addEventListener('click',e=>{e.preventDefault();if(sendBtn.dataset.mode==='voice')report('语音模型未连接，圆形按钮预留给语音模式');else if(!pending)form.requestSubmit();});
   document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(!modelMenu.hidden){closeModel();return;}if(!bellMenu.hidden){closeBell();return;}invoke('panel.hide').catch(report);});
-  form.onsubmit=async e=>{e.preventDefault();if(pending||!input.value.trim())return;pending=true;setSendMode(true);try{await invoke('task.submit',input.value);input.value='';root.querySelector('#error').textContent='';}catch(err){report(err);}finally{pending=false;setSendMode(Boolean(input.value.trim()));}};
+  form.onsubmit=async e=>{e.preventDefault();if(pending||!input.value.trim())return;pending=true;setSendMode(true);try{await invoke('task.submit',input.value);input.value='';requestAnimationFrame(()=>{thread.scrollTop=thread.scrollHeight;});root.querySelector('#error').textContent='';}catch(err){report(err);}finally{pending=false;setSendMode(Boolean(input.value.trim()));}};
   const stopButton=root.querySelector('#stop');
   // voice.stop is deliberately separate from task.cancel. The current build has no
   // voice provider, so it reports unavailable instead of claiming that speech stopped.
@@ -91,8 +93,10 @@ else {
     root.querySelector('.bubble').hidden=data.tasks.length>0;
     const taskSignature=JSON.stringify(data.tasks.map(t=>[t.taskId,t.state,t.revision,t.userMessage,t.resultSummary,t.error?.message]));
     const thinkingGrid='<span class="thinking-grid" aria-hidden="true">'+[0,1,2,1,2,3,2,3,4].map((delay,index)=>`<i style="--i:${delay}" data-cell="${index}"></i>`).join('')+'</span>';
-    tasksNode.innerHTML=data.tasks.map(t=>{const terminal=isTerminal(t);const waiting=['waiting_approval','waiting_external','waiting_reconciliation','cancelling'].includes(t.state);const activity=waiting?'等待中':t.state==='verifying'?'整理回答':t.state==='running'?'执行中':'思考中';const answer=visibleResult(t.resultSummary);const failure=t.error?.message;const answerActions=answer?`<div class="response-actions"><button type="button" data-ui-action="copy" data-id="${escape(t.taskId)}" title="复制" aria-label="复制回答">${responseIcons.copy}</button><button type="button" data-ui-action="share" data-id="${escape(t.taskId)}" title="分享" aria-label="分享回答">${responseIcons.share}</button><button type="button" data-ui-action="like" data-id="${escape(t.taskId)}" title="点赞" aria-label="点赞回答" aria-pressed="${likedTasks.has(t.taskId)}" class="${likedTasks.has(t.taskId)?'active':''}">${responseIcons.like}</button></div>`:'';return `<article class="task turn">${t.userMessage?`<div class="user-message">${escape(t.userMessage)}</div>`:''}<div class="assistant-turn">${!terminal?`<div class="thinking-line">${thinkingGrid}<span>${activity}</span></div>`:answer?`<div class="assistant-message">${escape(answer)}</div>${answerActions}`:failure?`<div class="assistant-error">${escape(failure)}</div>`:''}</div>${!terminal?`<div class="turn-actions"><button class="turn-action" data-action="task.cancel" data-id="${escape(t.taskId)}" ${t.state==='cancelling'?'disabled':''}>停止</button>${data.fake?`<button class="turn-action" data-action="test.advance" data-id="${escape(t.taskId)}">推进联调</button>`:''}</div>`:''}</article>`;}).join('');
-    if(taskSignature!==lastTaskSignature){lastTaskSignature=taskSignature;requestAnimationFrame(()=>{thread.scrollTop=thread.scrollHeight;});}};
+    const wasAtBottom=thread.scrollHeight-thread.scrollTop-thread.clientHeight<90;
+    if(taskSignature!==lastTaskSignature) tasksNode.innerHTML=data.tasks.map(t=>{const terminal=isTerminal(t);const waiting=['waiting_approval','waiting_external','waiting_reconciliation','cancelling'].includes(t.state);const activity=waiting?'等待中':t.state==='verifying'?'整理回答':t.state==='running'?'执行中':'思考中';const answer=visibleResult(t.resultSummary);const failure=t.error?.message;const answerActions=answer?`<div class="response-actions"><button type="button" data-ui-action="copy" data-id="${escape(t.taskId)}" title="复制" aria-label="复制回答">${responseIcons.copy}</button><button type="button" data-ui-action="share" data-id="${escape(t.taskId)}" title="分享" aria-label="分享回答">${responseIcons.share}</button><button type="button" data-ui-action="like" data-id="${escape(t.taskId)}" title="点赞" aria-label="点赞回答" aria-pressed="${likedTasks.has(t.taskId)}" class="${likedTasks.has(t.taskId)?'active':''}">${responseIcons.like}</button></div>`:'';return `<article class="task turn" data-turn="${escape(t.taskId)}">${t.userMessage?`<div class="user-message">${escape(t.userMessage)}</div>`:''}<div class="assistant-turn">${!terminal?`<div class="thinking-line">${thinkingGrid}<span>${activity}</span></div>`:answer?`<div class="assistant-message">${escape(answer)}</div>${answerActions}`:failure?`<div class="assistant-error">${escape(failure)}</div>`:''}</div>${!terminal?`<div class="turn-actions"><button class="turn-action" data-action="task.cancel" data-id="${escape(t.taskId)}" ${t.state==='cancelling'?'disabled':''}>停止</button>${data.fake?`<button class="turn-action" data-action="test.advance" data-id="${escape(t.taskId)}">推进联调</button>`:''}</div>`:''}</article>`;}).join('');
+    setSendMode(Boolean(input.value.trim()));
+    if(taskSignature!==lastTaskSignature){lastTaskSignature=taskSignature;requestAnimationFrame(()=>{if(wasAtBottom)thread.scrollTop=thread.scrollHeight;updateRail();});}};
 }
 if(bridge){const unsubscribe=bridge.subscribe(render);invoke('snapshot').then(render).catch(e=>{root.textContent=e.message;});window.addEventListener('unload',()=>{unsubscribe();orb?.dispose();});}
 else root.textContent='桌面桥未连接，请从 PersonalAgent 桌面应用启动。';
