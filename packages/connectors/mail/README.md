@@ -47,7 +47,7 @@ manifest：`id=mail`、`accountTypes=['qq']`、`capabilities=['fetchChanges','se
 
 ## 重启与恢复
 
-- **发送记录由 Runtime（宿主）持久化**：本包不落盘。宿主按 `actionId`（`mail-send:<幂等键>`）与 `evidenceRefs` 保存动作证据； 进入**核实状态**——到已发送文件夹核对结果后再决定重发（换新幂等键）或放弃，不自动重发。
+- **发送记录由 Runtime（宿主）持久化**：本包不落盘。宿主按 `actionId`（`mail-send:<幂等键>`）与 `evidenceRefs` 保存动作证据；`state: 'unknown'` 进入**核实状态**——到已发送文件夹核对结果后再决定重发（换新幂等键）或放弃，不自动重发。
 - 进程内的幂等表（并发单飞 + 输入绑定）随实例存活；跨重启的正确性由「宿主持久化的 actionId」+「同键同输入重放安全」共同保证。
 - 读侧游标由宿主持久化；重启后从上次游标继续增量，uidValidity 变化按 `CURSOR_EXPIRED` 从头同步。
 
