@@ -1,8 +1,8 @@
 # 授权策略（MOD-05）
 
-`@personal-agent/policy` 提供任务级内存授权策略。授权绑定 `authorizationRef`、任务、工具、scope、到期时间和可选使用次数；支持立即撤销。工具调用方不能把自报 scope 当作授权。
+`@personal-agent/policy` 提供任务级授权策略。授权绑定 `authorizationRef`、任务、工具、scope、到期时间和可选使用次数、参数摘要；支持立即撤销。工具调用方不能把自报 scope 当作授权。
 
-当前实现是 MOD-05 的最小可验证切片：授权不持久化，重启后失效；只支持绑定单个任务和工具的授权，不代表 PA-023 的持续授权管理已经完成。生产 Runtime 后续负责生成不可预测的授权引用并将授权决策持久化。
+`AuthorizationPolicy` 消费 `AuthorizationStore` 事务端口；Runtime 注入 SQLite 存储，一次性授权的检查和消费在同一事务内完成，重启不会重置次数。`InMemoryAuthorizationPolicy` 保留为隔离测试实现。授权当前仍绑定单个任务和工具，跨任务持续授权管理不是已完成能力。
 
 验证：
 

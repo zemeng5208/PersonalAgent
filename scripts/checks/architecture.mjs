@@ -142,6 +142,17 @@ export function inspectArchitecture(root = DEFAULT_ROOT) {
     for (const sourceRoot of sourceRoots) {
       for (const file of collectFiles(sourceRoot, item => SOURCE_EXTENSIONS.has(path.extname(item)))) {
         const content = readFileSync(file, 'utf8');
+        if (workspace.relativeDirectory === 'apps/desktop') {
+          if (/['"]@personal-agent\/(?:agents|models)(?:['"]|\/)/.test(content)) {
+            violations.push(`${toPosix(path.relative(root, file))}: Desktop must not import Agent or Model implementation packages`);
+          }
+          if (/['"]@personal-agent\/runtime\/text['"]/.test(content)) {
+            violations.push(`${toPosix(path.relative(root, file))}: Desktop must use Runtime Application instead of the text entrypoint`);
+          }
+          if (/\.runTask\s*\(/.test(content)) {
+            violations.push(`${toPosix(path.relative(root, file))}: Desktop must not start Runtime tasks directly`);
+          }
+        }
         const internalImport = /['"](@personal-agent\/[^'"]+)['"]/g;
         for (const match of content.matchAll(internalImport)) {
           const specifier = match[1];

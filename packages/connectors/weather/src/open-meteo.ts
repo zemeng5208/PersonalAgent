@@ -21,6 +21,16 @@ export interface OpenMeteoOptions {
   geocodeCacheLimit?: number;
   /** Population floor for trusting a match that is not an administrative seat. See `assessConfidence`. */
   minCorroboratedPopulation?: number;
+  /**
+   * GeoNames official API account. When set, Han-script inputs get an extra exact-name tier
+   * (`name_equals`) that Open-Meteo's per-language index cannot answer: its `zh` index is
+   * Traditional and incomplete, so simplified foreign city names fail outright. Inject at
+   * assembly from the environment; never commit an account into the repo. Failures of this
+   * tier degrade to the Open-Meteo-only behaviour.
+   */
+  geonamesUsername?: string;
+  /** Test seam for the GeoNames tier. */
+  geonamesBaseUrl?: string;
 }
 
 interface GeoCandidate {
@@ -33,6 +43,8 @@ interface GeoCandidate {
   country?: string;
   population?: number;
   featureCode?: string;
+  /** True when the input string is a documented alternate name of this place (GeoNames `name_equals`). */
+  exactName?: boolean;
 }
 
 /** A place after merging every language pass that returned it. */
@@ -45,13 +57,18 @@ interface MergedPlace {
   featureCode: string | undefined;
   /** First-seen position, so ranking stays stable when population is unknown. */
   order: number;
+  /** Set when any pass reported the query as a documented alternate name of this place. */
+  exactNameMatch?: boolean;
 }
 
 const USER_AGENT = 'personal-agent-weather/0.1.0-alpha.1';
 const FORECAST_BASE_URL = 'https://api.open-meteo.com';
 const GEOCODING_BASE_URL = 'https://geocoding-api.open-meteo.com';
+const GEONAMES_BASE_URL = 'https://secure.geonames.org';
 const MS_PER_DAY = 86_400_000;
 const MAX_CANDIDATES = 5;
+/** GeoNames ids normalized through `/v1/get` per resolve; small on purpose, they run in parallel. */
+const GEONAMES_MAX_IDS = 5;
 const MAX_ALTERNATIVES = 4;
 const DEFAULT_GEOCODE_CACHE_LIMIT = 500;
 
@@ -179,6 +196,8 @@ export class OpenMeteoProvider implements WeatherProvider {
   private readonly geocodingBaseUrl: string;
   private readonly geocodeCacheLimit: number;
   private readonly minCorroboratedPopulation: number;
+  private readonly geonamesUsername: string | undefined;
+  private readonly geonamesBaseUrl: string;
   private readonly geocodeCache = new Map<string, ResolvedPlace>();
 
   constructor(options: OpenMeteoOptions = {}) {
@@ -193,6 +212,8 @@ export class OpenMeteoProvider implements WeatherProvider {
     const floor = options.minCorroboratedPopulation ?? DEFAULT_MIN_CORROBORATED_POPULATION;
     if (!Number.isFinite(floor) || floor < 0) throw new Error('minCorroboratedPopulation must be a non-negative number');
     this.minCorroboratedPopulation = floor;
+    this.geonamesUsername = options.geonamesUsername;
+    this.geonamesBaseUrl = (options.geonamesBaseUrl ?? GEONAMES_BASE_URL).replace(/\/+$/, '');
   }
 
   async fetchForecast(request: ForecastRequest, signal: AbortSignal): Promise<ForecastFetch> {
@@ -307,16 +328,23 @@ export class OpenMeteoProvider implements WeatherProvider {
    * has to follow the input's script, not the configured language; the previous single pass under
    * an English configuration made every Chinese input fail outright.
    *
-   * Merge order is the display-name preference: configured language first, then `zh` for Han
-   * input, then `en`. This still does not make resolution script-independent — the `zh` index is
+   * Merge order is the display-name preference: the GeoNames exact-name tier first, then the
+   * configured language, then `zh` for Han input, then `en`. The tier runs before the language
+   * passes so a place found only there still supplies the display name from `/v1/get`. This
+   * still does not make resolution script-independent without an account — the `zh` index is
    * incomplete in both directions, which is what the hint tier exists for.
    */
   private async searchPasses(query: string, signal: AbortSignal): Promise<MergedPlace[]> {
+    const han = HAN_PATTERN.test(query);
     const languages: string[] = [];
-    for (const language of [this.language, ...(HAN_PATTERN.test(query) ? ['zh'] : []), 'en']) {
+    for (const language of [this.language, ...(han ? ['zh'] : []), 'en']) {
       if (!languages.some(known => known.toLowerCase() === language.toLowerCase())) languages.push(language);
     }
-    return mergePlaces(await Promise.all(languages.map(language => this.searchPlaces(query, language, signal))));
+    const passes = await Promise.all([
+      han ? this.geonamesPass(query, signal) : Promise.resolve([] as GeoCandidate[]),
+      ...languages.map(language => this.searchPlaces(query, language, signal)),
+    ]);
+    return mergePlaces(passes);
   }
 
   private async searchPlaces(location: string, language: string, signal: AbortSignal): Promise<GeoCandidate[]> {
@@ -325,6 +353,47 @@ export class OpenMeteoProvider implements WeatherProvider {
       + `&language=${encodeURIComponent(language)}&format=json`;
     const body = asRecord(await this.getJson(url, signal));
     return readCandidates(body?.results);
+  }
+
+  /**
+   * Exact-name tier over the GeoNames official API, gated on an assembly-provided account.
+   * `name_equals` matches documented alternate names in any script, so simplified Chinese
+   * queries reach places Open-Meteo's Traditional-and-incomplete `zh` index lacks (纽约,
+   * 首尔, 开罗 …). Each hit is normalized through Open-Meteo's `/v1/get` by the GeoNames id
+   * both sources share. Best-effort: any failure skips the tier and the resolve degrades to
+   * the Open-Meteo-only behaviour instead of failing the query. A GeoNames error payload is
+   * `{"status": {...}}` with a non-2xx HTTP status, so it surfaces as a thrown error here.
+   */
+  private async geonamesPass(query: string, signal: AbortSignal): Promise<GeoCandidate[]> {
+    if (this.geonamesUsername === undefined) return [];
+    try {
+      const url = `${this.geonamesBaseUrl}/searchJSON`
+        + `?name_equals=${encodeURIComponent(query)}&maxRows=${GEONAMES_MAX_IDS}`
+        + `&featureClass=P&lang=${encodeURIComponent(this.language)}`
+        + `&username=${encodeURIComponent(this.geonamesUsername)}`;
+      const body = asRecord(await this.getJson(url, signal));
+      if (body?.status !== undefined) return [];
+      const ids = readGeonamesIds(body?.geonames);
+      const normalized = await Promise.all(ids.map(id => this.fetchNormalizedById(id, signal)));
+      return normalized
+        .filter((candidate): candidate is GeoCandidate => candidate !== undefined)
+        .map(candidate => ({...candidate, exactName: true}));
+    } catch (error) {
+      if (error instanceof ProtocolError && error.code === 'CANCELLED') throw error;
+      return [];
+    }
+  }
+
+  /** `/v1/get` returns the same field names as `/v1/search`, keyed by the shared GeoNames id. */
+  private async fetchNormalizedById(id: number, signal: AbortSignal): Promise<GeoCandidate | undefined> {
+    const url = `${this.geocodingBaseUrl}/v1/get?id=${id}&language=${encodeURIComponent(this.language)}&format=json`;
+    try {
+      const body = asRecord(await this.getJson(url, signal));
+      return body === undefined ? undefined : readCandidates([body])[0];
+    } catch (error) {
+      if (error instanceof ProtocolError && error.code === 'NOT_FOUND') return undefined;
+      throw error;
+    }
   }
 
   private async getJson(url: string, signal: AbortSignal): Promise<unknown> {
@@ -390,6 +459,17 @@ function readCandidates(value: unknown): GeoCandidate[] {
   return candidates;
 }
 
+/** GeoNames search entries carry `geonameId`; everything else is re-fetched normalized. */
+function readGeonamesIds(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  const ids: number[] = [];
+  for (const entry of value) {
+    const id = asFiniteNumber(asRecord(entry)?.geonameId);
+    if (id !== undefined && Number.isSafeInteger(id) && id > 0) ids.push(Math.trunc(id));
+  }
+  return ids;
+}
+
 /**
  * Keyed by GeoNames id, falling back to rounded coordinates for entries without one, so the
  * same place returned by several language passes collapses into a single candidate. Passes are
@@ -405,19 +485,22 @@ function mergePlaces(passes: GeoCandidate[][]): MergedPlace[] {
         : `co:${candidate.latitude.toFixed(2)},${candidate.longitude.toFixed(2)}`;
       const existing = byKey.get(key);
       if (!existing) {
-        byKey.set(key, {
+        const entry: MergedPlace = {
           candidate,
           names: [normalize(candidate.name)],
           population: candidate.population ?? 0,
           featureCode: candidate.featureCode,
           order: order++,
-        });
+        };
+        if (candidate.exactName === true) entry.exactNameMatch = true;
+        byKey.set(key, entry);
         continue;
       }
       const variant = normalize(candidate.name);
       if (!existing.names.includes(variant)) existing.names.push(variant);
       if (existing.population === 0 && candidate.population !== undefined) existing.population = candidate.population;
       if (existing.featureCode === undefined && candidate.featureCode !== undefined) existing.featureCode = candidate.featureCode;
+      if (candidate.exactName === true) existing.exactNameMatch = true;
     }
   }
   return [...byKey.values()];
@@ -428,12 +511,17 @@ function mergePlaces(passes: GeoCandidate[][]): MergedPlace[] {
  * provider's own ranking is unreliable across languages: for "New York" the `zh` pass puts
  * York, Nebraska first and omits New York City, which only the `en` pass returns.
  *
+ * A place the GeoNames tier reports — `name_equals` proved the query is a documented alternate
+ * name of it — counts as exact even when its display name spells differently (伦敦 vs 倫敦):
+ * the alternate-name relation is stronger evidence than a spelling collision such as London,
+ * Ontario.
+ *
  * Region names are deliberately not matched against `admin1` or `country`. Doing so let
  * `Texas` or `France` masquerade as an exact place match; those lookups are surfaced as
  * low confidence by `assessConfidence` instead of being quietly promoted here.
  */
 function rankPlaces(places: MergedPlace[], query: string): MergedPlace[] {
-  const exact = places.filter(place => place.names.includes(query));
+  const exact = places.filter(place => place.names.includes(query) || place.exactNameMatch === true);
   const pool = exact.length > 0 ? exact : places;
   return [...pool].sort((a, b) => b.population - a.population || a.order - b.order);
 }

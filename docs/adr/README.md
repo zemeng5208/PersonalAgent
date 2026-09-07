@@ -7,3 +7,4 @@ ADR 记录已经采纳且会长期影响多个模块的决定。编号递增，�
 - [ADR-0001：采用模块化单体](0001-modular-monolith.md)
 - [ADR-0002：依赖方向与应用装配](0002-dependency-direction.md)
 - [ADR-0003：Runtime 控制任务与工具执行](0003-runtime-authority.md)
+- [ADR-0004：持久授权、工具证据与审批恢复（待评审）](0004-persistent-tool-approval.md)

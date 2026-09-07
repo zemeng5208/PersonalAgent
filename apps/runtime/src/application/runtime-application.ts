@@ -1,0 +1,104 @@
+import {ProtocolError, validateToolValue} from '@personal-agent/contracts';
+import type {Event, Request, Response, RegisteredTool} from '@personal-agent/contracts';
+import {RuntimeToolInvoker} from '@personal-agent/agents';
+import type {AgentToolPort} from '@personal-agent/agents';
+import {ToolGateway, toolArgumentsDigest} from '@personal-agent/tool-gateway';
+import {TaskRuntime} from '../index.js';
+import {createTextApplication, type TextApplication, type TextApplicationOptions} from './text.js';
+type SuccessfulResponse = Extract<Response, {outcome: 'ok'}>;
+
+export interface RuntimeApplicationOptions { path: string; now?: () => Date; idFactory?: () => string; text?: TextApplicationOptions; tools?: readonly RegisteredTool[]; }
+export interface RuntimeApplicationTransport { send(request: Request, signal: AbortSignal): Promise<Response>; }
+
+export class RuntimeApplication implements RuntimeApplicationTransport {
+  readonly runtime: TaskRuntime;
+  private textApplication: TextApplication;
+  private readonly activeTextTasks = new Map<string, Promise<unknown>>();
+  private readonly tools: AgentToolPort | undefined;
+
+  constructor(options: RuntimeApplicationOptions) {
+    let gateway: ToolGateway | undefined;
+    this.runtime = new TaskRuntime(options.path, {
+      ...(options.now ? {now: options.now} : {}),
+      ...(options.idFactory ? {idFactory: options.idFactory} : {}),
+      ...(options.tools ? {createToolGateway: (policy: import('@personal-agent/policy').AuthorizationPolicy) => {
+        gateway = new ToolGateway({policy, now: () => (options.now?.() ?? new Date()).getTime()});
+        for (const tool of options.tools ?? []) gateway.register(tool);
+        return gateway;
+      }} : {}),
+    });
+    if (gateway) {
+      const descriptors = gateway.list();
+      const invoker = new RuntimeToolInvoker(this.runtime, descriptors);
+      this.tools = {list: () => structuredClone(descriptors), invoke: async invocation => {
+        const tool = descriptors.find(item => item.name === invocation.toolName && item.version === invocation.toolVersion);
+        if (!tool) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Tool is not registered');
+        validateToolValue(tool.inputSchema, invocation.arguments);
+        const ref = invocation.runId;
+        if (!this.runtime.policy.get(ref)) {
+          const expiresAt = new Date((options.now?.() ?? new Date()).getTime() + 600_000).toISOString();
+          const approval = this.runtime.requestToolApproval(ref, invocation.taskId, tool, expiresAt, toolArgumentsDigest(invocation.arguments));
+          if (approval.state === 'denied') throw new ProtocolError('UNAUTHORIZED', 'Tool approval was denied');
+          if (approval.state === 'allowed') throw new ProtocolError('UNAUTHORIZED', 'Tool grant was revoked');
+          return {state: 'pending', evidenceRefs: []};
+        }
+        return invoker.invoke({...invocation, authorizationRef: ref});
+      }};
+    }
+    this.textApplication = createTextApplication({...options.text, ...(this.tools ? {tools: this.tools} : {})});
+  }
+
+  get deployment(): TextApplication['deployment'] { return structuredClone(this.textApplication.deployment); }
+  get activeTaskCount(): number { return this.activeTextTasks.size; }
+
+  async send(request: Request, signal: AbortSignal): Promise<Response> {
+    const response = await this.runtime.send(request, signal);
+    if (request.operation === 'task.submit' && response.outcome === 'ok') this.dispatchSubmittedTextTask(request, response);
+    if (request.operation === 'authorization.respond' && response.outcome === 'ok' && request.payload.decision === 'allow_once') {
+      const approval = this.runtime.getApproval(request.payload.approvalId);
+      await this.activeTextTasks.get(approval.taskId);
+      if (this.runtime.getTask(approval.taskId).state === 'waiting_approval') this.resumeTask(approval.taskId);
+    }
+    return response;
+  }
+
+  readEvents(afterSequence = 0): Event[] { return this.runtime.readEvents(afterSequence); }
+
+  configureText(options: TextApplicationOptions): TextApplication['deployment'] {
+    if (this.activeTextTasks.size) throw new Error('Cannot reconfigure text model while tasks are active');
+    this.textApplication = createTextApplication({...options, ...(this.tools ? {tools: this.tools} : {})});
+    return this.deployment;
+  }
+
+  testTextConnection(options?: Parameters<TextApplication['testConnection']>[0]) { return this.textApplication.testConnection(options); }
+  close(): void { this.runtime.close(); }
+
+  resumeTask(taskId: string): void {
+    if (this.activeTextTasks.has(taskId)) return;
+    if (this.runtime.getTask(taskId).state !== 'waiting_approval') throw new ProtocolError('REVISION_CONFLICT', 'Task is not awaiting approval');
+    const checkpoint = this.runtime.loadCheckpoint(taskId, 'agent-loop') as {step: number} | undefined;
+    const approval = this.runtime.getApproval(`agent-run-${taskId}-${checkpoint?.step}`);
+    if (approval.state !== 'allowed') throw new ProtocolError('UNAUTHORIZED', 'Task approval has not been allowed');
+    const goal = this.runtime.loadCheckpoint(taskId, 'application-goal');
+    if (typeof goal !== 'string') throw new ProtocolError('NOT_FOUND', 'Task has no application checkpoint');
+    const execution = this.textApplication.startTask(this.runtime, taskId, goal, {resume: true}).finally(() => this.activeTextTasks.delete(taskId));
+    this.activeTextTasks.set(taskId, execution);
+    void execution.catch(() => {});
+  }
+
+  private dispatchSubmittedTextTask(request: Request, response: SuccessfulResponse): void {
+    const taskId = response.data && typeof response.data === 'object' && 'taskId' in response.data ? response.data.taskId : undefined;
+    const goal = request.operation === 'task.submit' ? request.payload.goal : undefined;
+    if (typeof taskId !== 'string' || typeof goal !== 'string' || this.activeTextTasks.has(taskId)) return;
+    if (this.runtime.getTask(taskId).state !== 'created') return;
+    const application = this.textApplication;
+    this.runtime.saveCheckpoint(taskId, 'application-goal', goal);
+    const execution = Promise.resolve().then(() => application.startTask(this.runtime, taskId, goal)).finally(() => this.activeTextTasks.delete(taskId));
+    this.activeTextTasks.set(taskId, execution);
+    void execution.catch(() => {
+      // TaskRuntime persists the failure. This catch only prevents an unhandled rejection.
+    });
+  }
+}
+
+export function createRuntimeApplication(options: RuntimeApplicationOptions): RuntimeApplication { return new RuntimeApplication(options); }

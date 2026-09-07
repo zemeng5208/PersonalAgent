@@ -764,8 +764,110 @@ test('the tool accepts a hint and reports a weak match through the declared sche
   disposeGuarded();
 });
 
+/** Captured from `https://secure.geonames.org/searchJSON?name_equals=伦敦&lang=zh` and `/v1/get` on 2026-09-07. */
+const geonamesRoute = (idsByQuery, username) => ['secure.geonames.org', url => {
+  const parsed = new URL(url);
+  if (parsed.searchParams.get('username') !== username) return jsonResponse({status: {message: 'user does not exist.', value: 10}}, 401);
+  const ids = idsByQuery[parsed.searchParams.get('name_equals')] ?? [];
+  return jsonResponse({totalResultsCount: ids.length, geonames: ids.map(id => ({geonameId: id, name: String(id), lng: 0, lat: 0}))});
+}];
+
+const v1getRoute = recordsById => ['geocoding-api.open-meteo.com', url => {
+  const parsed = new URL(url);
+  if (parsed.pathname.endsWith('/v1/get')) {
+    const record = recordsById[parsed.searchParams.get('id')];
+    return record === undefined ? jsonResponse({error: true, reason: 'Id not found'}, 404) : jsonResponse(record);
+  }
+  const captures = CAPTURES[parsed.searchParams.get('name')] ?? {};
+  return jsonResponse({results: captures[parsed.searchParams.get('language')] ?? []});
+}];
+
+const ukLondon = {id: 2643743, name: '倫敦', latitude: 51.50853, longitude: -0.12574, timezone: 'Europe/London', feature_code: 'PPLC', population: 8961989, country: '英国', admin1: '英格兰'};
+
+test('the GeoNames tier resolves simplified names the zh index lacks', async () => {
+  const provider = makeProvider(
+    [geonamesRoute({'伦敦': [2643743]}, 'acct'), v1getRoute({2643743: ukLondon})],
+    {geonamesUsername: 'acct'},
+  );
+  const place = await provider.resolvePlace('伦敦', undefined, signal());
+
+  assert.equal(place.name, '倫敦');
+  assert.equal(place.timezone, 'Europe/London');
+  assert.equal(place.confidence, 'high');
+  assert.equal(place.featureCode, 'PPLC');
+  assert.equal(place.ambiguous, true, 'Canada, Ontario stays disclosed as an alternative');
+  assert.ok(place.alternatives.some(entry => entry.includes('安大略')), JSON.stringify(place.alternatives));
+});
+
+test('rankPlaces treats the alternate-name relation as exact: 倫敦 outranks the 伦敦 collision', async () => {
+  const provider = makeProvider(
+    [geonamesRoute({'伦敦': [2643743]}, 'acct'), v1getRoute({2643743: ukLondon})],
+    {geonamesUsername: 'acct'},
+  );
+  const calls = [];
+  const place = await provider.resolvePlace('伦敦', undefined, signal());
+  void calls;
+  assert.equal(place.timezone, 'Europe/London', 'PPLC 8.9M beats the exact-spelling Canadian town via the exact pool');
+});
+
+test('without a username the tier never runs and behaviour is unchanged', async () => {
+  const fetchImpl = stubFetch([captureRoutes(CAPTURES)]);
+  const provider = new OpenMeteoProvider({fetchImpl});
+  const place = await provider.resolvePlace('伦敦', undefined, signal());
+  assert.ok(!fetchImpl.calls.some(url => url.includes('secure.geonames.org')));
+  assert.equal(place.timezone, 'America/Toronto', 'the pre-tier misresolution, disclosed as low');
+  assert.equal(place.confidence, 'low');
+});
+
+test('a GeoNames failure skips the tier instead of failing the query', async () => {
+  const rejected = makeProvider(
+    [geonamesRoute({'伦敦': [2643743]}, 'acct'), v1getRoute({}), captureRoutes(CAPTURES)],
+    {geonamesUsername: 'acct'},
+  );
+  const place = await rejected.resolvePlace('伦敦', undefined, signal());
+  assert.equal(place.timezone, 'America/Toronto', '401 from GeoNames degrades to Open-Meteo-only');
+
+  const softError = makeProvider(
+    [v1getRoute({}), ['secure.geonames.org', () => jsonResponse({status: {message: 'the daily limit of 30000 credits for acct has been exceeded', value: 18}})]],
+    {geonamesUsername: 'acct'},
+  );
+  const degraded = await softError.resolvePlace('北京', undefined, signal());
+  assert.equal(degraded.name, '北京');
+});
+
+test('a dropped /v1/get id removes only that candidate', async () => {
+  const cairoEgypt = {id: 360630, name: '开罗', latitude: 30.06263, longitude: 31.24967, timezone: 'Africa/Cairo', feature_code: 'PPLC', population: 9606916, country: '埃及'};
+  const provider = makeProvider(
+    [geonamesRoute({'开罗': [9999999, 360630]}, 'acct'), v1getRoute({360630: cairoEgypt}), captureRoutes(CAPTURES)],
+    {geonamesUsername: 'acct'},
+  );
+  const place = await provider.resolvePlace('开罗', undefined, signal());
+  assert.equal(place.timezone, 'Africa/Cairo', 'the 404 id vanishes, Egypt Cairo survives with high confidence');
+});
+
+test('cancellation during the GeoNames tier is not swallowed', async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const provider = makeProvider(
+    [geonamesRoute({'伦敦': [2643743]}, 'acct'), v1getRoute({2643743: ukLondon}), captureRoutes(CAPTURES)],
+    {geonamesUsername: 'acct'},
+  );
+  await assert.rejects(provider.resolvePlace('伦敦', undefined, controller.signal), {code: 'CANCELLED'});
+});
+
 const LIVE = process.env.PA_WEATHER_LIVE === '1';
 const LIVE_SKIP = LIVE ? false : 'set PA_WEATHER_LIVE=1 to run the real provider read-back';
+const GEONAMES_USER = process.env.PA_GEONAMES_USERNAME;
+const GEONAMES_LIVE_SKIP = LIVE && GEONAMES_USER ? false : 'set PA_WEATHER_LIVE=1 and PA_GEONAMES_USERNAME=<geonames account> to run the tier against the real APIs';
+
+test('live GeoNames tier resolves simplified names end to end', {skip: GEONAMES_LIVE_SKIP}, async () => {
+  const provider = new OpenMeteoProvider({language: 'zh', geonamesUsername: GEONAMES_USER});
+  for (const [query, timezone] of [['纽约', 'America/New_York'], ['首尔', 'Asia/Seoul'], ['开罗', 'Africa/Cairo']]) {
+    const place = await provider.resolvePlace(query, undefined, signal());
+    assert.equal(place.timezone, timezone, `${query} -> ${timezone}`);
+    assert.equal(place.confidence, 'high');
+  }
+});
 
 test('live read-back against Open-Meteo', {skip: LIVE_SKIP}, async () => {
   const date = new Date().toISOString().slice(0, 10);
