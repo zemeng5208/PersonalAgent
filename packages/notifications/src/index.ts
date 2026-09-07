@@ -16,13 +16,14 @@ const UTC_PATTERN_STRING = '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{3}
 
 const statusOutputSchema: ToolDescriptor['outputSchema'] = {
   type: 'object',
-  required: ['pausedUntil', 'quietUntil', 'pending', 'nextDigestCloseAt', 'policy'],
+  required: ['pausedUntil', 'quietUntil', 'pending', 'nextDigestCloseAt', 'unacknowledgedBatches', 'policy'],
   additionalProperties: false,
   properties: {
     pausedUntil: {type: ['string', 'null'], pattern: UTC_PATTERN_STRING},
     quietUntil: {type: ['string', 'null'], pattern: UTC_PATTERN_STRING},
     pending: {type: 'integer', minimum: 0},
     nextDigestCloseAt: {type: ['string', 'null'], pattern: UTC_PATTERN_STRING},
+    unacknowledgedBatches: {type: 'integer', minimum: 0, description: '已裁定但桌面尚未确认接收的批次数；崩溃重启后这些批次会被 drain 原样返回。'},
     policy: {
       type: 'object',
       required: ['quietHoursConfigured', 'pauseConfigured', 'digestConfigured'],

@@ -107,14 +107,19 @@ export function quietHoursActive(quiet: QuietHours, instantMs: number): boolean 
     : minute >= start || minute < end;
 }
 
-/** 下一个「安静结束」时刻（该时区当地 endLocal 对应的下一个 UTC 瞬间）。已不在安静期则返回 null。 */
+/**
+ * 下一个「安静结束」时刻＝从当前起第一个**不再处于安静期**的整分。已不在安静期则返回 null。
+ *
+ * 不直接找「当地分钟数等于 endLocal」的瞬间：春季跳时当天 endLocal 可能根本不存在
+ * （纽约 2026-03-08 02:00→03:00，22:00–02:30 的窗口里 02:30 被跳过），按分钟数匹配会扫
+ * 26 小时一无所获。扫描「首次离开安静区」对跳跃与回拨都正确：跳跃夜在时钟越过 endLocal
+ * 的那一刻（03:00）释放；回拨夜在 endLocal 第一次出现（含 start 不含 end）释放。
+ */
 export function nextQuietEndMs(quiet: QuietHours, nowMs: number): number | null {
   if (!quietHoursActive(quiet, nowMs)) return null;
-  const end = minutesOf(quiet.endLocal);
-  // 从当前时刻起逐小时扫描到当地分钟数等于 end 的第一个瞬间；步进 60s 保证 DST 偏移跳变不被跳过。
-  for (let probe = nowMs; probe < nowMs + 26 * 3_600_000; probe += 60_000) {
-    if (localMinuteOfDay(probe, quiet.timeZone) === end) {
-      // 精确到分钟：回退到整分
+  for (let probe = nowMs + 60_000; probe <= nowMs + 26 * 3_600_000; probe += 60_000) {
+    if (!quietHoursActive(quiet, probe)) {
+      // 精确到分钟
       return probe - (probe % 60_000);
     }
   }

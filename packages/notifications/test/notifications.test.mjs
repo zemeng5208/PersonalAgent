@@ -72,7 +72,12 @@ test('立即裁定：安静窗外的事件一次性交付并去重', () => {
   assert.deepEqual(first.batches[0].itemRefs, ['k1', 'k2']);
   assert.equal(first.held.quiet, 0);
   const second = service.drain();
-  assert.equal(second.batches.length, 0, '已交付不再产出');
+  assert.equal(second.batches.length, 1, '未确认批次在确认前会被 drain 再次返回（恢复语义）');
+  assert.deepEqual(second.batches[0].itemRefs, ['k1', 'k2']);
+  assert.equal(second.batches[0].id, first.batches[0].id, '同一批次，不重复生成');
+  service.acknowledge(first.batches[0].id);
+  const afterAck = service.drain();
+  assert.equal(afterAck.batches.length, 0, '确认后不再返回');
   const again = service.ingest([item('k1')]);
   assert.equal(again.accepted, 0, '交付过的 dedupeKey 不再进入待裁');
 });
@@ -114,6 +119,7 @@ test('聚合：窗口关闭触发摘要；达上限提前触发；非聚合来�
   assert.equal(mixed.batches.length, 1, 'mail 来源不在聚合范围，立即交付');
   assert.deepEqual(mixed.batches[0].itemRefs, ['mail-1']);
   assert.equal(mixed.held.digest, 2);
+  service.acknowledge(mixed.batches[0].id);
   clock.advance(3_600_000);
   const closed = service.drain();
   assert.equal(closed.batches.length, 1);
@@ -204,4 +210,56 @@ test('工具 notifications.status 经 FakeToolHost 的 schema 与 scope 校验',
   dispose();
   void NOTIFICATIONS_MODULE_VERSION;
   void validateContract;
+});
+
+test('崩溃恢复：drain 后、桌面确认前重启，仍取得相同批次且不重复生成', () => {
+  const storage = new FakeStorage().namespace('notifications');
+  let counter = 0;
+  const first = new NotificationService(storage, {}, {now: () => NOON, idFactory: () => `n${++counter}`});
+  first.ingest([item('r1'), item('r2')]);
+  const before = first.drain();
+  assert.equal(before.batches.length, 1);
+  assert.equal(before.batches[0].state, 'ready_for_delivery');
+
+  // 模拟崩溃：同一存储上新建实例（重启）
+  const restarted = new NotificationService(storage, {}, {now: () => NOON, idFactory: () => `n${++counter}`});
+  const recovered = restarted.drain();
+  assert.equal(recovered.batches.length, 1);
+  assert.deepEqual(recovered.batches[0], before.batches[0], '批次 id/条目引用/状态原样取回');
+  assert.equal(restarted.status().unacknowledgedBatches, 1);
+  // 重启后同一批事件不会再次进入待裁（条目级 delivered 标记持久）
+  const reingest = restarted.ingest([item('r1'), item('r2')]);
+  assert.deepEqual(reingest, {accepted: 0, duplicates: 2});
+});
+
+test('确认后重启不重复通知；acknowledge 幂等且未知 id 报 NOT_FOUND', () => {
+  const storage = new FakeStorage().namespace('notifications');
+  let counter = 0;
+  const first = new NotificationService(storage, {}, {now: () => NOON, idFactory: () => `n${++counter}`});
+  first.ingest([item('a1')]);
+  const [batch] = first.drain().batches;
+  const acked = first.acknowledge(batch.id);
+  assert.equal(acked.state, 'delivered');
+  first.acknowledge(batch.id); // 幂等
+  assert.throws(() => first.acknowledge('ghost'), err => err.code === 'NOT_FOUND');
+
+  const restarted = new NotificationService(storage, {}, {now: () => NOON, idFactory: () => `n${++counter}`});
+  const after = restarted.drain();
+  assert.equal(after.batches.length, 0, '确认过的批次重启后不再返回');
+  assert.equal(restarted.status().unacknowledgedBatches, 0);
+});
+
+test('DST 春季跳时：纽约 22:00–02:30 窗口在 02:30 不存在的当天，于首次离开安静区（03:00 EDT）释放', () => {
+  const quiet = {startLocal: '22:00', endLocal: '02:30', timeZone: 'America/New_York'};
+  // 2026-03-08 06:30Z = 纽约 01:30 EST（跳跃前），在窗口内
+  const inWindow = Date.parse('2026-03-08T06:30:00.000Z');
+  assert.equal(quietHoursActive(quiet, inWindow), true);
+  const end = nextQuietEndMs(quiet, inWindow);
+  assert.equal(end, Date.parse('2026-03-08T07:00:00.000Z'), '跳跃发生在 07:00Z（02:00 EST→03:00 EDT），越过 02:30 即出窗');
+  // 旧实现按 endLocal 分钟数匹配，02:30 当天不存在 → 扫 26 小时返回 null
+  // 回拨夜不受影响：2026-11-01 从 05:00Z（01:00 EDT）起，回拨后本地重走 01:00–01:59（EST），
+  // 02:30 当晚只出现一次（02:30 EST = 07:30Z）——首次离开安静区即在那里
+  const fallBack = {startLocal: '22:00', endLocal: '02:30', timeZone: 'America/New_York'};
+  const inFall = Date.parse('2026-11-01T05:00:00.000Z');
+  assert.equal(nextQuietEndMs(fallBack, inFall), Date.parse('2026-11-01T07:30:00.000Z'), '回拨夜在 02:30 唯一一次出现时释放');
 });

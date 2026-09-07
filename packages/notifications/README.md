@@ -9,7 +9,8 @@ MOD-23 · 通知汇总策略（PA-015，P1）。负责人 `Potatos498`，评审�
   - **安静时段** `quietHours`：本地墙上时钟窗口 `HH:mm`＋IANA 时区；支持跨午夜（22:00→07:00＝「晚段或早段」）；判定经 `Intl` 换算 DST 安全（回拨夜的同一墙上时刻仍安静）；窗口含 start 不含 end。
   - **暂停** `pauseUntilUtc`：到时刻为止 hold 一切（含摘要），过期自动恢复，无需显式清除。
   - **聚合** `digest`：`windowMs`（自最早未裁事件起算）或 `maxItems`（先到先触发）产出一条摘要请求；`sources` 缺省聚合全部，可限定来源。
-- **去重**：按事件 `dedupeKey`——已交付或待裁的重复事件静默忽略并计数披露；裁定后的条目持久标记，重复 `drain` 不重复产出。
+- **去重**：按事件 `dedupeKey`——已交付或待裁的重复事件静默忽略并计数披露；裁定后的条目持久标记，重复 `drain` 不重复产出新批次（未确认批次会再次返回，id 不变）。
+- **批次生命周期**：`pending`（事件待裁）→ `ready_for_delivery`（已裁定并持久化，等待桌面取走并确认）→ `delivered`（已确认，保留最近 100 条作幂等记录后淘汰）。`status().unacknowledgedBatches` 披露未确认数。
 
 ## 非职责
 
@@ -27,7 +28,8 @@ MOD-23 · 通知汇总策略（PA-015，P1）。负责人 `Potatos498`，评审�
 | 方法 | 语义 |
 | --- | --- |
 | `ingest(items)` | 接收标准事件；重复 dedupeKey 忽略，返回 `{accepted, duplicates}` |
-| `drain()` | 裁定并交付：立即条目＋摘要请求；返回 `{batches, held}`（held 按 quiet/paused/digest 分计数披露） |
+| `drain()` | 裁定并交付：立即条目＋摘要请求；返回 `{batches, held}`（held 按 quiet/paused/digest 分计数披露）。**批次持久化为 `ready_for_delivery`，桌面确认前 drain 原样返回（崩溃恢复），不删除通知** |
+| `acknowledge(batchId)` | 桌面确认接收：批次置 `delivered`（幂等）；重复确认无副作用，未知 id 报 `NOT_FOUND` |
 | `status()` | 只读状态：暂停至、安静至、待裁数、下一聚合窗口关闭时刻 |
 | `planSchedules(conversationId)` | 结构兼容 Runtime `ScheduleInput` 的调度建议：`notifications:quiet-end:<时刻>` 与 `notifications:digest:<时刻>`，`missedRunPolicy: 'run_once'`，scheduleId＝幂等键（确定性） |
 
@@ -58,6 +60,6 @@ MOD-23 · 通知汇总策略（PA-015，P1）。负责人 `Potatos498`，评审�
 ## 已知限制
 
 - 聚合窗口从「最早未裁事件的到达时刻」起算，非固定对齐墙钟（首个事件决定窗口相位）；跨重启相位由 StoragePort 恢复。
-- 安静结束建议按 60 秒粒度扫描定位下一 `endLocal`，极端未对齐秒级时刻会取整到分。
+- 安静结束按「首个不再处于安静期的整分」扫描（60 秒粒度）：春季跳时当天 `endLocal` 可能不存在（纽约 2026-03-08 的 02:30 被跳过），在时钟越过 `endLocal` 的瞬间（03:00 EDT）释放；回拨夜在 `endLocal` 唯一一次出现时释放；极端未对齐秒级时刻取整到分。
 - 暂停过期由下一次 `drain`/`status` 调用察觉，不产生主动唤醒（装配方可用 `pauseUntilUtc` 自行建一条 Runtime 建议，本包不越权）。
 - 已交付标记无 TTL，StoragePort 长期增长由宿主清理策略负责。

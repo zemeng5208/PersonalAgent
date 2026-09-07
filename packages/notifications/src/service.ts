@@ -21,6 +21,11 @@ export interface NotificationBatch {
   decidedAt: string;
   heldSince: string;
   reason: string;
+  /**
+   * 批次生命周期：裁定即 ready_for_delivery（持久化，等待桌面取走）；桌面确认接收后
+   * acknowledge() 置 delivered。drain 不会删除未确认批次——崩溃重启后原样取回。
+   */
+  state: 'ready_for_delivery' | 'delivered';
 }
 
 export interface DrainReport {
@@ -33,6 +38,8 @@ export interface StatusReport {
   quietUntil: string | null;
   pending: number;
   nextDigestCloseAt: string | null;
+  /** 已裁定但桌面尚未确认接收的批次数（崩溃重启后这些批次会被再次返回）。 */
+  unacknowledgedBatches: number;
 }
 
 export interface NotificationServiceOptions {
@@ -42,6 +49,9 @@ export interface NotificationServiceOptions {
 
 const PENDING_KEY = 'notifications:pending';
 const DELIVERED_PREFIX = 'notifications:delivered:';
+const BATCHES_KEY = 'notifications:batches';
+/** 已确认批次的保留上限：只作幂等记录，超限淘汰最旧。 */
+const DELIVERED_BATCH_LIMIT = 100;
 
 /**
  * 通知汇总策略（MOD-23）：只做裁定，不调度、不展示。
@@ -83,7 +93,10 @@ export class NotificationService {
 
   /**
    * 裁定并交付。暂停与安静时段 hold 一切（含摘要）；聚合来源等窗口关闭或达上限。
-   * 已裁定的条目标记 delivered，重复 drain 不会重复产出。
+   * 已裁定的条目从 pending 消费并标记 delivered，但**批次**保持 `ready_for_delivery`
+   * 直到桌面 `acknowledge(batchId)`——drain 不在确认前删除通知，崩溃重启后原样取回
+   * 未确认批次（id 与条目引用不变，不重复生成）。条目级 dedupe 由 delivered 标记保证：
+   * 重启后同一事件不会再进 pending，也就不会再裁出重复批次。
    */
   drain(): DrainReport {
     const now = this.options.now();
@@ -112,15 +125,16 @@ export class NotificationService {
       deliver.push(entry);
     }
 
-    const batches: NotificationBatch[] = [];
+    const decided: NotificationBatch[] = [];
     if (deliver.length > 0) {
-      batches.push({
+      decided.push({
         id: this.options.idFactory(),
         kind: 'immediate',
         itemRefs: deliver.map(entry => entry.dedupeKey),
         decidedAt: nowIso,
         heldSince: earliest(deliver),
         reason: 'immediate',
+        state: 'ready_for_delivery',
       });
       for (const entry of deliver) this.markDelivered(entry.dedupeKey);
     }
@@ -133,13 +147,14 @@ export class NotificationService {
       // 摘要交付同样尊重安静时段：窗口到了但在安静期，继续持有并披露。
       const quietNow = this.policy.quietHours !== undefined && quietHoursActive(this.policy.quietHours, now);
       if ((flushes || windowElapsed) && !this.paused(now) && !quietNow) {
-        batches.push({
+        decided.push({
           id: this.options.idFactory(),
           kind: 'digest',
           itemRefs: digestPool.map(entry => entry.dedupeKey),
           decidedAt: nowIso,
           heldSince: earliest(digestPool),
           reason: flushes ? 'digest_max_items' : 'digest_window_closed',
+          state: 'ready_for_delivery',
         });
         for (const entry of digestPool) this.markDelivered(entry.dedupeKey);
       } else {
@@ -149,7 +164,25 @@ export class NotificationService {
     }
 
     this.storage.set(PENDING_KEY, keep);
-    return {batches, held};
+    // 恢复语义优先：未确认批次排在本次新裁定之前返回；持久化合并后淘汰超限的已确认批次。
+    const prior = this.readBatches().filter(batch => batch.state === 'ready_for_delivery');
+    if (decided.length > 0) this.writeBatches([...prior, ...decided]);
+    return {batches: [...prior, ...decided], held};
+  }
+
+  /** 桌面确认接收一个批次：置 delivered（幂等，重复确认无副作用）。 */
+  acknowledge(batchId: string): NotificationBatch {
+    if (typeof batchId !== 'string' || batchId.length === 0) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'batchId must be a non-empty string');
+    }
+    const batches = this.readBatches();
+    const target = batches.find(batch => batch.id === batchId);
+    if (target === undefined) throw new ProtocolError('NOT_FOUND', `No notification batch ${batchId}`);
+    if (target.state === 'ready_for_delivery') {
+      target.state = 'delivered';
+      this.writeBatches(batches);
+    }
+    return structuredClone(target);
   }
 
   status(): StatusReport {
@@ -169,6 +202,7 @@ export class NotificationService {
       quietUntil: quietEnd === null ? null : isoMinute(quietEnd),
       pending: pending.length,
       nextDigestCloseAt: nextDigest === null ? null : isoMinute(nextDigest),
+      unacknowledgedBatches: this.readBatches().filter(batch => batch.state === 'ready_for_delivery').length,
     };
     return report;
   }
@@ -227,6 +261,18 @@ export class NotificationService {
     return Array.isArray(value) ? value.filter(isPendingItem) : [];
   }
 
+  private readBatches(): NotificationBatch[] {
+    const value = this.storage.get(BATCHES_KEY);
+    return Array.isArray(value) ? value.filter(isBatch) : [];
+  }
+
+  /** 合并写入并淘汰超限的已确认批次（未确认批次永不淘汰）。 */
+  private writeBatches(batches: NotificationBatch[]): void {
+    const unacknowledged = batches.filter(batch => batch.state === 'ready_for_delivery');
+    const delivered = batches.filter(batch => batch.state === 'delivered');
+    this.storage.set(BATCHES_KEY, [...unacknowledged, ...delivered.slice(-DELIVERED_BATCH_LIMIT)]);
+  }
+
   private isoNow(): string {
     return isoMinute(this.options.now());
   }
@@ -236,6 +282,17 @@ function isPendingItem(value: unknown): value is PendingItem {
   if (!value || typeof value !== 'object') return false;
   const entry = value as Record<string, unknown>;
   return typeof entry.dedupeKey === 'string' && typeof entry.source === 'string' && typeof entry.receivedAt === 'string' && !!entry.item;
+}
+
+function isBatch(value: unknown): value is NotificationBatch {
+  if (!value || typeof value !== 'object') return false;
+  const batch = value as Record<string, unknown>;
+  return typeof batch.id === 'string'
+    && (batch.kind === 'immediate' || batch.kind === 'digest')
+    && Array.isArray(batch.itemRefs)
+    && typeof batch.decidedAt === 'string'
+    && typeof batch.reason === 'string'
+    && (batch.state === 'ready_for_delivery' || batch.state === 'delivered');
 }
 
 function earliest(entries: readonly PendingItem[]): string {
