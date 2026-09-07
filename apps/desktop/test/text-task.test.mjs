@@ -5,8 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {Client} from '@personal-agent/client';
 import {TaskRuntime} from '@personal-agent/runtime';
-import {FakeModelProvider, UnavailableModelProvider} from '@personal-agent/models';
-import {createFakeTextProvider, startTextTask} from '../electron/text-task.js';
+import {FakeModelProvider} from '@personal-agent/models';
+import {createFakeTextProvider, createTextApplication} from '@personal-agent/runtime/text';
 
 async function withRuntime(run) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'personal-agent-text-'));
@@ -38,7 +38,7 @@ test('text task uses Runtime and explicit Fake Model to persist an answer', asyn
   await withRuntime(async ({runtime, client}) => {
     const submitted = await submit(client, '你好');
     const provider = createFakeTextProvider();
-    await startTextTask(runtime, submitted.taskId, '你好', provider);
+    await createTextApplication({provider}).startTask(runtime, submitted.taskId, '你好');
     const task = await waitForTerminal(runtime, submitted.taskId);
     assert.equal(task.state, 'succeeded');
     assert.match(task.resultSummary, /Fake Model 回答：你好/);
@@ -51,7 +51,7 @@ test('text task uses Runtime and explicit Fake Model to persist an answer', asyn
 test('unavailable Provider fails truthfully without a Fake fallback', async () => {
   await withRuntime(async ({runtime, client}) => {
     const submitted = await submit(client, '未配置模型');
-    await startTextTask(runtime, submitted.taskId, '未配置模型', new UnavailableModelProvider('pangu'));
+    await createTextApplication({mode: 'unavailable', model: 'not-configured'}).startTask(runtime, submitted.taskId, '未配置模型');
     const task = await waitForTerminal(runtime, submitted.taskId);
     assert.equal(task.state, 'failed');
     assert.match(task.error.message, /not configured|does not support text/);
@@ -67,7 +67,7 @@ test('cancelling a text task aborts the in-flight model request', async () => {
       request.signal.addEventListener('abort', () => reject(new Error('fake request aborted')), {once: true});
     })]);
     const submitted = await submit(client, '等待取消');
-    const execution = startTextTask(runtime, submitted.taskId, '等待取消', provider, {deadlineMs: 5_000});
+    const execution = createTextApplication({provider}).startTask(runtime, submitted.taskId, '等待取消', {deadlineMs: 5_000});
     for (let attempt = 0; attempt < 100 && !signal; attempt += 1) await new Promise(resolve => setTimeout(resolve, 5));
     assert.ok(signal, 'model request should have started');
     const cancel = await client.call('task.cancel', {taskId: submitted.taskId, reason: '测试取消'});
