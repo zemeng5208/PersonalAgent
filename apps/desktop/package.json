@@ -22,6 +22,7 @@
     "@personal-agent/runtime": "0.1.0-alpha.1"
   },
   "devDependencies": {
+    "@personal-agent/testkit": "0.1.0-alpha.1",
     "electron": "44.2.0",
     "playwright": "1.63.0"
   }

@@ -1,0 +1,195 @@
+# 项目目录与模块开发规范
+
+版本：1.0 · 日期：2026-09-06 · 状态：架构治理基线
+
+本文是 PersonalAgent 目录布局、包边界和新增模块结构的唯一规范。需求范围以 [PRD](PRD.md) 为准，运行语义以 [公共开发协议](DEVELOPMENT_PROTOCOL.md) 为准，负责人以 [模块分工](MODULE_ASSIGNMENTS.md) 为准。
+
+## 1. 设计目标
+
+- 一个目录只有一种职责，开发者能从路径判断代码所属模块。
+- 模块通过公开端口协作，不读取其他模块的内部文件、数据库表或密钥。
+- 业务能力可逐个开发、独立测试、独立评审，再由应用层装配。
+- 保持模块化单体；独立进程必须由真实生命周期或安全需求驱动。
+- 目录不提前创建空模块，模块开工时再创建对应 workspace。
+
+## 2. 仓库根目录
+
+```text
+PersonalAgent/
+├─ .github/                  GitHub 模板、CODEOWNERS 与 CI
+├─ .worktrees/               本地隔离工作树，禁止提交
+├─ apps/                     可启动应用与可信装配入口
+│  ├─ desktop/               Electron 桌面应用
+│  └─ runtime/               当前 Runtime 应用与本地组合入口
+├─ packages/                 可复用核心模块
+│  ├─ contracts/
+│  ├─ client/
+│  ├─ agents/
+│  ├─ models/
+│  ├─ policy/
+│  ├─ tool-gateway/
+│  ├─ connector-host/
+│  ├─ storage/
+│  ├─ testkit/
+│  └─ connectors/            外部能力适配器
+│     └─ weather/
+├─ tests/                    跨模块架构、集成和 E2E 测试
+├─ docs/                     需求、架构、ADR、模块与验收文档
+├─ scripts/                  可复现的开发、检查和发布脚本
+├─ data/                     被忽略的本地运行数据
+├─ package.json              workspace 与根级编排命令
+├─ package-lock.json         全仓唯一 npm 锁文件
+└─ tsconfig.base.json        TypeScript 公共严格配置
+```
+
+连接器继续使用已经投入协作的 `packages/connectors/<capability>/`，不迁移到新的根级 `connectors/`。这避免与现有模块分工、开放 PR 和导入路径产生无行为收益的冲突。
+
+当前 `apps/runtime/` 同时保存 Runtime 核心和少量组合入口。核心文件不能导入具体连接器；具体连接器只允许出现在明确命名的组合文件。等后台生命周期、进程通信和安装方案经过验收后，再决定是否拆为 `packages/runtime-core/` 与 `apps/runtime-host/`，现在不创建空目录。
+
+## 3. 目录职责
+
+| 目录 | 允许内容 | 禁止内容 |
+| --- | --- | --- |
+| `apps/` | 进程入口、UI、IPC、Transport、依赖装配 | 可复用协议和连接器业务规则 |
+| `packages/` | Runtime、Agent、模型网关、策略、存储等模块 | Electron 页面、真实账号值、任意根装配 |
+| `packages/connectors/` | 一个外部能力一个 workspace | 任务状态机、授权决定、UI |
+| `tests/` | 跨模块架构、集成、E2E、人工真实验收 | 单模块普通单元测试 |
+| `docs/` | 需求、决策、模块说明、验证记录 | 密钥、账号标识、个人绝对路径 |
+| `scripts/` | 可复现且可在 CI 使用的工程命令 | 产品运行时业务逻辑 |
+| `data/` | 本地数据库、缓存和检查点 | 源码、共享夹具、需提交的文档 |
+
+根目录不保存生产 `src/`。单元测试跟随所属 workspace，根 `tests/` 只负责跨模块验证。
+
+## 4. 依赖方向
+
+```text
+apps
+  ↓
+Runtime / Agent / ToolGateway 等应用模块
+  ↓
+contracts 与模块自己声明的端口
+
+具体模型、存储和连接器 --通过端口注入--> 应用装配
+```
+
+强制规则：
+
+1. `packages/*` 不得依赖 `apps/*`。
+2. `packages/contracts` 不得依赖其他内部 workspace。
+3. `packages/agents` 只依赖公共协议和模型网关；Runtime 通过结构兼容的 worker/tool 端口接入。
+4. Runtime 核心不导入 Electron 或具体连接器。
+5. 连接器生产依赖仅允许公共协议和未来统一的 Connector SDK；测试依赖可以使用 testkit。
+6. Renderer 不能导入 Runtime、模型 Provider、Storage、Node 系统 API 或连接器。
+7. 跨包只能按 `@personal-agent/<name>` 及目标包显式 `exports` 导入，禁止跨包相对路径和私有深层导入。
+8. 生产依赖图不得有循环。
+
+本地及 CI 使用 `npm run check:architecture` 自动检查可机械验证的规则。
+
+## 5. 普通模块结构
+
+```text
+packages/<module>/
+├─ src/
+│  ├─ index.ts               唯一公共导出入口
+│  ├─ <module>.ts            主要实现
+│  ├─ errors.ts              模块错误映射，需要时创建
+│  └─ ports/                 模块所需抽象端口，需要时创建
+├─ test/                     单元和单模块契约测试
+├─ README.md                 职责、接口、依赖、测试和限制
+├─ package.json
+└─ tsconfig.json
+```
+
+- `index.ts` 只组织公共导出，不堆放装配和演示代码。
+- 只有被两个以上实现使用或用于隔离外部依赖时才新增抽象。
+- 不为尚未实现的能力创建空目录或 `.gitkeep`。
+- 包名统一为 `@personal-agent/<lower-kebab-case>`。
+- 每个包只使用根 `package-lock.json`，不能产生模块锁文件。
+
+## 6. 连接器结构
+
+```text
+packages/connectors/<capability>/
+├─ src/
+│  ├─ index.ts               公共注册入口
+│  ├─ connector.ts           ConnectorPort 实现
+│  ├─ service.ts             与供应商无关的业务规范化
+│  ├─ provider.ts            Provider 端口
+│  └─ <provider>.ts          真实或 Fake 适配器
+├─ test/
+│  ├─ connector.test.mjs
+│  ├─ service.test.mjs
+│  └─ <provider>.test.mjs
+├─ README.md
+├─ package.json
+└─ tsconfig.json
+```
+
+连接器 README 必须声明工具名和版本、输入输出、Scope、副作用、取消、超时、重试、幂等、证据、Fake 与真实验收边界。连接器不能自行签发授权、修改任务终态、访问桌面 UI 或直接读取其他模块的持久化数据。
+
+## 7. 应用目录
+
+`apps/desktop/` 按信任边界组织：
+
+```text
+apps/desktop/
+├─ electron/
+│  ├─ main.js                可信主进程入口
+│  ├─ preload.cjs            最小安全桥
+│  ├─ ipc/                   IPC handler，出现多个 handler 时创建
+│  └─ composition/           依赖装配，出现多个组合时创建
+├─ src/
+│  ├─ app/                   页面壳层
+│  ├─ features/              按产品能力组织的 UI
+│  └─ ui/                    共享视觉 token/原语
+├─ test/
+├─ README.md
+└─ package.json
+```
+
+Renderer 只提交请求和展示 Runtime 事实状态。主进程负责安全配置与装配，但不复制 Agent、Policy 或连接器业务逻辑。
+
+## 8. 测试布局
+
+```text
+<workspace>/test/             单元测试、单模块契约测试
+tests/architecture/           目录和依赖门禁
+tests/integration/            多模块 + 显式 Fake Provider
+tests/e2e/                    应用入口完整链路
+tests/manual/                 真实账号、网络、付费模型验收
+tests/fixtures/               无隐私共享夹具
+```
+
+真实 Provider 不进入默认 CI。Fake、Unavailable 和真实 Provider 必须显式选择，测试报告不能将 mock 结果写成真实能力。
+
+## 9. 文档和 ADR
+
+- `PRD.md`：需求与验收依据。
+- `ARCHITECTURE.md`：当前与目标系统边界。
+- `PROJECT_STRUCTURE.md`：目录与依赖依据。
+- `DEVELOPMENT_PROTOCOL.md`：跨模块运行语义。
+- `MODULE_ASSIGNMENTS.md`：负责人和独占目录。
+- `ROADMAP.md`：真实状态与证据。
+- `adr/`：已采纳的重要架构决策。
+- `modules/`：模块模板和模块级设计。
+
+会改变跨模块依赖、信任边界、公共协议或进程形态的方案必须先写 ADR。普通模块内部实现不需要 ADR。
+
+## 10. Worktree 与本地数据
+
+- 新工作树统一放入 `.worktrees/<task-slug>/`，目录已被 Git 忽略。
+- 创建、移动或移除工作树前先执行 `git worktree list` 和目标目录 `git status`。
+- 不用删除未跟踪文件、强制重置或覆盖他人分支解决冲突。
+- `data/` 中除 README 外全部忽略；数据库、WAL、缓存、密钥和私人数据不得提交。
+
+## 11. 新模块开工门槛
+
+每个模块必须先登记：模块 ID、负责人、评审者、独占目录、依赖、公共输入输出、不在范围、Fake 验收和真实验收条件。随后按“端口/Schema → Fake 和契约测试 → 实现 → 集成 → 真实条件验收 → 文档和 ROADMAP”推进。
+
+完成定义：
+
+- 只通过公开入口调用，依赖门禁通过。
+- README、负责人、测试和已知限制齐全。
+- 默认测试无密钥、无付费调用、可重复。
+- 有副作用操作经过 Runtime、Policy 和 ToolGateway。
+- PR 由非作者评审并合并后，才根据完整验收更新为 done。

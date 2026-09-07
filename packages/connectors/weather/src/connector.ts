@@ -21,6 +21,11 @@ export class WeatherConnector implements ConnectorPort {
           cacheTtlMs: {type: 'integer', minimum: 1},
           language: {type: 'string', minLength: 2},
           locationResolution: {enum: ['ranked', 'strict']},
+          minCorroboratedPopulation: {
+            type: 'integer',
+            minimum: 0,
+            description: '人口下限：非行政中心的地点低于此值时 resolved.confidence 记为 low。默认 500000，取自 2026-09-06 实测空档（最差误解析伦敦/安大略 422324 ↔ 正确的非行政中心大城市纽约 8804190）。',
+          },
         },
         additionalProperties: false,
       },

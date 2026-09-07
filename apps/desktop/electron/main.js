@@ -1,10 +1,10 @@
-import {app, BrowserWindow, ipcMain, Menu, nativeImage, safeStorage, screen, session, Tray} from 'electron';
+import {app, BrowserWindow, clipboard, ipcMain, Menu, nativeImage, safeStorage, screen, session, Tray} from 'electron';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
 import {EventCursor} from '@personal-agent/client';
 import {register} from './runtime.js';
-import {panelBounds, clampOrb} from './placement.js';
+import {panelBounds, clampOrb, draggedGroupBounds} from './placement.js';
 import {createFakeTextProvider, startTextTask} from './text-task.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
@@ -27,6 +27,7 @@ let poll;
 let pinned = false;
 let dragging = false;
 let dragOffset;
+let panelDragOrigin;
 let away = 0;
 let audioLevel = 0;
 let orbStateOverride = null;
@@ -52,6 +53,7 @@ let model = {
 };
 let thinking = {depth: 1, fast: false, applied: false, reason: 'Runtime 尚未公开思考参数契约'};
 const tasks = new Map();
+const taskGoals = new Map();
 const activeTextTasks = new Map();
 const approvals = new Map();
 
@@ -64,7 +66,7 @@ function snapshot() {
     pinned,
     audioLevel,
     orbStateOverride,
-    tasks: [...tasks.values()],
+    tasks: [...tasks.values()].map(task => ({...structuredClone(task), userMessage: taskGoals.get(task.taskId)})),
     capabilities: structuredClone(capabilities),
     health: structuredClone(health),
     approvals: [...approvals.values()],
@@ -119,6 +121,18 @@ function openPanel(focus = false) {
   applyShape(panel, 20);
   if (focus) panel.show(); else panel.showInactive();
   away = 0;
+}
+
+function movePanelGroup(point) {
+  if (!panelDragOrigin || !orb || !panel) return;
+  const area = screen.getDisplayNearestPoint(point).workArea;
+  const next = draggedGroupBounds(panelDragOrigin.orb, panelDragOrigin.pointer, point, area);
+  // On Windows, setBounds() can expand a frameless non-resizable window to the
+  // native minimum tracking size, leaving an invisible click-blocking area.
+  // Dragging the orb must only change its position and preserve 112x112.
+  orb.setPosition(next.orb.x, next.orb.y);
+  panel.setBounds(next.panel);
+  applyShape(panel, 20);
 }
 
 function openAdmin() {
@@ -396,10 +410,27 @@ async function action(event, name, payload) {
     dragOffset = {x: point.x - bounds.x, y: point.y - bounds.y}; return;
   }
   if (name === 'orb.dragEnd' && sender === orb) { dragging = false; away = Date.now() + 400; return; }
+  if (name === 'panel.dragStart' && sender === panel) {
+    if (!payload || !Number.isFinite(payload.x) || !Number.isFinite(payload.y)) throw Error('拖动坐标无效');
+    dragging = 'panel';
+    panelDragOrigin = {pointer: {x: payload.x, y: payload.y}, orb: orb.getBounds()};
+    return;
+  }
+  if (name === 'panel.dragMove' && sender === panel && dragging === 'panel') {
+    if (!payload || !Number.isFinite(payload.x) || !Number.isFinite(payload.y)) throw Error('拖动坐标无效');
+    movePanelGroup(payload);
+    return;
+  }
+  if (name === 'panel.dragEnd' && sender === panel) { dragging = false; panelDragOrigin = undefined; away = Date.now() + 400; return; }
   if (name === 'app.quit') { app.quit(); return; }
   if (name === 'voice.stop') {
     if (sender !== panel) throw Error('语音操作只能从面板调用');
     return {available: false, stopped: false, reason: '语音供应商尚未连接'};
+  }
+  if (name === 'clipboard.writeText') {
+    if (sender !== panel || typeof payload !== 'string' || payload.length > 50000) throw Error('剪贴板内容无效');
+    clipboard.writeText(payload);
+    return {copied: true};
   }
   if (name === 'model.configure') {
     if (sender !== admin) throw Error('模型配置只能从管理后台调用');
@@ -419,6 +450,7 @@ async function action(event, name, payload) {
     if (typeof payload !== 'string' || !payload.trim() || payload.length > 10000) throw Error('请输入有效任务');
     const goal = payload.trim();
     const result = await client.call('task.submit', {goal, conversationId: 'desktop-session'}, {idempotencyKey: crypto.randomUUID()});
+    taskGoals.set(result.taskId, goal);
     pinned = true;
     const task = await refresh(result.taskId);
     if (!fakeMode) void executeTextTask(result.taskId, goal).catch(error => {
@@ -498,7 +530,7 @@ app.whenReady().then(async () => {
     if (orb.isDestroyed()) return;
     const point = screen.getCursorScreenPoint();
     const bounds = orb.getBounds();
-    if (dragging) {
+    if (dragging === true) {
       orb.setBounds(clampOrb({...bounds, x: point.x - dragOffset.x, y: point.y - dragOffset.y}, screen.getDisplayNearestPoint(point).workArea));
       return;
     }
