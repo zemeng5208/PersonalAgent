@@ -12,13 +12,10 @@
     "dev:text-fake": "electron . --fake-model",
     "test": "node --test test/*.test.mjs",
     "test:smoke": "node test/electron-smoke.cjs",
-    "test:text-task": "node --test test/text-task.test.mjs",
     "test:text-smoke": "node test/text-chat-smoke.cjs"
   },
   "dependencies": {
-    "@personal-agent/agents": "0.1.0-alpha.1",
     "@personal-agent/client": "0.1.0-alpha.1",
-    "@personal-agent/models": "0.1.0-alpha.1",
     "@personal-agent/runtime": "0.1.0-alpha.1"
   },
   "devDependencies": {

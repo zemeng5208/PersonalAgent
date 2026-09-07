@@ -5,7 +5,6 @@ import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'no
 import {EventCursor} from '@personal-agent/client';
 import {register} from './runtime.js';
 import {panelBounds, clampOrb, draggedGroupBounds} from './placement.js';
-import {createFakeTextProvider, startTextTask} from './text-task.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -42,7 +41,6 @@ const modelConfig = {
   apiKey: process.env.PANGU_API_KEY ?? '',
 };
 const modelStorage = {persisted: false};
-let panguProvider;
 let model = {
   provider: 'pangu', label: '盘古大模型 2.0', status: 'unavailable', verification: 'conditional',
   baseUrl: modelConfig.baseUrl, model: modelConfig.model, deployment: modelConfig.deployment,
@@ -54,8 +52,8 @@ let model = {
 let thinking = {depth: 1, fast: false, applied: false, reason: 'Runtime 尚未公开思考参数契约'};
 const tasks = new Map();
 const taskGoals = new Map();
-const activeTextTasks = new Map();
 const approvals = new Map();
+let runtimeApplication;
 
 function snapshot() {
   return {
@@ -227,8 +225,6 @@ async function configurePangu(input, {publishState = true, persist = true} = {})
   const deployment = requiredModelText(input?.deployment || modelName, '部署名称');
   const apiKey = typeof input?.apiKey === 'string' && input.apiKey.trim() ? input.apiKey.trim() : modelConfig.apiKey;
   if (!apiKey) throw Error('API Key 未配置；密钥只会保留在主进程内存中');
-  const {PanguModelProvider} = await import('@personal-agent/models');
-  const provider = new PanguModelProvider({baseUrl, model: modelName, deployment, apiKey: () => modelConfig.apiKey});
   const previous = {...modelConfig};
   modelConfig.baseUrl = baseUrl;
   modelConfig.model = modelName;
@@ -241,13 +237,13 @@ async function configurePangu(input, {publishState = true, persist = true} = {})
     Object.assign(modelConfig, previous);
     throw error;
   }
-  panguProvider = provider;
+  const configuredDeployment = runtimeApplication.configureText({mode: 'pangu', baseUrl, model: modelName, deployment, apiKey: () => modelConfig.apiKey});
   model = {
     ...model,
-    provider: 'pangu', label: '盘古大模型 2.0', status: 'configured', verification: provider.deployment.verification,
+    provider: 'pangu', label: '盘古大模型 2.0', status: 'configured', verification: configuredDeployment.verification,
     baseUrl, model: modelName, deployment, configured: true, keyConfigured: true,
     persisted: storage.saved,
-    capabilities: structuredClone(provider.deployment.capabilities),
+    capabilities: structuredClone(configuredDeployment.capabilities),
     reason: `${storage.reason}，尚未发起真实连接测试`, lastTestAt: null, latencyMs: null,
   };
   if (publishState) publish();
@@ -255,15 +251,11 @@ async function configurePangu(input, {publishState = true, persist = true} = {})
 }
 
 async function testPangu() {
-  if (!panguProvider) throw Error('请先保存盘古模型配置');
+  if (!runtimeApplication || runtimeApplication.deployment.provider !== 'pangu') throw Error('请先保存盘古模型配置');
   const controller = new AbortController();
   const started = Date.now();
   try {
-    const result = await panguProvider.complete({
-      messages: [{role: 'user', content: 'Reply with exactly OK.'}],
-      tools: [], maxOutputTokens: 4,
-      deadline: new Date(Date.now() + 15_000).toISOString(), signal: controller.signal,
-    });
+    const result = await runtimeApplication.testTextConnection({signal: controller.signal});
     const latencyMs = Number.isFinite(result.latencyMs) ? result.latencyMs : Date.now() - started;
     model = {...model, status: 'ready', reason: `连接测试通过 · ${latencyMs}ms`, lastTestAt: new Date().toISOString(), latencyMs};
     publish();
@@ -285,6 +277,7 @@ function updateThinking(input) {
 
 async function initializeModelFromEnvironment() {
   if (fakeModelMode) {
+    runtimeApplication.configureText({mode: 'fake'});
     model = {
       ...model,
       provider: 'fake', label: 'Fake Model · 离线测试', status: 'ready', verification: 'mock',
@@ -302,21 +295,7 @@ async function initializeModelFromEnvironment() {
   }
 }
 
-async function executeTextTask(taskId, goal) {
-  if (fakeMode || activeTextTasks.has(taskId)) return;
-  const {UnavailableModelProvider} = await import('@personal-agent/models');
-  const provider = fakeModelMode
-    ? createFakeTextProvider()
-    : panguProvider ?? new UnavailableModelProvider('pangu', modelConfig.model);
-  const execution = startTextTask(runtime, taskId, goal, provider);
-  activeTextTasks.set(taskId, execution);
-  try {
-    await execution;
-  } finally {
-    activeTextTasks.delete(taskId);
-    await refresh(taskId).catch(() => {});
-  }
-}
+
 async function refresh(taskId) {
   const task = await client.call('task.get', {taskId});
   tasks.set(taskId, task);
@@ -367,20 +346,28 @@ async function syncCapabilities() {
 }
 
 async function initializeRuntime() {
+  const {createRuntimeApplication} = await import('@personal-agent/runtime/application');
   let readEvents;
   if (fakeMode) {
     const {FakeRuntime} = await import('@personal-agent/testkit');
     runtime = new FakeRuntime({mode: 'test', scenario: 'success'});
+    runtimeApplication = createRuntimeApplication({
+      path: path.resolve(dir, '../.cache/fake-runtime-application.sqlite'),
+      text: {mode: 'unavailable', model: modelConfig.model},
+    });
     readEvents = after => runtime.readEvents('tasks', after);
   } else {
-    const {TaskRuntime} = await import('@personal-agent/runtime');
     const dbPath = path.resolve(dir, '../.cache/runtime.sqlite');
     mkdirSync(path.dirname(dbPath), {recursive: true});
-    runtime = new TaskRuntime(dbPath);
-    readEvents = after => runtime.readEvents(after);
+    runtimeApplication = createRuntimeApplication({
+      path: dbPath,
+      text: {mode: 'unavailable', model: modelConfig.model},
+    });
+    runtime = runtimeApplication.runtime;
+    readEvents = after => runtimeApplication.readEvents(after);
   }
   runtimeConnection = await register({
-    transport: runtime,
+    transport: fakeMode ? runtime : runtimeApplication,
     now: () => fakeMode ? runtime.clock.now() : Date.now(),
     readEvents,
     attachClient: value => { client = value; return () => { client = undefined; }; },
@@ -453,10 +440,6 @@ async function action(event, name, payload) {
     taskGoals.set(result.taskId, goal);
     pinned = true;
     const task = await refresh(result.taskId);
-    if (!fakeMode) void executeTextTask(result.taskId, goal).catch(error => {
-      runtimeError = error instanceof Error ? error.message : '文字任务启动失败';
-      publish();
-    });
     return task;
   }
   if (name === 'task.cancel') {
@@ -541,13 +524,20 @@ app.whenReady().then(async () => {
     if (near || inside || pinned) { away = 0; if (near && !panel.isVisible()) openPanel(); }
     else if (panel.isVisible()) { if (!away) away = Date.now(); else if (Date.now() - away > 520) { panel.hide(); away = 0; } }
   }, 80);
-  app.on('before-quit', () => {
+  app.on('before-quit', event => {
     app.isQuitting = true;
     clearInterval(poll);
     clearInterval(eventPoll);
     tray?.destroy();
     runtimeConnection?.dispose?.();
-    try { runtime?.close?.(); } catch { /* active task recovery remains owned by Runtime */ }
+    try {
+      if (runtimeApplication) runtimeApplication.close();
+      else runtime?.close?.();
+    } catch (error) {
+      event.preventDefault();
+      runtimeError = error instanceof Error ? error.message : 'Runtime 仍有活动任务，无法安全退出';
+      publish();
+    }
   });
   app.on('window-all-closed', event => event.preventDefault());
 }).catch(error => { console.error(error); app.exit(1); });

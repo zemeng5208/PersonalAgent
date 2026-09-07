@@ -27,7 +27,7 @@ npm start --prefix apps/desktop
 
 普通启动使用 `.cache/runtime.sqlite` 中的本地 Runtime；显式联调命令为 `npm run dev:fake --prefix apps/desktop`。fake 标识常驻面板和后台，任务状态由“推进联调一步”手动驱动，测试数据仅在内存，本机联调配置在模块 `.cache`。无真实盘古、语音、外部账号调用。
 
-`electron/runtime.js` 提供 `register({transport, now?, readEvents?, attachClient?})`，供 goo122 根装配传入真实传输；生产路径不会自动加载 testkit。托盘菜单可打开面板、后台或退出应用，关闭后台不会销毁 Runtime。Electron 44.2.0 仍是模块开发依赖，根 workspace、锁文件和打包流程待 goo122 统一集成。当前应用不含分发安装包。
+`electron/runtime.js` 提供 `register({transport, now?, readEvents?, attachClient?})`，生产路径传入 `@personal-agent/runtime/application` 的传输对象；生产路径不会自动加载 testkit。托盘菜单可打开面板、后台或退出应用，关闭后台不会销毁 Runtime。Electron 44.2.0 仍是模块开发依赖，根 workspace、锁文件和打包流程待 goo122 统一集成。当前应用不含分发安装包。
 
 ## 验证与限制
 
@@ -39,13 +39,13 @@ npm start --prefix apps/desktop
 
 ## 文字交互垂直链路
 
-普通启动时，提交文字任务会通过本地 `TaskRuntime` 执行 `runAgent`，再由 `ModelGateway` 调用已配置的盘古 Provider。没有 Provider 时任务会如实失败，不会静默生成假回答。
+普通启动时，提交文字任务会通过本地 Runtime Application 的 `task.submit` 入口，由 Runtime 自动执行 Agent、`ModelGateway` 和 Provider 编排。Desktop 主进程只负责安全配置、IPC、事件订阅和任务展示；没有 Provider 时任务会如实失败，不会静默生成假回答。
 
 离线验收使用显式 Fake Model：
 
 ```powershell
 npm run dev:text-fake --prefix apps/desktop
-npm run test:text-task --workspace=@personal-agent/desktop
+npm run test --workspace=@personal-agent/runtime
 npm run test:text-smoke --workspace=@personal-agent/desktop
 ```
 
