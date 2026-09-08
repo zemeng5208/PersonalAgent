@@ -78,16 +78,24 @@ export class CalendarService {
     return structuredClone(result);
   }
 
-  searchEvents(accountRef: string, query: string): ConnectorItem[] {
+  async searchEvents(accountRef: string, query: string): Promise<ConnectorItem[]> {
     if (typeof query !== 'string' || query.length === 0) throw new ProtocolError('INVALID_ARGUMENT', 'Query must be a non-empty string');
     // Fake 端点没有服务端搜索，这里拉全窗口后按标题过滤；真实提供商实现服务端搜索。
+    // 提供商按页返回，必须翻完所有页——只看第一页会漏掉排在后续页的事件。
     const epoch: CalendarWindow = {fromUtc: '1970-01-01T00:00:00.000Z', toUtc: '2999-01-01T00:00:00.000Z'};
-    const page = this.provider.fetchWindow(accountRef, epoch, undefined);
+    const events: CalendarEventRecord[] = [];
+    let cursor: string | undefined;
+    for (let round = 0; round < 50; round += 1) {
+      const page = await this.provider.fetchWindow(accountRef, epoch, cursor);
+      events.push(...page.events);
+      if (!page.hasMore) break;
+      cursor = page.nextCursor;
+    }
     const fetchedAt = this.isoNow();
-    return structuredClone(page.events.filter(event => event.title.includes(query)).map(event => eventToItem(event, accountRef, fetchedAt)));
+    return structuredClone(events.filter(event => event.title.includes(query)).map(event => eventToItem(event, accountRef, fetchedAt)));
   }
 
-  getEventItem(accountRef: string, externalId: string): ConnectorItem {
+  async getEventItem(accountRef: string, externalId: string): Promise<ConnectorItem> {
     if (typeof externalId !== 'string' || externalId.length === 0) throw new ProtocolError('INVALID_ARGUMENT', 'externalId must be a non-empty string');
     const event = this.provider.getEvent(accountRef, externalId);
     if (event === undefined) throw new ProtocolError('NOT_FOUND', `Calendar event ${externalId} not found`);

@@ -78,7 +78,12 @@ export function localToUtc(localDateTime: string, timeZone: string): number {
   const asIfUtc = Date.parse(`${localDateTime}Z`);
   const offsetHere = zoneOffsetMs(asIfUtc, timeZone);
   const guess = asIfUtc - offsetHere;
-  if (zoneOffsetMs(guess, timeZone) === offsetHere && formatInZone(guess, timeZone) === localDateTime) {
+  // 快路径只在附近无转变时成立：回拨夜同一墙上时刻有两次解释，转变后偏移会让快路径
+  // 静默选中较晚的一次（柏林 2026-10-25 02:30 → 01:30Z 而非约定取较早的 00:30Z）。
+  // 附近 ±6 小时偏移一致才短路，否则交给慢路径按「取最早」裁决。
+  const nearTransition = zoneOffsetMs(guess - 6 * 3600e3, timeZone) !== offsetHere
+    || zoneOffsetMs(guess + 6 * 3600e3, timeZone) !== offsetHere;
+  if (!nearTransition && zoneOffsetMs(guess, timeZone) === offsetHere && formatInZone(guess, timeZone) === localDateTime) {
     return guess;
   }
   // 慢路径：采样一天内的偏移，收集能精确还原墙上时间的候选（覆盖回拨歧义，取最早）。

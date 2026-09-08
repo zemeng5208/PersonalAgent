@@ -103,6 +103,11 @@ export class TodoService {
       const reminder = this.resolveReminder(patch.reminder, next.due);
       if (reminder !== undefined) next.reminder = reminder;
     }
+    // 截止时间改动后重验既有提醒：把 due 提前到提醒之后而不同步调整提醒，会留下一个
+    // 在截止之后才响的提醒——这正是「改期重验」要拦下的状态。
+    if (next.due !== undefined && next.reminder !== undefined && Date.parse(next.reminder.remindAt.utc) > Date.parse(next.due.utc)) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Reminder must not be after due; move the reminder together with the new due time');
+    }
     const changed = jsonOf(next) !== jsonOf(current);
     if (!changed) return structuredClone(current);
     next.updatedAt = this.isoNow();

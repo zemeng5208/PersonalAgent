@@ -36,7 +36,7 @@
 
 ## 验收
 
-- Fake/离线测试：productivity 14 项 + calendar 10 项（DST 四边界、CRUD 读回、触发确定性、分页去重、respond 幂等、契约校验），全仓 `npm run check` 退出码 0（含架构门禁）。
+- Fake/离线测试：productivity 16 项 + calendar 10 项（DST 回拨取较早含柏林、改期重验、日历搜索跨页）（DST 四边界、CRUD 读回、触发确定性、分页去重、respond 幂等、契约校验），全仓 `npm run check` 退出码 0（含架构门禁）。
 - 跨模块集成：待办→Runtime 调度→桌面通知链路未接线（归 goo122 装配工作包）。
 - 真实条件验收：PA-013 真实日历连接器授权+读回待独立工作包；manifest 保持 `mock`。
 

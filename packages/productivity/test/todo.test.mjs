@@ -172,3 +172,28 @@ test('不存在的条目与非法输入映射为协议错误', () => {
   void PRODUCTIVITY_MODULE_VERSION;
   void ProtocolError;
 });
+
+test('DST 回拨歧义取较早一次：柏林 2026-10-25 02:30 → 00:30Z（CEST），不是 01:30Z（CET）', () => {
+  assert.equal(localToUtc('2026-10-25T02:30:00', 'Europe/Berlin'), Date.parse('2026-10-25T00:30:00.000Z'));
+});
+
+test('修改截止时间时重验既有提醒：due 提前到提醒之后 → 拒绝，要求同步调整提醒', () => {
+  const {service} = makeService();
+  const item = service.create({
+    title: '交付',
+    due: {localDateTime: '2026-09-20T18:00:00', timeZone: 'Asia/Shanghai'},
+    reminder: {remindAt: {localDateTime: '2026-09-20T08:00:00', timeZone: 'Asia/Shanghai'}},
+  });
+  // 把 due 提前到 07:00（早于 08:00 的提醒）而不动提醒 → 拒绝
+  assert.throws(() => service.update(item.id, {due: {localDateTime: '2026-09-20T07:00:00', timeZone: 'Asia/Shanghai'}}), /after due/);
+  // 连带把提醒改到 06:00 → 允许
+  const moved = service.update(item.id, {
+    due: {localDateTime: '2026-09-20T07:00:00', timeZone: 'Asia/Shanghai'},
+    reminder: {remindAt: {localDateTime: '2026-09-20T06:00:00', timeZone: 'Asia/Shanghai'}},
+  });
+  assert.equal(moved.due.utc, '2026-09-19T23:00:00.000Z');
+  assert.equal(moved.reminder.remindAt.utc, '2026-09-19T22:00:00.000Z');
+  // 清除提醒后再改 due 不受影响
+  const cleared = service.update(service.create({title: 'x', reminder: {remindAt: {utc: '2026-09-25T00:00:00.000Z'}}}).id, {clearReminder: true, due: {utc: '2026-09-21T00:00:00.000Z'}});
+  assert.equal(cleared.due.utc, '2026-09-21T00:00:00.000Z');
+});

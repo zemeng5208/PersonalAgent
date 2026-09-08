@@ -80,12 +80,12 @@ export class CalendarConnector implements ConnectorPort {
     return {items: page.items, nextCursor, hasMore: page.hasMore};
   }
 
-  search(accountRef: string, query: string): ProtocolContracts['connectorItem'][] {
+  async search(accountRef: string, query: string): Promise<ProtocolContracts['connectorItem'][]> {
     this.assertConnected();
     return this.service.searchEvents(accountRef, query);
   }
 
-  getItem(accountRef: string, id: string): ProtocolContracts['connectorItem'] {
+  async getItem(accountRef: string, id: string): Promise<ProtocolContracts['connectorItem']> {
     this.assertConnected();
     return this.service.getEventItem(accountRef, id);
   }

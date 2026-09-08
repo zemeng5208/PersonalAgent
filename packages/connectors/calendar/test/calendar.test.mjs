@@ -58,12 +58,18 @@ test('分页：limit 收窄 + hasMore + 窗口内事件按开始时间排序', (
   assert.equal(new Set(ids).size, ids.length);
 });
 
-test('搜索与单条读取；不存在的条目 NOT_FOUND', () => {
+test('搜索覆盖所有分页：后续页的事件（夜班/DST）也能命中', async () => {
   const {service} = makeService();
-  assert.equal(service.searchEvents(ACCOUNT, '站会').length, 1);
-  assert.equal(service.searchEvents(ACCOUNT, '不存在的关键词').length, 0);
-  assert.equal(service.getEventItem(ACCOUNT, 'evt-review').externalId, 'evt-review');
-  assert.throws(() => service.getEventItem(ACCOUNT, 'evt-none'), /not found/);
+  assert.equal((await service.searchEvents(ACCOUNT, '站会')).length, 1);
+  assert.equal((await service.searchEvents(ACCOUNT, '不存在的关键词')).length, 0);
+  // evt-dst-night「夜班交接（跨 DST）」按开始时间排在第 4 位，默认页大小 2 → 第 2 页；
+  // 修复前搜索只看第一页，永远命中不了它。
+  const nightShift = await service.searchEvents(ACCOUNT, '夜班');
+  assert.equal(nightShift.length, 1);
+  assert.equal(nightShift[0].externalId, 'evt-dst-night');
+  assert.equal(nightShift[0].validFor, '2026-11-01T05:30:00.000Z/2026-11-01T08:00:00.000Z');
+  assert.equal((await service.getEventItem(ACCOUNT, 'evt-review')).externalId, 'evt-review');
+  await assert.rejects(service.getEventItem(ACCOUNT, 'evt-none'), err => err.code === 'NOT_FOUND');
 });
 
 test('respond 幂等：同幂等键重复调用返回一致结果；键冲突换输入拒绝', () => {
