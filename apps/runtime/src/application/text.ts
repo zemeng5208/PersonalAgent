@@ -13,6 +13,7 @@ import type {
   ModelProvider,
   ModelRequest,
   ModelResult,
+  ModelMessage,
 } from '@personal-agent/models';
 import type { TaskSnapshot } from '@personal-agent/contracts';
 
@@ -43,6 +44,7 @@ export interface TextTaskRuntime {
 
 export interface TextTaskOptions {
   tools?: AgentToolPort;
+  initialMessages?: readonly ModelMessage[];
   resume?: boolean;
   now?: () => number;
   deadlineMs?: number;
@@ -112,6 +114,7 @@ export function startTextTask(
   return runtime.runTask(taskId, context => runAgent(context, {
     goal,
     model,
+    ...(options.initialMessages === undefined ? {} : {initialMessages: options.initialMessages}),
     tools: options.tools ?? NO_TOOLS,
     authorizationRefFor: () => 'runtime-text-chat-no-tools',
     maxSteps: options.tools ? 8 : 1,
