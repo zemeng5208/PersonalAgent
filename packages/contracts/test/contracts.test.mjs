@@ -3,8 +3,8 @@ import {test} from 'node:test';
 import {readFileSync} from 'node:fs';
 import {parseRequest,parseResponse,parseEvent,encodeFrame,FrameDecoder,MAX_FRAME_BYTES,validateContract} from '../dist/index.js';
 const fixtures = JSON.parse(readFileSync(new URL('../fixtures/requests.json',import.meta.url),'utf8'));
-test('all 14 operations accept portable fixtures and reject malformed/forged requests', () => {
-  assert.equal(fixtures.valid.length,14);
+test('all 17 operations accept portable fixtures and reject malformed/forged requests', () => {
+  assert.equal(fixtures.valid.length,17);
   for (const request of fixtures.valid) assert.deepEqual(parseRequest(request),request);
   for (const request of fixtures.invalid) assert.throws(() => parseRequest(request));
   assert.throws(() => parseRequest({...fixtures.valid[0],protocolVersion:'2.0.0'}),{code:'PROTOCOL_MISMATCH'});

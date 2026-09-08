@@ -27,7 +27,7 @@ test('approval allow/deny and stale decisions follow revision rules',async()=>{
     const request={approvalId:event.payload.approvalId,decision,expectedRevision:event.payload.revision};
     await assert.rejects(client.call('authorization.respond',{...request,expectedRevision:0}),{code:'REVISION_CONFLICT'});
     await client.call('authorization.respond',request);
-    await assert.rejects(client.call('authorization.respond',request),{code:'NOT_FOUND'});
+    await assert.rejects(client.call('authorization.respond',request),{code:'REVISION_CONFLICT'});
     runtime.advance(id);runtime.advance(id);
     assert.equal((await client.call('task.get',{taskId:id})).state,decision==='deny'?'cancelled':'succeeded');
   }
@@ -81,4 +81,18 @@ test('fake requires explicit test mode and never silently enables in production'
   const old=process.env.NODE_ENV;
   try{process.env.NODE_ENV='production';assert.throws(()=>new FakeRuntime({mode:'test',scenario:'success'}));}
   finally{if(old===undefined)delete process.env.NODE_ENV;else process.env.NODE_ENV=old;}
+});
+
+test('public fake queries support snapshot recovery and redacted approval lookup',async()=>{
+  const {runtime,client,id}=await setup('approval');
+  await client.call('task.submit',{goal:'second',conversationId:'c'},{idempotencyKey:'key-2'});
+  const tasks=await client.call('task.list',{conversationId:'c',limit:1});
+  assert.equal(tasks.items.length,1);
+  assert.equal(typeof tasks.nextBeforeSequence,'number');
+  const conversations=await client.call('conversation.list',{conversationId:'c',snapshotSequence:tasks.snapshotSequence});
+  assert.equal(conversations.items[0].taskCount,2);
+  runtime.advance(id);runtime.advance(id);
+  const approvals=await client.call('approval.list',{taskId:id,state:'pending'});
+  assert.equal(approvals.items[0].argumentSummary,'redacted');
+  assert.equal('arguments' in approvals.items[0],false);
 });
