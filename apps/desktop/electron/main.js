@@ -392,22 +392,7 @@ function applyEvent(event) {
   if (event.taskId && event.payload && ['task.created', 'task.state_changed', 'task.completed', 'task.failed', 'task.cancelled'].includes(event.type)) {
     tasks.set(event.taskId, structuredClone(event.payload));
   }
-  if (event.type === 'approval.requested' && event.payload) {
-    const view = structuredClone(event.payload);
-    try {
-      const approval = runtimeApplication?.runtime?.getApproval(event.payload.approvalId);
-      const checkpoint = runtimeApplication?.runtime?.loadCheckpoint(event.payload.taskId, 'agent-loop');
-      const proposal = checkpoint?.pending?.response?.kind === 'tool_proposal' ? checkpoint.pending.response.proposal : undefined;
-      if (approval) {
-        view.toolName = approval.toolName;
-        view.scopes = [...approval.scopes];
-        view.argumentsDigest = approval.argumentsDigest;
-        view.expiresAt = approval.expiresAt;
-      }
-      if (proposal?.toolName === approval?.toolName) view.arguments = structuredClone(proposal.arguments);
-    } catch {}
-    approvals.set(event.payload.approvalId, view);
-  }
+  if (event.type === 'approval.requested' && event.payload) approvals.set(event.payload.approvalId, structuredClone(event.payload));
   if (event.type === 'task.cancelled' && event.payload?.taskId) {
     for (const [id, approval] of approvals) if (approval.taskId === event.payload.taskId) approvals.delete(id);
   }
@@ -421,7 +406,13 @@ async function pumpEvents() {
     await client.call('event.subscribe', {streamId: 'tasks', afterSequence});
     const events = await runtimeConnection.readEvents(afterSequence);
     const accepted = eventCursor.accept(events);
-    accepted.forEach(applyEvent);
+    for (const event of accepted) {
+      applyEvent(event);
+      if (event.type === 'approval.requested') {
+        const result = await client.call('approval.list', {approvalId: event.payload.approvalId, limit: 1});
+        if (result.items[0]) approvals.set(event.payload.approvalId, structuredClone(result.items[0]));
+      }
+    }
     if (accepted.length) publish();
   } catch (error) {
     runtimeError = error instanceof Error ? error.message : '事件流读取失败';
@@ -441,6 +432,21 @@ async function syncCapabilities() {
     health = [];
     if (error?.code !== 'UNSUPPORTED_CAPABILITY') runtimeError = error instanceof Error ? error.message : '能力目录读取失败';
   }
+}
+
+async function syncRuntimeSnapshots() {
+  tasks.clear(); approvals.clear();
+  let beforeSequence;
+  let snapshotSequence;
+  do {
+    const page = await client.call('task.list', {limit: 100, ...(beforeSequence ? {beforeSequence} : {}), ...(snapshotSequence === undefined ? {} : {snapshotSequence})});
+    snapshotSequence = page.snapshotSequence;
+    for (const task of page.items) { tasks.set(task.taskId, structuredClone(task)); if (task.goal) taskGoals.set(task.taskId, task.goal); }
+    beforeSequence = page.nextBeforeSequence;
+  } while (beforeSequence);
+  const pending = await client.call('approval.list', {state: 'pending', limit: 100});
+  for (const approval of pending.items) approvals.set(approval.approvalId, structuredClone(approval));
+  eventCursor.reset(snapshotSequence ?? 0);
 }
 
 async function initializeRuntime() {
@@ -479,6 +485,7 @@ async function initializeRuntime() {
   connectionLabel = fakeMode ? 'Fake Runtime · 联调模式' : '本地 Runtime · 已连接';
   eventCursor = new EventCursor('tasks');
   await syncCapabilities();
+  await syncRuntimeSnapshots();
   await pumpEvents();
   eventPoll = setInterval(() => void pumpEvents(), 120);
 }
