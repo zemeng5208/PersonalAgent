@@ -4,8 +4,10 @@ import {mountAdmin} from '../features/admin/view.js';
 import {mountWorkspace} from '../features/workspace/view.js';
 import {applyPreferences} from '../ui/preferences.js';
 import {mountConversationRail} from '../features/conversation/rail.js';
+import {mountDesktopShell} from '../ui/desktop-shell.js';
 
 applyPreferences();
+mountDesktopShell();
 const root = document.querySelector('#root');
 const mode = new URLSearchParams(location.search).get('mode');
 const bridge = window.desktop;

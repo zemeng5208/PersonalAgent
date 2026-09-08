@@ -6,6 +6,7 @@ import {EventCursor} from '@personal-agent/client';
 import {register} from './runtime.js';
 import {panelBounds, clampOrb, draggedGroupBounds} from './placement.js';
 import {Conversations} from './conversations.js';
+import {createDesktopHost} from './desktop-host.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -15,7 +16,11 @@ if (fakeMode || fakeModelMode) app.setPath('userData', path.resolve(dir, '../.ca
 if (process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1') app.setPath('userData', path.resolve(dir, `../.cache/test-user-data-${process.pid}`));
 if (process.env.PA_DESKTOP_TEST_USER_DATA) app.setPath('userData', path.resolve(process.env.PA_DESKTOP_TEST_USER_DATA));
 
+const ownsDesktopInstance = app.requestSingleInstanceLock();
+if (!ownsDesktopInstance) app.quit();
+
 let runtime;
+let desktopHost;
 let runtimeConnection;
 let client;
 let eventCursor;
@@ -92,9 +97,10 @@ function publish() {
 }
 
 function windowFor(mode, bounds, options = {}) {
-  const win = new BrowserWindow({...bounds, show: false, backgroundColor: '#00000000',
+  const win = new BrowserWindow({...desktopHost.restore(mode, bounds), show: false, backgroundColor: '#00000000',
     webPreferences: {preload: path.join(dir, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true}, ...options});
   win.setMenuBarVisibility(false);
+  desktopHost.attach(win, mode);
   win.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
   win.webContents.on('will-navigate', event => event.preventDefault());
   win.loadFile(entry, {query: {mode}});
@@ -171,6 +177,7 @@ function createTray() {
     tray.setContextMenu(Menu.buildFromTemplate([
       {label: '打开悬浮面板', click: () => { pinned = true; openPanel(true); publish(); }},
       {label: '打开管理后台', click: () => openAdmin()},
+      {label: '桌面设置与恢复', click: () => desktopHost.openSettings()},
       {type: 'separator'},
       {label: '退出 PersonalAgent', click: () => app.quit()},
     ]));
@@ -512,7 +519,7 @@ async function action(event, name, payload) {
     dragging = true; panel.hide(); const point = screen.getCursorScreenPoint(); const bounds = orb.getBounds();
     dragOffset = {x: point.x - bounds.x, y: point.y - bounds.y}; return;
   }
-  if (name === 'orb.dragEnd' && sender === orb) { dragging = false; away = Date.now() + 400; return; }
+  if (name === 'orb.dragEnd' && sender === orb) { dragging = false; desktopHost.snap(orb); away = Date.now() + 400; return; }
   if (name === 'panel.dragStart' && sender === panel) {
     if (!payload || !Number.isFinite(payload.x) || !Number.isFinite(payload.y)) throw Error('拖动坐标无效');
     dragging = 'panel';
@@ -608,7 +615,13 @@ async function action(event, name, payload) {
   throw Error('Unsupported action');
 }
 
+app.on('second-instance', () => {
+  if (desktopHost && orb && panel && !orb.isDestroyed() && !panel.isDestroyed()) { pinned = true; openPanel(true); publish(); }
+});
+
 app.whenReady().then(async () => {
+  if (!ownsDesktopInstance) return;
+  desktopHost = createDesktopHost();
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
   try {
@@ -657,7 +670,7 @@ app.whenReady().then(async () => {
     const near = Math.hypot(point.x - bounds.x - bounds.width / 2, point.y - bounds.y - bounds.height / 2) <= 90;
     const panelBoundsValue = panel.getBounds();
     const inside = panel.isVisible() && point.x >= panelBoundsValue.x && point.x <= panelBoundsValue.x + panelBoundsValue.width && point.y >= panelBoundsValue.y && point.y <= panelBoundsValue.y + panelBoundsValue.height;
-    if (near || inside || pinned) { away = 0; if (near && !panel.isVisible()) openPanel(); }
+    if ((near && desktopHost.settings.hover) || inside || pinned) { away = 0; if (near && desktopHost.settings.hover && !panel.isVisible()) openPanel(); }
     else if (panel.isVisible()) { if (!away) away = Date.now(); else if (Date.now() - away > 520) { panel.hide(); away = 0; } }
   }, 80);
   app.on('before-quit', event => {

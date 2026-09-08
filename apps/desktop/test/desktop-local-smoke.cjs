@@ -1,0 +1,81 @@
+const assert = require('node:assert/strict');
+const path = require('node:path');
+const fs = require('node:fs');
+const {spawn} = require('node:child_process');
+const {_electron} = require('playwright');
+(async () => {
+  const root = path.resolve(__dirname, '../.cache');fs.mkdirSync(root,{recursive:true});
+  const data = fs.mkdtempSync(path.join(root,'local-smoke-'));
+  const launch = () => _electron.launch({executablePath:path.resolve(__dirname,'../../../node_modules/electron/dist/electron.exe'),args:[path.resolve(__dirname,'..'),'--fake-runtime'],env:{...process.env,ELECTRON_RUN_AS_NODE:undefined,PA_DESKTOP_TEST_USER_DATA:data}});
+  let app;
+  try {
+    app = await launch();await app.firstWindow();
+    const orb = app.windows().find(page=>page.url().includes('mode=orb'));
+    await orb.waitForSelector('canvas');
+    const duplicateExit = await new Promise((resolve,reject)=>{
+      const child=spawn(path.resolve(__dirname,'../../../node_modules/electron/dist/electron.exe'),[path.resolve(__dirname,'..'),'--fake-runtime'],{env:{...process.env,ELECTRON_RUN_AS_NODE:undefined,PA_DESKTOP_TEST_USER_DATA:data},windowsHide:true,stdio:'ignore'});
+      const timer=setTimeout(()=>{child.kill();reject(Error('Duplicate instance did not exit'));},15000);
+      child.once('error',error=>{clearTimeout(timer);reject(error);});
+      child.once('exit',code=>{clearTimeout(timer);resolve(code);});
+    });
+    assert.equal(duplicateExit,0);
+    const orbPosition=await app.evaluate(({BrowserWindow,screen})=>{
+      const win=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('mode=orb'));
+      const area=screen.getPrimaryDisplay().workArea;win.setPosition(area.x+160,area.y+180);return win.getPosition();
+    });
+    const opening=app.waitForEvent('window');
+    await orb.evaluate(()=>window.desktop.openSettings());
+    const page=await opening;
+    await page.waitForSelector('#settings');
+    const errors=[];page.on('pageerror',error=>errors.push(error.message));
+    page.on('console',message=>{if(message.type()==='error')errors.push(message.text());});
+    assert.ok(page.url().includes('/desktop-settings/'));
+    await page.locator('[name=language]').selectOption('en');
+    await page.locator('[name=fontScale]').selectOption('1.2');
+    await page.locator('[name=alwaysOnTop]').uncheck();
+    await page.locator('button[type=submit]').click();
+    await page.getByText('Saved',{exact:true}).waitFor();
+    assert.equal(await page.locator('h1').innerText(),'Desktop settings');
+    assert.equal(await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('mode=orb')).isAlwaysOnTop()),false);
+    assert.equal(await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('mode=orb')).webContents.getZoomFactor()),1);
+    const snapshot=await page.evaluate(()=>window.localDesktop.call('read'));
+    assert.ok(snapshot.logs.includes('settings-saved'));
+    assert.ok(snapshot.displays.length);
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
+    assert.equal(await page.evaluate(()=>[...document.querySelectorAll('select,input,button')].every(node=>node.getBoundingClientRect().right<=innerWidth)),true);
+    const adminOpening=app.waitForEvent('window');
+    await orb.evaluate(()=>window.desktop.invoke('admin.open'));
+    const admin=await adminOpening;
+    await admin.waitForSelector('#desktop-local-settings');
+    const adminId=await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('mode=admin')).webContents.id);
+    // Exercise the recovery handler without crashing Playwright's own CDP session.
+    await app.evaluate(({BrowserWindow},id)=>BrowserWindow.getAllWindows().find(w=>w.webContents.id===id).webContents.emit('render-process-gone', {}, {reason:'crashed'}),adminId);
+    const crashed=await page.evaluate(()=>window.localDesktop.call('read'));
+    assert.ok(crashed.logs.includes('renderer-gone'));
+    await page.evaluate(id=>window.localDesktop.call('window',{id,action:'reload'}),adminId);
+    await admin.waitForSelector('#desktop-local-settings');
+    assert.equal(await admin.locator('#desktop-local-settings').innerText(),'Desktop settings and recovery');
+    await page.evaluate(id=>window.localDesktop.call('window',{id,action:'minimize'}),adminId);
+    assert.equal(await app.evaluate(({BrowserWindow},id)=>BrowserWindow.getAllWindows().find(w=>w.webContents.id===id).isMinimized(),adminId),true);
+    await page.evaluate(id=>window.localDesktop.call('window',{id,action:'show'}),adminId);
+    await page.evaluate(id=>window.localDesktop.call('window',{id,action:'reload'}),adminId);
+    await admin.waitForSelector('#desktop-local-settings');
+    await page.evaluate(()=>window.scrollTo(0,0));
+    const png = await app.evaluate(async ({BrowserWindow}) => {
+      const win = BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('/desktop-settings/'));
+      win.show();win.focus();
+      return (await win.webContents.capturePage()).toPNG().toString('base64');
+    });
+    fs.writeFileSync(path.join(data,'desktop-settings.png'),Buffer.from(png,'base64'));
+    assert.deepEqual(errors,[]);
+    await app.close();app=await launch();await app.firstWindow();
+    const nextOrb=app.windows().find(p=>p.url().includes('mode=orb'));await nextOrb.waitForSelector('canvas');
+    assert.deepEqual(await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('mode=orb')).getPosition()),orbPosition);
+    const pending=app.waitForEvent('window');await nextOrb.evaluate(()=>window.desktop.openSettings());const next=await pending;
+    await next.waitForSelector('#settings');
+    const restored=await next.evaluate(()=>window.localDesktop.call('read'));
+    assert.equal(restored.settings.language,'en');assert.equal(restored.settings.fontScale,1.2);assert.equal(restored.settings.alwaysOnTop,false);
+    console.log('PASS: single instance, desktop settings, language, zoom isolation, window controls, recovery handler, logs and restart/position persistence');
+    console.log(path.join(data,'desktop-settings.png'));
+  } finally {if(app)await app.close();}
+})().catch(error=>{console.error(error);process.exitCode=1;});
