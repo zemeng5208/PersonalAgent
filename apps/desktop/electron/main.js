@@ -103,12 +103,20 @@ function windowFor(mode, bounds, options = {}) {
   desktopHost.attach(win, mode);
   win.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
   win.webContents.on('will-navigate', event => event.preventDefault());
-  win.loadFile(entry, {query: {mode}});
-  win.once('ready-to-show', () => {
+  let presented = false;
+  const present = () => {
+    if (presented || win.isDestroyed()) return;
+    presented = true;
     if (['panel','admin','workspace'].includes(mode)) applyShape(win, mode === 'panel' ? 20 : 12);
     if (mode !== 'panel') win.show();
     publish();
-  });
+  };
+  // Applying a restored zoom during did-finish-load can prevent Electron from
+  // emitting ready-to-show.  Loaded local pages are already safe to present,
+  // so either lifecycle event may complete the one-shot presentation.
+  win.webContents.once('did-finish-load', present);
+  win.once('ready-to-show', present);
+  win.loadFile(entry, {query: {mode}});
   return win;
 }
 

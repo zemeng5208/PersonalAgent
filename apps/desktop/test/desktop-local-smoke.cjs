@@ -48,6 +48,7 @@ const {_electron} = require('playwright');
     const admin=await adminOpening;
     await admin.waitForSelector('#desktop-local-settings');
     const adminId=await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('mode=admin')).webContents.id);
+    assert.equal(await app.evaluate(({BrowserWindow},id)=>BrowserWindow.getAllWindows().find(w=>w.webContents.id===id).isVisible(),adminId),true);
     // Exercise the recovery handler without crashing Playwright's own CDP session.
     await app.evaluate(({BrowserWindow},id)=>BrowserWindow.getAllWindows().find(w=>w.webContents.id===id).webContents.emit('render-process-gone', {}, {reason:'crashed'}),adminId);
     const crashed=await page.evaluate(()=>window.localDesktop.call('read'));

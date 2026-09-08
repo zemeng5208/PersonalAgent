@@ -58,7 +58,10 @@ export function createDesktopHost() {
     win.on('close', save);
     win.on('closed', () => { clearTimeout(saveTimer); windows.delete(contentsId); });
     win.webContents.on('did-finish-load', () => {
-      if (!['orb', 'panel'].includes(mode)) win.webContents.setZoomFactor(state.value.settings.fontScale);
+      const fontScale = state.value.settings.fontScale;
+      if (!['orb', 'panel'].includes(mode) && win.webContents.getZoomFactor() !== fontScale) {
+        win.webContents.setZoomFactor(fontScale);
+      }
       log('loaded', mode);
     });
     win.webContents.on('did-fail-load', (_event, code, _description, _url, mainFrame) => { if (mainFrame) log('load-failed', mode, String(code)); });
@@ -102,7 +105,7 @@ export function createDesktopHost() {
       try { shortcut(settings.shortcut); } catch (error) { state.update(before); throw error; }
       for (const {win, mode} of windows.values()) {
         if (mode === 'orb' || mode === 'panel') win.setAlwaysOnTop(settings.alwaysOnTop);
-        else win.webContents.setZoomFactor(settings.fontScale);
+        else if (win.webContents.getZoomFactor() !== settings.fontScale) win.webContents.setZoomFactor(settings.fontScale);
         if (mode === 'admin' || mode === 'workspace') win.webContents.send('desktop:preferences', {settings, locale:app.getLocale()});
       }
       log('settings-saved', 'desktop-settings');
