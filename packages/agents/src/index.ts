@@ -87,6 +87,7 @@ export class RuntimeToolInvoker implements AgentToolPort {
 
 export interface AgentRunOptions {
   goal: string;
+  initialMessages?: readonly ModelMessage[];
   model: ModelGateway;
   tools: AgentToolPort;
   authorizationRefFor: (toolName: string, context: AgentWorkerContext) => string;
@@ -146,7 +147,10 @@ async function complete(context: AgentWorkerContext, options: AgentRunOptions, m
 export async function runAgent(context: AgentWorkerContext, options: AgentRunOptions): Promise<AgentOutcome> {
   validateBounds(options);
   const saved = context.loadCheckpoint('agent-loop') as {messages: ModelMessage[]; usedTokens: number; repairs: number; evidenceRefs: string[]; step: number; pending?: ModelResult} | undefined;
-  let messages: ModelMessage[] = saved?.messages ?? [{role: 'user', content: options.goal}];
+  let messages: ModelMessage[] = saved?.messages ?? [
+    ...(options.initialMessages ?? []).map(message => structuredClone(message)),
+    {role: 'user', content: options.goal},
+  ];
   let usedTokens = saved?.usedTokens ?? 0;
   let repairs = saved?.repairs ?? 0;
   let evidenceRefs: string[] = saved?.evidenceRefs ?? [];

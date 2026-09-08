@@ -34,6 +34,12 @@ export interface SubmitTaskInput {
   idempotencyKey: string;
 }
 
+export interface ConversationTurn {
+  taskId: string;
+  goal: string;
+  resultSummary: string;
+}
+
 export interface ProgressInput {
   stepId: string;
   label: string;
@@ -322,6 +328,37 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
 
   getTask(taskId: string): TaskSnapshot {
     return structuredClone(taskFromRow(this.taskRow(requireText(taskId, 'taskId'))));
+  }
+
+  readConversationHistory(conversationId: string, beforeTaskId: string, limit = 20): ConversationTurn[] {
+    const normalizedConversationId = requireText(conversationId, 'conversationId');
+    const normalizedTaskId = requireText(beforeTaskId, 'beforeTaskId');
+    if (!Number.isInteger(limit) || limit <= 0) throw new Error('limit must be a positive integer');
+
+    this.getTask(normalizedTaskId);
+    const currentEvent = this.db.prepare(
+      `SELECT sequence FROM task_events
+       WHERE task_id = ? AND type = 'task.created'
+       ORDER BY sequence ASC LIMIT 1`,
+    ).get(normalizedTaskId) as {sequence?: number} | undefined;
+    if (!currentEvent || typeof currentEvent.sequence !== 'number') return [];
+
+    const rows = this.db.prepare(
+      `SELECT t.task_id AS taskId, t.goal, t.result_summary AS resultSummary
+       FROM tasks t
+       JOIN task_events e ON e.task_id = t.task_id AND e.type = 'task.created'
+       WHERE t.conversation_id = ?
+         AND t.state = 'succeeded'
+         AND t.result_summary IS NOT NULL
+         AND e.sequence < ?
+       ORDER BY e.sequence DESC LIMIT ?`,
+    ).all(normalizedConversationId, currentEvent.sequence, limit) as unknown as ConversationTurn[];
+
+    return rows.reverse().map(row => ({
+      taskId: row.taskId,
+      goal: row.goal,
+      resultSummary: row.resultSummary,
+    }));
   }
 
   readToolExecutions(taskId: string): ToolExecutionRecord[] {

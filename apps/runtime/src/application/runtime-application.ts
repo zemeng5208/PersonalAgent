@@ -5,7 +5,15 @@ import type {AgentToolPort} from '@personal-agent/agents';
 import {ToolGateway, toolArgumentsDigest} from '@personal-agent/tool-gateway';
 import {TaskRuntime} from '../index.js';
 import {createTextApplication, type TextApplication, type TextApplicationOptions} from './text.js';
+import type {ModelMessage} from '@personal-agent/models';
 type SuccessfulResponse = Extract<Response, {outcome: 'ok'}>;
+
+const CONVERSATION_HISTORY_LIMIT = 20;
+const MODEL_METADATA = /\s*\[model=[^;\]]+;\s*verification=[^;\]]+;\s*tokens=[^\]]+\]\s*$/;
+
+function assistantText(resultSummary: string): string {
+  return resultSummary.replace(MODEL_METADATA, '').trim();
+}
 
 export interface RuntimeApplicationOptions { path: string; now?: () => Date; idFactory?: () => string; text?: TextApplicationOptions; tools?: readonly RegisteredTool[]; }
 export interface RuntimeApplicationTransport { send(request: Request, signal: AbortSignal): Promise<Response>; }
@@ -81,7 +89,11 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     if (approval.state !== 'allowed') throw new ProtocolError('UNAUTHORIZED', 'Task approval has not been allowed');
     const goal = this.runtime.loadCheckpoint(taskId, 'application-goal');
     if (typeof goal !== 'string') throw new ProtocolError('NOT_FOUND', 'Task has no application checkpoint');
-    const execution = this.textApplication.startTask(this.runtime, taskId, goal, {resume: true}).finally(() => this.activeTextTasks.delete(taskId));
+    const context = this.runtime.loadCheckpoint(taskId, 'application-context') as {messages?: ModelMessage[]} | undefined;
+    const execution = this.textApplication.startTask(this.runtime, taskId, goal, {
+      resume: true,
+      ...(context?.messages === undefined ? {} : {initialMessages: context.messages}),
+    }).finally(() => this.activeTextTasks.delete(taskId));
     this.activeTextTasks.set(taskId, execution);
     void execution.catch(() => {});
   }
@@ -89,11 +101,23 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   private dispatchSubmittedTextTask(request: Request, response: SuccessfulResponse): void {
     const taskId = response.data && typeof response.data === 'object' && 'taskId' in response.data ? response.data.taskId : undefined;
     const goal = request.operation === 'task.submit' ? request.payload.goal : undefined;
-    if (typeof taskId !== 'string' || typeof goal !== 'string' || this.activeTextTasks.has(taskId)) return;
+    const conversationId = request.operation === 'task.submit' ? request.payload.conversationId : undefined;
+    if (typeof taskId !== 'string' || typeof goal !== 'string' || typeof conversationId !== 'string' || this.activeTextTasks.has(taskId)) return;
     if (this.runtime.getTask(taskId).state !== 'created') return;
     const application = this.textApplication;
+
+    const history: ModelMessage[] = this.runtime.readConversationHistory(conversationId, taskId, CONVERSATION_HISTORY_LIMIT).flatMap(turn => {
+      const answer = assistantText(turn.resultSummary);
+      return answer ? [
+        {role: 'user' as const, content: turn.goal},
+        {role: 'assistant' as const, content: answer},
+      ] : [];
+    });
     this.runtime.saveCheckpoint(taskId, 'application-goal', goal);
-    const execution = Promise.resolve().then(() => application.startTask(this.runtime, taskId, goal)).finally(() => this.activeTextTasks.delete(taskId));
+    this.runtime.saveCheckpoint(taskId, 'application-context', {messages: history});
+    const execution = Promise.resolve().then(() => application.startTask(this.runtime, taskId, goal, {
+      ...(history.length ? {initialMessages: history} : {}),
+    })).finally(() => this.activeTextTasks.delete(taskId));
     this.activeTextTasks.set(taskId, execution);
     void execution.catch(() => {
       // TaskRuntime persists the failure. This catch only prevents an unhandled rejection.
