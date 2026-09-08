@@ -7,7 +7,7 @@ export * from './ports.js';
 export type Scenario = 'success' | 'failure' | 'approval' | 'cancel' | 'unknown_write' | 'reconnect';
 const scenarios: Scenario[] = ['success','failure','approval','cancel','unknown_write','reconnect'];
 const terminal = new Set(['succeeded','failed','cancelled']);
-const capabilities: Operation[] = ['system.handshake','task.submit','task.get','task.cancel','event.subscribe','capability.list','settings.get','settings.update','authorization.respond'];
+const capabilities: Operation[] = ['system.handshake','task.submit','task.get','task.list','conversation.list','approval.list','task.cancel','event.subscribe','capability.list','settings.get','settings.update','authorization.respond'];
 function canonical(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
@@ -21,7 +21,8 @@ export class FakeRuntime implements Transport {
   private events: Event[] = [];
   private sequence = 0;
   private nextTask = 0;
-  private approvals = new Map<string, string>();
+  private approvals = new Map<string, {approvalId: string; taskId: string; revision: number; action: string; scopes: string[]; expiresAt: string; state: 'pending' | 'allowed' | 'denied'; argumentsDigest: string; argumentSummary: 'redacted'}>();
+  private taskSequences = new Map<string, number>();
   private settings = new Map<string, {value: Record<string,unknown>; revision: number}>();
   constructor(private readonly options: {mode: 'test'; scenario: Scenario; clock?: FakeClock; replayLimit?: number}) {
     if (options.mode !== 'test' || process.env.NODE_ENV === 'production') throw new Error('FakeRuntime is test-only');
@@ -74,13 +75,39 @@ export class FakeRuntime implements Transport {
           return cached.data;
         }
         const task: TaskSnapshot = {taskId:'fake-task-' + ++this.nextTask,state:'created',revision:1,
-          updatedAt:new Date(this.clock.now()).toISOString(),steps:[],evidenceRefs:[]};
+          updatedAt:new Date(this.clock.now()).toISOString(),steps:[],evidenceRefs:[],goal:request.payload.goal,
+          conversationId:request.payload.conversationId,attachmentRefs:request.payload.attachmentRefs ?? []};
         this.tasks.set(task.taskId,task);
         this.emit('task.created',task,task.taskId);
+        this.taskSequences.set(task.taskId,this.sequence);
         const data = {taskId:task.taskId,state:task.state,revision:task.revision};
         this.dedupe.set(key,{input,data}); return data;
       }
       case 'task.get': return this.task(request.payload.taskId);
+      case 'task.list': {
+        const snapshotSequence=request.payload.snapshotSequence ?? this.sequence;
+        if(snapshotSequence>this.sequence)throw new ProtocolError('INVALID_ARGUMENT','Invalid snapshot sequence');
+        const all=[...this.tasks.values()].filter(task=>(this.taskSequences.get(task.taskId) ?? 0)<=snapshotSequence)
+          .filter(task=>request.payload.beforeSequence===undefined||(this.taskSequences.get(task.taskId) ?? 0)<request.payload.beforeSequence)
+          .filter(task=>request.payload.conversationId===undefined||task.conversationId===request.payload.conversationId)
+          .filter(task=>request.payload.states===undefined||request.payload.states.includes(task.state))
+          .sort((a,b)=>(this.taskSequences.get(b.taskId) ?? 0)-(this.taskSequences.get(a.taskId) ?? 0));
+        const limit=request.payload.limit ?? 50;const page=all.slice(0,limit);
+        return {items:structuredClone(page),snapshotSequence,...(all.length>limit?{nextBeforeSequence:this.taskSequences.get(page.at(-1)!.taskId)!}:{})};
+      }
+      case 'conversation.list': {
+        const snapshotSequence=request.payload.snapshotSequence ?? this.sequence;
+        if(snapshotSequence>this.sequence)throw new ProtocolError('INVALID_ARGUMENT','Invalid snapshot sequence');
+        const grouped=new Map<string,{sequence:number;tasks:TaskSnapshot[]}>();
+        for(const task of this.tasks.values()){const sequence=this.taskSequences.get(task.taskId) ?? 0;if(sequence>snapshotSequence)continue;if(request.payload.conversationId!==undefined&&task.conversationId!==request.payload.conversationId)continue;const conversationId=task.conversationId!;const value=grouped.get(conversationId)??{sequence,tasks:[]};value.sequence=Math.max(value.sequence,sequence);value.tasks.push(task);grouped.set(conversationId,value);}
+        const all=[...grouped.entries()].filter(([,value])=>request.payload.beforeSequence===undefined||value.sequence<request.payload.beforeSequence).sort((a,b)=>b[1].sequence-a[1].sequence);
+        const limit=request.payload.limit ?? 20;const page=all.slice(0,limit);
+        return {items:page.map(([conversationId,value])=>({conversationId,updatedAt:value.tasks.reduce((latest,task)=>task.updatedAt>latest?task.updatedAt:latest,value.tasks[0]!.updatedAt),taskCount:value.tasks.length,tasks:structuredClone(value.tasks).sort((a,b)=>(this.taskSequences.get(a.taskId)??0)-(this.taskSequences.get(b.taskId)??0))})),snapshotSequence,...(all.length>limit?{nextBeforeSequence:page.at(-1)![1].sequence}:{})};
+      }
+      case 'approval.list': {
+        const all=[...this.approvals.values()].filter(item=>request.payload.approvalId===undefined||item.approvalId===request.payload.approvalId).filter(item=>request.payload.taskId===undefined||item.taskId===request.payload.taskId).filter(item=>request.payload.state===undefined||item.state===request.payload.state).reverse();
+        const limit=request.payload.limit ?? 50;return {items:structuredClone(all.slice(0,limit)),snapshotSequence:this.sequence};
+      }
       case 'task.cancel': {
         const task = this.task(request.payload.taskId);
         if (terminal.has(task.state)) return {taskId:task.taskId,state:task.state,cancelAccepted:false};
@@ -106,11 +133,11 @@ export class FakeRuntime implements Transport {
       }
       case 'authorization.respond': {
         const {approvalId,decision,expectedRevision} = request.payload;
-        const id = this.approvals.get(approvalId);
-        if (!id) throw new ProtocolError('NOT_FOUND','Approval not found');
-        const task = this.task(id);
-        if (task.state !== 'waiting_approval' || task.revision !== expectedRevision) throw new ProtocolError('REVISION_CONFLICT','Approval changed');
-        this.approvals.delete(approvalId);
+        const approval = this.approvals.get(approvalId);
+        if (!approval) throw new ProtocolError('NOT_FOUND','Approval not found');
+        const task = this.task(approval.taskId);
+        if (approval.state !== 'pending' || approval.revision !== expectedRevision || task.state !== 'waiting_approval') throw new ProtocolError('REVISION_CONFLICT','Approval changed');
+        approval.state=decision === 'deny' ? 'denied' : 'allowed';approval.revision++;
         this.state(task,decision === 'deny' ? 'cancelled' : 'running');
         return {accepted:true,approvalState:decision === 'deny' ? 'denied' : 'allowed'};
       }
@@ -127,8 +154,9 @@ export class FakeRuntime implements Transport {
       if (this.options.scenario === 'approval') {
         this.state(task,'waiting_approval');
         const approvalId = 'fake-approval-' + taskId;
-        this.approvals.set(approvalId,taskId);
-        this.emit('approval.requested',{approvalId,taskId,revision:task.revision,action:'fixture-read'},taskId);
+        const approval={approvalId,taskId,revision:1,action:'fixture-read',scopes:['fixture:read'],expiresAt:new Date(this.clock.now()+60000).toISOString(),state:'pending' as const,argumentsDigest:'0'.repeat(64),argumentSummary:'redacted' as const};
+        this.approvals.set(approvalId,approval);
+        this.emit('approval.requested',{approvalId,taskId,revision:approval.revision,action:approval.action},taskId);
       } else this.state(task,'running');
     } else if (task.state === 'running') {
       if (this.options.scenario === 'failure') {
