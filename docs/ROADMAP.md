@@ -169,6 +169,14 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；PR #
 
 ## 5. 继续入口
 
+### COMPETITION-PORTS-01（本地开发增量）
+
+- Profile：huawei_ict_agentarts；负责人 goo122；消费评审 zemeng；状态 in_progress。
+- 基线 bafb541；分支 codex/competition-coordination-ports，工作树 .worktrees/competition-coordination-ports。
+- 新增 CoordinationPort / CloudAgentPort 文字首片、显式 Fake、Runtime 注入；不调用真实服务、不扩展 Local。
+- 端口 provisional，真实 AgentArts 仍 unavailable；完整范围与验证见 [工作包](modules/COMPETITION-PORTS-01.md)。
+- 下一步为 zemeng 消费评审，然后补云适配与工具提案/执行结果契约；不能将文字 Fake 视为 Golden Path 完成。
+
 当前继续入口以[接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md)和模块台账为准。Core Runtime Profile 1 可稳定消费；下一公共接口工作是 Model/Coordination/Memory/ToolExecution/Evidence/Artifact 的最小端口与 Fake。MOD-05 已具备任务级 SQLite 授权、审批恢复和本地 Evidence，但跨任务持续授权、真实 SecretStore、公开 Evidence 内容和真实写入恢复仍未完成。PR #8 的历史冲突由原负责人处理；PR #19 已合并。
 
 ### MOD-25 地理编码修复工作包（PR #12，历史验收）

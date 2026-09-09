@@ -6,6 +6,8 @@ import {ToolGateway, toolArgumentsDigest} from '@personal-agent/tool-gateway';
 import {TaskRuntime} from '../index.js';
 import {createTextApplication, type TextApplication, type TextApplicationOptions} from './text.js';
 import type {ModelMessage} from '@personal-agent/models';
+import type {CoordinationPort} from '@personal-agent/coordination';
+import {startCoordinationTask} from './coordination.js';
 type SuccessfulResponse = Extract<Response, {outcome: 'ok'}>;
 
 const CONVERSATION_HISTORY_LIMIT = 20;
@@ -15,7 +17,7 @@ function assistantText(resultSummary: string): string {
   return resultSummary.replace(MODEL_METADATA, '').trim();
 }
 
-export interface RuntimeApplicationOptions { path: string; now?: () => Date; idFactory?: () => string; text?: TextApplicationOptions; tools?: readonly RegisteredTool[]; }
+export interface RuntimeApplicationOptions { path: string; now?: () => Date; idFactory?: () => string; text?: TextApplicationOptions; tools?: readonly RegisteredTool[]; profile?: 'local' | 'huawei_ict_agentarts'; coordination?: CoordinationPort; }
 export interface RuntimeApplicationTransport { send(request: Request, signal: AbortSignal): Promise<Response>; }
 
 export class RuntimeApplication implements RuntimeApplicationTransport {
@@ -23,8 +25,17 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   private textApplication: TextApplication;
   private readonly activeTextTasks = new Map<string, Promise<unknown>>();
   private readonly tools: AgentToolPort | undefined;
+  readonly profile: 'local' | 'huawei_ict_agentarts';
+  private readonly coordination: CoordinationPort | undefined;
 
   constructor(options: RuntimeApplicationOptions) {
+    this.profile = options.profile ?? 'local';
+    if (!['local', 'huawei_ict_agentarts'].includes(this.profile)
+      || (this.profile === 'local' && options.coordination !== undefined)
+      || (this.profile === 'huawei_ict_agentarts' && (options.text !== undefined || options.tools !== undefined))) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Choose explicit competition coordination or existing local text configuration, not both');
+    }
+    this.coordination = options.coordination;
     let gateway: ToolGateway | undefined;
     this.runtime = new TaskRuntime(options.path, {
       ...(options.now ? {now: options.now} : {}),
@@ -56,7 +67,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     this.textApplication = createTextApplication({...options.text, ...(this.tools ? {tools: this.tools} : {})});
   }
 
-  get deployment(): TextApplication['deployment'] { return structuredClone(this.textApplication.deployment); }
+  get deployment(): TextApplication['deployment'] { this.requireLocalText(); return structuredClone(this.textApplication.deployment); }
   get activeTaskCount(): number { return this.activeTextTasks.size; }
 
   async send(request: Request, signal: AbortSignal): Promise<Response> {
@@ -70,18 +81,24 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     return response;
   }
 
+  private requireLocalText(): void {
+    if (this.profile !== 'local') throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Local text configuration is unavailable in competition profile');
+  }
+
   readEvents(afterSequence = 0): Event[] { return this.runtime.readEvents(afterSequence); }
 
   configureText(options: TextApplicationOptions): TextApplication['deployment'] {
+    this.requireLocalText();
     if (this.activeTextTasks.size) throw new Error('Cannot reconfigure text model while tasks are active');
     this.textApplication = createTextApplication({...options, ...(this.tools ? {tools: this.tools} : {})});
     return this.deployment;
   }
 
-  testTextConnection(options?: Parameters<TextApplication['testConnection']>[0]) { return this.textApplication.testConnection(options); }
+  testTextConnection(options?: Parameters<TextApplication['testConnection']>[0]) { this.requireLocalText(); return this.textApplication.testConnection(options); }
   close(): void { this.runtime.close(); }
 
   resumeTask(taskId: string): void {
+    this.requireLocalText();
     if (this.activeTextTasks.has(taskId)) return;
     if (this.runtime.getTask(taskId).state !== 'waiting_approval') throw new ProtocolError('REVISION_CONFLICT', 'Task is not awaiting approval');
     const checkpoint = this.runtime.loadCheckpoint(taskId, 'agent-loop') as {step: number} | undefined;
@@ -104,6 +121,15 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     const conversationId = request.operation === 'task.submit' ? request.payload.conversationId : undefined;
     if (typeof taskId !== 'string' || typeof goal !== 'string' || typeof conversationId !== 'string' || this.activeTextTasks.has(taskId)) return;
     if (this.runtime.getTask(taskId).state !== 'created') return;
+    if (this.profile === 'huawei_ict_agentarts') {
+      this.runtime.saveCheckpoint(taskId, 'application-profile', this.profile);
+      const execution = Promise.resolve().then(() => startCoordinationTask(
+        this.runtime, this.coordination, taskId, goal, request.deadline,
+      )).finally(() => this.activeTextTasks.delete(taskId));
+      this.activeTextTasks.set(taskId, execution);
+      void execution.catch(() => {});
+      return;
+    }
     const application = this.textApplication;
 
     const history: ModelMessage[] = this.runtime.readConversationHistory(conversationId, taskId, CONVERSATION_HISTORY_LIMIT).flatMap(turn => {
