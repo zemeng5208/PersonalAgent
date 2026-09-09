@@ -2,7 +2,9 @@
 
 日期：2026-09-08。提出方 / 消费者：`zemeng`；公共协议、SDK、fake 与根装配负责人：`goo122`。
 
-状态：**请求已合并；批次 A 查询接口已实现，等待非作者评审**。批次 A 的最终公开签名、恢复流程和剩余限制见 [Runtime 公开查询接口](RUNTIME_QUERY_API.md)；其余批次仍是待冻结请求，不宣称 MOD-11～19 已获全部开工授权。
+状态：**请求 PR #32 已合并；批次 A 的查询/恢复子集已随 PR #34 交付并冻结**。批次 A 的最终签名见 [Runtime 公开查询接口](RUNTIME_QUERY_API.md)；逐项状态见[当前接口目录](../interfaces/CURRENT_INTERFACE_CATALOG.md)。F01～F10 的其余部分仍为 `provisional` 或 `unavailable`，不宣称 MOD-11～19 已获得完整接口或全部开工授权。
+
+Profile 更新：当前只实施 [Huawei ICT AgentArts Competition Profile](../competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)。本请求中已冻结的 Core Runtime 查询面继续作为比赛共享底座；后续新增接口先满足 MOD-29/30/32 的 `CoordinationPort`、`CloudAgentPort`、`ToolExecutionPort` 与 Evidence 最小消费语义。MOD-04B、MOD-27/28 随后接入持续认知；MOD-11～19 只按比赛 Golden Path 的实际依赖推进。通用 Local Profile 仅保留现有代码，当前不新增、不扩展，也不作为接收门槛。
 
 ## 1. 目的与边界
 
@@ -14,9 +16,22 @@
 
 以下新增接口名称均是**建议能力名，不是已存在的 operation 或最终签名**。请 goo122 在交付 PR 中选择复用现有操作、增加公开方法或新增 capability，并明确最终导出位置；不要让消费方维护另一套 DTO。
 
+### 处理结果（2026-09-09）
+
+| 请求范围 | 处理结论 | 当前状态 |
+| --- | --- | --- |
+| F02 的 `task.list`、`conversation.list` 和固定水位分页 | PR #34 已实现、Desktop 已通过公开 Client 恢复 | `frozen` |
+| F03 的 `approval.list` 脱敏查询和 revision 语义 | PR #34 已实现，Desktop 不再读取私有 approval/checkpoint | `frozen` |
+| F01 Host 生命周期、F02 事件通道、F03 Evidence | 有部分本地实现，但语义或跨进程边界未闭合 | `provisional` / `unavailable`，按接口目录逐项判断 |
+| F04～F08、F10 | 尚无完整公开类型、生产提供者和消费验收 | `unavailable`，不得由 UI 或模块自行猜测 |
+| 盘古/Agent 工具链 | 只有 Fake 与文字 JSON 解析测试，真实脚本默认跳过 | `provisional`；不是原生 function calling 证据 |
+| 新分工的 MOD-04B、MOD-27～32 | 已确定比赛架构和负责人，尚未实现公共端口或 AgentArts 适配 | `unavailable`；先做 MOD-29/30/32，再做 MOD-27/28；Local 不阻塞 |
+
+因此这份文件继续保留为需求和缺口记录；已交付接口的规范性状态由接口目录接管。
+
 ## 2. 已核对的代码基线
 
-主线基线：`2e449e9c7b0cda00f7dfc929652e20e688a47a36`。这是一份提交快照，不将未合并 PR 当成主线能力。
+本请求的原始代码基线：`2e449e9c7b0cda00f7dfc929652e20e688a47a36`。这是一份历史提交快照；当前交付状态由上方处理结果、现行接口目录和已合并 PR 共同说明。
 
 | 事实与源码依据 | 对独立开发的影响 |
 | --- | --- |
@@ -29,7 +44,7 @@
 | [ConnectorHost](../../packages/connector-host/src/index.ts) 已有 SecretStorePort.read、工厂和注入；[Models](../../packages/models/src/index.ts) 的 ModelRequest 仍以文本消息为主 | 凭据读端口复用；凭据管理、视觉附件与流式输出仍需定边界 |
 | 现有 packages 没有 voice、voice-wake、windows-client、traceguard、coding-tools；MOD-19 没有已交付安装包 | 先冻结最小依赖，不把规划目录或能力布尔值当作实现 |
 
-另已检查开发中的 **PR #31**（`codex/mod-04-conversation-context`，检查时 head `5828f1a43bd2853fd42723907b74392f456c5e2f`）：它给模型注入同会话最近成功任务历史并保存上下文 checkpoint，覆盖隔离与恢复测试；没有新增 contracts/client 的会话管理 API。请在其基础上补公开消费面，不重复实现历史注入，也不把它当成已冻结 SDK。其他连接器开放 PR 仍由各自负责人交付；本请求不接管它们。
+另已检查并已合并的 **PR #31**（`codex/mod-04-conversation-context`，实现提交 `5828f1a43bd2853fd42723907b74392f456c5e2f`）：它给模型注入同会话最近成功任务历史并保存上下文 checkpoint，覆盖隔离与恢复测试；它没有新增 contracts/client 的会话管理 API。公开查询消费面随后由 PR #34 补齐；“成功历史”的模型上下文和 UI 完整历史仍是两个不同语义。其他连接器开放 PR 仍由各自负责人交付；本请求不接管它们。
 
 ## 3. 全部 zemeng 模块的依赖对照
 
@@ -46,6 +61,16 @@
 | MOD-19：packaging / scripts/release | F10 产物、启动装配、运行时版本、目录迁移与升级退出契约 | 无账号的安装输入清单、启动自检、卸载保留数据 fixture |
 
 MOD-20～26 不因此转给 zemeng。MOD-13 消费这些模块的后台与通知数据，由 goo122 冻结公共宿主面、`Potatos498` 提供领域配置 Schema/数据。MOD-26 平台子模块只有另行认领才增加 zemeng 的开发范围。
+
+Competition 新模块优先级如下；它们不把本文件历史上的 MOD-11～19 接口请求改写为“已交付”：
+
+| 模块 | 当前需要的最小公共边界 | 验收替身 / 真实门槛 |
+| --- | --- | --- |
+| MOD-29：AgentArts 云端基础 | `CloudAgentPort`、deployment/version/trace、身份与错误语义 | Fake CloudAgent；真实项目、部署与 API 读回 |
+| MOD-30：AgentArts Agent/Workflow | Coordination→CloudAgent 请求、工具提案、知识/MCP/Skill 能力映射 | Fake Workflow；真实 AgentArts trace 与工具提案 |
+| MOD-32：发布、观测与比赛验收 | profile、deployment、trace、usage、评估、失败与回滚 Evidence | Golden Path；AgentArts 失败时不静默回退 |
+| MOD-27/28：世界状态与持续认知 | MemoryQuery/FactChange、Goal/Decision/Plan revision、KEEP/RECHECK/REVISE | 确定性 Fake；真实事件影响与最小计划修复 |
+| MOD-04B：Competition Coordination | `CoordinationPort`、`ToolExecutionPort`、Evidence 消费语义 | Fake Runtime/Memory/Tool；真实 AgentArts 协调闭环 |
 
 ## 4. 按依赖包交付的具体要求
 
@@ -152,8 +177,11 @@ MOD-20～26 不因此转给 zemeng。MOD-13 消费这些模块的后台与通知
 
 ## 5. 建议交付顺序与接收门槛
 
+以下顺序已由 Competition Profile 覆盖：先交付比赛共享端口和 MOD-29/30/32 Golden Path，再按真实需要取用原 F01～F10。Local `ModelPort`、本地 Agent 新能力和与比赛无关的通用接口不进入当前批次。
+
 | 批次 | 交付内容 | zemeng 可并行推进 |
 | --- | --- | --- |
+| P：比赛主路径 | Coordination/CloudAgent/ToolExecution/Evidence 最小边界、Fake 与 profile 语义 | MOD-29/30/32；真实 AgentArts 部署、API、trace 和只读工具 Golden Path |
 | A：先消除当前耦合 | F01/F02/F03/F05 的桌面急需项 + 对应 F09 fake | MOD-11～13 公共数据/审批/恢复接入，不再钻 checkpoint |
 | B：提前冻结执行与媒体边界 | F04/F06/F07/F08 的类型、协议与 fake | 经开工授权后的 MOD-14～18 独立模块实现 |
 | C：冻结分发输入 | F10 清单、生命周期与无账号自检输入 | MOD-19 包装与隔离验收准备 |
@@ -162,7 +190,7 @@ MOD-20～26 不因此转给 zemeng。MOD-13 消费这些模块的后台与通知
 
 接收标准：
 
-- [ ] 九个模块的依赖都有最终公共入口或明确的暂不支持边界，没有待猜测字段/错误语义。
+- [ ] 当前比赛批次涉及的模块都有最终公共入口或明确的暂不支持边界，没有待猜测字段/错误语义；其余 MOD-11～19 需求不因未进入当前范围而伪装成完成。
 - [ ] 新旧协议一致性、生成检查和对应契约测试通过；未公布 capability 时客户端可靠拒绝。
 - [ ] zemeng 使用同一提交版本运行消费示例，不需要 goo122 的私人环境、密钥、真实模型或账号。
 - [ ] 在 fake 下可验收重启/审批/取消/未知结果/恢复；fake 限制有显式说明。

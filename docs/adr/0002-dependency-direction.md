@@ -1,5 +1,7 @@
 # ADR-0002：依赖方向与应用装配
 
+适用范围：Huawei ICT AgentArts Competition Profile 与可选 Local Profile；AgentArts Adapter 仍遵守 `packages` 不反向依赖 `apps` 的规则。
+
 - 状态：accepted
 - 日期：2026-09-06
 

@@ -1,6 +1,10 @@
 # 批次 A：Runtime 公开查询接口
 
-状态：实现完成，等待非作者评审。协议线版本保持 `1.0.0`，本批只增加向后兼容的只读 operation 和 TaskSnapshot 可选字段。
+状态：**Core Runtime Profile 1 已冻结**。实现提交 `e5e20cad16566c6bdf821b7880efad96f0513ef1` 已由 `zemeng` 非作者批准，Foundation CI 通过，并随 PR #34 合并为 `bcbeaa2`。协议线版本保持 `1.0.0`；本批只增加向后兼容的只读 operation 和 TaskSnapshot 可选字段。
+
+这里的冻结仅覆盖下列任务、会话和审批查询语义，不代表整套 wire、事件通道、模型、工具或连接器接口均已冻结。完整边界见[当前接口目录](../interfaces/CURRENT_INTERFACE_CATALOG.md)。
+
+本查询面是 Huawei ICT AgentArts Competition Profile 的共享 Runtime 底座；若 Local Profile 以后被明确启用，也复用同一查询面。它只提供 Runtime 事实快照，不表示 AgentArts 已接入；后续 Competition UI 可用它恢复 profile、deployment/trace 引用，但新增字段仍须经过契约流程。
 
 ## 公开操作
 
