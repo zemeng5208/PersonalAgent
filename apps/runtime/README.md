@@ -8,6 +8,24 @@ Interface status is tracked per operation in the [current interface catalog](../
 
 ## Implemented
 
+### Competition text-port increment (COMPETITION-PORTS-01)
+
+Trusted composition may pass `profile: 'huawei_ict_agentarts'` and an explicit
+`coordination: CoordinationPort`. Only bounded text results are supported.
+Runtime owns submission, deduplication, cancellation, deadline and persisted terminal
+state. The request deadline is the execution deadline for this slice; it is not reset.
+Missing coordination fails with UNSUPPORTED_CAPABILITY. Local text/tools options and
+model configuration APIs are rejected in Competition mode. Existing Desktop callers
+without a profile retain their existing Local composition; no UI switch is delivered.
+
+Adapters receive no Runtime object, authorization, history or attachments. Late results
+after cancellation/timeout are ignored. This detaches a read-only request; it does not
+prove a remote cloud run has stopped. Adapters must honor cancellation, must not perform
+writes and must not start real cloud traffic without separately authorized composition.
+No real adapter is included. Results are mock/unverified text, not trusted tool Evidence.
+Approval resume, tool proposals, deployment trace, usage and cloud recovery remain outside
+this provisional slice. See [work package](../../docs/modules/COMPETITION-PORTS-01.md).
+
 - SQLite-backed tasks, checkpoints, events and one-shot schedules.
 - Explicit task transition rules and immutable terminal states.
 - Submission idempotency: the same key and input returns the original task; different input is rejected.

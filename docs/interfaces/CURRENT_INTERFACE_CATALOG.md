@@ -169,6 +169,16 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 
 ## 6. 新分工需要的接口冻结包
 
+### COMPETITION-PORTS-01 分支增量
+
+在 codex/competition-coordination-ports 中，`@personal-agent/coordination`
+新增 provisional 的文字 CoordinationPort / CloudAgentPort 和 testing 导出的 Fake；
+Runtime Application 可显式注入 CoordinationPort。此增量未冻结、未评审合并，
+不提升上表的真实 AgentArts 能力状态。当前只传 taskId/revision/goal/deadline/signal，
+只返回 kind/text/verification；工具提案、deployment/version/trace、usage、世界状态、
+云端续跑与出机同意尚未交付，不能据此接入真实服务。详见
+[工作包](../modules/COMPETITION-PORTS-01.md)。
+
 以下接口尚未提供，因此本节是待交付清单，不是接口定义：
 
 | 待交付接口 | 语义提出方 | 公共类型/宿主提供方 | 最小验收 |
