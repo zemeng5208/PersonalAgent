@@ -8,6 +8,8 @@
 - 取消信号传给工具；
 - 外部写入在执行开始后被取消或超时时返回 `RESULT_UNKNOWN`，不自动重试。
 
+该实现已通过 Fake 工具和 Runtime 离线闭环，但接口仍为 `provisional`：真实盘古工具提案、真实工具读回核实及 Windows/MCP/Skill 等独立提供者尚未验收。见[当前接口目录](../../docs/interfaces/CURRENT_INTERFACE_CATALOG.md)。
+
 Runtime 只允许为 `running` 的持久任务调用工具，并为 confirmed/unknown 结果记录 `tool.completed` 事件。Runtime 负责持久授权、审批记录和 Evidence，网关在授权完成后通知可信宿主记录执行阶段。参数绑定授权会比对规范化参数摘要。读工具的普通异常统一脱敏，写工具无法确认结果时返回 `RESULT_UNKNOWN`；工具仍需自行实现可核实的恢复接口，网关不盲目重试。
 
 验证：

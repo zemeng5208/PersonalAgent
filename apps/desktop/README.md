@@ -1,6 +1,8 @@
 # PersonalAgent Desktop
 
-MOD-11 / MOD-12 / MOD-13，负责人 `zemeng`。最新桌面增量已随 PR #25 合并到 `main`（`cef4d08`）；模块仍按未完成边界保持 `in_progress`。关联 PA-001、PA-002、PA-004，消费公共客户端和契约 `0.1.0-alpha.1`。
+MOD-11 / MOD-12 / MOD-13，负责人 `zemeng`。桌面工作区增量已随 PR #25 合并，本地外壳增量随 PR #33 合并；PR #34 已将任务、会话和脱敏审批恢复迁移到公开 Client 查询。模块仍按未完成边界保持 `in_progress`。关联 PA-001、PA-002、PA-004，消费公共客户端和契约 `0.1.0-alpha.1`。
+
+Desktop 只依赖[当前接口目录](../../docs/interfaces/CURRENT_INTERFACE_CATALOG.md)中已冻结的 Core Runtime Profile 1；事件通道、Host 生命周期和 Model/Agent/Tool 路径仍为 `provisional`，语音、设置/连接器生产路由、Windows Host 等未公布能力显示为 `unavailable`。
 
 ## 已落地的界面
 

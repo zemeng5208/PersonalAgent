@@ -1,12 +1,12 @@
 # 架构设计与技术契约
 
-版本：0.5 · 日期：2026-09-07 · 状态：模块化单体、目录与依赖治理基线；ARCH-03 已将 Runtime Application 设为任务提交与文本执行生命周期边界；模块实现状态以 ROADMAP 为准
+版本：0.6 · 日期：2026-09-09 · 状态：模块化单体、分层接口冻结、核心认知依赖倒置与 AgentArts 本地信任边界
 
-模块所有权以 [模块分工](MODULE_ASSIGNMENTS.md) 为准；消息与接口语义以 [公共开发协议](DEVELOPMENT_PROTOCOL.md) 为准。`goo122`（A）持有底座和公共接口，`zemeng`（B）是消费端及执行模块负责人。
+模块所有权以 [模块分工](MODULE_ASSIGNMENTS.md) 为准；消息语义以 [公共开发协议](DEVELOPMENT_PROTOCOL.md) 为准；接口是否冻结和生产可用以 [当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md) 为准。
 
 ## 1. 原则
 
-模型提出行动，运行核心核验权限并执行，真实结果决定完成状态。Windows 本地常驻；模块化、可扩展，不在初期拆微服务。
+模型或 AgentArts 只能提出文本、计划或动作建议；本地 Runtime 核验权限、执行并读回，真实结果决定完成状态。Windows 本地常驻；模块化、可扩展，不在初期拆微服务。
 
 开发协作 Agent 与产品运行 Agent 是两套系统。Qcode 可用于开发协作，但不成为用户安装产品的前置要求。
 
@@ -16,6 +16,8 @@
 | --- | --- | --- |
 | Desktop | Electron；当前原生 HTML/CSS/JavaScript | 窗口、悬浮球、后台、状态展示；不假定 React 已采用 |
 | Runtime | Node.js、TypeScript | 会话、任务、事件、连接器、模型与工具调度 |
+| Coordination | TypeScript、端口注入 | 主 Agent、目标/决策图谱、事实影响和最小计划修复 |
+| AgentArts Adapter | TypeScript、HTTPS | 云端 Workflow/多 Agent 的版本化调用与本地提案映射 |
 | Windows Host | C#、.NET | UI Automation、窗口/输入、系统观测 |
 | Knowledge | Markdown、FTS5、可替换向量索引 | Obsidian 增量索引、混合检索、来源 |
 | Storage | SQLite WAL | 任务、事件、授权、同步状态和迁移 |
@@ -29,9 +31,10 @@
 ### 2.1 模块依赖边界
 
 - `apps` 是进程和装配入口，可以依赖 `packages`；可复用 `packages` 不能反向依赖 `apps`。
-- Agent 只持有模型与工具端口，不导入具体 Runtime 实现。
+- Agent 只持有 ModelPort、MemoryQueryPort、FactChangeFeed 和 ToolExecutionPort，不导入具体 Runtime 或 ModelGateway 实现。
 - Runtime 核心不导入 Electron 或具体连接器；具体 Weather 等只出现在明确组合入口。
-- Runtime Application 层负责持有 TaskRuntime、组合 Agent/ModelGateway/Provider、接收 task.submit 并自动分派文本任务；Desktop 主进程只负责可信配置、IPC、事件订阅和 UI 生命周期，不复制 Agent/Model 编排。
+- Runtime Application 层负责持有 TaskRuntime、接收 task.submit 和执行生命周期；目标形态是注入 CoordinationPort，不直接构造主 Agent 或具体 ModelGateway。当前代码仍直接装配两者，因此该注入边界登记为 unavailable，迁移前不得称为已冻结。
+- 根 composition 是唯一同时引用 goo122 与 zemeng 具体实现的位置。goo122 使用 FakeCoordination 开发 Runtime；zemeng 使用 Fake Model/Memory/Tool/Runtime 开发核心认知。
 - 连接器只实现公共连接器/工具契约，不能拥有任务状态、授权决定或 UI。
 - 跨包调用只能使用包的公开 `exports`，生产依赖图必须无环。
 
@@ -41,22 +44,26 @@
 
 ```mermaid
 flowchart TD
-  UI[悬浮球 / 面板 / 后台] --> R[Runtime 任务与授权]
-  E[定时器 / 平台事件 / 系统变化] --> R
-  R <--> P[盘古主 Agent]
-  P <--> A[按需专业 Agent 与辅助模型]
-  P --> G[能力网关]
-  A --> G
-  G --> C[MCP / Skills / 平台连接器]
+  UI[悬浮球 / 面板 / 后台] --> R[本地 Runtime / Policy]
+  E[日程 / 平台事件 / 系统变化] --> R
+  R --> Q[CoordinationPort]
+  Q <--> M[ModelPort / 盘古]
+  Q <--> K[世界状态 / 记忆查询]
+  Q <--> AA[AgentArts Adapter]
+  AA <--> CLOUD[AgentArts Workflow / Multi-Agent]
+  Q --> G[ToolExecutionPort]
+  G --> C[本地 MCP / Skills / 连接器]
   G --> W[Windows Host / TraceGuard]
-  R <--> D[本地任务 / 记忆 / 证据]
-  G --> D
+  G --> V[执行读回 / Evidence]
+  V --> R
+  R --> S[Task / Event / Checkpoint]
 ```
 
 - 渲染进程隔离上下文，禁用直接 Node 能力；只暴露最小 preload API。远端内容不能进入有权限的应用页面上下文。
 - Runtime 独立于后台窗口生命周期，应用整体退出时明确处理未完成任务。
 - Named Pipe 校验当前用户访问与会话握手；消息必须经过运行时 Schema 校验，不信任“来自本机”。
 - 第三方 MCP/脚本独立进程不是完整安全沙箱；启动前限制授权、环境变量和工作目录，隔离方案需实测。
+- AgentArts 位于云端，不接收本地 authorizationRef，不直接访问记忆数据库或 Windows Host；云端返回成功只形成候选结果，不能设置本地任务终态。
 - 开发工件留在仓库内；分发后采用用户范围应用数据目录生成状态，具体路径由安装设计确认。
 
 ## 4. 通用协议
@@ -71,11 +78,11 @@ flowchart TD
 
 ## 5. Agent 与模型网关
 
-盘古负责目标理解、主计划、委派与汇总。专业角色初期为知识研究、通信日程、电脑操作、编程；角色不必绑定不同模型或常驻进程。
+主 Agent 负责目标理解、主计划、委派与汇总；盘古是主要模型 Provider，AgentArts 是可选云端编排 Provider。专业角色初期为知识研究、通信日程、电脑操作、编程；角色不必绑定不同模型或常驻进程。
 
 网关维护每个实际模型部署的能力：文本、流式、工具调用、结构化输出、视觉、上下文和限流。先探测再启用能力；不将接口兼容视为功能全兼容。
 
-工具调用有两种路径：原生调用；结构化提案经校验后执行。不合法提案有限次修正后停止，不能作为任意命令执行。
+工具调用有两种候选路径：模型原生调用；文字模型返回结构化提案后由宿主校验。当前盘古 Provider 明确声明 toolCalling=false、structuredOutput=false；StructuredToolProvider 只是离线验证的文字 JSON 适配器。真实盘古工具闭环未完成，因此 Model/Agent/Tool 接口不冻结。
 
 任务设最大步骤、费用/Token 预算和超时。辅助 Agent 输出带来源的结果回主 Agent。盘古失效时显式暂停或经授权切换，不静默将其他模型冒充盘古。
 
@@ -103,9 +110,11 @@ SQLite 保存步骤和检查点。外部写操作使用幂等键（服务支持�
 
 ## 8. MCP 与 Skills
 
-Runtime 内置 MCP Host；本地 stdio、远端按所选服务协议支持。工具发现后注册，执行前校验 Schema、范围和当前权限。工具自报只读不可当作唯一安全依据。
+目标设计由 Runtime 装配 MCP Host；本地 stdio、远端按所选服务协议支持。当前仓库尚无 MCP package、Host/Client 端口或真实调用，状态为 `unavailable`。未来工具发现后仍须注册，执行前校验 Schema、范围和当前权限；工具自报只读不可当作唯一安全依据。
 
 Skill 目录包含 SKILL.md 和可选脚本、资源、模板；项目扩展清单描述所需工具、数据范围和版本。导入外部 Skill 先检查兼容性与副作用。升级保留版本，旧任务绑定其启动时版本。
+
+AgentArts 的 MCP、插件或 Skill 只作为云端能力映射，不能替代本地 MOD-06/07。云端不能直接访问未安全暴露的本机 stdio/私有服务；对应能力只有完成部署和真实调用后才从 unavailable 提升。
 
 ## 9. 知识与数据
 
@@ -118,6 +127,14 @@ Obsidian：增量扫描 → Markdown 分块 → FTS/向量混合检索 → 引�
 记忆保存来源、时间、用户确认状态和敏感级别。删除同时失效索引和缓存；备份的保留/删除策略在实现时提供明确设置。执行日志不等同于用户长期知识。
 
 “学习”先实现偏好与流程版本迭代；候选流程经验证才启用。参数微调需要独立数据和评估方案。
+
+### 9.1 版本化世界状态与持续认知
+
+Fact、Goal、Decision 和 Plan 使用稳定 ID、revision、来源、有效期和敏感级别形成依赖图。Memory 通过 MemoryQueryPort 和 FactChangeFeed 提供事实快照与变化，不直接修改 Goal、Plan 或 Task。
+
+Coordination 根据事实变化计算影响，只输出 KEEP、RECHECK 或 REVISE、理由和最小 PlanPatch。Runtime 决定何时调度、审批和持久化任务终态；Decision Graph 不能绕过 TaskRuntime。
+
+该架构边界已由 [ADR-0006](adr/0006-coordination-and-agentarts-boundary.md) 接受，但端口和实现尚未提供，当前状态为 unavailable。
 
 ## 10. 语音与电脑控制
 
@@ -140,6 +157,9 @@ TraceGuard 通过适配层提供真实观测和受限动作，不在此阶段复
 | 决策 | 当前状态 | 后续验证 |
 | --- | --- | --- |
 | Windows 本地常驻、盘古主推理 | 用户确认方向 | 盘古实际部署闭环 |
+| 分层接口冻结 | accepted / ADR-0005 | 每次接口状态变化逐项复审 |
+| 核心认知依赖倒置 | accepted / ADR-0006；实现 unavailable | Coordination/Model/Memory/Tool Fakes 与注入槽 |
+| AgentArts 只提案、本地执行 | accepted / ADR-0006；实现 unavailable | 已部署 API、Policy、执行读回和 Evidence |
 | Electron + TS Runtime + .NET Host | 建议基线 | 打包体积、IPC、悬浮窗口、真实 UIA |
 | SQLite + Markdown + 可替换向量索引 | 建议基线 | 冲突、检索质量、数据量和迁移 |
 | 本地调度优先 | 建议基线 | 休眠、退出、中断恢复 |
@@ -147,7 +167,8 @@ TraceGuard 通过适配层提供真实观测和受限动作，不在此阶段复
 
 正式技术变更补充日期、负责人、原因、替代方案、影响和迁移方式。
 
-- 2026-09-05：按最新分工，`goo122`（A）负责底座、公共协议和 Obsidian，`zemeng`（B）负责桌面与执行模块。为支持 2—3 人独立开发，拆出模块所有权和公共协议文档；只更新文档，无代码迁移；原工作包对应关系保留在 ROADMAP。
+- 2026-09-09：按新分工拆分 MOD-04A/04B，增加 MOD-27～32；采用分层接口冻结和 AgentArts 本地信任边界。Potatos498 的 MOD-20～26 不变；历史工作包归属保留。
+- 2026-09-05：goo122 负责底座、公共协议和 Obsidian，zemeng 负责桌面与执行模块。为支持 2—3 人独立开发，拆出模块所有权和公共协议文档；原工作包对应关系保留在 ROADMAP。
 
 ## 13. 参考资料
 

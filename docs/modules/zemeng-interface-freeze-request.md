@@ -2,7 +2,7 @@
 
 日期：2026-09-08。提出方 / 消费者：`zemeng`；公共协议、SDK、fake 与根装配负责人：`goo122`。
 
-状态：**请求已合并；批次 A 查询接口已实现，等待非作者评审**。批次 A 的最终公开签名、恢复流程和剩余限制见 [Runtime 公开查询接口](RUNTIME_QUERY_API.md)；其余批次仍是待冻结请求，不宣称 MOD-11～19 已获全部开工授权。
+状态：**请求 PR #32 已合并；批次 A 的查询/恢复子集已随 PR #34 交付并冻结**。批次 A 的最终签名见 [Runtime 公开查询接口](RUNTIME_QUERY_API.md)；逐项状态见[当前接口目录](../interfaces/CURRENT_INTERFACE_CATALOG.md)。F01～F10 的其余部分仍为 `provisional` 或 `unavailable`，不宣称 MOD-11～19 已获得完整接口或全部开工授权。
 
 ## 1. 目的与边界
 
@@ -13,6 +13,19 @@
 依据：[PRD](../PRD.md)、[架构](../ARCHITECTURE.md)、[模块分工](../MODULE_ASSIGNMENTS.md)、[开发协议](../DEVELOPMENT_PROTOCOL.md)、[目录规范](../PROJECT_STRUCTURE.md)。本文件是消费者请求；与已发布 Schema 不一致时以现行 Schema 为准，新语义经 goo122 评审发布后才能消费。
 
 以下新增接口名称均是**建议能力名，不是已存在的 operation 或最终签名**。请 goo122 在交付 PR 中选择复用现有操作、增加公开方法或新增 capability，并明确最终导出位置；不要让消费方维护另一套 DTO。
+
+### 处理结果（2026-09-09）
+
+| 请求范围 | 处理结论 | 当前状态 |
+| --- | --- | --- |
+| F02 的 `task.list`、`conversation.list` 和固定水位分页 | PR #34 已实现、Desktop 已通过公开 Client 恢复 | `frozen` |
+| F03 的 `approval.list` 脱敏查询和 revision 语义 | PR #34 已实现，Desktop 不再读取私有 approval/checkpoint | `frozen` |
+| F01 Host 生命周期、F02 事件通道、F03 Evidence | 有部分本地实现，但语义或跨进程边界未闭合 | `provisional` / `unavailable`，按接口目录逐项判断 |
+| F04～F08、F10 | 尚无完整公开类型、生产提供者和消费验收 | `unavailable`，不得由 UI 或模块自行猜测 |
+| 盘古/Agent 工具链 | 只有 Fake 与文字 JSON 解析测试，真实脚本默认跳过 | `provisional`；不是原生 function calling 证据 |
+| 新分工的 MOD-04B、MOD-27～32 | 已确定架构和负责人，尚未实现公共端口或 AgentArts 适配 | `unavailable` |
+
+因此这份文件继续保留为需求和缺口记录；已交付接口的规范性状态由接口目录接管。
 
 ## 2. 已核对的代码基线
 
@@ -29,7 +42,7 @@
 | [ConnectorHost](../../packages/connector-host/src/index.ts) 已有 SecretStorePort.read、工厂和注入；[Models](../../packages/models/src/index.ts) 的 ModelRequest 仍以文本消息为主 | 凭据读端口复用；凭据管理、视觉附件与流式输出仍需定边界 |
 | 现有 packages 没有 voice、voice-wake、windows-client、traceguard、coding-tools；MOD-19 没有已交付安装包 | 先冻结最小依赖，不把规划目录或能力布尔值当作实现 |
 
-另已检查开发中的 **PR #31**（`codex/mod-04-conversation-context`，检查时 head `5828f1a43bd2853fd42723907b74392f456c5e2f`）：它给模型注入同会话最近成功任务历史并保存上下文 checkpoint，覆盖隔离与恢复测试；没有新增 contracts/client 的会话管理 API。请在其基础上补公开消费面，不重复实现历史注入，也不把它当成已冻结 SDK。其他连接器开放 PR 仍由各自负责人交付；本请求不接管它们。
+另已检查并已合并的 **PR #31**（`codex/mod-04-conversation-context`，实现提交 `5828f1a43bd2853fd42723907b74392f456c5e2f`）：它给模型注入同会话最近成功任务历史并保存上下文 checkpoint，覆盖隔离与恢复测试；它没有新增 contracts/client 的会话管理 API。公开查询消费面随后由 PR #34 补齐；“成功历史”的模型上下文和 UI 完整历史仍是两个不同语义。其他连接器开放 PR 仍由各自负责人交付；本请求不接管它们。
 
 ## 3. 全部 zemeng 模块的依赖对照
 

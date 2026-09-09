@@ -19,6 +19,8 @@
 
 `@personal-agent/contracts` 0.1.0-alpha.1（wire 1.0.0）；记录用 `validateContract('connectorItem')` 校验；工具输出 schema 以 `$ref` 引用协议 `$id` 下的 `ConnectorItem` 定义，不复制契约。fake 联调用 `@personal-agent/testkit` 0.1.0-alpha.1（FakeClock / FakeToolHost）。无新增外部依赖：HTTP 用 Node 内置 `fetch`，时区换算用内置 `Intl`。
 
+MOD-25 的天气 Provider/Connector 工作包已完成，但通用 ConnectorPort/ConnectorHost 仍为 `provisional`，生产 wire 的 `connector.connect` / `connector.disconnect` 为 `unavailable`。当前生产入口通过 Runtime 显式注册 `weather.forecast` 工具；这不冻结所有连接器账号与生命周期接口。见[当前接口目录](../../../docs/interfaces/CURRENT_INTERFACE_CATALOG.md)。
+
 ## 行为规则
 
 - **地点不静默猜测**：地点只能来自本次请求或已配置的 `defaultLocation`（用户设置），两者都缺时返回 `INVALID_ARGUMENT`。
@@ -182,4 +184,4 @@ PA_WEATHER_LIVE=1 PA_GEONAMES_USERNAME=<geonames 账号> node --test packages/co
 - 缓存为实例内存级，无持久化与跨进程共享；TTL 到期前不感知真实数据更新。地理编码缓存无 TTL，地名变更不会自动刷新。
 - 无凭据、无密钥，因此不涉及凭据存储；但真实调用会产生出站请求，Open-Meteo 免费额度（约 600 次/分、10000 次/日）耗尽时返回 `RATE_LIMITED`。
 - ConnectorPort 的 `fetchChanges` / `search` / `getItem` / `performAction` 均返回 `UNSUPPORTED_CAPABILITY`：天气为按需查询连接器，非增量同步连接器。
-- 未实现 MOD-05 权限隔离，scope 校验目前由 testkit 的 `FakeToolHost` 承担。本包已由 `apps/runtime` 的 `createOpenMeteoRuntime` 装配（PR #9），该处显式传入 `new OpenMeteoProvider({locationResolution: 'strict'})`，归 `goo122`。`WeatherProvider` 本轮新增**必需**方法 `resolvePlace`，是消费方可见的接口变更；`apps/runtime` 无需改代码（编译通过、11 项测试全过），但任何自实现 `WeatherProvider` 的下游都要补这个方法。
+- 本包内部不实现 MOD-05 权限隔离；单包测试的 scope 校验由 testkit `FakeToolHost` 承担。生产组合入口已由 Runtime 装配持久 Policy/ToolGateway，并显式传入严格模式 Open-Meteo Provider；真实模型发起工具调用仍未验收。`WeatherProvider.resolvePlace` 是消费方可见的必需方法，任何自实现 Provider 的下游都必须提供。
