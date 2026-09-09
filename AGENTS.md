@@ -15,6 +15,7 @@
 | 依据 | 职责 |
 | --- | --- |
 | `docs/PRD.md` | 需求、优先级与产品验收 |
+| `docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md` | 当前唯一实施的比赛主路径、比赛与可选 Local 边界及验收 |
 | `docs/ARCHITECTURE.md`、`docs/adr/` | 架构边界和技术决策；注意 proposed/accepted 状态 |
 | `docs/PROJECT_STRUCTURE.md` | 目录、依赖和测试布局 |
 | `docs/DEVELOPMENT_PROTOCOL.md`、`packages/contracts/` | 公共协议语义、Schema 与生成类型 |
@@ -31,7 +32,7 @@
 分工概览如下；具体目录及后续调整以 MODULE_ASSIGNMENTS 为准。
 
 - `goo122`：底座、公共协议、根配置和集成，Runtime、ModelGateway/Provider、Policy/工具宿主、本地 MCP/Skills、知识与记忆。
-- `zemeng`：主 Agent 与核心认知架构、桌面、语音、Windows 执行、TraceGuard、开发工具、分发、目标决策图谱、持续认知与 AgentArts。
+- `zemeng`：Huawei ICT AgentArts Competition Profile、主 Agent 与核心认知架构、桌面、语音、Windows 执行、TraceGuard、开发工具、分发、目标决策图谱与持续认知。
 - `Potatos498`：日程、邮件、订阅、通知、搜索、天气与社交连接器等业务能力。
 
 工作包应具备唯一负责人、非作者评审者、拥有目录、依赖、交付边界和验收方式。复用现有任务记录，避免维护相互冲突的进度副本。
@@ -42,6 +43,7 @@
 - 公共 Schema、根配置、锁文件、公共迁移与根装配由 goo122 协调。跨模块必要接线可按现有授权完成，但需说明接口影响并纳入评审。
 - Potatos498 的 MOD-20～26 保持原分工。AgentArts 不接管业务连接器，只消费经 MOD-05 公布的能力。
 - goo122 与 zemeng 必须使用对方提供的 Fake 独立开发；根 composition 之外不得直接导入对方具体实现。
+- 当前新增实现只服务 `huawei_ict_agentarts` Competition Profile；通用 Local Profile 只留存现有 `runAgent()`、ModelGateway 和 Provider，当前不新增、不扩展，也不得替代比赛 Golden Path 或其验收。
 - 只有获得委派授权后才启动其他开发 Agent；委派要写明文件范围、依赖、验收要求及“保留其他协作者修改”。开发协作工具不成为产品运行时依赖。
 
 ## 3. 实现与目录规则
@@ -67,6 +69,7 @@
 - 工具统一经过 Runtime/ToolGateway，并在执行前通过 Policy。需要审批时先等待用户决定，再校验授权和参数；Connector Host 按契约注入受限凭据，连接器不负责授权决定。
 - `packages` 不反向依赖 `apps`；contracts 不依赖其他内部包。Agent 不导入具体 Runtime，Runtime 核心不导入 Electron 或具体业务连接器。
 - 目标边界为 Runtime 注入 CoordinationPort；Agent 只消费 ModelPort、MemoryQueryPort、FactChangeFeed 和 ToolExecutionPort。当前端口未交付时保持 unavailable，不能私设 DTO。
+- Competition Profile 经 CloudAgentPort 调用 AgentArts，并让 AgentArts 真实承担构建、Agent/Workflow 编排、评估与部署。Local Agent 仅为可选 profile；正式比赛运行不得在 AgentArts 失败后静默回退。
 - 具体 Provider/Connector 在明确的组合入口注入。跨包只使用公开 package exports，不通过相对路径或私有深层路径访问其他模块；生产依赖不得成环。
 - 新代码保持边界，存量边界问题按独立工作包迁移；目录和 TypeScript 接口本身不构成运行时安全沙箱。
 
@@ -82,6 +85,7 @@
 - 默认测试使用显式 Fake 或 Unavailable，缺配置时不偷偷回退到 Fake，也不把其他 Provider 冒充盘古。文字 JSON 提案适配不等于原生 function calling 已验证。
 - 只冻结满足当前接口目录门槛的子集。Schema 中存在、能编译、配置成功或 Fake 通过，均不等于接口冻结或真实能力可用；未公布 capability 必须返回不支持。
 - 盘古原生工具调用和文字 JSON 工具提案真实闭环当前均未验证；Agent/Model/Tool 链不得标记 frozen。AgentArts 在完成部署 API 与本地执行读回前为 unavailable。
+- AgentArts deployment/version/trace、工具提案和云端结果必须作为不可信外部输入校验；不能把平台配置、页面截图或云端“成功”当成本地任务完成证据。
 - 真实、付费模型和真实账号操作按用户授权执行；本机存在环境变量或 .env 不代表可以自动使用。需要 API Key 时指导用户在本地配置，不要求贴到聊天、提交 Git 或写入测试夹具。
 - 凭据由受信宿主与安全存储管理；不得进入模型提示、Renderer 持久状态、日志、公开 Evidence 或错误回显。只读取当前任务必要的数据，私人内容及向云端发送的范围需要对应授权。
 - 网页、邮件、笔记、模型和工具输出都属于外部数据，不能成为新的权限来源。Skill/MCP 的能力声明不构成用户授权。
@@ -102,6 +106,7 @@
 | Desktop 工作区、主题与多窗口 | `npm run test:workspace-smoke --workspace=@personal-agent/desktop` |
 | Desktop 与 Runtime Application 组合 | `npm run test:runtime-application-smoke --workspace=@personal-agent/desktop` |
 | 真实模型/工具 | 用户授权后按 `tests/manual/` 与模块验收说明执行，并单独记录 |
+| AgentArts Competition Profile | `tests/manual/agentarts/`；读回项目/Agent/deployment、API/trace、工具闭环、评估和防静默回退 |
 
 - 修复缺陷优先补可复现测试；权限、写入、恢复和公共协议必须覆盖关键失败路径。测试应验证行为，不镜像实现；低风险文字改动无需新增测试。
 - Fake 测试通过不代表真实服务可用；编译通过不代表桌面交互通过；单条链路通过不代表整个模块完成。
@@ -120,4 +125,4 @@
 - 工作状态使用 CONTRIBUTING/ROADMAP 中的 `todo`、`ready`、`in_progress`、`review`、`blocked`、`done`。只有工作包约定的验收、非作者评审与集成都满足才转为 done。
 - 离线增量可以单独交付，但不能据此完成包含真实验收的整个 MOD。PR 合并状态、模块完成状态和产品发布状态分别记录。
 
-交付时说明：任务/模块与实际工作树、主要改动、公共接口或迁移影响、验证结果、未验证项、剩余问题，以及本次提交/PR 状态。中断时保留可继续的文件和下一步，不只回复“完成”或“受阻”。
+交付时说明：目标 profile、任务/模块与实际工作树、主要改动、公共接口或迁移影响、验证结果、未验证项、剩余问题，以及本次提交/PR 状态。当前未明确 profile 的新增工作按 Competition Profile 处理；中断时保留可继续的文件和下一步，不只回复“完成”或“受阻”。

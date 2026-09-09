@@ -2,6 +2,8 @@
 
 负责人 goo122；评审者 zemeng。MOD-01 已随 PR #1 完成评审和集成。该包提供可信宿主使用的 SQLite 连接与有序迁移，不实现任务状态机或公共 StoragePort。
 
+该底座由当前 [Huawei ICT AgentArts Competition Profile](../../docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md) 复用，继续承载本地私有状态、授权、Evidence 引用和迁移事实来源；AgentArts 不直接获得数据库访问。可选 Local Profile 不建立第二套数据库或迁移序列，当前也无新增 Local 存储工作。
+
 ## 使用与验证
 
 先在仓库根目录运行 npm ci。根命令 npm run check 执行类型检查、构建和四项测试，npm run dev 启动一次性存储演示。存储模块可单独运行：

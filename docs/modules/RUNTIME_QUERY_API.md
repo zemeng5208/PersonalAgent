@@ -4,6 +4,8 @@
 
 这里的冻结仅覆盖下列任务、会话和审批查询语义，不代表整套 wire、事件通道、模型、工具或连接器接口均已冻结。完整边界见[当前接口目录](../interfaces/CURRENT_INTERFACE_CATALOG.md)。
 
+本查询面是 Huawei ICT AgentArts Competition Profile 的共享 Runtime 底座；若 Local Profile 以后被明确启用，也复用同一查询面。它只提供 Runtime 事实快照，不表示 AgentArts 已接入；后续 Competition UI 可用它恢复 profile、deployment/trace 引用，但新增字段仍须经过契约流程。
+
 ## 公开操作
 
 | operation | 用途 | 主要过滤 | 分页与恢复 |

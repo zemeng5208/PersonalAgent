@@ -1,5 +1,7 @@
 # ADR-0006：核心认知依赖倒置与 AgentArts 本地信任边界
 
+适用范围：通用 Local Profile 与华为 ICT AgentArts Competition Profile。Competition Profile 的优先级和 AgentArts 主编排职责由 [ADR-0007](0007-huawei-ict-agentarts-competition-profile.md)补充，本 ADR 的本地信任边界继续有效。
+
 - 状态：accepted（架构边界）；实现状态：unavailable
 - 日期：2026-09-09
 - 负责人：`zemeng`（核心认知与 AgentArts）；`goo122`（Runtime、模型、记忆、工具公共端口）
@@ -33,7 +35,7 @@ AgentArts -> CloudAgentPort -> 动作提案
 
 ## 独立开发要求
 
-`goo122` 使用 `FakeCoordinationPort` 开发 Runtime、模型、记忆和工具；`zemeng` 使用 Fake Model/Memory/Tool/Runtime 开发主 Agent、MOD-27～32。任一方都不需要另一方的私人环境、真实账号、云资源或未合并分支。
+`goo122` 使用 `FakeCoordinationPort` 开发 Runtime、记忆和工具；`zemeng` 使用 Fake CloudAgent/Memory/Tool/Runtime 开发 Competition Coordination 与 MOD-27～32。可选 Local Model/Agent 不阻塞当前比赛工作；任一方都不需要另一方的私人环境、真实账号、云资源或未合并分支。
 
 ## 影响
 

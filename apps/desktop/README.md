@@ -4,6 +4,8 @@ MOD-11 / MOD-12 / MOD-13，负责人 `zemeng`。桌面工作区增量已随 PR #
 
 Desktop 只依赖[当前接口目录](../../docs/interfaces/CURRENT_INTERFACE_CATALOG.md)中已冻结的 Core Runtime Profile 1；事件通道、Host 生命周期和 Model/Agent/Tool 路径仍为 `provisional`，语音、设置/连接器生产路由、Windows Host 等未公布能力显示为 `unavailable`。
 
+当前新增界面与集成只服务 [Huawei ICT AgentArts Competition Profile](../../docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)。正式比赛界面必须显示实际 profile、AgentArts deployment/version、trace 与不可用状态，不得把 Local/Fake 输出标成 AgentArts 结果，也不得静默回退。现有盘古/Local 配置界面作为可选历史基线保留，当前不新增功能且不进入比赛退出条件。
+
 ## 已落地的界面
 
 2026-09-06 外观更新：ORB-02 所有粒子固定纯白、满不透明度，正反面及所有任务状态保持高亮，不再随状态变暗或闪烁。原稿的点数、位置和尺寸保留；此前逐像素一致记录对应调整亮度之前的版本。

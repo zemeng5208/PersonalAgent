@@ -2,6 +2,8 @@
 
 包版本 0.1.0-alpha.1；wire 版本 1.0.0；负责人 goo122，消费端评审 zemeng。按接口分层登记：Core Runtime Profile 1 已冻结，整包及模型/工具/连接器/语音等其余形状仍为 `provisional` 或 `unavailable`。精确清单见[当前接口目录](../../docs/interfaces/CURRENT_INTERFACE_CATALOG.md)。
 
+该冻结子集是 [Huawei ICT AgentArts Competition Profile](../../docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md) 的共享可信底座；当前新增契约优先服务比赛所需的 Coordination、CloudAgent、ToolExecution 和 Evidence 消费边界。Local Model/Agent 契约仅在产品负责人以后明确启用 Local Profile 时扩展，不阻塞比赛主路径。
+
 schema/protocol.json 是 JSON Schema Draft-07 单一来源；src/generated.ts 与 src/schema.ts 由脚本生成。当前覆盖 17 个操作的请求与结果、9 类事件、任务快照、工具、连接器、Evidence。fixtures/requests.json 提供对应有效消息与无效/伪造授权样例，可交给 C# Host 使用相同 Schema 验证。
 
 从根目录执行：

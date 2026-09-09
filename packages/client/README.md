@@ -2,6 +2,8 @@
 
 消费 @personal-agent/contracts 0.1.0-alpha.1；wire 1.0.0。Core Runtime Profile 1 的消息、任务、会话和审批只读查询子集已冻结；Transport、事件生命周期及其余 operation 仍按[当前接口目录](../../docs/interfaces/CURRENT_INTERFACE_CATALOG.md)登记。Client 接受注入的 Transport，不导入 Node 系统 API、密钥或 Runtime 实现。
 
+当前新增 Client 消费面只服务 [Huawei ICT AgentArts Competition Profile](../../docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)，包括 profile、deployment/trace 引用和可信工具闭环所需状态；它不负责选择 AgentArts 或 Local，也不实现失败回退。Local 仅为可选留存，不产生当前新增接口义务。
+
 先 await client.connect() 握手，再 client.call(operation, payload, options)。客户端发现未注册能力后拒绝调用；task.submit 必须显式提供 idempotencyKey。超时和 AbortSignal 传给传输层；错误保留 code、retryable、retryAfterMs；客户端不自动重试。
 
 Transport.send 应关联请求、序列化消息并实现实际 IPC；此包目前只定义传输接口。Electron preload 和 C# Named Pipe 适配由 zemeng 实现，实际桌面运行未验证。

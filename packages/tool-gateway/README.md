@@ -2,6 +2,8 @@
 
 `@personal-agent/tool-gateway` 实现生产侧 `ToolHost` 注册和受控调用：
 
+它是当前 [Huawei ICT AgentArts Competition Profile](../../docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md) 唯一允许的本地工具执行入口：AgentArts 工具提案先由 Runtime/Policy 校验，再经本 Gateway 执行和读回。云端成功、Local/Fake 执行或绕过 Gateway 的调用都不能作为比赛工具闭环证据。
+
 - 输入/输出按工具 JSON Schema 校验；
 - scope 只从 `PolicyPort` 根据受信 `authorizationRef` 解析；
 - 校验任务、工具版本、deadline、用户在场要求；

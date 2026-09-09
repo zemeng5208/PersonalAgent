@@ -1,5 +1,7 @@
 # ADR-0005：采用分层接口冻结与显式不可用状态
 
+适用范围：Huawei ICT AgentArts Competition Profile 与可选 Local Profile；部署优先级不自动提升任何接口的冻结或可用状态。
+
 - 状态：accepted
 - 日期：2026-09-09
 - 决策者：产品负责人；协议维护：`goo122`；消费评审：`zemeng`

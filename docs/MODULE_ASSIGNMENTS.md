@@ -1,8 +1,8 @@
 # 模块分工与独立交付清单
 
-版本：0.5 · 日期：2026-09-09 · 状态：32 个主编号，MOD-04 拆为两个独占工作面；历史提交与验收归属不追溯改写
+版本：0.6 · 日期：2026-09-09 · 状态：只实施 Huawei ICT AgentArts Competition Profile；Local Profile 可选留存
 
-本文件是未来工作负责人、文件所有权和交付边界的唯一登记处。[PRD](PRD.md) 定义需求，[公共开发协议](DEVELOPMENT_PROTOCOL.md) 定义互通语义，[当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md) 决定接口是否冻结或可用，[ROADMAP](ROADMAP.md) 维护执行状态。
+本文件是未来工作负责人、文件所有权和交付边界的唯一登记处。[Competition Profile](competition/HUAWEI_ICT_AGENTARTS_PROFILE.md) 定义当前优先参赛路径，[PRD](PRD.md) 定义需求，[公共开发协议](DEVELOPMENT_PROTOCOL.md) 定义互通语义，[当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md) 决定接口是否冻结或可用，[ROADMAP](ROADMAP.md) 维护执行状态。
 
 ## 1. 人员与决策权
 
@@ -12,7 +12,7 @@
 | zemeng | 主 Agent 与核心认知架构、桌面/语音/Windows/TraceGuard/编程/分发、目标决策图谱、持续认知、AgentArts |
 | Potatos498 | 待办、日历、邮件、订阅、通知、搜索、天气、微信与社交连接器；MOD-20～26 保持原分工 |
 
-产品负责人决定产品范围和重大取舍。核心认知、Goal/Decision/Plan 语义及 AgentArts 本地—云边界由 zemeng 负责；公共 Schema、根配置、迁移、锁文件和根装配由 goo122 维护。历史 PR 的作者、评审者和 Evidence 按事实保留，不能因新分工改写。
+产品负责人决定当前只实施华为 ICT AgentArts Competition Profile，通用 Local Profile 仅留存现有代码。核心认知、Goal/Decision/Plan 语义、Competition Profile 及 AgentArts 本地—云边界由 zemeng 负责；公共 Schema、根配置、迁移、锁文件和根装配由 goo122 维护。历史 PR 的作者、评审者和 Evidence 按事实保留，不能因新分工改写。
 
 ## 2. 共同所有权规则
 
@@ -22,6 +22,7 @@
 - 新模块目录是规划边界，不因本文出现而创建空包。模块负责人开工时创建入口、README、测试和 Fake。
 - apps/desktop 按功能子目录分工；Renderer 不导入 Runtime、模型、数据库、Node/Shell 或连接器。
 - 一个 PR 只覆盖一个可审查工作包；共享文件通过单独集成 PR 修改，保留其他协作者及用户未提交内容。
+- 新工作默认服务 `huawei_ict_agentarts`；Local Profile 只有被明确列入范围时才新增能力。保留现有 Local 代码不等于当前必须为它扩展接口或通过比赛验收。
 
 ## 3. goo122：底座、模型、工具、知识与记忆
 
@@ -30,7 +31,7 @@
 | MOD-01 | 工程与存储底座 / PA-004 | 根配置、packages/storage、scripts/dev、.github/workflows | 无 | 可启动工程；有序迁移保留数据；根构建和 CI 可复现 |
 | MOD-02 | 公共协议与联调 SDK / PA-004、PA-023 | packages/contracts、packages/client、packages/testkit | MOD-01 | Schema、生成类型、Client、Fake 和兼容记录一致；逐接口登记冻结状态 |
 | MOD-03 | 任务与事件核心 / PA-004、PA-009 | apps/runtime 的任务、事件、调度核心和公共 Host 边界 | MOD-01、02 | 持久任务、恢复、取消、幂等和未知结果；通过 FakeCoordination 可独立运行 |
-| MOD-04A | ModelGateway 与模型供应商适配 / PA-003、PA-012 | packages/models | MOD-02、03 | 提供最小 ModelPort、能力探测、Fake/Unavailable/Provider；真实盘古能力分别验收 |
+| MOD-04A | 可选 Local Profile 的 ModelGateway 与模型供应商适配 / PA-003、PA-012 | packages/models | MOD-02、03 | 保留 ModelGateway、能力探测、Fake/Unavailable/Provider；当前只做 Competition Profile 明确需要的兼容工作 |
 | MOD-05 | 权限、工具与连接器宿主 / PA-023 | packages/policy、packages/tool-gateway、packages/connector-host | MOD-02、03 | 越权拒绝、一次性授权事务消费、结果未知待核实、受限凭据注入 |
 | MOD-06 | 本地 MCP 适配 / PA-005 | packages/mcp | MOD-02、05 | 工具发现、调用、断连；Fake 和至少一个真实本地 MCP 分开验收 |
 | MOD-07 | 本地 Skills 加载与运行 / PA-006 | packages/skills | MOD-02、05 | Skill 版本、启停、受控工具调用和执行记录；不能自行授权 |
@@ -43,7 +44,7 @@ goo122 必须让上述模块在没有真实 Desktop、AgentArts 或 zemeng 私�
 
 | ID | 模块 / 需求 | 独占目录 | 依赖 | 独立交付与验收 |
 | --- | --- | --- | --- | --- |
-| MOD-04B | 主 Agent 与认知编排核心 / PA-003、PA-012 | packages/agents | MOD-02、03、04A、05 | Agent 只消费 ModelPort/ToolExecutionPort；Fake 下完成规划、等待审批、核实和结果汇总 |
+| MOD-04B | Competition Coordination 与可选 Local Agent / PA-003、PA-012 | packages/coordination、packages/agents | MOD-02、03、05；Local 才依赖 04A | Competition 路径只消费 CloudAgent/Memory/Tool 端口；既有 Local Agent 代码保留为可选 baseline |
 | MOD-10 | 模型与 AgentArts 能力研究 / PA-022、PA-026 | docs/research/model-training、docs/research/agentarts | 供应商能力与数据条件 | 给出来源、实验、成本和条件结论；不把提示或记忆称为参数训练 |
 | MOD-11 | 桌面外壳与桥接 | apps/desktop/electron、apps/desktop/src/app | MOD-02 | 窗口、托盘、受控 IPC；Renderer 无系统权限 |
 | MOD-12 | 悬浮球与展开面板 / PA-001 | apps/desktop/src/features/orb、apps/desktop/src/features/conversation | MOD-02、11 | ORB、单面板、多屏、取消与状态映射；真实桌面合成验收 |
@@ -56,12 +57,12 @@ goo122 必须让上述模块在没有真实 Desktop、AgentArts 或 zemeng 私�
 | MOD-19 | 打包与安装验收 | packaging、scripts/release | 已验收模块、MOD-01 | 独立安装、启动、升级、卸载和数据保留；发布授权另行处理 |
 | MOD-27 | 目标、事实与决策图谱 / PA-024 | packages/goals | MOD-02、03、09、04B | 版本化 Goal/Fact/Decision/Plan 依赖图、来源、冲突和回退；不直接读记忆数据库 |
 | MOD-28 | 持续认知与最小计划修复 / PA-025 | packages/cognition | MOD-03、04B、09、27 | 事实变化影响分析；输出 KEEP/RECHECK/REVISE 和最小差异，不直接改 TaskRuntime |
-| MOD-29 | AgentArts 云端基础与盘古适配 / PA-026 | packages/agentarts/src/foundation 与云资源说明 | MOD-02、04A、05、16 | CloudAgentPort、身份/模型/部署引用和 Fake；凭据不进入云提示或仓库 |
-| MOD-30 | AgentArts Workflow、MCP、插件与 Skill 映射 / PA-026、PA-027 | packages/agentarts/src/workflows | MOD-05、06、07、29 | 云流程只产生提案；一条部署后 API 流程经本地 Policy/ToolGateway 验收 |
-| MOD-31 | AgentArts 多 Agent 编排 / PA-012、PA-027 | packages/agentarts/src/multi-agent | MOD-04B、28～30 | 角色、路由、交接、预算、失败降级和完整 trace；不能提升本地权限 |
-| MOD-32 | AgentArts 发布、API、观测与验收 / PA-027 | packages/agentarts/src/observability、tests/manual/agentarts | MOD-03、05、19、29～31 | 版本提交、部署、API 实调、日志、成本、回滚和本地执行读回证据 |
+| MOD-29 | AgentArts 云端基础、身份、MaaS 与部署 / PA-026 | packages/agentarts/src/foundation 与云资源说明 | MOD-02、03、05、16 | 第一优先；CloudAgentPort、项目/Agent/deployment 引用、Fake 和真实 API 读回；凭据不进入云提示或仓库 |
+| MOD-30 | AgentArts Agent/Workflow、知识、MCP/Skill 与工具提案 / PA-026、PA-027 | packages/agentarts/src/workflows | MOD-05、29；本地 MCP/Skills 为可选依赖 | 第一优先；云流程产生受限提案，一条部署 API 经本地 Policy/ToolGateway 和目标系统读回验收 |
+| MOD-31 | AgentArts 多 Agent 与效果评估 / PA-012、PA-027 | packages/agentarts/src/multi-agent、packages/agentarts/src/evaluation | MOD-28～30 | 角色必要性、路由、交接、预算、固定评估集、失败降级和完整 trace；不能提升本地权限 |
+| MOD-32 | AgentArts 发布、API、观测与 Competition 验收 / PA-027 | packages/agentarts/src/observability、tests/manual/agentarts | MOD-03、05、19、29～31 | 第一优先；版本、部署、API 实调、profile、日志、成本、回滚、Demo 和本地执行读回证据 |
 
-zemeng 必须让上述模块在没有 goo122 的真实数据库、模型账号或未合并实现时，使用 Fake Model/Memory/Tool/Runtime 独立开发。AgentArts 成功不能直接把本地任务标为完成。
+zemeng 必须优先交付 MOD-29/30/32 的 Competition Golden Path，并让模块在没有 goo122 的真实数据库或未合并实现时使用 Fake Memory/Tool/Runtime 独立开发。AgentArts 成功不能直接把本地任务标为完成；Local Agent 新能力当前不作为必交项。
 
 ## 5. Potatos498：业务连接器（保持不变）
 
@@ -82,7 +83,8 @@ MOD-20～26 的负责人和业务范围不因 AgentArts 调整而改变。AgentA
 | 方向 | 必须使用的接口 | 当前状态 |
 | --- | --- | --- |
 | goo122 Runtime → zemeng 核心认知 | CoordinationPort | unavailable；需交付类型、Fake 和注入槽 |
-| zemeng 核心认知 → goo122 模型 | 最小 ModelPort | unavailable；现有 ModelProvider/ModelGateway 为 provisional，Agent 仍依赖具体网关 |
+| zemeng Competition Coordination → AgentArts | CloudAgentPort | unavailable；当前第一优先，需交付 deployment/version/trace、提案和错误语义 |
+| 可选 Local Agent → goo122 模型 | 最小 ModelPort | unavailable；现有 ModelProvider/ModelGateway 为 provisional，不阻塞 Competition Profile |
 | zemeng 核心认知 → goo122 记忆 | MemoryQueryPort、FactChangeFeed | unavailable |
 | zemeng 核心认知 → goo122 工具 | ToolExecutionPort | unavailable；现有 ToolHost/ToolGateway 为 provisional，稳定消费端口尚未定义 |
 | zemeng 目标/决策 → goo122 存储 | CoordinationStorePort | unavailable |
@@ -92,6 +94,6 @@ MOD-20～26 的负责人和业务范围不因 AgentArts 调整而改变。AgentA
 
 ## 7. 工作包与完成标准
 
-每个模块必须交付：公开入口、消费的接口版本、README、Fake/夹具、代表性验证、接入说明、已知限制和真实验证条件。只有接口冻结不等于模块完成；只有 Fake 通过也不等于真实服务可用。
+每个模块必须交付：目标 profile、公开入口、消费的接口版本、README、Fake/夹具、代表性验证、接入说明、已知限制和真实验证条件。当前新增工作默认以 Competition Profile 验收；只有接口冻结不等于模块完成，只有 Fake 通过也不等于真实服务可用。
 
 模块负责人从同一冻结提交建立分支。根配置、锁文件、公共迁移和生产 composition 通过 goo122 的独立集成 PR 接入；模块实现 PR 不并发修改共享文件。作者不能自评，合并后才更新 done。

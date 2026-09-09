@@ -1,17 +1,18 @@
 # PersonalAgent
 
-面向 Windows 的私人 Agent 助理：以动态悬浮球为入口，由盘古主导推理，结合个人知识、平台连接器与受控电脑操作，提供主动提示和有限自动执行。
+面向 Windows 的持续型私人 Agent 助理：以动态悬浮球为入口，结合版本化个人世界状态、AgentArts 云端编排、平台连接器与受控电脑操作，提供主动提示和有限自动执行。
 
-项目面向华为 ICT 创新赛准备。核心方向是版本化个人世界状态、事实—决策—计划依赖和事件触发的最小计划修复；盘古与 AgentArts 是模型和云端编排平台，不替代本地授权、执行、读回和 Evidence。
+项目参加**华为 ICT 大赛创新赛道**，选择“基于华为云 AgentArts 智能体开发平台的 Agent 设计和应用”赛题。[Huawei ICT AgentArts Competition Profile](docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md) 是当前唯一实施和验收优先级：AgentArts 必须真实承担智能体构建、编排、评估和部署。通用 Local Profile 及现有 `runAgent()`、`ModelGateway`、盘古/自有模型代码只作为可选基线留存，当前不新增能力，也不构成比赛退出条件。本地 Runtime 始终拥有授权、真实执行、读回和 Evidence。
 
 ## 当前状态
 
 截至 2026-09-09，MOD-01/02/03/25 及 MOD-04/05 的离线增量已集成；PR #31 已加入 Runtime-owned 会话上下文，PR #34 已完成非作者评审、CI 和合并，Desktop 已通过公开 task/conversation/approval 查询恢复状态。只冻结 [Core Runtime Profile 1](docs/interfaces/CURRENT_INTERFACE_CATALOG.md) 的消息、任务、会话和审批只读查询子集。
 
-整套协议、模型工具调用和 Agent 编排**尚未冻结**。盘古 Provider 当前仅声明非流式文本能力；原生 function calling 未提供，文字 JSON 工具提案没有真实盘古→审批→工具→读回闭环证据。AgentArts、记忆、知识、MCP、Skills、语音、Windows Host 等缺少生产提供者的能力统一登记为 unavailable。尚无完整生产闭环。
+整套协议、模型工具调用和 Agent 编排**尚未冻结**。盘古 Provider 当前仅声明非流式文本能力；原生 function calling 未提供，文字 JSON 工具提案没有真实盘古→审批→工具→读回闭环证据。AgentArts、记忆、知识、MCP、Skills、语音、Windows Host 等缺少生产提供者的能力统一登记为 unavailable。Competition Profile 已完成架构确认，但尚无 AgentArts Adapter、云端部署、API trace 或完整生产闭环。
 
 ## 文档入口
 
+- [华为 ICT AgentArts Competition Profile](docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)：参赛主路径、比赛与可选 Local 边界、实施顺序和验收矩阵。
 - [产品需求 PRD](docs/PRD.md)：产品范围、需求编号、优先级和验收条件。
 - [架构设计](docs/ARCHITECTURE.md)：模块、进程、协议、数据与技术验证项。
 - [模块分工](docs/MODULE_ASSIGNMENTS.md)：32 个主模块及 MOD-04A/04B 独占工作面；`Potatos498` 的 MOD-20～26 保持不变。
@@ -21,7 +22,7 @@
 - [开发计划与进度](docs/ROADMAP.md)：阶段门槛、首批工作包和当前状态。
 - [Agent 协作规则](AGENTS.md)：在本仓库工作的自动化开发者必须遵循的约束。
 
-阅读顺序：PRD → 模块分工 → 当前接口目录 → 公共开发协议 → 架构 → 协作规范 → 开发计划。`goo122` 与 `zemeng` 从同一冻结接口提交使用 Fake 独立开发；`Potatos498` 保持原连接器分工。实现变更必须关联需求编号和验收证据。
+阅读顺序：Competition Profile → PRD → 模块分工 → 当前接口目录 → 公共开发协议 → 架构 → 协作规范 → 开发计划。`goo122` 与 `zemeng` 从同一冻结接口提交使用 Fake 独立开发；`Potatos498` 保持原连接器分工。当前新增实现只面向 `huawei_ict_agentarts`；Local Profile 仅留存现有代码，除非产品负责人以后明确启用，否则不新增、不扩展、不作为当前验收对象。任何实现变更必须关联需求编号、profile 和验收证据。
 
 ## 开发入口
 

@@ -1,8 +1,8 @@
 # 公共开发协议
 
-版本：0.2.0 · 日期：2026-09-09 · 协议负责人：`goo122`
+版本：0.3.0 · 日期：2026-09-09 · 协议负责人：`goo122`
 
-状态：开发包仍为 0.1.0-alpha.1、wire 主版本仍为 1.0.0。按 [ADR-0005](adr/0005-layered-interface-freeze.md) 采用逐接口冻结：Core Runtime Profile 1 的消息、任务、会话和审批只读查询子集已冻结；整套协议、模型工具调用和 Agent 编排未冻结。精确状态见 [当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md)。
+状态：开发包仍为 0.1.0-alpha.1、wire 主版本仍为 1.0.0。按 [ADR-0005](adr/0005-layered-interface-freeze.md) 采用逐接口冻结：Core Runtime Profile 1 的消息、任务、会话和审批只读查询子集已冻结；整套协议、模型工具调用和 Agent 编排未冻结。当前只实施[华为 ICT AgentArts Competition Profile](competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)，Local Profile 仅留存现有代码、当前不新增；profile 决策不改变已冻结 wire。精确状态见 [当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md)。
 
 ## 1. 规范来源与冻结
 
@@ -14,7 +14,13 @@
 - 变更流程：提出差异和消费者影响 → 更新接口目录为 provisional → `goo122` 更新 Schema/夹具 → 消费方黑盒验证 → 非作者评审与 CI → 更新为 frozen。禁止 UI 和服务端私自约定临时字段。
 - Schema 中已知但生产握手未公布的 operation 为 unavailable；消费者不调用，Host 返回 `UNSUPPORTED_CAPABILITY`，UI 明确展示不可用。
 
-## 2. 通信分层
+## 2. Profile 与通信分层
+
+- `huawei_ict_agentarts` 是当前实现和比赛验收的唯一优先 profile；AgentArts 负责 Agent 构建、编排、评估与部署。
+- `local` 只作为可选保留，现有 `runAgent()`、ModelGateway 和 Provider 不删除，但其新增能力不进入当前比赛交付。
+- profile 由受信 composition root 显式选择，当前 wire 不新增临时 profile 字段；Renderer、模型、邮件或网页内容都不能切换 profile。
+- Competition Profile 中 AgentArts 不可用时返回明确错误并保留任务事实状态，正式评测不得静默切换 Local。
+- AgentArts 外部 DTO 由 CloudAgentPort/Adapter 隔离，不直接进入公共 wire、TaskRuntime 或连接器。
 
 - Electron 渲染器只调用 `packages/client/` 公开 API，经 `zemeng` 的 preload 桥接；不访问 Named Pipe、密钥或原生工具。
 - Runtime 与 Windows Host 使用受限 Named Pipe。`goo122` 发布 Schema 与 JSONL 帧定义，`zemeng` 实现 Host；每帧一行 UTF-8 JSON，字符串内换行转义，最大 1 MiB，超限拒绝。
@@ -128,7 +134,7 @@ TaskSnapshot 必含 `taskId`、`state`、`revision`、`updatedAt`、`steps`、`e
 | --- | --- | --- |
 | TaskPort / EventPort / SchedulerPort | `goo122` | provisional 内部端口；所有模块通过 Runtime，不私建任务库 |
 | ToolHost / ToolContext / PolicyPort | `goo122` | provisional；离线实现存在，真实模型/工具闭环未验收 |
-| ModelPort | `goo122` | unavailable；现有 ModelProvider/ModelGateway 为 provisional，但最小消费端口尚未定义 |
+| ModelPort | `goo122` | unavailable；仅为可选 Local Profile 和明确专业模型适配使用，不阻塞 Competition Golden Path |
 | StoragePort | `goo122` | provisional；当前缺 revision、事务、容量和失败语义 |
 | SecretStorePort | `zemeng` 实现 Windows 适配，`goo122` 控制注入 | provisional read；save/replace/delete/status unavailable |
 | CoordinationPort | `zemeng`，Runtime 注入由 `goo122` | unavailable；主 Agent/认知与 Runtime 的独立边界 |
@@ -136,7 +142,7 @@ TaskSnapshot 必含 `taskId`、`state`、`revision`、`updatedAt`、`steps`、`e
 | CoordinationStorePort | `goo122` 适配、`zemeng` 消费 | unavailable；版本化目标/决策图谱存储 |
 | ToolExecutionPort | `goo122` | unavailable 的稳定消费面；复用现有工具语义，不另造授权 |
 | EvidencePort / ArtifactPort | `goo122` | unavailable；访问、过期、敏感性、分片与背压待定义 |
-| CloudAgentPort | `zemeng` | unavailable；AgentArts 只返回提案，不持有本地授权 |
+| CloudAgentPort | `zemeng` | unavailable；Competition 第一优先，封装 AgentArts deployment/version/trace/提案/usage/error，不持有本地授权 |
 | KnowledgePort | `goo122` | unavailable |
 | DesktopActionPort / VoicePort | `zemeng` | unavailable |
 
@@ -182,11 +188,12 @@ Evidence 记录：`evidenceId`、`kind`（observation/source/execution）、`sou
 
 下一批必须交付：
 
-1. `zemeng` 提供 Coordination/Goal/Decision/Plan 语义和消费者测试；`goo122` 提供 Model/Memory/Tool/Storage 的稳定端口与 Fake。
-2. Runtime 注入 `CoordinationPort`，不直接依赖 Agent 和 ModelGateway 具体实现；双方能从同一接口提交独立开发。
-3. 结构化 TaskResult、Evidence/Artifact、真实游标过期恢复、Host 生命周期、SecretStore 管理面和对应失败夹具。
-4. AgentArts 使用 FakeCloudAgent 离线开发；真实版本部署、API、日志与本地执行读回另行验收。
-5. 每项记录版本、提交、状态、消费者验证和真实能力限制。文档或 Fake 存在不能把 unavailable 直接提升为 frozen。
+1. `zemeng` 先提供 Competition Coordination、CloudAgent、ToolProposal、Goal/Decision/Plan 语义和消费者测试；`goo122` 提供 Runtime/Memory/Tool/Evidence/Storage 的稳定端口与 Fake。
+2. Runtime 注入 `CoordinationPort`，Competition 实现经 `CloudAgentPort` 调用 AgentArts；不直接依赖 AgentArts DTO、Local Agent 或 ModelGateway 具体实现。
+3. AgentArts Adapter 先以 FakeCloudAgent 离线开发，再分别验收真实项目/Agent/Workflow、deployment、API、trace、usage、失败和本地执行读回。
+4. 结构化 TaskResult、Evidence/Artifact、真实游标过期恢复、Host 生命周期、SecretStore 管理面和对应失败夹具。
+5. Local ModelPort/Agent 扩展为可选后续工作，不阻塞 Competition Profile；现有实现保持可追溯，不为参赛删除。
+6. 每项记录 profile、版本、提交、状态、消费者验证和真实能力限制。文档或 Fake 存在不能把 unavailable 直接提升为 frozen。
 
 ## 11. 最小消息示例
 

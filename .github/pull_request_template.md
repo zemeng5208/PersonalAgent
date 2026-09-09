@@ -1,6 +1,7 @@
 ## 目的与关联
 
 - 任务 ID：
+- 目标 Profile（默认 `huawei_ict_agentarts`；Local 需说明为何进入当前范围）：
 - 模块 ID / GitHub 负责人（`goo122` / `zemeng` / 已登记协作者）：
 - 需求 ID（PA-xxx）：
 - 修改解决的问题及最终行为：
@@ -13,6 +14,7 @@
 - 涉及接口在 `docs/interfaces/CURRENT_INTERFACE_CATALOG.md` 中的状态与冻结基线：
 - 新增或未提供 capability 的握手、Fake 与 `UNSUPPORTED_CAPABILITY` 行为：
 - 权限、隐私或外部副作用变化（无则注明）：
+- AgentArts 项目/Agent/deployment/API/trace 及 Local 回退行为（不适用则注明）：
 
 ## 验证证据
 
@@ -33,4 +35,5 @@
 - [ ] 无密钥、私人账号信息或个人绝对路径
 - [ ] 必要文档及进度已同步
 - [ ] 接口状态、能力发现和真实验证等级未被 Fake/编译结果误提升
+- [ ] Competition Profile 未静默回退 Local；Local/Fake 结果未冒充 AgentArts 证据
 - [ ] 指定评审者并完成评审后才合并

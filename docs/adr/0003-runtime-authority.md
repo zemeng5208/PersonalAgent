@@ -1,5 +1,7 @@
 # ADR-0003：Runtime 控制任务与工具执行
 
+适用范围：Huawei ICT AgentArts Competition Profile 与可选 Local Profile；AgentArts 成为比赛主编排后端不改变 Runtime 的本地执行权威。
+
 - 状态：accepted
 - 日期：2026-09-06
 

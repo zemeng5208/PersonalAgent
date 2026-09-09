@@ -1,12 +1,12 @@
 # 架构设计与技术契约
 
-版本：0.6 · 日期：2026-09-09 · 状态：模块化单体、分层接口冻结、核心认知依赖倒置与 AgentArts 本地信任边界
+版本：0.7 · 日期：2026-09-09 · 状态：只实施 Huawei ICT AgentArts Competition Profile，Local Profile 可选留存
 
-模块所有权以 [模块分工](MODULE_ASSIGNMENTS.md) 为准；消息语义以 [公共开发协议](DEVELOPMENT_PROTOCOL.md) 为准；接口是否冻结和生产可用以 [当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md) 为准。
+参赛主架构见[华为 ICT AgentArts Competition Profile](competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)；模块所有权以 [模块分工](MODULE_ASSIGNMENTS.md) 为准；消息语义以 [公共开发协议](DEVELOPMENT_PROTOCOL.md) 为准；接口是否冻结和生产可用以 [当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md) 为准。
 
 ## 1. 原则
 
-模型或 AgentArts 只能提出文本、计划或动作建议；本地 Runtime 核验权限、执行并读回，真实结果决定完成状态。Windows 本地常驻；模块化、可扩展，不在初期拆微服务。
+当前只实施华为 ICT Competition Profile，由 AgentArts 完成智能体构建、编排、评估与部署。通用 Local Profile 仅可选留存现有 Local Agent、`runAgent()`、`ModelGateway` 和 Provider，当前不扩展也不参与比赛验收。任何模型或 AgentArts 都只能提出文本、计划或动作建议；本地 Runtime 核验权限、执行并读回，真实结果决定完成状态。Windows 本地常驻；模块化、可扩展，不在初期拆微服务。
 
 开发协作 Agent 与产品运行 Agent 是两套系统。Qcode 可用于开发协作，但不成为用户安装产品的前置要求。
 
@@ -17,7 +17,7 @@
 | Desktop | Electron；当前原生 HTML/CSS/JavaScript | 窗口、悬浮球、后台、状态展示；不假定 React 已采用 |
 | Runtime | Node.js、TypeScript | 会话、任务、事件、连接器、模型与工具调度 |
 | Coordination | TypeScript、端口注入 | 主 Agent、目标/决策图谱、事实影响和最小计划修复 |
-| AgentArts Adapter | TypeScript、HTTPS | 云端 Workflow/多 Agent 的版本化调用与本地提案映射 |
+| AgentArts Adapter | TypeScript、HTTPS | Competition Profile 的 Agent/Workflow/评估/部署调用与本地提案映射 |
 | Windows Host | C#、.NET | UI Automation、窗口/输入、系统观测 |
 | Knowledge | Markdown、FTS5、可替换向量索引 | Obsidian 增量索引、混合检索、来源 |
 | Storage | SQLite WAL | 任务、事件、授权、同步状态和迁移 |
@@ -28,7 +28,16 @@
 
 当前实现统一放在 `apps/*`、`packages/*` 和 `packages/connectors/*`；新模块目录、依赖方向、测试位置和未来 Runtime 拆分条件见 [项目目录规范](PROJECT_STRUCTURE.md) 与 [架构决策记录](adr/README.md)。不为未开工模块创建空目录。
 
-### 2.1 模块依赖边界
+### 2.1 部署 Profile
+
+| Profile | 主编排 | 用途 | 失败规则 |
+| --- | --- | --- | --- |
+| `huawei_ict_agentarts` | Huawei Cloud AgentArts | 华为 ICT 创新赛正式开发、评估、部署与 Demo | 未连接即明确不可用；正式证据不静默回退 |
+| `local` | Local Agent / `runAgent()` / ModelGateway | 可选历史基线；当前不实施、不新增、不纳入比赛验收 | 只有产品负责人以后明确启用时，才按显式配置选择 Provider/Fake/Unavailable |
+
+Profile 在受信 composition root 选择，不由 Renderer、模型输出或外部内容决定。现阶段 composition 只交付 `huawei_ict_agentarts`；Local 代码留存不形成并行工作流或兼容性承诺，也不削弱 AgentArts 的主编排地位。
+
+### 2.2 模块依赖边界
 
 - `apps` 是进程和装配入口，可以依赖 `packages`；可复用 `packages` 不能反向依赖 `apps`。
 - Agent 只持有 ModelPort、MemoryQueryPort、FactChangeFeed 和 ToolExecutionPort，不导入具体 Runtime 或 ModelGateway 实现。
@@ -47,11 +56,14 @@ flowchart TD
   UI[悬浮球 / 面板 / 后台] --> R[本地 Runtime / Policy]
   E[日程 / 平台事件 / 系统变化] --> R
   R --> Q[CoordinationPort]
-  Q <--> M[ModelPort / 盘古]
   Q <--> K[世界状态 / 记忆查询]
-  Q <--> AA[AgentArts Adapter]
-  AA <--> CLOUD[AgentArts Workflow / Multi-Agent]
-  Q --> G[ToolExecutionPort]
+  Q --> CP[Competition Profile]
+  CP <--> AA[AgentArts Adapter]
+  AA <--> CLOUD[AgentArts Agent / Workflow / Evaluation / Deployment]
+  Q --> LP[Local Profile]
+  LP <--> M[runAgent / ModelPort / ModelGateway]
+  CP --> G[Tool Proposal -> ToolExecutionPort]
+  LP --> G
   G --> C[本地 MCP / Skills / 连接器]
   G --> W[Windows Host / TraceGuard]
   G --> V[执行读回 / Evidence]
@@ -64,6 +76,7 @@ flowchart TD
 - Named Pipe 校验当前用户访问与会话握手；消息必须经过运行时 Schema 校验，不信任“来自本机”。
 - 第三方 MCP/脚本独立进程不是完整安全沙箱；启动前限制授权、环境变量和工作目录，隔离方案需实测。
 - AgentArts 位于云端，不接收本地 authorizationRef，不直接访问记忆数据库或 Windows Host；云端返回成功只形成候选结果，不能设置本地任务终态。
+- Competition Profile 的 AgentArts 是主编排后端，但不因此获得本地权限；正式评测中云端不可用时必须明确失败，不能静默把 Local Profile 的结果冒充 AgentArts 结果。
 - 开发工件留在仓库内；分发后采用用户范围应用数据目录生成状态，具体路径由安装设计确认。
 
 ## 4. 通用协议
@@ -78,13 +91,13 @@ flowchart TD
 
 ## 5. Agent 与模型网关
 
-主 Agent 负责目标理解、主计划、委派与汇总；盘古是主要模型 Provider，AgentArts 是可选云端编排 Provider。专业角色初期为知识研究、通信日程、电脑操作、编程；角色不必绑定不同模型或常驻进程。
+Competition Profile 中，AgentArts 负责参赛 Agent 的构建、主 Workflow/Agent 编排、知识与工具选择、效果评估和云端部署。只有产品负责人以后明确启用 Local Profile 时，现有 Local Agent 才继续负责目标理解、计划、委派与汇总，并由 `ModelGateway` 调用已登记 Provider；这不是当前实施路径。专业角色只在职责和评估能够证明必要时拆分，不为展示数量机械增加多 Agent。
 
 网关维护每个实际模型部署的能力：文本、流式、工具调用、结构化输出、视觉、上下文和限流。先探测再启用能力；不将接口兼容视为功能全兼容。
 
 工具调用有两种候选路径：模型原生调用；文字模型返回结构化提案后由宿主校验。当前盘古 Provider 明确声明 toolCalling=false、structuredOutput=false；StructuredToolProvider 只是离线验证的文字 JSON 适配器。真实盘古工具闭环未完成，因此 Model/Agent/Tool 接口不冻结。
 
-任务设最大步骤、费用/Token 预算和超时。辅助 Agent 输出带来源的结果回主 Agent。盘古失效时显式暂停或经授权切换，不静默将其他模型冒充盘古。
+任务设最大步骤、费用/Token 预算和超时。辅助 Agent 输出带来源的结果回主 Agent。盘古失效时显式暂停或经授权切换，不静默将其他模型冒充盘古；AgentArts 失效时 Competition Profile 同样显式失败，不静默切到 Local Profile。
 
 ## 6. 任务、并发与恢复
 
@@ -160,6 +173,7 @@ TraceGuard 通过适配层提供真实观测和受限动作，不在此阶段复
 | 分层接口冻结 | accepted / ADR-0005 | 每次接口状态变化逐项复审 |
 | 核心认知依赖倒置 | accepted / ADR-0006；实现 unavailable | Coordination/Model/Memory/Tool Fakes 与注入槽 |
 | AgentArts 只提案、本地执行 | accepted / ADR-0006；实现 unavailable | 已部署 API、Policy、执行读回和 Evidence |
+| 当前只实施 Huawei ICT Competition Profile；Local Profile 可选留存 | accepted / ADR-0007；实现 unavailable | AgentArts 构建、编排、评估、部署、Golden Path 与 profile 防静默回退 |
 | Electron + TS Runtime + .NET Host | 建议基线 | 打包体积、IPC、悬浮窗口、真实 UIA |
 | SQLite + Markdown + 可替换向量索引 | 建议基线 | 冲突、检索质量、数据量和迁移 |
 | 本地调度优先 | 建议基线 | 休眠、退出、中断恢复 |
@@ -167,6 +181,7 @@ TraceGuard 通过适配层提供真实观测和受限动作，不在此阶段复
 
 正式技术变更补充日期、负责人、原因、替代方案、影响和迁移方式。
 
+- 2026-09-09：确认华为 ICT 创新赛 AgentArts 赛题；当前只实施 Competition Profile，通用 Local Profile 仅留存既有 Agent/模型代码，不新增且不纳入比赛验收，见 ADR-0007。
 - 2026-09-09：按新分工拆分 MOD-04A/04B，增加 MOD-27～32；采用分层接口冻结和 AgentArts 本地信任边界。Potatos498 的 MOD-20～26 不变；历史工作包归属保留。
 - 2026-09-05：goo122 负责底座、公共协议和 Obsidian，zemeng 负责桌面与执行模块。为支持 2—3 人独立开发，拆出模块所有权和公共协议文档；原工作包对应关系保留在 ROADMAP。
 
@@ -175,6 +190,8 @@ TraceGuard 通过适配层提供真实观测和受限动作，不在此阶段复
 以下官方资料在 2026-09-05 的架构讨论中用于确认接口方向；开发时需核对当前文档与实际账号能力。
 
 - [盘古文本对话 API](https://support.huaweicloud.com/api-pangulm/pangulm_05_0012.html)
+- [AgentArts 产品页](https://www.huaweicloud.com/product/agentarts.html?utm_source=zgcompetition)
+- [AgentArts 用户指南](https://support.huaweicloud.com/agentarts/index.html)
 - [Windows UI Automation](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-uiautomationoverview)
 - [Obsidian Vault API](https://docs.obsidian.md/Plugins/Vault)
 - [Microsoft Graph 订阅](https://learn.microsoft.com/en-us/graph/api/subscription-post-subscriptions?view=graph-rest-1.0)

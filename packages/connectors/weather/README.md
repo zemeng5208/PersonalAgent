@@ -2,6 +2,8 @@
 
 负责人 Potatos498（C）；评审者 `goo122` 或 `zemeng`。包版本 0.1.0-alpha.1。关联需求 [PA-010](../../../docs/PRD.md)。
 
+本包是当前 [Huawei ICT AgentArts Competition Profile](../../../docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md) Golden Path 的候选只读工具：只有完成 AgentArts 提案、本地 Policy/ToolGateway 调用、目标数据读回和 trace/Evidence 关联后，才算比赛链路证据。现有 Local/Fake 调用继续用于基线测试，但不计入比赛完成度，也不产生新的 Local 实施工作。
+
 接 **Open-Meteo** 真实提供商（免密钥、无账号），manifest `verification` 为 `conditional`——结果依赖出站网络可达。`register` 不默认任何提供商，装配方必须显式传入（通常为 `new OpenMeteoProvider()`），缺失时抛 `INVALID_ARGUMENT`，避免静默启用测试用 Fake。`FakeWeatherProvider` 夹具仅用于离线测试，`verification` 为 `mock`。
 
 ## 导出入口

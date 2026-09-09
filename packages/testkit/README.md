@@ -4,6 +4,8 @@
 
 Testkit 为接口形状和失败分支提供可重复替身，不决定生产可用性。Core Runtime Profile 1 的 Fake 已参与冻结验收；Model/Agent/Tool、设置、连接器和语音等 Fake 不会把对应能力提升为 `frozen`。精确状态见[当前接口目录](../../docs/interfaces/CURRENT_INTERFACE_CATALOG.md)。
 
+当前新增夹具只服务 [Huawei ICT AgentArts Competition Profile](../../docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)：后续需提供显式 `FakeCloudAgent`、deployment/trace、工具提案和防静默回退场景，但它们不能替代真实 AgentArts 项目、部署、API 和评估读回。Local 现有 Fake 保留，不形成当前新增工作。
+
 ```sh
 npm ci
 npm run check

@@ -1,8 +1,8 @@
 # 项目目录与模块开发规范
 
-版本：1.1 · 日期：2026-09-09 · 状态：架构治理、独立开发与接口状态基线
+版本：1.2 · 日期：2026-09-09 · 状态：只实施 Competition Profile、Local Profile 可选留存的目录与依赖基线
 
-本文是 PersonalAgent 目录布局、包边界和新增模块结构的唯一规范。需求范围以 [PRD](PRD.md) 为准，运行语义以 [公共开发协议](DEVELOPMENT_PROTOCOL.md) 为准，负责人以 [模块分工](MODULE_ASSIGNMENTS.md) 为准，跨模块接口可用性以 [当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md) 为准。
+本文是 PersonalAgent 目录布局、包边界和新增模块结构的唯一规范。当前实现优先级以[华为 ICT AgentArts Competition Profile](competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)为准，需求范围以 [PRD](PRD.md) 为准，运行语义以 [公共开发协议](DEVELOPMENT_PROTOCOL.md) 为准，负责人以 [模块分工](MODULE_ASSIGNMENTS.md) 为准，跨模块接口可用性以 [当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md) 为准。
 
 ## 1. 设计目标
 
@@ -25,6 +25,8 @@ PersonalAgent/
 │  ├─ contracts/
 │  ├─ client/
 │  ├─ agents/
+│  ├─ coordination/          目标目录；Competition 编排消费边界，开工时创建
+│  ├─ agentarts/             目标目录；AgentArts Adapter/Workflow/Evaluation
 │  ├─ models/
 │  ├─ policy/
 │  ├─ tool-gateway/
@@ -35,6 +37,7 @@ PersonalAgent/
 │     └─ weather/
 ├─ tests/                    跨模块架构、集成和 E2E 测试
 ├─ docs/                     需求、架构、ADR、接口、模块与验收文档
+│  ├─ competition/           华为 ICT AgentArts Competition Profile
 │  └─ interfaces/            接口冻结状态与 unavailable 登记
 ├─ scripts/                  可复现的开发、检查和发布脚本
 ├─ data/                     被忽略的本地运行数据
@@ -47,7 +50,7 @@ PersonalAgent/
 
 当前 `apps/runtime/` 同时保存 Runtime 核心和少量组合入口。核心文件不能导入具体连接器；具体连接器只允许出现在明确命名的组合文件。等后台生命周期、进程通信和安装方案经过验收后，再决定是否拆为 `packages/runtime-core/` 与 `apps/runtime-host/`，现在不创建空目录。
 
-新分工规划在开工时增加 `packages/memory/`、`packages/knowledge/`、`packages/mcp/`、`packages/skills/`、`packages/goals/`、`packages/cognition/` 和 `packages/agentarts/`。这些路径当前不存在，本文不把规划目录描述成已实现能力。
+Competition Profile 规划在开工时先增加 `packages/coordination/` 和 `packages/agentarts/`，随后增加 `packages/memory/`、`packages/knowledge/`、`packages/mcp/`、`packages/skills/`、`packages/goals/` 与 `packages/cognition/`。这些路径当前不存在，本文不把规划目录描述成已实现能力。`packages/agents/` 与 `packages/models/` 只作为可选 Local Profile 代码留存，当前不新增、不扩展，也不因参赛改名或删除。
 
 ## 3. 目录职责
 
@@ -68,11 +71,17 @@ PersonalAgent/
 ```text
 apps / 根 composition
   ↓
-Runtime ──调用──> CoordinationPort <──实现── zemeng Agent/Cognition
-                         ↓
-          Model / Memory / Tool 等消费端口
-                         ↑
-                 goo122 具体实现
+Runtime ──调用──> CoordinationPort <──实现── zemeng Coordination
+                         │
+             ┌───────────┴───────────┐
+             ▼                       ▼
+   CloudAgentPort / AgentArts    Local Agent（可选）
+             │                       │
+             ▼                       ▼
+   Huawei ICT Competition       ModelPort/ModelGateway
+             │
+             ▼
+      Memory / Tool / Evidence 等受限端口
 
 所有模块只依赖公开 contracts 或消费模块声明的端口
 ```
@@ -81,14 +90,15 @@ Runtime ──调用──> CoordinationPort <──实现── zemeng Agent/Co
 
 1. `packages/*` 不得依赖 `apps/*`。
 2. `packages/contracts` 不得依赖其他内部 workspace。
-3. `packages/agents` 只依赖公共协议和最小 Model/Memory/Tool 端口，不以具体 ModelGateway 类作为冻结边界。
-4. Runtime 核心不导入 Electron 或具体连接器。
-5. 连接器生产依赖仅允许公共协议和未来统一的 Connector SDK；测试依赖可以使用 testkit。
-6. Renderer 不能导入 Runtime、模型 Provider、Storage、Node 系统 API 或连接器。
-7. 跨包只能按 `@personal-agent/<name>` 及目标包显式 `exports` 导入，禁止跨包相对路径和私有深层导入。
-8. 生产依赖图不得有循环。
-9. Runtime 通过注入的 CoordinationPort 调用 zemeng 实现；根 composition 之外不直接导入具体 AgentArts/Coordination 实现。
-10. AgentArts package 不导入 Runtime、Policy 私有实现或 SecretStore 具体实现，只接收受限端口。
+3. `packages/coordination` 拥有 Competition Profile 的消费语义，通过 CloudAgent/Memory/Tool/Evidence 端口协作；不导入 AgentArts DTO 或 Runtime 私有实现。
+4. `packages/agents` 是可选 Local Profile，实现只依赖公共协议和最小 Model/Memory/Tool 端口，不以具体 ModelGateway 类作为冻结边界。
+5. Runtime 核心不导入 Electron 或具体连接器。
+6. 连接器生产依赖仅允许公共协议和未来统一的 Connector SDK；测试依赖可以使用 testkit。
+7. Renderer 不能导入 Runtime、模型 Provider、Storage、Node 系统 API 或连接器。
+8. 跨包只能按 `@personal-agent/<name>` 及目标包显式 `exports` 导入，禁止跨包相对路径和私有深层导入。
+9. 生产依赖图不得有循环。
+10. Runtime 通过注入的 CoordinationPort 调用 zemeng 实现；根 composition 之外不直接导入具体 AgentArts/Coordination 实现。
+11. AgentArts package 不导入 Runtime、Policy 私有实现或 SecretStore 具体实现，只接收受限端口；正式 Competition 运行不得静默回退 Local。
 
 本地及 CI 使用 `npm run check:architecture` 自动检查可机械验证的规则。
 
@@ -164,6 +174,7 @@ tests/architecture/           目录和依赖门禁
 tests/integration/            多模块 + 显式 Fake Provider
 tests/e2e/                    应用入口完整链路
 tests/manual/                 真实账号、网络、付费模型验收
+tests/manual/agentarts/       Competition deployment/API/trace/Golden Path 验收
 tests/fixtures/               无隐私共享夹具
 ```
 
@@ -172,6 +183,7 @@ tests/fixtures/               无隐私共享夹具
 ## 9. 文档和 ADR
 
 - `PRD.md`：需求与验收依据。
+- `competition/`：当前优先的 Huawei ICT AgentArts Profile、Golden Path 和比赛验收矩阵。
 - `ARCHITECTURE.md`：当前与目标系统边界。
 - `PROJECT_STRUCTURE.md`：目录与依赖依据。
 - `DEVELOPMENT_PROTOCOL.md`：跨模块运行语义。
@@ -192,7 +204,7 @@ tests/fixtures/               无隐私共享夹具
 
 ## 11. 新模块开工门槛
 
-每个模块必须先登记：模块 ID、负责人、评审者、独占目录、依赖、公共输入输出、不在范围、Fake 验收和真实验收条件。随后按“接口状态登记 → 端口/Schema → Fake 和契约测试 → 实现 → 集成 → 真实条件验收 → 文档和 ROADMAP”推进。
+每个模块必须先登记：目标 profile、模块 ID、负责人、评审者、独占目录、依赖、公共输入输出、不在范围、Fake 验收和真实验收条件。当前新增模块只服务 Competition Profile；Local Profile 只有产品负责人以后明确启用才产生新增工作。随后按“接口状态登记 → 端口/Schema → Fake 和契约测试 → 实现 → 集成 → 真实条件验收 → 文档和 ROADMAP”推进。
 
 完成定义：
 

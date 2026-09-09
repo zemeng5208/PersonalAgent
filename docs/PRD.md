@@ -1,6 +1,6 @@
 # PersonalAgent 产品需求文档
 
-版本：0.2 · 日期：2026-09-09 · 状态：需求基线与证据边界已更新
+版本：0.3 · 日期：2026-09-09 · 状态：只实施华为 ICT AgentArts Competition Profile，通用 Local Profile 可选留存
 
 产品负责人：用户 · 底座/协议/Runtime/模型/记忆：`goo122` · 核心认知/桌面执行/AgentArts：`zemeng` · 业务连接器：`Potatos498` · 具体分工见 [模块分工](MODULE_ASSIGNMENTS.md)
 
@@ -8,15 +8,24 @@
 
 构建 Windows 私人 Agent 助理，具备 Jarvis 式常驻交互：平时呈现动态悬浮球，鼠标靠近展开面板，通过专门按钮进入完整管理后台。
 
-用户表达目标后，系统结合版本化个人世界状态形成事实—决策—计划依赖，选择工具或专业 Agent，完成信息获取、判断、受控行动和结果反馈。以盘古 API 作为主要模型入口，AgentArts 承担可选的云端 Workflow 与多 Agent 编排；本地 Runtime、Policy 和 ToolGateway 始终拥有授权、执行、读回和终态。
+用户表达目标后，系统结合版本化个人世界状态形成事实—决策—计划依赖，选择工具或专业 Agent，完成信息获取、判断、受控行动和结果反馈。当前只实施华为 ICT Competition Profile，AgentArts 是智能体构建、Workflow/Agent 编排、评估和云端部署的主平台。通用 Local Profile 只留存现有 `runAgent()`、`ModelGateway` 与盘古/自有模型 Provider，当前不新增、不扩展；若以后启用，仍与比赛 profile 共用本地 Runtime、Policy、ToolGateway、读回和任务终态。
 
 明确纳入产品方向：Obsidian、日程、研究、软件操作、编程、语音、微信与其他可用社交平台、邮件、通知、博主订阅、实时信息、天气、MCP、Skills、持续学习、目标/决策图谱、事件影响与最小计划修复、AgentArts，以及 TraceGuard 能力。
 
-本项目用于华为 ICT 创新赛准备；确切届次、提交日期、评分标准与技术使用要求尚未核验。API 接通与满足参赛要求分别验收。
+本项目参加**华为 ICT 大赛创新赛道**，选择“基于华为云 AgentArts 智能体开发平台的 Agent 设计和应用”赛题。参赛版本必须基于 AgentArts 完成智能体构建、编排与部署，并通过可视化 Demo 体现其在工具、知识、Agent/多 Agent 和效果评估中的真实价值。确切届次通知、提交日期、评分细则、资源券和账号区域仍需按组委会最新材料读回；API 接通与满足参赛要求分别验收。完整口径见[华为 ICT AgentArts Competition Profile](competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)。
+
+### 1.1 比赛 Profile 与可选 Local 边界
+
+| Profile | 定位 | 当前优先级 | 关键规则 |
+| --- | --- | --- | --- |
+| `huawei_ict_agentarts` | 华为 ICT 创新赛正式开发、评估、部署和 Demo | 当前唯一实施 | AgentArts 必须真实承担构建、编排、评估与部署；不可静默回退 Local |
+| `local` | 可选历史基线 | 当前不实施 | 仅留存 `runAgent()`、`ModelGateway`、盘古/自有模型和既有测试；不新增、不扩展、不纳入比赛退出条件 |
+
+“只实施 Competition Profile”表示当前新增架构、代码和验收全部按比赛 Golden Path 排序；不删除已有 Local 代码，也不把本地隐私、授权和执行终态迁入云端，但不为 Local 承诺当前兼容性或新增交付。
 
 ## 2. 范围与证据状态
 
-- 已确认：Windows 优先、悬浮球交互、盘古主要模型入口、版本化个人世界状态、本地可信执行边界、AgentArts 云端编排和上述能力方向。
+- 已确认：Windows 优先、悬浮球交互、版本化个人世界状态、本地可信执行边界、当前只实施华为 ICT AgentArts Competition Profile、通用 Local Profile 仅可选留存，以及上述能力方向。
 - 建议方案：具体技术栈、模块拆分、交互延迟、实现优先级；见架构与计划。
 - 待验证：盘古真实部署、原生/适配工具调用、AgentArts 部署与 API、各平台权限、语音供应商和具体 Windows 兼容范围。
 - 当前实现：MOD-01/02/03/25 及 MOD-04/05 离线增量已集成；PR #34 的任务、会话与审批查询已完成消费验证和非作者评审。只冻结 [Core Runtime Profile 1](interfaces/CURRENT_INTERFACE_CATALOG.md)；盘古工具调用、AgentArts、知识/记忆、MCP/Skills、语音和 Windows 执行仍为 provisional 或 unavailable。
@@ -50,7 +59,7 @@
 | --- | --- | --- | --- |
 | PA-001 | 动态悬浮球与靠近展开 | P0 | 真实窗口展示待机、倾听、思考、执行、等待和错误状态；拖动不误展开；输入后保持面板 |
 | PA-002 | 完整管理后台 | P0 | 专门按钮打开后台；查看能力、模型、连接、任务、记忆、授权与设置；未接通状态如实显示 |
-| PA-003 | 文本任务与盘古主推理 | P0 | 一个真实请求由盘古规划、调用工具并依据结果回答；记录实际模型；错误不伪装成功 |
+| PA-003 | 文本任务与模型推理 | P0 | Competition Profile 记录 AgentArts 实际调用的模型/部署；若以后启用 Local Profile，才经 ModelGateway 调用已登记 Provider；模型、profile 和错误均不伪装 |
 | PA-004 | 持久任务与取消 | P0 | 任务状态可查看；中断恢复核对外部结果；用户可停止；不重复执行已成功写操作 |
 | PA-005 | MCP 接入 | P0 | 至少一个真实服务完成工具发现、参数校验、执行与结果回传；断连可诊断 |
 | PA-006 | Skills | P0 | 一个版本化 Skill 经授权调用工具完成任务；启停有效；不能自行提升权限 |
@@ -73,8 +82,8 @@
 | PA-023 | 持续授权与数据边界 | P0 | 对象、动作、期限可查看和撤销；外部内容不能变成授权；云端发送范围受控 |
 | PA-024 | 版本化个人世界状态与决策依赖 | P0 | Fact、Goal、Decision、Plan 均有 revision、来源和有效期；修正/撤回可追踪；记忆不能直接修改任务终态 |
 | PA-025 | 事件影响与最小计划修复 | P0 | 新事实只影响有依赖边的决策；输出 KEEP/RECHECK/REVISE、原因和最小差异；可回放验证 |
-| PA-026 | AgentArts 安全接入 | P0 | 一个已部署云能力经 API 调用；云端只返回文本/计划/动作提案，本地 Policy 批准并读回后才能完成 |
-| PA-027 | AgentArts Workflow 与多 Agent | P1 | Workflow/多 Agent 有版本、角色、预算、失败降级和 trace；MCP/插件/Skill 能力按真实可用状态登记 |
+| PA-026 | Huawei ICT AgentArts Competition Profile | P0 | AgentArts 完成 Agent 构建、编排与部署；一个真实 API/Workflow 产生工具提案，经本地 Policy 批准、执行和读回；正式 Demo 不静默回退 Local |
+| PA-027 | AgentArts Workflow、知识、多 Agent 与评估 | P0 | 展示 AgentArts 的实际 Workflow/Agent 路径、知识或 MCP/Skill、必要的角色协作、固定评估集、部署版本、失败降级和 trace；未实测能力明确标记 |
 
 ## 6. 交互要求
 
@@ -83,6 +92,7 @@
 - 多屏和缩放变化后仍在可见区域；全屏隐藏与开机启动可配置。
 - 后台提供工具来源、账号健康、任务历史、授权、记忆纠正和停止入口。
 - 后台按接口目录显示 frozen、provisional、unavailable；Schema 占位或 Fake 不显示为已接通。
+- 后台显示当前 profile、AgentArts deployment/version 与 trace 引用；Competition Profile 断连时明确失败，不把 Local 结果显示成比赛路径。
 - 默认中文。其他语言暂不作为首版完成门槛。
 - 配色和最终视觉稿尚未确认；实际设计遵循用户指定的 Open Design 位置，不擅自新建平行设计项目。
 
@@ -104,7 +114,7 @@
 | 资源 | 待机不持续调用模型、截图或高频轮询；基准测试记录 CPU、内存与动画负载后确定预算 |
 | 可靠性 | 任务持久化，写入去重，异常退出可恢复；模拟不确定写入结果验证不重复发送 |
 | 隐私 | 最小数据上传、密钥隔离、日志脱敏；用户可查看和删除记忆与索引 |
-| 可观测性 | 任务、工具、模型请求关联；记录摘要依据与实际结果，不要求保存模型内部思维链 |
+| 可观测性 | 任务、profile、AgentArts deployment/trace、工具和模型请求关联；记录摘要依据与实际结果，不要求保存模型内部思维链 |
 | 可用性 | 展示断网、账号过期、平台不支持和模型失败；不得静默伪造降级结果 |
 | 分发 | 必要运行文件自包含；干净环境验证安装、运行、卸载和用户数据处理 |
 
@@ -112,13 +122,13 @@
 
 ## 9. 首版完成与暂不承诺
 
-首版需满足所有 P0，并展示“提出需求 → 盘古或已登记模型形成提案 → 本地授权 → 工具执行 → 结果读回 → Evidence → 受影响计划更新”。比赛版还需展示 AgentArts 的已部署 API 路径及其不能绕过本地 Policy 的证据。各 P0 不可因演示只覆盖一条路径而被标为全部完成。
+当前唯一交付目标是 Competition Profile。它必须展示“提出需求 → 版本化状态/Goal → AgentArts Agent/Workflow → 工具提案 → 本地授权 → 工具执行 → 结果读回 → AgentArts 最终结果 → Evidence → 受影响计划更新”，并提供 AgentArts 构建、部署、API、trace 和评估证据。Local Profile 现有代码与既有测试可留存，但不新增、不扩展，也不能替代比赛验收。各 P0 不可因演示只覆盖一条路径而被标为全部完成。
 
 暂不承诺：关机后持续执行、全部社交平台完整读写、任意软件无条件自动化、无限自主执行、盘古参数自训练、未实测的 AgentArts/MCP/Skill 能力。
 
 ## 10. 待决事项
 
-- 比赛届次、日期与正式技术要求。
+- 比赛届次通知、日期、评分细则、材料格式和资源发放；创新赛道与 AgentArts 赛题已经确认。
 - 盘古账号、部署、限流、费用与实际工具调用能力；当前原生 function calling 不可用。
 - AgentArts 区域、项目、身份、模型、版本发布、API、费用和可观测性条件。
 - 首批邮箱、日历与社交平台及账号类型。
@@ -129,6 +139,7 @@
 
 ## 11. 变更记录
 
+- 2026-09-09 / v0.3：确认华为 ICT 大赛创新赛道的 AgentArts 赛题；当前只实施 Competition Profile，通用 Local Profile 仅留存既有模型/Agent 代码，不新增且不纳入比赛退出条件。
 - 2026-09-09 / v0.2：扩展至 PA-024～27；加入世界状态、最小计划修复和 AgentArts；更新三人分工与分层接口冻结边界。
 - 2026-09-05：按最新分工，`goo122`（A）承担底座、公共协议及 Obsidian，`zemeng`（B）承担桌面与执行模块；需求范围与优先级保持不变。
 - 2026-09-05 / v0.1：从项目讨论整理初始需求、边界和验收条件；尚未开始实现。

@@ -1,5 +1,7 @@
 # ADR-0004：持久授权、工具证据与审批恢复
 
+适用范围：Huawei ICT AgentArts Competition Profile 与可选 Local Profile；云端工具提案必须复用本 ADR 的持久审批和结果核实语义。
+
 - 状态：accepted（PR #26 已由非作者评审并合并）；真实模型工具能力仍为 `provisional`。
 - 负责人：goo122。
 

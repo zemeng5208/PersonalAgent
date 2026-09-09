@@ -3,6 +3,7 @@
 ## 基本信息
 
 - 关联需求：PA-XXX
+- 目标 Profile：`huawei_ict_agentarts`（当前默认）/ `local`（可选，需说明进入当前范围的理由）
 - GitHub 负责人：
 - 评审者：
 - 独占目录：
@@ -41,7 +42,10 @@
 - 跨模块集成：
 - 真实条件验收：
 - 能力发现与不可用路径：
+- AgentArts deployment/API/trace 与防静默回退（Competition 模块）：
 
 ## 排除项与已知限制
 
 明确本工作包不实现和仍未验证的事项。
+
+Competition 模块必须区分 AgentArts、Local 和 Fake 证据；Local 模块不能被计入比赛主路径完成度。

@@ -1,21 +1,21 @@
 # 协作开发规范
 
-版本：0.3 · 更新：2026-09-09 · 状态：多人独立开发与分层接口冻结基线
+版本：0.4 · 更新：2026-09-09 · 状态：只实施 Competition Profile 的多人独立开发与分层接口冻结基线
 
 ## 1. 决策与职责
 
 | 角色 | 责任 |
 | --- | --- |
-| 产品负责人（用户） | 产品目标、关键交互、范围与重大取舍 |
+| 产品负责人（用户） | 已决定只实施 Huawei ICT AgentArts Competition Profile；Local Profile 可选保留；负责产品目标、关键交互、范围与重大取舍 |
 | `goo122` | 工程/存储、公共协议、TaskRuntime、ModelGateway/Provider、本地工具/MCP/Skills、知识与记忆 |
-| `zemeng` | 主 Agent/核心认知、桌面/语音/Windows/TraceGuard/编程/分发、目标决策、持续认知和 AgentArts |
+| `zemeng` | Competition Profile、AgentArts、主 Agent/核心认知、桌面/语音/Windows/TraceGuard/编程/分发、目标决策和持续认知 |
 | `Potatos498` | MOD-20～26 的待办、日历、邮件、订阅、通知、搜索、天气和社交连接器；分工不变 |
 | 模块负责人 | 在分配范围内实现、验证、维护文档、报告阻碍 |
 | 评审者 | 对照需求、接口、权限边界及验收证据审查 |
 
 各模块负责人可以决定范围内普通实现细节；产品边界、真实账号授权、不可逆操作和重大架构变化按已有授权处理。用户名不代表任何工具已经连通。所有协作者使用同一验收标准。
 
-模块归属唯一来源是 [模块分工](docs/MODULE_ASSIGNMENTS.md)，公共契约语义见 [公共开发协议](docs/DEVELOPMENT_PROTOCOL.md)，接口冻结与可用状态见 [当前接口目录](docs/interfaces/CURRENT_INTERFACE_CATALOG.md)，目录和依赖边界见 [项目目录规范](docs/PROJECT_STRUCTURE.md)。
+当前参赛范围见[华为 ICT AgentArts Competition Profile](docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)，模块归属唯一来源是 [模块分工](docs/MODULE_ASSIGNMENTS.md)，公共契约语义见 [公共开发协议](docs/DEVELOPMENT_PROTOCOL.md)，接口冻结与可用状态见 [当前接口目录](docs/interfaces/CURRENT_INTERFACE_CATALOG.md)，目录和依赖边界见 [项目目录规范](docs/PROJECT_STRUCTURE.md)。
 
 ## 2. 需求与任务流
 
@@ -31,6 +31,7 @@
 
 ```text
 任务 ID / 标题：
+目标 Profile：huawei_ict_agentarts（当前唯一实施）/ local（仅在产品负责人以后明确启用时）
 模块 ID / 关联需求：MOD-xx / PA-xxx
 负责人 / 评审者：
 状态：
@@ -45,8 +46,9 @@
 ## 3. 文件所有权与并行工作
 
 - 一个工作包只设一个交付负责人。多个独立工作包可以并行，同一共享文件不得多人同时编辑。
+- 当前新增工作只服务 `huawei_ict_agentarts`；Local Profile 仅在产品负责人以后明确列入范围时新增能力。保留旧代码不等于存在当前排期、兼容性承诺或验收义务。
 - 公共协议、数据库迁移、根依赖锁文件和根启动装配由 `goo122` 协调；模块内部入口归模块负责人。新增模块导出 `register(host)` 或已冻结消费端口，由 `goo122` 在独立集成 PR 接入根装配。
-- `goo122` 使用 FakeCoordination 开发 Runtime/模型/记忆/工具；`zemeng` 使用 Fake Model/Memory/Tool/Runtime 开发 Agent/认知/AgentArts。模块 PR 不依赖对方的真实账号、私人环境或未合并分支。
+- `goo122` 使用 FakeCoordination 开发 Runtime/记忆/工具；`zemeng` 使用 Fake CloudAgent/Memory/Tool/Runtime 开发 Competition Coordination 与 AgentArts。可选 Local Model/Agent 不阻塞比赛模块；模块 PR 不依赖对方的真实账号、私人环境或未合并分支。
 - Agent 委派消息必须包含文件所有权、验收条件，并声明“你不是唯一协作者，不要覆盖他人改动”。
 - 共用一个工作区时采用串行编辑；并行实现使用独立 checkout/worktree。项目相关工作树统一放在项目内 `.worktrees/<task-slug>/`，该目录必须保持忽略；移动或移除前先检查登记状态和未提交修改。
 - 每个工作树独立安装和运行，避免共享可写数据库、测试账号状态及端口。
@@ -58,7 +60,7 @@
 - 主分支保持可集成。默认分支前缀为 `codex/`，例如 `codex/feat-mod-27-goal-graph`、`codex/docs-interface-freeze`；延续已有分支时不为改名制造冲突。
 - 一个 PR 对应一个可独立审查的工作包，避免混入格式化、依赖升级和无关修改。
 - 提交建议使用 `feat(runtime): ...`、`fix(desktop): ...`、`docs(prd): ...`；描述具体行为。
-- PR 使用仓库模板，关联需求、说明实际验证和限制。没有执行的检查明确写“未执行”。
+- PR 使用仓库模板，声明目标 profile、关联需求、实际验证和限制。Competition PR 必须说明 AgentArts 是否真实部署/调用以及是否存在 Local 回退；没有执行的检查明确写“未执行”。
 - 合并前至少有一名非作者评审；`goo122` 的 PR 由 `zemeng` 或已登记的第三位协作者评审，`zemeng` 的 PR 由 `goo122` 或已登记的第三位协作者评审。无人可评审时留在 review，不标记为已通过他人评审。
 - 建议合并策略为 squash；是否开启分支保护、CI 和谁有远端权限仍需实际配置，本文不表示已启用。
 - PR 合并不等于发布。发布和真实账号接入按用户授权范围另行执行。
@@ -84,6 +86,7 @@
 - Schema、类型、配置、Fake 或单元测试中的任何一项单独存在都不等于冻结或生产可用。
 - 冻结接口的破坏性变化必须升级不兼容版本；新增可选字段或 operation 仍需 capability negotiation。
 - 接口状态变化同步更新当前接口目录、实现 README、ROADMAP 和验证记录。
+- Profile 是 composition 选择，不由模型或外部内容决定；Competition 正式证据不允许静默回退 Local，Local 输出也不能标为 AgentArts 输出。
 
 ## 6. 测试与验证
 
@@ -93,6 +96,7 @@
 | --- | --- |
 | 文档 | 相对链接、编号一致性、接口状态、冻结证据和措辞 |
 | Runtime | 一个完整任务闭环、取消或中断恢复、关键失败处理 |
+| AgentArts Competition | 项目/Agent/deployment 读回、Workflow/API/trace、工具提案→本地授权→真实读回、评估和防静默回退 |
 | 权限与写操作 | 授权范围、越权拒绝、不确定结果不重复写入 |
 | 连接器 | 契约校验；具备账号后再做真实读回；模拟与真实结果分开 |
 | 电脑操作 | 目标确认、用户接管、后置结果；真实 Windows 交互 |
@@ -103,7 +107,7 @@
 
 ## 7. 完成标准
 
-- 关联需求的验收条件满足，明确适用环境。
+- 关联需求的验收条件满足，明确适用 profile 与环境。
 - 代码与共享契约一致，必要文档同步。
 - 关键验证通过，有可重现步骤或 CI 证据。
 - 相关运行日志可定位任务，但不暴露敏感内容。
