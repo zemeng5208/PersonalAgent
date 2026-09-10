@@ -25,5 +25,5 @@ Historical snapshots do not undo any external side effects.
 Run `npm run test --workspace=@personal-agent/goals` and
 `npm run typecheck --workspace=@personal-agent/goals`. Tests use synthetic in-memory
 meeting data. The test script builds this new package because the root build list
-is maintained separately by goo122. No third-party dependency is added. Root lock
-and production composition registration remain part of the integration handoff.
+is maintained separately by goo122. No third-party dependency is added. Workspace
+lock entries are included; production composition remains an integration handoff.

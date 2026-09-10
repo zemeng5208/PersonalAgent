@@ -50,4 +50,8 @@
 5. 集成工作包运行根 check，并在项目要求 Node 版本验证；涉及真实状态时增加重启读回。
 6. 云试用获批且用户授权后，另行验收 AgentArts 语义修复和真实执行；不以本地 demo 替代比赛 Golden Path。
 
-当前不修改根配置/锁、公共 contracts 或 Runtime；只按用户授权提交、推送和请求 PR 评审，不合并或标记 MOD done。
+PR #37 CI 后续修正：2026-09-10 的 run 34430658413 在 npm ci 因缺少两个 workspace
+锁登记失败。本 PR 补充根锁的 4 个 package/link 记录（19 行），没有第三方升级；
+此共享文件例外由 goo122 随 PR 评审。上文原定锁登记交接项由此次修正提前完成，
+生产构建次序、公共端口与根装配仍待集成。未修改根 package、公共 contracts 或 Runtime。
+只按用户授权提交、推送和请求 PR 评审，不合并或标记 MOD done。

@@ -29,8 +29,9 @@ baseline 5944061; both increments must be reviewed before production integration
 Tests: `npm test --workspace=@personal-agent/cognition`. Synthetic meeting data
 covers propagation, stale historical paths, expiry, withdrawal, unrelated plans,
 deduplication, deterministic replay, revision checks and summary-only proposals.
-The module build first builds goals; root build ordering and lock registration
-remain goo122 integration work. No new third-party dependency is introduced.
+The module build first builds goals; root production build ordering remains
+goo122 integration work. Workspace lock entries are included for clean CI installs.
+No new third-party dependency is introduced.
 Full-history validation/copying and cause expansion target small graphs; large
 graph performance and cloud-assisted semantic plan repair are not delivered.
 
