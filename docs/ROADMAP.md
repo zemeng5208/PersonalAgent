@@ -169,6 +169,18 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；PR #
 
 ## 5. 继续入口
 
+### MOD-28-IMPACT-01（本地依赖影响与显式修订提案）
+
+- 负责人 zemeng；状态 review（待非作者评审与集成）；串行延续 `codex/zemeng/mod27-goal-graph` 的 MOD-27 增量。
+- 范围 `packages/cognition`：KEEP/RECHECK 影响分析及显式 summary 候选的 REVISE 差异；不接云、不写 Runtime。
+- 依赖、验收与剩余边界见[工作包](modules/MOD-28-IMPACT-01.md)。
+
+### MOD-27-GRAPH-01（云审批期间的本地工作包）
+
+- 负责人 zemeng；基线 5944061；状态 review（待非作者评审与集成）；分支 `codex/zemeng/mod27-goal-graph`。
+- 范围 `packages/goals`：版本化 Fact/Goal/Decision/Plan、依赖引用、修正/撤回历史和冲突校验。
+- 纯领域增量，无云调用、生产持久化或公共存储端口变更；详见[工作包](modules/MOD-27-GRAPH-01.md)。
+
 ### COMPETITION-PORTS-01（本地开发增量）
 
 - Profile：huawei_ict_agentarts；负责人 goo122；消费评审 zemeng；状态 in_progress。
