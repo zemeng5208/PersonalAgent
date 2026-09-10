@@ -3,7 +3,10 @@
   "version": "0.1.0-alpha.1",
   "private": true,
   "type": "module",
-  "exports": {".": {"types": "./dist/index.d.ts", "import": "./dist/index.js"}},
+  "exports": {
+    ".": {"types": "./dist/index.d.ts", "import": "./dist/index.js"},
+    "./store": {"types": "./dist/store.d.ts", "import": "./dist/store.js"}
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",

@@ -1,7 +1,9 @@
 # MOD-27/28 本地消费者集成交接
 
 日期：2026-09-10；profile：huawei_ict_agentarts；消费者负责人 zemeng。
-状态：review；用户已授权提交、推送和请求 goo122 评审，不代表接口冻结或批准合并。
+状态：原离线图谱工作包已在 PR #37 评审合并为 `41ea79d`，含根构建接线；不代表 MOD-27/28 整体验收完成。
+存储首片见 [COORDINATION-STORE-01](COORDINATION-STORE-01.md)，当前分支实现中、待消费评审。
+以下原工作树/基线及交接需求保留为当时记录；MemoryQueryPort、FactChangeFeed 仍 unavailable。
 工作树 `.worktrees/zemeng-mod27-goal-graph`；分支 `codex/zemeng/mod27-goal-graph`。
 本轮 fetch 确认 origin/main 为 59440614a15623e6190e0df5542dc9ff8d019d0c。
 

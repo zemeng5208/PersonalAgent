@@ -1,7 +1,7 @@
 # COMPETITION-PORTS-01：编排端口与 Runtime 注入首片
 
 - Profile：`huawei_ict_agentarts`；关联 MOD-02/03/04B/29、PA-026。
-- 负责人：goo122（本次公共端口与集成）；消费评审：zemeng。状态：in_progress。
+- 负责人：goo122（本次公共端口与集成）；消费评审：zemeng。状态：review（PR #36 已合并为 `5944061`，非作者消费评审证据仍待补齐）。
 - 基线：`bafb541`；工作树：`.worktrees/competition-coordination-ports`。
 - 范围：消费模块 `packages/coordination` 声明 CoordinationPort / CloudAgentPort、显式 Fake；Runtime 注入 CoordinationPort，只接收文字结果。
 - 不在范围：AgentArts HTTP/身份/部署、工具执行循环、世界状态、历史上下文出机、UI profile 切换、wire Schema 和数据库迁移。
@@ -16,4 +16,4 @@
 - 修正后 `node --test apps/runtime/test/coordination.test.mjs packages/coordination/test/ports.test.mjs`：9/9 通过。
 - 修正后 `npm run test --workspaces`：176 项，172 通过、4 项真实天气门控跳过、0 失败。修正只涉及测试夹具，未重复整轮构建。
 - `git diff --check` 通过。无 wire/迁移变化；未调用真实/付费模型、AgentArts 或账号，未运行 Electron UI smoke。
-- 尚未提交、推送或创建 PR；消费语义需 zemeng 非作者评审，状态保持 in_progress。不能将此记录当作接口冻结或比赛验收。
+- 后续状态：已通过 PR #36 合并；消费语义仍需 zemeng 非作者评审。不能将合并记录当作接口冻结或比赛验收。

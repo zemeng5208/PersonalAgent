@@ -156,8 +156,8 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | 记忆 | `MemoryQueryPort`、`FactChangeFeed`、修正/删除 | 对应 package、类型、存储和 Fake 未提供 | MOD-09 `goo122` |
 | MCP | 本地 MCP Host/Client 端口 | 对应 package、注册适配和真实调用未提供 | MOD-06 `goo122` |
 | Skills | 本地 Skill 加载/版本/执行端口 | 对应 package 和闭环未提供 | MOD-07 `goo122` |
-| 决策 | 目标/事实/决策图谱 | `CoordinationStorePort`、版本结构和实现未提供 | MOD-27 `zemeng` |
-| 认知 | 事件影响与 `KEEP/RECHECK/REVISE` 计划修复 | 端口、算法、Fake 和验收未提供 | MOD-28 `zemeng` |
+| 决策 | 目标/事实/决策图谱的生产集成 | PR #37 已集成纯领域版本图；存储端口首片见下，真实消费集成未完成 | MOD-27 `zemeng`，存储 `goo122` |
+| 认知 | 事件驱动的完整计划修复 | PR #37 已集成离线影响分析与显式候选差异；持久事件消费和真实验收未完成 | MOD-28 `zemeng` |
 | AgentArts | Competition Profile 的身份、Agent/Workflow、MaaS/模型、知识、MCP/Skill、工具提案与多 Agent | 当前第一优先；仓库没有 AgentArts adapter、deployment 或 API 实调 | MOD-29～31 `zemeng` |
 | AgentArts | Competition 发布、API、trace、评估、成本、回滚和端到端证据 | 无云资源读回、本地 Policy/ToolGateway 闭环或 profile 防静默回退证据 | MOD-32 `zemeng` |
 | Windows | Named Pipe、DesktopActionPort、资源锁、用户接管 | 对应 Host/Client package 与真实应用验收未提供 | MOD-16 `zemeng` |
@@ -173,13 +173,21 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 
 在 codex/competition-coordination-ports 中，`@personal-agent/coordination`
 新增 provisional 的文字 CoordinationPort / CloudAgentPort 和 testing 导出的 Fake；
-Runtime Application 可显式注入 CoordinationPort。此增量未冻结、未评审合并，
+Runtime Application 可显式注入 CoordinationPort。PR #36 已合并为 `5944061`，尚未冻结、非作者消费评审证据待补齐，
 不提升上表的真实 AgentArts 能力状态。当前只传 taskId/revision/goal/deadline/signal，
 只返回 kind/text/verification；工具提案、deployment/version/trace、usage、世界状态、
 云端续跑与出机同意尚未交付，不能据此接入真实服务。详见
 [工作包](../modules/COMPETITION-PORTS-01.md)。
 
-以下接口尚未提供，因此本节是待交付清单，不是接口定义：
+### COORDINATION-STORE-01 分支增量
+
+基于 PR #37 的 `41ea79d`，当前分支在 `@personal-agent/goals/store` 提供
+provisional CoordinationStorePort、Fake，Runtime 提供绑定命名空间的 SQLite 适配。
+显式 provision/bind、read(revision?) 与事务 append(expectedRevision,node) 详见
+[工作包](../modules/COORDINATION-STORE-01.md)。尚未评审合并，不增加 wire capability；
+MemoryQueryPort、FactChangeFeed、AgentArts 和真实数据生产授权仍 unavailable。
+
+以下是完整接口的待交付要求；已提供的文字与存储子集以上述增量为准，不代表完整接口冻结：
 
 | 待交付接口 | 语义提出方 | 公共类型/宿主提供方 | 最小验收 |
 | --- | --- | --- | --- |
@@ -205,4 +213,4 @@ Runtime Application 可显式注入 CoordinationPort。此增量未冻结、未�
 
 截至 2026-09-09，**适合冻结的是 Core Runtime Profile 1 的消息、任务、会话与审批只读查询子集；不适合冻结整套协议、模型工具调用或 Agent 编排接口。** 产品当前只实施 Huawei ICT AgentArts Competition Profile；Local Profile 仅留存现有代码、当前不新增。该范围决定不改变接口证据状态。
 
-盘古当前没有已验证的原生工具调用，文字 JSON 工具提案也未完成真实闭环。因此 MOD-04/05 的离线实现继续保持 `review`，Local Model/Agent/Tool 相关接口保持 `provisional`；Competition 所需 AgentArts、CloudAgent、世界状态与新认知接口保持 `unavailable`，并成为下一批优先交付面。
+盘古当前没有已验证的原生工具调用，文字 JSON 工具提案也未完成真实闭环。因此 MOD-04/05 的离线实现继续保持 `review`，Local Model/Agent/Tool 相关接口保持 `provisional`。截至 2026-09-10，Competition 的文字 Coordination/CloudAgent 子集与离线版本图/影响分析已集成但未冻结；存储首片为当前分支增量。真实 AgentArts、统一世界状态、事实流与完整认知集成仍 `unavailable`。

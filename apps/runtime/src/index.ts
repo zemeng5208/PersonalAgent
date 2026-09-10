@@ -6,6 +6,8 @@ import {openStorage} from '@personal-agent/storage';
 import type {Migration} from '@personal-agent/storage';
 import {AuthorizationPolicy} from '@personal-agent/policy';
 import {SqliteAuthorizationStore} from './authorization-store.js';
+import {bindCoordinationStore} from './coordination-store.js';
+import type {CoordinationStorePort} from '@personal-agent/goals/store';
 
 type TaskState = TaskSnapshot['state'];
 type TaskError = NonNullable<TaskSnapshot['error']>;
@@ -225,6 +227,9 @@ export const RUNTIME_MIGRATIONS: readonly Migration[] = [{
 }, {
   version: 4,
   sql: 'CREATE TABLE tool_approvals (approval_id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(task_id), value_json TEXT NOT NULL) STRICT;'
+}, {
+  version: 5,
+  sql: 'CREATE TABLE coordination_graphs (namespace TEXT PRIMARY KEY, snapshot_json TEXT NOT NULL) STRICT;'
 }];
 
 export class RuntimeError extends Error {
@@ -303,6 +308,16 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     this.idFactory = options.idFactory ?? randomUUID;
     this.policy = new AuthorizationPolicy(new SqliteAuthorizationStore(this.db));
     this.toolGateway = options.createToolGateway?.(this.policy) ?? options.toolGateway;
+  }
+
+  /** Trusted host only; provisioning never clears an existing graph. */
+  provisionCoordinationStore(namespace: string): CoordinationStorePort {
+    return bindCoordinationStore(this.db, namespace, true);
+  }
+
+  /** Does not provision: missing graphs report NOT_FOUND when used. */
+  bindCoordinationStore(namespace: string): CoordinationStorePort {
+    return bindCoordinationStore(this.db, namespace, false);
   }
 
   close(): void {

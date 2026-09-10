@@ -25,7 +25,9 @@ PersonalAgent/
 │  ├─ contracts/
 │  ├─ client/
 │  ├─ agents/
-│  ├─ coordination/          目标目录；Competition 编排消费边界，开工时创建
+│  ├─ coordination/          已有 provisional Competition 文字编排消费边界
+│  ├─ goals/                 已有离线版本图及 provisional 存储端口
+│  ├─ cognition/             已有离线依赖影响分析
 │  ├─ agentarts/             目标目录；AgentArts Adapter/Workflow/Evaluation
 │  ├─ models/
 │  ├─ policy/
@@ -50,7 +52,7 @@ PersonalAgent/
 
 当前 `apps/runtime/` 同时保存 Runtime 核心和少量组合入口。核心文件不能导入具体连接器；具体连接器只允许出现在明确命名的组合文件。等后台生命周期、进程通信和安装方案经过验收后，再决定是否拆为 `packages/runtime-core/` 与 `apps/runtime-host/`，现在不创建空目录。
 
-Competition Profile 规划在开工时先增加 `packages/coordination/` 和 `packages/agentarts/`，随后增加 `packages/memory/`、`packages/knowledge/`、`packages/mcp/`、`packages/skills/`、`packages/goals/` 与 `packages/cognition/`。这些路径当前不存在，本文不把规划目录描述成已实现能力。`packages/agents/` 与 `packages/models/` 只作为可选 Local Profile 代码留存，当前不新增、不扩展，也不因参赛改名或删除。
+PR #36/#37 后已有 `packages/coordination/`、`packages/goals/` 和 `packages/cognition/`，分别提供 provisional 文字编排与离线版本图/影响分析。`packages/agentarts/`、`packages/memory/`、`packages/knowledge/`、`packages/mcp/`、`packages/skills/` 仍为后续规划，未实现生产能力。`packages/agents/` 与 `packages/models/` 只作为可选 Local Profile 代码留存，当前不新增、不扩展，也不因参赛改名或删除。
 
 ## 3. 目录职责
 
