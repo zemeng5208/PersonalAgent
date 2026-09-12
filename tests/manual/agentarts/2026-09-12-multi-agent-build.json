@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "profile": "huawei_ict_agentarts",
-  "observedAt": "2026-09-12T23:53:12+08:00",
+  "observedAt": "2026-09-13T00:00:38+08:00",
   "region": "cn-southwest-2",
   "evidenceLevel": "conditional",
   "surface": "Huawei Cloud AgentArts console readback",
@@ -9,10 +9,15 @@
     "name": "PersonalAgent持续认知协调器",
     "id": "32d4d44c-eade-4f3f-8f76-209c74609e79",
     "state": "submitted",
-    "versionName": "v20260912235312",
+    "versionName": "v20260913000038",
     "controllerModel": "DeepSeek-V4-Flash",
     "maxConversationHistory": 10,
     "maxJumps": 9,
+    "routing": {
+      "startWorkflow": "PA-世界状态影响分析",
+      "defaultWorkflow": "PA-计划最小修复",
+      "endWorkflow": "PA-证据安全审查"
+    },
     "children": [
       {
         "name": "PA-世界状态影响分析",
@@ -42,6 +47,7 @@
     "submitted state",
     "controller configuration",
     "three saved child workflow identities",
+    "explicit start, default and end workflow routing",
     "child workflow version identifiers"
   ],
   "notVerified": [
