@@ -1,6 +1,6 @@
 # COORDINATION-STORE-01：图谱持久化首片
 
-- Profile：huawei_ict_agentarts；负责人 goo122；消费方与待评审者 zemeng。
+- Profile：huawei_ict_agentarts；负责人 goo122；消费方与非作者评审者 zemeng（PR #38 已批准）。
 - 状态：done；基线 main `41ea79d`（PR #37）；PR #38 已由 `zemeng5208` 非作者批准，并于 2026-09-12 合并为 `87ee444`。
 - 范围：MOD-27 的 namespace-bound CoordinationStorePort、Fake、Runtime SQLite 适配及原子版本提交。
 - 不在范围：AgentArts、MemoryQueryPort、FactChangeFeed、桌面接线、真实私人数据、物理删除及完整认知闭环。
@@ -54,6 +54,6 @@ npm 11.12.1 干净安装依赖，`npm run check` 完整退出 0。含架构门�
 199 通过、4 项真实天气门控跳过、0 失败；Runtime 46/46，存储测试仍为 8/8。
 本次未执行真实外部服务、AgentArts 或 Electron 实机验收。
 
-下一步：非作者评审端口语义后，由 zemeng 将会议变更消费者改为仅接收绑定端口，
+下一步：由 zemeng 将会议变更消费者改为仅接收已评审的绑定端口，
 补充“读取持久图→影响分析→显式候选修订→冲突后重新分析”的消费者验收。
 Memory/变更订阅、真实数据删除及 AgentArts Golden Path 单独交付，不据此标记 MOD-27/28 整体 done。

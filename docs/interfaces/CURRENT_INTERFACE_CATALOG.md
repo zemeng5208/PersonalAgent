@@ -179,7 +179,7 @@ Runtime Application 可显式注入 CoordinationPort。PR #36 已合并为 `5944
 云端续跑与出机同意尚未交付，不能据此接入真实服务。详见
 [工作包](../modules/COMPETITION-PORTS-01.md)。
 
-### COORDINATION-STORE-01 分支增量
+### COORDINATION-STORE-01 已集成增量
 
 基于 PR #37 的 `41ea79d`，PR #38（合并提交 `87ee444`）在 `@personal-agent/goals/store` 提供
 provisional CoordinationStorePort、Fake，Runtime 提供绑定命名空间的 SQLite 适配。
