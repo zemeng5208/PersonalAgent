@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "profile": "huawei_ict_agentarts",
+  "observedAt": "2026-09-12T23:53:12+08:00",
+  "region": "cn-southwest-2",
+  "evidenceLevel": "conditional",
+  "surface": "Huawei Cloud AgentArts console readback",
+  "multiAgent": {
+    "name": "PersonalAgent持续认知协调器",
+    "id": "32d4d44c-eade-4f3f-8f76-209c74609e79",
+    "state": "submitted",
+    "versionName": "v20260912235312",
+    "controllerModel": "DeepSeek-V4-Flash",
+    "maxConversationHistory": 10,
+    "maxJumps": 9,
+    "children": [
+      {
+        "name": "PA-世界状态影响分析",
+        "id": "7d06153e-6262-4679-86ae-1914b38e11f3",
+        "kind": "task_workflow",
+        "state": "submitted",
+        "versionId": "1789211817655"
+      },
+      {
+        "name": "PA-计划最小修复",
+        "id": "ed2363d9-b770-4ce5-a988-9bf0903466f7",
+        "kind": "task_workflow",
+        "state": "submitted",
+        "versionId": "1789228335613"
+      },
+      {
+        "name": "PA-证据安全审查",
+        "id": "998031d7-ec28-40ed-83e6-96667f22ff51",
+        "kind": "task_workflow",
+        "state": "submitted",
+        "versionId": "1789228287157"
+      }
+    ]
+  },
+  "verified": [
+    "resource identity",
+    "submitted state",
+    "controller configuration",
+    "three saved child workflow identities",
+    "child workflow version identifiers"
+  ],
+  "notVerified": [
+    "deployment",
+    "API invocation",
+    "model execution",
+    "trace",
+    "usage",
+    "evaluation",
+    "knowledge or MCP or Skill integration",
+    "tool proposal and local execution",
+    "target-system readback",
+    "local Evidence",
+    "failure fallback behavior"
+  ],
+  "sideEffects": {
+    "versionsSubmitted": true,
+    "deploymentCancelled": true,
+    "apiKeyEntered": false,
+    "trialRunStarted": false,
+    "modelCallStarted": false
+  }
+}
