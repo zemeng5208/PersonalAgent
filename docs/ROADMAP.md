@@ -4,6 +4,13 @@
 
 本文维护工作状态，需求以 PRD 为准，当前交付顺序以[华为 ICT AgentArts Competition Profile](competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)为先。模块负责人和独占目录唯一登记在 [模块分工](MODULE_ASSIGNMENTS.md)，契约见[公共开发协议](DEVELOPMENT_PROTOCOL.md)，逐接口冻结和可用性见[当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md)。`goo122` 负责共享底座、公共协议、Runtime、工具、知识与记忆；`zemeng` 负责 Competition Profile、AgentArts、核心认知和桌面执行；`Potatos498` 负责 MOD-20～26 业务连接器。Local Profile 只作为可选保留，不进入当前比赛退出条件。阶段不代表承诺日期；正式排期需根据比赛时间、团队人数和接口验证结果确定。
 
+### 2026-09-10 集成与存储首片更新
+
+- PR #36 已合并为 `5944061`：Competition 文字 Coordination/CloudAgent 端口与 Runtime 注入为 provisional；非作者消费评审仍需补齐，不标记完整比赛链 done。
+- PR #37 已评审合并为 `41ea79d`：MOD-27/28 纯领域图谱与离线影响分析、根构建接线已集成；持久化和真实运行仍是后续工作。
+- COORDINATION-STORE-01：goo122，review；独立分支已实现绑定命名空间的存储端口、Fake、SQLite 原子版本提交与重启测试，全仓检查通过，待非作者评审和集成。详见[工作包](modules/COORDINATION-STORE-01.md)。
+- 下一步由 zemeng 消费公开存储端口验证持久图的会议影响分析；MemoryQueryPort、FactChangeFeed 和真实 AgentArts 仍 unavailable。
+
 ### ARCH-03：Runtime Application 自主管理任务分派
 
 - 负责人：`goo122`；评审者：`zemeng` 或 `Potatos498`。

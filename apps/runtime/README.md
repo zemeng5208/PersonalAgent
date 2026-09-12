@@ -8,6 +8,15 @@ Interface status is tracked per operation in the [current interface catalog](../
 
 ## Implemented
 
+### Provisional graph storage
+
+Trusted hosts may call `provisionCoordinationStore(namespace)` or
+`bindCoordinationStore(namespace)` and pass only the returned
+`CoordinationStorePort` to a consumer. Migration 5 stores immutable graph history
+in the existing Runtime database, with transaction-protected revision comparison.
+No wire capability or AgentArts integration is enabled by this host-only API.
+See [COORDINATION-STORE-01](../../docs/modules/COORDINATION-STORE-01.md).
+
 ### Competition text-port increment (COMPETITION-PORTS-01)
 
 Trusted composition may pass `profile: 'huawei_ict_agentarts'` and an explicit
