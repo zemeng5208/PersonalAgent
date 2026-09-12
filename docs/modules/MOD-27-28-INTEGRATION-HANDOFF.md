@@ -2,7 +2,7 @@
 
 日期：2026-09-10；profile：huawei_ict_agentarts；消费者负责人 zemeng。
 状态：原离线图谱工作包已在 PR #37 评审合并为 `41ea79d`，含根构建接线；不代表 MOD-27/28 整体验收完成。
-存储首片见 [COORDINATION-STORE-01](COORDINATION-STORE-01.md)，当前分支实现中、待消费评审。
+存储首片见 [COORDINATION-STORE-01](COORDINATION-STORE-01.md)，已在 PR #38 经消费方非作者评审并合并为 `87ee444`；接口仍待持久图消费者纵向验收后评估冻结。
 以下原工作树/基线及交接需求保留为当时记录；MemoryQueryPort、FactChangeFeed 仍 unavailable。
 工作树 `.worktrees/zemeng-mod27-goal-graph`；分支 `codex/zemeng/mod27-goal-graph`。
 本轮 fetch 确认 origin/main 为 59440614a15623e6190e0df5542dc9ff8d019d0c。
@@ -15,8 +15,8 @@
 - 基线提交本身不包含上述实现；两包与此交接记录作为同一图谱影响工作包提供和评审。
 - PR #36 的 CoordinationPort/CloudAgentPort 是 provisional 文字子集；结果只允许
   kind/text/verification，不可塞入 PlanPatch、授权、Evidence 或任务状态。
-- 接口目录中的 MemoryQueryPort、FactChangeFeed、CoordinationStorePort 仍 unavailable。
-  本文只描述消费需求，不定义方法签名、wire DTO 或数据库结构。
+- 接口目录中的 MemoryQueryPort、FactChangeFeed 仍 unavailable；CoordinationStorePort
+  的首片已集成为 provisional。本文原始段落只描述当时消费需求，不扩大 wire DTO。
 
 ## goo122 端口交付需要覆盖的消费者场景
 

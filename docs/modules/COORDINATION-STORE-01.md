@@ -1,7 +1,7 @@
 # COORDINATION-STORE-01：图谱持久化首片
 
 - Profile：huawei_ict_agentarts；负责人 goo122；消费方与待评审者 zemeng。
-- 状态：review；基线 main `41ea79d`（PR #37）；分支 `codex/coordination-store`，进入 PR 交付与非作者评审。
+- 状态：done；基线 main `41ea79d`（PR #37）；PR #38 已由 `zemeng5208` 非作者批准，并于 2026-09-12 合并为 `87ee444`。
 - 范围：MOD-27 的 namespace-bound CoordinationStorePort、Fake、Runtime SQLite 适配及原子版本提交。
 - 不在范围：AgentArts、MemoryQueryPort、FactChangeFeed、桌面接线、真实私人数据、物理删除及完整认知闭环。
 
@@ -47,7 +47,12 @@ BEGIN IMMEDIATE 事务内读当前图、检查 expectedRevision、追加和提�
 首次新增测试暴露 Windows 临时目录先于数据库关闭的清理错误，修正关闭顺序后完整复跑通过。
 较早的一轮输出工具在 120 秒超时，不计为通过；以上是随后完整运行结果。
 `git diff --check` 通过。锁文件仅新增 Runtime 对已有 goals workspace 的依赖，无第三方升级。
-未调用模型、AgentArts 或真实账号，未运行 Electron smoke；本片进入 PR 交付，待非作者评审和集成，不代表模块整体完成。
+未调用模型、AgentArts 或真实账号，未运行 Electron smoke；本片已完成非作者评审和集成，不代表 MOD-27/28 整体完成或接口冻结。
+
+2026-09-12 合并后回归：在 main `87ee444` 的独立工作树使用 Node 24.15.0 /
+npm 11.12.1 干净安装依赖，`npm run check` 完整退出 0。含架构门禁共 203 项，
+199 通过、4 项真实天气门控跳过、0 失败；Runtime 46/46，存储测试仍为 8/8。
+本次未执行真实外部服务、AgentArts 或 Electron 实机验收。
 
 下一步：非作者评审端口语义后，由 zemeng 将会议变更消费者改为仅接收绑定端口，
 补充“读取持久图→影响分析→显式候选修订→冲突后重新分析”的消费者验收。
