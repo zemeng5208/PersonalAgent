@@ -179,12 +179,12 @@ Runtime Application 可显式注入 CoordinationPort。PR #36 已合并为 `5944
 云端续跑与出机同意尚未交付，不能据此接入真实服务。详见
 [工作包](../modules/COMPETITION-PORTS-01.md)。
 
-### COORDINATION-STORE-01 分支增量
+### COORDINATION-STORE-01 已集成增量
 
-基于 PR #37 的 `41ea79d`，当前分支在 `@personal-agent/goals/store` 提供
+基于 PR #37 的 `41ea79d`，PR #38（合并提交 `87ee444`）在 `@personal-agent/goals/store` 提供
 provisional CoordinationStorePort、Fake，Runtime 提供绑定命名空间的 SQLite 适配。
 显式 provision/bind、read(revision?) 与事务 append(expectedRevision,node) 详见
-[工作包](../modules/COORDINATION-STORE-01.md)。尚未评审合并，不增加 wire capability；
+[工作包](../modules/COORDINATION-STORE-01.md)。该存储首片已由非作者评审并集成，但尚缺真实消费者纵向验收，因此保持 provisional；不增加 wire capability；
 MemoryQueryPort、FactChangeFeed、AgentArts 和真实数据生产授权仍 unavailable。
 
 以下是完整接口的待交付要求；已提供的文字与存储子集以上述增量为准，不代表完整接口冻结：
@@ -213,4 +213,4 @@ MemoryQueryPort、FactChangeFeed、AgentArts 和真实数据生产授权仍 unav
 
 截至 2026-09-09，**适合冻结的是 Core Runtime Profile 1 的消息、任务、会话与审批只读查询子集；不适合冻结整套协议、模型工具调用或 Agent 编排接口。** 产品当前只实施 Huawei ICT AgentArts Competition Profile；Local Profile 仅留存现有代码、当前不新增。该范围决定不改变接口证据状态。
 
-盘古当前没有已验证的原生工具调用，文字 JSON 工具提案也未完成真实闭环。因此 MOD-04/05 的离线实现继续保持 `review`，Local Model/Agent/Tool 相关接口保持 `provisional`。截至 2026-09-10，Competition 的文字 Coordination/CloudAgent 子集与离线版本图/影响分析已集成但未冻结；存储首片为当前分支增量。真实 AgentArts、统一世界状态、事实流与完整认知集成仍 `unavailable`。
+盘古当前没有已验证的原生工具调用，文字 JSON 工具提案也未完成真实闭环。因此 MOD-04/05 的离线实现继续保持 `review`，Local Model/Agent/Tool 相关接口保持 `provisional`。截至 2026-09-12，Competition 的文字 Coordination/CloudAgent 子集、离线版本图/影响分析和存储首片均已集成但未冻结。真实 AgentArts、统一世界状态、事实流与完整认知集成仍 `unavailable`。
