@@ -153,7 +153,7 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | 通知 | 列表/恢复、已读/隐藏、策略配置 | 只有 `notification.created` Schema，无生产模块或查询 operation | MOD-23 `Potatos498`、MOD-13 `zemeng` |
 | 语音 | `voice.start` / `voice.stop` 和 ASR/TTS 流 | 只有 Schema 声明，无 VoicePort、生产实现或流协议 | MOD-14/15 `zemeng` |
 | 知识 | `KnowledgePort`、Obsidian/LLM Wiki | 对应 package 和 Fake 未提供 | MOD-08 `goo122` |
-| 记忆 | `MemoryQueryPort`、`FactChangeFeed`、修正/删除 | 对应 package、类型、存储和 Fake 未提供 | MOD-09 `goo122` |
+| 记忆 | `MemoryQueryPort`、`FactChangeFeed`、修正/删除 | MOD-09A 已开始需求与合成夹具准备；package、公开类型、存储、Fake 和真实删除仍未提供 | MOD-09 `goo122` |
 | MCP | 本地 MCP Host/Client 端口 | 对应 package、注册适配和真实调用未提供 | MOD-06 `goo122` |
 | Skills | 本地 Skill 加载/版本/执行端口 | 对应 package 和闭环未提供 | MOD-07 `goo122` |
 | 决策 | 目标/事实/决策图谱的生产集成 | PR #37 已集成纯领域版本图；存储端口首片见下，真实消费集成未完成 | MOD-27 `zemeng`，存储 `goo122` |
@@ -186,6 +186,14 @@ provisional CoordinationStorePort、Fake，Runtime 提供绑定命名空间的 S
 显式 provision/bind、read(revision?) 与事务 append(expectedRevision,node) 详见
 [工作包](../modules/COORDINATION-STORE-01.md)。该存储首片已由非作者评审并集成，但尚缺真实消费者纵向验收，因此保持 provisional；不增加 wire capability；
 MemoryQueryPort、FactChangeFeed、AgentArts 和真实数据生产授权仍 unavailable。
+
+### MOD-09A-WORLD-STATE-CONTRACT 准备
+
+当前仅在[工作包](../modules/MOD-09A-WORLD-STATE-CONTRACT.md)登记查询、变化流、
+敏感范围、修正/撤回/删除和合成会议夹具。该准备不定义公共方法签名，不增加 package、
+exports、Schema operation、数据库迁移或 capability；MemoryQueryPort 与
+FactChangeFeed 继续保持 unavailable，直到消费语义确认并完成实现、Fake、重启/游标
+测试和非作者评审。
 
 以下是完整接口的待交付要求；已提供的文字与存储子集以上述增量为准，不代表完整接口冻结：
 
