@@ -60,8 +60,11 @@ export class MailService {
     }
     // 游标只推进到实际返回的最后一条：聚合可能超额取回（页边界越过 limit），
     // 那些多取但未返回的条目必须留在游标之后，否则会漏邮件。
+    // epoch（uidValidity）轮换后旧 lastUid 不再是本 epoch 的水位——只有 epoch 未变才沿用，
+    // 重置时从新 epoch 实际返回的条目重算（goo122 2026-09-09 复审 P1）。
     const returned = collected.slice(0, limit);
-    const lastReturnedUid = returned.reduce((max, message) => Math.max(max, message.uid), options.cursor?.lastUid ?? 0);
+    const seed = options.cursor !== undefined && options.cursor.uidValidity === uidValidity ? options.cursor.lastUid : 0;
+    const lastReturnedUid = returned.reduce((max, message) => Math.max(max, message.uid), seed);
     const nextCursor: MailCursor = {uidValidity, lastUid: lastReturnedUid};
     const fetchedAt = this.isoNow();
     return {
