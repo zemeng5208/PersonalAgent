@@ -1,8 +1,8 @@
 # MOD-09A：世界状态查询与变化流契约准备
 
 - Profile：`huawei_ict_agentarts`；关联 PA-020、PA-024、MOD-09/27/28。
-- 负责人：`goo122`；消费语义确认：`zemeng`；状态：`in_progress`。
-- 分支：`codex/mod-09a-world-state-contract`；目标基线：PR #39 合并后的 `main@188f925`。
+- 负责人：`goo122`；消费语义确认：`zemeng`；状态：`review`。
+- 分支：`codex/mod-09a-world-state-contract`；交付基线：PR #40/#42/#44 合并后的 `main@3eb9156`。
 
 ## 1. 目标与边界
 
@@ -91,11 +91,29 @@ state 语义。Memory 不创建第二套 Goal/Decision/Plan，也不能直接写
 7. sequence 从 1 跳到 3 必须失败，不能静默推进。
 8. restricted 事实在 public/private 范围不可见；更换 namespace 不能越权。
 
+查询 probes 还覆盖空结果与固定水位、历史 revision、命名空间不存在、非法参数、
+存储不可用、deadline 和取消；失败不能携带部分成功。变化流 probes 覆盖固定水位分页、
+并发新事件隔离、确认后重启续读、处理失败不推进 cursor、cursor 过期 reconciliation，
+以及取消订阅后零投递。这些字段只服务夹具自检，不冻结未来端口形状。
+
 ## 7. 等待消费方确认的问题
 
 `zemeng` 恢复后需要确认：cognition 需要批量快照、点查或两者；固定水位所需字段；
 cursor 确认时机；缺口、修正链缺失和图谱冲突的恢复流程；AgentArts 可接收内容引用、
 脱敏摘要还是授权正文；哪些错误映射到 contracts。
+
+| 决策 | 推荐选项 | 原因与影响 |
+| --- | --- | --- |
+| 查询方式 | 批量快照与按稳定 fact ID 点查都保留 | 批量用于影响分析，点查用于按精确版本解释；不包含自由向量检索 |
+| snapshot watermark | 端口暴露不透明 token | 避免消费者依赖 SQLite revision 或变化流 sequence；Fake 可使用确定字符串 |
+| cursor 确认 | 消费者持久完成影响分析后显式确认 | 读取成功或内存处理成功都不足以保证重启后不会漏事件 |
+| 缺口或过期 | 返回 reconciliation required | 不静默跳过、不自动从头执行；由可信宿主安排固定水位重建 |
+| 历史读取 | 支持按 fact ID 加精确 revision 的有界读取 | 用于解释修正链；默认查询仍只返回当前有效版本 |
+| AgentArts 出机 | 默认只提供引用或脱敏摘要，正文需当前任务单独授权 | 端口可读不等于云端可见，禁止把 namespace 当作出机授权 |
+| 公共错误 | 先保留模块错误，公开 operation 接线时再映射 contracts | 避免为尚未发布的 capability 提前扩展公共 Schema |
+
+评审者可以逐项接受或提出替代方案；任何替代方案都必须说明重启恢复、隐私和兼容性
+影响。该表是提案而非已冻结接口。
 
 确认前不得新增公共接口、迁移或 capability。
 
@@ -113,9 +131,14 @@ cursor 确认时机；缺口、修正链缺失和图谱冲突的恢复流程；A
 ## 9. 本轮验证
 
 - `meeting-change.json` 可解析；5 条事实、会议 revision 1/2/3、3 个唯一事件、
-  重复事件、sequence 缺口和敏感范围预期自洽。
+  9 个查询 probes、7 个变化流 probes、重复事件、固定水位分页、sequence 缺口和敏感
+  范围预期自洽。
+- `npm run test:contract-fixtures` 验证版本引用、查询错误分支、cursor 确认、去重和图谱
+  KEEP/RECHECK 集合；该测试不代表公共接口已实现或冻结。
 - 文档链接与 `git diff --check` 通过。
-- `npm run check:architecture`：1/1 通过。
-- 变更仅包含文档和合成夹具；没有 apps/packages、Schema、迁移或依赖改动。
+- `npm run check`：通过，包含架构门禁、契约夹具 4/4、生成类型检查、类型检查和全部
+  workspace 测试。
+- 变更包含文档、合成夹具、自检测试与根检查脚本接线；没有 apps/packages、Schema、迁移或依赖改动。
 - 未运行真实服务、模型、AgentArts、账号或 Electron；接口仍 unavailable。
-- 尚未提交、推送或创建 PR；待非作者评审，`zemeng` 恢复后还需确认消费语义。
+- 本增量提交非作者评审；合并状态以 GitHub PR 为准。第 7 节消费语义仍待 `zemeng`
+  确认，夹具自检通过不代表 Memory 查询、变化流或持久化实现已经通过验收。
