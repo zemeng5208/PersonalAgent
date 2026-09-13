@@ -10,6 +10,7 @@
 - PR #37 已评审合并为 `41ea79d`：MOD-27/28 纯领域图谱与离线影响分析、根构建接线已集成；持久化和真实运行仍是后续工作。
 - COORDINATION-STORE-01：goo122，done；PR #38 已由 `zemeng5208` 批准并合并为 `87ee444`，绑定命名空间的存储端口、Fake、SQLite 原子版本提交与重启测试已集成。接口仍为 provisional，待真实消费者验证后评估冻结。详见[工作包](modules/COORDINATION-STORE-01.md)。
 - zemeng 已在下述工作包消费绑定端口，验证持久图的会议影响分析与冲突刷新；MemoryQueryPort、FactChangeFeed 和真实 AgentArts 仍 unavailable。
+- MOD-09A-WORLD-STATE-CONTRACT：`goo122`，review；世界状态查询/变化流场景、合成夹具和自检已形成，未发布接口或迁移。待非作者评审及消费语义确认。详见[工作包](modules/MOD-09A-WORLD-STATE-CONTRACT.md)。
 
 ### MOD-28-PERSISTENT-CONSUMER-01（2026-09-12）
 
@@ -93,7 +94,7 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；PR #
 | MOD-06 | M2 | todo | 未启动 |
 | MOD-07 | M2 | todo | 未启动 |
 | MOD-08 | M2 | todo | 未启动 |
-| MOD-09 | M1.6/M4 | todo | `goo122` / Competition Profile 需要的记忆查询、事实变化和流程学习；未启动 |
+| MOD-09 | M1.6/M4 | in_progress | `goo122` / MOD-09A 仅准备 MemoryQueryPort、FactChangeFeed 的消费场景与合成夹具；接口、存储、Fake、删除和真实数据仍 unavailable |
 | MOD-10 | M4 后研究，无交付日期承诺 | todo | 未启动 |
 | MOD-11 | M1 | in_progress | `zemeng` / PR #13、#14、#18、#25、#33、#34 已合并；窗口、安全桥、托盘、公开恢复和本地外壳可运行，DPI/透明命中及实机验收仍未完成 |
 | MOD-12 | M1 | in_progress | `zemeng` / PR #18、#25、#34 已合并；文字交互、会话恢复、状态展示、取消和大工作区可用，真实盘古对话与语音仍未验收 |
