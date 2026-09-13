@@ -1,7 +1,8 @@
 # @personal-agent/cognition — MOD-28 local impact core
 
-Owner: zemeng. Profile: huawei_ict_agentarts. Pure local domain increment;
-no AgentArts, Memory, persistence, scheduler, tool execution or Runtime writes.
+Owner: zemeng. Profile: huawei_ict_agentarts. Pure local domain increment with
+an optional host-bound persistent-store consumer; no AgentArts, Memory,
+scheduler, tool execution or TaskRuntime state transition.
 
 `analyzeImpact(graph, evaluatedAt)` validates and replays the complete MOD-27
 graph. It returns current Goal/Decision/Plan references with KEEP or RECHECK,
@@ -23,8 +24,9 @@ data and output identifiers must remain within the host's privacy boundary.
 
 Only the public `@personal-agent/goals` export is consumed. These provisional
 types are NOT a frozen PlanPatch wire contract or invented FactChangeFeed.
-The paired MOD-27 source is included in the same graph-impact work package on
-baseline 5944061; both increments must be reviewed before production integration.
+The MOD-27 source was integrated separately. This package consumes only its public
+exports and the host-bound provisional store export; both increments still require
+their own review evidence before production use.
 
 Tests: `npm test --workspace=@personal-agent/cognition`. Synthetic meeting data
 covers propagation, stale historical paths, expiry, withdrawal, unrelated plans,
@@ -46,3 +48,24 @@ snapshot preservation and deterministic JSON replay. All edits are to in-memory
 fixture copies. `mock` is deliberate: no host approval, storage, scheduling or
 external reminder execution is demonstrated. KEEP means no detected dependency
 or validity issue, not that the fixture's chosen times are semantically proven.
+
+## Bound persistent-store consumer
+
+`analyzeStoredImpact(boundStore, evaluatedAt)` reads and analyzes the exact
+snapshot returned by a host-bound provisional `CoordinationStorePort`.
+`commitStoredPlanRevision(boundStore, evaluatedAt, request)` revalidates an
+explicit Plan candidate, then appends one version with caller-selected exact
+dependencies. A stale graph or a commit-time race returns `kind: 'conflict'`
+with a fresh snapshot and impact report. A stale Plan `NodeRef` revision keeps
+the `proposePlanRevision` `REVISION_CONFLICT` error instead of returning a
+graph-conflict object whose graph revisions are equal. It never retries the
+write. Invalid, unaffected or extra-field requests are rejected before reading
+the bound store. Returned snapshots and proposals are isolated copies. The
+consumer cannot select a namespace and does not receive the Runtime host.
+
+An applied result only proves durable domain append. It does not approve text,
+change task state, schedule a reminder, execute a tool, or clear RECHECK unless
+the caller explicitly rebound the complete affected dependency chain. The Fake
+tests run with the workspace suite. The SQLite restart scenario lives at
+`tests/integration/mod-27-28-persistent-cognition.test.mjs` and is run after the
+root build; it uses only temporary synthetic data.
