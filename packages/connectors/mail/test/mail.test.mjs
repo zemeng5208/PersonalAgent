@@ -357,3 +357,46 @@ test('live QQ mail send (opt-in separately, sends a real message)', {skip: proce
     await provider.dispose();
   }
 });
+
+test('指纹无歧义：subject/text 换行拼接的不同 payload 不得撞指纹（goo122 09-13 P1）', async () => {
+  const {service} = makeService();
+  await service.send(ACCOUNT, {to: 'a@b.c', subject: 'A\nB', text: 'C', idempotencyKey: 'fp-1'});
+  await assert.rejects(
+    service.send(ACCOUNT, {to: 'a@b.c', subject: 'A', text: 'B\nC', idempotencyKey: 'fp-1'}),
+    err => err.code === 'INVALID_ARGUMENT' && /different recipient/.test(err.message),
+    '换行歧义碰撞必须被拒绝',
+  );
+});
+
+test('Provider 层单飞：QQMailProvider 注入假 transporter，并发同键只触发一次 sendMail', async () => {
+  const {QQMailProvider} = await import('../dist/index.js');
+  const provider = new QQMailProvider({user: 'x@qq.com', authCode: 'code'});
+  let sendMailCalls = 0;
+  Object.defineProperty(provider, 'transporter', {
+    get: () => fakeTransporter,
+    set: value => { fakeTransporter = value; },
+  });
+  let fakeTransporter = {
+    sendMail: async mail => {
+      sendMailCalls += 1;
+      await new Promise(resolve => setTimeout(resolve, 5));
+      return {messageId: '<stub-' + sendMailCalls + '>'};
+    },
+    close: () => {},
+  };
+  try {
+    const [a, b] = await Promise.all([
+      provider.send(ACCOUNT, {to: 'a@b.c', subject: 's', text: 't', timeoutMs: 30_000, idempotencyKey: 'cc-1'}),
+      provider.send(ACCOUNT, {to: 'a@b.c', subject: 's', text: 't', timeoutMs: 30_000, idempotencyKey: 'cc-1'}),
+    ]);
+    assert.equal(sendMailCalls, 1, 'Provider 层并发同键只调一次 sendMail');
+    assert.deepEqual(a, b);
+    // Provider 层同样绑定输入：同键不同正文拒绝
+    await assert.rejects(
+      provider.send(ACCOUNT, {to: 'a@b.c', subject: 's', text: 'DIFFERENT', timeoutMs: 30_000, idempotencyKey: 'cc-1'}),
+      err => err.code === 'INVALID_ARGUMENT',
+    );
+  } finally {
+    await provider.dispose();
+  }
+});

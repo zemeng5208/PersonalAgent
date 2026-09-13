@@ -62,6 +62,7 @@ export class QQMailProvider implements MailProvider {
   private client: ImapFlow | null = null;
   private transporter: Transporter | null = null;
   private readonly sendActions = new Map<string, MailSendResult>();
+  private readonly sendInflight = new Map<string, {fingerprint: string; inflight: MailSendResult | Promise<MailSendResult>}>();
 
   constructor(options: QQMailOptions) {
     if (typeof options.user !== 'string' || !options.user.includes('@')) {
@@ -187,8 +188,25 @@ export class QQMailProvider implements MailProvider {
 
   async send(_accountRef: string, input: MailSendInput & {idempotencyKey: string}): Promise<MailSendResult> {
     if (input.idempotencyKey.length === 0) throw new ProtocolError('INVALID_ARGUMENT', 'idempotencyKey is required');
-    const prior = this.sendActions.get(input.idempotencyKey);
-    if (prior !== undefined) return prior;
+    // Provider 层同样单飞 + 输入绑定（goo122 2026-09-13 复审 P1）：在途 Promise 先登记再 await，
+    // 并发同键只触发一次 sendMail；键换输入直接拒绝。持久化的最终责任在 Runtime，
+    // 此表只覆盖进程内窗口（与 Service 层互为纵深，不互为替代）。
+    const fingerprint = JSON.stringify([input.to, input.subject, input.text]);
+    const prior = this.sendInflight.get(input.idempotencyKey);
+    if (prior !== undefined) {
+      if (prior.fingerprint !== fingerprint) {
+        throw new ProtocolError('INVALID_ARGUMENT', `idempotencyKey "${input.idempotencyKey}" was used with different content at the provider; refusing`);
+      }
+      return prior.inflight;
+    }
+    const inflight = this.sendViaTransporter(input);
+    this.sendInflight.set(input.idempotencyKey, {fingerprint, inflight});
+    const result = await inflight;
+    this.sendActions.set(input.idempotencyKey, result);
+    return result;
+  }
+
+  private async sendViaTransporter(input: MailSendInput & {idempotencyKey: string}): Promise<MailSendResult> {
     if (this.transporter === null) {
       this.transporter = nodemailer.createTransport({
         host: this.options.smtpHost,
@@ -210,7 +228,6 @@ export class QQMailProvider implements MailProvider {
       // 超时或连接中断都意味着「结果未知」，不是失败：绝不盲重试（PA-014）。
       result = {state: 'unknown', reason: describe(error)};
     }
-    this.sendActions.set(input.idempotencyKey, result);
     return result;
   }
 
