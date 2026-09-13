@@ -1,6 +1,6 @@
 import { ProtocolError } from '@personal-agent/contracts';
 import type { StoragePort, ProtocolContracts } from '@personal-agent/contracts';
-import type { Freshness, PublishedTimeKind, ResearchMaterial, ResearchProvider } from './provider.js';
+import type { Freshness, PublishedTimeKind, ResearchMaterial, ResearchProvider, ResearchSearchInput } from './provider.js';
 
 type ConnectorItem = ProtocolContracts['connectorItem'];
 
@@ -69,7 +69,7 @@ export class ResearchService {
   async search(accountRef: string, query: string, options: {limit?: number; signal?: AbortSignal}): Promise<ResearchResult> {
     const limit = options?.limit ?? 10;
     if (typeof query !== 'string' || query.trim().length === 0) throw new ProtocolError('INVALID_ARGUMENT', 'Query must be a non-empty string');
-    const cacheKey = `${this.provider.providerKind}|${query.trim().toLowerCase()}`;
+    const cacheKey = `${this.provider.providerKind}|${limit}|${query.trim().toLowerCase()}`;
     const now = this.options.now();
     const cached = this.cache.get(cacheKey);
     const cacheFresh = cached !== undefined && now - cached.fetchedAtMs < this.cacheTtlMs;
@@ -82,7 +82,9 @@ export class ResearchService {
       state = 'fresh';
     } else {
       try {
-        materials = await this.provider.search(accountRef, {query, limit});
+        const searchArgs: ResearchSearchInput = {query, limit};
+        if (options?.signal !== undefined) searchArgs.signal = options.signal;
+        materials = await this.provider.search(accountRef, searchArgs);
         state = 'fetched';
         if (this.cache.size >= CACHE_LIMIT) {
           const oldest = this.cache.keys().next().value;

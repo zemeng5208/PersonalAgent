@@ -17,6 +17,8 @@ export interface ResearchMaterial {
 export interface ResearchSearchInput {
   query: string;
   limit: number;
+  /** 宿主取消信号：实现方必须透传到出站请求（goo122/zemeng 评审后补齐）。 */
+  signal?: AbortSignal;
 }
 
 export interface ResearchProvider {

@@ -166,3 +166,28 @@ test('live OpenAlex read-back（真实学术源，免 key）', {skip: LIVE_SKIP}
   }
   assert.equal(result.cache.state, 'fetched');
 });
+
+test('signal 一路透传：ToolContext 取消后真实 fetch 收到 abort（zemeng 09-13 P1）', async () => {
+  let forwardedSignal = null;
+  const fetchImpl = (url, init) => new Promise((resolve, reject) => {
+    forwardedSignal = init.signal;
+    forwardedSignal.addEventListener('abort', () => reject(new Error('The operation was aborted')));
+    setTimeout(() => resolve({ok: true, status: 200, json: async () => ({results: []})}), 50);
+  });
+  const provider = new OpenAlexProvider({fetchImpl});
+  const service = new ResearchService(provider, {now: () => NOW});
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 10);
+  await assert.rejects(service.search(ACCOUNT, 'agent', {signal: controller.signal}), err => err.code === 'CANCELLED');
+  assert.ok(forwardedSignal !== null && forwardedSignal.aborted, 'provider 收到的 signal 已中止');
+});
+
+test('缓存键含 limit：limit=1 后 limit=3 不得命中同键只回 1 条（zemeng 09-13 P2）', async () => {
+  const {service} = makeService();
+  const first = await service.search(ACCOUNT, 're', {limit: 1});
+  assert.equal(first.results.length, 1);
+  assert.equal(first.cache.state, 'fetched');
+  const second = await service.search(ACCOUNT, 're', {limit: 3});
+  assert.equal(second.cache.state, 'fetched', '不同 limit 是不同缓存键，重新检索');
+  assert.equal(second.results.length, 3, '拿到请求的全部 3 条而非缓存里的 1 条');
+});
