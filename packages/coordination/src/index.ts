@@ -37,6 +37,15 @@ export interface CloudAgentPort {
   invoke(request: CoordinationRequest): Promise<CoordinationTextResult>;
 }
 
+export {AgentArtsCloudAgentPort} from './agentarts.js';
+export type {
+  AgentArtsAuthorizationProvider,
+  AgentArtsFetch,
+  AgentArtsFetchInit,
+  AgentArtsResponse,
+  AgentArtsRuntimeConfig,
+} from './agentarts.js';
+
 /** Runtime validates even typed adapters. Text is not execution evidence. */
 export function parseCoordinationTextResult(value: unknown): CoordinationTextResult {
   let array = false;
