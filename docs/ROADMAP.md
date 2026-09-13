@@ -1,6 +1,6 @@
 # 开发计划与进度
 
-更新：2026-09-12 · 当前阶段：只实施华为 ICT AgentArts Competition Profile 架构与最小 Golden Path；通用 Local Profile 可选留存 · 已集成：ARCH-01/02/03、MOD-01/02/03/25、MOD-04/05 离线增量、PR #31/#34 会话与查询恢复、PR #33 桌面本地外壳、PR #36 Competition 文字端口、PR #37/38 离线认知图谱及持久化 · Core Runtime Profile 1 已冻结；AgentArts 运行链与完整产品闭环未完成
+更新：2026-09-13 · 当前阶段：只实施华为 ICT AgentArts Competition Profile 架构与最小 Golden Path；通用 Local Profile 可选留存 · 已集成：ARCH-01/02/03、MOD-01/02/03/25、MOD-04/05 离线增量、PR #31/#34 会话与查询恢复、PR #33 桌面本地外壳、PR #36 Competition 文字端口、PR #37/38 离线认知图谱及持久化 · Core Runtime Profile 1 已冻结；AgentArts 运行链与完整产品闭环未完成
 
 本文维护工作状态，需求以 PRD 为准，当前交付顺序以[华为 ICT AgentArts Competition Profile](competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)为先。模块负责人和独占目录唯一登记在 [模块分工](MODULE_ASSIGNMENTS.md)，契约见[公共开发协议](DEVELOPMENT_PROTOCOL.md)，逐接口冻结和可用性见[当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md)。`goo122` 负责共享底座、公共协议、Runtime、工具、知识与记忆；`zemeng` 负责 Competition Profile、AgentArts、核心认知和桌面执行；`Potatos498` 负责 MOD-20～26 业务连接器。Local Profile 只作为可选保留，不进入当前比赛退出条件。阶段不代表承诺日期；正式排期需根据比赛时间、团队人数和接口验证结果确定。
 
@@ -9,7 +9,15 @@
 - PR #36 已合并为 `5944061`：Competition 文字 Coordination/CloudAgent 端口与 Runtime 注入为 provisional；非作者消费评审仍需补齐，不标记完整比赛链 done。
 - PR #37 已评审合并为 `41ea79d`：MOD-27/28 纯领域图谱与离线影响分析、根构建接线已集成；持久化和真实运行仍是后续工作。
 - COORDINATION-STORE-01：goo122，done；PR #38 已由 `zemeng5208` 批准并合并为 `87ee444`，绑定命名空间的存储端口、Fake、SQLite 原子版本提交与重启测试已集成。接口仍为 provisional，待真实消费者验证后评估冻结。详见[工作包](modules/COORDINATION-STORE-01.md)。
-- 下一步由 zemeng 消费公开存储端口验证持久图的会议影响分析；MemoryQueryPort、FactChangeFeed 和真实 AgentArts 仍 unavailable。
+- zemeng 已在下述工作包消费绑定端口，验证持久图的会议影响分析与冲突刷新；MemoryQueryPort、FactChangeFeed 和真实 AgentArts 仍 unavailable。
+
+### MOD-28-PERSISTENT-CONSUMER-01（2026-09-12）
+
+- 负责人 zemeng；实现基线 PR #38 / `87ee444`，已同步 PR #39 / `188f925`；
+  状态 review（本地验证通过，待非作者评审与集成）。
+- `packages/cognition` 消费绑定的 provisional CoordinationStorePort，提供持久快照影响分析、
+  显式 Plan 追加及 CAS 冲突后的重新分析；不重试写入，不修改 TaskRuntime 终态。
+- Fake 与 SQLite 重启验收、边界及未交付项见[工作包](modules/MOD-28-PERSISTENT-CONSUMER-01.md)。
 
 ### ARCH-03：Runtime Application 自主管理任务分派
 
@@ -104,7 +112,7 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；PR #
 | MOD-25 | M2 | done | `Potatos498` / PR #4、#12、#23 与 Runtime 装配 PR #9 已合并；GeoNames 增强下 26 个世界大城市简体查询 26/26 高置信，真实门控测试 66/66；manifest 仍为 `conditional`，不等于长期生产稳定性验收 |
 | MOD-26 | M4 起逐平台验收 | todo | `Potatos498` 已登记，未授权启动 |
 | MOD-27 | M1.6 | review | `zemeng` 领域核心 PR #37、`goo122` 存储 PR #38 已合并；版本图、Fake、SQLite 原子提交及重启读回已离线验证；真实事实流、消费者接线和数据删除未完成 |
-| MOD-28 | M1.6 | review | `zemeng` / PR #37 已合并离线 KEEP/RECHECK 与显式 REVISE 候选；持久图消费者纵向验收、AgentArts 驱动和 Evidence 闭环未完成 |
+| MOD-28 | M1.6 | review | `zemeng` / PR #37 已合并离线 KEEP/RECHECK 与显式 REVISE 候选；持久图消费者本地验收完成、待非作者评审；真实事实订阅、AgentArts 驱动和 Evidence 闭环未完成 |
 | MOD-29 | M1.5 第一优先 | todo | `zemeng` / AgentArts 云端基础、身份、MaaS/模型和部署适配；无部署/API 证据 |
 | MOD-30 | M1.5 第一优先 | todo | `zemeng` / AgentArts Agent/Workflow、知识、MCP/Skill 与工具提案映射；未提供 |
 | MOD-31 | M1.5/M3 | todo | `zemeng` / AgentArts 多 Agent 与评估；未提供 |
