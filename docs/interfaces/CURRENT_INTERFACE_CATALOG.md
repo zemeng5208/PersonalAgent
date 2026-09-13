@@ -21,7 +21,7 @@
 
 | 部署 profile | 优先级 | 当前能力 | 接口规则 |
 | --- | --- | --- | --- |
-| `huawei_ict_agentarts` | 当前唯一优先实现与比赛验收路径 | 架构 accepted；运行 `unavailable` | 先交付 Coordination/CloudAgent/Tool/Evidence 端口；正式证据不静默回退 |
+| `huawei_ict_agentarts` | 当前唯一优先实现与比赛验收路径 | 最小文字 Coordination/CloudAgent 与 Runtime 注入已集成；真实 Golden Path `unavailable` | 文字调用失败不静默回退；trace/usage/Tool/Evidence 仍待交付与验收 |
 | `local` | 可选保留 | 现有 Agent/Model 部分实现为 `provisional` | 不删除既有代码；新增 Local 能力不阻塞 Competition，也不计入比赛验收 |
 
 ## 2. 状态定义与冻结门槛
@@ -158,8 +158,8 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | Skills | 本地 Skill 加载/版本/执行端口 | 对应 package 和闭环未提供 | MOD-07 `goo122` |
 | 决策 | 目标/事实/决策图谱的生产集成 | PR #37 已集成纯领域版本图；存储端口首片见下，真实消费集成未完成 | MOD-27 `zemeng`，存储 `goo122` |
 | 认知 | 事件驱动的完整计划修复 | PR #37 已集成离线影响分析与显式候选差异；持久事件消费和真实验收未完成 | MOD-28 `zemeng` |
-| AgentArts | Competition Profile 的身份、Agent/Workflow、MaaS/模型、知识、MCP/Skill、工具提案与多 Agent | 当前第一优先；仓库没有 AgentArts adapter、deployment 或 API 实调 | MOD-29～31 `zemeng` |
-| AgentArts | Competition 发布、API、trace、评估、成本、回滚和端到端证据 | 无云资源读回、本地 Policy/ToolGateway 闭环或 profile 防静默回退证据 | MOD-32 `zemeng` |
+| AgentArts | Competition Profile 的身份、Agent/Workflow、MaaS/模型、知识、MCP/Skill、工具提案与多 Agent | 最小文字 adapter 与多智能体/路由读回已存在；模型鉴权、知识、MCP/Skill 与工具提案仍未完成 | MOD-29～31 `zemeng` |
+| AgentArts | Competition 发布、API、trace、评估、成本、回滚和端到端证据 | 已读回部署运行时并获得一次真实 API 失败响应；尚无成功 trace/usage、本地 Policy/ToolGateway 闭环或回滚证据 | MOD-32 `zemeng` |
 | Windows | Named Pipe、DesktopActionPort、资源锁、用户接管 | 对应 Host/Client package 与真实应用验收未提供 | MOD-16 `zemeng` |
 | TraceGuard | 公开工具和 Evidence/恢复端口 | 仓库适配 package 未提供 | MOD-17 `zemeng` |
 | 编程 | Workspace/patch/command/artifact 端口 | 仓库 package 和隔离验收未提供 | MOD-18 `zemeng` |
@@ -185,7 +185,7 @@ Runtime Application 可显式注入 CoordinationPort。PR #36 已合并为 `5944
 provisional CoordinationStorePort、Fake，Runtime 提供绑定命名空间的 SQLite 适配。
 显式 provision/bind、read(revision?) 与事务 append(expectedRevision,node) 详见
 [工作包](../modules/COORDINATION-STORE-01.md)。该存储首片已由非作者评审并集成，但尚缺真实消费者纵向验收，因此保持 provisional；不增加 wire capability；
-MemoryQueryPort、FactChangeFeed、AgentArts 和真实数据生产授权仍 unavailable。
+MemoryQueryPort、FactChangeFeed、AgentArts trace/usage 与可信工具闭环及真实数据生产授权仍 unavailable。
 
 ### MOD-09A-WORLD-STATE-CONTRACT 准备
 
@@ -207,7 +207,7 @@ FactChangeFeed 继续保持 unavailable，直到消费语义确认并完成实�
 | `EvidencePort` / `ArtifactPort` | 双方共同给出用例 | `goo122` | 越权、过期、超限、乱序、取消、敏感内容不入日志 |
 | `ModelPort` 最小稳定面 | 可选 Local Agent 提供消费场景 | `goo122` | 可选后续；Agent 只依赖接口而非 `ModelGateway`；不阻塞 Competition Profile |
 
-交付顺序：先提交 Competition 的 Coordination/CloudAgent/Tool/Evidence 语义与消费者测试，再由接口负责人交付公开类型/Fake，随后完成 AgentArts deployment/API Golden Path；Memory/Goal/Event 与完整评估在此基础上扩展。Local ModelPort 为可选后续。未完成前保持 `unavailable`。
+交付顺序：最小 Competition Coordination/CloudAgent 文字子集及消费者测试已交付；下一步完成 AgentArts 成功 API/trace/usage，再交付 Tool/Evidence 语义与可信闭环；Memory/Goal/Event 与完整评估在此基础上扩展。Local ModelPort 为可选后续。未完成的能力保持 `unavailable`。
 
 ## 7. 兼容与变更规则
 
@@ -219,6 +219,6 @@ FactChangeFeed 继续保持 unavailable，直到消费语义确认并完成实�
 
 ## 8. 当前结论
 
-截至 2026-09-09，**适合冻结的是 Core Runtime Profile 1 的消息、任务、会话与审批只读查询子集；不适合冻结整套协议、模型工具调用或 Agent 编排接口。** 产品当前只实施 Huawei ICT AgentArts Competition Profile；Local Profile 仅留存现有代码、当前不新增。该范围决定不改变接口证据状态。
+截至 2026-09-13，**适合冻结的是 Core Runtime Profile 1 的消息、任务、会话与审批只读查询子集；不适合冻结整套协议、模型工具调用或 Agent 编排接口。** 产品当前只实施 Huawei ICT AgentArts Competition Profile；Local Profile 仅留存现有代码、当前不新增。该范围决定不改变接口证据状态。
 
-盘古当前没有已验证的原生工具调用，文字 JSON 工具提案也未完成真实闭环。因此 MOD-04/05 的离线实现继续保持 `review`，Local Model/Agent/Tool 相关接口保持 `provisional`。截至 2026-09-12，Competition 的文字 Coordination/CloudAgent 子集、离线版本图/影响分析和存储首片均已集成但未冻结。真实 AgentArts、统一世界状态、事实流与完整认知集成仍 `unavailable`。
+盘古当前没有已验证的原生工具调用，文字 JSON 工具提案也未完成真实闭环。因此 MOD-04/05 的离线实现继续保持 `review`，Local Model/Agent/Tool 相关接口保持 `provisional`。截至 2026-09-13，Competition 的文字 Coordination/CloudAgent 子集、Runtime 注入、防静默回退、离线版本图/影响分析和存储首片均已集成但未冻结；云端多智能体与部署运行时已读回，首次真实 API 调用因模型鉴权失败。成功 AgentArts trace/usage、统一世界状态、事实流与完整认知集成仍 `unavailable`。

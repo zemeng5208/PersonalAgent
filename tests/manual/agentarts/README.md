@@ -25,5 +25,14 @@
 deployment、API、trace、usage、评估、知识/MCP/Skill、工具提案与本地可信执行闭环
 仍为 `unavailable`，不能把本次记录计为比赛 Golden Path 完成。
 
+## 2026-09-13：运行时部署与首个 API 失败读回
+
+机器可读记录见 [`2026-09-13-runtime-deployment.json`](2026-09-13-runtime-deployment.json)。
+AgentArts 控制台已读回正常运行的运行时、已发布访问方式和 API 网关；使用纯合成文字进行的
+真实 API 调用到达运行时并返回 SSE execution/workflow 标识，但首个工作流因模型鉴权错误失败。
+这证明本地到 AgentArts 的网络与入站鉴权已接通，不证明模型执行、多智能体完整路由、trace、
+usage 或比赛 Golden Path 成功。验收记录不包含任何 API Key；交付前必须轮换曾暴露于工具输出的
+入站凭据，并重新完成成功 API、trace 和 Desktop 读回。
+
 重新验收时应在不暴露凭据的前提下读回同一资源及版本；任何重新部署、试运行或
 真实 API 调用都需要单独记录费用、身份、输入范围、trace 和失败/回滚结果。

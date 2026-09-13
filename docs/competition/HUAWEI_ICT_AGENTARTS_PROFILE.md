@@ -1,6 +1,6 @@
 # 华为 ICT 创新赛 AgentArts Competition Profile
 
-版本：1.0 · 日期：2026-09-09 · 状态：架构基线已确认，运行实现仍为 `unavailable`
+版本：1.1 · 日期：2026-09-13 · 状态：文字适配与云端部署已存在，真实模型闭环仍为 `unavailable`
 
 ## 1. 参赛口径
 
@@ -41,7 +41,7 @@ AgentArts 云端编排
 本地可信执行与 Evidence
 ```
 
-当前仓库尚未实现统一世界状态、持续 Goal、影响传播或 AgentArts 适配。以上内容是已确认的目标架构，不是当前能力声明。
+当前仓库已实现最小 `CoordinationPort` / `CloudAgentPort` 文字适配、Competition Runtime 注入和防静默回退；云端也已读回多智能体版本与运行时。统一世界状态、持续 Goal、完整影响传播、trace/usage 回传及工具闭环仍未实现。以上图示包含目标架构，不能整体视为当前能力声明。
 
 ## 3. Competition Profile 架构
 
@@ -155,9 +155,9 @@ Profile 是受信组合入口的部署选择，不作为模型输出字段，也
 
 | 赛题要求 | 必须提供的证据 | 当前状态 |
 | --- | --- | --- |
-| AgentArts 构建 | 项目/Agent 标识、版本、配置摘要和平台读回 | `unavailable` |
-| AgentArts 编排 | 可见 Workflow/Agent 路径、输入输出和 trace | `unavailable` |
-| AgentArts 部署 | 已部署版本、API 调用、健康/错误读回 | `unavailable` |
+| AgentArts 构建 | 项目/Agent 标识、版本、配置摘要和平台读回 | `conditional`：已读回多智能体、三个子工作流及版本 |
+| AgentArts 编排 | 可见 Workflow/Agent 路径、输入输出和 trace | `conditional`：已读回 start/default/end 路由；尚无成功调用 trace |
+| AgentArts 部署 | 已部署版本、API 调用、健康/错误读回 | `conditional`：运行时正常且 API 已发布；首个真实调用因模型鉴权失败 |
 | 可视化 Demo | Desktop 展示真实 profile、任务、审批、工具、证据和失败 | Desktop 有基础；比赛链未接入 |
 | 工具编排 | AgentArts 产生提案，本地授权执行，目标系统读回 | `unavailable` |
 | 知识接入 | 来源、检索结果、引用、敏感范围和失败测试 | `unavailable` |
@@ -182,4 +182,4 @@ Profile 是受信组合入口的部署选择，不作为模型输出字段，也
 
 ## 10. 当前结论
 
-截至 2026-09-09，Competition Profile 的产品定位与信任边界已经确认，是当前唯一实施和验收优先级；Local Profile 仅保留现有代码，当前不新增、不扩展。仓库尚无 AgentArts Adapter、云端部署/API 读回、统一世界状态或比赛 Golden Path，因此参赛架构是 `accepted`，运行能力仍为 `unavailable`。
+截至 2026-09-13，Competition Profile 的产品定位与信任边界已经确认，是当前唯一实施和验收优先级；Local Profile 仅保留现有代码，当前不新增、不扩展。仓库已有最小文字 AgentArts Adapter、Competition Runtime 接线和防静默回退；云端已读回多智能体版本、部署运行时及 API 失败响应。由于模型鉴权、成功 trace/usage、统一世界状态和本地可信工具闭环仍未验收，比赛 Golden Path 整体仍为 `unavailable`。
