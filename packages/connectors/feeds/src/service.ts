@@ -282,12 +282,20 @@ export class FeedService {
           delivered: (cursor.pass?.delivered ?? 0) + delivered.length,
         };
       }
+    } else if (cursor.pass !== undefined) {
+      // Pass exhausted on a CONTINUATION poll: the watermark suppressed everything above it —
+      // including entries the source inserted mid-pass (id4 above id2's watermark). Saving the
+      // response validator here would 304 the next poll and strand those entries forever
+      // (goo122 2026-09-13 复审 P1). Hold the previous validators once more: the next poll
+      // refetches fully, the pass is gone so `seen` alone filters, and the inserted entry
+      // arrives as a seen-miss.
+      if (cursor.etag !== undefined) nextState.etag = cursor.etag;
+      if (cursor.lastModified !== undefined) nextState.lastModified = cursor.lastModified;
     } else {
-      // Pass exhausted: drop the watermark so backfilled entries older than it stay deliverable
-      // (the `seen` window alone governs cross-poll dedup again).
-      // Validators are assigned from the response, not merged: a validator that disappears between
-      // polls has to be dropped, otherwise the next conditional request could 304 against a changed
-      // document.
+      // Single-page pass on a poll that did not continue one: the watermark suppressed nothing,
+      // so the response validators describe a fully consumed document and are safe to adopt.
+      // Assigned from the response, not merged: a validator that disappears between polls has to
+      // be dropped, otherwise the next conditional request could 304 against a changed document.
       if (fetched.etag !== undefined) nextState.etag = fetched.etag;
       if (fetched.lastModified !== undefined) nextState.lastModified = fetched.lastModified;
     }
