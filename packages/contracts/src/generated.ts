@@ -61,6 +61,56 @@ export interface ProtocolContracts {
         taskId?: string;
         deadline: string;
         idempotencyKey?: string;
+        operation: "task.list";
+        payload: {
+          beforeSequence?: number;
+          snapshotSequence?: number;
+          limit?: number;
+          conversationId?: string;
+          /**
+           * @minItems 1
+           */
+          states?: [TaskState, ...TaskState[]];
+        };
+      }
+    | {
+        kind: "request";
+        protocolVersion: string;
+        requestId: string;
+        taskId?: string;
+        deadline: string;
+        idempotencyKey?: string;
+        operation: "conversation.list";
+        payload: {
+          beforeSequence?: number;
+          snapshotSequence?: number;
+          limit?: number;
+          conversationId?: string;
+        };
+      }
+    | {
+        kind: "request";
+        protocolVersion: string;
+        requestId: string;
+        taskId?: string;
+        deadline: string;
+        idempotencyKey?: string;
+        operation: "approval.list";
+        payload: {
+          approvalId?: string;
+          taskId?: string;
+          state?: "pending" | "allowed" | "denied";
+          beforeRowId?: number;
+          limit?: number;
+        };
+      }
+    | {
+        kind: "request";
+        protocolVersion: string;
+        requestId: string;
+        taskId?: string;
+        deadline: string;
+        idempotencyKey?: string;
         operation: "task.cancel";
         payload: {
           taskId: string;
@@ -401,6 +451,21 @@ export interface ProtocolContracts {
       captureStopped: boolean;
       playbackStopped: boolean;
     };
+    "task.list": {
+      items: TaskSnapshot[];
+      nextBeforeSequence?: number;
+      snapshotSequence: number;
+    };
+    "conversation.list": {
+      items: ConversationSnapshot[];
+      nextBeforeSequence?: number;
+      snapshotSequence: number;
+    };
+    "approval.list": {
+      items: ApprovalSnapshot[];
+      nextBeforeRowId?: number;
+      snapshotSequence: number;
+    };
   };
   snapshot: TaskSnapshot;
   tool: ToolDescriptor;
@@ -442,6 +507,9 @@ export interface TaskSnapshot {
   resultSummary?: string;
   error?: Error;
   cancelRequested?: boolean;
+  goal?: string;
+  conversationId?: string;
+  attachmentRefs?: string[];
 }
 export interface ToolDescriptor {
   name: string;
@@ -470,6 +538,23 @@ export interface ConnectorManifest {
   requiresPresence: boolean;
   syncStrategy: string;
   verification: "mock" | "verified" | "conditional";
+}
+export interface ConversationSnapshot {
+  conversationId: string;
+  updatedAt: string;
+  taskCount: number;
+  tasks: TaskSnapshot[];
+}
+export interface ApprovalSnapshot {
+  approvalId: string;
+  taskId: string;
+  revision: number;
+  action: string;
+  scopes: string[];
+  expiresAt: string;
+  state: "pending" | "allowed" | "denied";
+  argumentsDigest: string;
+  argumentSummary: "redacted";
 }
 export interface Evidence {
   evidenceId: string;

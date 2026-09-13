@@ -62,7 +62,7 @@ test('public Client negotiates and uses the persisted Runtime task operations', 
   try {
     const client = new Client(runtime, () => Date.parse('2026-09-06T02:00:00.000Z'));
     const handshake = await client.connect();
-    assert.deepEqual(handshake.capabilities, ['system.handshake', 'task.submit', 'task.get', 'task.cancel', 'event.subscribe']);
+    assert.deepEqual(handshake.capabilities, ['system.handshake', 'task.submit', 'task.get', 'task.list', 'conversation.list', 'approval.list', 'task.cancel', 'event.subscribe']);
     const submitted = await client.call('task.submit', {
       goal: 'submit through public client',
       conversationId: 'conversation-client'
@@ -358,6 +358,41 @@ test('one-shot schedules apply explicit run-once or skip recovery policy', () =>
     assert.equal(normal.length, 1);
     assert.equal(normal[0].status, 'fired');
     assert.equal(runtime.getSchedule('schedule-normal').status, 'fired');
+  } finally {
+    runtime.close();
+  }
+});
+
+test('public queries page task and conversation snapshots and redact approvals', async () => {
+  const setup = fixture();
+  const runtime = setup.open();
+  try {
+    const client = new Client(runtime, () => setup.options.now().getTime());
+    await client.connect();
+    const first = await client.call('task.submit', {goal: 'first', conversationId: 'conversation-a'}, {idempotencyKey: 'query-1'});
+    await client.call('task.submit', {goal: 'second', conversationId: 'conversation-a'}, {idempotencyKey: 'query-2'});
+    await client.call('task.submit', {goal: 'third', conversationId: 'conversation-b'}, {idempotencyKey: 'query-3'});
+    const firstPage = await client.call('task.list', {limit: 2});
+    assert.equal(firstPage.items.length, 2);
+    assert.equal(typeof firstPage.nextBeforeSequence, 'number');
+    const secondPage = await client.call('task.list', {limit: 2, beforeSequence: firstPage.nextBeforeSequence, snapshotSequence: firstPage.snapshotSequence});
+    assert.equal(secondPage.items.length, 1);
+    assert.equal(secondPage.items[0].goal, 'first');
+    const conversations = await client.call('conversation.list', {conversationId: 'conversation-a'});
+    assert.equal(conversations.items[0].taskCount, 2);
+    assert.deepEqual(conversations.items[0].tasks.map(task => task.goal), ['first', 'second']);
+
+    runtime.transitionTask(first.taskId, 'planning');
+    runtime.transitionTask(first.taskId, 'running');
+    runtime.requestToolApproval('approval-query', first.taskId, {
+      name: 'fixture.read', version: '1.0.0', inputSchema: {}, outputSchema: {}, sideEffect: 'read',
+      requiredScopes: ['fixture:read'], idempotencySupport: true, recoverySupport: true, requiresPresence: false,
+    }, '2026-09-06T02:01:00.000Z', 'a'.repeat(64));
+    const approvals = await client.call('approval.list', {approvalId: 'approval-query'});
+    assert.equal(approvals.items.length, 1);
+    assert.equal(approvals.items[0].argumentSummary, 'redacted');
+    assert.equal(approvals.items[0].argumentsDigest, 'a'.repeat(64));
+    assert.equal('arguments' in approvals.items[0], false);
   } finally {
     runtime.close();
   }

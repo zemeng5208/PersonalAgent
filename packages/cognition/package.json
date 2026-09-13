@@ -1,0 +1,14 @@
+{
+  "name": "@personal-agent/cognition",
+  "version": "0.1.0-alpha.1",
+  "private": true,
+  "type": "module",
+  "exports": {".": {"types": "./dist/index.d.ts", "import": "./dist/index.js"}},
+  "dependencies": {"@personal-agent/goals": "0.1.0-alpha.1"},
+  "scripts": {
+    "demo": "npm run build && node examples/meeting-replay.mjs",
+    "build": "npm run build --workspace=@personal-agent/goals && tsc -p tsconfig.json",
+    "typecheck": "npm run build --workspace=@personal-agent/goals && tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test test/*.test.mjs"
+  }
+}

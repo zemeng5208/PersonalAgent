@@ -38,6 +38,43 @@
     {
       "kind": "request",
       "protocolVersion": "1.0.0",
+      "requestId": "fixture-14",
+      "operation": "task.list",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {
+        "conversationId": "fixture-conversation",
+        "states": [
+          "running",
+          "succeeded"
+        ],
+        "limit": 20
+      }
+    },
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
+      "requestId": "fixture-15",
+      "operation": "conversation.list",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {
+        "limit": 20
+      }
+    },
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
+      "requestId": "fixture-16",
+      "operation": "approval.list",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {
+        "taskId": "fixture-task",
+        "state": "pending",
+        "limit": 20
+      }
+    },
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
       "requestId": "fixture-3",
       "operation": "task.cancel",
       "deadline": "2026-09-05T12:01:00.000Z",
@@ -217,6 +254,26 @@
       "payload": {
         "goal": "查找项目计划",
         "conversationId": "fixture-conversation"
+      }
+    },
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
+      "requestId": "fixture-17",
+      "operation": "task.list",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {
+        "limit": 0
+      }
+    },
+    {
+      "kind": "request",
+      "protocolVersion": "1.0.0",
+      "requestId": "fixture-18",
+      "operation": "approval.list",
+      "deadline": "2026-09-05T12:01:00.000Z",
+      "payload": {
+        "state": "expired"
       }
     }
   ]

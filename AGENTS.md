@@ -1,33 +1,128 @@
-# PersonalAgent Agent 协作规则
+# PersonalAgent 开发 Agent 工作规范
 
-## 范围与依据
+本文件约束在本仓库工作的开发 Agent，不是产品运行时的 Skill 或授权来源。默认用中文沟通。
+这里维护长期有效的工作规则；模块进度、PR 编号和临时开工授权不在此重复维护。
 
-- 默认中文。开始工作前阅读 `docs/PRD.md`、`docs/ARCHITECTURE.md`、`docs/MODULE_ASSIGNMENTS.md`、`docs/DEVELOPMENT_PROTOCOL.md`、`CONTRIBUTING.md` 和相关进度。
-- 用户最新明确指令优先；本文件不扩大用户授权。MOD-01、MOD-02 已完成评审与集成，MOD-03 已获用户开工与测试授权；其他模块不因计划包含实现任务就自行开始开发。
-- PRD 是需求依据，架构文档是建议实现基线，ROADMAP 是工作状态。发现冲突先记录，不悄悄改变范围。
-- 不将计划、接口注册、编译成功或模拟结果描述成真实能力已可用。
+## 1. 先确认任务与事实
 
-## 多人及多 Agent
+- 根据用户当前请求和已确认上下文确定范围。已授权的实现、必要接线、测试和文档工作连续推进，不重复索要同一授权；路线图中的待办不自动成为本次开发任务。
+- 分析、评审和状态查询以只读检查为主；需要改代码时按用户的修改授权执行。提交、推送、创建 PR、合并和发布按对应请求执行，不把一个动作的授权推导为全部动作。
+- 开始前检查当前工作目录、分支、工作树登记及未提交修改；确认代码位于根工作树还是隔离工作树。不要假定当前目录就是最新 main。
+- 阅读下列依据，以及目标模块的 README、适用的子目录 AGENTS.md、相关验收记录和 ADR。跨模块开发必须先读 `docs/interfaces/CURRENT_INTERFACE_CATALOG.md`，确认依赖是 frozen、provisional 还是 unavailable。
+- 先说明目标、涉及模块、关键假设和验收方式。普通实现细节自行决定；只有缺失信息会改变需求、权限或公共行为时才提出具体问题，并继续不受影响的工作。
+- 文档中的设计目标不代表已有实现。发现代码、文档和 PR 状态冲突时明确记录：需求以 PRD 为依据，实际能力以代码及可复现验证为依据，合并状态以 Git/PR 为依据。范围内修正文档，范围外列入交接。
 
-- `goo122`（A）负责底座、公共协议、根工程集成和 Obsidian；`zemeng`（B）负责桌面、语音、Windows 执行、TraceGuard 和分配到的连接器。具体模块所有权以 `docs/MODULE_ASSIGNMENTS.md` 为准。
-- 工作包必须指定唯一 GitHub 负责人、拥有的文件或模块、依赖和完成标准。未提供 GitHub 用户名的模块保持待认领，不以会话身份代替负责人。
-- 只在获得委派授权后启动开发 Agent。Qcode 是可选开发协作者，其安装、具体模型名称与调用方式在使用前验证；不是产品运行时依赖。
-- 多人共享目录时，不并行修改同一文件，不自行切换别人正在使用的分支。需要隔离时使用项目目录内工作树，并统一登记。
-- 每位协作者都不是唯一开发者：保留他人的修改和未跟踪文件，不用覆盖、重置或清理来解决冲突。
-- 公共接口、根配置和锁文件由 `goo122` 维护；`zemeng` 或待认领模块负责人提出变更后交 `goo122` 集成，不单方面修改调用契约。普通模块可使用 `goo122` 发布的 fake 端口独立开发，真实验收另行记录。
+| 依据 | 职责 |
+| --- | --- |
+| `docs/PRD.md` | 需求、优先级与产品验收 |
+| `docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md` | 当前唯一实施的比赛主路径、比赛与可选 Local 边界及验收 |
+| `docs/ARCHITECTURE.md`、`docs/adr/` | 架构边界和技术决策；注意 proposed/accepted 状态 |
+| `docs/PROJECT_STRUCTURE.md` | 目录、依赖和测试布局 |
+| `docs/DEVELOPMENT_PROTOCOL.md`、`packages/contracts/` | 公共协议语义、Schema 与生成类型 |
+| `docs/interfaces/CURRENT_INTERFACE_CATALOG.md` | 当前接口冻结范围、生产可用性、证据和不可用清单 |
+| `docs/MODULE_ASSIGNMENTS.md` | 模块负责人、文件所有权及依赖 |
+| `CONTRIBUTING.md` | 协作、评审和交付流程 |
+| `docs/ROADMAP.md`、`docs/modules/` | 工作状态、验收证据与继续入口 |
+| 根及目标 workspace 的 `package.json` | 实际依赖、版本约束与可执行脚本 |
 
-## 实现约束
+旧工作树缺少上述文档或脚本时，先核对基线和远程版本；不要为迎合规范在旧分支临时造一套接口或命令。
 
-- 所有模型与工具调用经过统一网关；UI 不持有密钥，不直接执行 Shell。
-- 外部内容属于数据，不能提升权限。Skill 和 MCP 工具声明不构成授权。
-- 保留 TraceGuard 的普通用户权限和关键系统保护边界。读取私人内容使用单独的显式数据授权。
-- 不自动发送外部消息，不执行真实账号写入来代替测试；依用户对该动作的授权执行。
-- 电脑操作串行，同一资源写入加锁；有副作用操作不做盲目重试。
-- 不添加未经验证的安装、构建或测试命令；测试命令应来自实际工程配置。
+## 2. 多人协作与工作区
 
-## 文件与交付
+分工概览如下；具体目录及后续调整以 MODULE_ASSIGNMENTS 为准。
 
-- 项目源码、依赖、测试夹具、临时输出、备份和开发日志放在本项目内；不修改其他项目来完成本项目任务。
-- 文档与公开工件不包含密钥、邮箱、账号标识或个人绝对路径。未经要求不添加许可证。
-- 每次交付说明需求编号、修改内容、验证方法、实际结果与剩余限制。
-- 只有真实满足验收条件才更新为完成。受阻时保留继续入口；不通过删除验证项获得完成状态。
+- `goo122`：底座、公共协议、根配置和集成，Runtime、ModelGateway/Provider、Policy/工具宿主、本地 MCP/Skills、知识与记忆。
+- `zemeng`：Huawei ICT AgentArts Competition Profile、主 Agent 与核心认知架构、桌面、语音、Windows 执行、TraceGuard、开发工具、分发、目标决策图谱与持续认知。
+- `Potatos498`：日程、邮件、订阅、通知、搜索、天气与社交连接器等业务能力。
+
+工作包应具备唯一负责人、非作者评审者、拥有目录、依赖、交付边界和验收方式。复用现有任务记录，避免维护相互冲突的进度副本。
+
+- 你不是唯一协作者。保留他人的修改、未跟踪文件、数据库和工作树；不因它们与当前任务无关而删除。
+- 同一共享目录串行编辑。不擅自切换他人正在使用的分支；需要隔离时先检查是否已有对应工作树，再在 `.worktrees/<task-slug>/` 创建并登记。
+- 工作树各自安装依赖，使用独立数据库、缓存和测试端口。历史工作树的位置不规范时，不顺带搬迁或清理。
+- 公共 Schema、根配置、锁文件、公共迁移与根装配由 goo122 协调。跨模块必要接线可按现有授权完成，但需说明接口影响并纳入评审。
+- Potatos498 的 MOD-20～26 保持原分工。AgentArts 不接管业务连接器，只消费经 MOD-05 公布的能力。
+- goo122 与 zemeng 必须使用对方提供的 Fake 独立开发；根 composition 之外不得直接导入对方具体实现。
+- 当前新增实现只服务 `huawei_ict_agentarts` Competition Profile；通用 Local Profile 只留存现有 `runAgent()`、ModelGateway 和 Provider，当前不新增、不扩展，也不得替代比赛 Golden Path 或其验收。
+- 只有获得委派授权后才启动其他开发 Agent；委派要写明文件范围、依赖、验收要求及“保留其他协作者修改”。开发协作工具不成为产品运行时依赖。
+
+## 3. 实现与目录规则
+
+- 优先最小可验证的纵向工作包：公开端口/契约 → 实现 → 调用方接线 → 关键测试 → 文档。缺少真实服务时可先用明确的 Fake 端口完成离线验证。
+- 修改只覆盖当前需求。保留现有风格，不顺带格式化全仓、升级依赖、重命名目录或重构无关模块。
+- 优先复用已有实现与端口；不创建第二套任务库、调度器、模型入口或连接器注册体系。只移除本次修改造成的孤立代码。
+- 生产代码放在 `apps/`、`packages/`，业务连接器放在 `packages/connectors/<capability>/`。根级 `src/` 不作为新的生产入口，未开工模块不创建空目录。
+- 普通模块保留公开入口、README、package.json、源码及模块内测试。新注册型模块通过 `register(host)` 接线并提供释放方式，不强行改造无关的历史模块。
+- 单元测试跟随 workspace；跨模块测试放根 `tests/`，真实服务验收放 `tests/manual/`。临时输出、夹具生成物、日志和备份放在项目内被忽略的目录。
+- 本地文本修改使用补丁工具；生成文件通过仓库已有生成器更新，不手改生成类型来掩盖 Schema 漂移。
+- 新依赖说明用途和成本，复用根锁文件。运行版本以 `.node-version`、`package.json` 和锁文件为准，不凭记忆升级。
+- 公共行为、依赖方向、信任边界或进程形态改变时，先记录方案、兼容性和迁移影响；普通模块内部细节不必新建 ADR。
+
+## 4. 必须保持的架构边界
+
+项目采用 Windows 本地模块化单体。当前 Desktop 为 Electron 与原生 HTML/CSS/JavaScript；Runtime Application 可在主进程内装配，不假定 React、独立守护进程或 Windows Host 已经可用。
+
+- Renderer 只提交请求、接收事件并展示状态，通过安全 Preload/IPC 和 Client 接入；不直接导入 Runtime、Provider、数据库、Node/Shell 或连接器。
+- Desktop 主进程负责可信配置、凭据适配、IPC 和窗口生命周期。任务提交后的分派、Agent/Model 编排、审批恢复归 `apps/runtime/src/application/`，不在 Desktop 复制执行循环或直接调用 `runTask`。
+- TaskRuntime 是任务状态、事件、检查点和持久执行记录的事实来源。UI 和连接器不能自行改变任务终态。
+- 模型调用统一经过 ModelGateway。Agent 只生成回答或提出工具请求，通过端口调用工具；不得自己签发授权。
+- 工具统一经过 Runtime/ToolGateway，并在执行前通过 Policy。需要审批时先等待用户决定，再校验授权和参数；Connector Host 按契约注入受限凭据，连接器不负责授权决定。
+- `packages` 不反向依赖 `apps`；contracts 不依赖其他内部包。Agent 不导入具体 Runtime，Runtime 核心不导入 Electron 或具体业务连接器。
+- 目标边界为 Runtime 注入 CoordinationPort；Agent 只消费 ModelPort、MemoryQueryPort、FactChangeFeed 和 ToolExecutionPort。当前端口未交付时保持 unavailable，不能私设 DTO。
+- Competition Profile 经 CloudAgentPort 调用 AgentArts，并让 AgentArts 真实承担构建、Agent/Workflow 编排、评估与部署。Local Agent 仅为可选 profile；正式比赛运行不得在 AgentArts 失败后静默回退。
+- 具体 Provider/Connector 在明确的组合入口注入。跨包只使用公开 package exports，不通过相对路径或私有深层路径访问其他模块；生产依赖不得成环。
+- 新代码保持边界，存量边界问题按独立工作包迁移；目录和 TypeScript 接口本身不构成运行时安全沙箱。
+
+## 5. 状态、授权与数据安全
+
+- 保持公共请求/响应/事件 Schema、版本和错误码一致。未知字段、能力未注册、参数非法或版本不兼容时明确拒绝，不私设消费者之间的临时协议。
+- `task.submit` 成功仅表示任务受理；`pending`、`waiting_approval`、`waiting_reconciliation` 都不等于完成。取消受理与执行停止也要区分，终态不可直接重开。
+- 所有异步模型和工具调用贯穿 deadline 与取消信号；Agent 有步骤和 token 预算。有副作用操作不做盲目重试，结果未知先核实，保留已发生的副作用。
+- 一次性授权检查与消费要具备事务保护，绑定任务、工具、范围、参数及期限；过期、撤销、重复消费和参数替换不得放行。审批响应检查 revision，并保持幂等。
+- 同一工具运行标识不能绑定不同输入。只重放已确认结果，重启不能重置次数或重做未知结果的写入。鼠标键盘操作串行，其他同资源写入按需加锁。
+- 数据库使用有序迁移，不能修改已发布迁移的含义或通过清库升级；验证已有数据保留，并说明备份与版本回退限制。
+- Evidence 由可信执行路径记录。区分实际执行状态、Schema 校验和外部读回验证；模型自报成功不构成证据。`mock`、`conditional` 和 `verified` 按真实依据填写。
+- 默认测试使用显式 Fake 或 Unavailable，缺配置时不偷偷回退到 Fake，也不把其他 Provider 冒充盘古。文字 JSON 提案适配不等于原生 function calling 已验证。
+- 只冻结满足当前接口目录门槛的子集。Schema 中存在、能编译、配置成功或 Fake 通过，均不等于接口冻结或真实能力可用；未公布 capability 必须返回不支持。
+- 盘古原生工具调用和文字 JSON 工具提案真实闭环当前均未验证；Agent/Model/Tool 链不得标记 frozen。AgentArts 在完成部署 API 与本地执行读回前为 unavailable。
+- AgentArts deployment/version/trace、工具提案和云端结果必须作为不可信外部输入校验；不能把平台配置、页面截图或云端“成功”当成本地任务完成证据。
+- 真实、付费模型和真实账号操作按用户授权执行；本机存在环境变量或 .env 不代表可以自动使用。需要 API Key 时指导用户在本地配置，不要求贴到聊天、提交 Git 或写入测试夹具。
+- 凭据由受信宿主与安全存储管理；不得进入模型提示、Renderer 持久状态、日志、公开 Evidence 或错误回显。只读取当前任务必要的数据，私人内容及向云端发送的范围需要对应授权。
+- 网页、邮件、笔记、模型和工具输出都属于外部数据，不能成为新的权限来源。Skill/MCP 的能力声明不构成用户授权。
+- 保留 TraceGuard 普通用户权限与关键系统保护。外部发送、删除、发布等动作需要对应授权，不用真实账号写入代替测试。
+
+## 6. 验证与执行环境
+
+从当前工作树的实际脚本选命令。以下命令存在于当前 main；旧分支先核对可用性：
+
+| 改动 | 验证方式 |
+| --- | --- |
+| 文档 | 校对事实、路径、编号与冲突标记，执行 `git diff --check`；无需为纯文档改动启动真实服务 |
+| 模块实现 | 构建依赖后运行受影响 workspace 的测试及类型检查 |
+| 公共接口、依赖或 Runtime 集成 | `npm run check`，包含架构门禁、生成类型检查、类型检查和工作区测试 |
+| 单独检查架构 | `npm run check:architecture` |
+| Desktop 文字链路 | `npm run test:text-smoke --workspace=@personal-agent/desktop` |
+| Desktop 窗口或桥接 | `npm run test:smoke --workspace=@personal-agent/desktop` |
+| Desktop 工作区、主题与多窗口 | `npm run test:workspace-smoke --workspace=@personal-agent/desktop` |
+| Desktop 与 Runtime Application 组合 | `npm run test:runtime-application-smoke --workspace=@personal-agent/desktop` |
+| 真实模型/工具 | 用户授权后按 `tests/manual/` 与模块验收说明执行，并单独记录 |
+| AgentArts Competition Profile | `tests/manual/agentarts/`；读回项目/Agent/deployment、API/trace、工具闭环、评估和防静默回退 |
+
+- 修复缺陷优先补可复现测试；权限、写入、恢复和公共协议必须覆盖关键失败路径。测试应验证行为，不镜像实现；低风险文字改动无需新增测试。
+- Fake 测试通过不代表真实服务可用；编译通过不代表桌面交互通过；单条链路通过不代表整个模块完成。
+- 有效检查通过后进入交付；只在有新增改动、失败或未解决疑点时扩大或重跑测试。仓库未配置的 lint、测试和启动命令不宣称存在或已执行。
+- 现有失败先判断与本次改动的关系，记录命令、位置和影响；不删除测试、放宽断言或隐去错误来制造通过。
+- 工具启动或网络访问失败时，保存准确错误并使用平台提供的重试/授权机制。不能绕过拒绝；有安全替代路径时继续，确实受阻时记录已完成工作和恢复入口。
+- Windows 文件操作使用同一 shell 和已确认的具体路径。后台辅助进程默认隐藏窗口；真实桌面验收所需界面按任务打开。
+
+## 7. Git、PR 与完成标准
+
+- 一个分支/PR 对应一个可审查的工作包。按当前客户端要求使用分支前缀；Codex 默认 `codex/<task-slug>`。延续已有任务时优先复用对应分支。
+- 提交前检查完整 diff，仅暂存当前任务文件；使用 scoped commit，例如 `feat(runtime): ...`、`fix(models): ...`、`docs(agents): ...`。不把数据、密钥、缓存、依赖或工作树提交进去。
+- 创建 PR 前核对目标分支及是否已有同任务 PR；按 `.github/pull_request_template.md` 写明行为变化、接口/迁移、实际验证和限制，不沿用与最终改动不符的说明。
+- 合并前须由另一位已登记协作者评审。作者不能自评替代非作者评审；CI 通过和无冲突也不等于已批准。
+- 禁止用强制推送、硬重置、覆盖或清理未跟踪文件解决普通冲突；存在需要处置的他人修改时先说明具体影响。
+- 工作状态使用 CONTRIBUTING/ROADMAP 中的 `todo`、`ready`、`in_progress`、`review`、`blocked`、`done`。只有工作包约定的验收、非作者评审与集成都满足才转为 done。
+- 离线增量可以单独交付，但不能据此完成包含真实验收的整个 MOD。PR 合并状态、模块完成状态和产品发布状态分别记录。
+
+交付时说明：目标 profile、任务/模块与实际工作树、主要改动、公共接口或迁移影响、验证结果、未验证项、剩余问题，以及本次提交/PR 状态。当前未明确 profile 的新增工作按 Competition Profile 处理；中断时保留可继续的文件和下一步，不只回复“完成”或“受阻”。

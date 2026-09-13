@@ -1,18 +1,26 @@
 # 公共开发协议
 
-版本：0.1.0-draft · 日期：2026-09-05 · 协议负责人：`goo122`
+版本：0.3.0 · 日期：2026-09-09 · 协议负责人：`goo122`
 
-状态：MOD-02 的 0.1.0-alpha.1 公共包、JSON Schema、生成类型、客户端和 Fake 六场景已通过 PR #1 评审并集成；wire 版本为 1.0.0。协议仍待桌面消费者和第三方连接器按同版本联调后冻结。模块分工见 [MODULE_ASSIGNMENTS](MODULE_ASSIGNMENTS.md)，接入见 [testkit](../packages/testkit/README.md)。
+状态：开发包仍为 0.1.0-alpha.1、wire 主版本仍为 1.0.0。按 [ADR-0005](adr/0005-layered-interface-freeze.md) 采用逐接口冻结：Core Runtime Profile 1 的消息、任务、会话和审批只读查询子集已冻结；整套协议、模型工具调用和 Agent 编排未冻结。当前只实施[华为 ICT AgentArts Competition Profile](competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)，Local Profile 仅留存现有代码、当前不新增；profile 决策不改变已冻结 wire。精确状态见 [当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md)。
 
 ## 1. 规范来源与冻结
 
 - `goo122` 维护 `packages/contracts/` 的 JSON Schema、生成类型与测试夹具；本文件解释语义。`goo122` 在首次交付时使两者一致，消费者不得自行复制不同版本。
-- wire 版本初定 `1.0.0`，与本文草案版本分开。开发包可预发布；`goo122`、`zemeng` 和参与开发的第三位协作者验证后记录实际版本、提交号、日期，才称为冻结。
+- wire 版本为 `1.0.0`，与文档和开发包版本分开。wire 主版本不代表全部 operation 已冻结；冻结单位是接口 profile 或单项端口。
+- 状态分为 `frozen`、`provisional`、`unavailable`、`deprecated`。接口只有具备单一来源、生产实现、Fake/失败夹具、消费验证、非作者评审和 CI 后才可冻结；外部行为影响语义时还需要真实目标系统闭环。
 - 新增可选字段为兼容扩展；删除字段、修改含义、增加消费者无法处理的必需状态必须升级不兼容版本或协商能力。
 - 握手交换协议版本与能力列表；主版本不一致拒绝连接。新操作必须先通过能力发现，不能只凭次版本猜测支持。
-- 变更流程：提出差异和消费者影响 → `goo122` 更新 Schema/夹具 → `zemeng` 和待认领协作者检查 → `goo122` 集成。禁止 UI 和服务端私自约定临时字段。
+- 变更流程：提出差异和消费者影响 → 更新接口目录为 provisional → `goo122` 更新 Schema/夹具 → 消费方黑盒验证 → 非作者评审与 CI → 更新为 frozen。禁止 UI 和服务端私自约定临时字段。
+- Schema 中已知但生产握手未公布的 operation 为 unavailable；消费者不调用，Host 返回 `UNSUPPORTED_CAPABILITY`，UI 明确展示不可用。
 
-## 2. 通信分层
+## 2. Profile 与通信分层
+
+- `huawei_ict_agentarts` 是当前实现和比赛验收的唯一优先 profile；AgentArts 负责 Agent 构建、编排、评估与部署。
+- `local` 只作为可选保留，现有 `runAgent()`、ModelGateway 和 Provider 不删除，但其新增能力不进入当前比赛交付。
+- profile 由受信 composition root 显式选择，当前 wire 不新增临时 profile 字段；Renderer、模型、邮件或网页内容都不能切换 profile。
+- Competition Profile 中 AgentArts 不可用时返回明确错误并保留任务事实状态，正式评测不得静默切换 Local。
+- AgentArts 外部 DTO 由 CloudAgentPort/Adapter 隔离，不直接进入公共 wire、TaskRuntime 或连接器。
 
 - Electron 渲染器只调用 `packages/client/` 公开 API，经 `zemeng` 的 preload 桥接；不访问 Named Pipe、密钥或原生工具。
 - Runtime 与 Windows Host 使用受限 Named Pipe。`goo122` 发布 Schema 与 JSONL 帧定义，`zemeng` 实现 Host；每帧一行 UTF-8 JSON，字符串内换行转义，最大 1 MiB，超限拒绝。
@@ -70,24 +78,24 @@ type Event<T> = {
 
 ## 4. 最小公开 API
 
-每个操作都是应用内部契约，不表示第三方平台拥有同名 API。`goo122` 在 MOD-02 发布下列最小请求/结果 Schema；领域能力可由 manifest 注册，未注册返回不支持。
+每个操作都是应用内部契约，不表示第三方平台拥有同名 API。Schema 当前登记 17 个 operation；只有握手公布且下表为 frozen/provisional 的操作才可调用。
 
-| 操作 | 请求关键字段 | 返回关键字段 | 提供者 / 消费者 |
+| 操作 | 请求关键字段 | 返回关键字段 | 当前状态 |
 | --- | --- | --- | --- |
-| `system.handshake` | supportedMajor、clientCapabilities | protocolVersion、capabilities、sessionRef | `goo122` / `zemeng`、待认领 |
-| `task.submit` | goal、conversationId、attachmentRefs?、idempotencyKey（信封） | taskId、state、revision | `goo122` / `zemeng` |
-| `task.get` | taskId | TaskSnapshot | `goo122` / `zemeng` |
-| `task.cancel` | taskId、reason? | taskId、state、cancelAccepted | `goo122` / `zemeng` |
-| `event.subscribe` | streamId、afterSequence? | subscriptionId、replayFrom | `goo122` / `zemeng`、待认领 |
-| `capability.list` | kind? | manifests、health | `goo122` / `zemeng` |
-| `settings.get` | namespace | value（脱敏）、revision | `goo122` / `zemeng` |
-| `settings.update` | namespace、expectedRevision、patch | revision | `goo122` / `zemeng` |
-| `authorization.respond` | approvalId、decision、expectedRevision | accepted、approvalState | `goo122` / `zemeng` 界面 |
-| `tool.invoke` | toolName、toolVersion、arguments、scopeRef | runId、state 或验证后结果 | `goo122` / 专业 Agent、模块 |
-| `connector.connect` | connectorId、accountLabel | sessionRef、interactionRequired | `goo122` 宿主调用待认领 / `zemeng` |
-| `connector.disconnect` | accountRef | disconnected、cleanupState | `goo122` 宿主调用待认领 / `zemeng` |
-| `voice.start` | mode=push_to_talk、deviceRef | voiceSessionId、audioFormat | `zemeng` 服务经 `goo122` 注册 / `zemeng` UI |
-| `voice.stop` | voiceSessionId、reason | captureStopped、playbackStopped | `zemeng` 服务 / `zemeng` UI |
+| `system.handshake` | supportedMajor、clientCapabilities | protocolVersion、capabilities、sessionRef | frozen / 可用 |
+| `task.submit` | goal、conversationId、attachmentRefs?、idempotencyKey | taskId、state、revision | frozen / 可用 |
+| `task.get` | taskId | TaskSnapshot | frozen / 可用 |
+| `task.list` | conversationId?、states?、分页和 snapshotSequence | 任务页、固定水位 | frozen / 可用 |
+| `conversation.list` | conversationId?、分页和 snapshotSequence | 会话及任务历史页 | frozen / 可用 |
+| `approval.list` | approvalId?、taskId?、state?、分页 | 脱敏审批页、事件水位 | frozen / 可用 |
+| `task.cancel` | taskId、reason? | taskId、state、cancelAccepted | frozen / 可用 |
+| `event.subscribe` | streamId、afterSequence? | subscriptionId、replayFrom | provisional |
+| `capability.list` | kind? | manifests、health | provisional；只在 ToolGateway 配置时公布 |
+| `authorization.respond` | approvalId、decision、expectedRevision | accepted、approvalState | provisional |
+| `tool.invoke` | toolName、toolVersion、arguments、scopeRef | runId、confirmed/pending/unknown、结果引用 | provisional |
+| `settings.get` / `settings.update` | namespace、revision、patch | value/revision | unavailable；仅 Schema/Fake |
+| `connector.connect` / `connector.disconnect` | 连接器/账号字段 | 会话或清理结果 | unavailable；生产 Runtime 未路由 |
+| `voice.start` / `voice.stop` | 设备/语音会话 | 音频格式或停止结果 | unavailable；只有 Schema |
 
 `goal` 非空、`decision` 为 allow_once/deny（持续授权另按配置 Schema），`expectedRevision` 不匹配返回冲突。`scopeRef` 是已授权范围引用，不是允许调用者任填新路径的授权依据。高风险动作由 Runtime 创建独立 approval，工具不能伪造。
 
@@ -120,17 +128,23 @@ TaskSnapshot 必含 `taskId`、`state`、`revision`、`updatedAt`、`steps`、`e
 
 工具描述包含：`name`（如 knowledge.search）、`version`、`inputSchema`、`outputSchema`、`sideEffect`（read/local_write/external_write）、`requiredScopes`、`idempotencySupport`、`recoverySupport`、`requiresPresence`。一个工具包含多种动作时按最强副作用声明，优先拆成独立工具。
 
-`execute(input, context)` 的 context 由宿主注入：`taskId`、`runId`、`deadline`、`signal`、`authorizationRef`、受限 logger 和所需端口。回传数据需 outputSchema 校验，并保存结果与证据；调用返回不一定代表业务已验证。
+`execute(input, context)` 的当前 context 由宿主注入：`taskId`、`runId`、`deadline`、`signal`、`authorizationRef` 和 scopes。受限 logger、Artifact/Evidence 等仍未提供，不得由工具私自扩展 context。回传数据需 outputSchema 校验；调用返回不一定代表业务已验证。
 
-| 端口 | 实现负责人 | 使用规则 |
+| 端口 | 负责人 | 状态与使用规则 |
 | --- | --- | --- |
-| TaskPort / EventPort / SchedulerPort | `goo122` | 所有模块通过 Runtime 调度；不私建第二套持久任务库 |
-| ToolPort / PolicyPort / ModelPort | `goo122` | 请求经范围检查；模块不能自行扩大工具或云端数据访问 |
-| StoragePort | `goo122` | 注入模块命名空间；不得直接读取别人的表；迁移交 `goo122` 编号集成 |
-| SecretStorePort | `zemeng` 实现 Windows 适配，`goo122` 控制注入 | 仅受信宿主/连接器受限取得凭据；模型和 UI 不可访问 |
-| KnowledgePort | `goo122` | 返回来源引用；写入带 expectedRevision |
-| DesktopActionPort | `zemeng` | 目标确认、输入独占、用户接管和后置验证 |
-| VoicePort | `zemeng` | 音频流与任务取消分离；会话销毁释放采集 |
+| TaskPort / EventPort / SchedulerPort | `goo122` | provisional 内部端口；所有模块通过 Runtime，不私建任务库 |
+| ToolHost / ToolContext / PolicyPort | `goo122` | provisional；离线实现存在，真实模型/工具闭环未验收 |
+| ModelPort | `goo122` | unavailable；仅为可选 Local Profile 和明确专业模型适配使用，不阻塞 Competition Golden Path |
+| StoragePort | `goo122` | provisional；当前缺 revision、事务、容量和失败语义 |
+| SecretStorePort | `zemeng` 实现 Windows 适配，`goo122` 控制注入 | provisional read；save/replace/delete/status unavailable |
+| CoordinationPort | `zemeng`，Runtime 注入由 `goo122` | unavailable；主 Agent/认知与 Runtime 的独立边界 |
+| MemoryQueryPort / FactChangeFeed | `goo122` | unavailable；记忆不直接修改 Goal/Task |
+| CoordinationStorePort | `goo122` 适配、`zemeng` 消费 | unavailable；版本化目标/决策图谱存储 |
+| ToolExecutionPort | `goo122` | unavailable 的稳定消费面；复用现有工具语义，不另造授权 |
+| EvidencePort / ArtifactPort | `goo122` | unavailable；访问、过期、敏感性、分片与背压待定义 |
+| CloudAgentPort | `zemeng` | unavailable；Competition 第一优先，封装 AgentArts deployment/version/trace/提案/usage/error，不持有本地授权 |
+| KnowledgePort | `goo122` | unavailable |
+| DesktopActionPort / VoicePort | `zemeng` | unavailable |
 
 工具代码隔离必须在运行时落实，TypeScript 接口或进程拆分本身不构成沙箱。
 
@@ -168,13 +182,18 @@ Evidence 记录：`evidenceId`、`kind`（observation/source/execution）、`sou
 
 外部内容不能成为系统授权；内部引用也校验访问范围。日志记录关联 ID 和脱敏摘要，不默认存原始邮件、音频、截图、密钥或模型隐藏推理。知识出机按目的模型与内容范围检查。
 
-## 10. `goo122` 必须交付的联调包
+## 10. 独立开发联调包
 
-1. JSON Schema、TypeScript 类型、版本与兼容性说明；`zemeng` 的 C# Host 按同一 JSON Schema 实现并用同一夹具验证。
-2. 公共客户端与 fake Runtime，涵盖成功、失败、需要授权、取消、未知写入结果、事件重连六种固定场景。
-3. fake ToolHost、存储、时钟和连接器响应，供 `zemeng` 和待认领协作者独立开发；fake 明显标记，生产构建不得静默启用。
-4. 桌面消费者示例和连接器提供者示例；命令必须实际运行后写入 README。
-5. 一次 `goo122`→`zemeng` 消息往返和取消验证；第三位协作者参与时验证同版本连接器注册。记录提交号与证据，不把文档存在称为 SDK 可用。
+已交付：JSON Schema/生成类型、Client、FakeRuntime 六场景、FakeToolHost/Storage/Connector、任务/会话/审批查询及 Desktop 恢复消费。冻结子集见接口目录。
+
+下一批必须交付：
+
+1. `zemeng` 先提供 Competition Coordination、CloudAgent、ToolProposal、Goal/Decision/Plan 语义和消费者测试；`goo122` 提供 Runtime/Memory/Tool/Evidence/Storage 的稳定端口与 Fake。
+2. Runtime 注入 `CoordinationPort`，Competition 实现经 `CloudAgentPort` 调用 AgentArts；不直接依赖 AgentArts DTO、Local Agent 或 ModelGateway 具体实现。
+3. AgentArts Adapter 先以 FakeCloudAgent 离线开发，再分别验收真实项目/Agent/Workflow、deployment、API、trace、usage、失败和本地执行读回。
+4. 结构化 TaskResult、Evidence/Artifact、真实游标过期恢复、Host 生命周期、SecretStore 管理面和对应失败夹具。
+5. Local ModelPort/Agent 扩展为可选后续工作，不阻塞 Competition Profile；现有实现保持可追溯，不为参赛删除。
+6. 每项记录 profile、版本、提交、状态、消费者验证和真实能力限制。文档或 Fake 存在不能把 unavailable 直接提升为 frozen。
 
 ## 11. 最小消息示例
 

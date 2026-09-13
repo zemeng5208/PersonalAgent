@@ -66,6 +66,19 @@ test('Pangu V2 provider maps a text completion and keeps usage metadata', async 
   assert.equal(result.deployment.verification, 'conditional');
 });
 
+test('Pangu provider leaves output length to the service when no local budget is configured', async () => {
+  let receivedBody;
+  const provider = new PanguModelProvider(panguOptions(async (_url, options) => {
+    receivedBody = JSON.parse(options.body);
+    return panguResponse({choices: [{message: {content: 'unbounded locally'}, finish_reason: 'stop'}]});
+  }));
+  const unboundedRequest = request();
+  delete unboundedRequest.maxOutputTokens;
+  const result = await new ModelGateway(provider).complete(unboundedRequest);
+  assert.equal(result.response.text, 'unbounded locally');
+  assert.equal(Object.hasOwn(receivedBody, 'max_tokens'), false);
+});
+
 test('Pangu provider preserves an OpenAI-compatible versioned endpoint', async () => {
   let receivedUrl;
   const provider = new PanguModelProvider(panguOptions(async url => {

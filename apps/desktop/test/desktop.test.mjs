@@ -10,7 +10,7 @@ test('panel stays within negative-origin and small display work areas',()=>{
     const panel=panelBounds(orb,area);
     assert.ok(panel.x>=area.x&&panel.y>=area.y);
     assert.ok(panel.x+panel.width<=area.x+area.width&&panel.y+panel.height<=area.y+area.height);
-    assert.equal(panel.width,Math.min(372,area.width));
+    assert.equal(panel.width,Math.min(420,area.width));
   }
 });
 test('dragged panel and orb reach right corners while panel automatically flips left',()=>{
@@ -20,7 +20,7 @@ test('dragged panel and orb reach right corners while panel automatically flips 
   for(const point of [{x:2500,y:-500},{x:2500,y:1800}]) {
     const next=draggedGroupBounds(orbStart,pointerStart,point,area);
     assert.equal(next.orb.x,1808);
-    assert.equal(next.panel.x,1428);
+    assert.equal(next.panel.x,1380);
     assert.ok(next.panel.x+next.panel.width<=next.orb.x);
     assert.ok(next.orb.y===0||next.orb.y===968);
     assert.ok(next.panel.y>=area.y&&next.panel.y+next.panel.height<=area.height);
