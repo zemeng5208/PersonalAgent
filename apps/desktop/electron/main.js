@@ -12,6 +12,11 @@ const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
 const fakeMode = process.argv.includes('--fake-runtime');
 const fakeModelMode = process.argv.includes('--fake-model') || process.env.PA_DESKTOP_MODEL_MODE === 'fake';
+const runtimeProfile = process.env.PA_RUNTIME_PROFILE === undefined ? 'local' : process.env.PA_RUNTIME_PROFILE;
+const agentArtsInvokeMode = process.env.PA_AGENTARTS_INVOKE_MODE === undefined
+  ? 'published'
+  : process.env.PA_AGENTARTS_INVOKE_MODE;
+const competitionMode = !fakeMode && runtimeProfile === 'huawei_ict_agentarts';
 if (fakeMode || fakeModelMode) app.setPath('userData', path.resolve(dir, '../.cache/user-data'));
 if (process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1') app.setPath('userData', path.resolve(dir, `../.cache/test-user-data-${process.pid}`));
 if (process.env.PA_DESKTOP_TEST_USER_DATA) app.setPath('userData', path.resolve(process.env.PA_DESKTOP_TEST_USER_DATA));
@@ -364,6 +369,27 @@ function updateThinking(input) {
 }
 
 async function initializeModelFromEnvironment() {
+  if (competitionMode) {
+    model = {
+      ...model,
+      provider: 'agentarts',
+      label: 'AgentArts · Competition Profile',
+      status: 'configured',
+      verification: 'unverified',
+      baseUrl: process.env.PA_AGENTARTS_GATEWAY_URL ?? '',
+      model: 'AgentArts Runtime',
+      deployment: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
+      configured: true,
+      keyConfigured: Boolean(process.env.PA_AGENTARTS_AUTHORIZATION),
+      persisted: false,
+      enabled: true,
+      capabilities: {text: true, streaming: false, toolCalling: false, structuredOutput: false, vision: false},
+      reason: 'Competition Profile 已装配；云端结果仍需真实调用和本地读回验证',
+      lastTestAt: null,
+      latencyMs: null,
+    };
+    return;
+  }
   if (fakeModelMode) {
     runtimeApplication.configureText({mode: 'fake'});
     model = {
@@ -458,8 +484,15 @@ async function syncRuntimeSnapshots() {
 }
 
 async function initializeRuntime() {
-  const {createRuntimeApplication} = await import('@personal-agent/runtime/application');
+  const runtimeModule = await import('@personal-agent/runtime/application');
+  const {createRuntimeApplication} = runtimeModule;
   let readEvents;
+  if (!['local', 'huawei_ict_agentarts'].includes(runtimeProfile)) {
+    throw Error('PA_RUNTIME_PROFILE 只允许 local 或 huawei_ict_agentarts');
+  }
+  if (!fakeMode && fakeModelMode && runtimeProfile === 'huawei_ict_agentarts') {
+    throw Error('Competition Profile 不能与 fake-model 同时启用；不会静默切换到 Local 或真实云端');
+  }
   if (fakeMode) {
     const {FakeRuntime} = await import('@personal-agent/testkit');
     runtime = new FakeRuntime({mode: 'test', scenario: 'success'});
@@ -473,13 +506,32 @@ async function initializeRuntime() {
       ? path.join(app.getPath('userData'), 'runtime.sqlite')
       : path.resolve(dir, '../.cache/runtime.sqlite');
     mkdirSync(path.dirname(dbPath), {recursive: true});
-    const createApplication = process.argv.includes('--weather-tools')
-      ? (await import('@personal-agent/runtime/weather')).createOpenMeteoApplication
-      : createRuntimeApplication;
-    runtimeApplication = createApplication({
-      path: dbPath,
-      text: {mode: 'unavailable', model: modelConfig.model},
-    });
+    if (competitionMode) {
+      if (!process.env.PA_AGENTARTS_AUTHORIZATION) {
+        throw Error('PA_AGENTARTS_AUTHORIZATION 未配置；Competition Runtime 不会启动');
+      }
+      runtimeApplication = runtimeModule.createAgentArtsRuntimeApplication({
+        path: dbPath,
+        gatewayUrl: process.env.PA_AGENTARTS_GATEWAY_URL ?? '',
+        runtimeName: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
+        invokeMode: agentArtsInvokeMode,
+        authorizationProvider: {
+          read: async () => {
+            const authorization = process.env.PA_AGENTARTS_AUTHORIZATION;
+            if (!authorization) throw Error('AgentArts authorization is unavailable');
+            return authorization;
+          },
+        },
+      });
+    } else {
+      const createApplication = process.argv.includes('--weather-tools')
+        ? (await import('@personal-agent/runtime/weather')).createOpenMeteoApplication
+        : createRuntimeApplication;
+      runtimeApplication = createApplication({
+        path: dbPath,
+        text: {mode: 'unavailable', model: modelConfig.model},
+      });
+    }
     runtime = runtimeApplication.runtime;
     readEvents = after => runtimeApplication.readEvents(after);
   }
@@ -490,7 +542,9 @@ async function initializeRuntime() {
     attachClient: value => { client = value; return () => { client = undefined; }; },
   });
   client = runtimeConnection.client;
-  connectionLabel = fakeMode ? 'Fake Runtime · 联调模式' : '本地 Runtime · 已连接';
+  connectionLabel = fakeMode
+    ? 'Fake Runtime · 联调模式'
+    : competitionMode ? '本地 Runtime · AgentArts Competition' : '本地 Runtime · 已连接';
   eventCursor = new EventCursor('tasks');
   await syncCapabilities();
   await syncRuntimeSnapshots();
@@ -517,6 +571,9 @@ async function waitForTerminalTask(taskId, timeoutMs = 5_000) {
 async function action(event, name, payload) {
   const sender = [orb, panel, admin, workspace].find(win => win && !win.isDestroyed() && win.webContents === event.sender);
   if (!sender || event.senderFrame !== sender.webContents.mainFrame) throw Error('Untrusted sender');
+  if (competitionMode && ['model.configure', 'model.test', 'model.toggle'].includes(name)) {
+    throw Error('Competition Profile 的 AgentArts 配置只允许由可信主进程提供；盘古配置操作不可用');
+  }
   if (name === 'snapshot') return snapshot(sender === workspace ? 'workspace' : sender === admin ? undefined : 'panel');
   if (name === 'admin.open') { openAdmin(payload?.page); return; }
   if (name === 'workspace.open' && sender === panel) { openWorkspace(); return; }
@@ -646,7 +703,7 @@ app.whenReady().then(async () => {
         ? path.join(app.getPath('userData'), 'conversations.json')
         : path.resolve(dir, '../.cache/conversations.json');
     conversations = new Conversations(conversationPath);
-    restoreModelConfig();
+    if (!competitionMode) restoreModelConfig();
     await initializeRuntime();
     await initializeModelFromEnvironment();
   } catch (error) {
