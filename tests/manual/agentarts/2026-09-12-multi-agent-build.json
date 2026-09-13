@@ -18,6 +18,24 @@
       "defaultWorkflow": "PA-计划最小修复",
       "endWorkflow": "PA-证据安全审查"
     },
+    "currentDraft": {
+      "observedAt": "2026-09-13T14:03:31+08:00",
+      "state": "pending_update",
+      "visibleNodeCount": 6,
+      "routedNodes": [
+        "PA-世界状态影响分析_1 (开始)",
+        "PA-计划最小修复_1 (默认)",
+        "PA-证据安全审查_1 (结束)"
+      ],
+      "duplicateUnroutedNodes": [
+        "PA-世界状态影响分析",
+        "PA-计划最小修复",
+        "PA-证据安全审查"
+      ],
+      "controllerShowsUnconfiguredSlot": true,
+      "safeToPublish": false,
+      "note": "The submitted version remains recorded above; the current draft has later unsubmitted duplicate references and must not be deployed as-is."
+    },
     "children": [
       {
         "name": "PA-世界状态影响分析",
@@ -48,7 +66,8 @@
     "controller configuration",
     "three saved child workflow identities",
     "explicit start, default and end workflow routing",
-    "child workflow version identifiers"
+    "child workflow version identifiers",
+    "current draft pending-update state and six visible workflow references"
   ],
   "notVerified": [
     "deployment",
