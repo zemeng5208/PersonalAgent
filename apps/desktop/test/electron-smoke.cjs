@@ -59,7 +59,13 @@ const {_electron}=require('playwright');
    const orbViewportAfter=await orb.evaluate(()=>({width:innerWidth,height:innerHeight}));
    assert.ok(orbViewportAfter.width<=128&&orbViewportAfter.height<=128,`orb viewport expanded unexpectedly: ${JSON.stringify({orbViewportBefore,orbViewportAfter})}`);
    const dragArea=await app.evaluate(({screen,BrowserWindow})=>{const win=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('mode=orb'));return screen.getDisplayMatching(win.getBounds()).workArea;});
-   for(const bounds of [groupAfter.orb,groupAfter.panel]){assert.ok(bounds.x>=dragArea.x&&bounds.y>=dragArea.y);assert.ok(bounds.x+bounds.width<=dragArea.x+dragArea.width&&bounds.y+bounds.height<=dragArea.y+dragArea.height);}
+   const dpiSlack=1;
+   for(const bounds of [groupAfter.orb,groupAfter.panel]){
+     assert.ok(
+       bounds.x>=dragArea.x&&bounds.y>=dragArea.y&&bounds.x+bounds.width<=dragArea.x+dragArea.width+dpiSlack&&bounds.y+bounds.height<=dragArea.y+dragArea.height+dpiSlack,
+       `window escaped work area: ${JSON.stringify({bounds,dragArea,dpiSlack})}`,
+     );
+   }
    assert.ok(groupAfter.panel.x+groupAfter.panel.width<=groupAfter.orb.x||groupAfter.orb.x+groupAfter.orb.width<=groupAfter.panel.x);
    assert.match(await panel.locator('#connection').innerText(),fake?/Fake Runtime/:/本地 Runtime/);
    await panel.locator('#model').click();

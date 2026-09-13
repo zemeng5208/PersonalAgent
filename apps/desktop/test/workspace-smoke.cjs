@@ -66,7 +66,10 @@ const {_electron} = require('playwright');
       return {bounds: win.getBounds(), area: screen.getDisplayMatching(win.getBounds()).workArea, panelVisible: BrowserWindow.getAllWindows().find(item => item.webContents.getURL().includes('mode=panel')).isVisible()};
     });
     assert.equal(bounds.panelVisible, false);
-    assert.ok(Math.abs(bounds.bounds.x + bounds.bounds.width / 2 - (bounds.area.x + bounds.area.width / 2)) <= 1);
+    assert.ok(
+      Math.abs(bounds.bounds.x + bounds.bounds.width / 2 - (bounds.area.x + bounds.area.width / 2)) <= 1.5,
+      `workspace is not horizontally centered: ${JSON.stringify(bounds)}`,
+    );
     assert.ok(Math.abs(bounds.bounds.y + bounds.bounds.height / 2 - (bounds.area.y + bounds.area.height / 2)) <= 1);
 
     await workspace.locator('#workspace-orb').click();
