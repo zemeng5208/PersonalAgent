@@ -47,11 +47,27 @@ export interface NotificationServiceOptions {
   idFactory: () => string;
 }
 
-const PENDING_KEY = 'notifications:pending';
-const DELIVERED_PREFIX = 'notifications:delivered:';
-const BATCHES_KEY = 'notifications:batches';
+/**
+ * 全部通知状态的持久化形态，存于**单一存储键**。
+ *
+ * 原子性（goo122 2026-09-09 复审 P1）：pending 消费、去重标记与批次创建曾写三个键，
+ * 写入间隙注入异常会永久丢失通知（重放又被去重拒绝）。现在每次变更都在内存中算出
+ * 完整新状态并**一次写入**——存储层崩溃要么完全应用新状态，要么保留旧状态，
+ * 不存在「事件被标记已裁但批次未落盘」的窗口。宿主若提供真实事务型存储，
+ * 可在 writeState 处替换为事务提交，语义不变。
+ */
+interface NotificationState {
+  pending: PendingItem[];
+  batches: NotificationBatch[];
+  /** 已交付 dedupeKey 的有界 FIFO（去重窗口），淘汰由宿主按 dedupeKey 吸收。 */
+  delivered: string[];
+}
+
+const STATE_KEY = 'notifications:state';
 /** 已确认批次的保留上限：只作幂等记录，超限淘汰最旧。 */
 const DELIVERED_BATCH_LIMIT = 100;
+/** 已交付 dedupeKey 的窗口上限。 */
+const DELIVERED_KEY_LIMIT = 500;
 
 /**
  * 通知汇总策略（MOD-23）：只做裁定，不调度、不展示。
@@ -71,43 +87,41 @@ export class NotificationService {
     this.policy = policy;
   }
 
-  /** 接收标准事件。重复 dedupeKey 静默忽略（计数披露在返回值）。 */
+  /** 接收标准事件。重复 dedupeKey 静默忽略（计数披露在返回值）。单次状态写入，原子。 */
   ingest(items: readonly ConnectorItem[]): {accepted: number; duplicates: number} {
-    const pending = this.readPending();
+    const state = this.readState();
     let accepted = 0;
     let duplicates = 0;
     for (const item of items) {
       if (!item || typeof item !== 'object' || typeof item.dedupeKey !== 'string' || item.dedupeKey.length === 0) {
         throw new ProtocolError('INVALID_ARGUMENT', 'Ingested items must be ConnectorItems with a dedupeKey');
       }
-      if (this.isDelivered(item.dedupeKey) || pending.some(existing => existing.dedupeKey === item.dedupeKey)) {
+      if (state.delivered.includes(item.dedupeKey) || state.pending.some(existing => existing.dedupeKey === item.dedupeKey)) {
         duplicates += 1;
         continue;
       }
-      pending.push({dedupeKey: item.dedupeKey, source: item.source, receivedAt: this.isoNow(), item: structuredClone(item)});
+      state.pending.push({dedupeKey: item.dedupeKey, source: item.source, receivedAt: this.isoNow(), item: structuredClone(item)});
       accepted += 1;
     }
-    this.storage.set(PENDING_KEY, pending);
+    if (accepted > 0) this.writeState(state);
     return {accepted, duplicates};
   }
 
   /**
    * 裁定并交付。暂停与安静时段 hold 一切（含摘要）；聚合来源等窗口关闭或达上限。
-   * 已裁定的条目从 pending 消费并标记 delivered，但**批次**保持 `ready_for_delivery`
-   * 直到桌面 `acknowledge(batchId)`——drain 不在确认前删除通知，崩溃重启后原样取回
-   * 未确认批次（id 与条目引用不变，不重复生成）。条目级 dedupe 由 delivered 标记保证：
-   * 重启后同一事件不会再进 pending，也就不会再裁出重复批次。
+   * 全部状态变更（消费 pending、标记 delivered、创建批次）在**一次状态写入**中生效：
+   * 确认前批次保持 `ready_for_delivery`，崩溃重启后原样取回，不重复生成。
    */
   drain(): DrainReport {
     const now = this.options.now();
     const nowIso = this.isoNow();
-    const pending = this.readPending();
+    const state = this.readState();
     const held: DrainReport['held'] = {quiet: 0, paused: 0, digest: 0};
     const deliver: PendingItem[] = [];
     const digestPool: PendingItem[] = [];
     const keep: PendingItem[] = [];
 
-    for (const entry of pending) {
+    for (const entry of state.pending) {
       if (this.paused(now)) {
         held.paused += 1;
         keep.push(entry);
@@ -136,7 +150,6 @@ export class NotificationService {
         reason: 'immediate',
         state: 'ready_for_delivery',
       });
-      for (const entry of deliver) this.markDelivered(entry.dedupeKey);
     }
 
     if (digestPool.length > 0) {
@@ -156,42 +169,47 @@ export class NotificationService {
           reason: flushes ? 'digest_max_items' : 'digest_window_closed',
           state: 'ready_for_delivery',
         });
-        for (const entry of digestPool) this.markDelivered(entry.dedupeKey);
       } else {
         held.digest = digestPool.length;
         keep.push(...digestPool);
       }
     }
 
-    this.storage.set(PENDING_KEY, keep);
-    // 恢复语义优先：未确认批次排在本次新裁定之前返回；持久化合并后淘汰超限的已确认批次。
-    const prior = this.readBatches().filter(batch => batch.state === 'ready_for_delivery');
-    if (decided.length > 0) this.writeBatches([...prior, ...decided]);
+    // 单次原子写入：消费的条目移出 pending、进入 delivered 窗口与批次列表；失败则整体不生效。
+    const nextState: NotificationState = {
+      pending: keep,
+      batches: trimBatches([...state.batches, ...decided]),
+      delivered: [...state.delivered, ...deliver.map(entry => entry.dedupeKey), ...flushedKeys(digestPool, decided)].slice(-DELIVERED_KEY_LIMIT),
+    };
+    if (decided.length > 0) this.writeState(nextState);
+
+    // 恢复语义优先：未确认批次排在本次新裁定之前返回；不重复生成（id 不变）。
+    const prior = state.batches.filter(batch => batch.state === 'ready_for_delivery');
     return {batches: [...prior, ...decided], held};
   }
 
-  /** 桌面确认接收一个批次：置 delivered（幂等，重复确认无副作用）。 */
+  /** 桌面确认接收一个批次：置 delivered（幂等，重复确认无副作用）。单次写入，原子。 */
   acknowledge(batchId: string): NotificationBatch {
     if (typeof batchId !== 'string' || batchId.length === 0) {
       throw new ProtocolError('INVALID_ARGUMENT', 'batchId must be a non-empty string');
     }
-    const batches = this.readBatches();
-    const target = batches.find(batch => batch.id === batchId);
+    const state = this.readState();
+    const target = state.batches.find(batch => batch.id === batchId);
     if (target === undefined) throw new ProtocolError('NOT_FOUND', `No notification batch ${batchId}`);
     if (target.state === 'ready_for_delivery') {
       target.state = 'delivered';
-      this.writeBatches(batches);
+      this.writeState({...state, batches: trimBatches(state.batches)});
     }
     return structuredClone(target);
   }
 
   status(): StatusReport {
     const now = this.options.now();
-    const pending = this.readPending();
+    const state = this.readState();
     const quietEnd = this.policy.quietHours === undefined ? null : nextQuietEndMs(this.policy.quietHours, now);
     let nextDigest: number | null = null;
     if (this.policy.digest !== undefined) {
-      const scoped = pending.filter(entry => this.inDigestScope(entry));
+      const scoped = state.pending.filter(entry => this.inDigestScope(entry));
       if (scoped.length > 0) {
         const oldest = Math.min(...scoped.map(entry => Date.parse(entry.receivedAt)));
         nextDigest = Math.min(oldest + this.policy.digest.windowMs, now + this.policy.digest.windowMs);
@@ -200,9 +218,9 @@ export class NotificationService {
     const report: StatusReport = {
       pausedUntil: this.paused(now) ? (this.policy.pauseUntilUtc as string) : null,
       quietUntil: quietEnd === null ? null : isoMinute(quietEnd),
-      pending: pending.length,
+      pending: state.pending.length,
       nextDigestCloseAt: nextDigest === null ? null : isoMinute(nextDigest),
-      unacknowledgedBatches: this.readBatches().filter(batch => batch.state === 'ready_for_delivery').length,
+      unacknowledgedBatches: state.batches.filter(batch => batch.state === 'ready_for_delivery').length,
     };
     return report;
   }
@@ -248,34 +266,43 @@ export class NotificationService {
     return digest.sources === undefined || digest.sources.includes(entry.source);
   }
 
-  private isDelivered(dedupeKey: string): boolean {
-    return this.storage.get(DELIVERED_PREFIX + dedupeKey) === true;
+  private readState(): NotificationState {
+    const value = this.storage.get(STATE_KEY);
+    if (value === undefined || value === null) return {pending: [], batches: [], delivered: []};
+    if (typeof value !== 'object' || Array.isArray(value)) return {pending: [], batches: [], delivered: []};
+    const record = value as Record<string, unknown>;
+    const state: NotificationState = {
+      pending: Array.isArray(record.pending) ? record.pending.filter(isPendingItem) : [],
+      batches: Array.isArray(record.batches) ? record.batches.filter(isBatch) : [],
+      delivered: Array.isArray(record.delivered) ? record.delivered.filter((key): key is string => typeof key === 'string').slice(-DELIVERED_KEY_LIMIT) : [],
+    };
+    return state;
   }
 
-  private markDelivered(dedupeKey: string): void {
-    this.storage.set(DELIVERED_PREFIX + dedupeKey, true);
-  }
-
-  private readPending(): PendingItem[] {
-    const value = this.storage.get(PENDING_KEY);
-    return Array.isArray(value) ? value.filter(isPendingItem) : [];
-  }
-
-  private readBatches(): NotificationBatch[] {
-    const value = this.storage.get(BATCHES_KEY);
-    return Array.isArray(value) ? value.filter(isBatch) : [];
-  }
-
-  /** 合并写入并淘汰超限的已确认批次（未确认批次永不淘汰）。 */
-  private writeBatches(batches: NotificationBatch[]): void {
-    const unacknowledged = batches.filter(batch => batch.state === 'ready_for_delivery');
-    const delivered = batches.filter(batch => batch.state === 'delivered');
-    this.storage.set(BATCHES_KEY, [...unacknowledged, ...delivered.slice(-DELIVERED_BATCH_LIMIT)]);
+  private writeState(state: NotificationState): void {
+    this.storage.set(STATE_KEY, {
+      pending: state.pending,
+      batches: trimBatches(state.batches),
+      delivered: state.delivered.slice(-DELIVERED_KEY_LIMIT),
+    });
   }
 
   private isoNow(): string {
-    return isoMinute(this.options.now());
+    return `${new Date(this.options.now()).toISOString().slice(0, 19)}.000Z`;
   }
+}
+
+/** 已确认批次保留最近 DELIVERED_BATCH_LIMIT 条作幂等记录；未确认批次永不淘汰。 */
+function trimBatches(batches: NotificationBatch[]): NotificationBatch[] {
+  const unacknowledged = batches.filter(batch => batch.state === 'ready_for_delivery');
+  const delivered = batches.filter(batch => batch.state === 'delivered');
+  return [...unacknowledged, ...delivered.slice(-DELIVERED_BATCH_LIMIT)];
+}
+
+/** 被摘要批次的条目键同样进 delivered 窗口（批次已创建即视为已裁）。 */
+function flushedKeys(digestPool: readonly PendingItem[], decided: readonly NotificationBatch[]): string[] {
+  const hasDigest = decided.some(batch => batch.kind === 'digest');
+  return hasDigest ? digestPool.map(entry => entry.dedupeKey) : [];
 }
 
 function isPendingItem(value: unknown): value is PendingItem {

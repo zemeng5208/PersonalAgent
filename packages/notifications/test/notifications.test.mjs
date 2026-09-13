@@ -263,3 +263,54 @@ test('DST 春季跳时：纽约 22:00–02:30 窗口在 02:30 不存在的当天
   const inFall = Date.parse('2026-11-01T05:00:00.000Z');
   assert.equal(nextQuietEndMs(fallBack, inFall), Date.parse('2026-11-01T07:30:00.000Z'), '回拨夜在 02:30 唯一一次出现时释放');
 });
+
+test('原子性：唯一写入点注入异常 → 整体不生效，重试后批次恰好出现一次（不丢通知）', () => {
+  // 故障注入存储：第 failOn 次 set 抛出（模拟写入落盘前崩溃）
+  const makeFlakyStorage = (failOn) => {
+    const inner = new FakeStorage().namespace('notifications');
+    let calls = 0;
+    return {
+      get: key => inner.get(key),
+      set: (key, value) => {
+        calls += 1;
+        if (calls === failOn) throw new Error('injected storage failure at write');
+        inner.set(key, value);
+      },
+      delete: key => inner.delete(key),
+    };
+  };
+  let counter = 0;
+  const idFactory = () => `n${++counter}`;
+
+  // drain 的状态写入失败（写入序：ingest=1、drain=2）：旧状态必须原样保留（不丢 pending、不加去重标记、无半成品批次）
+  const flaky = makeFlakyStorage(2);
+  const service1 = new NotificationService(flaky, {}, {now: () => NOON, idFactory});
+  service1.ingest([item('f1')]);
+  assert.throws(() => service1.drain(), /injected storage failure/);
+  const healthy = new NotificationService(flaky, {}, {now: () => NOON, idFactory});
+  assert.equal(healthy.status().pending, 1, '失败的 drain 未消费 pending');
+  const recovered = healthy.drain();
+  assert.equal(recovered.batches.length, 1, '重试后批次正常产出');
+  const again = healthy.ingest([item('f1')]);
+  assert.equal(again.accepted, 0, '事件只计一次，未因失败重复待裁');
+
+  // acknowledge 写入失败（写入序：ingest=1、drain=2、ack=3）：批次保持 ready，重试确认成功
+  const flaky2 = makeFlakyStorage(3);
+  const service2 = new NotificationService(flaky2, {}, {now: () => NOON, idFactory});
+  service2.ingest([item('f2')]);
+  const [batch] = service2.drain().batches;
+  assert.throws(() => service2.acknowledge(batch.id), /injected storage failure/);
+  const afterFailure = new NotificationService(flaky2, {}, {now: () => NOON, idFactory});
+  assert.equal(afterFailure.status().unacknowledgedBatches, 1, '确认失败后批次仍待交付');
+  const acked = afterFailure.acknowledge(batch.id);
+  assert.equal(acked.state, 'delivered');
+
+  // ingest 写入失败：条目不半途进入待裁
+  const flaky3 = makeFlakyStorage(1);
+  const service3 = new NotificationService(flaky3, {}, {now: () => NOON, idFactory});
+  assert.throws(() => service3.ingest([item('f3')]), /injected storage failure/);
+  const afterIngest = new NotificationService(flaky3, {}, {now: () => NOON, idFactory});
+  assert.equal(afterIngest.status().pending, 0, '失败的 ingest 未产生半途状态');
+  afterIngest.ingest([item('f3')]);
+  assert.equal(afterIngest.status().pending, 1);
+});
