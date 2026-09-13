@@ -1,5 +1,7 @@
 # ADR-0001：采用模块化单体
 
+适用范围：Huawei ICT AgentArts Competition Profile 与可选 Local Profile；Competition 优先级不改变模块化单体决定。
+
 - 状态：accepted
 - 日期：2026-09-06
 

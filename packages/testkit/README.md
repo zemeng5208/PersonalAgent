@@ -2,6 +2,10 @@
 
 负责人 goo122；评审者 zemeng。包版本 0.1.0-alpha.1。所有演示内容均为 mock，无模型、外部账号或私人数据调用。
 
+Testkit 为接口形状和失败分支提供可重复替身，不决定生产可用性。Core Runtime Profile 1 的 Fake 已参与冻结验收；Model/Agent/Tool、设置、连接器和语音等 Fake 不会把对应能力提升为 `frozen`。精确状态见[当前接口目录](../../docs/interfaces/CURRENT_INTERFACE_CATALOG.md)。
+
+当前新增夹具只服务 [Huawei ICT AgentArts Competition Profile](../../docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)：后续需提供显式 `FakeCloudAgent`、deployment/trace、工具提案和防静默回退场景，但它们不能替代真实 AgentArts 项目、部署、API 和评估读回。Local 现有 Fake 保留，不形成当前新增工作。
+
 ```sh
 npm ci
 npm run check
@@ -33,4 +37,4 @@ FakeClock 可显式推进；FakeStorage 按命名空间隔离并返回副本；F
 
 2026-09-05：Node 24.15.0、npm 11.12.1。npm run check 通过：storage 4、contracts 4、client 5、testkit 13，共 26 项。包括 MOD-01 数据迁移回滚/跨进程读回、MOD-02 六场景、工具执行中取消/超时，以及 SQLite 持久化协议事件后再迁移和回放的跨模块测试。生成文件一致性和严格类型检查通过。
 
-npm run demo:protocol 已执行，展示 mock 取消状态及夹具来源。项目内 .cache/clean-mod-02 独立源码副本未复制 node_modules、dist 或数据库，npm ci、npm run check（26/26）、npm run dev、npm run demo:protocol 全部通过。测试数据在项目内 .cache 下，未加载 .env。远程 CI、PR 和 zemeng 实际消费端验证仍未完成；协议尚未冻结。
+npm run demo:protocol 已执行，展示 mock 取消状态及夹具来源。项目内 .cache/clean-mod-02 独立源码副本未复制 node_modules、dist 或数据库，npm ci、npm run check（26/26）、npm run dev、npm run demo:protocol 全部通过。测试数据在项目内 .cache 下，未加载 .env。此段是 2026-09-05 的历史证据；当前冻结结论以接口目录及 PR #34 的消费验证为准。

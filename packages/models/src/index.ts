@@ -48,7 +48,7 @@ export interface ModelRequest {
   messages: readonly ModelMessage[];
   tools: readonly ToolDescriptor[];
   requiredCapabilities?: readonly ModelCapability[];
-  maxOutputTokens: number;
+  maxOutputTokens?: number;
   deadline: string;
   signal: AbortSignal;
 }
@@ -83,7 +83,7 @@ function requiredText(value: string, field: string): string {
 }
 
 function validateRequest(request: ModelRequest): void {
-  if (!Number.isSafeInteger(request.maxOutputTokens) || request.maxOutputTokens < 1) {
+  if (request.maxOutputTokens !== undefined && (!Number.isSafeInteger(request.maxOutputTokens) || request.maxOutputTokens < 1)) {
     throw new ProtocolError('INVALID_ARGUMENT', 'maxOutputTokens must be a positive integer');
   }
   if (!Number.isFinite(Date.parse(request.deadline))) throw new ProtocolError('INVALID_ARGUMENT', 'deadline must be an ISO timestamp');
@@ -329,7 +329,12 @@ export class PanguModelProvider implements ModelProvider {
       const response = await this.request(panguCompletionsUrl(this.baseUrl), {
         method: 'POST',
         headers: {'content-type': 'application/json', authorization: `Bearer ${key}`},
-        body: JSON.stringify({model: this.model, messages, max_tokens: request.maxOutputTokens, stream: false}),
+        body: JSON.stringify({
+          model: this.model,
+          messages,
+          ...(request.maxOutputTokens === undefined ? {} : {max_tokens: request.maxOutputTokens}),
+          stream: false,
+        }),
         signal: controller.signal,
       });
       if (!response.ok) throw panguError(response.status, response.headers.get('retry-after'));
