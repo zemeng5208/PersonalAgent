@@ -81,6 +81,7 @@ test('published JSON sends the exact bounded request and reads authorization per
   assert.equal(calls.length, 2);
   assert.equal(calls[0].url, `${GATEWAY}/runtimes/${RUNTIME}/invocations`);
   assert.equal(calls[0].init.method, 'POST');
+  assert.equal(calls[0].init.redirect, 'error');
   assert.deepEqual(calls[0].init.headers, {
     'Content-Type': 'application/json',
     Accept: 'application/json,text/event-stream',
@@ -95,6 +96,46 @@ test('published JSON sends the exact bounded request and reads authorization per
   assert.equal(calls[0].init.body.includes(input.taskId), false);
   assert.equal(calls[0].init.body.includes(String(input.revision)), false);
   assert.equal(calls[0].init.body.includes(input.deadline), false);
+});
+
+test('JSON failure events reject instead of returning a partial message', async () => {
+  const secret = 'provider failure details must stay private';
+  const cloud = port(async () => jsonResponse([
+    message('partial answer', 0),
+    {event: 'status', type: 'failed', data: {message: secret}},
+  ]));
+  await rejectsCode(cloud.invoke(request()), 'EXTERNAL_FAILURE', [secret, 'partial answer']);
+});
+
+test('SSE error events reject instead of returning a partial message', async () => {
+  const secret = 'sse failure details must stay private';
+  const body = [
+    `data: ${JSON.stringify(message('partial answer', 0))}`,
+    '',
+    `data: ${JSON.stringify({event: 'error', data: {message: secret}})}`,
+    '',
+  ].join('\n');
+  const cloud = port(async () => sseResponse(body));
+  await rejectsCode(cloud.invoke(request()), 'EXTERNAL_FAILURE', [secret, 'partial answer']);
+});
+
+test('redirect responses never become successful adapter results', async () => {
+  let redirect;
+  const cloud = port(async (_url, init) => {
+    redirect = init.redirect;
+    return new Response('redirect response body', {
+      status: 307,
+      headers: {
+        location: 'https://outside.example.test/target',
+        'content-type': 'application/json',
+      },
+    });
+  });
+  await rejectsCode(cloud.invoke(request()), 'EXTERNAL_FAILURE', [
+    'redirect response body',
+    'outside.example.test',
+  ]);
+  assert.equal(redirect, 'error');
 });
 
 test('SSE sorts indexed fragments, de-duplicates equal indexes, and stops at DONE', async () => {

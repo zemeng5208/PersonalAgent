@@ -28,6 +28,7 @@ export interface AgentArtsFetchInit {
   headers: Record<string, string>;
   body: string;
   signal: AbortSignal;
+  redirect: 'error';
 }
 
 interface AgentArtsReader<T> {
@@ -399,10 +400,28 @@ class TextCollector {
 function consumeEvent(value: unknown, collector: TextCollector): void {
   const event = asPlainObject(value);
   if (!event) external('AgentArts response event is malformed');
+
+  // A successful HTTP status does not mean the AgentArts invocation succeeded.
+  // Gateways may report an error in the event name or in a status/type field,
+  // sometimes after emitting one or more partial message events.  Fail closed
+  // before inspecting the event payload so provider details are never exposed.
+  const failureFields = ['event', 'type', 'status'];
+  const indicatesFailure = (candidate: unknown): boolean => {
+    if (typeof candidate !== 'string') return false;
+    const tokens = candidate.trim().toLowerCase().split(/[^a-z]+/).filter(Boolean);
+    return tokens.some(token => token === 'error' || token === 'failed' || token === 'failure');
+  };
+  if (failureFields.some(field => indicatesFailure(event[field]))) {
+    external('AgentArts response reported a failure');
+  }
+  const data = asPlainObject(event.data);
+  if (data && failureFields.some(field => indicatesFailure(data[field]))) {
+    external('AgentArts response reported a failure');
+  }
+
   const eventName = event.event;
   if (typeof eventName !== 'string') external('AgentArts response event is malformed');
   if (eventName !== 'message') return;
-  const data = asPlainObject(event.data);
   if (!data || (typeof data.text !== 'string' && data.text !== null)) {
     external('AgentArts message event is malformed');
   }
@@ -577,6 +596,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
         },
         body: JSON.stringify({query: request.goal}),
         signal: combined.signal,
+        redirect: 'error',
       };
 
       let response: AgentArtsResponse;
