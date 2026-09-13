@@ -8,4 +8,8 @@
 - `manual/`：需要真实账号、网络或付费模型的显式验收。
 - `fixtures/`：不包含密钥、账号或私人数据的共享夹具。
 
+跨模块接口测试必须固定接口目录中的冻结基线，并分别覆盖 capability 已公布、未公布、版本不兼容和 `UNSUPPORTED_CAPABILITY`。Fake 通过只证明接口形状与状态分支；盘古、AgentArts、真实账号、语音和 Windows 操作仍需在 `manual/` 中保留独立验收与读回证据。
+
+当前新增测试只服务 [Huawei ICT AgentArts Competition Profile](../docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)。至少覆盖 AgentArts 项目/Agent/deployment 读回、API/trace、工具提案→本地授权→执行→目标系统读回、评估指标，以及 AgentArts 失败时不静默回退 Local。Local 现有测试可以保留，但不新增测试义务，也不能计入比赛完成度。
+
 不得把真实 Provider 测试加入默认 CI。目录在出现第一项真实测试时创建，不保留空占位目录。

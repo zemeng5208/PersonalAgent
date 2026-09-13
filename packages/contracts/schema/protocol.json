@@ -117,6 +117,21 @@
         },
         "cancelRequested": {
           "type": "boolean"
+        },
+        "goal": {
+          "type": "string",
+          "minLength": 1
+        },
+        "conversationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "attachmentRefs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       },
       "required": [
@@ -379,6 +394,96 @@
         "evidenceRefs"
       ],
       "additionalProperties": false
+    },
+    "ConversationSnapshot": {
+      "type": "object",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "updatedAt": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{3})?Z$"
+        },
+        "taskCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "tasks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TaskSnapshot"
+          }
+        }
+      },
+      "required": [
+        "conversationId",
+        "updatedAt",
+        "taskCount",
+        "tasks"
+      ],
+      "additionalProperties": false
+    },
+    "ApprovalSnapshot": {
+      "type": "object",
+      "properties": {
+        "approvalId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "taskId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "action": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "expiresAt": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{3})?Z$"
+        },
+        "state": {
+          "enum": [
+            "pending",
+            "allowed",
+            "denied"
+          ]
+        },
+        "argumentsDigest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "argumentSummary": {
+          "enum": [
+            "redacted"
+          ]
+        }
+      },
+      "required": [
+        "approvalId",
+        "taskId",
+        "revision",
+        "action",
+        "scopes",
+        "expiresAt",
+        "state",
+        "argumentsDigest",
+        "argumentSummary"
+      ],
+      "additionalProperties": false
     }
   },
   "type": "object",
@@ -565,6 +670,225 @@
               "required": [
                 "taskId"
               ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "kind",
+            "protocolVersion",
+            "requestId",
+            "deadline",
+            "operation",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "enum": [
+                "request"
+              ]
+            },
+            "protocolVersion": {
+              "type": "string",
+              "pattern": "^\\d+\\.\\d+\\.\\d+$"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "taskId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "deadline": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{3})?Z$"
+            },
+            "idempotencyKey": {
+              "type": "string",
+              "minLength": 1
+            },
+            "operation": {
+              "enum": [
+                "task.list"
+              ]
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "beforeSequence": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "snapshotSequence": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                },
+                "conversationId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "states": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {
+                    "$ref": "#/definitions/TaskState"
+                  }
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "kind",
+            "protocolVersion",
+            "requestId",
+            "deadline",
+            "operation",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "enum": [
+                "request"
+              ]
+            },
+            "protocolVersion": {
+              "type": "string",
+              "pattern": "^\\d+\\.\\d+\\.\\d+$"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "taskId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "deadline": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{3})?Z$"
+            },
+            "idempotencyKey": {
+              "type": "string",
+              "minLength": 1
+            },
+            "operation": {
+              "enum": [
+                "conversation.list"
+              ]
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "beforeSequence": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "snapshotSequence": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                },
+                "conversationId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "kind",
+            "protocolVersion",
+            "requestId",
+            "deadline",
+            "operation",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "enum": [
+                "request"
+              ]
+            },
+            "protocolVersion": {
+              "type": "string",
+              "pattern": "^\\d+\\.\\d+\\.\\d+$"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "taskId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "deadline": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{3})?Z$"
+            },
+            "idempotencyKey": {
+              "type": "string",
+              "minLength": 1
+            },
+            "operation": {
+              "enum": [
+                "approval.list"
+              ]
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "approvalId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "taskId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "state": {
+                  "enum": [
+                    "pending",
+                    "allowed",
+                    "denied"
+                  ]
+                },
+                "beforeRowId": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                }
+              },
+              "required": [],
               "additionalProperties": false
             }
           },
@@ -2220,12 +2544,87 @@
             "playbackStopped"
           ],
           "additionalProperties": false
+        },
+        "task.list": {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/TaskSnapshot"
+              }
+            },
+            "nextBeforeSequence": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "snapshotSequence": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "items",
+            "snapshotSequence"
+          ],
+          "additionalProperties": false
+        },
+        "conversation.list": {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ConversationSnapshot"
+              }
+            },
+            "nextBeforeSequence": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "snapshotSequence": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "items",
+            "snapshotSequence"
+          ],
+          "additionalProperties": false
+        },
+        "approval.list": {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ApprovalSnapshot"
+              }
+            },
+            "nextBeforeRowId": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "snapshotSequence": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "items",
+            "snapshotSequence"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
         "system.handshake",
         "task.submit",
         "task.get",
+        "task.list",
+        "conversation.list",
+        "approval.list",
         "task.cancel",
         "event.subscribe",
         "capability.list",
