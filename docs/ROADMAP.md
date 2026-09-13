@@ -176,6 +176,15 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；PR #
 
 ## 5. 继续入口
 
+### MOD-04B Competition 文字协调消费实现
+
+- 负责人 zemeng；实现基线 PR #38 / `87ee444`，已同步 PR #39 / `188f925`；
+  状态 review（受影响类型检查与无隔离测试通过；workspace 测试受本机 `spawn EPERM`
+  阻断，待非作者评审与集成）。
+- 工作树 `.worktrees/zemeng-mod04b-coordinator`，分支 `codex/zemeng/mod04b-coordinator`。
+- 复用已有文字端口，交付 CompetitionCoordinator 与显式 Unavailable；不修改 Runtime 或公共契约。
+- 详见[工作包](modules/MOD-04B-COMPETITION-TEXT.md)。真实 AgentArts 与工具闭环仍 unavailable。
+
 ### MOD-28-IMPACT-01（本地依赖影响与显式修订提案）
 
 - 负责人 zemeng；状态 review（待非作者评审与集成）；串行延续 `codex/zemeng/mod27-goal-graph` 的 MOD-27 增量。

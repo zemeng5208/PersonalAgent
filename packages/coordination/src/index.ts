@@ -1,5 +1,18 @@
 import {ProtocolError} from '@personal-agent/contracts';
 
+const textResultFields = ['kind', 'text', 'verification'] as const;
+
+function hasExactEnumerableKeys(value: object, fields: readonly string[]): boolean {
+  try {
+    const keys = Reflect.ownKeys(value);
+    return keys.length === fields.length
+      && keys.every(key => typeof key === 'string' && fields.includes(key))
+      && fields.every(field => Object.prototype.propertyIsEnumerable.call(value, field));
+  } catch {
+    return false;
+  }
+}
+
 /** In-process, provisional text-only boundary. No Runtime, credentials or history. */
 export interface CoordinationRequest {
   readonly taskId: string;
@@ -26,15 +39,36 @@ export interface CloudAgentPort {
 
 /** Runtime validates even typed adapters. Text is not execution evidence. */
 export function parseCoordinationTextResult(value: unknown): CoordinationTextResult {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+  let array = false;
+  try {
+    array = Array.isArray(value);
+  } catch {
+    throw new ProtocolError('INVALID_ARGUMENT', 'Invalid coordination result');
+  }
+  if (value === null || typeof value !== 'object' || array) {
     throw new ProtocolError('INVALID_ARGUMENT', 'Invalid coordination result');
   }
   const result = value as Record<string, unknown>;
-  if (Object.keys(result).some(key => !['kind', 'text', 'verification'].includes(key))
-    || result.kind !== 'text' || typeof result.text !== 'string'
-    || result.text.trim().length === 0 || result.text.length > 16_000
-    || !['mock', 'unverified'].includes(result.verification as string)) {
+  if (!hasExactEnumerableKeys(result, textResultFields)) {
     throw new ProtocolError('INVALID_ARGUMENT', 'Expected bounded text without tool proposals, evidence or task state');
   }
-  return {kind: 'text', text: result.text, verification: result.verification as CoordinationTextResult['verification']};
+  let kind: unknown;
+  let text: unknown;
+  let verification: unknown;
+  try {
+    kind = result.kind;
+    text = result.text;
+    verification = result.verification;
+  } catch {
+    // A provider-controlled getter/proxy must not leak its exception message.
+    throw new ProtocolError('INVALID_ARGUMENT', 'Invalid coordination result');
+  }
+  if (kind !== 'text' || typeof text !== 'string'
+    || text.trim().length === 0 || text.length > 16_000
+    || !['mock', 'unverified'].includes(verification as string)) {
+    throw new ProtocolError('INVALID_ARGUMENT', 'Expected bounded text without tool proposals, evidence or task state');
+  }
+  return {kind: 'text', text, verification: verification as CoordinationTextResult['verification']};
 }
+
+export {CompetitionCoordinator, UnavailableCloudAgentPort} from './coordinator.js';
