@@ -46,6 +46,14 @@ export function mountAdmin(root, invoke, escape) {
   let current = {tasks: [], capabilities: [], health: [], approvals: []};
   root.innerHTML = `<div class="admin"><header class="admin-bar"><span class="admin-title">PersonalAgent · 设置</span><span class="spacer"></span><button class="icon-btn hdr-btn" id="admin-close" title="关闭" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6 6 18"/></svg></button></header><aside class="side"><div class="side-home"><span class="brand">PersonalAgent</span><span>设置与管理</span></div><label class="admin-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="admin-search" type="search" placeholder="搜索设置…" aria-label="搜索设置"></label><nav aria-label="设置导航">${navGroups.map(group => `<section class="nav-group"><h2>${group.label}</h2>${group.items.map(id => `<button data-page="${id}">${icon(id)}<span>${sections[id]}</span></button>`).join('')}</section>`).join('')}</nav><footer>私人助理 · Windows<br>冷光青 / 标准毛玻璃</footer></aside><section class="main"><div class="eyebrow">PERSONAL WORKSPACE</div><h1 id="page-title"></h1><div class="banner" id="connection"></div><div id="content"></div><p class="error" role="alert" id="error"></p></section></div>`;
 
+  const localSettingsButton = document.createElement('button');
+  localSettingsButton.type = 'button';
+  localSettingsButton.id = 'desktop-local-settings';
+  localSettingsButton.className = 'btn btn-sm';
+  localSettingsButton.textContent = '桌面设置与恢复';
+  localSettingsButton.addEventListener('click', () => window.desktop.openSettings().catch(error => { root.querySelector('#error').textContent = error.message; }));
+  root.querySelector('.admin-bar').insertBefore(localSettingsButton, root.querySelector('#admin-close'));
+
   function taskTable(data) {
     const rows = data.tasks.map(task => `<tr><td>${escape(task.taskId)}</td><td>${stateNames[task.state] ?? escape(task.state)}</td><td>${task.revision}</td><td>${escape(task.resultSummary ?? '—')}</td></tr>`).join('');
     return `<div class="sheet"><h2>任务记录</h2><div class="table-scroll"><table><thead><tr><th>任务</th><th>状态</th><th>版本</th><th>结果</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="empty">还没有任务<br>从悬浮面板开始新的对话</td></tr>'}</tbody></table></div></div>`;

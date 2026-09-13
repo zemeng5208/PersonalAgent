@@ -1,11 +1,13 @@
 import {createHash, randomUUID} from 'node:crypto';
-import type {DatabaseSync} from 'node:sqlite';
+import type {DatabaseSync, SQLInputValue} from 'node:sqlite';
 import {parseEvent, parseRequest, parseResponse, PROTOCOL_VERSION, ProtocolError, validateContract} from '@personal-agent/contracts';
-import type {Event, Operation, Request, Response, TaskSnapshot, ToolDescriptor} from '@personal-agent/contracts';
+import type {Event, Operation, Request, Response, Result, TaskSnapshot, ToolDescriptor} from '@personal-agent/contracts';
 import {openStorage} from '@personal-agent/storage';
 import type {Migration} from '@personal-agent/storage';
 import {AuthorizationPolicy} from '@personal-agent/policy';
 import {SqliteAuthorizationStore} from './authorization-store.js';
+import {bindCoordinationStore} from './coordination-store.js';
+import type {CoordinationStorePort} from '@personal-agent/goals/store';
 
 type TaskState = TaskSnapshot['state'];
 type TaskError = NonNullable<TaskSnapshot['error']>;
@@ -32,6 +34,12 @@ export interface SubmitTaskInput {
   conversationId: string;
   attachmentRefs?: readonly string[];
   idempotencyKey: string;
+}
+
+export interface ConversationTurn {
+  taskId: string;
+  goal: string;
+  resultSummary: string;
 }
 
 export interface ProgressInput {
@@ -147,6 +155,9 @@ export interface SchedulerPort {
 
 interface TaskRow {
   task_id: string;
+  goal: string;
+  conversation_id: string;
+  attachment_refs_json: string;
   state: TaskState;
   revision: number;
   updated_at: string;
@@ -180,7 +191,7 @@ interface ScheduleRow {
 }
 
 const terminal = new Set<TaskState>(['succeeded', 'failed', 'cancelled']);
-const baseCapabilities: Operation[] = ['system.handshake', 'task.submit', 'task.get', 'task.cancel', 'event.subscribe'];
+const baseCapabilities: Operation[] = ['system.handshake', 'task.submit', 'task.get', 'task.list', 'conversation.list', 'approval.list', 'task.cancel', 'event.subscribe'];
 const interrupted = ['planning', 'running', 'waiting_external', 'verifying', 'cancelling'] as const;
 const allowed: Record<TaskState, readonly TaskState[]> = {
   created: ['planning', 'cancelling', 'failed'],
@@ -216,6 +227,9 @@ export const RUNTIME_MIGRATIONS: readonly Migration[] = [{
 }, {
   version: 4,
   sql: 'CREATE TABLE tool_approvals (approval_id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(task_id), value_json TEXT NOT NULL) STRICT;'
+}, {
+  version: 5,
+  sql: 'CREATE TABLE coordination_graphs (namespace TEXT PRIMARY KEY, snapshot_json TEXT NOT NULL) STRICT;'
 }];
 
 export class RuntimeError extends Error {
@@ -252,7 +266,10 @@ function taskFromRow(row: TaskRow): TaskSnapshot {
     revision: row.revision,
     updatedAt: row.updated_at,
     steps: JSON.parse(row.steps_json) as TaskSnapshot['steps'],
-    evidenceRefs: JSON.parse(row.evidence_refs_json) as string[]
+    evidenceRefs: JSON.parse(row.evidence_refs_json) as string[],
+    goal: row.goal,
+    conversationId: row.conversation_id,
+    attachmentRefs: JSON.parse(row.attachment_refs_json) as string[]
   };
   if (row.result_summary !== null) snapshot.resultSummary = row.result_summary;
   if (row.error_json !== null) snapshot.error = JSON.parse(row.error_json) as TaskError;
@@ -293,6 +310,16 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     this.toolGateway = options.createToolGateway?.(this.policy) ?? options.toolGateway;
   }
 
+  /** Trusted host only; provisioning never clears an existing graph. */
+  provisionCoordinationStore(namespace: string): CoordinationStorePort {
+    return bindCoordinationStore(this.db, namespace, true);
+  }
+
+  /** Does not provision: missing graphs report NOT_FOUND when used. */
+  bindCoordinationStore(namespace: string): CoordinationStorePort {
+    return bindCoordinationStore(this.db, namespace, false);
+  }
+
   close(): void {
     if (this.active.size) throw new RuntimeError('REVISION_CONFLICT', 'Cannot close runtime while workers are active');
     this.db.close();
@@ -315,13 +342,101 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
   }
 
   private taskRow(taskId: string): TaskRow {
-    const row = this.db.prepare('SELECT task_id, state, revision, updated_at, steps_json, evidence_refs_json, result_summary, error_json, cancel_requested FROM tasks WHERE task_id = ?').get(taskId) as unknown as TaskRow | undefined;
+    const row = this.db.prepare('SELECT task_id, goal, conversation_id, attachment_refs_json, state, revision, updated_at, steps_json, evidence_refs_json, result_summary, error_json, cancel_requested FROM tasks WHERE task_id = ?').get(taskId) as unknown as TaskRow | undefined;
     if (!row) throw new RuntimeError('NOT_FOUND', 'Task not found');
     return row;
   }
 
   getTask(taskId: string): TaskSnapshot {
     return structuredClone(taskFromRow(this.taskRow(requireText(taskId, 'taskId'))));
+  }
+
+  private snapshotSequence(): number {
+    const row = this.db.prepare('SELECT COALESCE(MAX(sequence), 0) AS sequence FROM task_events').get() as {sequence: number};
+    return row.sequence;
+  }
+
+  listTasks(input: {conversationId?: string; states?: TaskState[]; beforeSequence?: number; snapshotSequence?: number; limit?: number}): Result<'task.list'> {
+    const limit = input.limit ?? 50;
+    const latestSequence = this.snapshotSequence();
+    const snapshotSequence = input.snapshotSequence ?? latestSequence;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new RuntimeError('INVALID_ARGUMENT', 'limit must be between 1 and 100');
+    if (!Number.isSafeInteger(snapshotSequence) || snapshotSequence < 0 || snapshotSequence > latestSequence) throw new RuntimeError('INVALID_ARGUMENT', 'Invalid snapshot sequence');
+    const clauses = ["e.type = 'task.created'", 'e.sequence <= ?'];
+    const params: SQLInputValue[] = [snapshotSequence];
+    if (input.beforeSequence !== undefined) { clauses.push('e.sequence < ?'); params.push(input.beforeSequence); }
+    if (input.conversationId !== undefined) { clauses.push('t.conversation_id = ?'); params.push(requireText(input.conversationId, 'conversationId')); }
+    if (input.states?.length) { clauses.push(`t.state IN (${input.states.map(() => '?').join(', ')})`); params.push(...input.states); }
+    const rows = this.db.prepare(`SELECT t.task_id, t.goal, t.conversation_id, t.attachment_refs_json, t.state, t.revision, t.updated_at, t.steps_json, t.evidence_refs_json, t.result_summary, t.error_json, t.cancel_requested, e.sequence AS created_sequence FROM tasks t JOIN task_events e ON e.task_id = t.task_id WHERE ${clauses.join(' AND ')} ORDER BY e.sequence DESC LIMIT ?`).all(...params, limit + 1) as unknown as Array<TaskRow & {created_sequence: number}>;
+    const more = rows.length > limit;
+    const page = rows.slice(0, limit);
+    return {items: page.map(taskFromRow), snapshotSequence, ...(more ? {nextBeforeSequence: page.at(-1)!.created_sequence} : {})};
+  }
+
+  listConversations(input: {conversationId?: string; beforeSequence?: number; snapshotSequence?: number; limit?: number}): Result<'conversation.list'> {
+    const limit = input.limit ?? 20;
+    const latestSequence = this.snapshotSequence();
+    const snapshotSequence = input.snapshotSequence ?? latestSequence;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new RuntimeError('INVALID_ARGUMENT', 'limit must be between 1 and 100');
+    if (!Number.isSafeInteger(snapshotSequence) || snapshotSequence < 0 || snapshotSequence > latestSequence) throw new RuntimeError('INVALID_ARGUMENT', 'Invalid snapshot sequence');
+    const rows = this.db.prepare(`SELECT t.task_id, t.goal, t.conversation_id, t.attachment_refs_json, t.state, t.revision, t.updated_at, t.steps_json, t.evidence_refs_json, t.result_summary, t.error_json, t.cancel_requested, e.sequence AS created_sequence FROM tasks t JOIN task_events e ON e.task_id = t.task_id AND e.type = 'task.created' WHERE e.sequence <= ? ORDER BY e.sequence DESC`).all(snapshotSequence) as unknown as Array<TaskRow & {created_sequence: number}>;
+    const grouped = new Map<string, {sequence: number; tasks: TaskSnapshot[]}>();
+    const conversationId = input.conversationId === undefined ? undefined : requireText(input.conversationId, 'conversationId');
+    for (const row of rows) {
+      if (conversationId !== undefined && row.conversation_id !== conversationId) continue;
+      const current = grouped.get(row.conversation_id) ?? {sequence: row.created_sequence, tasks: []};
+      current.tasks.push(taskFromRow(row)); grouped.set(row.conversation_id, current);
+    }
+    const conversations = [...grouped.entries()].filter(([, value]) => input.beforeSequence === undefined || value.sequence < input.beforeSequence).sort((a, b) => b[1].sequence - a[1].sequence);
+    const more = conversations.length > limit;
+    const page = conversations.slice(0, limit);
+    return {items: page.map(([id, value]) => ({conversationId: id, updatedAt: value.tasks.reduce((latest, task) => task.updatedAt > latest ? task.updatedAt : latest, value.tasks[0]!.updatedAt), taskCount: value.tasks.length, tasks: value.tasks.reverse()})), snapshotSequence, ...(more ? {nextBeforeSequence: page.at(-1)![1].sequence} : {})};
+  }
+
+  listApprovals(input: {approvalId?: string; taskId?: string; state?: 'pending' | 'allowed' | 'denied'; beforeRowId?: number; limit?: number}): Result<'approval.list'> {
+    const limit = input.limit ?? 50;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new RuntimeError('INVALID_ARGUMENT', 'limit must be between 1 and 100');
+    const clauses: string[] = []; const params: SQLInputValue[] = [];
+    if (input.approvalId !== undefined) { clauses.push('approval_id = ?'); params.push(requireText(input.approvalId, 'approvalId')); }
+    if (input.taskId !== undefined) { clauses.push('task_id = ?'); params.push(requireText(input.taskId, 'taskId')); }
+    if (input.state !== undefined) { clauses.push("json_extract(value_json, '$.state') = ?"); params.push(input.state); }
+    if (input.beforeRowId !== undefined) { clauses.push('rowid < ?'); params.push(input.beforeRowId); }
+    const where = clauses.length ? ' WHERE ' + clauses.join(' AND ') : '';
+    const rows = this.db.prepare(`SELECT rowid, value_json FROM tool_approvals${where} ORDER BY rowid DESC LIMIT ?`).all(...params, limit + 1) as Array<{rowid: number; value_json: string}>;
+    const approvals = rows.map(row => ({rowId: row.rowid, value: JSON.parse(row.value_json) as ToolApproval}));
+    const more = approvals.length > limit; const page = approvals.slice(0, limit);
+    return {items: page.map(({value}) => ({approvalId: value.approvalId, taskId: value.taskId, revision: value.revision, action: value.toolName, scopes: [...value.scopes], expiresAt: value.expiresAt, state: value.state, argumentsDigest: value.argumentsDigest, argumentSummary: 'redacted' as const})), snapshotSequence: this.snapshotSequence(), ...(more ? {nextBeforeRowId: page.at(-1)!.rowId} : {})};
+  }
+
+  readConversationHistory(conversationId: string, beforeTaskId: string, limit = 20): ConversationTurn[] {
+    const normalizedConversationId = requireText(conversationId, 'conversationId');
+    const normalizedTaskId = requireText(beforeTaskId, 'beforeTaskId');
+    if (!Number.isInteger(limit) || limit <= 0) throw new Error('limit must be a positive integer');
+
+    this.getTask(normalizedTaskId);
+    const currentEvent = this.db.prepare(
+      `SELECT sequence FROM task_events
+       WHERE task_id = ? AND type = 'task.created'
+       ORDER BY sequence ASC LIMIT 1`,
+    ).get(normalizedTaskId) as {sequence?: number} | undefined;
+    if (!currentEvent || typeof currentEvent.sequence !== 'number') return [];
+
+    const rows = this.db.prepare(
+      `SELECT t.task_id AS taskId, t.goal, t.result_summary AS resultSummary
+       FROM tasks t
+       JOIN task_events e ON e.task_id = t.task_id AND e.type = 'task.created'
+       WHERE t.conversation_id = ?
+         AND t.state = 'succeeded'
+         AND t.result_summary IS NOT NULL
+         AND e.sequence < ?
+       ORDER BY e.sequence DESC LIMIT ?`,
+    ).all(normalizedConversationId, currentEvent.sequence, limit) as unknown as ConversationTurn[];
+
+    return rows.reverse().map(row => ({
+      taskId: row.taskId,
+      goal: row.goal,
+      resultSummary: row.resultSummary,
+    }));
   }
 
   readToolExecutions(taskId: string): ToolExecutionRecord[] {
@@ -431,6 +546,15 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
         }
         case 'task.get':
           data = this.getTask(request.payload.taskId);
+          break;
+        case 'task.list':
+          data = this.listTasks(request.payload);
+          break;
+        case 'conversation.list':
+          data = this.listConversations(request.payload);
+          break;
+        case 'approval.list':
+          data = this.listApprovals(request.payload);
           break;
         case 'task.cancel':
           data = this.requestCancel(request.payload.taskId, request.payload.reason);

@@ -6,6 +6,7 @@ import {EventCursor} from '@personal-agent/client';
 import {register} from './runtime.js';
 import {panelBounds, clampOrb, draggedGroupBounds} from './placement.js';
 import {Conversations} from './conversations.js';
+import {createDesktopHost} from './desktop-host.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -15,7 +16,11 @@ if (fakeMode || fakeModelMode) app.setPath('userData', path.resolve(dir, '../.ca
 if (process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1') app.setPath('userData', path.resolve(dir, `../.cache/test-user-data-${process.pid}`));
 if (process.env.PA_DESKTOP_TEST_USER_DATA) app.setPath('userData', path.resolve(process.env.PA_DESKTOP_TEST_USER_DATA));
 
+const ownsDesktopInstance = app.requestSingleInstanceLock();
+if (!ownsDesktopInstance) app.quit();
+
 let runtime;
+let desktopHost;
 let runtimeConnection;
 let client;
 let eventCursor;
@@ -92,17 +97,26 @@ function publish() {
 }
 
 function windowFor(mode, bounds, options = {}) {
-  const win = new BrowserWindow({...bounds, show: false, backgroundColor: '#00000000',
+  const win = new BrowserWindow({...desktopHost.restore(mode, bounds), show: false, backgroundColor: '#00000000',
     webPreferences: {preload: path.join(dir, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true}, ...options});
   win.setMenuBarVisibility(false);
+  desktopHost.attach(win, mode);
   win.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
   win.webContents.on('will-navigate', event => event.preventDefault());
-  win.loadFile(entry, {query: {mode}});
-  win.once('ready-to-show', () => {
+  let presented = false;
+  const present = () => {
+    if (presented || win.isDestroyed()) return;
+    presented = true;
     if (['panel','admin','workspace'].includes(mode)) applyShape(win, mode === 'panel' ? 20 : 12);
     if (mode !== 'panel') win.show();
     publish();
-  });
+  };
+  // Applying a restored zoom during did-finish-load can prevent Electron from
+  // emitting ready-to-show.  Loaded local pages are already safe to present,
+  // so either lifecycle event may complete the one-shot presentation.
+  win.webContents.once('did-finish-load', present);
+  win.once('ready-to-show', present);
+  win.loadFile(entry, {query: {mode}});
   return win;
 }
 
@@ -171,6 +185,7 @@ function createTray() {
     tray.setContextMenu(Menu.buildFromTemplate([
       {label: '打开悬浮面板', click: () => { pinned = true; openPanel(true); publish(); }},
       {label: '打开管理后台', click: () => openAdmin()},
+      {label: '桌面设置与恢复', click: () => desktopHost.openSettings()},
       {type: 'separator'},
       {label: '退出 PersonalAgent', click: () => app.quit()},
     ]));
@@ -385,22 +400,7 @@ function applyEvent(event) {
   if (event.taskId && event.payload && ['task.created', 'task.state_changed', 'task.completed', 'task.failed', 'task.cancelled'].includes(event.type)) {
     tasks.set(event.taskId, structuredClone(event.payload));
   }
-  if (event.type === 'approval.requested' && event.payload) {
-    const view = structuredClone(event.payload);
-    try {
-      const approval = runtimeApplication?.runtime?.getApproval(event.payload.approvalId);
-      const checkpoint = runtimeApplication?.runtime?.loadCheckpoint(event.payload.taskId, 'agent-loop');
-      const proposal = checkpoint?.pending?.response?.kind === 'tool_proposal' ? checkpoint.pending.response.proposal : undefined;
-      if (approval) {
-        view.toolName = approval.toolName;
-        view.scopes = [...approval.scopes];
-        view.argumentsDigest = approval.argumentsDigest;
-        view.expiresAt = approval.expiresAt;
-      }
-      if (proposal?.toolName === approval?.toolName) view.arguments = structuredClone(proposal.arguments);
-    } catch {}
-    approvals.set(event.payload.approvalId, view);
-  }
+  if (event.type === 'approval.requested' && event.payload) approvals.set(event.payload.approvalId, structuredClone(event.payload));
   if (event.type === 'task.cancelled' && event.payload?.taskId) {
     for (const [id, approval] of approvals) if (approval.taskId === event.payload.taskId) approvals.delete(id);
   }
@@ -414,7 +414,13 @@ async function pumpEvents() {
     await client.call('event.subscribe', {streamId: 'tasks', afterSequence});
     const events = await runtimeConnection.readEvents(afterSequence);
     const accepted = eventCursor.accept(events);
-    accepted.forEach(applyEvent);
+    for (const event of accepted) {
+      applyEvent(event);
+      if (event.type === 'approval.requested') {
+        const result = await client.call('approval.list', {approvalId: event.payload.approvalId, limit: 1});
+        if (result.items[0]) approvals.set(event.payload.approvalId, structuredClone(result.items[0]));
+      }
+    }
     if (accepted.length) publish();
   } catch (error) {
     runtimeError = error instanceof Error ? error.message : '事件流读取失败';
@@ -434,6 +440,21 @@ async function syncCapabilities() {
     health = [];
     if (error?.code !== 'UNSUPPORTED_CAPABILITY') runtimeError = error instanceof Error ? error.message : '能力目录读取失败';
   }
+}
+
+async function syncRuntimeSnapshots() {
+  tasks.clear(); approvals.clear();
+  let beforeSequence;
+  let snapshotSequence;
+  do {
+    const page = await client.call('task.list', {limit: 100, ...(beforeSequence ? {beforeSequence} : {}), ...(snapshotSequence === undefined ? {} : {snapshotSequence})});
+    snapshotSequence = page.snapshotSequence;
+    for (const task of page.items) { tasks.set(task.taskId, structuredClone(task)); if (task.goal) taskGoals.set(task.taskId, task.goal); }
+    beforeSequence = page.nextBeforeSequence;
+  } while (beforeSequence);
+  const pending = await client.call('approval.list', {state: 'pending', limit: 100});
+  for (const approval of pending.items) approvals.set(approval.approvalId, structuredClone(approval));
+  eventCursor.reset(snapshotSequence ?? 0);
 }
 
 async function initializeRuntime() {
@@ -472,6 +493,7 @@ async function initializeRuntime() {
   connectionLabel = fakeMode ? 'Fake Runtime · 联调模式' : '本地 Runtime · 已连接';
   eventCursor = new EventCursor('tasks');
   await syncCapabilities();
+  await syncRuntimeSnapshots();
   await pumpEvents();
   eventPoll = setInterval(() => void pumpEvents(), 120);
 }
@@ -512,7 +534,7 @@ async function action(event, name, payload) {
     dragging = true; panel.hide(); const point = screen.getCursorScreenPoint(); const bounds = orb.getBounds();
     dragOffset = {x: point.x - bounds.x, y: point.y - bounds.y}; return;
   }
-  if (name === 'orb.dragEnd' && sender === orb) { dragging = false; away = Date.now() + 400; return; }
+  if (name === 'orb.dragEnd' && sender === orb) { dragging = false; desktopHost.snap(orb); away = Date.now() + 400; return; }
   if (name === 'panel.dragStart' && sender === panel) {
     if (!payload || !Number.isFinite(payload.x) || !Number.isFinite(payload.y)) throw Error('拖动坐标无效');
     dragging = 'panel';
@@ -608,7 +630,13 @@ async function action(event, name, payload) {
   throw Error('Unsupported action');
 }
 
+app.on('second-instance', () => {
+  if (desktopHost && orb && panel && !orb.isDestroyed() && !panel.isDestroyed()) { pinned = true; openPanel(true); publish(); }
+});
+
 app.whenReady().then(async () => {
+  if (!ownsDesktopInstance) return;
+  desktopHost = createDesktopHost();
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
   try {
@@ -657,7 +685,7 @@ app.whenReady().then(async () => {
     const near = Math.hypot(point.x - bounds.x - bounds.width / 2, point.y - bounds.y - bounds.height / 2) <= 90;
     const panelBoundsValue = panel.getBounds();
     const inside = panel.isVisible() && point.x >= panelBoundsValue.x && point.x <= panelBoundsValue.x + panelBoundsValue.width && point.y >= panelBoundsValue.y && point.y <= panelBoundsValue.y + panelBoundsValue.height;
-    if (near || inside || pinned) { away = 0; if (near && !panel.isVisible()) openPanel(); }
+    if ((near && desktopHost.settings.hover) || inside || pinned) { away = 0; if (near && desktopHost.settings.hover && !panel.isVisible()) openPanel(); }
     else if (panel.isVisible()) { if (!away) away = Date.now(); else if (Date.now() - away > 520) { panel.hide(); away = 0; } }
   }, 80);
   app.on('before-quit', event => {
