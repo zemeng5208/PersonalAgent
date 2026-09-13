@@ -4,7 +4,7 @@ import type { ProtocolContracts } from '@personal-agent/contracts';
 import { parseFeedDate } from './dates.js';
 import { parseFeedDocument, toPlainText } from './parser.js';
 import { appendSeen, CURSOR_VERSION, decodeCursor, encodeCursor } from './cursor.js';
-import type { CursorState } from './cursor.js';
+import type { CursorState, PassState } from './cursor.js';
 import type { FeedFetch, FeedFetchRequest, FeedProvider } from './provider.js';
 import { makeContentRedactor } from './redact.js';
 
@@ -276,26 +276,36 @@ export class FeedService {
       if (cursor.lastModified !== undefined) nextState.lastModified = cursor.lastModified;
       const last = delivered[delivered.length - 1];
       if (last !== undefined) {
-        nextState.pass = {
+        const pass: PassState = {
           lastTime: last.occurredAt,
           lastId: last.externalId,
           delivered: (cursor.pass?.delivered ?? 0) + delivered.length,
         };
+        // 记录趟开启时源携带的校验器：取尽时用于判断趟期间源是否变化。
+        if (cursor.pass === undefined) {
+          if (fetched.etag !== undefined) pass.startEtag = fetched.etag;
+          if (fetched.lastModified !== undefined) pass.startModified = fetched.lastModified;
+        } else {
+          if (cursor.pass.startEtag !== undefined) pass.startEtag = cursor.pass.startEtag;
+          if (cursor.pass.startModified !== undefined) pass.startModified = cursor.pass.startModified;
+        }
+        nextState.pass = pass;
       }
-    } else if (cursor.pass !== undefined) {
-      // Pass exhausted on a CONTINUATION poll: the watermark suppressed everything above it —
-      // including entries the source inserted mid-pass (id4 above id2's watermark). Saving the
-      // response validator here would 304 the next poll and strand those entries forever
-      // (goo122 2026-09-13 复审 P1). Hold the previous validators once more: the next poll
-      // refetches fully, the pass is gone so `seen` alone filters, and the inserted entry
+    } else if (cursor.pass !== undefined && sourceChangedDuringPass(cursor.pass, fetched)) {
+      // Pass exhausted on a CONTINUATION poll AND the source changed while it ran: the watermark
+      // suppressed everything above it — including entries inserted mid-pass (id4 above id2's
+      // watermark). Adopting the response validator would 304 the next poll and strand them
+      // forever (goo122 2026-09-13 复审 P1). Hold the previous validators once more: the next
+      // poll refetches fully, the pass is gone so `seen` alone filters, and the inserted entry
       // arrives as a seen-miss.
       if (cursor.etag !== undefined) nextState.etag = cursor.etag;
       if (cursor.lastModified !== undefined) nextState.lastModified = cursor.lastModified;
     } else {
-      // Single-page pass on a poll that did not continue one: the watermark suppressed nothing,
-      // so the response validators describe a fully consumed document and are safe to adopt.
-      // Assigned from the response, not merged: a validator that disappears between polls has to
-      // be dropped, otherwise the next conditional request could 304 against a changed document.
+      // Pass exhausted with the source unchanged (or no pass continued): the watermark
+      // suppressed nothing undelivered, so the response validators describe a fully consumed
+      // document and are safe to adopt. Assigned from the response, not merged: a validator that
+      // disappears between polls has to be dropped, otherwise the next conditional request could
+      // 304 against a changed document.
       if (fetched.etag !== undefined) nextState.etag = fetched.etag;
       if (fetched.lastModified !== undefined) nextState.lastModified = fetched.lastModified;
     }
@@ -340,6 +350,20 @@ function carryValidators(cursor: CursorState, fetched: FeedFetch): CursorState {
   // A 304 mid-pass leaves the document unchanged, so the pass watermark survives untouched.
   if (cursor.pass !== undefined) state.pass = cursor.pass;
   return state;
+}
+
+/**
+ * Whether the source changed while the pass ran: its validators now differ from the ones the
+ * document carried when the pass started. Only a change makes exhaust-time watermark suppression
+ * suspect — an unchanged document was fully paginated by definition.
+ */
+function sourceChangedDuringPass(pass: NonNullable<CursorState['pass']>, fetched: FeedFetch): boolean {
+  if (pass.startEtag !== undefined || pass.startModified !== undefined) {
+    return fetched.etag !== pass.startEtag || fetched.lastModified !== pass.startModified;
+  }
+  // The pass started under a validator-less document, so there is nothing to compare against;
+  // treat any validator the source now sends as a change.
+  return fetched.etag !== undefined || fetched.lastModified !== undefined;
 }
 
 /**

@@ -628,3 +628,37 @@ test('分页中途 304（带校验器）保持趟状态继续翻页', async () =
   const titles = page3.items.map(item => item.title);
   assert.ok(titles.includes('Entry 250') && titles.includes('Entry 201'), `从 Entry 250 继续，实际首条 ${titles[0]} 末条 ${titles[49]}`);
 });
+
+test('goo122 复现（带校验器变体）：exhaustion 时源已变化 → 持有旧校验器一轮，id4 交付且校验器最终推进', async () => {
+  const feedOf = ids => {
+    const base = Date.parse('2026-08-01T00:00:00Z');
+    const entries = ids.map(i => {
+      const pub = new Date(base + i * 60_000).toUTCString();
+      return `<item><title>Entry ${i}</title><link>https://example.test/e/${i}</link><guid>fixture-big-${i}</guid><pubDate>${pub}</pubDate></item>`;
+    }).join('');
+    return `<?xml version="1.0"?><rss version="2.0"><channel><title>t</title><link>x</link><description>d</description>${entries}</channel></rss>`;
+  };
+  // 先完整消费一个带 ETag v0 的 10 条 feed（建立校验器基线）
+  const provider = new FakeFeedProvider([{url: FIXTURE_URL, body: feedOf([10, 9, 8, 7, 6, 5, 4, 3, 2, 1]), etag: 'W/"v0"'}]);
+  const service = new FeedService({provider, subscriptions: [{id: 'fixture', url: FIXTURE_URL}], now: () => Date.parse('2026-09-07T00:00:00Z')});
+  const done = await service.collect({subscriptionId: 'fixture', limit: 20});
+  assert.equal(done.hasMore, false);
+  // 源换成 v1：4 条（id13..id10 全部比已有新），limit=2 → 第一页截断开启新趟（趟起始校验器 = v1）
+  provider.setFixtures([{url: FIXTURE_URL, body: feedOf([14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]), etag: 'W/"v1"'}]);
+  const page1 = await service.collect({subscriptionId: 'fixture', limit: 2, cursor: done.nextCursor});
+  assert.deepEqual(page1.items.map(item => item.title), ['Entry 14', 'Entry 13']);
+  assert.equal(page1.hasMore, true);
+  // 翻页期间源换成 v2（插入 id15）→ 续页取尽（剩余 12 条 > limit? 不，limit=20 一次取尽，但 id15 在水位线之上被抑制）
+  provider.setFixtures([{url: FIXTURE_URL, body: feedOf([15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]), etag: 'W/"v2"'}]);
+  const page2 = await service.collect({subscriptionId: 'fixture', limit: 20, cursor: page1.nextCursor});
+  assert.equal(page2.items.map(item => item.title).includes('Entry 15'), false, 'id15 在水位线之上，本趟被抑制');
+  assert.equal(page2.hasMore, false);
+  assert.equal(decode(page2.nextCursor).etag, 'W/"v0"', '源已变化：不采纳响应校验器 v2，持有趟前校验器 v0——v0 必然全量抓取，若持 v1 可能对仍是 v2 的源 304 空转');
+  // 下一轮：If-None-Match v0 未命中 → 全量抓取 → id15 以 seen 未命中交付
+  const page3 = await service.collect({subscriptionId: 'fixture', limit: 20, cursor: page2.nextCursor});
+  assert.ok(page3.items.map(item => item.title).includes('Entry 15'), 'id15 最终交付');
+  assert.equal(page3.hasMore, false);
+  assert.equal(decode(page3.nextCursor).etag, 'W/"v2"', '源未再变化，校验器此时才推进到 v2');
+  const page4 = await service.collect({subscriptionId: 'fixture', limit: 20, cursor: page3.nextCursor});
+  assert.equal(page4.collection.state, 'unchanged', '校验器推进后 304 安全');
+});

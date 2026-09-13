@@ -42,6 +42,9 @@ export interface PassState {
   lastId: string;
   /** Entries delivered in this pass so far; for diagnostics only. */
   delivered: number;
+  /** Validator the source carried when this pass started; exhaust compares against it. */
+  startEtag?: string;
+  startModified?: string;
 }
 
 export function emptyCursor(): CursorState {
@@ -119,7 +122,10 @@ function decodedPass(value: unknown): PassState | undefined {
   if (typeof lastTime !== 'string' || lastTime.length === 0) throw cursorExpired('its pagination watermark has no timestamp');
   if (typeof lastId !== 'string' || lastId.length === 0) throw cursorExpired('its pagination watermark has no entry id');
   if (!Number.isSafeInteger(delivered) || (delivered as number) < 0) throw cursorExpired('its pagination watermark has no delivered count');
-  return {lastTime, lastId, delivered: delivered as number};
+  const pass: PassState = {lastTime, lastId, delivered: delivered as number};
+  if (typeof record['startEtag'] === 'string') pass.startEtag = record['startEtag'];
+  if (typeof record['startModified'] === 'string') pass.startModified = record['startModified'];
+  return pass;
 }
 
 function decodedValidator(value: unknown, label: string): string | undefined {
