@@ -197,3 +197,34 @@ test('修改截止时间时重验既有提醒：due 提前到提醒之后 → �
   const cleared = service.update(service.create({title: 'x', reminder: {remindAt: {utc: '2026-09-25T00:00:00.000Z'}}}).id, {clearReminder: true, due: {utc: '2026-09-21T00:00:00.000Z'}});
   assert.equal(cleared.due.utc, '2026-09-21T00:00:00.000Z');
 });
+
+test('原子性：唯一写入点注入异常 → 悬空索引不可能存在，重建服务后既有条目照常可查', () => {
+  const makeFlakyStorage = (failOn) => {
+    const inner = new FakeStorage().namespace('todo');
+    let calls = 0;
+    return {
+      get: key => inner.get(key),
+      set: (key, value) => {
+        calls += 1;
+        if (calls === failOn) throw new Error('injected storage failure at write');
+        inner.set(key, value);
+      },
+      delete: key => inner.delete(key),
+    };
+  };
+  let counter = 0;
+  const idFactory = () => `t${++counter}`;
+
+  // goo122 复现路径：第一次创建（写入 1 成功），第二次变更（写入 2）失败 →
+  // 旧实现 ids 已写、条目缺失；单键实现下失败整体不生效
+  const flaky = makeFlakyStorage(2);
+  const service1 = new TodoService(flaky, {now: () => NOW, idFactory});
+  const first = service1.create({title: '已有条目'});
+  assert.throws(() => service1.update(first.id, {title: '改标题'}), /injected storage failure/);
+  const rebuilt = new TodoService(flaky, {now: () => NOW, idFactory});
+  assert.equal(rebuilt.list().length, 1, '重建后既有条目仍可列出');
+  assert.equal(rebuilt.get(first.id).title, '已有条目', '内容为失败前的旧值');
+  // 重试同一变更成功
+  assert.equal(rebuilt.update(first.id, {title: '改标题'}).title, '改标题');
+  assert.equal(rebuilt.list().length, 1);
+});

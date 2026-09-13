@@ -30,8 +30,17 @@ export interface TodoUpdateInput {
   clearReminder?: boolean;
 }
 
-const IDS_KEY = 'todo:ids';
-const ITEM_PREFIX = 'todo:item:';
+/**
+ * 全部待办状态存于单一存储键（goo122 2026-09-13 复审 P1）：此前 ids 索引与条目分两个键、
+ * 两次写入，注入第二次写入失败会留下悬空索引（list 持续 NOT_FOUND）。现在每次变更都在
+ * 内存中算出完整新状态并一次写入——失败整体不生效，重建服务后既有条目照常可查。
+ */
+const STATE_KEY = 'todo:state';
+
+interface TodoState {
+  ids: string[];
+  items: Record<string, TodoItem>;
+}
 
 export class TodoService {
   constructor(
@@ -118,14 +127,14 @@ export class TodoService {
 
   get(id: string): TodoItem {
     if (typeof id !== 'string' || id.length === 0) throw new ProtocolError('INVALID_ARGUMENT', 'Item id must be a non-empty string');
-    const stored = this.storage.get(ITEM_PREFIX + id);
+    const stored = this.readState().items[id];
     if (!isTodoItem(stored)) throw new ProtocolError('NOT_FOUND', `Todo item ${id} not found`);
-    return stored;
+    return structuredClone(stored);
   }
 
   list(filter?: {status?: TodoStatus}): TodoItem[] {
-    const ids = this.readIds();
-    const items = ids.map(id => this.get(id));
+    const state = this.readState();
+    const items = state.ids.map(id => state.items[id]).filter(isTodoItem).map(item => structuredClone(item));
     if (filter?.status === undefined) return items;
     return items.filter(item => item.status === filter.status);
   }
@@ -133,12 +142,13 @@ export class TodoService {
   /** 供宿主把 dispatch 后的条目写回（applyReminderDispatches 的产物）。 */
   save(item: TodoItem): void {
     if (!isTodoItem(item)) throw new ProtocolError('INVALID_ARGUMENT', 'Not a todo item');
-    const existing = this.storage.get(ITEM_PREFIX + item.id);
+    const state = this.readState();
+    const existing = state.items[item.id];
     if (!isTodoItem(existing)) throw new ProtocolError('NOT_FOUND', `Todo item ${item.id} not found`);
     if (item.revision <= existing.revision) {
       throw new ProtocolError('INVALID_ARGUMENT', 'Revision must increase');
     }
-    this.write(item);
+    this.write(item, state);
   }
 
   private resolveReminder(input: ReminderInput | undefined, due: TodoWhen | undefined): {remindAt: TodoWhen; missedPolicy: MissedRunPolicy; state: ReminderState} | undefined {
@@ -168,18 +178,30 @@ export class TodoService {
     if (from === 'open' && to === 'open') return;
   }
 
-  private write(item: TodoItem): void {
-    const ids = this.readIds();
-    if (!ids.includes(item.id)) {
-      ids.push(item.id);
-      this.storage.set(IDS_KEY, ids);
-    }
-    this.storage.set(ITEM_PREFIX + item.id, structuredClone(item));
+  /** 单次原子写入：索引与条目同键落盘，写失败整体不生效（goo122 2026-09-13 复审 P1）。 */
+  private write(item: TodoItem, prior?: TodoState): void {
+    const state = prior ?? this.readState();
+    const ids = state.ids.includes(item.id) ? state.ids : [...state.ids, item.id];
+    const items: Record<string, TodoItem> = {...state.items, [item.id]: structuredClone(item)};
+    this.storage.set(STATE_KEY, {ids, items});
   }
 
-  private readIds(): string[] {
-    const ids = this.storage.get(IDS_KEY);
-    return Array.isArray(ids) ? ids.filter(id => typeof id === 'string') : [];
+  private readState(): TodoState {
+    const value = this.storage.get(STATE_KEY);
+    if (value === undefined || value === null || typeof value !== 'object' || Array.isArray(value)) {
+      return {ids: [], items: {}};
+    }
+    const record = value as Record<string, unknown>;
+    const ids = Array.isArray(record.ids) ? record.ids.filter((id): id is string => typeof id === 'string') : [];
+    const rawItems = typeof record.items === 'object' && record.items !== null && !Array.isArray(record.items)
+      ? record.items as Record<string, unknown>
+      : {};
+    const items: Record<string, TodoItem> = {};
+    for (const id of ids) {
+      const item = rawItems[id];
+      if (isTodoItem(item)) items[id] = item;
+    }
+    return {ids, items};
   }
 
   private isoNow(): string {
