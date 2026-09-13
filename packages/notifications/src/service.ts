@@ -184,8 +184,9 @@ export class NotificationService {
     if (decided.length > 0) this.writeState(nextState);
 
     // 恢复语义优先：未确认批次排在本次新裁定之前返回；不重复生成（id 不变）。
+    // 输出边界深拷贝：调用方改动返回批次不得影响存储内的状态（返回对象可能携带内部引用）。
     const prior = state.batches.filter(batch => batch.state === 'ready_for_delivery');
-    return {batches: [...prior, ...decided], held};
+    return {batches: structuredClone([...prior, ...decided]), held};
   }
 
   /** 桌面确认接收一个批次：置 delivered（幂等，重复确认无副作用）。单次写入，原子。 */
@@ -276,7 +277,9 @@ export class NotificationService {
       batches: Array.isArray(record.batches) ? record.batches.filter(isBatch) : [],
       delivered: Array.isArray(record.delivered) ? record.delivered.filter((key): key is string => typeof key === 'string').slice(-DELIVERED_KEY_LIMIT) : [],
     };
-    return state;
+    // 读边界整态深拷贝（goo122 2026-09-13 复审 P1）：StoragePort 不保证 get 返回副本，
+    // 不拷贝则 acknowledge 对状态对象的就地修改会先于写入生效——写失败也"生效"了。
+    return structuredClone(state);
   }
 
   private writeState(state: NotificationState): void {

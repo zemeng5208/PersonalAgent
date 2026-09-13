@@ -314,3 +314,45 @@ test('原子性：唯一写入点注入异常 → 整体不生效，重试后批
   afterIngest.ingest([item('f3')]);
   assert.equal(afterIngest.status().pending, 1);
 });
+
+test('非克隆存储 + acknowledge 写失败：失败不得生效（goo122 2026-09-13 复审 P1）', () => {
+  // 不做 structuredClone 的裸 Map 存储：get 返回活引用，专测引用隔离
+  const makeRawStorage = (failOn) => {
+    const data = new Map();
+    let calls = 0;
+    return {
+      get: key => data.get(key),
+      set: (key, value) => {
+        calls += 1;
+        if (calls === failOn) throw new Error('injected ack failure');
+        data.set(key, structuredClone(value));
+      },
+      delete: key => data.delete(key),
+    };
+  };
+  let counter = 0;
+  const idFactory = () => `n${++counter}`;
+
+  // 写入序：ingest=1、drain=2、ack=3 注入失败
+  const raw = makeRawStorage(3);
+  const service = new NotificationService(raw, {}, {now: () => NOON, idFactory});
+  service.ingest([item('iso-1')]);
+  const [batch] = service.drain().batches;
+  // 返回批次被调用方就地篡改也不得影响存储状态
+  batch.itemRefs.push('tampered');
+  assert.throws(() => service.acknowledge(batch.id), /injected ack failure/);
+  assert.equal(service.status().unacknowledgedBatches, 1, 'ack 写失败后批次仍待交付（失败未生效）');
+  const acked = service.acknowledge(batch.id);
+  assert.equal(acked.state, 'delivered');
+  assert.deepEqual(acked.itemRefs, ['iso-1'], '存储未被调用方篡改污染');
+  assert.equal(service.status().unacknowledgedBatches, 0);
+
+  // drain 返回对象与存储隔离：改返回值后再次 drain，原批次不受影响
+  const raw2 = makeRawStorage(0);
+  const service2 = new NotificationService(raw2, {}, {now: () => NOON, idFactory});
+  service2.ingest([item('iso-2')]);
+  const [first] = service2.drain().batches;
+  first.itemRefs.push('tampered');
+  const [again] = service2.drain().batches;
+  assert.deepEqual(again.itemRefs, ['iso-2'], '存储内状态未被返回对象污染');
+});
