@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  夹具来源：2026-09-06 对 https://sspai.com/feed 的真实响应（HTTP 200，
+  Content-Type: application/xml; charset=UTF-8，Transfer-Encoding: chunked，
+  **响应头没有 ETag，也没有 Last-Modified**；原始 5440 字节、10 条 item）。
+
+  相对原始响应只做三处改动，均不改变解析语义：
+  1. 原始 body 整个压在一行，此处在 item 之间插入换行以便阅读；XML 元素间空白无意义，
+     解析器 trimValues 会去掉首尾空白。
+  2. item 由 10 条截断为前 5 条（保留原始顺序与全部真实取值）。
+  3. <managingEditor> 原文含第三方邮箱，按 AGENTS.md「文档与公开工件不包含邮箱」替换为
+     redacted-for-fixture。这是本夹具**唯一被改写取值**的地方。
+
+  保留的真实结构特征（这些是必须覆盖的解析路径）：
+  - **10 条 item 全部没有 <guid>**，去重只能退化到 <link>；
+  - **没有 <lastBuildDate>**，feed 级时间只能取 <pubDate>；
+  - <description> 内含 HTML 转义标记（&lt;a href=&#34;…&#34;&gt;查看全文&lt;/a&gt;），
+    既有 &lt;/&gt; 又有十进制与十六进制数字字符引用，必须先解实体再去标签，
+    否则标记会漏进纯文本摘要；
+  - <title> 内含 &amp; 实体（第 3 条）；
+  - <pubDate> 为 RFC 822 且带 +0800 数字时区偏移；
+  - <author> 是笔名而非邮箱（RSS 规范此处应为邮箱，真实源并不遵守）；
+  - channel 末尾有两个 <atom:link>，用的是 ref="self"/ref="hub" 而**不是 rel=**，
+    属真实源的写法错误，解析不得因此失败。
+-->
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/"><channel><title>少数派</title><link>https://sspai.com</link><description>少数派致力于更好地运用数字产品或科学方法，帮助用户提升工作效率和生活品质</description><language>zh-CN</language><managingEditor>redacted-for-fixture (少数派)</managingEditor><pubDate>Sat, 05 Sep 2026 16:00:01 +0800</pubDate>
+<item><title>最值得买的顶级公路车？TREK 八代 Madone 评测</title><link>https://sspai.com/post/114040</link><description>它没有卷到极致的轻量化，也没有最极端的气动数据，但综合实力稳稳站在顶级公路车的第一梯队。&lt;a href=&#34;https://sspai.com/post/114040&#34; target=&#34;_blank&#34;&gt;查看全文&lt;/a&gt;</description><author>写小黑文的Alex</author><pubDate>Sat, 05 Sep 2026 16:00:01 +0800</pubDate></item>
+<item><title>本周看什么 | 最近值得一看的 8 部作品</title><link>https://sspai.com/post/114175</link><description>📅本周新预告《哈利·波特》剧集先导预告9月2日，剧集《哈利·波特与魔法石》发布了先导预告，第一季共8集，将于12月25日上线HBOMax。原作者J·K·罗琳担任执行制片人，多米尼克·麦克劳克林、阿拉贝 ...&lt;a href=&#34;https://sspai.com/post/114175&#34; target=&#34;_blank&#34;&gt;查看全文&lt;/a&gt;</description><author>少数派编辑部</author><pubDate>Fri, 04 Sep 2026 17:32:48 +0800</pubDate></item>
+<item><title>新学期，新气象：正版软件 &amp; 付费栏目限时优惠</title><link>https://sspai.com/post/114110</link><description>多款付费栏目和正版软件上新，以及口碑、质量都非常优秀的现有产品优惠活动，快来看看有没有你需要的吧。&lt;a href=&#34;https://sspai.com/post/114110&#34; target=&#34;_blank&#34;&gt;查看全文&lt;/a&gt;</description><author>福利派</author><pubDate>Fri, 04 Sep 2026 15:11:46 +0800</pubDate></item>
+<item><title>开学季 | 超级闹钟、算教学周、统计作业：三条快捷指令让学校生活轻松一点</title><link>https://sspai.com/post/114117</link><description>研究一下iOS自带的快捷指令，可能会让你的学习生活也轻松不少。&lt;a href=&#34;https://sspai.com/post/114117&#34; target=&#34;_blank&#34;&gt;查看全文&lt;/a&gt;</description><author>谷雨G2rain</author><pubDate>Fri, 04 Sep 2026 15:01:57 +0800</pubDate></item>
+<item><title>在 16:10 屏幕普及的当下，聊聊那台最后的 4:3 版 ThinkPad T61p</title><link>https://sspai.com/post/113990</link><description>在 2026 年用一台 4:3 屏幕的 ThinkPad 是一种什么体验？&lt;a href=&#34;https://sspai.com/post/113990&#34; target=&#34;_blank&#34;&gt;查看全文&lt;/a&gt;</description><author>随便好啦</author><pubDate>Fri, 04 Sep 2026 11:25:29 +0800</pubDate></item>
+<atom:link href="https://sspai.com/feed" type="application/rss+xml" ref="self"></atom:link><atom:link href="https://sspai.com/feed" type="application/rss+xml" ref="hub"></atom:link></channel></rss>

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  **合成夹具，非真实源响应。** 用途：固定「既无稳定标识也无任何可用时间 → 跳过」的路径。
+
+  与 dc-namespace-rss.xml 的区别：那里 channel 有 lastBuildDate 可退，所以无自身时间的
+  条目仍被投递并标注 feed_build；这里 channel **既无 lastBuildDate 也无 pubDate**，
+  条目自身也无时间，occurredAt 无从取得。occurredAt 是 ConnectorItem 的必填字段，
+  编不出合法时间戳就不能投递 —— 此时必须跳过，**绝不能用 fetchedAt 顶替**
+  （DEVELOPMENT_PROTOCOL：不把获取时间当发布时间）。
+
+  第 1 条：有标题与 link，但没有时间 → 跳过，reason 说明缺时间而不是缺标识。
+  第 2 条：完全没有内容 → 跳过，既无 key 也无时间。
+  第 3 条：有 guid 与 pubDate → 正常投递，用于断言跳过是逐条判定而非整批失败。
+
+  skipped[] 每项必须带 {index, reason}：index 是条目在文档中的位置，reason 只描述缺失的
+  类别，**不回显源内容**（避免把不可信的外部文本写进日志与工具输出）。
+-->
+<rss version="2.0">
+  <channel>
+    <title>无标识无时间夹具</title>
+    <link>https://example.com/skip</link>
+    <description>channel 刻意不提供 lastBuildDate 与 pubDate</description>
+    <item>
+      <title>有 link 但没有任何时间</title>
+      <link>https://example.com/skip/no-date</link>
+    </item>
+    <item>
+    </item>
+    <item>
+      <title>正常条目</title>
+      <link>https://example.com/skip/normal</link>
+      <guid isPermaLink="false">skip-normal</guid>
+      <pubDate>Sat, 05 Sep 2026 10:00:00 +0800</pubDate>
+    </item>
+  </channel>
+</rss>
