@@ -400,3 +400,17 @@ test('Provider 层单飞：QQMailProvider 注入假 transporter，并发同键�
     await provider.dispose();
   }
 });
+
+test('复合键无歧义：accountRef 含冒号时不得与相邻账号/键碰撞（goo122 09-14 P1）', async () => {
+  const provider = new FakeMailProvider();
+  const serviceA = new MailService(provider, {now: () => NOW});
+  // 旧拼接下 ^G:b + c 与 ^G + :c 是同一个 mapKey：第二次会撞指纹拒绝或错误重放。
+  // 结构化编码后互相独立——第二次发送不同正文也应成功（= 无碰撞、无错误重放）。
+  const first = await serviceA.send('^G:b', {to: 'a@b.c', subject: 's', text: 't', idempotencyKey: 'c'});
+  assert.equal(first.state, 'confirmed');
+  const againA = await serviceA.send('^G:b', {to: 'a@b.c', subject: 's', text: 't', idempotencyKey: 'c'});
+  assert.deepEqual(first, againA);
+  const second = await serviceA.send('^G', {to: 'a@b.c', subject: 's', text: '完全不同', idempotencyKey: ':c'});
+  assert.equal(second.state, 'confirmed', '相邻冒号组合不碰撞：独立请求正常发送');
+  assert.notDeepEqual(first, second);
+});

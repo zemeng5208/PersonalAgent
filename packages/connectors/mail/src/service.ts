@@ -133,8 +133,10 @@ export class MailService {
     if (typeof input.idempotencyKey !== 'string' || input.idempotencyKey.length === 0) throw new ProtocolError('INVALID_ARGUMENT', 'idempotencyKey is required');
     // 无歧义规范编码（goo122 2026-09-13 复审 P1）：换行拼接会让 subject=A\nB,text=C 与
     // subject=A,text=B\nC 撞指纹；JSON 数组转义换行与引号，编码唯一。
+    // 复合键同样结构化编码（goo122 2026-09-14 复审）：`${accountRef}:${key}` 在 accountRef
+    // 含冒号时碰撞（^G:b + c ≡ ^G + :c）；JSON 数组编码无歧义。
     const fingerprint = JSON.stringify([input.to, input.subject, input.text]);
-    const mapKey = `${accountRef}:${input.idempotencyKey}`;
+    const mapKey = JSON.stringify([accountRef, input.idempotencyKey]);
     const prior = this.sendIdempotency.get(mapKey);
     if (prior !== undefined) {
       if (prior.fingerprint !== fingerprint) {
