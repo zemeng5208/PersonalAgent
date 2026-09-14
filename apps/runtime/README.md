@@ -6,6 +6,12 @@ Interface status is tracked per operation in the [current interface catalog](../
 
 当前新增装配只面向 [Huawei ICT AgentArts Competition Profile](../../docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)：Runtime 后续通过 `CoordinationPort` / `CloudAgentPort` 调用比赛编排，并继续拥有任务、授权、真实执行、读回和终态。现有本地 `runAgent()` 与模型装配仅作为可选基线留存，当前不扩展、不作为比赛验收路径；Competition 运行不得在 AgentArts 不可用时静默回退本地链路。
 
+`createAgentArtsRuntimeApplication(options)` 是可信 Competition 文字装配入口：
+它用显式的 HTTPS gateway、runtime 名称、调用模式和宿主
+`AgentArtsAuthorizationProvider` 构造云适配器，再注入现有
+`RuntimeApplication`。工厂不接受 Local text/tool 配置；AgentArts 返回仍只是
+`unverified` 文字，任务持久化和终态继续由 TaskRuntime 决定。
+
 ## Implemented
 
 ### Provisional graph storage
