@@ -67,6 +67,8 @@ PA_MAIL_LIVE=1 PA_QQ_MAIL_USER=<QQ邮箱地址> PA_QQ_MAIL_AUTH_CODE=<授权码>
 PA_MAIL_LIVE=1 PA_MAIL_LIVE_SEND=1 PA_QQ_MAIL_USER=… PA_QQ_MAIL_AUTH_CODE=… PA_QQ_MAIL_TO=<收件地址> node --test packages/connectors/mail/test/
 ```
 
+**真实读回证据（2026-09-13）**：用户 QQ 邮箱开启 IMAP/SMTP 并提供授权码后执行上述命令，`22/22` 全过（0 失败 0 跳过）——只读读回（真实 IMAP 列文件夹＋拉 5 封、uidValidity 捕获）与真实 SMTP 发送（自发自收一封验证邮件，SMTP 返回 messageId，`state: 'confirmed'`）均成功。imapflow/nodemailer 与 QQ 服务器的协议对接得到生产端点验证；`verification` 维持 `conditional`（网络依赖型提供商的诚实标注，不因一次读回翻转）。
+
 ## 已知限制
 
 - `QQMailProvider` 的网络路径未经本机验证（需授权码，live 门控待执行）——协议映射逻辑（envelope→条目、游标、错误映射）已离线固定，live 结果待补记。

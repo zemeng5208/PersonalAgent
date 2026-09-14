@@ -182,6 +182,7 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；PR #
 - 2026-09-09：完成接口冻结评估。只冻结 Core Runtime Profile 1；事件生命周期、Host、Model/Agent/Tool、连接器、Evidence/Artifact 和持续授权保持 `provisional`，无生产提供者的设置、语音、知识/记忆、MCP/Skills、Windows、AgentArts 与分发接口列为 `unavailable`。
 - 2026-09-09：按新分工拆分 MOD-04A/04B，新增 MOD-27～32，并接受核心认知依赖倒置和 AgentArts 本地信任边界；这些新接口和模块尚未实现，不能因文档完成而提升状态。
 - 2026-09-09：确认华为 ICT 创新赛 AgentArts 赛题；新增 Competition Profile 与 ADR-0007，当前只实施比赛主路径，Local Profile 仅可选留存现有代码，不新增且不进入比赛退出条件。
+- 2026-09-13：MOD-21「QQ 邮箱」真实链路验证完成。用户开启 IMAP/SMTP 并提供授权码后执行门控命令：mail 测试 22/22 全过（0 失败 0 跳过）——只读读回（真实 IMAP 登录 imap.qq.com:993、列文件夹、拉取 5 封、uidValidity 捕获）与真实 SMTP 发送（smtp.qq.com:465 自发自收一封验证邮件，SMTP 返回 messageId、state confirmed）均成功。imapflow/nodemailer 与 QQ 服务器的协议对接得到生产端点验证，补记为 live 证据；manifest 维持 conditional（网络依赖型提供商的诚实标注）。授权码仅经环境变量使用，未进仓库；已提醒用户验证后重新生成。ROADMAP 相对链接检查通过。
 - 此记录不构成任何运行时能力通过证明。
 
 ## 5. 继续入口
