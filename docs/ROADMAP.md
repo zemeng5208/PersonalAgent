@@ -109,7 +109,7 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；PR #
 | MOD-21 | M3 | todo | `Potatos498` 已登记，未授权启动 |
 | MOD-22 | M3 | review | `Potatos498` / PR #8；RSS 2.0/Atom 增量、去重、脱敏和 Fake 验收已完成，当前与最新 main 冲突，等待负责人更新分支后合并 |
 | MOD-23 | M3 | todo | `Potatos498` 已登记，未授权启动 |
-| MOD-24 | M2 | todo | `Potatos498` 已登记，未授权启动 |
+| MOD-24 | M2 | review | `Potatos498` / 分支 `feat/mod-24-research`，指定 `goo122` 非作者评审；模块设计见 [mod-24](modules/mod-24.md)。交付 `packages/connectors/research`：OpenAlex 学术源（免 key，实测可达）＋Fake 夹具；材料三披露（来源/发布时间/获取时间）；**失败/过期区分**（错误照实、缓存三态 fresh/fetched/stale+lastError、材料过旧标 stale 仍返回）；无发布时间回退抓取时刻并显式标注；工具 `research.search` 只读（scope `research:read`）。实测：research 11 项（10 离线＋1 门控 live，`PA_RESEARCH_LIVE=1` 全过含真实 OpenAlex 读回）。通用 web 搜索（Bing 需 key）与网页抓取为后续提供商工作包；Runtime 接线归 `goo122` |
 | MOD-25 | M2 | done | `Potatos498` / PR #4、#12、#23 与 Runtime 装配 PR #9 已合并；GeoNames 增强下 26 个世界大城市简体查询 26/26 高置信，真实门控测试 66/66；manifest 仍为 `conditional`，不等于长期生产稳定性验收 |
 | MOD-26 | M4 起逐平台验收 | todo | `Potatos498` 已登记，未授权启动 |
 | MOD-27 | M1.6 | review | `zemeng` 领域核心 PR #37、`goo122` 存储 PR #38 已合并；版本图、Fake、SQLite 原子提交及重启读回已离线验证；真实事实流、消费者接线和数据删除未完成 |

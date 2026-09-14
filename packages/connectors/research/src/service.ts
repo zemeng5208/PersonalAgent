@@ -69,23 +69,28 @@ export class ResearchService {
   async search(accountRef: string, query: string, options: {limit?: number; signal?: AbortSignal}): Promise<ResearchResult> {
     const limit = options?.limit ?? 10;
     if (typeof query !== 'string' || query.trim().length === 0) throw new ProtocolError('INVALID_ARGUMENT', 'Query must be a non-empty string');
-    const cacheKey = `${this.provider.providerKind}|${limit}|${query.trim().toLowerCase()}`;
+    // 缓存键含 accountRef（goo122 2026-09-14 复审）：同一 service 服务多账号时不得串结果。
+    const cacheKey = `${this.provider.providerKind}|${accountRef}|${limit}|${query.trim().toLowerCase()}`;
     const now = this.options.now();
     const cached = this.cache.get(cacheKey);
     const cacheFresh = cached !== undefined && now - cached.fetchedAtMs < this.cacheTtlMs;
 
     let materials: ResearchMaterial[];
     let state: ResearchResult['cache']['state'];
+    /** 实际提供本次材料的数据抓取时刻：fresh/stale 来自缓存条目，fetched 是现在。 */
+    let servedAtMs: number;
     let lastError: ResearchResult['cache']['lastError'];
     if (cacheFresh && cached !== undefined) {
       materials = cached.materials;
       state = 'fresh';
+      servedAtMs = cached.fetchedAtMs;
     } else {
       try {
         const searchArgs: ResearchSearchInput = {query, limit};
         if (options?.signal !== undefined) searchArgs.signal = options.signal;
         materials = await this.provider.search(accountRef, searchArgs);
         state = 'fetched';
+        servedAtMs = now;
         if (this.cache.size >= CACHE_LIMIT) {
           const oldest = this.cache.keys().next().value;
           if (oldest !== undefined) this.cache.delete(oldest);
@@ -96,6 +101,7 @@ export class ResearchService {
         if (protocolError !== undefined && protocolError.retryable && cached !== undefined) {
           materials = cached.materials;
           state = 'stale';
+          servedAtMs = cached.fetchedAtMs;
           lastError = {code: protocolError.code, message: protocolError.message, retryable: true};
         } else if (protocolError !== undefined) {
           throw protocolError;
@@ -105,7 +111,10 @@ export class ResearchService {
       }
     }
 
-    const fetchedAt = this.isoNow();
+    // fetchedAt/ageMs 诚实反映所服务数据的真实抓取时刻与年龄（goo122 2026-09-14 复审）：
+    // fresh＝缓存时刻与在缓年龄；fetched＝现在、年龄 0；stale＝缓存原始时刻与大年龄，不伪装新鲜。
+    const fetchedAt = this.isoMs(servedAtMs);
+    const cacheAgeMs = Math.max(0, now - servedAtMs);
     const results: MaterialResult[] = materials.slice(0, limit).map(material => {
       const record = this.materialToItem(material, accountRef, fetchedAt);
       const ageMs = material.publishedAt === null ? 0 : Math.max(0, now - Date.parse(material.publishedAt));
@@ -119,7 +128,7 @@ export class ResearchService {
       cache: {
         state,
         fetchedAt,
-        ageMs: cached === undefined ? 0 : Math.max(0, now - cached.fetchedAtMs),
+        ageMs: cacheAgeMs,
         ttlMs: this.cacheTtlMs,
       },
     };
@@ -156,6 +165,10 @@ export class ResearchService {
 
   private isoNow(): string {
     return `${new Date(this.options.now()).toISOString().slice(0, 19)}.000Z`;
+  }
+
+  private isoMs(ms: number): string {
+    return `${new Date(ms).toISOString().slice(0, 19)}.000Z`;
   }
 }
 

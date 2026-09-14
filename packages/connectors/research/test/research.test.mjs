@@ -191,3 +191,65 @@ test('缓存键含 limit：limit=1 后 limit=3 不得命中同键只回 1 条（
   assert.equal(second.cache.state, 'fetched', '不同 limit 是不同缓存键，重新检索');
   assert.equal(second.results.length, 3, '拿到请求的全部 3 条而非缓存里的 1 条');
 });
+
+test('非法日历日期（2026-99-99）降级为无发布时间，不再抛 RangeError（goo122 09-14）', async () => {
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      results: [
+        {id: 'https://openalex.org/W999', display_name: 'Bad date paper', publication_date: '2026-99-99'},
+        {id: 'https://openalex.org/W1000', display_name: 'Good date paper', publication_date: '2026-01-15'},
+      ],
+    }),
+  });
+  const provider = new OpenAlexProvider({fetchImpl});
+  const service = new ResearchService(provider, {now: () => NOW});
+  const result = await service.search(ACCOUNT, 'anything', {limit: 5});
+  const bad = result.results.find(entry => entry.record.externalId === 'W999');
+  const good = result.results.find(entry => entry.record.externalId === 'W1000');
+  assert.ok(bad && good);
+  assert.equal(bad.publishedTimeKind, 'fetched_fallback', '非法日期按无发布时间降级');
+  assert.equal(bad.record.occurredAt, NOW && '2026-09-08T00:00:00.000Z');
+  assert.equal(bad.record.validFor, undefined);
+  assert.equal(good.publishedTimeKind, 'date_only');
+});
+
+test('缓存键含 accountRef：account-b 不得读到 account-a 的结果（goo122 09-14）', async () => {
+  let providerCalls = 0;
+  const fetchImpl = async () => {
+    providerCalls += 1;
+    return {ok: true, status: 200, json: async () => ({results: [{id: 'https://openalex.org/W1', display_name: 'Shared', publication_date: '2026-01-01'}]})};
+  };
+  const provider = new OpenAlexProvider({fetchImpl});
+  const service = new ResearchService(provider, {now: () => NOW});
+  const forA = await service.search('account-a', 'shared', {limit: 5});
+  assert.equal(providerCalls, 1);
+  const forB = await service.search('account-b', 'shared', {limit: 5});
+  assert.equal(providerCalls, 2, '不同 accountRef 是不同缓存键，各自检索');
+  assert.equal(forB.cache.state, 'fetched', '不得命中 account-a 的缓存');
+  assert.equal(forA.results[0].record.accountRef, 'account-a');
+  assert.equal(forB.results[0].record.accountRef, 'account-b');
+});
+
+test('cache.fetchedAt/ageMs 诚实：fresh 报缓存年龄；stale 报原始抓取时刻与大年龄（goo122 09-14）', async () => {
+  let offset = 0;
+  const {provider, service} = makeService({cacheTtlMs: 600_000});
+  void provider; void service;
+  // 重新构造可推进时钟的服务
+  let nowMs = NOW;
+  const provider2 = new FakeResearchProvider();
+  const service2 = new ResearchService(provider2, {now: () => nowMs, cacheTtlMs: 600_000});
+  await service2.search(ACCOUNT, 'agent', {});
+  nowMs += 300_000; // TTL 内
+  const fresh = await service2.search(ACCOUNT, 'agent', {});
+  assert.equal(fresh.cache.state, 'fresh');
+  assert.equal(fresh.cache.ageMs, 300_000, 'fresh 报真实缓存年龄（在缓 5 分钟）');
+  assert.equal(fresh.cache.fetchedAt, '2026-09-08T00:00:00.000Z', 'fetchedAt 是缓存真实抓取时刻（00:00:00 填充）');
+  nowMs += 700_000; // 越过 TTL
+  provider2.setFailure(new ProtocolError('RATE_LIMITED', 'limit', true, 60_000));
+  const stale = await service2.search(ACCOUNT, 'agent', {});
+  assert.equal(stale.cache.state, 'stale');
+  assert.equal(stale.cache.ageMs, 1_000_000, 'stale 报数据真实年龄（不伪装成刚抓）');
+  assert.equal(stale.cache.fetchedAt, '2026-09-08T00:00:00.000Z', 'stale 保留原始抓取时刻，不改写成当前时间');
+});

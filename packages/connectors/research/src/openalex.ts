@@ -98,7 +98,10 @@ function readWork(entry: unknown): ResearchMaterial | undefined {
   const externalId = id.startsWith('https://openalex.org/') ? id.slice('https://openalex.org/'.length) : id;
   const material: ResearchMaterial = {externalId, title, publishedAt: null, authors: []};
   if (typeof record.publication_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(record.publication_date)) {
-    material.publishedAt = `${record.publication_date}T00:00:00.000Z`;
+    // 2026-99-99 这类通过正则但日历不存在的值不能留给下游：Date.parse 为 NaN，
+    // 后续 toISOString 会抛 RangeError。解析失败按「无发布时间」处理，诚实降级。
+    const instant = Date.parse(`${record.publication_date}T00:00:00.000Z`);
+    if (Number.isFinite(instant)) material.publishedAt = `${record.publication_date}T00:00:00.000Z`;
   }
   if (Array.isArray(record.authorships)) {
     for (const authorship of record.authorships) {
