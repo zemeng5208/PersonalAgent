@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  **合成夹具，非真实源响应。** 用途：固定四条时间/去重退化路径，以及顺序与回填。
+
+  覆盖点：
+  1. **命名空间日期**：item 用 dc:date（RFC 3339 带 +08:00 偏移）而没有 pubDate。
+     Dublin Core 的 date 在 RSS item 上按惯例表示发布时间，故 occurredAtKind 取
+     item_published。解析器 removeNSPrefix:false，标签名原样保留为 "dc:date"。
+  2. **回退到 feed 级构建时间**：第 3 条 item 既无 pubDate 也无 dc:date，只能用 channel 的
+     lastBuildDate，occurredAtKind 必须标注为 feed_build —— 不能伪装成条目发布时间，
+     也**不能跳过**（有可退的时间就投递并如实标注，沿用 MOD-25 的 publishedTimeKind 模式）。
+     「连 feed 级时间都没有、必须跳过并记入 skipped[]」的路径由 no-key-no-date.xml 覆盖。
+  3. **回填与乱序**：文档顺序是 09-05、09-01、09-04、09-02、09-02、09-02，**不是**时间降序；
+     其中 09-01 那条是回填条目（发布时刻早于本批最新条目）。实现必须按 occurredAt
+     排序而不是信任文档顺序，且回填条目不得被丢弃 —— 这正是游标不用 watermark 的原因。
+     最后两条时间完全相同，用于检验排序稳定（同刻按文档顺序）且 dedupeKey 不冲突。
+  4. **CDATA 与实体混用**：description 同时含 CDATA 段与转义标记。
+     实测 cdataPropName 未设置时多段 CDATA 会与相邻文本合并成一个值，且 CDATA 内的
+     &amp; 原样保留。纯文本摘要的顺序必须是**先解实体、再去标签**：少数派真实源的
+     &lt;a href=&#34;…&#34;&gt;查看全文&lt;/a&gt; 若先去标签，标记会原样漏进摘要。
+-->
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>退化路径夹具</title>
+    <link>https://example.com/fallback</link>
+    <description>覆盖 dc:date、feed_build 回退、回填条目与乱序</description>
+    <lastBuildDate>Sat, 05 Sep 2026 18:00:00 +0800</lastBuildDate>
+    <item>
+      <title>用 dc:date 而不是 pubDate</title>
+      <link>https://example.com/fallback/dc-date</link>
+      <dc:date>2026-09-05T09:30:00+08:00</dc:date>
+      <description>只有 Dublin Core 日期。</description>
+    </item>
+    <item>
+      <title>回填条目：发布时刻早于本批最新条目</title>
+      <link>https://example.com/fallback/backdated</link>
+      <pubDate>Tue, 01 Sep 2026 08:00:00 +0800</pubDate>
+      <description><![CDATA[<p>这条是补发的。</p>]]>补发的说明文字。</description>
+    </item>
+    <item>
+      <title>无自身时间，只能回退到 feed 级 lastBuildDate</title>
+      <link>https://example.com/fallback/no-item-date</link>
+      <description>没有 pubDate 也没有 dc:date。</description>
+    </item>
+    <item>
+      <title>乱序：时间上介于前两条之间</title>
+      <link>https://example.com/fallback/out-of-order</link>
+      <pubDate>Fri, 04 Sep 2026 12:00:00 +0800</pubDate>
+      <content:encoded><![CDATA[<p>带命名空间的正文元素。</p>]]></content:encoded>
+    </item>
+    <item>
+      <title>时间同为 09-02，用于检验稳定排序</title>
+      <link>https://example.com/fallback/stable-sort</link>
+      <pubDate>Wed, 02 Sep 2026 12:00:00 +0800</pubDate>
+      <description>与下一条同刻。</description>
+    </item>
+    <item>
+      <title>时间同为 09-02，用于检验稳定排序</title>
+      <link>https://example.com/fallback/stable-sort-2</link>
+      <pubDate>Wed, 02 Sep 2026 12:00:00 +0800</pubDate>
+      <description>同刻但 link 不同，dedupeKey 不应冲突。</description>
+    </item>
+  </channel>
+</rss>

@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<!--
+  夹具来源：2026-09-06 对 https://36kr.com/feed 的真实响应。
+
+  这是「HTTP 200 但 body 不是订阅源」的真实案例，必须映射为 EXTERNAL_FAILURE
+  且 retryable:false，不能当成源不可用去重试，也不能把 HTML 当 feed 解析出空结果。
+
+  原始 body 17501 字节：第 1 行 <!DOCTYPE html>，第 2 行 <html lang="en">，
+  第 8 行是 1868 字符的内联 <style>，**第 9 行是 14178 字符的混淆反爬 JavaScript**，
+  全文含 25 个裸 & 且**零个合法实体引用**。此处截断为可读长度，但刻意保留三个
+  决定行为的真实特征：
+
+  1. 首个元素名是 html，不是 rss 也不是 feed —— 根元素检查据此判定「不是订阅源」；
+  2. 内联 <style> 与 <script> 中的裸 &（原文即如此）—— XMLValidator 对该 body 的真实
+     判定是 {"err":{"code":"InvalidChar","msg":"char '&' is not expected.","line":9,"col":542}}，
+     而 XMLParser 宽松、不抛错，仍解析出根 html。因此**根元素检查必须先于 XML 校验**，
+     否则本例会被误报成「XML 畸形」而不是「不是订阅源」；
+  3. <meta>/<link> 等 HTML 空元素写法。
+
+  相对原始响应：截断 <style> 与 <script> 正文，删除混淆 JS 的其余部分；结构与裸 & 保留。
+-->
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<link rel="icon" href="data:;base64,=">
+	<style>* { box-sizing: border-box; } html, body { height: 100%; } body { margin: 0; background: #fff; color: #0c0d0e; } .page { min-height: 100vh; padding: min(300px, 22vh) 20px 40px; } .card { width: 432px; max-width: 100%; }</style>
+	<script>var _0x236cec=0,_0x4e62ce=1;~_0x236cec&&(_0x4e62ce=_0x33149d%(-0xce3*0x2+-0x2*-0x97f+0x4*0x1b3)?_0x4e62ce*(-0x102f+0x3):_0x4e62ce);</script>
+</head>
+
+<body>
+	<div class="page"><div class="card"><h1>36氪</h1></div></div>
+</body>
+
+</html>

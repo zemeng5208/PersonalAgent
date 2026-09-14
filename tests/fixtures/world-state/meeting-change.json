@@ -1,0 +1,130 @@
+{
+  "fixtureFormat": "mod-09a-contract-fixture/1",
+  "synthetic": true,
+  "namespace": "fixture/person-a",
+  "allowedSensitivity": ["public", "private"],
+  "facts": [
+    {
+      "id": "meeting",
+      "revision": 1,
+      "summary": "Synthetic meeting at 15:00",
+      "sourceRef": "fixture/calendar/meeting-1",
+      "observedAt": "2026-09-12T08:00:00.000Z",
+      "validFrom": "2026-09-13T07:00:00.000Z",
+      "validUntil": "2026-09-13T08:00:00.000Z",
+      "sensitivity": "private",
+      "state": "active"
+    },
+    {
+      "id": "meeting",
+      "revision": 2,
+      "summary": "Synthetic meeting corrected to 17:00",
+      "sourceRef": "fixture/calendar/meeting-1",
+      "observedAt": "2026-09-12T09:00:00.000Z",
+      "validFrom": "2026-09-13T09:00:00.000Z",
+      "validUntil": "2026-09-13T10:00:00.000Z",
+      "sensitivity": "private",
+      "state": "active",
+      "corrects": {"id": "meeting", "revision": 1}
+    },
+    {
+      "id": "meeting",
+      "revision": 3,
+      "summary": "Synthetic meeting withdrawn",
+      "sourceRef": "fixture/calendar/meeting-1",
+      "observedAt": "2026-09-12T10:00:00.000Z",
+      "validFrom": "2026-09-13T09:00:00.000Z",
+      "validUntil": "2026-09-13T10:00:00.000Z",
+      "sensitivity": "private",
+      "state": "withdrawn",
+      "corrects": {"id": "meeting", "revision": 2}
+    },
+    {
+      "id": "unrelated-weather",
+      "revision": 1,
+      "summary": "Synthetic unrelated weather fact",
+      "sourceRef": "fixture/weather/city-1",
+      "observedAt": "2026-09-12T08:30:00.000Z",
+      "validFrom": "2026-09-13T00:00:00.000Z",
+      "validUntil": "2026-09-14T00:00:00.000Z",
+      "sensitivity": "public",
+      "state": "active"
+    },
+    {
+      "id": "restricted-note",
+      "revision": 1,
+      "summary": "Synthetic restricted content",
+      "sourceRef": "fixture/private/note-1",
+      "observedAt": "2026-09-12T08:45:00.000Z",
+      "validFrom": "2026-09-12T00:00:00.000Z",
+      "validUntil": "2026-09-14T00:00:00.000Z",
+      "sensitivity": "restricted",
+      "state": "active"
+    }
+  ],
+  "graphSeeds": [
+    {"id": "attend", "kind": "goal", "dependsOn": {"id": "meeting", "revision": 1}},
+    {"id": "depart", "kind": "decision", "dependsOn": {"id": "attend", "revision": 1}},
+    {"id": "remind", "kind": "plan", "dependsOn": {"id": "depart", "revision": 1}},
+    {"id": "unrelated-plan", "kind": "plan", "dependsOn": {"id": "unrelated-weather", "revision": 1}}
+  ],
+  "changes": [
+    {"sequence": 1, "eventId": "fixture-change-1", "kind": "created", "fact": {"id": "meeting", "revision": 1}},
+    {"sequence": 2, "eventId": "fixture-change-2", "kind": "corrected", "fact": {"id": "meeting", "revision": 2}},
+    {"sequence": 2, "eventId": "fixture-change-2", "kind": "corrected", "fact": {"id": "meeting", "revision": 2}, "duplicate": true},
+    {"sequence": 3, "eventId": "fixture-change-3", "kind": "withdrawn", "fact": {"id": "meeting", "revision": 3}}
+  ],
+  "queryProbes": [
+    {
+      "id": "meeting-effective-at-snapshot-2",
+      "request": {"factId": "meeting", "at": "2026-09-13T09:30:00.000Z", "snapshotWatermark": 2, "sensitivity": ["public", "private"], "limit": 10},
+      "expected": {"status": "OK", "snapshotWatermark": 2, "refs": [{"id": "meeting", "revision": 2}]}
+    },
+    {
+      "id": "fact-history-at-revision",
+      "request": {"factId": "meeting", "revision": 1},
+      "expected": {"status": "OK", "refs": [{"id": "meeting", "revision": 1}]}
+    },
+    {
+      "id": "no-match-is-empty",
+      "request": {"sourceRef": "fixture/source/no-match", "snapshotWatermark": 3},
+      "expected": {"status": "OK", "snapshotWatermark": 3, "refs": []}
+    },
+    {"id": "missing-bound-namespace", "fault": "namespace_missing", "expected": {"status": "NOT_FOUND"}},
+    {"id": "invalid-limit", "request": {"limit": 0}, "expected": {"status": "INVALID_ARGUMENT"}},
+    {
+      "id": "restricted-scope-denied",
+      "request": {"factId": "restricted-note", "sensitivity": ["public", "private"]},
+      "expected": {"status": "FORBIDDEN", "revealsExistence": false}
+    },
+    {"id": "storage-unavailable", "fault": "storage_unavailable", "expected": {"status": "STORAGE_UNAVAILABLE", "partialSuccess": false}},
+    {"id": "deadline-exceeded", "fault": "deadline_exceeded", "expected": {"status": "TIMEOUT", "partialSuccess": false}},
+    {"id": "cancelled", "fault": "cancelled", "expected": {"status": "CANCELLED", "partialSuccess": false}}
+  ],
+  "changeFeedProbes": [
+    {
+      "id": "fixed-watermark-pagination",
+      "startAfterSequence": 0,
+      "pageSize": 2,
+      "watermark": 3,
+      "pages": [["fixture-change-1", "fixture-change-2"], ["fixture-change-3"]],
+      "concurrentlyArriving": {"sequence": 4, "eventId": "fixture-change-4"},
+      "excludedUntilNextRead": ["fixture-change-4"]
+    },
+    {"id": "restart-after-confirmed-cursor", "lastConfirmedSequence": 2, "expectedNextEventId": "fixture-change-3"},
+    {"id": "processing-failure-does-not-confirm", "lastConfirmedSequence": 1, "deliveredSequence": 2, "processingResult": "FAILED", "expectedConfirmedSequence": 1},
+    {"id": "duplicate-event-idempotent", "eventId": "fixture-change-2", "deliveries": 2, "expectedAppliedCount": 1},
+    {"id": "sequence-gap", "lastConfirmedSequence": 1, "nextObservedSequence": 3, "expected": "CURSOR_GAP", "advancesCursor": false},
+    {"id": "expired-cursor", "fault": "cursor_expired", "expected": "RECONCILIATION_REQUIRED", "silentRestart": false},
+    {"id": "cancelled-subscription", "fault": "cancelled", "expected": "CANCELLED", "deliveriesAfterCancellation": 0}
+  ],
+  "gapProbe": {"lastConfirmedSequence": 1, "nextObservedSequence": 3, "expected": "CURSOR_GAP"},
+  "expectations": {
+    "afterCorrection": {"recheck": ["attend", "depart", "remind"], "keep": ["unrelated-plan"]},
+    "afterGoalRebindOnly": {"recheck": ["depart", "remind"], "keep": ["attend", "unrelated-plan"]},
+    "afterFullExplicitRebind": {"recheck": [], "keep": ["attend", "depart", "remind", "unrelated-plan"]},
+    "restrictedVisible": false,
+    "duplicateEventAppliedCount": 1,
+    "withdrawalPreservesHistory": true
+  }
+}

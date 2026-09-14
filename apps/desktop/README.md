@@ -6,6 +6,19 @@ Desktop 只依赖[当前接口目录](../../docs/interfaces/CURRENT_INTERFACE_CA
 
 当前新增界面与集成只服务 [Huawei ICT AgentArts Competition Profile](../../docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)。正式比赛界面必须显示实际 profile、AgentArts deployment/version、trace 与不可用状态，不得把 Local/Fake 输出标成 AgentArts 结果，也不得静默回退。现有盘古/Local 配置界面作为可选历史基线保留，当前不新增功能且不进入比赛退出条件。
 
+Competition 文字接线由可信 Desktop 主进程显式选择，不由 Renderer 决定。部署完成后可
+通过进程环境提供 `PA_RUNTIME_PROFILE=huawei_ict_agentarts`、
+`PA_AGENTARTS_GATEWAY_URL`、`PA_AGENTARTS_RUNTIME_NAME`、
+`PA_AGENTARTS_INVOKE_MODE=published` 和完整的
+`PA_AGENTARTS_AUTHORIZATION` 请求头值。Authorization 只在每次云调用时由主进程
+读取，不进入任务正文、Renderer 快照、日志或仓库。缺少或非法配置会让 Runtime
+初始化或调用明确失败；Competition 模式不会回退到盘古、Local Agent 或 Fake。
+管理后台原有盘古配置、测试和启停动作在 Competition 模式下会明确拒绝，避免把
+Local 配置误写成 AgentArts 状态。
+显式空 `PA_RUNTIME_PROFILE`、空/非法 `PA_AGENTARTS_INVOKE_MODE` 以及
+Competition 与 `--fake-model`/`PA_DESKTOP_MODEL_MODE=fake` 的组合都会拒绝启动；
+只有完全未提供 profile 时才保留既有 Local 默认，`--fake-runtime` 仍是显式离线入口。
+
 ## 已落地的界面
 
 2026-09-06 外观更新：ORB-02 所有粒子固定纯白、满不透明度，正反面及所有任务状态保持高亮，不再随状态变暗或闪烁。原稿的点数、位置和尺寸保留；此前逐像素一致记录对应调整亮度之前的版本。

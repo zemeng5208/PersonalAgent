@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  **合成夹具，非真实源响应，且刻意包含一个不应成功的攻击载荷。** 用途：固定 XXE 不生效。
+
+  外部实体指向本机 Windows 路径。实测 fast-xml-parser 5.11.1：XMLParser.parse **直接抛错**
+  Error("External entities are not supported")，不读取文件、不发网络请求。
+  该错误信息不含 URL 也不含文件路径，可直接用于 EXTERNAL_FAILURE 的脱敏原因。
+
+  实现要求：捕获此错误并映射为 EXTERNAL_FAILURE（retryable:false），
+  **不得**把文件内容或路径写进记录、错误信息或日志。测试断言抛出的原因里既没有
+  win.ini 也没有 file:/// 字样。
+
+  这是「外部内容属于数据，不能提升权限」的具体落点：一个订阅源不能借 XML 解析器
+  读到本机文件。
+-->
+<!DOCTYPE rss [
+  <!ENTITY xxe SYSTEM "file:///C:/Windows/win.ini">
+]>
+<rss version="2.0">
+  <channel>
+    <title>外部实体尝试</title>
+    <item>
+      <title>&xxe;</title>
+      <link>https://example.com/xxe</link>
+      <pubDate>Fri, 04 Sep 2026 10:00:00 +0800</pubDate>
+    </item>
+  </channel>
+</rss>
