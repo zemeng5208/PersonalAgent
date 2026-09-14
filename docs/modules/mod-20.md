@@ -6,7 +6,7 @@
 - GitHub 负责人：`Potatos498`
 - 评审者：`goo122`（非作者）
 - 独占目录：`packages/productivity/`、`packages/connectors/calendar/`
-- 当前状态：review（源码完成，待非作者评审；分支 `feat/mod-20-productivity`）
+- 当前状态：review（PR #22 已由 `goo122` 批准并合并为 `cdb69a2`；离线工作包已集成，Runtime 调度/通知接线和真实日历账号仍未完成）
 
 ## 职责
 

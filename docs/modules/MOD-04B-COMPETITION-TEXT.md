@@ -1,8 +1,8 @@
 # MOD-04B：Competition 文字协调消费实现
 
-- 负责人：zemeng；待非作者评审。状态：review（本地实现已验证，待评审与集成）。
-- Profile：huawei_ict_agentarts；实现基线：PR #38 / `87ee444`；已同步 PR #39 /
-  `188f925`。
+- 负责人：zemeng；工作包状态：done（PR #42 已批准并合并为 `243c0e2`）；MOD-04B 整体仍 in_progress。
+- Profile：huawei_ict_agentarts；实现基线：PR #38 / `87ee444`，后续已由 PR #41/#43
+  消费到 AgentArts HTTP 与 Runtime/Desktop 离线首片。
 - 工作树：`.worktrees/zemeng-mod04b-coordinator`；分支：`codex/zemeng/mod04b-coordinator`。
 - 修改范围：`packages/coordination`、本说明及 ROADMAP 的继续入口。
 - 复用 #36 的 provisional CoordinationPort / CloudAgentPort；原有请求、结果形状不变。
@@ -48,4 +48,4 @@ provider 自报的 `CANCELLED`/`TIMEOUT` 也按 `EXTERNAL_FAILURE` 处理，生�
 - `git diff --check` 通过。未运行真实 AgentArts 或 Electron UI 验收；本包无云端和界面改动。
 - 环境 Node 26.3.0 / npm 11.16.0；仓库指定 Node 24.15.x / npm 11.12.x，
   指定版本环境尚未验证。锁文件未改动，未升级依赖。
-- 尚未推送、创建 PR 或发送非作者评审请求；端口继续 provisional。
+- 本工作包已推送、评审并合并；端口继续 provisional，真实 AgentArts 与工具闭环仍需独立验收。

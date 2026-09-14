@@ -2,7 +2,7 @@
 
 - 负责人：zemeng；profile：huawei_ict_agentarts；基线：5944061（PR #36）。
 - 分支：`codex/zemeng/mod27-goal-graph`；工作树：`.worktrees/zemeng-mod27-goal-graph`。
-- 状态：review；本地增量已实现并验证，待非作者评审与集成；提交/PR 状态以 Git 为准。
+- 工作包状态：done（PR #37 已批准并合并为 `41ea79d`）；MOD-27 整体仍为 review。
 - 用户当前约束：云试用审批未通过，暂停云工作，先做本地模块。
 - 所有权：`packages/goals` 属于 zemeng；公共 Schema、Runtime、Memory、存储适配及根配置/锁文件由 goo122 负责。
 
@@ -42,5 +42,5 @@ JSON 往返、历史查询和内容恢复、损坏快照拒绝、有效期边界
 环境为 Node 26.3.0 / npm 11.16.0，与项目要求的 Node 24.15.x / npm 11.12.x
 不同，目标版本兼容性仍需集成环境确认。根配置和锁文件未修改。
 
-下一步由 MOD-28 消费图谱实现受影响节点分析；生产持久化、Memory 变更流、
-Runtime/界面接线和跨重启验收仍未交付。本增量不代表整个 MOD-27 完成。
+MOD-28 持久图消费者已随 PR #40 合并；Memory 变更流、Runtime/界面接线和真实数据
+验收仍未交付。本工作包完成不代表整个 MOD-27 完成。
