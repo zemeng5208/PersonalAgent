@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  **合成夹具，非真实源响应。** 用途：固定 Atom 侧的时间退化与 link 选择规则。
+
+  覆盖点：
+  1. **只有 <updated> 没有 <published>**：Atom 规范里 published 是可选的，很多源只给
+     updated。此时 occurredAt 取 updated，但 occurredAtKind 必须标注为 item_updated
+     —— 修改时间不是发布时间，不能冒充（DEVELOPMENT_PROTOCOL：不把获取时间当发布时间，
+     同理也不能把更新时间当发布时间）。
+  2. **published 与 updated 并存**：优先 published，kind 为 item_published。
+     阮一峰真实源即此情况，且两者取值不同（09-03 发布、09-05 更新）。
+  3. **link 选择**：Atom 的 <link> 可以出现多次，靠 rel 区分。规则是取 rel="alternate"；
+     没有 alternate 时取没有 rel 的那条；再没有就取第一条。rel="self"/"enclosure"/"hub"
+     都不是正文链接。实测 ignoreAttributes:false 时属性名为 @_rel / @_href，
+     且多个 link 会被 isArray 归一化成数组，单个 link 也必须走同一条取值路径。
+  4. **entry 无 id 但有 link** → dedupeKeyKind 退化到 item_link。
+  5. **feed 级 <updated> 作为最后的时间退路**，kind 为 feed_build。
+  6. 命名空间默认 xmlns 会让 rss 侧的属性出现在 @_xmlns 上，解析不得因此失败。
+-->
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Atom 退化路径夹具</title>
+  <link rel="alternate" type="text/html" href="https://example.com/atom" />
+  <link rel="self" type="application/atom+xml" href="https://example.com/atom.xml" />
+  <id>tag:example.com,2026:/atom//1</id>
+  <updated>2026-09-05T14:48:27Z</updated>
+
+  <entry>
+    <title>published 与 updated 并存，应取 published</title>
+    <link rel="alternate" type="text/html" href="https://example.com/atom/both" />
+    <id>tag:example.com,2026:/atom//1.1</id>
+    <published>2026-09-03T23:59:05Z</published>
+    <updated>2026-09-05T14:48:27Z</updated>
+    <summary>两条时间取值不同，便于断言选中的是哪一条。</summary>
+  </entry>
+
+  <entry>
+    <title>只有 updated，kind 必须是 item_updated</title>
+    <link rel="self" href="https://example.com/atom/updated-only.xml" />
+    <link rel="alternate" href="https://example.com/atom/updated-only" />
+    <id>tag:example.com,2026:/atom//1.2</id>
+    <updated>2026-09-04T08:00:00Z</updated>
+  </entry>
+
+  <entry>
+    <title>无 id，退化到 link</title>
+    <link href="https://example.com/atom/no-id" />
+    <updated>2026-09-02T08:00:00Z</updated>
+  </entry>
+
+  <entry>
+    <title>自身无任何时间，回退到 feed 级 updated</title>
+    <link rel="alternate" href="https://example.com/atom/no-time" />
+    <id>tag:example.com,2026:/atom//1.4</id>
+  </entry>
+
+  <entry>
+    <title>只有 enclosure 链接，没有 alternate</title>
+    <link rel="enclosure" href="https://example.com/atom/enclosure.mp3" />
+    <id>tag:example.com,2026:/atom//1.5</id>
+    <updated>2026-09-01T08:00:00Z</updated>
+  </entry>
+</feed>

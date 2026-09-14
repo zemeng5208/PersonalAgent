@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  夹具来源：2026-09-06 对 https://www.ruanyifeng.com/blog/atom.xml 的真实响应（HTTP 200，
+  Content-Type: application/xml，ETag: "11425-65abd7a6ed870-gzip"，
+  Last-Modified: Sat, 05 Sep 2026 14:48:29 GMT，原始 45184 字节、3 条 entry）。
+
+  相对原始响应只做两处改动，均为可读性与合规，不改变解析语义：
+  1. 每条 entry 的 <content> 正文被截断（原文各约 350 行周刊正文），保留其真实结构：
+     type="html"、xml:lang、xml:base，以及**同一个人元素内多段并列 CDATA**（原文即如此，
+     解析器在 cdataPropName 未设置时会把它们合并成一个文本值，这是必须覆盖的真实情况）。
+  2. 原始正文含第三方个人邮箱，按 AGENTS.md「文档与公开工件不包含邮箱」删除；被截断的
+     段落本身不含邮箱，故无需替换。
+
+  保留的真实结构特征：feed 级 <id>/<updated>/<subtitle>（含 &apos; 实体）/<generator uri>；
+  entry 级 <published> 与 <updated> 并存且取值不同；<id> 为 tag: URI 形式；
+  <link rel="alternate"> 带 type 与 href 属性；<author> 含 <name> 与 <uri>；
+  <category> 带 term 与 scheme 属性；<summary> 以 ... 结尾。
+-->
+<feed xmlns="http://www.w3.org/2005/Atom">
+    <title>阮一峰的网络日志</title>
+    <link rel="alternate" type="text/html" href="http://www.ruanyifeng.com/blog/" />
+    <link rel="self" type="application/atom+xml" href="http://www.ruanyifeng.com/blog/atom.xml" />
+    <id>tag:www.ruanyifeng.com,2010-04-11:/blog//1</id>
+    <updated>2026-09-05T14:48:27Z</updated>
+    <subtitle>Ruan YiFeng&apos;s Blog</subtitle>
+    <generator uri="http://www.sixapart.com/movabletype/">Movable Type 5.2.2</generator>
+
+<entry>
+    <title>科技爱好者周刊（第 411 期）：OpenClaw 2.0 是一个缩影</title>
+    <link rel="alternate" type="text/html" href="http://www.ruanyifeng.com/blog/2026/09/weekly-issue-411.html" />
+    <id>tag:www.ruanyifeng.com,2026:/blog//1.2555</id>
+
+    <published>2026-09-03T23:59:05Z</published>
+    <updated>2026-09-05T14:48:27Z</updated>
+
+    <summary>这里记录每周值得分享的科技内容，周五发布。...</summary>
+    <author>
+        <name>阮一峰</name>
+        <uri>http://www.ruanyifeng.com</uri>
+    </author>
+
+        <category term="Weekly" scheme="http://www.sixapart.com/ns/types#category" />
+
+
+    <content type="html" xml:lang="en" xml:base="http://www.ruanyifeng.com/blog/">
+        <![CDATA[<p>这里记录每周值得分享的科技内容，周五发布。</p>
+]]>
+        <![CDATA[<p>本杂志<a href="https://github.com/ruanyf/weekly">开源</a>，欢迎<a href="https://github.com/ruanyf/weekly/issues">投稿</a>。</p>
+
+<h2>封面图</h2>
+
+<p><img src="https://cdn.beekka.com/blogimg/asset/202608/bg2026082702.webp" alt="" title="" /></p>
+]]>
+        <![CDATA[<div style="color:#556677;line-height:160%;"><h3>文档信息</h3>
+<ul>
+<li>发表日期： <abbr class="published" title="2026-09-04T07:59:05+08:00">2026年9月 4日</abbr></li>
+
+</ul></div>]]>
+        <![CDATA[<div style="color:#556677;line-height:160%;"></div>]]>
+    </content>
+</entry>
+
+<entry>
+    <title>科技爱好者周刊（第 410 期）：你需要知道的 AI 三种机制</title>
+    <link rel="alternate" type="text/html" href="http://www.ruanyifeng.com/blog/2026/08/weekly-issue-410.html" />
+    <id>tag:www.ruanyifeng.com,2026:/blog//1.2554</id>
+
+    <published>2026-08-27T23:56:43Z</published>
+    <updated>2026-09-01T06:33:06Z</updated>
+
+    <summary>这里记录每周值得分享的科技内容，周五发布。...</summary>
+    <author>
+        <name>阮一峰</name>
+        <uri>http://www.ruanyifeng.com</uri>
+    </author>
+
+        <category term="Weekly" scheme="http://www.sixapart.com/ns/types#category" />
+
+
+    <content type="html" xml:lang="en" xml:base="http://www.ruanyifeng.com/blog/">
+        <![CDATA[<p>这里记录每周值得分享的科技内容，周五发布。</p>
+]]>
+        <![CDATA[<p>本杂志<a href="https://github.com/ruanyf/weekly">开源</a>。</p>
+]]>
+    </content>
+</entry>
+
+<entry>
+    <title>科技爱好者周刊（第 409 期）：程序员的职业未来</title>
+    <link rel="alternate" type="text/html" href="http://www.ruanyifeng.com/blog/2026/08/weekly-issue-409.html" />
+    <id>tag:www.ruanyifeng.com,2026:/blog//1.2553</id>
+
+    <published>2026-08-20T23:53:54Z</published>
+    <updated>2026-08-28T10:26:43Z</updated>
+
+    <summary>这里记录每周值得分享的科技内容，周五发布。...</summary>
+    <author>
+        <name>阮一峰</name>
+        <uri>http://www.ruanyifeng.com</uri>
+    </author>
+
+        <category term="Weekly" scheme="http://www.sixapart.com/ns/types#category" />
+
+
+    <content type="html" xml:lang="en" xml:base="http://www.ruanyifeng.com/blog/">
+        <![CDATA[<p>这里记录每周值得分享的科技内容，周五发布。</p>
+]]>
+    </content>
+</entry>
+
+</feed>

@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  **合成夹具，非真实源响应。** 用途：固定 dedupeKey 的三级退化链与跳过规则。
+
+  dedupeKeyKind 取值优先级：item_guid（RSS <guid> / Atom <id>）→ item_link（<link>）
+  → content_hash（对归一化后的 title+link+date+content 取 SHA-256）。三者都取不到才跳过。
+
+  逐条覆盖：
+  1. guid isPermaLink="true"（RSS 默认值，常被省略）→ item_guid，externalId 取 guid 原文。
+  2. guid isPermaLink="false" → item_guid。isPermaLink 只说明 guid 是否是可访问 URL，
+     **不影响它作为稳定标识的资格**，两种都要用。
+  3. 无 guid、有 link → item_link。少数派真实源 10 条全部是这种情况。
+  4. 无 guid、无 link、有标题与日期 → content_hash。
+  5. guid 为空白 → 视为没有 guid，退化到 link。空白标识不能当稳定 key。
+  6. 无 guid、无 link、无标题、无日期、无正文 → 既无 key 也无时间，**必须跳过**，
+     并在 skipped[] 里给出 {index, reason}；reason 只用位置与原因，不回显源内容。
+
+  externalId 是**未加命名空间**的原生取值，dedupeKey 则加
+  "source:subscriptionId:kind:" 前缀；getItem(accountRef, externalId) 按 externalId 匹配，
+  不按 dedupeKey（与 testkit 的 FakeConnector 一致）。
+-->
+<rss version="2.0">
+  <channel>
+    <title>标识退化链夹具</title>
+    <link>https://example.com/keys</link>
+    <description>覆盖 guid / link / content hash 三级退化与跳过</description>
+    <item>
+      <title>guid isPermaLink 为 true</title>
+      <link>https://example.com/keys/permalink</link>
+      <guid isPermaLink="true">https://example.com/keys/permalink</guid>
+      <pubDate>Sat, 05 Sep 2026 10:00:00 +0800</pubDate>
+    </item>
+    <item>
+      <title>guid isPermaLink 为 false</title>
+      <link>https://example.com/keys/not-permalink</link>
+      <guid isPermaLink="false">urn:uuid:60a76c80-d399-11d9-b93C-0003939e0af6</guid>
+      <pubDate>Sat, 05 Sep 2026 09:00:00 +0800</pubDate>
+    </item>
+    <item>
+      <title>无 guid，只有 link</title>
+      <link>https://example.com/keys/link-only</link>
+      <pubDate>Sat, 05 Sep 2026 08:00:00 +0800</pubDate>
+    </item>
+    <item>
+      <title>无 guid 无 link，只能算内容哈希</title>
+      <pubDate>Sat, 05 Sep 2026 07:00:00 +0800</pubDate>
+      <description>正文参与哈希计算。</description>
+    </item>
+    <item>
+      <title>guid 是空白，应退化到 link</title>
+      <link>https://example.com/keys/blank-guid</link>
+      <guid isPermaLink="false">   </guid>
+      <pubDate>Sat, 05 Sep 2026 06:00:00 +0800</pubDate>
+    </item>
+    <item>
+      <description>   </description>
+    </item>
+  </channel>
+</rss>
