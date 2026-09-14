@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  **合成夹具，非真实源响应。** 用途：固定「XML 畸形 → EXTERNAL_FAILURE 且 retryable:false」。
+
+  <title> 未闭合就用 </channel> 收尾。实测 fast-xml-parser 5.11.1 的行为：
+  XMLParser.parse **不抛错**，宽松地返回 {rss:{channel:{item:[{title:"unclosed"}]}}}，
+  即静默丢掉了后续内容；只有 XMLValidator.validate 能判定
+  {"err":{"code":"InvalidTag","msg":"Expected closing tag 'title' ..."}}。
+
+  因此实现必须**先跑 XMLValidator 再解析**，否则畸形源会被当成「只有一条条目的正常源」，
+  属于静默降级（PRD「不得静默伪造降级结果」）。根元素检查在此例通过（根是 rss），
+  所以它不能替代 XML 校验，两者都要有。
+-->
+<rss version="2.0">
+  <channel>
+    <title>畸形源</title>
+    <item>
+      <title>unclosed</title
+      <link>https://example.com/a</link>
+    </item>
+    <item>
+      <title>这一条在畸形点之后，宽松解析会静默丢掉</title>
+      <link>https://example.com/b</link>
+      <pubDate>Fri, 04 Sep 2026 10:00:00 +0800</pubDate>
+    </item>
+  </channel>
+</rss>
