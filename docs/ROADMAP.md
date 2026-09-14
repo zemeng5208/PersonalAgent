@@ -106,9 +106,9 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；PR #
 | MOD-18 | M4 | todo | `zemeng` 已确定，未启动 |
 | MOD-19 | M5 | todo | `zemeng` 已确定，未启动 |
 | MOD-20 | M2 本地提醒、M3 日历 | todo | `Potatos498` 已登记，未授权启动 |
-| MOD-21 | M3 | todo | `Potatos498` 已登记，未授权启动 |
-| MOD-22 | M3 | review | `Potatos498` / PR #8；RSS 2.0/Atom 增量、去重、脱敏和 Fake 验收已完成，当前与最新 main 冲突，等待负责人更新分支后合并 |
-| MOD-23 | M3 | todo | `Potatos498` 已登记，未授权启动 |
+| MOD-21 | M3 | review | `Potatos498` / PR #28；增量同步（uidValidity 游标）、多账号绑定、mark_seen 幂等、发送超时→unknown 先核对、QQ 真实链路已验证（22/22 含真实读回与自发自收），已获 `goo122` 两轮复审意见并全部修复，待复审合并 |
+| MOD-22 | M3 | done | `Potatos498` / PR #8 已合并（RSS 2.0/Atom 增量、趟水位线分页修复、真实源读回验证） |
+| MOD-23 | M3 | review | `Potatos498` / PR #27；通知裁定引擎（安静时段 DST 安全、暂停、聚合摘要）、单键原子状态、acknowledge 确认机制，已获 `goo122` 两轮复审意见并全部修复，待复审合并 |
 | MOD-24 | M2 | todo | `Potatos498` 已登记，未授权启动 |
 | MOD-25 | M2 | done | `Potatos498` / PR #4、#12、#23 与 Runtime 装配 PR #9 已合并；GeoNames 增强下 26 个世界大城市简体查询 26/26 高置信，真实门控测试 66/66；manifest 仍为 `conditional`，不等于长期生产稳定性验收 |
 | MOD-26 | M4 起逐平台验收 | todo | `Potatos498` 已登记，未授权启动 |
