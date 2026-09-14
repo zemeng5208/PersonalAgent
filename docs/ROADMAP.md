@@ -105,7 +105,7 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；PR #
 | MOD-17 | M2 只读、M4 治理 | todo | `zemeng` 已确定，未启动 |
 | MOD-18 | M4 | todo | `zemeng` 已确定，未启动 |
 | MOD-19 | M5 | todo | `zemeng` 已确定，未启动 |
-| MOD-20 | M2 本地提醒、M3 日历 | todo | `Potatos498` 已登记，未授权启动 |
+| MOD-20 | M2 本地提醒、M3 日历 | review | `Potatos498` / PR #22（分支 `feat/mod-20-productivity`），指定 `goo122` 非作者评审；模块设计见 [mod-20](modules/mod-20.md)。交付 `packages/productivity`（待办 CRUD 读回、DST 回拨取较早、due 改期重验提醒）与 `packages/connectors/calendar`（Fake 日历：窗口增量、跨页搜索、respond 幂等）。实测：productivity 16 项 + calendar 10 项全过；已获 `goo122` 非作者评审批准（2026-09-14），待合并 |
 | MOD-21 | M3 | todo | `Potatos498` 已登记，未授权启动 |
 | MOD-22 | M3 | review | `Potatos498` / PR #8；RSS 2.0/Atom 增量、去重、脱敏和 Fake 验收已完成，当前与最新 main 冲突，等待负责人更新分支后合并 |
 | MOD-23 | M3 | todo | `Potatos498` 已登记，未授权启动 |
