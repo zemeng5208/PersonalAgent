@@ -69,8 +69,10 @@ export class ResearchService {
   async search(accountRef: string, query: string, options: {limit?: number; signal?: AbortSignal}): Promise<ResearchResult> {
     const limit = options?.limit ?? 10;
     if (typeof query !== 'string' || query.trim().length === 0) throw new ProtocolError('INVALID_ARGUMENT', 'Query must be a non-empty string');
-    // 缓存键含 accountRef（goo122 2026-09-14 复审）：同一 service 服务多账号时不得串结果。
-    const cacheKey = `${this.provider.providerKind}|${accountRef}|${limit}|${query.trim().toLowerCase()}`;
+    // 缓存键含 accountRef 且用 JSON 结构化编码（goo122 2026-09-14 两轮复审）：
+    // `|` 拼接在 accountRef 含分隔符时可碰撞——`a|10`+limit5+`x` ≡ `a`+limit10+`5|x`，
+    // 第二次错误命中 fresh 缓存。JSON.stringify 转义分隔符，组合唯一。
+    const cacheKey = JSON.stringify([this.provider.providerKind, accountRef, limit, query.trim().toLowerCase()]);
     const now = this.options.now();
     const cached = this.cache.get(cacheKey);
     const cacheFresh = cached !== undefined && now - cached.fetchedAtMs < this.cacheTtlMs;

@@ -253,3 +253,22 @@ test('cache.fetchedAt/ageMs 诚实：fresh 报缓存年龄；stale 报原始抓�
   assert.equal(stale.cache.ageMs, 1_000_000, 'stale 报数据真实年龄（不伪装成刚抓）');
   assert.equal(stale.cache.fetchedAt, '2026-09-08T00:00:00.000Z', 'stale 保留原始抓取时刻，不改写成当前时间');
 });
+
+test('缓存键无歧义：accountRef 含分隔符 | 时不得跨字段碰撞（goo122 09-14 二轮）', async () => {
+  let providerCalls = 0;
+  const fetchImpl = async () => {
+    providerCalls += 1;
+    return {ok: true, status: 200, json: async () => ({results: [{id: 'https://openalex.org/W1', display_name: 'Hit', publication_date: '2026-01-01'}]})};
+  };
+  const provider = new OpenAlexProvider({fetchImpl});
+  const service = new ResearchService(provider, {now: () => NOW});
+  // 旧 `|` 拼接下两个组合都生成 p|a|10|5|x：第二次错误命中第一次的 fresh 缓存。
+  const first = await service.search('a|10', 'x', {limit: 5});
+  assert.equal(providerCalls, 1);
+  assert.equal(first.results[0].record.accountRef, 'a|10');
+  const second = await service.search('a', '5|x', {limit: 10});
+  assert.equal(providerCalls, 2, 'JSON 编码键无碰撞：第二次真实检索而非命中缓存');
+  assert.equal(second.cache.state, 'fetched');
+  assert.equal(second.results[0].record.accountRef, 'a');
+  assert.equal(second.results.length, 1, '结果归属正确账号');
+});
