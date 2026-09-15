@@ -401,16 +401,26 @@ test('Provider 层单飞：QQMailProvider 注入假 transporter，并发同键�
   }
 });
 
-test('复合键无歧义：accountRef 含冒号时不得与相邻账号/键碰撞（goo122 09-14 P1）', async () => {
+test('复合键无歧义：a:b+c 与 a+b:c 在旧拼接下同键，结构化编码后必须独立（goo122 09-14 复审）', async () => {
+  let providerSends = 0;
   const provider = new FakeMailProvider();
-  const serviceA = new MailService(provider, {now: () => NOW});
-  // 旧拼接下 ^G:b + c 与 ^G + :c 是同一个 mapKey：第二次会撞指纹拒绝或错误重放。
-  // 结构化编码后互相独立——第二次发送不同正文也应成功（= 无碰撞、无错误重放）。
-  const first = await serviceA.send('^G:b', {to: 'a@b.c', subject: 's', text: 't', idempotencyKey: 'c'});
+  const realSend = provider.send.bind(provider);
+  provider.send = (accountRef, input) => {
+    providerSends += 1;
+    return realSend(accountRef, input);
+  };
+  const service = new MailService(provider, {now: () => NOW});
+  // 旧算法 `${accountRef}:${key}`：'a:b'+'c' 与 'a'+'b:c' 都拼成 "a:b:c" —— 真碰撞。
+  // 第二次会错误重放第一次的结果（同输入指纹时）或撞指纹拒绝（不同输入时）。
+  // 结构化编码 JSON.stringify([accountRef, key]) 后两键不同：两次独立发送、两个不同 externalId。
+  const first = await service.send('a:b', {to: 'x@y.z', subject: 's1', text: 't1', idempotencyKey: 'c'});
+  const second = await service.send('a', {to: 'x@y.z', subject: 's1', text: 't1', idempotencyKey: 'b:c'});
   assert.equal(first.state, 'confirmed');
-  const againA = await serviceA.send('^G:b', {to: 'a@b.c', subject: 's', text: 't', idempotencyKey: 'c'});
-  assert.deepEqual(first, againA);
-  const second = await serviceA.send('^G', {to: 'a@b.c', subject: 's', text: '完全不同', idempotencyKey: ':c'});
-  assert.equal(second.state, 'confirmed', '相邻冒号组合不碰撞：独立请求正常发送');
-  assert.notDeepEqual(first, second);
+  assert.equal(second.state, 'confirmed');
+  assert.notEqual(first.externalId, second.externalId, '两个独立请求各有自己的 externalId，不是重放');
+  assert.equal(providerSends, 2, 'provider 被调用两次，不是一次（旧算法会错误命中第一次的结果）');
+  // 同键同输入重放仍然一致
+  const replay = await service.send('a:b', {to: 'x@y.z', subject: 's1', text: 't1', idempotencyKey: 'c'});
+  assert.deepEqual(first, replay);
+  assert.equal(providerSends, 2, '重放不新增 provider 调用');
 });
