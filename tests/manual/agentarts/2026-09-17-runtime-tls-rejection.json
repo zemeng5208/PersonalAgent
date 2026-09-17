@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "profile": "huawei_ict_agentarts",
+  "surface": "Runtime Application only; no Desktop or IPC",
+  "evidenceLevel": "conditional",
+  "startedAt": "2026-09-17T10:15:19.699Z",
+  "finishedAt": "2026-09-17T10:15:20.405Z",
+  "codeVersion": {
+    "runtimeHead": "291ad4aaafd9a2c9b9b1084cd61259d14c27115b",
+    "helperCommit": "ece2151df70158ca1ecdc62b3ac1a74e92558152",
+    "harnessSha256": "ff56b2748f766c222731036158abe4099cda1869efa7f21da5f180c39994ec0d"
+  },
+  "taskId": "c460c996-dd21-4eb7-8f21-07cfca96c12e",
+  "networkCallCount": 1,
+  "authorizationReadCount": 1,
+  "transportFailureCategory": "tls",
+  "firstRun": {
+    "state": "failed",
+    "errorCode": "EXTERNAL_FAILURE",
+    "verification": "unavailable",
+    "hasResult": false,
+    "evidenceRefCount": 0
+  },
+  "response": {
+    "fetchOutcome": "rejected",
+    "status": "unread",
+    "contentType": "unread",
+    "bodyOutcome": "unread",
+    "byteCountCapped": 0,
+    "chunkCountCapped": 0,
+    "eventCountCapped": 0
+  },
+  "restart": {
+    "sameDatabase": true,
+    "submittedDuringRestart": false,
+    "authorizationReadCount": 0,
+    "fetchCallCount": 0,
+    "state": "failed",
+    "errorCode": "EXTERNAL_FAILURE",
+    "verification": "unavailable"
+  },
+  "localFallbackConfigured": false,
+  "automaticRetryPerformed": false,
+  "conclusion": "This attempt failed in the TLS transport category before an HTTP response. It does not explain the earlier complete-SSE response failure.",
+  "notVerified": [
+    "specific TLS failure cause",
+    "Desktop success",
+    "earlier parser failure branch",
+    "cloud execution or billing outcome",
+    "trusted tool or Evidence loop"
+  ],
+  "security": {
+    "rawErrorRecorded": false,
+    "rawResponseSaved": false,
+    "privateInputSent": false,
+    "credentialsRecorded": false
+  }
+}
