@@ -240,6 +240,41 @@ test('multi-agent mode ignores intermediate message text and requires its final 
   );
 });
 
+test('explicit workflow boundaries scope indexes while preserving local conflict rejection', async () => {
+  const events = [
+    {event: 'workflow_start', data: {workflow_name: 'first'}},
+    message('A', 0),
+    {event: 'workflow_end', data: {answer: 'first answer'}},
+    {event: 'workflow_start', data: {workflow_name: 'second'}},
+    message('B', 0),
+    {event: 'workflow_end', data: {answer: 'second answer'}},
+    {event: 'task_end', data: {}},
+    {event: 'end', data: {}},
+  ];
+  const body = events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('');
+  assert.equal((await port(async () => sseResponse(body)).invoke(request())).text, 'second answer');
+  const conflicting = [...events.slice(0, 2), message('conflict', 0), ...events.slice(2)];
+  await rejectsCode(port(async () => jsonResponse(conflicting)).invoke(request()), 'EXTERNAL_FAILURE');
+});
+
+test('explicit workflow index resets retain the response-wide text budget', async () => {
+  for (const secondLength of [8_000, 8_001]) {
+    const events = [
+      {event: 'workflow_start', data: {workflow_name: 'first'}},
+      message('a'.repeat(8_000), 0),
+      {event: 'workflow_end', data: {answer: 'first answer'}},
+      {event: 'workflow_start', data: {workflow_name: 'second'}},
+      message('b'.repeat(secondLength), 0),
+      {event: 'workflow_end', data: {answer: 'second answer'}},
+      {event: 'task_end', data: {}},
+      {event: 'end', data: {}},
+    ];
+    const result = port(async () => jsonResponse(events)).invoke(request());
+    if (secondLength === 8_000) assert.equal((await result).text, 'second answer');
+    else await rejectsCode(result, 'EXTERNAL_FAILURE');
+  }
+});
+
 test('workflow answer accepts exactly 16000 characters', async () => {
   const answer = 'a'.repeat(16_000);
   const events = [

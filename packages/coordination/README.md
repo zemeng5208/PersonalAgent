@@ -90,6 +90,11 @@ compatibility choice, `workflow_end` can introduce this mode without a preceding
 validate a workflow's internal execution or elevate its answer to trusted Evidence.
 Pure `message` responses retain their existing text-only behavior. The synthetic
 multi-agent fixture reflects observed event fields, not a complete raw cloud trace.
+An explicit `workflow_start` begins a new message-index scope. Conflicting text for
+the same index inside that scope is still rejected, and the 16,000-character
+message budget remains cumulative across all workflows in the response. An
+end-only workflow does not reset indexes. This compatibility rule has synthetic
+coverage; the live global-conflict report does not identify each conflict's scope.
 
 The adapter is not a claim that AgentArts is available. Real project/runtime setup,
 deployment, authentication, streaming behavior, trace/usage, and local Policy or

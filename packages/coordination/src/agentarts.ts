@@ -394,6 +394,7 @@ class TextCollector {
     if (this.terminalPhase !== 'open') external('AgentArts workflow event order is malformed');
     this.workflowSeen = true;
     this.finalWorkflowAnswer = undefined;
+    this.indexed.clear();
   }
 
   completeWorkflow(answer: string | null): void {
