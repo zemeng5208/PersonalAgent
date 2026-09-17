@@ -114,9 +114,9 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；PR #
 | MOD-26 | M4 起逐平台验收 | todo | `Potatos498` 已登记，未授权启动 |
 | MOD-27 | M1.6 | review | `zemeng` 领域核心 PR #37、`goo122` 存储 PR #38 与持久消费者 PR #40 已合并；版本图、SQLite 原子提交、影响分析及重启读回已离线验证；真实事实流、Runtime 接线和数据删除未完成 |
 | MOD-28 | M1.6 | review | `zemeng` / PR #37 的离线 KEEP/RECHECK/REVISE 与 PR #40 的持久图消费者均已批准合并；真实事实订阅、AgentArts 驱动和 Evidence 闭环未完成 |
-| MOD-29 | M1.5 第一优先 | in_progress | `zemeng` / PR #41 文字 HTTP Adapter 与 PR #43 Runtime/Desktop 组合已合并；main 仍仅有 mock-fetch/离线证据。PR #51 为 Draft，记录有条件真实文字调用及平台 trace，但未合并，不能作为 main 已验收能力 |
-| MOD-30 | M1.5 第一优先 | todo | `zemeng` / AgentArts Agent/Workflow、知识、MCP/Skill 与工具提案映射；未提供 |
-| MOD-31 | M1.5/M3 | todo | `zemeng` / AgentArts 多 Agent 与评估；未提供 |
+| MOD-29 | M1.5 第一优先 | in_progress | `zemeng` / PR #41 文字 HTTP Adapter 与 PR #43 Runtime/Desktop 组合已合并；PR #44 已集成 conditional 云资源身份、提交版本及路由读回，运行链测试仍为 mock-fetch/离线。PR #51 为未合并 Draft，其调用/诊断材料不计为 main 已验收能力；deployment/API/trace 仍缺正式验收 |
+| MOD-30 | M1.5 第一优先 | in_progress | `zemeng` / PR #44 已记录三个子工作流身份及提交版本；知识、MCP/Skill、真实工具提案映射与执行闭环未验收 |
+| MOD-31 | M1.5/M3 | in_progress | `zemeng` / PR #44 已记录多 Agent 提交版本及开始/默认/结束路由的 conditional 控制台读回；后续草稿存在重复引用且 safeToPublish=false，实际模型执行、多 Agent 效果与评估未验收 |
 | MOD-32 | M1.5/M5 第一优先 | todo | `zemeng` / AgentArts 发布、API、观测、profile 证据与端到端验收；未提供 |
 
 ### 2.1 开工顺序与阻塞边界
