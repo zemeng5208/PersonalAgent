@@ -8,6 +8,7 @@
     "./testing": {"types": "./dist/testing.d.ts", "import": "./dist/testing.js"}
   },
   "dependencies": {
+    "@personal-agent/client": "0.1.0-alpha.1",
     "@personal-agent/voice-wake": "0.1.0-alpha.1"
   },
   "scripts": {
