@@ -56,6 +56,7 @@ interface FactProjectionMetadata {
 Memory→Graph 的类型转换、完整 FactVersion 校验和 digest 计算属于 cognition 投影层。
 如未来有第二种事实提供者，再评审是否提取到中立的低层公共包；本次不把它放进 wire
 contracts，也不为单个消费者新建“共享 DTO”包。
+`ExternalFactRef` 的名称、字段、scope epoch 表达和长度均是 proposed 工程选项，尚未冻结。
 
 ### 2. 绑定范围与唯一稳定映射
 
@@ -82,9 +83,12 @@ consumer 和精确 sensitivity scope；普通消费者不能选择或改写。�
 - externalRef revision 早于或等于当前映射头、但图历史中没有该精确 Ref：拒绝倒插为最新，
   返回 reconciliation/rebuild 类失败；不重排历史。
 
-scope 收缩或绑定 epoch 变化后不能复用旧 epoch 的映射来恢复先前可见内容。旧图历史和
-依赖如何保留、隔离或物理删除仍由删除策略决定；本 ADR 不用新 epoch 自动删除历史，
-也不把 namespace 标签当身份认证。
+scope 收缩或绑定 epoch 变化后，映射身份也随之改变，直接在原图分配另一个 opaque ID
+会切断旧依赖；不能这样追加后沿旧图报告 KEEP。这里保留一个必须由 Host/迁移评审解决的
+开放决策：新 epoch 要么隔离到新图/命名空间，要么拒绝在现有图继续投影并保持
+reconciliation/unavailable。迁移方案接受前不得复用旧 epoch 恢复先前可见内容，也不得
+让新旧 epoch 在同一图中静默并存。旧图历史和依赖如何保留、隔离或物理删除仍由删除策略
+决定；本 ADR 不把 namespace 标签当身份认证。
 
 ### 3. externalDigest 的规范化与限制
 
@@ -102,6 +106,8 @@ scope 收缩或绑定 epoch 变化后不能复用旧 epoch 的映射来恢复先
 “同一规范输入得到同一指纹”，不是来源真实性、用户确认、授权、Evidence 或执行成功。
 它与事实采用相同敏感级别，不得进入公开日志、错误、AgentArts 提示或出机载荷；
 `externalDigest`（亦即来源内容指纹）绝不是出机许可，低熵内容仍可能被猜测。
+上述域标识、规范 JSON 细则、SHA-256 编码及 opaque ID 生成方式均是 proposed 工程选项；
+只有实现与兼容评审通过后才能冻结，本文不把示例写法声明为既有公共标准。
 
 ### 4. 兼容、持久格式与回滚门槛
 
@@ -121,9 +127,9 @@ scope 收缩或绑定 epoch 变化后不能复用旧 epoch 的映射来恢复先
 
 | 负责人 | 所需变更 | 不在该变更内 |
 | --- | --- | --- |
-| `zemeng` | cognition 的 Memory→Graph 映射、规范 digest、幂等/冲突/影响消费者测试 | Memory 存储、Runtime migration、feed ack |
-| `goo122` | Goals 的 `NodeInput`/`NodeVersion` 可选成对字段、dual parser；可信 Host 的 scope epoch 绑定；持久格式版本、迁移、备份和回滚 | Goal/Decision/Plan 语义自动修复 |
-| 双方评审 | 接口目录状态、精确长度/算法版本、旧数据升级与失败语义 | 自动提升为 frozen、wire capability 或真实数据授权 |
+| `zemeng` | MOD-27 Goals 领域实现，包括 `NodeInput`/`NodeVersion` 可选成对字段与 dual parser；cognition 映射、digest、幂等/冲突/影响测试 | Memory 存储、Runtime migration、feed ack |
+| `goo122` | 协调公共类型与存储接口评审；提供可信 Host 的 scope epoch 绑定；负责持久格式版本、迁移、备份和回滚 | 接管 Goals 领域实现或自动修改 Goal/Decision/Plan 语义 |
+| 双方评审 | 接口目录状态、精确长度/算法版本、scope epoch 迁移、旧数据升级与失败语义 | 自动提升为 frozen、wire capability 或真实数据授权 |
 
 `GraphSnapshot`、`NodeInput`、`NodeVersion` 的具体 v2 形状只有在持久方案选定后才能冻结。
 本 ADR 不修改 contracts Schema，不新增生产 capability，也不授权把真实私人事实写入图或云端。
@@ -150,24 +156,24 @@ digest 还增加敏感派生数据治理。大图按 history 查 externalRef 的
 - **按原始 fact ID 确定图 node ID**：泄露标识并可能与 legacy/其他 kind 冲突；使用图内持久、
   Host 分配的稳定 opaque ID。
 
-## 最小验收条件
+## 六组验收条件
 
-1. 空图可将完整验证后的 `MemoryFact@12` 投影为 `GraphFact@1`，不生成 1～11 占位，
-   `sourceRef` 原样且完整图历史可重放。
-2. 同一精确 externalRef + 同 digest 重投为 no-op；同 Ref + 不同 digest 固定完整性拒绝，
-   错误不回显事实正文。
-3. `Memory@13` 在相同 namespace/scope epoch 下复用同一图 ID 并成为 GraphFact@2；
-   未映射旧 Ref 不得倒插为最新，修正链缺口显式 reconciliation。
-4. 并发首次映射只能一个 CAS 成功；冲突刷新后得到同一稳定映射，不产生两个图节点或部分历史。
-5. 外部事实更新只追加 Fact；既有 Goal/Decision/Plan dependencies 不自动重绑，影响分析仍只标记
-   精确旧 NodeRef 的传递依赖，非相关节点 KEEP。
-6. scope epoch 变化/收缩使旧映射不可复用；旧可见内容不得通过 legacy fallback 或旧头复活。
-7. 新 reader 能读取既有 legacy 图且不猜来源；成对字段校验覆盖缺一、非 Fact、恶意结构与 digest；
-   旧 reader 拒绝新格式的限制有明确升级/降级说明。
-8. SQLite 关闭重启后 externalRef/digest 和映射唯一性读回；格式版本、迁移、备份与回滚由
-   `goo122` 验收，且架构门禁证明没有 `goals -> memory` 依赖。
-9. digest 测试覆盖 metadata、corrects、confirmation 任一变化都会改变指纹，并证明 digest
-   不进入公开 Evidence/日志/云载荷，也不作为授权或真实性判断。
+1. **Bootstrap 与稳定映射**：空图把完整验证后的 `MemoryFact@12` 投影为
+   `GraphFact@1`，不生成 1～11 占位，`sourceRef` 原样；`Memory@13` 在相同绑定下复用
+   同一图 ID 并成为图 @2，未映射旧 Ref 和修正链缺口显式 reconciliation。
+2. **幂等与完整 metadata 冲突**：同一精确 externalRef + 同 digest 重投为 no-op；
+   summary、时间、sensitivity/state、confirmation、corrects 或其他规范字段任一变化都会
+   改变 digest，同 Ref + 不同 digest 固定拒绝且错误不回显事实正文。
+3. **并发 CAS 与不自动重绑**：并发首次映射只能一个 CAS 成功，冲突刷新后得到同一稳定
+   映射且无部分历史；事实更新只追加 Fact，Goal/Decision/Plan 依赖不自动重绑，精确旧
+   NodeRef 的影响继续 RECHECK，非相关节点 KEEP。
+4. **Scope 变化**：scope 收缩或 epoch 变化时旧映射和旧头不能复活；在“隔离新图/命名空间”
+   与“拒绝继续现有图”方案获批前保持 unavailable，禁止仅换 opaque ID 后沿旧图报告 KEEP。
+5. **格式迁移、重启与依赖方向**：新 reader 读取 legacy 图且不猜来源，成对字段非法时
+   fail closed；SQLite 重启读回 externalRef/digest 和映射唯一性，旧 reader 限制、格式版本、
+   migration、备份与回滚由 `goo122` 验收，架构门禁证明没有 `goals -> memory` 依赖。
+6. **隐私与非授权**：digest/opaque ID 不进入公开 Evidence、日志或云载荷，不成为真实性、
+   用户确认、授权或出机许可；低熵指纹、错误脱敏和与事实相同的敏感级别均有验证。
 
 ## 复审条件
 
