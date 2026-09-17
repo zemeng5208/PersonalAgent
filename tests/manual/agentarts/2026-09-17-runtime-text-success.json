@@ -129,7 +129,7 @@
   },
   "adapterDiagnosis": {
     "status": "synthetic_compatibility_verified_live_root_cause_unresolved",
-    "basis": "The successful sanitized API capture retained three workflow_end answers and both terminal events. The pre-fix adapter ignored workflow_end and required message text, which supported an initial parser hypothesis. A second authorized Desktop invocation using the rebuilt adapter still failed with the same sanitized response-validation error. Neither Desktop invocation retained the raw response or sanitized event statistics, so the production failure cannot be attributed to terminal ordering or workflow_end selection without more evidence.",
+    "basis": "The successful sanitized API capture retained three workflow_end answers and both terminal events. The pre-fix adapter ignored workflow_end and required message text, which supported an initial parser hypothesis. A second authorized Desktop invocation using the rebuilt adapter still failed with the same sanitized Coordination adapter failed error (the failing layer is not known). Neither Desktop invocation retained the raw response or sanitized event statistics, so the production failure cannot be attributed to terminal ordering or workflow_end selection without more evidence.",
     "selectionRule": "For streams containing workflow_start or workflow_end, keep only the latest completed workflow answer and return it only after task_end followed by end; later failure events override all partial output.",
     "liveResult": "The selection rule passes synthetic fixtures but did not make the second live Desktop task succeed.",
     "unresolvedCandidates": [
