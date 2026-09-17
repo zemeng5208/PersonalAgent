@@ -81,3 +81,18 @@ SSE 事件序列与平台 trace 是两类独立证据；前者不能冒充平台
   该入口成功，也不能补记为 Desktop 成功。平台 trace 仍需独立读回。
 - 每次记录独立任务与实际代码版本，保留成功或失败终态；重启读回不提交新任务。
   成功文字仍为 `unverified`，不能作为工具执行、授权或可信 Evidence 的证明。
+
+诊断辅助代码的离线验证入口为
+`node --test tests/manual/agentarts/support/structural-fetch.test.mjs`。
+它不读取本机凭据或环境配置、不联网，不要求启动 Electron。调用方将
+`createStructuralDiagnosticFetch(innerFetch).fetch` 注入现有测试宿主的 `fetchImpl`；
+只在响应消费结束后取得 `finish()` 的结构快照，不把原响应或异常对象写入日志。
+达到诊断采集上限只停止采集，不截断交给适配器的响应；报告中的截断、饱和计数和未知值
+不代表云端未发送对应事件，也不能代替生产适配器的协议校验。
+
+事件结构分析当前仅支持 SSE，JSON 的事件观察标为 `json_unparsed`，不是“没有事件”。
+仅有 `.text()` 的测试替身无法证明原始响应字节数，报告标为 `unavailable`。
+2026-09-17 离线辅助测试 18/18 通过；本机普通测试进程启动遇到 `spawn EPERM` 后使用
+`node --test --test-isolation=none tests/manual/agentarts/support/structural-fetch.test.mjs`
+通过。另以原生 `Response`、合成 SSE 和已构建的真实 `AgentArtsCloudAgentPort` 完成
+不联网组合验证：一次 fetch、正确文字结果、`unverified`，快照无正文。未据此宣称云端成功。
