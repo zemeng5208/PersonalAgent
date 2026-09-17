@@ -554,6 +554,31 @@ test('response byte and text limits are enforced at their exact boundaries', asy
   await rejectsCode(tooManyBytes.invoke(request()), 'EXTERNAL_FAILURE');
 });
 
+test('a valid response at exactly one MiB is accepted', async () => {
+  const json = JSON.stringify(message('ok'));
+  const body = json + ' '.repeat(1024 * 1024 - Buffer.byteLength(json));
+  assert.equal(Buffer.byteLength(body), 1024 * 1024);
+  const cloud = port(async () => new Response(body, {
+    headers: {'content-type': 'application/json'},
+  }));
+  assert.equal((await cloud.invoke(request())).text, 'ok');
+});
+
+test('UTF-8 characters split across byte chunks retain their text', async () => {
+  const text = '中文🙂';
+  const bytes = new TextEncoder().encode(JSON.stringify(message(text)));
+  const cloud = port(async () => ({
+    status: 200,
+    headers: {get: () => 'application/json'},
+    body: {
+      async *[Symbol.asyncIterator]() {
+        for (const byte of bytes) yield new Uint8Array([byte]);
+      },
+    },
+  }));
+  assert.equal((await cloud.invoke(request())).text, text);
+});
+
 test('streaming body byte limit rejects before requesting another chunk', async () => {
   let reads = 0;
   const body = {
