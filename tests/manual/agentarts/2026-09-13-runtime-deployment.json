@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "profile": "huawei_ict_agentarts",
+  "observedAt": "2026-09-13T22:48:31+08:00",
+  "region": "cn-southwest-2",
+  "evidenceLevel": "conditional",
+  "surface": "Huawei Cloud AgentArts console and runtime API readback",
+  "multiAgent": {
+    "name": "PersonalAgent持续认知协调器",
+    "id": "32d4d44c-eade-4f3f-8f76-209c74609e79",
+    "versionName": "v20260913180706"
+  },
+  "deployment": {
+    "runtimeName": "agent-arts-d5ae1174bc7d4cb8ab3dbbc6fae654e4",
+    "runtimeId": "1beeb366-7d05-4bb5-b054-d0b626aaef7f",
+    "state": "normal",
+    "accessMethod": "Latest",
+    "accessMethodVersion": "v1",
+    "gatewayOrigin": "https://defaultgw-gztdqobzmm.cn-southwest-2.huaweicloud-agentarts.com",
+    "authentication": "api_key",
+    "logsEnabled": false,
+    "metricsEnabled": false,
+    "traceEnabled": true,
+    "agentGuardEnabled": false
+  },
+  "apiInvocation": {
+    "requestDataClass": "synthetic text only",
+    "httpStatus": 200,
+    "streamProtocol": "sse",
+    "executionId": "95697046-1056-40d8-bfde-5173e19a1700",
+    "workflowId": "7d06153e-6262-4679-86ae-1914b38e11f3",
+    "workflowName": "PA-世界状态影响分析",
+    "result": "failed",
+    "errorCode": "AgentArts.101563 / ModelArts.81002",
+    "errorMessage": "Failed to get the authorization header"
+  },
+  "verified": [
+    "submitted multi-agent version identity",
+    "runtime identity and normal state",
+    "published access method and gateway origin",
+    "inbound API key authentication",
+    "runtime API reachability and SSE response",
+    "failed execution identity and first routed workflow"
+  ],
+  "notVerified": [
+    "successful model execution",
+    "successful end-to-end multi-agent routing",
+    "successful trace readback",
+    "usage and cost readback",
+    "Desktop live invocation",
+    "tool proposal and local execution",
+    "target-system readback",
+    "local trusted Evidence",
+    "rollback"
+  ],
+  "security": {
+    "credentialsRecorded": false,
+    "requestContainedPrivateData": false,
+    "credentialRotationRequiredBeforeHandoff": true
+  }
+}

@@ -1,0 +1,135 @@
+{
+  "schemaVersion": 1,
+  "profile": "huawei_ict_agentarts",
+  "observedAt": "2026-09-17T16:40:09+08:00",
+  "region": "cn-southwest-2",
+  "evidenceLevel": "conditional",
+  "surface": "Huawei Cloud AgentArts console, runtime API and isolated Desktop TaskRuntime readback",
+  "multiAgent": {
+    "name": "PersonalAgent持续认知协调器",
+    "id": "32d4d44c-eade-4f3f-8f76-209c74609e79",
+    "versionName": "v20260917160941",
+    "children": [
+      {
+        "name": "PA-世界状态影响分析",
+        "id": "7d06153e-6262-4679-86ae-1914b38e11f3",
+        "versionName": "v20260916121945"
+      },
+      {
+        "name": "PA-计划最小修复",
+        "id": "ed2363d9-b770-4ce5-a988-9bf0903466f7",
+        "versionName": "v20260916121823"
+      },
+      {
+        "name": "PA-证据安全审查",
+        "id": "998031d7-ec28-40ed-83e6-96667f22ff51",
+        "versionName": "v20260916121628"
+      }
+    ]
+  },
+  "deployment": {
+    "runtimeName": "agent-arts-d5ae1174bc7d4cb8ab3dbbc6fae654e4",
+    "runtimeId": "1beeb366-7d05-4bb5-b054-d0b626aaef7f",
+    "state": "normal",
+    "accessMethod": "Latest",
+    "accessMethodVersion": "v1",
+    "gatewayOrigin": "https://defaultgw-gztdqobzmm.cn-southwest-2.huaweicloud-agentarts.com"
+  },
+  "cloudApiInvocation": {
+    "startedAt": "2026-09-17T16:13:28+08:00",
+    "requestDataClass": "synthetic text only",
+    "httpStatus": 200,
+    "streamProtocol": "sse",
+    "executionId": "6d30c65f-1765-4e83-a839-aa612b724610",
+    "result": "succeeded",
+    "workflowSequence": [
+      "PA-世界状态影响分析",
+      "PA-计划最小修复",
+      "PA-证据安全审查"
+    ],
+    "workflowAnswerCount": 3,
+    "messageTextCount": null,
+    "messageTextCountNote": "The sanitized capture did not retain this count.",
+    "terminalEvents": [
+      "task_end",
+      "end"
+    ],
+    "errors": [],
+    "outputBoundary": {
+      "factVerification": "not_verified",
+      "planDisposition": "RECHECK",
+      "evidenceDecision": "REJECT"
+    }
+  },
+  "platformTraceReadback": {
+    "traceId": "beb5adfe9bbb8bc5520fe60d573ea828",
+    "sessionId": "8db1f52b-b04a-4f28-9e7b-87e1263c90eb",
+    "status": "success",
+    "durationMs": 70863,
+    "observedTokenMetric": 5994,
+    "metricBoundary": "Provider trace observation only; billing, cost and aggregate usage were not read back."
+  },
+  "desktopLiveInvocation": {
+    "taskId": "ac134227-eefe-4838-b333-b021302e195e",
+    "startedAt": "2026-09-17T16:27:44+08:00",
+    "terminalAt": "2026-09-17T16:28:53.846+08:00",
+    "isolatedUserData": true,
+    "profileCheckpoint": "huawei_ict_agentarts",
+    "state": "failed",
+    "error": {
+      "code": "EXTERNAL_FAILURE",
+      "message": "Coordination adapter failed",
+      "retryable": false
+    },
+    "resultPersisted": false,
+    "evidenceRefs": [],
+    "silentLocalFallbackObserved": false,
+    "automaticRetryPerformed": false,
+    "sameDatabaseRestartReadback": {
+      "observedAt": "2026-09-17T16:40:09+08:00",
+      "state": "failed",
+      "provider": "agentarts",
+      "verification": "unverified",
+      "evidenceRefCount": 0,
+      "submittedDuringRestart": false
+    }
+  },
+  "adapterDiagnosis": {
+    "status": "offline_verified_not_live_retried",
+    "basis": "The successful sanitized API capture retained three workflow_end answers and both terminal events. The pre-fix adapter ignored workflow_end and required message text, while the isolated Desktop task failed at response validation. The capture did not retain messageTextCount, so live causality remains to be confirmed by one separately authorized rerun.",
+    "selectionRule": "For streams containing workflow_start or workflow_end, keep only the latest completed workflow answer and return it only after task_end followed by end; later failure events override all partial output.",
+    "offlineVerification": [
+      "@personal-agent/coordination build passed",
+      "@personal-agent/coordination tests passed 49 of 49",
+      "affected Runtime AgentArts tests passed 10 of 10"
+    ]
+  },
+  "verified": [
+    "published multi-agent and child version identities",
+    "runtime deployment identity and normal state",
+    "successful synthetic cloud text execution",
+    "three workflow completion answers and task_end/end response sequence",
+    "AgentArts platform trace identity and success state",
+    "isolated Desktop failure without silent local fallback",
+    "failed TaskRuntime terminal persistence across a no-submit Desktop restart",
+    "unverified output semantics and empty trusted evidence references"
+  ],
+  "notVerified": [
+    "successful Desktop live invocation after the response parser fix",
+    "billing, cost and aggregate usage readback",
+    "structured tool proposal",
+    "local Policy, Approval and ToolGateway execution",
+    "target-system readback",
+    "local trusted Evidence linked to a successful task terminal",
+    "evaluation",
+    "rollback",
+    "credential rotation and old-key revocation"
+  ],
+  "security": {
+    "credentialsRecorded": false,
+    "requestContainedPrivateData": false,
+    "liveCredentialUsedInMemoryOnly": true,
+    "restartUsedPlaceholderWithoutTaskSubmission": true,
+    "credentialRotationRequiredBeforeHandoff": true
+  }
+}
