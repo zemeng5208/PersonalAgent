@@ -3,7 +3,8 @@
 - Profile：`huawei_ict_agentarts`；模块负责人/实现身份：`zemeng` / `zemeng5208`。
 - 用户是产品负责人和最终范围、授权来源；来源主任务统一指挥；`goo122` 负责非作者评审与共享根协调。
 - 工作树：`.worktrees/zemeng-voice-wake-composition`；分支：`codex/zemeng/voice-wake-composition`。
-- 状态：`in_progress` / provisional；本工作包未提交、未推送、未合并。
+- 状态：`review` / provisional；实现已提交在隔离分支，仅以 Draft PR 进入非作者评审，
+  尚未合并或发布。
 
 ## 最小组合接口
 
@@ -43,7 +44,8 @@ voice.start({
 wake 的 number 型会话标识只用于关联，不能转换、复用或覆盖 voice 的 string 型标识。
 有效 `expiresAtMs` 只转换为有限 ISO deadline，不延长授权。wake 退出 `listening`、切换
 session、撤销、到期或设备失效时，绑定器中止对应 voice parent；异步 start 的迟到结果
-还必须通过 binding epoch 和当前 wake 生命周期双重校验，不能在终态后存活。
+还必须通过 binding epoch、当前 wake 生命周期及 `voice.current()` 同一非终态 session
+校验，不能用过时 start 快照在终态或外部替换后继续占用绑定。
 
 voice 快照中的 `playbackActive` 同步到 `wake.setPlaybackActive()`，让 MOD-15 在播报期间
 抑制唤醒；绑定器不把该信号解释为 pause、revoke 或 `task.cancel`。`dispose()` 幂等，只
@@ -60,3 +62,16 @@ voice 快照中的 `playbackActive` 同步到 `wake.setPlaybackActive()`，让 M
   dispose 解绑；不证明真实设备、误触率、回声处理、数据出机授权或产品可用性。
 - 两个基础包及本组合仍为 provisional/unavailable 边界；编译或 Fake 通过不提升冻结和
   生产状态，非作者评审、可信宿主接线与真实验收仍是后续门槛。
+
+## 验证证据
+
+- 定向执行 voice TypeScript `--noEmit` 与 build：通过。
+- `node --test --test-isolation=none packages/voice/test/wake-binding.test.mjs`：6/6 通过，
+  覆盖授权 wake 单次 start、number/string ID 隔离与 deadline 映射、撤销/期限、播放抑制、
+  同步 disable 与迟到 start、start settle 前外部 stop、dispose 解绑和调用方对象所有权。
+- 外部 stop 回归在修复前的旧绑定产物上为 5/6，第二次 wake 未启动；加入
+  `voice.current()` 当前状态校验后为 6/6。该证据只证明本地确定性组合逻辑。
+- 本轮按审查要求未重复运行全部 36 项基础包测试；MOD-14 的 PR #61 订阅重入修复和
+  MOD-15 的 PR #65 生命周期提交均是本组合的明确前置，不能由本 Draft 替代各自评审。
+- 本机 Node/npm 版本与仓库声明版本不同，正式工具链结果仍以 CI 为准；未执行真实音频、
+  设备、云端、AgentArts、Desktop、Runtime、公共 wire 或 `task.submit` 验收。
