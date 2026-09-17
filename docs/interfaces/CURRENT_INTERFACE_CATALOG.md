@@ -219,6 +219,17 @@ FactChangeFeed 继续保持 unavailable，直到消费语义确认并完成实�
 
 ## 8. 当前结论
 
+### MOD-18 bounded patch preview increment (2026-09-17)
+
+`workspace.preview_text_patch@1.0.0` is a provisional, explicitly registered
+read-only coding tool over the existing `RegisteredTool`/Policy/ToolGateway
+interfaces. It requires `workspace:read`, a trusted host-bound root, an exact
+SHA-256 of current UTF-8 bytes, and bounded ordered unambiguous replacements.
+It returns only a candidate and before/after hashes; it does not write, grant
+`workspace:write`, create an Artifact/Evidence port, or export source to cloud.
+Production Runtime registration and actual patch execution remain unavailable.
+Preview success is not atomic filesystem CAS or permission to apply a change.
+
 截至 2026-09-09，**适合冻结的是 Core Runtime Profile 1 的消息、任务、会话与审批只读查询子集；不适合冻结整套协议、模型工具调用或 Agent 编排接口。** 产品当前只实施 Huawei ICT AgentArts Competition Profile；Local Profile 仅留存现有代码、当前不新增。该范围决定不改变接口证据状态。
 
 盘古当前没有已验证的原生工具调用，文字 JSON 工具提案也未完成真实闭环。因此 MOD-04/05 的离线实现继续保持 `review`，Local Model/Agent/Tool 相关接口保持 `provisional`。截至 2026-09-12，Competition 的文字 Coordination/CloudAgent 子集、离线版本图/影响分析和存储首片均已集成但未冻结。真实 AgentArts、统一世界状态、事实流与完整认知集成仍 `unavailable`。

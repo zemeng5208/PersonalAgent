@@ -1,6 +1,6 @@
 # 编程工具：可信工作区只读能力（MOD-18）
 
-`@personal-agent/coding-tools` 当前交付 `huawei_ict_agentarts` Competition Profile 的两个本地只读能力：由可信宿主绑定一个工作区根目录，并按需把 `workspace.read_text@1.0.0`、`workspace.list_entries@1.0.0` 注册到现有 `ToolHost`。它不执行命令、不生成或应用 patch、不修改 Git 状态，也不提供 Artifact/Evidence 服务。
+`@personal-agent/coding-tools` 当前交付 `huawei_ict_agentarts` Competition Profile 的三个本地只读能力：由可信宿主绑定一个工作区根目录，并按需把 `workspace.read_text@1.0.0`、`workspace.list_entries@1.0.0`、`workspace.preview_text_patch@1.0.0` 注册到现有 `ToolHost`。它不执行命令、不应用 patch、不修改 Git 状态，也不提供 Artifact/Evidence 服务。
 
 ## 公开入口
 
@@ -18,6 +18,14 @@
 - 输入为 `{path, limit?}`；只有 `path:'.'` 表示受信根，其他路径必须是规范相对子目录。默认 limit 为 100；宿主 `maxEntries` 可降低请求上限，模块硬上限为 1000。
 - 输出为 `{path, entries:[{name, kind:'file'|'directory'}], truncated}`。只返回直接子项名称与类别，不递归、不读取正文，也不返回绝对路径、权限、所有者、大小或时间；结果自身同样受 960 KiB 序列化门禁约束。
 
+Patch 预览复用读取边界，不增加写权限：
+
+- `createWorkspacePatchPreviewTool(options)` 创建 `workspace.preview_text_patch@1.0.0`；`registerWorkspacePatchPreview(host, options)` 注册并返回 disposer。工具沿用 `workspace:read`，不会签发或暗示 `workspace:write`。
+- 输入为 `{path, expectedSha256, edits:[{oldText,newText}]}`。SHA-256 绑定当前文件的精确 UTF-8 字节；1～32 条编辑按数组顺序应用，每条 `oldText` 必须非空、不能重复，并且在当时的候选文本中精确出现一次。
+- 输出为 `{path,beforeSha256,afterSha256,changed,previewText}`。只返回相对路径和内存候选；不会写文件、修改目录或 Git，也不构成后续写入授权。
+- 输入在首个异步读取前复制为只含 own data property 的普通结构；访问器、稀疏/畸形数组、未知字段、超限输入和调用方同 tick 修改均不能改变已捕获请求。
+- 预览候选必须能稳定往返为合法 UTF-8 且不含读取器已禁止的二进制控制字符。现有读取器会剥离 UTF-8 BOM，因此当解码正文不能按原始 `byteLength` 精确重建时，预览 fail-closed，不声称得到了原文件字节 hash。
+
 ## 安全边界
 
 工具拒绝绝对路径、`..`、Windows 盘符与 drive-relative 路径、UNC/设备路径、ADS、保留设备名和含尾随点/空格的歧义段。可信根使用 OS-native 同步 realpath，候选文件使用异步 realpath，避免 Windows CI 临时目录的 legacy/native 别名差异造成错误拒绝；随后通过 `path.relative` 的目录边界判断，不会用字符串前缀判断 containment。打开文件前后会再次核对 realpath 和文件标识，读取期间按块检查取消与 deadline，并在文件元数据变化时拒绝返回。
@@ -34,11 +42,13 @@
 
 `workspace.list_entries` 使用 `opendir` 迭代，不先把整个目录读入数组；扫描期间仅保留至多 `limit` 个按 JavaScript 字符串码元升序排列的候选，因此输出与内存有界。为了得到全局稳定的前 N 项，仍会扫描到目录末尾，扫描过程逐项检查 deadline/cancel。真实文件系统枚举不是事务快照：读后 lstat/realpath/身份复核能拒绝可检测的目录路径替换，但 Node `fs.Dir` 没有公开可供本实现 fstat 的目录句柄，不能消除恶意并发替换竞态，也不能阻止扫描期间普通子项增删或改名；结果只能表示本次受限观察，不能当作完美快照。
 
+`workspace.preview_text_patch` 的 hash 只证明本次读取字节与调用方给出的期望一致，预览结果仍只是内存候选。读取结束后文件可再次变化；本工具没有写入句柄、文件锁或 OS 原子 compare-and-swap，不能把预览成功表述为可安全写入或已经应用。
+
 ## 当前状态与接线限制
 
 本包消费 `@personal-agent/contracts@0.1.0-alpha.1` 的 provisional `RegisteredTool`、`ToolContext` 与 `ToolHost`，并按现有 Gateway/Policy scope 机制工作。它没有私设仍为 unavailable 的 `ToolExecutionPort`、ArtifactPort 或 EvidencePort。
 
-AgentArts 工具提案、Runtime composition、目标系统读回、Evidence 和最终回答尚未接通；因此这些只是离线可验证的本地只读工具，不是完整编程执行能力，也不是 Competition Golden Path 已完成或真实 AgentArts 可用的证据。根 `package.json` build 编排与 `package-lock.json` workspace 记录来自依赖 PR #63；`workspace.list_entries` 不会自动进入生产 composition。
+AgentArts 工具提案、Runtime composition、目标系统读回、Evidence 和最终回答尚未接通；因此这些只是离线可验证的本地只读工具，不是完整编程执行能力，也不是 Competition Golden Path 已完成或真实 AgentArts 可用的证据。根 `package.json` build 编排与 `package-lock.json` workspace 记录来自依赖 PR #63；目录枚举与 patch 预览都不会自动进入生产 composition。
 
 ## 定向验证
 
@@ -51,9 +61,12 @@ npm.cmd run typecheck --workspace=@personal-agent/coding-tools
 npm.cmd test --workspace=@personal-agent/coding-tools
 node --test --test-isolation=none packages/coding-tools/test/workspace-read-wire-boundary.test.mjs
 node --test --test-isolation=none packages/coding-tools/test/workspace-list.test.mjs
+node --test --test-isolation=none packages/coding-tools/test/workspace-patch-preview.test.mjs
 git diff --check
 ```
 
 读取覆盖：允许的 UTF-8 文本；精确 Schema；绝对/父级/盘符/UNC/设备/ADS；兄弟前缀和 symlink/junction 逃逸；敏感文件；大文件与二进制；缺 scope；deadline/cancel；现有 Host 的 register/dispose；控制字符转义膨胀拒绝与正常 UTF-8 序列化边界。
 
 枚举覆盖：根目录 `.`、稳定排序、limit/truncated、不递归、逃逸/敏感项/symlink-junction、独立 scope、扫描中 deadline、取消、严格 Schema、register/dispose。测试只使用系统临时目录中的合成文件；不读取真实用户工作区。
+
+预览覆盖：精确非 ASCII 字节 hash、顺序替换、磁盘不写；旧 hash 冲突；缺失/多处/重复/后续歧义；路径、敏感文件、link、非法 UTF-8、BOM、控制字符、孤立代理项和输入/输出上限；scope、取消、deadline、注册/释放及调用中输入突变。Policy 集成仅证明授权和参数摘要绑定，不代表写入、OS 原子 CAS、云端闭环或生产装配。
