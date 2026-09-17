@@ -110,6 +110,25 @@ npm.cmd run build --workspace=@personal-agent/cognition
 node --test --test-isolation=none packages/cognition/test/fact-projection.test.mjs
 ```
 
+## Graph-only fact projection commit
+
+`commitFactProjection(atomicStore, baseline, projected, evaluatedAt)` accepts the
+snapshot from the pure preview, validates its complete history and fact-only
+suffix, and commits that suffix through one `appendBatch` compare-and-swap.
+The existing history must be unchanged, including namespace, and the current
+store must still equal the baseline. Revision conflicts fail without retry;
+empty projections return an isolated snapshot without a write. Goal, Decision
+and Plan nodes are never rewritten by this operation.
+
+This is a trusted-host graph operation, not a feed acknowledgement transaction.
+It does not advance cursors, persist deduplication, grant data access, execute
+tasks or approve repairs. Atomicity depends on the supplied atomic store port;
+there is no fallback to repeated individual appends. A malformed provider
+response after append is rejected, but cannot prove rollback of an already
+committed write. Callers must reconcile rather than blindly retry. The store
+port is synchronous and this function does not promise interruption of a write
+already in progress. Complete production feed consumption remains unavailable.
+
 ## Explicit multi-node repair consumer
 
 `previewStoredRepair(boundStore, evaluatedAt, request)` validates a non-empty,
