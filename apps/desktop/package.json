@@ -8,7 +8,7 @@
     "postinstall": "node -e \"require('electron/install.js')\"",
     "start": "electron .",
     "dev:fake": "electron . --fake-runtime",
-    "typecheck": "node --check electron/main.js && node --check electron/runtime.js && node --check electron/conversations.js && node --check electron/preload.cjs && node --check src/app/renderer.js && node --check src/features/admin/view.js && node --check src/features/admin/profile.js && node --check src/features/workspace/view.js && node --check src/features/workspace/connectors.js && node --check src/features/orb/orb.js && node --check src/features/conversation/state.js && node --check src/features/conversation/rail.js && node --check src/ui/preferences.js",
+    "typecheck": "node --check electron/main.js && node --check electron/runtime.js && node --check electron/conversations.js && node --check electron/workspace-access.js && node --check electron/preload.cjs && node --check src/app/renderer.js && node --check src/features/admin/view.js && node --check src/features/admin/profile.js && node --check src/features/workspace/view.js && node --check src/features/workspace/connectors.js && node --check src/features/orb/orb.js && node --check src/features/conversation/state.js && node --check src/features/conversation/rail.js && node --check src/ui/preferences.js",
     "dev:text-fake": "electron . --fake-model",
     "test": "node --test test/*.test.mjs",
     "test:smoke": "node test/electron-smoke.cjs",
@@ -16,10 +16,12 @@
     "check:desktop-local": "node --check electron/desktop-host.js && node --check electron/desktop-state.js && node --check electron/desktop-preload.cjs && node --check src/desktop-settings/settings.js && node --check src/ui/desktop-shell.js",
     "test:workspace-smoke": "node test/workspace-smoke.cjs",
     "test:runtime-application-smoke": "node test/runtime-application-smoke.cjs",
+    "test:workspace-access-smoke": "node test/workspace-access-smoke.cjs",
     "test:text-smoke": "node test/text-chat-smoke.cjs"
   },
   "dependencies": {
     "@personal-agent/client": "0.1.0-alpha.1",
+    "@personal-agent/coding-tools": "0.1.0-alpha.1",
     "@personal-agent/runtime": "0.1.0-alpha.1"
   },
   "devDependencies": {

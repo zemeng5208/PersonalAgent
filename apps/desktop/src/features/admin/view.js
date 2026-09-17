@@ -69,6 +69,22 @@ export function mountAdmin(root, invoke, escape) {
     return `<div class="sheet"><h2>连接健康</h2><div class="table-scroll"><table><thead><tr><th>能力</th><th>状态</th><th>说明</th></tr></thead><tbody>${rows || '<tr><td colspan="3" class="empty">暂无连接器健康信息。</td></tr>'}</tbody></table></div></div>`;
   }
 
+  function workspaceAccessPage(data) {
+    const access = data.workspaceAccess ?? {available: false, configured: false, label: '', pendingRuntimeRefresh: false};
+    const status = !access.available
+      ? '仅 Competition Profile 可用'
+      : access.pendingRuntimeRefresh
+        ? '正在更新 Runtime 能力'
+        : access.configured
+          ? `已授权：${access.label}`
+          : '未授权';
+    return `<section class="feature-page"><div class="settings-heading"><h2>Worktrees</h2><p>为本次会话显式选择一个本地工作区，供受控只读工具使用。</p></div><div class="settings-list">${settingRow(
+      '可信工作区根',
+      status,
+      `<button class="btn btn-sm" id="workspace-root-select" ${!access.available || access.pendingRuntimeRefresh ? 'disabled' : ''}>${access.configured ? '更换目录' : '选择目录'}</button> <button class="btn btn-sm btn-danger" id="workspace-root-revoke" ${!access.available || (!access.configured && !access.pendingRuntimeRefresh) ? 'disabled' : ''}>撤销</button>`,
+    )}${settingRow('读取授权', '选择目录只限定本机范围；每次 workspace.read_text 仍需 Runtime allow_once 审批', '<button class="btn btn-sm" data-jump="authorizations">查看授权</button>')}${settingRow('云端边界', '目录路径不会发送给 Renderer、模型或 AgentArts；文件内容也不因选择目录而获得出机授权', '<span class="value-pill">本地受控</span>')}</div></section>`;
+  }
+
   function authorizationList(data) {
     const rows = data.approvals.map(item => {
       const tool = item.toolName ?? item.action;
@@ -203,6 +219,8 @@ export function mountAdmin(root, invoke, escape) {
       content = taskTable(data);
     } else if (section === 'authorizations') {
       content = authorizationList(data);
+    } else if (section === 'worktrees') {
+      content = workspaceAccessPage(data);
     } else if (directSettings[section]) {
       content = settingsPane(data, directSettings[section]);
     } else if (section === 'profile') {
@@ -235,6 +253,18 @@ export function mountAdmin(root, invoke, escape) {
     }
     root.querySelector('#refresh-capabilities')?.addEventListener('click', async () => {
       try { await invoke('capability.list'); } catch (error) { root.querySelector('#error').textContent = error.message; }
+    });
+    root.querySelector('#workspace-root-select')?.addEventListener('click', async event => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      try { await invoke('workspace.root.select'); root.querySelector('#error').textContent = ''; }
+      catch (error) { root.querySelector('#error').textContent = error.message; button.disabled = false; }
+    });
+    root.querySelector('#workspace-root-revoke')?.addEventListener('click', async event => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      try { await invoke('workspace.root.revoke'); root.querySelector('#error').textContent = ''; }
+      catch (error) { root.querySelector('#error').textContent = error.message; button.disabled = false; }
     });
     const modelForm = root.querySelector('#model-config-form');
     modelForm?.addEventListener('submit', async event => {
