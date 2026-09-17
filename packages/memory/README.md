@@ -45,6 +45,12 @@ npm.cmd run test --workspace=@personal-agent/memory
 
 The workspace is registered in the root build order and lockfile without adding
 external dependencies.
-`FactChangeFeed`, acknowledgement, durable checkpoints, production storage,
-physical deletion, fact ingestion and cognition/Runtime composition remain later
-reviewed increments.
+The provisional `FactChangeFeedPort` adds host-bound, bounded bootstrap/change
+batches without exposing internal sequence numbers. A reader has no ack method;
+confirmation belongs to the trusted host and must match the complete delivered
+batch and checkpoint. `parseFactChangeBatch` validates the fixed envelope and
+isolates its references; it does not prove processing or advance consumption.
+The Fake increment exercises this protocol only. Durable checkpoints, production
+storage, physical deletion, real fact ingestion and cognition/Runtime projection
+remain later reviewed increments. See
+[ADR-0008](../../docs/adr/0008-fact-feed-consumption.md) (proposed).

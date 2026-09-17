@@ -1,6 +1,10 @@
 import {randomUUID} from 'node:crypto';
 import {MemoryQueryError} from './index.js';
+import {FakeFactChangeFeeds} from './fake-feed.js';
 import type {
+  ConfirmFactChangeBatchRequest,
+  FactChangeFeedPort,
+  FactChangeReceipt,
   FactPage,
   FactRef,
   FactSensitivity,
@@ -24,6 +28,7 @@ const maxPageSize = 100;
 
 interface StoredFact {
   readonly sequence: number;
+  readonly eventId: string;
   readonly fact: FactVersion;
 }
 
@@ -251,6 +256,7 @@ export class FakeMemoryHost {
   private readonly namespaces = new Map<string, NamespaceState>();
   private readonly snapshots = new Map<string, SnapshotRecord>();
   private readonly cursors = new Map<string, CursorRecord>();
+  private readonly feeds = new FakeFactChangeFeeds(namespace => this.namespaces.get(namespace));
 
   provision(namespace: string): void {
     const key = parseNamespace(namespace);
@@ -270,8 +276,22 @@ export class FakeMemoryHost {
       || fact.corrects.id !== previous.ref.id
       || fact.corrects.revision !== previous.ref.revision) return fail();
     state.sequence++;
-    state.facts.push({sequence: state.sequence, fact: structuredClone(fact)});
+    state.facts.push({sequence: state.sequence, eventId: `memory-feed-event-${randomUUID()}`,
+      fact: structuredClone(fact)});
+    this.feeds.appended(key, previous, fact);
     return structuredClone(fact);
+  }
+
+  bindFeed(namespace: string, options: {
+    consumerId: string;
+    allowedSensitivities: readonly FactSensitivity[];
+  }): FactChangeFeedPort {
+    return this.feeds.bind(namespace, options);
+  }
+
+  confirmFeedBatch(namespace: string, consumerId: string,
+    request: ConfirmFactChangeBatchRequest): FactChangeReceipt {
+    return this.feeds.confirm(namespace, consumerId, request);
   }
 
   bind(namespace: string, options: {allowedSensitivities: readonly FactSensitivity[]}): MemoryQueryPort {

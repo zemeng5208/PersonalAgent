@@ -26,6 +26,15 @@
 
 ## 2. 状态定义与冻结门槛
 
+### 事实变化消费开发增量
+
+基于 PR #62 查询首片，`packages/memory/src/feed.ts` 增加 provisional 的进程内
+`FactChangeFeedPort`、批次解析与可信宿主确认请求。它区分 query snapshot、feed 水位、
+消费 checkpoint 和 graphRevision；读者不能任意 ack 序号。Fake 消费状态机不证明生产
+持久投影或原子确认。真实 FactChangeFeed 提供者与跨重启 MOD-27/28 投影仍 unavailable，
+不得新增 wire capability 或宣称 frozen。详见
+[MOD-28-FACT-CHANGE-FEED-01](../modules/MOD-28-FACT-CHANGE-FEED-01.md)。
+
 | 状态 | 含义 | 消费者规则 |
 | --- | --- | --- |
 | `frozen` | 单一来源、实现、Fake/失败夹具、消费端验证、非作者评审和 CI 均有证据；外部行为会改变语义时还需真实目标验证 | 可以并行开发；同一主版本内只做向后兼容扩展 |
@@ -218,7 +227,7 @@ FactChangeFeed 继续保持 unavailable，直到消费语义确认并完成实�
 sensitivity 集合；消费者无 namespace 选择、写入或出机许可入口。固定水位与不透明分页 token
 仅存在于 Fake 内存，精确版本隐藏/不存在统一拒绝，返回副本隔离；详见
 [工作包记录](../modules/MOD-09B-MEMORY-PORTS-01.md)。
-类型和离线 Fake 不代表生产事实库可用：SQLite 持久化、FactChangeFeed、ack、重启恢复、
+类型和离线 Fake 不代表生产事实库可用：SQLite 持久化、生产 FactChangeFeed、持久确认、重启恢复、
 认知自动触发与真实私人数据接入均未交付，运行能力继续 unavailable。无新增 wire Schema、
 capability 或迁移；非作者评审和真实提供者验收前不得冻结。
 
