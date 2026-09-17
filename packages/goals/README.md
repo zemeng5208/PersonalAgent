@@ -30,3 +30,21 @@ Run `npm run test --workspace=@personal-agent/goals` and
 meeting data. The test script builds this new package because the root build list
 now includes goals and cognition after PR #37. No third-party dependency is added.
 Live AgentArts/consumer composition remains an integration handoff.
+
+## Atomic store extension (provisional)
+
+`@personal-agent/goals/store` additionally exports `AtomicCoordinationStorePort`,
+which extends the unchanged `CoordinationStorePort` with
+`appendBatch(expectedRevision, inputs)`. A nonempty ordered batch is validated
+completely before one atomic replacement; invalid nodes or a revision conflict
+must leave the durable snapshot unchanged. Each appended node still receives its
+own graph revision, and later batch nodes may reference earlier batch versions.
+`appendVersions(snapshot, expectedRevision, inputs)` performs the same operation
+on an isolated in-memory candidate only. It is not a storage transaction.
+
+The Fake bound store implements the extension; the Runtime host supplies the SQLite
+transaction adapter. Old `read`/`append` providers remain valid, but consumers needing
+atomic repair must require the new interface and must not emulate it with sequential
+writes. No wire operation, authorization, database migration or cloud access is added.
+This is synchronous small-graph storage, not an asynchronous cancellable execution
+API or evidence that the proposed repair is semantically correct.
