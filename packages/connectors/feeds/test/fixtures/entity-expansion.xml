@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  **合成夹具，非真实源响应。** 用途：固定实体膨胀（billion laughs）不会被展开。
+
+  实测 fast-xml-parser 5.11.1 在 processEntities:false 下：解析耗时约 1ms，
+  实体引用**原样保留为字面量**，DOCTYPE 里的内部实体定义既不展开也不出现在输出中。
+  也就是说，展开路径在结构上不存在，而不是靠上限被截断——这正是本连接器选择
+  processEntities:false 并自行只解码 5 个预定义实体与数字字符引用的原因。
+
+  本夹具只嵌套到 lol4（真实攻击会到 lol8 以上，展开后约 10^8 个 "lol"）；
+  层数不影响结论，因为第 0 层就没有展开。测试断言：引用**已定义**实体的 title 恰好等于
+  字面量 "&lol4;"（若被展开会变成 1000 个 "lol"），引用**未定义**实体的 title 恰好等于
+  字面量 "&lol8;"，且解析在毫秒级完成。
+
+  注意：XMLValidator.validate 对含 DOCTYPE 的文档返回 true，不会替我们拦下它，
+  所以不能把「校验通过」当成「没有实体攻击」。
+-->
+<!DOCTYPE rss [
+  <!ENTITY lol "lol">
+  <!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">
+  <!ENTITY lol3 "&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;">
+  <!ENTITY lol4 "&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;">
+]>
+<rss version="2.0">
+  <channel>
+    <title>实体膨胀尝试</title>
+    <item>
+      <title>&lol4;</title>
+      <link>https://example.com/defined-entity</link>
+      <pubDate>Fri, 04 Sep 2026 10:00:00 +0800</pubDate>
+    </item>
+    <item>
+      <title>&lol8;</title>
+      <link>https://example.com/undefined-entity</link>
+      <pubDate>Fri, 04 Sep 2026 09:00:00 +0800</pubDate>
+    </item>
+  </channel>
+</rss>

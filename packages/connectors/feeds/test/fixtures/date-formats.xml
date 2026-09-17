@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  **合成夹具，非真实源响应。** 用途：固定日期解析必须自己写，不能交给 new Date(string)。
+
+  new Date(string) 对 RFC 822 的处理是**实现定义的**（ECMA-262 只规定 ISO 8601 子集，
+  其余落到 Date.parse 的实现自由），不同引擎对 GMT/EST/EDT、两位数年份、多余空白的
+  结果不一致。本连接器的输出还必须符合契约的时间戳 pattern
+  ^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$，所以解析器必须显式处理时区偏移
+  并归一化到 UTC，解析不出就返回 null，**不猜**。
+
+  每条 item 的 pubDate 是一种真实出现过的写法，期望的 UTC 结果写在 title 里：
+  1. +0800 数字偏移（少数派真实源即此写法）
+  2. -0500 数字偏移（跨日，日期部分会变）
+  3. GMT 缩写
+  4. EST 缩写（-0500）
+  5. EDT 缩写（-0400，夏令时；同一缩写在不同年份含义可能变化，本夹具只固定 -0400）
+  6. UTC 缩写
+  7. RFC 3339 带 Z
+  8. RFC 3339 带毫秒与 Z
+  9. RFC 3339 带 +08:00 冒号偏移（阮一峰正文里的 abbr title 即此写法）
+  10. 两位数年（05 而非 05 的完整写法）—— RFC 822 允许，必须能解析或明确判为无效，
+      本夹具选择判为**无效**并跳过该条，因为两位年份的世纪推断是猜测。
+  11. 完全不是日期的字符串 → 无效 → 跳过（若无 feed 级时间可退）。
+      本夹具 channel 提供 lastBuildDate，所以第 10、11 条实际会退化为 feed_build，
+      断言点是 kind 变成 feed_build 而不是把垃圾字符串当时间。
+
+  channel 的 lastBuildDate 同时是 feed 级时间的取值来源。
+-->
+<rss version="2.0">
+  <channel>
+    <title>日期写法夹具</title>
+    <link>https://example.com/dates</link>
+    <lastBuildDate>Sat, 05 Sep 2026 18:00:00 +0800</lastBuildDate>
+    <item>
+      <title>期望 2026-09-05T08:00:01Z</title>
+      <link>https://example.com/dates/1</link>
+      <pubDate>Sat, 05 Sep 2026 16:00:01 +0800</pubDate>
+    </item>
+    <item>
+      <title>期望 2026-09-05T03:00:00Z</title>
+      <link>https://example.com/dates/2</link>
+      <pubDate>Fri, 04 Sep 2026 22:00:00 -0500</pubDate>
+    </item>
+    <item>
+      <title>期望 2026-09-04T12:00:00Z</title>
+      <link>https://example.com/dates/3</link>
+      <pubDate>Fri, 04 Sep 2026 12:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>期望 2026-09-04T17:00:00Z</title>
+      <link>https://example.com/dates/4</link>
+      <pubDate>Fri, 04 Sep 2026 12:00:00 EST</pubDate>
+    </item>
+    <item>
+      <title>期望 2026-09-04T16:00:00Z</title>
+      <link>https://example.com/dates/5</link>
+      <pubDate>Fri, 04 Sep 2026 12:00:00 EDT</pubDate>
+    </item>
+    <item>
+      <title>期望 2026-09-04T12:00:00Z</title>
+      <link>https://example.com/dates/6</link>
+      <pubDate>Fri, 04 Sep 2026 12:00:00 UTC</pubDate>
+    </item>
+    <item>
+      <title>期望 2026-09-03T23:59:05Z</title>
+      <link>https://example.com/dates/7</link>
+      <pubDate>2026-09-03T23:59:05Z</pubDate>
+    </item>
+    <item>
+      <title>期望 2026-09-03T23:59:05.123Z</title>
+      <link>https://example.com/dates/8</link>
+      <pubDate>2026-09-03T23:59:05.123Z</pubDate>
+    </item>
+    <item>
+      <title>期望 2026-09-04T07:59:05Z</title>
+      <link>https://example.com/dates/9</link>
+      <pubDate>2026-09-04T15:59:05+08:00</pubDate>
+    </item>
+    <item>
+      <title>两位年份判为无效，期望 kind 退化为 feed_build</title>
+      <link>https://example.com/dates/10</link>
+      <pubDate>Fri, 04 Sep 26 12:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>非日期字符串判为无效，期望 kind 退化为 feed_build</title>
+      <link>https://example.com/dates/11</link>
+      <pubDate>not a date at all</pubDate>
+    </item>
+  </channel>
+</rss>
