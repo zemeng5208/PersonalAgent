@@ -90,3 +90,8 @@ Ports are not frozen. The in-process Fake path covers strict tool proposals and
 confirmed-result continuation, but the real HTTP adapter remains text-only.
 Deployment/version/trace, usage, resumable real cloud runs and data-export consent need
 separate verified contracts. No wire Schema or storage migration changes.
+
+Tool proposal and confirmed continuation JSON copies preserve own special keys such
+as `__proto__` as ordinary data properties. They do not change the copied object's
+prototype or silently drop fields before validation and authorization. Repeated
+parsing preserves the same JSON payload; schema and Policy checks still apply.
