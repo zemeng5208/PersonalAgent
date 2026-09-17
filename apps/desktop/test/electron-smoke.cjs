@@ -49,7 +49,8 @@ const {_electron}=require('playwright');
    await orb.evaluate(()=>window.desktop.invoke('orb.open'));
    let panel=app.windows().find(p=>p.url().includes('mode=panel'));
    await panel.waitForSelector('textarea');
-   assert.equal(await panel.evaluate(()=>innerWidth),372);
+   const panelArea=await app.evaluate(({BrowserWindow,screen})=>screen.getDisplayMatching(BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('mode=orb')).getBounds()).workArea);
+   assert.equal(await panel.evaluate(()=>innerWidth),Math.min(420,panelArea.width));
    const orbViewportBefore=await orb.evaluate(()=>({width:innerWidth,height:innerHeight}));
    const groupBefore=await app.evaluate(({BrowserWindow})=>Object.fromEntries(BrowserWindow.getAllWindows().filter(w=>/mode=(orb|panel)/.test(w.webContents.getURL())).map(w=>[w.webContents.getURL().includes('mode=orb')?'orb':'panel',w.getBounds()])));
    await panel.locator('header').hover();await panel.mouse.down();await panel.mouse.move(80,80,{steps:5});await panel.mouse.up();await panel.waitForTimeout(150);
@@ -58,7 +59,13 @@ const {_electron}=require('playwright');
    const orbViewportAfter=await orb.evaluate(()=>({width:innerWidth,height:innerHeight}));
    assert.ok(orbViewportAfter.width<=128&&orbViewportAfter.height<=128,`orb viewport expanded unexpectedly: ${JSON.stringify({orbViewportBefore,orbViewportAfter})}`);
    const dragArea=await app.evaluate(({screen,BrowserWindow})=>{const win=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('mode=orb'));return screen.getDisplayMatching(win.getBounds()).workArea;});
-   for(const bounds of [groupAfter.orb,groupAfter.panel]){assert.ok(bounds.x>=dragArea.x&&bounds.y>=dragArea.y);assert.ok(bounds.x+bounds.width<=dragArea.x+dragArea.width&&bounds.y+bounds.height<=dragArea.y+dragArea.height);}
+   const dpiSlack=1;
+   for(const bounds of [groupAfter.orb,groupAfter.panel]){
+     assert.ok(
+       bounds.x>=dragArea.x&&bounds.y>=dragArea.y&&bounds.x+bounds.width<=dragArea.x+dragArea.width+dpiSlack&&bounds.y+bounds.height<=dragArea.y+dragArea.height+dpiSlack,
+       `window escaped work area: ${JSON.stringify({bounds,dragArea,dpiSlack})}`,
+     );
+   }
    assert.ok(groupAfter.panel.x+groupAfter.panel.width<=groupAfter.orb.x||groupAfter.orb.x+groupAfter.orb.width<=groupAfter.panel.x);
    assert.match(await panel.locator('#connection').innerText(),fake?/Fake Runtime/:/本地 Runtime/);
    await panel.locator('#model').click();
@@ -85,7 +92,10 @@ const {_electron}=require('playwright');
    await panel.locator('#admin').click();
    const admin=await opened;
    await admin.waitForURL(/mode=admin/);
-   await admin.waitForSelector('[data-page="tasks"]');await admin.locator('[data-page="tasks"]').click();
+   await admin.waitForSelector('[data-page="models"]');
+   // Task monitoring remains a supported host route, but is no longer a sidebar item.
+   await panel.evaluate(()=>window.desktop.invoke('admin.open',{page:'tasks'}));
+   await admin.waitForSelector('tbody');
    assert.match(await admin.locator('tbody').innerText(),fake?/思考中/:/已创建/);
    await admin.locator('[data-page="models"]').click();
    await admin.waitForSelector('.model-list');
@@ -115,7 +125,11 @@ const {_electron}=require('playwright');
    await admin.locator('[data-page="settings"]').click();
    assert.equal(await admin.locator('#model-config-form').count(),0);
    assert.equal(await admin.locator('.settings-single').count(),1);
-   assert.equal(await admin.locator('.nav-icon').count(),25);
+   assert.deepEqual(await admin.locator('.side [data-page]').evaluateAll(buttons=>buttons.map(button=>button.dataset.page)),[
+     'settings','profile','appearance','voice','configuration','personalization','pets','shortcuts','analytics','models','memory',
+     'computer','capabilities','hooks','connections','git','environment','worktrees','authorizations','archive',
+   ]);
+   assert.equal(await admin.locator('.nav-icon').count(),20);
    await admin.locator('[data-page="appearance"]').click();
    await admin.locator('#pref-theme').selectOption('light');
    assert.equal(await admin.evaluate(()=>document.documentElement.dataset.theme),'light');
@@ -124,7 +138,8 @@ const {_electron}=require('playwright');
    await admin.locator('#admin-search').fill('模型');
    assert.equal(await admin.locator('.side [data-page]:visible').count(),1);
    await admin.locator('#admin-search').fill('');
-   await admin.locator('[data-page="tasks"]').click();
+   await panel.evaluate(()=>window.desktop.invoke('admin.open',{page:'tasks'}));
+   await admin.waitForSelector('tbody');
    await admin.screenshot({path:path.join(output,'admin.png')});
    await admin.close();
    const preserved=await panel.evaluate(()=>window.desktop.invoke('snapshot'));
@@ -143,6 +158,6 @@ const {_electron}=require('playwright');
    else assert.equal(await currentTaskCancel.isDisabled(),true);
    assert.equal(await panel.locator('#stop').isDisabled(),true);
    assert.deepEqual(errors,[]);
-   console.log(`PASS: ${fake?'Fake':'local'} Runtime Electron windows, native 90px hover/open, explicit collapse, grouped edge-aware drag, isolated preload, ORB-02, tray host, 372px panel, event-driven SDK submit/cancel, independent admin close, no page errors`);
+   console.log(`PASS: ${fake?'Fake':'local'} Runtime Electron windows, native 90px hover/open, explicit collapse, grouped edge-aware drag, isolated preload, ORB-02, tray host, 420px responsive panel, event-driven SDK submit/cancel, independent admin close, no page errors`);
  } finally {await app.close();}
 })();
