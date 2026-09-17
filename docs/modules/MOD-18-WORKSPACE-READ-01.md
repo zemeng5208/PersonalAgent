@@ -6,7 +6,7 @@
 
 负责人 / 评审者：`zemeng` / `goo122`
 
-状态：`review`（模块实现待非作者评审；根装配未接）
+状态：`review`（模块实现与根 workspace/build/lock 已进入 Draft PR；生产 composition 未接）
 
 拥有范围：`packages/coding-tools/**`、本文档
 
@@ -36,28 +36,35 @@
 
 - 消费：`@personal-agent/contracts@0.1.0-alpha.1` 的 `RegisteredTool`、`ToolContext`、`ToolHost`，当前均为 `provisional`；固定本分支提交供评审，准备随接口迁移。
 - 不新增公共 contracts，不定义 unavailable 的 `ToolExecutionPort`、ArtifactPort 或 EvidencePort。
+- 根 workspace 发现、build 顺序和 lockfile link 已接入；Policy/ToolGateway 黑盒集成测试覆盖未授权不执行、精确授权读取、撤销拒绝和 dispose 后 `UNSUPPORTED_CAPABILITY`。
 - 新 capability 尚未进入生产 Runtime/capability list；未装配时继续表现为未注册/`UNSUPPORTED_CAPABILITY`，不能启用 Fake 冒充。
 - AgentArts proposal → 本地 Runtime/Policy/ToolGateway → 本工具 → 读回/Evidence → AgentArts 最终回答仍未接通；没有真实 deployment/API/trace，也没有 Local 回退。
 
-需由 goo122 在独立集成工作包完成：
+本工作包已完成：
 
-1. 在根 `package-lock.json` 登记 `@personal-agent/coding-tools` workspace，并在根 `package.json` build 顺序加入该包；本 PR 不修改共享根配置。
-2. 在可信 composition 从用户明确授权的工作区配置注入 `rootPath`，通过现有 ToolGateway 注册/释放；不得从 proposal 参数构造根目录。
-3. capability 公布前补 Runtime 消费测试：Policy 绑定 task/tool/scope/参数摘要/deadline，未注册时保持 `UNSUPPORTED_CAPABILITY`。
-4. 等 ToolExecutionPort、ArtifactPort、EvidencePort 由接口负责人提供后，再接工具提案、内容最小化、读回证据与可访问 Artifact；本包不猜 DTO。
+1. 根 `package.json` 在 contracts 后构建 `@personal-agent/coding-tools`；`package-lock.json` 只增加该 workspace 的 metadata/link，无新外部依赖。
+2. 合成临时工作区通过 `InMemoryAuthorizationPolicy` + `ToolGateway` 黑盒验证：授权前 provider 调用计数为零；grant 绑定 task/tool/scope/参数摘要后读取精确文本；revoke 后不执行；dispose 后返回 `UNSUPPORTED_CAPABILITY`。
+
+仍需由 goo122 在后续独立生产 composition 工作包完成：
+
+1. 从用户明确授权的工作区配置注入 `rootPath`，通过现有 ToolGateway 注册/释放；不得从 proposal 参数构造根目录。
+2. capability 公布前补 Runtime 任务生命周期消费与发现测试；未装配时保持 `UNSUPPORTED_CAPABILITY`。
+3. 等 ToolExecutionPort、ArtifactPort、EvidencePort 由接口负责人提供后，再接工具提案、内容最小化、读回证据与可访问 Artifact；本包不猜 DTO。
 
 ## 验收与证据
 
 定向测试只使用系统临时目录中的合成文件，不读取真实用户项目：允许文本；非法字段与路径；兄弟前缀；symlink/junction（平台不支持时记录明确 skip 原因）；敏感文件；大文件；二进制；缺 scope；调用前和读取中的 deadline/cancel；register/dispose。
 
-计划命令：
+本集成增量命令：
 
 ```powershell
 npm.cmd run build --workspace=@personal-agent/contracts
+npm.cmd run build --workspace=@personal-agent/policy
+npm.cmd run build --workspace=@personal-agent/tool-gateway
 npm.cmd run build --workspace=@personal-agent/coding-tools
-npm.cmd run typecheck --workspace=@personal-agent/coding-tools
-npm.cmd test --workspace=@personal-agent/coding-tools
+npm.cmd run check:architecture
+node --test --test-isolation=none tests/integration/workspace-read-policy.test.mjs
 git diff --check
 ```
 
-不运行全仓 build/check，不启动 Electron 或长驻服务。验证结果与 PR/head 在提交后回填到 PR 描述；本文不把本地模拟测试表述成 AgentArts、完整 MOD-18 或完整 PA-017 验收。
+不运行全仓 build/check，不重跑本包已有 9 项单元测试，不启动 Electron 或长驻服务。本文不把本地模拟测试表述成 AgentArts、Artifact、command/patch、完整 MOD-18 或完整 PA-017 验收。
