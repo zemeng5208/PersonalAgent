@@ -1,6 +1,6 @@
 # 华为 ICT 创新赛 AgentArts Competition Profile
 
-版本：1.0 · 日期：2026-09-09 · 状态：架构基线已确认，运行实现仍为 `unavailable`
+版本：1.1 · 日期：2026-09-17 · 状态：架构基线已确认；main 的文字离线首片为 `provisional`，真实工具 Golden Path 仍为 `unavailable`
 
 ## 1. 参赛口径
 
@@ -41,7 +41,7 @@ AgentArts 云端编排
 本地可信执行与 Evidence
 ```
 
-当前仓库尚未实现统一世界状态、持续 Goal、影响传播或 AgentArts 适配。以上内容是已确认的目标架构，不是当前能力声明。
+当前仓库已有版本化 Goal/Decision/Plan、离线影响传播、SQLite 持久消费者，以及 AgentArts 文字 HTTP/Runtime/Desktop 离线首片；统一 Memory 事实查询/变化流、真实云端项目与部署、工具闭环和完整持续认知仍未实现。已交付首片不等于目标架构整体可用。
 
 ## 3. Competition Profile 架构
 
@@ -142,7 +142,7 @@ Profile 是受信组合入口的部署选择，不作为模型输出字段，也
 ## 7. 优先实施顺序
 
 1. 冻结本 profile 的职责、数据边界、验收矩阵和演示场景；Local 只保留现有代码，不新增能力。
-2. 交付最小 `CoordinationPort`、`CloudAgentPort` 与 Fake，使 Runtime 和 AgentArts Adapter 可独立开发。
+2. 最小 `CoordinationPort`、`CloudAgentPort`、Fake 与文字 HTTP/Runtime/Desktop 离线消费已交付；保持 provisional，继续补工具提案与结果续跑。
 3. 建立 AgentArts 项目、Agent/Workflow、版本和部署，完成一次真实 API 调用并读回平台 trace。
 4. 打通最小可信闭环：Desktop → Runtime → AgentArts → 只读工具提案 → 本地 Policy/ToolGateway → 真实读回 → AgentArts 最终回答 → Evidence。
 5. 接入版本化世界状态、Goal/Event 和 `KEEP/RECHECK/REVISE`，展示事件驱动的最小计划修复。
@@ -163,7 +163,7 @@ Profile 是受信组合入口的部署选择，不作为模型输出字段，也
 | 知识接入 | 来源、检索结果、引用、敏感范围和失败测试 | `unavailable` |
 | 多 Agent | 角色必要性、交接、预算、降级和完整 trace | `unavailable` |
 | 效果评估 | 固定任务集、基线、指标、重复运行和结果 | `unavailable` |
-| 创新机制 | 世界状态 revision、影响边、最小 PlanPatch 回放 | `unavailable` |
+| 创新机制 | 世界状态 revision、影响边、最小 PlanPatch 回放 | 图谱与持久影响分析离线 provisional；真实事实流和 AgentArts/Evidence 回放 unavailable |
 
 文档、架构图、Fake、配置成功、云端页面截图或单次模型回答都不能单独把某项提升为完成。
 
@@ -182,4 +182,4 @@ Profile 是受信组合入口的部署选择，不作为模型输出字段，也
 
 ## 10. 当前结论
 
-截至 2026-09-09，Competition Profile 的产品定位与信任边界已经确认，是当前唯一实施和验收优先级；Local Profile 仅保留现有代码，当前不新增、不扩展。仓库尚无 AgentArts Adapter、云端部署/API 读回、统一世界状态或比赛 Golden Path，因此参赛架构是 `accepted`，运行能力仍为 `unavailable`。
+截至 2026-09-17，Competition Profile 的产品定位与信任边界已经确认，是当前唯一实施和验收优先级；Local Profile 仅保留现有代码，当前不新增、不扩展。main 已集成文字 Coordination/CloudAgent、AgentArts HTTP Adapter、Runtime/Desktop 离线首片及离线认知图谱/持久消费者，均未冻结。Draft PR #51 记录有条件真实文字调用与平台 trace，但尚未集成；PR #49 的本地工具闭环仍在修复评审。真实工具 Golden Path、统一世界状态和比赛端到端证据仍为 `unavailable`。

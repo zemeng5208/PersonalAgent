@@ -7,7 +7,7 @@
 - 不在范围：AgentArts HTTP/身份/部署、工具执行循环、世界状态、历史上下文出机、UI profile 切换、wire Schema 和数据库迁移。
 - 兼容：旧 Desktop 未选择 profile 时保持已有 Local 装配；显式 Competition 不使用 Local 模型配置，不向端口传递 Runtime、授权、数据库或 checkpoint 方法。
 - 验收：公开 Client 提交→注入端口→持久任务结果；重复提交只执行一次；取消/deadline；未配置、异常和非法返回失败；不接受云端自报 Evidence/终态或工具执行；全仓 check。
-- 端口为 provisional，真实 AgentArts 仍 unavailable。后续由 zemeng 评审消费语义后交付云适配；工具闭环单独工作包。
+- 端口为 provisional，真实 AgentArts 仍 unavailable。下游 PR #42/#41/#43 已完成文字消费、HTTP Adapter 与 Runtime/Desktop 离线接线；工具闭环仍需单独工作包。
 
 ## 本轮验证（2026-09-09）
 
@@ -16,4 +16,4 @@
 - 修正后 `node --test apps/runtime/test/coordination.test.mjs packages/coordination/test/ports.test.mjs`：9/9 通过。
 - 修正后 `npm run test --workspaces`：176 项，172 通过、4 项真实天气门控跳过、0 失败。修正只涉及测试夹具，未重复整轮构建。
 - `git diff --check` 通过。无 wire/迁移变化；未调用真实/付费模型、AgentArts 或账号，未运行 Electron UI smoke。
-- 后续状态：已通过 PR #36 合并；消费语义仍需 zemeng 非作者评审。不能将合并记录当作接口冻结或比赛验收。
+- 后续状态：已通过 PR #36 合并；消费语义已被下游工作包实际使用，但 PR #36 仍缺正式非作者评审证据。不能将下游消费或合并记录当作接口冻结或比赛验收。

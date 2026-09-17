@@ -1,8 +1,8 @@
 # MOD-09A：世界状态查询与变化流契约准备
 
 - Profile：`huawei_ict_agentarts`；关联 PA-020、PA-024、MOD-09/27/28。
-- 负责人：`goo122`；消费语义确认：`zemeng`；状态：`review`。
-- 分支：`codex/mod-09a-world-state-contract`；交付基线：PR #40/#42/#44 合并后的 `main@3eb9156`。
+- 负责人：`goo122`；消费语义确认：`zemeng`；工作包状态：`done`（PR #45 已批准并合并为 `1042f91`）。
+- 分支：`codex/mod-09a-world-state-contract`；实现基线：PR #40/#42/#44 合并后的 `main@3eb9156`。
 
 ## 1. 目标与边界
 
@@ -140,5 +140,5 @@ cursor 确认时机；缺口、修正链缺失和图谱冲突的恢复流程；A
   workspace 测试。
 - 变更包含文档、合成夹具、自检测试与根检查脚本接线；没有 apps/packages、Schema、迁移或依赖改动。
 - 未运行真实服务、模型、AgentArts、账号或 Electron；接口仍 unavailable。
-- 本增量提交非作者评审；合并状态以 GitHub PR 为准。第 7 节消费语义仍待 `zemeng`
-  确认，夹具自检通过不代表 Memory 查询、变化流或持久化实现已经通过验收。
+- 本增量已通过非作者评审并随 PR #45 合并。第 7 节消费语义和夹具已纳入后续接口实现依据；
+  夹具自检通过不代表 Memory 查询、变化流或持久化实现已经通过验收。

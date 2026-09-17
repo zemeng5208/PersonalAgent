@@ -1,9 +1,9 @@
 # MOD-28-PERSISTENT-CONSUMER-01：持久图影响消费闭环
 
 - 日期：2026-09-12；Profile：huawei_ict_agentarts；MOD-28 / PA-025。
-- 负责人 zemeng；待非作者评审者 goo122；状态 review（本地验证通过，待评审与集成）。
+- 负责人 zemeng；非作者评审者 goo122；工作包状态 done（PR #40 已批准并合并为 `0e3125a`）；MOD-28 整体仍为 review。
 - 分支 `codex/zemeng/mod27-28-persistent-consumer`；实现基线 `87ee444`（PR #38），
-  已同步 `188f925`（PR #39）。
+  集成基线包含 `188f925`（PR #39）。
 - 所有权：`packages/cognition`；跨模块测试位于 `tests/integration`。
 - 消费接口：`@personal-agent/goals/store` 的 provisional CoordinationStorePort；
   只接收可信宿主已经绑定的端口，不选择 namespace，不导入 Runtime 私有实现。
@@ -44,5 +44,5 @@
   上述通过结果。根 `npm run check`、真实 AgentArts、事实订阅与外部 Evidence 本次未重跑，
   不作为本工作包当前证据。
 
-当前环境不同于项目要求的 Node 24.15.x / npm 11.12.x，目标版本与干净 CI 待后续 PR 验证。
+本地记录的 Node 版本不同于项目要求；PR #40 的非作者评审与 CI 已通过，但未增加真实 AgentArts、事实订阅或外部 Evidence 证据。
 根公共协议、迁移、Runtime 实现、package/lock 均未修改。没有云调用或外部副作用。
