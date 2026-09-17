@@ -96,3 +96,18 @@ SSE 事件序列与平台 trace 是两类独立证据；前者不能冒充平台
 `node --test --test-isolation=none tests/manual/agentarts/support/structural-fetch.test.mjs`
 通过。另以原生 `Response`、合成 SSE 和已构建的真实 `AgentArtsCloudAgentPort` 完成
 不联网组合验证：一次 fetch、正确文字结果、`unverified`，快照无正文。未据此宣称云端成功。
+
+## 2026-09-17：单次 Runtime 结构诊断仍失败
+
+另行批准的一次 Runtime Application 诊断见
+[`2026-09-17-runtime-structural-diagnostic.json`](2026-09-17-runtime-structural-diagnostic.json)。
+该入口没有经过 Desktop/IPC；网络调用和凭据读取各一次，无自动重试。响应 HTTP 200、
+媒体类型 SSE，完整读取 466,009 bytes / 1,727 chunks，低于生产 1 MiB 上限。
+任务仍为 `failed / EXTERNAL_FAILURE`，没有结果或 Evidence；无提交重启后仍失败，
+该测试宿主报告 `verification=unavailable`，重启凭据读取与 fetch 均为零。
+
+使用的是 helper `1fda774`：仅检查前 131,072 bytes，看到 459 个合法 JSON SSE 候选、
+零 JSON 解析失败，但只保留前 64 个事件。观察已截断，不可把未保留的 `task_end/end`
+解释为云端没有发送，也无法排除尾部错误、字段/文字限制或终止顺序问题。该记录只缩小
+传输、HTTP、媒体类型、响应读取和总字节上限方面的候选，不证明具体解析根因。
+后续辅助工具的离线改进不能倒填为本次已经采集到的证据。
