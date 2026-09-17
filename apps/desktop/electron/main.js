@@ -9,6 +9,8 @@ import {Conversations} from './conversations.js';
 import {createDesktopHost} from './desktop-host.js';
 import {WorkspaceAccess} from './workspace-access.js';
 
+import {createDesktopVoiceInput} from './voice-input.js';
+
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
 const fakeMode = process.argv.includes('--fake-runtime');
@@ -88,6 +90,9 @@ const submitting = new Set();
 const approvals = new Map();
 const notifications = new Map();
 let runtimeApplication;
+let voiceInput;
+let voiceDisposing = false;
+let voiceDisposed = false;
 
 function snapshot(surface) {
   return {
@@ -112,7 +117,7 @@ function snapshot(surface) {
     notifications: [...notifications.values()],
     model: structuredClone(model),
     thinking: structuredClone(thinking),
-    voice: {available: false, status: 'unavailable', reason: '语音供应商尚未连接'},
+    voice: voiceInput?.snapshot() ?? {available: false, captureAvailable: false, playbackAvailable: false, status: 'unavailable', reason: '语音供应商尚未连接'},
   };
 }
 
@@ -698,9 +703,15 @@ async function action(event, name, payload) {
   }
   if (name === 'panel.dragEnd' && sender === panel) { dragging = false; panelDragOrigin = undefined; away = Date.now() + 400; return; }
   if (name === 'app.quit') { app.quit(); return; }
-  if (name === 'voice.stop') {
-    if (sender !== panel) throw Error('语音操作只能从面板调用');
-    return {available: false, stopped: false, reason: '语音供应商尚未连接'};
+  if (name.startsWith('voice.')) {
+    if (sender !== panel || !voiceInput) throw Error('语音操作只能从面板调用');
+    const senderId = sender.webContents.id;
+    if (name === 'voice.capture.start') return voiceInput.beginCapture(senderId);
+    if (name === 'voice.capture.finish') return voiceInput.finishCapture(senderId, payload);
+    if (name === 'voice.capture.cancel') return voiceInput.cancelCapture(senderId);
+    if (name === 'voice.reply.play') return voiceInput.playReply(senderId);
+    if (name === 'voice.stop') return voiceInput.stopPlayback(senderId);
+    throw Error('Unsupported voice action');
   }
   if (name === 'clipboard.writeText') {
     if ((sender !== panel && sender !== workspace) || typeof payload !== 'string' || payload.length > 50000) throw Error('剪贴板内容无效');
@@ -845,8 +856,6 @@ app.on('second-instance', () => {
 app.whenReady().then(async () => {
   if (!ownsDesktopInstance) return;
   desktopHost = createDesktopHost();
-  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
-  session.defaultSession.setPermissionCheckHandler(() => false);
   try {
     const conversationPath = fakeMode || fakeModelMode || process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1'
       ? null
@@ -861,6 +870,18 @@ app.whenReady().then(async () => {
     runtimeError = error instanceof Error ? error.message : 'Runtime 初始化失败';
     connectionLabel = 'Runtime 未连接';
   }
+  voiceInput = createDesktopVoiceInput({client, onUpdate: publish});
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    const allowed = permission === 'media'
+      && webContents === panel?.webContents
+      && voiceInput.consumeMediaPermission(webContents.id, details);
+    callback(Boolean(allowed));
+  });
+  session.defaultSession.setPermissionCheckHandler((webContents, permission, _origin, details) => (
+    permission === 'media'
+    && webContents === panel?.webContents
+    && voiceInput.checkMediaPermission(webContents.id, details)
+  ));
 
   const area = screen.getPrimaryDisplay().workArea;
   orb = windowFor('orb', {x: area.x + area.width - 150, y: area.y + area.height - 180, width: 112, height: 112},
@@ -868,6 +889,11 @@ app.whenReady().then(async () => {
   panel = windowFor('panel', panelBounds(orb.getBounds(), area),
     {frame: false, transparent: true, alwaysOnTop: true, skipTaskbar: true, resizable: false, hasShadow: false, backgroundMaterial: 'none', roundedCorners: true});
   panel.on('close', event => { if (!app.isQuitting) { event.preventDefault(); pinned = false; panel.hide(); publish(); } });
+  panel.on('hide', () => {
+    if (voiceInput.snapshot().session?.state === 'listening') {
+      void voiceInput.cancelCapture(panel.webContents.id).catch(() => {});
+    }
+  });
   createTray();
 
   ipcMain.handle('desktop:action', async (...args) => {
@@ -902,6 +928,22 @@ app.whenReady().then(async () => {
       app.isQuitting = false;
       runtimeError = 'Runtime 仍有活动任务；请先等待完成或停止任务后再退出';
       publish();
+      return;
+    }
+    if (!voiceDisposed && voiceInput) {
+      event.preventDefault();
+      if (!voiceDisposing) {
+        voiceDisposing = true;
+        void voiceInput.dispose().then(() => {
+          voiceDisposed = true;
+          voiceDisposing = false;
+          app.quit();
+        }).catch(error => {
+          voiceDisposing = false;
+          runtimeError = error instanceof Error ? error.message : '语音资源无法安全释放';
+          publish();
+        });
+      }
       return;
     }
     app.isQuitting = true;

@@ -34,6 +34,14 @@ provisional 进程内配置，不是 wire operation、完整多输入映射或�
 适配器与工厂合成验证不冻结 CloudAgentPort，也不证明工具提案/恢复或真实 Workflow 接通。
 详见 [工作包与官方依据](../modules/MOD-30-WORKFLOW-INPUT-01.md)。
 
+### MOD-15 开发增量：唤醒生命周期
+
+`@personal-agent/voice-wake` 的 `WakeLifecycleController`、注入授权/事件源端口及
+`/testing` 显式 Fake 为 `provisional`。根构建登记该工作区；生命周期单测不代表
+真实麦克风、唤醒识别、连续语音或 Desktop/Runtime 组合可用。这些生产能力仍为
+`unavailable`。启用须提供显式有限 deadline；控制器不签发授权、不自动提交任务。
+详见 [MOD-15-WAKE-LIFECYCLE-01](../modules/MOD-15-WAKE-LIFECYCLE-01.md)。
+
 | 状态 | 含义 | 消费者规则 |
 | --- | --- | --- |
 | `frozen` | 单一来源、实现、Fake/失败夹具、消费端验证、非作者评审和 CI 均有证据；外部行为会改变语义时还需真实目标验证 | 可以并行开发；同一主版本内只做向后兼容扩展 |
@@ -237,6 +245,14 @@ It returns only a candidate and before/after hashes; it does not write, grant
 `workspace:write`, create an Artifact/Evidence port, or export source to cloud.
 Production Runtime registration and actual patch execution remain unavailable.
 Preview success is not atomic filesystem CAS or permission to apply a change.
+
+### MOD-14 WAVE container subset (2026-09-17)
+
+`@personal-agent/voice` adds provisional pure `decodeVoiceWave` and
+`encodeVoiceWave` over the existing `VoiceAudioClip`. Only bounded PCM S16LE,
+16 kHz, mono RIFF/WAVE is accepted. No resampling, device access, wire operation,
+dependency, provider, consent or migration is added. Voice device/ASR/TTS
+capabilities remain unavailable; this increment only adapts in-memory bytes.
 
 截至 2026-09-09，**适合冻结的是 Core Runtime Profile 1 的消息、任务、会话与审批只读查询子集；不适合冻结整套协议、模型工具调用或 Agent 编排接口。** 产品当前只实施 Huawei ICT AgentArts Competition Profile；Local Profile 仅留存现有代码、当前不新增。该范围决定不改变接口证据状态。
 
