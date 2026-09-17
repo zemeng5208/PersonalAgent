@@ -1,6 +1,6 @@
 # 当前接口目录与冻结登记
 
-版本：1.2 · 日期：2026-09-14 · 基线提交：`cdb69a265b9bfa42ee32311b8183749376c671dc`
+版本：1.2 · 日期：2026-09-17 · 基线提交：`72cc76b1f07d74ecbf431f1b31bcb62d1e403449`
 
 协议负责人：`goo122` · 核心认知与 AgentArts 消费负责人：`zemeng` · 连接器消费负责人：`Potatos498`
 
@@ -21,7 +21,7 @@
 
 | 部署 profile | 优先级 | 当前能力 | 接口规则 |
 | --- | --- | --- | --- |
-| `huawei_ict_agentarts` | 当前唯一优先实现与比赛验收路径 | 架构 accepted；文字 HTTP/Runtime/Desktop 离线首片 `provisional`；真实云运行 `unavailable` | 继续交付 Tool/Evidence 端口与真实部署证据；正式路径不静默回退 |
+| `huawei_ict_agentarts` | 当前唯一优先实现与比赛验收路径 | 架构 accepted；main 的文字 HTTP/Runtime/Desktop 离线首片 `provisional`；Draft PR #51 的有条件真实文字调用未计入 main；真实工具 Golden Path `unavailable` | 继续交付 Tool/Evidence 端口与真实部署证据；正式路径不静默回退 |
 | `local` | 可选保留 | 现有 Agent/Model 部分实现为 `provisional` | 不删除既有代码；新增 Local 能力不阻塞 Competition，也不计入比赛验收 |
 
 ## 2. 状态定义与冻结门槛
@@ -183,9 +183,8 @@ kind/text/verification；工具提案、deployment/version/trace、usage、世�
 ### COMPETITION-HTTP-01 已集成离线首片
 
 PR #41 提供严格校验的 AgentArts 文字 HTTP Adapter，PR #43 将其接入 Runtime/Desktop
-Competition profile；两者均已批准合并。现有证据只覆盖 mock-fetch、错误脱敏、取消/
-deadline、配置选择和离线 smoke。没有真实项目、身份、Agent/Workflow、deployment、
-API/trace/usage 读回，也没有工具提案与执行结果续跑，因此保持 provisional。
+Competition profile；两者均已批准合并。现有 main 证据只覆盖 mock-fetch、错误脱敏、取消/
+deadline、配置选择和离线 smoke。Draft PR #51 记录有条件真实文字调用及平台 trace，但尚未合并；工具提案与执行结果续跑仍无真实证据，因此保持 provisional。
 
 ### COORDINATION-STORE-01 已集成增量
 

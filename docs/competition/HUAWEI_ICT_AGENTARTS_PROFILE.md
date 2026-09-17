@@ -1,6 +1,6 @@
 # 华为 ICT 创新赛 AgentArts Competition Profile
 
-版本：1.1 · 日期：2026-09-14 · 状态：架构基线已确认，文字离线首片为 `provisional`，真实运行仍为 `unavailable`
+版本：1.1 · 日期：2026-09-17 · 状态：架构基线已确认；main 的文字离线首片为 `provisional`，真实工具 Golden Path 仍为 `unavailable`
 
 ## 1. 参赛口径
 
@@ -182,4 +182,4 @@ Profile 是受信组合入口的部署选择，不作为模型输出字段，也
 
 ## 10. 当前结论
 
-截至 2026-09-14，Competition Profile 的产品定位与信任边界已经确认，是当前唯一实施和验收优先级；Local Profile 仅保留现有代码，当前不新增、不扩展。仓库已有文字 Coordination/CloudAgent、AgentArts HTTP Adapter 和 Runtime/Desktop 离线首片，以及离线认知图谱/持久消费者；这些能力均未冻结。真实 AgentArts 项目、Agent/Workflow、部署/API/trace、工具 Golden Path、统一世界状态和比赛端到端证据仍为 `unavailable`。
+截至 2026-09-17，Competition Profile 的产品定位与信任边界已经确认，是当前唯一实施和验收优先级；Local Profile 仅保留现有代码，当前不新增、不扩展。main 已集成文字 Coordination/CloudAgent、AgentArts HTTP Adapter、Runtime/Desktop 离线首片及离线认知图谱/持久消费者，均未冻结。Draft PR #51 记录有条件真实文字调用与平台 trace，但尚未集成；PR #49 的本地工具闭环仍在修复评审。真实工具 Golden Path、统一世界状态和比赛端到端证据仍为 `unavailable`。
