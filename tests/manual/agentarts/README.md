@@ -25,5 +25,137 @@
 deployment、API、trace、usage、评估、知识/MCP/Skill、工具提案与本地可信执行闭环
 仍为 `unavailable`，不能把本次记录计为比赛 Golden Path 完成。
 
+## 2026-09-13：运行时部署与首个 API 失败读回
+
+机器可读记录见 [`2026-09-13-runtime-deployment.json`](2026-09-13-runtime-deployment.json)。
+AgentArts 控制台已读回正常运行的运行时、已发布访问方式和 API 网关；使用纯合成文字进行的
+真实 API 调用到达运行时并返回 SSE execution/workflow 标识，但首个工作流因模型鉴权错误失败。
+这证明本地到 AgentArts 的网络与入站鉴权已接通，不证明模型执行、多智能体完整路由、trace、
+usage 或比赛 Golden Path 成功。验收记录不包含任何 API Key；交付前必须轮换曾暴露于工具输出的
+入站凭据，并重新完成成功 API、trace 和 Desktop 读回。
+
 重新验收时应在不暴露凭据的前提下读回同一资源及版本；任何重新部署、试运行或
 真实 API 调用都需要单独记录费用、身份、输入范围、trace 和失败/回滚结果。
+
+## 2026-09-17：云端文字成功与 Desktop 失败读回
+
+机器可读记录见 [`2026-09-17-runtime-text-success.json`](2026-09-17-runtime-text-success.json)。
+已发布多智能体版本 `v20260917160941` 的一次最小合成文字调用返回 HTTP 200/SSE；
+三个工作流均产生 completion answer，响应随后出现 `task_end` 和 `end`，`errors=[]`。
+AgentArts 控制台另行读回 trace `beb5adfe9bbb8bc5520fe60d573ea828` 为成功。
+SSE 事件序列与平台 trace 是两类独立证据；前者不能冒充平台 trace，trace 中的 token
+指标也不等于已完成账单、费用或聚合 usage 读回。
+
+同日以隔离 Desktop 数据库发起的一次真实 Competition 任务已受理并运行约 69 秒，
+但本地终态为 `failed`，错误被净化为 `EXTERNAL_FAILURE`，没有 result 或 Evidence，
+也没有静默回退到 Local/Fake。随后在不提交任务、无云调用的条件下重启 Desktop，
+同一数据库仍读回该 `failed` 终态、`verification=unverified` 与空 Evidence。
+
+既有适配器只消费 `message.data.text`，而脱敏云端采集保留的是三个
+`workflow_end.data.answer` 及完整终止事件，因此最初形成了响应解析假设。该兼容修改完成
+离线定向测试后，又经用户单独授权执行了一次真实 Desktop 合成任务；第二个独立任务仍在
+约 69 秒后以同一净化错误进入 `failed`，同库无提交重启也保持该终态。没有自动重试。
+
+两次 Desktop 脚本均未保存原始响应或无内容事件统计；第二次运行的 AgentArts 平台 trace
+因当前浏览器表面不可用而未能读回。因此离线 fixture 只证明新选择规则自身的兼容性，不能
+证明它命中了真实根因，也不能在没有证据时继续归因为 terminal 顺序。后续改生产解析前，
+需要在另行授权的调用中仅采集 HTTP/content type、事件名、字段类型、计数、顺序和有界大小，
+并区分云端节点错误、字段形状、体积限制、SSE framing 与终止事件顺序。云端文字链仍为
+`conditional`；Desktop 成功闭环、结构化工具提案、本地 Policy/Approval/ToolGateway、
+目标系统读回、本地可信 Evidence、usage/cost、评估、回滚及凭据轮换仍未验证。
+
+## 后续诊断的执行与证据边界
+
+下一次真实调用前，先用离线合成响应验证诊断辅助代码；测试通过不是发起云调用的授权。
+两次已批准调用均已使用，不自动重试或复用这两次授权。新调用需明确入口、合成输入、
+凭据来源及次数；凭据只由可信测试宿主在内存提供，不写入示例、命令参数、报告或日志。
+
+- 诊断仅输出 HTTP 状态、归一化媒体类型、白名单事件类别、字段类型、长度、计数及
+  有界顺序。未知事件名归入固定 `other`，不能原样输出外部事件名或错误文本。
+- 不采集请求 URL、请求体、Authorization、其他头值、回答正文或原始响应；结构数据
+  也不能带入任意外部字符串。观测上限达到后明确标记截断，不据缺失事件判断云端未执行。
+- 通过现有 `fetchImpl` 注入的辅助工具只用于隔离测试宿主，不修改生产错误净化、
+  解析准入、重试策略、公共协议或 Runtime 状态逻辑。结构观察只能缩小候选范围，不能
+  自动证明适配器内部失败分支。
+- 若直接使用 Runtime Application 入口验收，必须标明没有经过 Desktop/IPC；即使
+  该入口成功，也不能补记为 Desktop 成功。平台 trace 仍需独立读回。
+- 每次记录独立任务与实际代码版本，保留成功或失败终态；重启读回不提交新任务。
+  成功文字仍为 `unverified`，不能作为工具执行、授权或可信 Evidence 的证明。
+
+诊断辅助代码的离线验证入口为
+`node --test tests/manual/agentarts/support/structural-fetch.test.mjs`。
+它不读取本机凭据或环境配置、不联网，不要求启动 Electron。调用方将
+`createStructuralDiagnosticFetch(innerFetch).fetch` 注入现有测试宿主的 `fetchImpl`；
+只在响应消费结束后取得 `finish()` 的结构快照，不把原响应或异常对象写入日志。
+达到诊断采集上限只停止采集，不截断交给适配器的响应；报告中的截断、饱和计数和未知值
+不代表云端未发送对应事件，也不能代替生产适配器的协议校验。
+
+事件结构分析当前仅支持 SSE，JSON 的事件观察标为 `json_unparsed`，不是“没有事件”。
+仅有 `.text()` 的测试替身无法证明原始响应字节数，报告标为 `unavailable`。
+2026-09-17 离线辅助测试 18/18 通过；本机普通测试进程启动遇到 `spawn EPERM` 后使用
+`node --test --test-isolation=none tests/manual/agentarts/support/structural-fetch.test.mjs`
+通过。另以原生 `Response`、合成 SSE 和已构建的真实 `AgentArtsCloudAgentPort` 完成
+不联网组合验证：一次 fetch、正确文字结果、`unverified`，快照无正文。未据此宣称云端成功。
+
+## 2026-09-17：单次 Runtime 结构诊断仍失败
+
+另行批准的一次 Runtime Application 诊断见
+[`2026-09-17-runtime-structural-diagnostic.json`](2026-09-17-runtime-structural-diagnostic.json)。
+该入口没有经过 Desktop/IPC；网络调用和凭据读取各一次，无自动重试。响应 HTTP 200、
+媒体类型 SSE，完整读取 466,009 bytes / 1,727 chunks，低于生产 1 MiB 上限。
+任务仍为 `failed / EXTERNAL_FAILURE`，没有结果或 Evidence；无提交重启后仍失败，
+该测试宿主报告 `verification=unavailable`，重启凭据读取与 fetch 均为零。
+
+使用的是 helper `1fda774`：仅检查前 131,072 bytes，看到 459 个合法 JSON SSE 候选、
+零 JSON 解析失败，但只保留前 64 个事件。观察已截断，不可把未保留的 `task_end/end`
+解释为云端没有发送，也无法排除尾部错误、字段/文字限制或终止顺序问题。该记录只缩小
+传输、HTTP、媒体类型、响应读取和总字节上限方面的候选，不证明具体解析根因。
+后续辅助工具的离线改进不能倒填为本次已经采集到的证据。
+
+### 后续诊断格式 v2
+
+v2 将结构扫描上限调整为生产已有的 1 MiB 响应上限；只保留前 32 与后 32 个事件形状、
+固定白名单计数、字段类型和有界长度指标。窗口被截断与扫描被截断分别标记，仍不影响
+原响应消费。文本累计值是观察到的原始字符串累计，不是生产适配器去重后的长度，不能
+仅凭累计值饱和就断言生产文本上限触发。
+
+索引冲突观察内部最多保存 1,024 个索引及文本摘要，仅输出固定计数、冲突布尔值与覆盖
+标记，不输出索引、摘要或正文。覆盖不完整时，“未观察到冲突”不代表全流没有冲突。
+未确认 SSE 媒体类型、JSON 响应或媒体类型读取失败时，索引覆盖也保持不完整。
+这些计数不是第二套协议验证器，也不构成自动修改生产解析规则的依据。
+
+v2 离线测试 21/21 通过，包含约 466 KB、多于 4,200 个事件的首尾保留、有界计数、
+索引冲突/容量不足、Unicode 和采集截断；原响应 chunk 保持透传。原生 `Response`
+与真实适配器的不联网组合也验证了超过 64 个事件后的尾部保留及原文字结果不变。
+这些是离线辅助工具验证，不新增真实云验收证据。
+
+### v2 首次 Runtime 诊断：收到 HTTP 响应前失败
+
+`2026-09-17-runtime-fetch-rejection.json` 记录 helper `ece2151` 的一次合成调用。
+任务 `446bee58-a2b0-452a-b824-2e8067773a58` 在 fetch 层拒绝，未取得 HTTP
+状态、媒体类型或 body，采集字节与事件均为 0；Runtime 为 `failed / EXTERNAL_FAILURE`、
+`verification=unavailable`。没有自动重试；同库无提交重启保持失败，额外凭据读取和 fetch 均为 0。
+
+本次没有 SSE 尾部可分析，不能解释上一次已完整收到响应的失败，也不能仅凭这些指标
+区分 DNS、TLS、代理或网络策略。云端是否执行及计费未验证；不计为 Desktop 或工具闭环成功。
+
+### 后续单次诊断：TLS 类别拒绝
+
+`2026-09-17-runtime-tls-rejection.json` 记录独立任务
+`c460c996-dd21-4eb7-8f21-07cfca96c12e`。隔离 harness 仅新增固定 transport
+类别，不记录原始错误码、消息或证书；helper 与生产代码未改变。该次单次调用在收到
+HTTP 响应前以 `tls` 类别失败，0 字节/事件，未重试；Runtime 及同库无提交重启均为
+`failed / EXTERNAL_FAILURE / unavailable`，重启没有额外 fetch 或凭据读取。
+这只定位本次连接错误类别，尚不能确定具体证书原因，也不能解释之前完整 SSE 响应后的失败。
+
+### 系统信任库隔离诊断：完整 SSE 与索引冲突
+
+`2026-09-17-runtime-index-conflict.json` 记录任务
+`1fecb109-1f76-4960-b1f7-3b0c513ce73e`。仅隔离 Node 进程启用系统信任库，未关闭
+证书校验或更改系统配置。一次调用完整收到 HTTP 200/SSE，共 510,406 字节、1,878 个
+事件；结构扫描未截断，末尾含有序 `task_end → end`，但 Runtime 及无提交重启仍失败。
+
+全响应消息文本累计 2,180 UTF-16 单元，未触及 16k 限制；诊断观察到 2 次全局索引
+文本冲突，当前生产适配器会拒绝这类冲突。索引观察容量为 1,024，覆盖仍为 partial：
+已观察到的冲突有效，但不能据此断言冲突总数，或判断它们发生在同一还是不同 workflow。
+该记录支持下一步离线复现，不证明已定位生产首个失败分支，也不代表 Desktop 成功。

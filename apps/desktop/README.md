@@ -13,6 +13,12 @@ Competition 文字接线由可信 Desktop 主进程显式选择，不由 Rendere
 `PA_AGENTARTS_AUTHORIZATION` 请求头值。Authorization 只在每次云调用时由主进程
 读取，不进入任务正文、Renderer 快照、日志或仓库。缺少或非法配置会让 Runtime
 初始化或调用明确失败；Competition 模式不会回退到盘古、Local Agent 或 Fake。
+Competition 的 `task.submit` 使用 180 秒请求 deadline，以覆盖多工作流编排；该 deadline
+仍由 Client 写入请求并贯穿 TaskRuntime 与 AgentArts 调用。本地取消或超时沿现有契约
+传递：任务 deadline 到期时 Runtime 向协调与 AgentArts 调用传播终止信号，用户取消则
+通过 `task.cancel`；提交调用本身超时不等于任务已经停止。上述路径均不自动重试，
+远端是否停止仍需 AgentArts trace 独立读回。
+Local 与 Fake 继续使用 Client 的默认 deadline。
 管理后台原有盘古配置、测试和启停动作在 Competition 模式下会明确拒绝，避免把
 Local 配置误写成 AgentArts 状态。
 显式空 `PA_RUNTIME_PROFILE`、空/非法 `PA_AGENTARTS_INVOKE_MODE` 以及
