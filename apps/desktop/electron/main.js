@@ -16,6 +16,7 @@ const runtimeProfile = process.env.PA_RUNTIME_PROFILE === undefined ? 'local' : 
 const agentArtsInvokeMode = process.env.PA_AGENTARTS_INVOKE_MODE === undefined
   ? 'published'
   : process.env.PA_AGENTARTS_INVOKE_MODE;
+const agentArtsWorkflowGoalInput = process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT;
 const competitionMode = !fakeMode && runtimeProfile === 'huawei_ict_agentarts';
 if (fakeMode || fakeModelMode) app.setPath('userData', path.resolve(dir, '../.cache/user-data'));
 if (process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1') app.setPath('userData', path.resolve(dir, `../.cache/test-user-data-${process.pid}`));
@@ -515,6 +516,7 @@ async function initializeRuntime() {
         gatewayUrl: process.env.PA_AGENTARTS_GATEWAY_URL ?? '',
         runtimeName: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
         invokeMode: agentArtsInvokeMode,
+        ...(agentArtsWorkflowGoalInput === undefined ? {} : {workflowGoalInput: agentArtsWorkflowGoalInput}),
         authorizationProvider: {
           read: async () => {
             const authorization = process.env.PA_AGENTARTS_AUTHORIZATION;
