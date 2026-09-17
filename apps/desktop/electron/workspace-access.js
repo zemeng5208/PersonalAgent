@@ -1,7 +1,17 @@
 import {realpathSync, statSync} from 'node:fs';
 import {homedir} from 'node:os';
 import path from 'node:path';
-import {createWorkspaceReadTool} from '@personal-agent/coding-tools';
+import {
+  createWorkspaceListTool,
+  createWorkspacePatchPreviewTool,
+  createWorkspaceReadTool,
+} from '@personal-agent/coding-tools';
+
+const defaultToolFactories = Object.freeze([
+  createWorkspaceReadTool,
+  createWorkspaceListTool,
+  createWorkspacePatchPreviewTool,
+]);
 
 const samePath = (left, right) => process.platform === 'win32'
   ? left.toLocaleLowerCase('en-US') === right.toLocaleLowerCase('en-US')
@@ -71,30 +81,30 @@ function guardedWorkspaceTool(tool, epoch) {
 }
 
 export class WorkspaceAccess {
-  constructor({selectDirectory, protectedRoots, broadRoots, toolFactory = createWorkspaceReadTool} = {}) {
+  constructor({selectDirectory, protectedRoots, broadRoots, toolFactory} = {}) {
     if (typeof selectDirectory !== 'function') throw Error('Workspace directory selector is required');
     this.selectDirectory = selectDirectory;
     this.protectedRoots = protectedRoots;
     this.broadRoots = broadRoots;
-    this.toolFactory = toolFactory;
+    this.toolFactories = toolFactory === undefined ? defaultToolFactories : Object.freeze([toolFactory]);
     this.epoch = new AbortController();
     this.root = undefined;
-    this.tool = undefined;
+    this.workspaceTools = Object.freeze([]);
     this.revision = 0;
     this.selectionGeneration = 0;
   }
 
   snapshot() {
     return Object.freeze({
-      configured: Boolean(this.tool),
+      configured: this.workspaceTools.length > 0,
       label: this.root ? path.basename(this.root) : '',
-      status: this.tool ? 'authorized' : 'unavailable',
+      status: this.workspaceTools.length > 0 ? 'authorized' : 'unavailable',
       revision: this.revision,
     });
   }
 
   tools() {
-    return this.tool ? [this.tool] : [];
+    return [...this.workspaceTools];
   }
 
   async select({isBusy = () => false, beforeCommit = () => {}, rendererPayload} = {}) {
@@ -118,10 +128,10 @@ export class WorkspaceAccess {
       broadRoots: this.broadRoots,
     });
     const epoch = new AbortController();
-    const tool = guardedWorkspaceTool(this.toolFactory({rootPath: root}), epoch);
+    const tools = this.toolFactories.map(factory => guardedWorkspaceTool(factory({rootPath: root}), epoch));
     this.epoch = epoch;
     this.root = root;
-    this.tool = tool;
+    this.workspaceTools = Object.freeze(tools);
     this.revision += 1;
     return {...this.snapshot(), changed: true, cancelled: false};
   }
@@ -129,11 +139,11 @@ export class WorkspaceAccess {
   revoke({rendererPayload} = {}) {
     if (rendererPayload !== undefined) throw Error('撤销工作区授权不接受 Renderer 参数');
     this.selectionGeneration += 1;
-    const changed = Boolean(this.tool || this.root);
+    const changed = Boolean(this.workspaceTools.length || this.root);
     this.epoch.abort();
     this.epoch = new AbortController();
     this.root = undefined;
-    this.tool = undefined;
+    this.workspaceTools = Object.freeze([]);
     if (changed) this.revision += 1;
     return {...this.snapshot(), changed};
   }

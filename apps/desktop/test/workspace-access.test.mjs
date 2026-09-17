@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import {mkdir, mkdtemp, readFile, readdir, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -21,13 +22,13 @@ async function fixture() {
   return {base, rootA, rootB, protectedRoot, database: path.join(base, 'runtime.sqlite')};
 }
 
-function toolContext() {
+function toolContext(scopes = ['workspace:read']) {
   return {
     runId: 'desktop-workspace-test-run',
     taskId: 'desktop-workspace-test-task',
     authorizationRef: 'desktop-workspace-test-authorization',
     deadline: new Date(Date.now() + 60_000).toISOString(),
-    scopes: ['workspace:read'],
+    scopes,
     signal: new AbortController().signal,
   };
 }
@@ -78,7 +79,16 @@ test('native selection is the only root source; cancellation and busy state do n
   assert.equal(granted.configured, true);
   assert.equal(granted.label, path.basename(rootA));
   assert.equal(JSON.stringify(granted).includes(rootA), false, 'snapshots must not expose the absolute root');
-  assert.equal(access.tools().length, 1);
+  assert.deepEqual(access.tools().map(tool => tool.descriptor.name), [
+    'workspace.read_text',
+    'workspace.list_entries',
+    'workspace.preview_text_patch',
+  ]);
+  assert.deepEqual(access.tools().map(tool => tool.descriptor.requiredScopes), [
+    ['workspace:read'],
+    ['workspace:list'],
+    ['workspace:read'],
+  ]);
 });
 
 test('late native picker results stay stale after revoke or a newer selection', async t => {
@@ -111,7 +121,8 @@ test('late native picker results stay stale after revoke or a newer selection', 
   assert.equal(stale.stale, true);
   assert.equal(access.snapshot().label, path.basename(rootB));
   assert.equal(access.snapshot().revision, committedRevision);
-  assert.match((await access.tools()[0].execute({path: 'selected.ts'}, toolContext())).content, /"b"/u);
+  const readTool = access.tools().find(tool => tool.descriptor.name === 'workspace.read_text');
+  assert.match((await readTool.execute({path: 'selected.ts'}, toolContext())).content, /"b"/u);
 });
 
 test('a task that starts while the native picker is open blocks commit and preserves the old grant', async t => {
@@ -123,7 +134,7 @@ test('a task that starts while the native picker is open blocks commit and prese
     broadRoots: [],
   });
   await access.select();
-  const oldTool = access.tools()[0];
+  const oldTools = access.tools();
   const oldRevision = access.snapshot().revision;
   let resolvePicker;
   let busy = false;
@@ -139,7 +150,7 @@ test('a task that starts while the native picker is open blocks commit and prese
   assert.equal(commits, 0);
   assert.equal(access.snapshot().label, path.basename(rootA));
   assert.equal(access.snapshot().revision, oldRevision);
-  assert.equal(access.tools()[0], oldTool);
+  assert.deepEqual(access.tools(), oldTools);
 });
 
 test('volume, broad and protected roots are rejected and a failed replacement never revives the old root', async t => {
@@ -181,17 +192,42 @@ test('revocation and A-to-B replacement invalidate old wrappers and discard late
     broadRoots: [],
   });
   await access.select();
-  const oldTool = access.tools()[0];
-  assert.equal((await oldTool.execute({path: 'selected.ts'}, toolContext())).content, content);
+  const oldTools = new Map(access.tools().map(tool => [tool.descriptor.name, tool]));
+  const sourceSha256 = createHash('sha256').update(content).digest('hex');
+  assert.equal((await oldTools.get('workspace.read_text').execute({path: 'selected.ts'}, toolContext())).content, content);
 
   selected = rootB;
   await access.select();
-  await assert.rejects(oldTool.execute({path: 'selected.ts'}, toolContext()), /cancel|撤销/iu);
-  assert.match((await access.tools()[0].execute({path: 'selected.ts'}, toolContext())).content, /"b"/u);
+  await assert.rejects(
+    oldTools.get('workspace.read_text').execute({path: 'selected.ts'}, toolContext()),
+    /cancel|撤销/iu,
+  );
+  await assert.rejects(
+    oldTools.get('workspace.list_entries').execute({path: '.'}, toolContext(['workspace:list'])),
+    /cancel|撤销/iu,
+  );
+  await assert.rejects(oldTools.get('workspace.preview_text_patch').execute({
+    path: 'selected.ts',
+    expectedSha256: sourceSha256,
+    edits: [{oldText: 'true', newText: 'false'}],
+  }, toolContext()), /cancel|撤销/iu);
+  const currentTools = new Map(access.tools().map(tool => [tool.descriptor.name, tool]));
+  assert.match((await currentTools.get('workspace.read_text').execute({path: 'selected.ts'}, toolContext())).content, /"b"/u);
 
-  const currentTool = access.tools()[0];
   access.revoke();
-  await assert.rejects(currentTool.execute({path: 'selected.ts'}, toolContext()), /cancel|撤销/iu);
+  await assert.rejects(
+    currentTools.get('workspace.read_text').execute({path: 'selected.ts'}, toolContext()),
+    /cancel|撤销/iu,
+  );
+  await assert.rejects(
+    currentTools.get('workspace.list_entries').execute({path: '.'}, toolContext(['workspace:list'])),
+    /cancel|撤销/iu,
+  );
+  await assert.rejects(currentTools.get('workspace.preview_text_patch').execute({
+    path: 'selected.ts',
+    expectedSha256: sourceSha256,
+    edits: [{oldText: 'true', newText: 'false'}],
+  }, toolContext()), /cancel|撤销/iu);
   assert.deepEqual(access.tools(), []);
 
   let release;
@@ -226,17 +262,39 @@ test('selected root enters the existing Competition approval loop and the same d
     broadRoots: [],
   });
   await access.select();
-  const port = new FakeCoordinationPort(request => request.continuation === undefined ? {
-    kind: 'tool_proposal',
-    proposalId: 'desktop-workspace-proposal',
-    toolName: 'workspace.read_text',
-    toolVersion: '1.0.0',
-    arguments: {path: 'selected.ts'},
-    verification: 'mock',
-  } : {
-    kind: 'text',
-    text: `本地读取 ${request.continuation.result.byteLength} 字节`,
-    verification: 'mock',
+  const directoryBefore = await readdir(rootA);
+  const sourceFile = path.join(rootA, 'selected.ts');
+  const originalBytes = await readFile(sourceFile);
+  const candidate = content.replace('true', 'false');
+  const beforeSha256 = createHash('sha256').update(originalBytes).digest('hex');
+  const afterSha256 = createHash('sha256').update(candidate).digest('hex');
+  const port = new FakeCoordinationPort(request => {
+    if (request.continuation === undefined) {
+      return {
+        kind: 'tool_proposal',
+        proposalId: 'desktop-workspace-preview-proposal',
+        toolName: 'workspace.preview_text_patch',
+        toolVersion: '1.0.0',
+        arguments: {
+          path: 'selected.ts',
+          expectedSha256: beforeSha256,
+          edits: [{oldText: 'true', newText: 'false'}],
+        },
+        verification: 'mock',
+      };
+    }
+    assert.deepEqual(request.continuation, {
+      proposalId: 'desktop-workspace-preview-proposal',
+      state: 'confirmed',
+      result: {
+        path: 'selected.ts',
+        beforeSha256,
+        afterSha256,
+        changed: true,
+        previewText: candidate,
+      },
+    });
+    return {kind: 'text', text: '本地补丁预览已确认，文件未写入', verification: 'mock'};
   });
   app = createRuntimeApplication({
     path: database,
@@ -247,23 +305,38 @@ test('selected root enters the existing Competition approval loop and the same d
   const client = new Client(app, Date.now);
   await client.connect();
   const capabilities = await client.call('capability.list', {kind: 'tool'});
-  assert.deepEqual(capabilities.manifests.map(item => item.name), ['workspace.read_text']);
+  assert.deepEqual(capabilities.manifests.map(item => item.name), [
+    'workspace.read_text',
+    'workspace.list_entries',
+    'workspace.preview_text_patch',
+  ]);
+  assert.deepEqual(capabilities.health, [
+    {id: 'workspace.read_text', state: 'ready'},
+    {id: 'workspace.list_entries', state: 'ready'},
+    {id: 'workspace.preview_text_patch', state: 'ready'},
+  ]);
   const {taskId} = await client.call('task.submit', {
-    goal: '读取显式选择的合成工作区文件',
+    goal: '预览显式选择的合成工作区文件修改，但不要写入',
     conversationId: 'desktop-workspace-access',
   }, {idempotencyKey: 'desktop-workspace-access'});
   assert.equal((await waitForState(app, taskId, ['waiting_approval', 'failed'])).state, 'waiting_approval');
   const approvals = await client.call('approval.list', {taskId, state: 'pending'});
   assert.equal(approvals.items.length, 1);
-  assert.equal(approvals.items[0].action, 'workspace.read_text');
+  assert.equal(approvals.items[0].action, 'workspace.preview_text_patch');
   assert.equal('arguments' in approvals.items[0], false, 'Desktop approval snapshots stay redacted');
   await client.call('authorization.respond', {
     approvalId: approvals.items[0].approvalId,
     expectedRevision: approvals.items[0].revision,
     decision: 'allow_once',
   });
-  assert.equal((await waitForState(app, taskId, ['succeeded', 'failed'])).state, 'succeeded');
-  assert.equal(port.requests[1].continuation.result.content, content);
+  const completed = await waitForState(app, taskId, ['succeeded', 'failed']);
+  assert.equal(completed.state, 'succeeded');
+  assert.match(completed.resultSummary, /本地补丁预览已确认，文件未写入/u);
+  assert.equal(port.requests.length, 2);
+  assert.equal(app.runtime.readToolExecutions(taskId).length, 1);
+  assert.equal(app.runtime.readToolExecutions(taskId)[0].toolName, 'workspace.preview_text_patch');
+  assert.deepEqual(await readFile(sourceFile), originalBytes);
+  assert.deepEqual(await readdir(rootA), directoryBefore);
   await waitForIdle(app);
   app.close();
   app = undefined;
