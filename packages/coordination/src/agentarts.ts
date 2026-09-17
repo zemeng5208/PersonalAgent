@@ -21,6 +21,8 @@ export interface AgentArtsRuntimeConfig {
   gatewayUrl: string;
   runtimeName: string;
   invokeMode?: 'debug' | 'published';
+  /** Trusted host opt-in: map the goal to one Workflow start-node variable. */
+  workflowGoalInput?: string;
 }
 
 export interface AgentArtsFetchInit {
@@ -91,6 +93,8 @@ function asPlainObject(value: unknown): Record<string, unknown> | undefined {
 function validateRequest(request: CoordinationRequest): {deadlineMs: number; signal: AbortSignal} {
   const input = asPlainObject(request);
   if (!input) invalid('Invalid AgentArts coordination request');
+  // A text-only invocation cannot silently discard a future tool result.
+  if (input.continuation !== undefined) invalid('AgentArts text adapter does not support tool continuation');
 
   const taskId = input.taskId;
   if (typeof taskId !== 'string') invalid('Coordination taskId must be a string');
@@ -149,6 +153,7 @@ function validateRuntimeConfig(config: AgentArtsRuntimeConfig): {
   gatewayOrigin: string;
   runtimeName: string;
   invokeMode: 'debug' | 'published';
+  workflowGoalInput?: string;
 } {
   const value = asPlainObject(config);
   if (!value) invalid('AgentArts runtime config is invalid');
@@ -159,7 +164,13 @@ function validateRuntimeConfig(config: AgentArtsRuntimeConfig): {
   }
   const invokeMode = value.invokeMode === undefined ? 'published' : value.invokeMode;
   if (invokeMode !== 'debug' && invokeMode !== 'published') invalid('AgentArts invokeMode is invalid');
-  return {gatewayOrigin, runtimeName, invokeMode};
+  const workflowGoalInput = value.workflowGoalInput;
+  if (workflowGoalInput !== undefined && (typeof workflowGoalInput !== 'string'
+    || !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(workflowGoalInput))) {
+    invalid('AgentArts workflow goal input is invalid');
+  }
+  return {gatewayOrigin, runtimeName, invokeMode,
+    ...(workflowGoalInput === undefined ? {} : {workflowGoalInput})};
 }
 
 function makeCombinedSignal(parent: AbortSignal, deadlineMs: number): CombinedSignal {
@@ -610,6 +621,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
   private readonly gatewayOrigin: string;
   private readonly runtimeName: string;
   private readonly invokeMode: 'debug' | 'published';
+  private readonly workflowGoalInput: string | undefined;
   private readonly authorizationProvider: AgentArtsAuthorizationProvider;
   private readonly fetchImpl: AgentArtsFetch;
 
@@ -626,6 +638,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
     this.gatewayOrigin = validated.gatewayOrigin;
     this.runtimeName = validated.runtimeName;
     this.invokeMode = validated.invokeMode;
+    this.workflowGoalInput = validated.workflowGoalInput;
     this.authorizationProvider = authorizationProvider;
     this.fetchImpl = fetchImpl ?? defaultFetch;
   }
@@ -662,7 +675,9 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
           'X-Invoke-Mode': this.invokeMode,
           'X-Request-Id': requestId,
         },
-        body: JSON.stringify({query: request.goal}),
+        body: JSON.stringify(this.workflowGoalInput === undefined
+          ? {query: request.goal}
+          : {inputs: {[this.workflowGoalInput]: request.goal}}),
         signal: combined.signal,
         redirect: 'error',
       };
