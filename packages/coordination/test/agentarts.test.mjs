@@ -177,6 +177,13 @@ test('message events with null text are metadata-only and do not invalidate late
   });
 });
 
+test('message text rejects non-string number, object, and boolean values', async () => {
+  for (const text of [42, {value: 'not text'}, true]) {
+    const cloud = port(async () => jsonResponse(message(text)));
+    await rejectsCode(cloud.invoke(request()), 'EXTERNAL_FAILURE');
+  }
+});
+
 test('multi-agent SSE returns only the last workflow answer after task_end and end', async () => {
   const body = readFileSync(
     new URL('./fixtures/agentarts-multi-agent-success.sse', import.meta.url),
@@ -233,6 +240,39 @@ test('multi-agent mode ignores intermediate message text and requires its final 
   );
 });
 
+test('workflow answer accepts exactly 16000 characters', async () => {
+  const answer = 'a'.repeat(16_000);
+  const events = [
+    {event: 'workflow_end', data: {workflow_name: 'PA-final', answer}},
+    {event: 'task_end', data: {}},
+    {event: 'end', data: {}},
+  ];
+  const result = await port(async () => jsonResponse(events)).invoke(request());
+  assert.equal(result.text, answer);
+});
+
+test('workflow intermediate messages use a cumulative 16000-character limit', async () => {
+  const accepted = [
+    {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
+    message('a'.repeat(8_000)),
+    message('b'.repeat(8_000)),
+    {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'final'}},
+    {event: 'task_end', data: {}},
+    {event: 'end', data: {}},
+  ];
+  assert.equal((await port(async () => jsonResponse(accepted)).invoke(request())).text, 'final');
+
+  const rejected = [
+    {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
+    message('a'.repeat(8_000)),
+    message('b'.repeat(8_001)),
+    {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'final'}},
+    {event: 'task_end', data: {}},
+    {event: 'end', data: {}},
+  ];
+  await rejectsCode(port(async () => jsonResponse(rejected)).invoke(request()), 'EXTERNAL_FAILURE');
+});
+
 test('multi-agent workflow answers remain partial until both terminal events arrive', async () => {
   const answer = {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'candidate'}};
   for (const events of [
@@ -243,6 +283,25 @@ test('multi-agent workflow answers remain partial until both terminal events arr
   ]) {
     const body = events.map(event => `data: ${JSON.stringify(event)}\n`).join('\n');
     await rejectsCode(port(async () => sseResponse(body)).invoke(request()), 'EXTERNAL_FAILURE');
+  }
+});
+
+test('workflow task_end and end terminal events cannot be repeated', async () => {
+  for (const events of [
+    [
+      {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'candidate'}},
+      {event: 'task_end', data: {}},
+      {event: 'task_end', data: {}},
+      {event: 'end', data: {}},
+    ],
+    [
+      {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'candidate'}},
+      {event: 'task_end', data: {}},
+      {event: 'end', data: {}},
+      {event: 'end', data: {}},
+    ],
+  ]) {
+    await rejectsCode(port(async () => jsonResponse(events)).invoke(request()), 'EXTERNAL_FAILURE');
   }
 });
 
@@ -288,6 +347,21 @@ test('a failure after workflow_end overrides the partial answer', async () => {
       'partial answer',
     ]);
   }
+});
+
+test('a failure after task_end and end still overrides the completed answer', async () => {
+  const secret = 'post-terminal workflow failure must stay private';
+  const events = [
+    {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'completed answer'}},
+    {event: 'task_end', data: {}},
+    {event: 'end', data: {}},
+    {event: 'error', data: {message: secret}},
+  ];
+  await rejectsCode(
+    port(async () => jsonResponse(events)).invoke(request()),
+    'EXTERNAL_FAILURE',
+    [secret, 'completed answer'],
+  );
 });
 
 test('workflow_end validates answer type and size', async () => {
@@ -518,6 +592,16 @@ test('invalid UTF-8 is rejected for raw body and text seams', async () => {
 test('missing content type is rejected instead of guessed from the payload', async () => {
   const cloud = port(async () => new Response(JSON.stringify(message('ok')), {status: 200}));
   await rejectsCode(cloud.invoke(request()), 'EXTERNAL_FAILURE');
+});
+
+test('unsupported content types are rejected instead of guessed from the payload', async () => {
+  for (const contentType of ['text/plain', 'application/xml', 'application/jsonx']) {
+    const cloud = port(async () => new Response(JSON.stringify(message('ok')), {
+      status: 200,
+      headers: {'content-type': contentType},
+    }));
+    await rejectsCode(cloud.invoke(request()), 'EXTERNAL_FAILURE');
+  }
 });
 
 test('malformed JSON, conflicting indexes, and empty text are rejected', async () => {
