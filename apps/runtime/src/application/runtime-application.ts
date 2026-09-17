@@ -104,11 +104,13 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     if (typeof goal !== 'string') throw new ProtocolError('NOT_FOUND', 'Task has no application checkpoint');
 
     if (this.profile === 'huawei_ict_agentarts') {
+      const deadline = this.runtime.loadCheckpoint(taskId, 'application-deadline');
+      if (typeof deadline !== 'string') throw new ProtocolError('NOT_FOUND', 'Task has no deadline checkpoint');
       const competition = this.runtime.loadCheckpoint(taskId, 'competition-loop') as {step: number} | undefined;
       const competitionApproval = this.runtime.getApproval(`competition-tool-${taskId}-${competition?.step}`);
       if (competitionApproval.state !== 'allowed') throw new ProtocolError('UNAUTHORIZED', 'Task approval has not been allowed');
       const execution = startCoordinationTask(
-        this.runtime, this.coordination, this.tools, taskId, goal, competitionApproval.expiresAt, {resume: true},
+        this.runtime, this.coordination, this.tools, taskId, goal, deadline, {resume: true},
       ).finally(() => this.activeTextTasks.delete(taskId));
       this.activeTextTasks.set(taskId, execution);
       void execution.catch(() => {});
@@ -137,6 +139,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     if (this.profile === 'huawei_ict_agentarts') {
       this.runtime.saveCheckpoint(taskId, 'application-profile', this.profile);
       this.runtime.saveCheckpoint(taskId, 'application-goal', goal);
+      this.runtime.saveCheckpoint(taskId, 'application-deadline', request.deadline);
       const execution = Promise.resolve().then(() => startCoordinationTask(
         this.runtime, this.coordination, this.tools, taskId, goal, request.deadline,
       )).finally(() => this.activeTextTasks.delete(taskId));

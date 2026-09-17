@@ -218,6 +218,7 @@ test('competition approval resumes from the persisted proposal after Runtime res
       {idempotencyKey: 'competition-restart'},
     );
     assert.equal((await waitForState(app, taskId, ['waiting_approval', 'failed'])).state, 'waiting_approval');
+    const deadline = app.runtime.loadCheckpoint(taskId, 'application-deadline');
     app.close();
 
     app = createRuntimeApplication({
@@ -229,6 +230,7 @@ test('competition approval resumes from the persisted proposal after Runtime res
     client = new Client(app, Date.now);
     await client.connect();
     const approval = (await client.call('approval.list', {taskId})).items[0];
+    assert.ok(Date.parse(approval.expiresAt) > Date.parse(deadline));
     await client.call('authorization.respond', {
       approvalId: approval.approvalId,
       expectedRevision: approval.revision,
@@ -239,6 +241,57 @@ test('competition approval resumes from the persisted proposal after Runtime res
     assert.match(task.resultSummary, /重启后续跑成功/);
     assert.equal(executions, 1);
     assert.equal(port.requests.length, 2);
+    assert.equal(port.requests[1].deadline, deadline);
+  } finally {
+    app.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('competition approval after original deadline times out without executing the tool', async () => {
+  const base = new URL('../../../.cache/competition-tool-loop/', import.meta.url);
+  await mkdir(base, {recursive: true});
+  const directory = await mkdtemp(new URL('case-', base));
+  let currentTime = Date.now();
+  const now = () => currentTime;
+  let executions = 0;
+  const port = new FakeCoordinationPort(() => ({
+    kind: 'tool_proposal',
+    proposalId: 'proposal-expired',
+    toolName: 'fixture.echo',
+    toolVersion: '1.0.0',
+    arguments: {value: 'expired'},
+    verification: 'mock',
+  }));
+  const app = createRuntimeApplication({
+    path: directory + '/runtime.sqlite',
+    now: () => new Date(now()),
+    profile: 'huawei_ict_agentarts',
+    coordination: port,
+    tools: [{...tool, execute: async input => { executions++; return input; }}],
+  });
+  try {
+    const client = new Client(app, now);
+    await client.connect();
+    const {taskId} = await client.call(
+      'task.submit',
+      {goal: '过期审批', conversationId: 'competition'},
+      {idempotencyKey: 'competition-expired', timeoutMs: 30_000},
+    );
+    assert.equal((await waitForState(app, taskId, ['waiting_approval', 'failed'])).state, 'waiting_approval');
+    const deadline = app.runtime.loadCheckpoint(taskId, 'application-deadline');
+    const approval = (await client.call('approval.list', {taskId})).items[0];
+    assert.ok(Date.parse(approval.expiresAt) > Date.parse(deadline));
+    currentTime = Date.parse(deadline) + 1;
+    await client.call('authorization.respond', {
+      approvalId: approval.approvalId,
+      expectedRevision: approval.revision,
+      decision: 'allow_once',
+    });
+    const task = await waitForState(app, taskId, ['failed']);
+    assert.equal(task.error.code, 'TIMEOUT');
+    assert.equal(executions, 0);
+    assert.equal(port.requests.length, 1);
   } finally {
     app.close();
     await rm(directory, {recursive: true, force: true});
