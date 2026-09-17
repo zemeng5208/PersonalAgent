@@ -51,8 +51,15 @@ SSE 事件序列与平台 trace 是两类独立证据；前者不能冒充平台
 也没有静默回退到 Local/Fake。随后在不提交任务、无云调用的条件下重启 Desktop，
 同一数据库仍读回该 `failed` 终态、`verification=unverified` 与空 Evidence。
 
-诊断发现既有适配器只消费 `message.data.text`，而本次脱敏云端采集保留的是三个
-`workflow_end.data.answer` 及完整终止事件。对应解析修复已完成离线定向测试，但本次
-授权的一次真实 Desktop 调用已经使用，尚未进行修复后的第二次付费调用。因此云端文字
-链仍为 `conditional`；Desktop 成功闭环、结构化工具提案、本地 Policy/Approval/
-ToolGateway、目标系统读回、本地可信 Evidence、usage/cost、评估、回滚及凭据轮换仍未验证。
+既有适配器只消费 `message.data.text`，而脱敏云端采集保留的是三个
+`workflow_end.data.answer` 及完整终止事件，因此最初形成了响应解析假设。该兼容修改完成
+离线定向测试后，又经用户单独授权执行了一次真实 Desktop 合成任务；第二个独立任务仍在
+约 69 秒后以同一净化错误进入 `failed`，同库无提交重启也保持该终态。没有自动重试。
+
+两次 Desktop 脚本均未保存原始响应或无内容事件统计；第二次运行的 AgentArts 平台 trace
+因当前浏览器表面不可用而未能读回。因此离线 fixture 只证明新选择规则自身的兼容性，不能
+证明它命中了真实根因，也不能在没有证据时继续归因为 terminal 顺序。后续改生产解析前，
+需要在另行授权的调用中仅采集 HTTP/content type、事件名、字段类型、计数、顺序和有界大小，
+并区分云端节点错误、字段形状、体积限制、SSE framing 与终止事件顺序。云端文字链仍为
+`conditional`；Desktop 成功闭环、结构化工具提案、本地 Policy/Approval/ToolGateway、
+目标系统读回、本地可信 Evidence、usage/cost、评估、回滚及凭据轮换仍未验证。

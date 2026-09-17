@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "profile": "huawei_ict_agentarts",
-  "observedAt": "2026-09-17T16:40:09+08:00",
+  "observedAt": "2026-09-17T16:51:17+08:00",
   "region": "cn-southwest-2",
   "evidenceLevel": "conditional",
   "surface": "Huawei Cloud AgentArts console, runtime API and isolated Desktop TaskRuntime readback",
@@ -94,10 +94,53 @@
       "submittedDuringRestart": false
     }
   },
+  "desktopLiveReverification": {
+    "authorizationScope": "one additional synthetic Desktop task",
+    "taskId": "c3a266a6-4df4-4a93-82dc-862a2a9fca57",
+    "startedAt": "2026-09-17T16:48:55.349+08:00",
+    "terminalAt": "2026-09-17T16:50:03.853+08:00",
+    "isolatedUserData": true,
+    "profileCheckpoint": "huawei_ict_agentarts",
+    "state": "failed",
+    "error": {
+      "code": "EXTERNAL_FAILURE",
+      "message": "Coordination adapter failed",
+      "retryable": false
+    },
+    "resultPersisted": false,
+    "evidenceRefs": [],
+    "silentLocalFallbackObserved": false,
+    "automaticRetryPerformed": false,
+    "rawResponseCaptured": false,
+    "sanitizedEventStatisticsCaptured": false,
+    "platformTraceReadback": {
+      "attempted": true,
+      "completed": false,
+      "blocker": "No browser surface was available after one reset and retry."
+    },
+    "sameDatabaseRestartReadback": {
+      "observedAt": "2026-09-17T16:51:17+08:00",
+      "state": "failed",
+      "provider": "agentarts",
+      "verification": "unverified",
+      "evidenceRefCount": 0,
+      "submittedDuringRestart": false
+    }
+  },
   "adapterDiagnosis": {
-    "status": "offline_verified_not_live_retried",
-    "basis": "The successful sanitized API capture retained three workflow_end answers and both terminal events. The pre-fix adapter ignored workflow_end and required message text, while the isolated Desktop task failed at response validation. The capture did not retain messageTextCount, so live causality remains to be confirmed by one separately authorized rerun.",
+    "status": "synthetic_compatibility_verified_live_root_cause_unresolved",
+    "basis": "The successful sanitized API capture retained three workflow_end answers and both terminal events. The pre-fix adapter ignored workflow_end and required message text, which supported an initial parser hypothesis. A second authorized Desktop invocation using the rebuilt adapter still failed with the same sanitized response-validation error. Neither Desktop invocation retained the raw response or sanitized event statistics, so the production failure cannot be attributed to terminal ordering or workflow_end selection without more evidence.",
     "selectionRule": "For streams containing workflow_start or workflow_end, keep only the latest completed workflow answer and return it only after task_end followed by end; later failure events override all partial output.",
+    "liveResult": "The selection rule passes synthetic fixtures but did not make the second live Desktop task succeed.",
+    "unresolvedCandidates": [
+      "a cloud workflow or node error not exposed by the sanitized local error",
+      "an unexpected HTTP status or content type",
+      "a live message or workflow answer field type not represented by the fixture",
+      "the response byte or text limit",
+      "SSE framing that differs from the standard and separator-less fixtures",
+      "the live task_end and end order or another terminal event shape"
+    ],
+    "nextDiagnosticBoundary": "Before changing production parsing again, collect content-free event names, field types, counts, ordering, HTTP status, content type and bounded sizes during a separately authorized invocation.",
     "offlineVerification": [
       "@personal-agent/coordination build passed",
       "@personal-agent/coordination tests passed 49 of 49",
@@ -112,10 +155,14 @@
     "AgentArts platform trace identity and success state",
     "isolated Desktop failure without silent local fallback",
     "failed TaskRuntime terminal persistence across a no-submit Desktop restart",
+    "a second independently authorized Desktop failure with a distinct task ID",
+    "second failed TaskRuntime terminal persistence across a no-submit Desktop restart",
     "unverified output semantics and empty trusted evidence references"
   ],
   "notVerified": [
-    "successful Desktop live invocation after the response parser fix",
+    "successful Desktop live invocation after the response parser change",
+    "exact live response-validation failure cause for either Desktop attempt",
+    "platform trace or cloud node status for the second Desktop attempt",
     "billing, cost and aggregate usage readback",
     "structured tool proposal",
     "local Policy, Approval and ToolGateway execution",
@@ -129,6 +176,7 @@
     "credentialsRecorded": false,
     "requestContainedPrivateData": false,
     "liveCredentialUsedInMemoryOnly": true,
+    "secondLiveCredentialUsedInMemoryOnly": true,
     "restartUsedPlaceholderWithoutTaskSubmission": true,
     "credentialRotationRequiredBeforeHandoff": true
   }
