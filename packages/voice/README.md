@@ -105,6 +105,30 @@ the deadline timer remains active while the buffer is idle and all terminal path
 the timer and abort listener. This helper owns no session or Runtime state, emits no audio
 logs, and cannot translate cancellation into `task.cancel`.
 
+## Windows System.Speech adapters
+
+`createWindowsSystemSpeechPorts()` returns provider-specific recognition and output ports
+for the installed Windows `.NET Framework` `System.Speech` engine. The implementation
+starts one hidden Windows PowerShell 5.1 child per explicit operation with a fixed system
+executable, fixed adjacent script, fixed `zh-CN` culture and fixed `recognize` / `speak`
+mode. Callers cannot provide a command, script path, executable, device or execution
+policy. PCM or UTF-8 text uses bounded stdin; stdout is one bounded JSON result; stderr is
+drained without logging. There is no file, network, credential or automatic retry path.
+
+Deadline, parent abort, `stop()` and adapter disposal terminate the exact child and wait
+for its close. The adapter copies and later zeroes its audio input. Recognition responses
+are restricted to 8,000 characters and all process/provider failures use fixed local
+errors. The helper uses open dictation for recognition and the installed `zh-CN` default
+audio voice for speech.
+
+Source availability is not runtime availability. A one-time in-memory fixed-grammar probe
+confirmed that this development host has compatible synthesis and recognition, but it did
+not verify dictation, microphone capture or real playback. That one-time execution-policy
+authorization is exhausted. The production launcher never passes an execution-policy
+bypass; if the fixed script is blocked, the ports are unavailable until the packaged
+script is signed/allowed through a separately authorized production setup. Desktop must
+keep its Unavailable ports and UI state until that setup and real-device acceptance pass.
+
 ## Fake use and verification
 
 `@personal-agent/voice/testing` exports Fake recognition, explicit transcript consumer

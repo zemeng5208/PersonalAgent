@@ -35,6 +35,8 @@ export {
   createRuntimeClientTranscriptConsumer,
 } from './runtime-consumer.js';
 export type {RuntimeClientTranscriptConsumerOptions} from './runtime-consumer.js';
+export {createWindowsSystemSpeechPorts} from './windows-system-speech.js';
+export type {WindowsSystemSpeechPorts} from './windows-system-speech.js';
 export {bindVoiceWake} from './wake-binding.js';
 export type {VoiceWakeBinding, VoiceWakeBindingOptions} from './wake-binding.js';
 export {VoiceSessionManager} from './voice-session.js';
