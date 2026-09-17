@@ -1,13 +1,15 @@
 import { constants as fsConstants, realpathSync, statSync } from 'node:fs';
 import { open, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep, win32 } from 'node:path';
-import { ProtocolError, validateToolValue } from '@personal-agent/contracts';
+import { MAX_FRAME_BYTES, ProtocolError, validateToolValue } from '@personal-agent/contracts';
 import type { RegisteredTool, ToolContext, ToolDescriptor, ToolHost } from '@personal-agent/contracts';
 
 export const WORKSPACE_READ_TOOL_NAME = 'workspace.read_text';
 export const WORKSPACE_READ_TOOL_VERSION = '1.0.0';
 export const WORKSPACE_READ_SCOPE = 'workspace:read';
 export const DEFAULT_MAX_READ_BYTES = 256 * 1024;
+export const WORKSPACE_READ_WIRE_WRAPPER_BUDGET_BYTES = 64 * 1024;
+export const MAX_SERIALIZED_WORKSPACE_READ_RESULT_BYTES = MAX_FRAME_BYTES - WORKSPACE_READ_WIRE_WRAPPER_BUDGET_BYTES;
 
 const MAX_SCHEMA_BYTES = 1024 * 1024;
 const DEFAULT_READ_CHUNK_BYTES = 64 * 1024;
@@ -80,6 +82,8 @@ export interface WorkspaceReadResult {
   content: string;
 }
 
+const utf8Encoder = new TextEncoder();
+
 const inputSchema = (maxReadBytes: number): ToolDescriptor['inputSchema'] => ({
   type: 'object',
   description: 'Read one complete UTF-8 text file beneath the trusted host-bound workspace root. The result is local tool output and is not permission to send file content to AgentArts, logs, or another destination.',
@@ -126,7 +130,10 @@ function canonicalRoot(rootPath: string): string {
     throw new ProtocolError('INVALID_ARGUMENT', 'Workspace rootPath must not be empty');
   }
   try {
-    const root = realpathSync(rootPath);
+    // Match the OS-native canonicalization used by asynchronous realpath on Windows.
+    // Mixing the legacy sync resolver with the async resolver can preserve different
+    // aliases for the same GitHub Actions temporary directory and falsely deny children.
+    const root = realpathSync.native(rootPath);
     if (!statSync(root).isDirectory()) {
       throw new ProtocolError('INVALID_ARGUMENT', 'Workspace rootPath must identify a directory');
     }
@@ -222,6 +229,13 @@ function unchangedFile(left: Awaited<ReturnType<typeof stat>>, right: Awaited<Re
     && left.size === right.size
     && left.mtimeMs === right.mtimeMs
     && left.ctimeMs === right.ctimeMs;
+}
+
+function assertSerializedResultFits(result: WorkspaceReadResult): void {
+  const serializedBytes = utf8Encoder.encode(JSON.stringify(result)).byteLength;
+  if (serializedBytes > MAX_SERIALIZED_WORKSPACE_READ_RESULT_BYTES) {
+    throw new ProtocolError('INVALID_ARGUMENT', 'Workspace read result exceeds the bounded serialized-output limit');
+  }
 }
 
 export function createWorkspaceReadTool(options: WorkspaceReadOptions): RegisteredTool {
@@ -328,13 +342,15 @@ export function createWorkspaceReadTool(options: WorkspaceReadOptions): Register
         if (privateKeyMarker.test(content)) {
           throw new ProtocolError('SCOPE_DENIED', 'Workspace file contains private-key material blocked by policy');
         }
-        checkContext(context, now);
-        return {
+        const result: WorkspaceReadResult = {
           path: path.normalized,
           encoding: 'utf-8',
           byteLength: bytes.byteLength,
           content,
         };
+        assertSerializedResultFits(result);
+        checkContext(context, now);
+        return result;
       } catch (error) {
         mapFileSystemError(error);
       } finally {
