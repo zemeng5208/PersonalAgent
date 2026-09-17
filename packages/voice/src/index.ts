@@ -1,4 +1,6 @@
 export {VoiceSessionError} from './errors.js';
+export {decodeVoiceWave, MAX_VOICE_WAVE_BYTES, MAX_VOICE_WAVE_CHUNKS} from './wave-decode.js';
+export {encodeVoiceWave} from './wave-encode.js';
 export type {VoiceErrorCode} from './errors.js';
 export {
   MAX_AUDIO_BYTES,

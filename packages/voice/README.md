@@ -6,6 +6,24 @@ with explicit Fake/Unavailable adapters. It does not choose an ASR/TTS vendor, o
 microphone, persist audio or transcripts, upload data by itself, submit Runtime tasks,
 or advertise the public `voice.start` / `voice.stop` wire operations.
 
+## Bounded in-memory WAVE adapter
+
+`decodeVoiceWave(bytes)` accepts only RIFF/WAVE with one 16-byte PCM `fmt `
+chunk followed by one `data` chunk: signed 16-bit little-endian, 16 kHz, mono.
+It returns an independent `VoiceAudioClip`; duration is the ceiling of the
+sample duration in milliseconds. Unknown chunks are skipped without exposing
+metadata, but at most 64 chunks and 64 KiB of container overhead are accepted.
+Declared RIFF/chunk sizes must match the complete input, including odd chunk
+padding. Duplicate formats/data, empty or odd-sized PCM, compressed/float audio,
+extensible formats, other rates/channels, truncation and trailing bytes fail
+with a fixed error. This is deliberately not a general-purpose audio decoder.
+
+`encodeVoiceWave(clip)` validates the same PCM shape and exact rounded duration,
+then returns a canonical 44-byte header plus an independent PCM copy. Neither
+function opens files, records, plays, uploads, resamples or grants consent.
+They do not import device providers or change the unavailable ASR/TTS status.
+Container parsing follows Microsoft's [RIFF documentation](https://learn.microsoft.com/en-us/windows/win32/xaudio2/resource-interchange-file-format--riff-).
+
 ## Public flow
 
 1. A trusted caller starts one bounded session with an ISO UTC deadline and an

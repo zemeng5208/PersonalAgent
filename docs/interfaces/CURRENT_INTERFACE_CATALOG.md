@@ -227,6 +227,14 @@ FactChangeFeed 继续保持 unavailable，直到消费语义确认并完成实�
 
 ## 8. 当前结论
 
+### MOD-14 WAVE container subset (2026-09-17)
+
+`@personal-agent/voice` adds provisional pure `decodeVoiceWave` and
+`encodeVoiceWave` over the existing `VoiceAudioClip`. Only bounded PCM S16LE,
+16 kHz, mono RIFF/WAVE is accepted. No resampling, device access, wire operation,
+dependency, provider, consent or migration is added. Voice device/ASR/TTS
+capabilities remain unavailable; this increment only adapts in-memory bytes.
+
 截至 2026-09-09，**适合冻结的是 Core Runtime Profile 1 的消息、任务、会话与审批只读查询子集；不适合冻结整套协议、模型工具调用或 Agent 编排接口。** 产品当前只实施 Huawei ICT AgentArts Competition Profile；Local Profile 仅留存现有代码、当前不新增。该范围决定不改变接口证据状态。
 
 盘古当前没有已验证的原生工具调用，文字 JSON 工具提案也未完成真实闭环。因此 MOD-04/05 的离线实现继续保持 `review`，Local Model/Agent/Tool 相关接口保持 `provisional`。截至 2026-09-12，Competition 的文字 Coordination/CloudAgent 子集、离线版本图/影响分析和存储首片均已集成但未冻结。真实 AgentArts、统一世界状态、事实流与完整认知集成仍 `unavailable`。
