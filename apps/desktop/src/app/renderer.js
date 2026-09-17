@@ -5,6 +5,7 @@ import {mountWorkspace} from '../features/workspace/view.js';
 import {applyPreferences} from '../ui/preferences.js';
 import {mountConversationRail} from '../features/conversation/rail.js';
 import {mountDesktopShell} from '../ui/desktop-shell.js';
+import {createPushToTalkCapture} from '../features/voice/capture.js';
 
 applyPreferences();
 mountDesktopShell();
@@ -49,6 +50,10 @@ else {
   const form=root.querySelector('form'),input=root.querySelector('textarea'),thread=root.querySelector('.thread'),tasksNode=root.querySelector('#tasks');
   const updateRail=mountConversationRail(root.querySelector('.panel'),thread);
   const sendBtn=root.querySelector('#send'),modelBtn=root.querySelector('#model'),modelMenu=root.querySelector('#model-menu');
+  const playButton=root.querySelector('#talk'),stopButton=root.querySelector('#stop'),micState=root.querySelector('.mic-state');
+  playButton.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6.5 9H3v6h3.5L11 19z"/><path d="M15 8.5a5 5 0 0 1 0 7"/><path d="M17.8 5.8a9 9 0 0 1 0 12.4"/></svg>';
+  playButton.title='播报回答';playButton.setAttribute('aria-label','播报回答');
+  let voiceRecorder,voicePress=false,voiceFinishRequested=false,voiceFinishing=false,voiceToken=0;
   const bellBtn=root.querySelector('#bell'),bellMenu=root.querySelector('#bell-menu');
   const slider=root.querySelector('#mm-slider'),depthLabel=root.querySelector('#mm-depth-label'),fastBtn=root.querySelector('#mm-fast');
   const closeModel=()=>{modelMenu.hidden=true;modelBtn.setAttribute('aria-expanded','false');};
@@ -59,7 +64,10 @@ else {
   const finishPanelDrag=()=>{if(panelDragging)panelDragReady?.then(()=>invoke('panel.dragEnd').catch(report));panelDragStart=undefined;panelDragging=false;panelDragReady=undefined;};
   header.addEventListener('pointerup',finishPanelDrag);header.addEventListener('pointercancel',finishPanelDrag);header.addEventListener('lostpointercapture',finishPanelDrag);
   const syncSlider=()=>{const v=Number(slider.value);const labels=['最低','低','平衡','深入','高','最高'];const fill=6+(88*v/5);slider.style.setProperty('--fill',fill+'%');depthLabel.textContent=labels[v]??'平衡';modelMenu.classList.toggle('maxed',v===5);};
-  const setSendMode=hasText=>{sendBtn.dataset.mode=hasText?'send':'voice';sendBtn.title=hasText?'发送':'语音模式（语音模型未连接）';sendBtn.setAttribute('aria-label',hasText?'发送消息':'语音模式（语音模型未连接）');sendBtn.disabled=pending || Boolean(current?.tasks.some(task=>!isTerminal(task)));};
+  const setSendMode=hasText=>{const voiceReady=current?.voice?.captureAvailable===true;const voiceReason=current?.voice?.reason??'语音供应商尚未连接';sendBtn.dataset.mode=hasText?'send':'voice';sendBtn.title=hasText?'发送':voiceReady?'按住说话，松开发送':voiceReason;sendBtn.setAttribute('aria-label',hasText?'发送消息':voiceReady?'按住说话，松开发送':voiceReason);sendBtn.disabled=pending || Boolean(current?.tasks.some(task=>!isTerminal(task))) || (!hasText&&!voiceReady);sendBtn.dataset.voiceActive=String(Boolean(voicePress||voiceRecorder?.active));};
+  const cancelVoiceCapture=async()=>{voiceToken+=1;voicePress=false;voiceFinishRequested=false;voiceRecorder?.cancel();voiceRecorder=undefined;sendBtn.dataset.voiceActive='false';try{await invoke('voice.capture.cancel');}catch{/* Host may already have released the session. */}};
+  const finishVoiceCapture=async()=>{if(voiceFinishing||!voiceRecorder?.active)return;voiceFinishing=true;const recorder=voiceRecorder;voiceRecorder=undefined;let payload;try{payload=await recorder.stop();await invoke('voice.capture.finish',payload);root.querySelector('#error').textContent='';}catch(error){report(error);}finally{payload?.audio?.fill(0);voiceFinishing=false;voiceFinishRequested=false;sendBtn.dataset.voiceActive='false';setSendMode(Boolean(input.value.trim()));}};
+  const startVoiceCapture=async token=>{try{await invoke('voice.capture.start');if(token!==voiceToken||!voicePress){await cancelVoiceCapture();return;}const recorder=createPushToTalkCapture({onLimit:()=>{voicePress=false;voiceFinishRequested=true;void finishVoiceCapture();}});voiceRecorder=recorder;await recorder.start();sendBtn.dataset.voiceActive='true';if(voiceFinishRequested||!voicePress)await finishVoiceCapture();}catch(error){if(token===voiceToken){await cancelVoiceCapture();report(error);}}};
   root.querySelector('#admin').onclick=()=>invoke('admin.open').catch(report);
   root.querySelector('#close').onclick=()=>invoke('panel.hide').catch(report);
   modelBtn.onclick=e=>{e.stopPropagation();const open=modelMenu.hidden;closeModel();closeBell();if(open){modelMenu.hidden=false;modelBtn.setAttribute('aria-expanded','true');}};
@@ -69,15 +77,18 @@ else {
   fastBtn.onclick=()=>{const on=fastBtn.getAttribute('aria-pressed')!=='true';fastBtn.setAttribute('aria-pressed',String(on));modelMenu.classList.toggle('fast',on);invoke('thinking.update',{depth:Number(slider.value),fast:on}).catch(report);};
   input.addEventListener('input',e=>{setSendMode(Boolean(e.target.value.trim()));invoke('panel.pin',true).catch(report);});
   input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();if(input.value.trim()&&!pending)form.requestSubmit();}});
-  sendBtn.addEventListener('click',e=>{e.preventDefault();if(sendBtn.dataset.mode==='voice')report('语音模型未连接，圆形按钮预留给语音模式');else if(!pending)form.requestSubmit();});
+  sendBtn.addEventListener('pointerdown',e=>{if(e.button!==0||sendBtn.dataset.mode!=='voice'||sendBtn.disabled)return;e.preventDefault();voicePress=true;voiceFinishRequested=false;const token=++voiceToken;sendBtn.setPointerCapture(e.pointerId);void startVoiceCapture(token);});
+  sendBtn.addEventListener('pointerup',e=>{if(sendBtn.dataset.mode!=='voice')return;e.preventDefault();voicePress=false;voiceFinishRequested=true;try{sendBtn.releasePointerCapture(e.pointerId);}catch{/* Capture may already be released. */}void finishVoiceCapture();});
+  sendBtn.addEventListener('pointercancel',()=>{if(sendBtn.dataset.mode==='voice')void cancelVoiceCapture();});
+  sendBtn.addEventListener('click',e=>{e.preventDefault();if(sendBtn.dataset.mode!=='voice'&&!pending)form.requestSubmit();});
   document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(!modelMenu.hidden){closeModel();return;}if(!bellMenu.hidden){closeBell();return;}invoke('panel.hide').catch(report);});
   form.onsubmit=async e=>{e.preventDefault();if(pending||!input.value.trim())return;pending=true;setSendMode(true);try{await invoke('task.submit',input.value);input.value='';requestAnimationFrame(()=>{thread.scrollTop=thread.scrollHeight;});root.querySelector('#error').textContent='';}catch(err){report(err);}finally{pending=false;setSendMode(Boolean(input.value.trim()));}};
-  const stopButton=root.querySelector('#stop');
-  // voice.stop is deliberately separate from task.cancel. The current build has no
-  // voice provider, so it reports unavailable instead of claiming that speech stopped.
-  stopButton.onclick=async()=>{window.speechSynthesis?.cancel();try{const result=await invoke('voice.stop');if(!result?.stopped)report(result?.reason??'语音供应商尚未连接');}catch(err){report(err);}};
+  playButton.onclick=async()=>{try{await invoke('voice.reply.play');}catch(err){report(err);}};
+  // voice.stop is deliberately separate from task.cancel.
+  stopButton.onclick=async()=>{try{const result=await invoke('voice.stop');if(!result?.stopped)report(Error(result?.reason??'当前没有正在播报的回答'));}catch(err){report(err);}};
+  document.addEventListener('visibilitychange',()=>{if(document.hidden&&voiceRecorder?.active)void cancelVoiceCapture();});
   root.querySelector('#tasks').onclick=async e=>{const b=e.target.closest('[data-action],[data-ui-action]');if(!b)return;const uiAction=b.dataset.uiAction;if(uiAction==='like'){const on=!likedTasks.has(b.dataset.id);if(on)likedTasks.add(b.dataset.id);else likedTasks.delete(b.dataset.id);b.classList.toggle('active',on);b.setAttribute('aria-pressed',String(on));return;}if(uiAction==='copy'||uiAction==='share'){const task=current?.tasks.find(item=>item.taskId===b.dataset.id);const text=visibleResult(task?.resultSummary);if(!text)return;try{if(uiAction==='share'&&navigator.share){await navigator.share({text});}else{await invoke('clipboard.writeText',text);b.title=uiAction==='copy'?'已复制':'已复制分享文本';b.setAttribute('aria-label',b.title);setTimeout(()=>{b.title=uiAction==='copy'?'复制':'分享';b.setAttribute('aria-label',`${b.title}回答`);},1600);}}catch(err){if(err?.name!=='AbortError')report(err);}return;}b.disabled=true;try{await invoke(b.dataset.action,b.dataset.id);}catch(err){report(err);}finally{b.disabled=false;}};
-  render=data=>{current=data;const task=data.tasks.at(-1);const connectionNode=root.querySelector('#connection');connectionNode.textContent=data.fakeModel?data.connection+' · Fake Model':data.connection;root.querySelector('#state').textContent=task?stateNames[task.state]:'待机';
+  render=data=>{current=data;const task=data.tasks.at(-1),voice=data.voice??{};const voiceLabels={ready:'语音就绪',listening:'正在聆听',recognizing:'正在识别',awaiting_consume:'等待处理',consuming:'正在思考',awaiting_speech:'回答就绪',speaking:'正在播报',stopped:'已停止',cancelled:'已取消',expired:'已超时',error:'语音错误',unavailable:'语音不可用'};const connectionNode=root.querySelector('#connection');connectionNode.textContent=data.fakeModel?data.connection+' · Fake Model':data.connection;root.querySelector('#state').textContent=task?stateNames[task.state]:(voiceLabels[voice.status]??'待机');
     root.querySelector('#error').textContent=data.connectionError??'';
     const modelReady=data.model?.status==='ready';
     // Thinking controls are a local test surface.  They must remain draggable
@@ -86,12 +97,12 @@ else {
     fastBtn.disabled=false;slider.disabled=false;
     const modelIdentity=data.fakeModel?(data.model?.label??'Fake Model · 离线测试'):(data.model?.configured&&data.model?.model?data.model.model:(data.model?.label||'模型未配置'));
     root.querySelector('#model-label').textContent=modelIdentity;root.querySelector('#mm-model-label').textContent=modelIdentity;slider.setAttribute('aria-label',`${modelIdentity} 思考深度`);
-    const modelConnected=modelReady||(data.model?.configured===true&&data.model?.status!=='error');const connectionNotice=root.querySelector('#connection-notice');connectionNode.hidden=modelConnected;if(connectionNotice){connectionNotice.hidden=modelConnected;connectionNotice.textContent=data.fakeModel?'当前使用 Fake Model，仅用于离线测试。':modelReady?`当前使用 ${modelIdentity}；语音尚未连接。`:`${data.model?.reason??'模型尚未连接'}；语音尚未连接。`;}
+    const voiceSummary=voice.captureAvailable?'语音输入已就绪':voice.reason??'语音尚未连接';const modelConnected=modelReady||(data.model?.configured===true&&data.model?.status!=='error');const connectionNotice=root.querySelector('#connection-notice');connectionNode.hidden=modelConnected;if(connectionNotice){connectionNotice.hidden=modelConnected;connectionNotice.textContent=data.fakeModel?`当前使用 Fake Model，仅用于离线测试；${voiceSummary}。`:modelReady?`当前使用 ${modelIdentity}；${voiceSummary}。`:`${data.model?.reason??'模型尚未连接'}；${voiceSummary}。`;}
     modelBtn.title=modelReady?`${modelIdentity} · 模型与思考深度`:'思考设置可调整；模型尚未完成真实连接测试';
     if(data.thinking){slider.value=String(data.thinking.depth??1);fastBtn.setAttribute('aria-pressed',String(Boolean(data.thinking.fast)));modelMenu.classList.toggle('fast',Boolean(data.thinking.fast));syncSlider();}
     const tag=root.querySelector('#model-tag');if(tag)tag.textContent=modelReady?'已测试':data.model?.status==='configured'?'待测试':'未配置';
     const modelNotice=root.querySelector('#model-notice');if(modelNotice)modelNotice.textContent=modelReady?'思考设置已保存到桌面测试状态；Runtime 参数契约接入后才会影响任务。':`${data.model?.reason??'模型未完成真实连接测试'}；思考设置仍可调整，但不会用于真实任务。`;
-    stopButton.disabled=data.voice?.available!==true;stopButton.title=data.voice?.available===true?'停止播报':'停止播报（语音供应商未连接）';
+    const sessionVoice=voice.session??{};micState.textContent=voiceLabels[voice.status]??voice.reason??'麦克风未采集';micState.title=voice.reason??'';playButton.disabled=!(voice.playbackAvailable&&sessionVoice.replyReady);stopButton.disabled=!sessionVoice.playbackActive;stopButton.title=sessionVoice.playbackActive?'停止播报':'当前没有正在播报的回答';
     root.querySelector('.bubble').hidden=data.tasks.length>0;
     const taskSignature=JSON.stringify(data.tasks.map(t=>[t.taskId,t.state,t.revision,t.userMessage,t.resultSummary,t.error?.message]));
     const thinkingGrid='<span class="thinking-grid" aria-hidden="true">'+[0,1,2,1,2,3,2,3,4].map((delay,index)=>`<i style="--i:${delay}" data-cell="${index}"></i>`).join('')+'</span>';

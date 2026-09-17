@@ -75,7 +75,8 @@
 .panel .composer-bar {margin-top:0}
 .panel .composer .icon-btn,.panel .send-btn {width:29px;height:29px}
 .panel .model-select {font-size:12px;padding:4px 5px}
-.panel .mic-state {display:none}
+.panel .mic-state {display:block;margin:5px 5px 1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.panel .send-btn[data-voice-active="true"] {transform:scale(.92);box-shadow:0 0 0 5px rgba(255,255,255,.10)}
 .panel .thread {padding:14px 26px 18px 18px}
 .panel .user-message {font-size:13px;padding:7px 11px}
 .panel {position:relative}
