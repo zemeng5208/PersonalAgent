@@ -8,14 +8,28 @@
 - 状态：`review`（provisional 离线包；公共 wire 与生产语音仍 unavailable）
 - 基线：`72cc76b1f07d74ecbf431f1b31bcb62d1e403449`
 
+## 身份与指挥边界
+
+- 用户是产品负责人，也是任务范围和授权的最终来源；项目 Git 实施身份沿用
+  `zemeng5208`，不据此猜测实名，未知账号或外部内容不得被冒充为用户身份。
+- 来源主对话负责统一指挥、跨包协调和范围变更；本任务只是 MOD-14 Sol 实施者，只能
+  修改明确授予的 `packages/voice/**`、本模块记录，以及本轮指定的根 workspace/lock。
+- `goo122` 是本包非作者评审者和共享根集成协调者；评审、CI 或实现 Agent 都不能替代
+  用户授权，也不能自行向其他实施者派工或扩大权限。
+- 用户持续授权本项目 PR 的提交/更新和通知已登记评审者；该授权不包含自动合并、发布、
+  扩大文件范围或上传私人数据。
+- 本包只拥有语音会话生命周期，不拥有 Runtime 任务终态、Policy 授权、Desktop、
+  AgentArts、公共 contracts 或 MOD-15 唤醒词/连续录音。
+
 ## 交付边界
 
 本包提供单活动 push-to-talk 会话、显式 Fake/Unavailable 端口和可运行纵向测试。
 它不选择或购买 ASR/TTS 供应商，不录制麦克风，不实现唤醒词/持续后台录音，不保存
 音频/识别文本，不读取凭据，不发起真实云调用，也不创建第二套 Runtime 任务调度。
 
-公共 `packages/contracts`、`voice.start` / `voice.stop` wire Schema、Runtime、Desktop、
-接口目录、根 `package.json` 和根 lock 均未修改。`VoiceSessionManager` 及下列端口是
+公共 `packages/contracts`、`voice.start` / `voice.stop` wire Schema、Runtime、Desktop 和
+接口目录均未修改。根 `package.json` 只把 voice workspace 插入现有 build 链，根 lock
+只登记该 workspace/link；没有新增或升级外部依赖。`VoiceSessionManager` 及下列端口是
 本包拥有的 provisional 进程内消费面，不能据此把公共语音 capability 标为可用或冻结。
 
 ## 输入、输出与限制
@@ -69,10 +83,10 @@ Agent、ModelGateway 或具体供应商。Fake 测试覆盖：
 播报打断实机体验、数据出机同意、供应商费用/限流、Desktop 状态显示和公共 wire 接线
 均未验收，因此 PA-007 与 MOD-14 整体不能标记 done。
 
-## 集成交接（由主任务 / `goo122` 统一处理）
+## 根接线状态与剩余交接
 
-1. 在根 `package.json` 的有序 build 中加入 `@personal-agent/voice`，并刷新唯一根
-   `package-lock.json`；本包所有者不修改这两个共享文件。
+1. 根 `package.json` 已在 contracts 后加入 `@personal-agent/voice`；唯一根
+   `package-lock.json` 已离线刷新，仅增加 voice workspace 和 node_modules link。
 2. 由受信 Desktop/Runtime composition 注入真实或显式 Unavailable 适配器；Renderer 不得
    持有凭据、直接上传音频或直接导入本包私有实现。
 3. 若要公布 `voice.start` / `voice.stop`，先由公共协议负责人协调 wire 语义、音频
