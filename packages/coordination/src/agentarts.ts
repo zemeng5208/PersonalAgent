@@ -371,7 +371,10 @@ async function readResponseText(response: AgentArtsResponse, combined: CombinedS
 class TextCollector {
   private readonly indexed = new Map<number, string>();
   private readonly unindexed: string[] = [];
-  private length = 0;
+  private messageLength = 0;
+  private workflowSeen = false;
+  private finalWorkflowAnswer: string | undefined;
+  private terminalPhase: 'open' | 'task-ended' | 'ended' | 'invalid' = 'open';
 
   add(text: string, index: number | undefined): void {
     if (index !== undefined) {
@@ -383,17 +386,62 @@ class TextCollector {
     } else {
       this.unindexed.push(text);
     }
-    this.length += text.length;
-    if (this.length > MAX_TEXT_CHARS) external('AgentArts response exceeds the text limit');
+    this.messageLength += text.length;
+    if (this.messageLength > MAX_TEXT_CHARS) external('AgentArts response exceeds the text limit');
+  }
+
+  startWorkflow(): void {
+    if (this.terminalPhase !== 'open') external('AgentArts workflow event order is malformed');
+    this.workflowSeen = true;
+    this.finalWorkflowAnswer = undefined;
+  }
+
+  completeWorkflow(answer: string | null): void {
+    // A multi-agent stream can expose intermediate workflow results. Keep only
+    // the most recently completed workflow as a candidate; it does not become
+    // the invocation result until task_end followed by end is observed.
+    if (this.terminalPhase !== 'open') external('AgentArts workflow event order is malformed');
+    this.workflowSeen = true;
+    if (answer === null) {
+      this.finalWorkflowAnswer = undefined;
+      return;
+    }
+    if (answer.length > MAX_TEXT_CHARS) external('AgentArts response exceeds the text limit');
+    this.finalWorkflowAnswer = answer;
+  }
+
+  markTaskEnd(): void {
+    if (this.terminalPhase !== 'open') {
+      this.terminalPhase = 'invalid';
+      if (this.workflowSeen) external('AgentArts workflow event order is malformed');
+      return;
+    }
+    this.terminalPhase = 'task-ended';
+  }
+
+  markEnd(): void {
+    if (this.terminalPhase === 'task-ended') {
+      this.terminalPhase = 'ended';
+      return;
+    }
+    this.terminalPhase = 'invalid';
+    if (this.workflowSeen) external('AgentArts workflow event order is malformed');
   }
 
   finish(): string {
     const indexedText = [...this.indexed.entries()]
       .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
       .map(([, text]) => text);
-    const text = indexedText.concat(this.unindexed).join('');
-    if (text.trim().length === 0) external('AgentArts response contains no text');
-    return text;
+    const messageText = indexedText.concat(this.unindexed).join('');
+    if (this.workflowSeen) {
+      if (this.terminalPhase !== 'ended' || this.finalWorkflowAnswer?.trim().length === 0
+        || this.finalWorkflowAnswer === undefined) {
+        external('AgentArts response contains no text');
+      }
+      return this.finalWorkflowAnswer;
+    }
+    if (messageText.trim().length > 0) return messageText;
+    external('AgentArts response contains no text');
   }
 }
 
@@ -421,6 +469,25 @@ function consumeEvent(value: unknown, collector: TextCollector): void {
 
   const eventName = event.event;
   if (typeof eventName !== 'string') external('AgentArts response event is malformed');
+  if (eventName === 'workflow_start') {
+    collector.startWorkflow();
+    return;
+  }
+  if (eventName === 'workflow_end') {
+    if (!data || (typeof data.answer !== 'string' && data.answer !== null)) {
+      external('AgentArts workflow_end event is malformed');
+    }
+    collector.completeWorkflow(data.answer);
+    return;
+  }
+  if (eventName === 'task_end') {
+    collector.markTaskEnd();
+    return;
+  }
+  if (eventName === 'end') {
+    collector.markEnd();
+    return;
+  }
   if (eventName !== 'message') return;
   if (!data || (typeof data.text !== 'string' && data.text !== null)) {
     external('AgentArts message event is malformed');

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
 import {ProtocolError} from '@personal-agent/contracts';
 import {AgentArtsCloudAgentPort} from '../dist/index.js';
@@ -174,6 +175,146 @@ test('message events with null text are metadata-only and do not invalidate late
   assert.deepEqual(await cloud.invoke(request()), {
     kind: 'text', text: 'final', verification: 'unverified',
   });
+});
+
+test('multi-agent SSE returns only the last workflow answer after task_end and end', async () => {
+  const body = readFileSync(
+    new URL('./fixtures/agentarts-multi-agent-success.sse', import.meta.url),
+    'utf8',
+  );
+  const cloud = port(async () => sseResponse(body));
+  assert.deepEqual(await cloud.invoke(request()), {
+    kind: 'text',
+    text: '{"stage":"evidence","decision":"REJECT","verification":"not_verified"}',
+    verification: 'unverified',
+  });
+});
+
+test('multi-agent terminal selection also applies to JSON and separator-less SSE', async () => {
+  const events = [
+    {event: 'workflow_end', data: {workflow_name: 'PA-intermediate', answer: 'draft'}},
+    {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'final'}},
+    {event: 'task_end', data: {}},
+    {event: 'end', data: {}},
+  ];
+  const json = port(async () => jsonResponse(events));
+  assert.equal((await json.invoke(request())).text, 'final');
+
+  const withoutSeparators = events.map(event => `data: ${JSON.stringify(event)}`).join('\n');
+  const sse = port(async () => sseResponse(withoutSeparators));
+  assert.equal((await sse.invoke(request())).text, 'final');
+});
+
+test('multi-agent mode ignores intermediate message text and requires its final workflow answer', async () => {
+  const success = [
+    {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
+    message('intermediate controller text'),
+    {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'final workflow answer'}},
+    {event: 'task_end', data: {}},
+    {event: 'end', data: {}},
+  ];
+  assert.equal((await port(async () => jsonResponse(success)).invoke(request())).text, 'final workflow answer');
+
+  const incomplete = [
+    {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
+    message('intermediate controller text'),
+  ];
+  await rejectsCode(port(async () => jsonResponse(incomplete)).invoke(request()), 'EXTERNAL_FAILURE');
+
+  const finalWorkflowNeverCompleted = [
+    {event: 'workflow_end', data: {workflow_name: 'PA-intermediate', answer: 'intermediate answer'}},
+    {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
+    {event: 'task_end', data: {}},
+    {event: 'end', data: {}},
+  ];
+  await rejectsCode(
+    port(async () => jsonResponse(finalWorkflowNeverCompleted)).invoke(request()),
+    'EXTERNAL_FAILURE',
+  );
+});
+
+test('multi-agent workflow answers remain partial until both terminal events arrive', async () => {
+  const answer = {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'candidate'}};
+  for (const events of [
+    [answer],
+    [answer, {event: 'task_end', data: {}}],
+    [answer, {event: 'end', data: {}}],
+    [answer, {event: 'end', data: {}}, {event: 'task_end', data: {}}],
+  ]) {
+    const body = events.map(event => `data: ${JSON.stringify(event)}\n`).join('\n');
+    await rejectsCode(port(async () => sseResponse(body)).invoke(request()), 'EXTERNAL_FAILURE');
+  }
+});
+
+test('workflow events after task_end or end cannot replace the final candidate', async () => {
+  for (const events of [
+    [
+      {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'accepted candidate'}},
+      {event: 'task_end', data: {}},
+      {event: 'workflow_end', data: {workflow_name: 'PA-late', answer: 'late replacement'}},
+      {event: 'end', data: {}},
+    ],
+    [
+      {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'accepted candidate'}},
+      {event: 'task_end', data: {}},
+      {event: 'end', data: {}},
+      {event: 'workflow_end', data: {workflow_name: 'PA-late', answer: 'late replacement'}},
+    ],
+    [
+      {event: 'task_end', data: {}},
+      {event: 'end', data: {}},
+      {event: 'workflow_end', data: {workflow_name: 'PA-late', answer: 'late replacement'}},
+    ],
+  ]) {
+    await rejectsCode(port(async () => jsonResponse(events)).invoke(request()), 'EXTERNAL_FAILURE');
+  }
+});
+
+test('a failure after workflow_end overrides the partial answer', async () => {
+  const secret = 'workflow failure details must stay private';
+  for (const failure of [
+    {event: 'error', data: {message: secret}},
+    {event: 'status', type: 'failed', data: {message: secret}},
+  ]) {
+    const events = [
+      {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'partial answer'}},
+      failure,
+      {event: 'task_end', data: {}},
+      {event: 'end', data: {}},
+    ];
+    const body = events.map(event => `data: ${JSON.stringify(event)}\n`).join('\n');
+    await rejectsCode(port(async () => sseResponse(body)).invoke(request()), 'EXTERNAL_FAILURE', [
+      secret,
+      'partial answer',
+    ]);
+  }
+});
+
+test('workflow_end validates answer type and size', async () => {
+  for (const answer of [undefined, null, 42, {text: 'not accepted'}, 'a'.repeat(16_001)]) {
+    const events = [
+      {event: 'workflow_end', data: answer === undefined
+        ? {workflow_name: 'PA-final'}
+        : {workflow_name: 'PA-final', answer}},
+      {event: 'task_end', data: {}},
+      {event: 'end', data: {}},
+    ];
+    const body = events.map(event => `data: ${JSON.stringify(event)}\n`).join('\n');
+    await rejectsCode(port(async () => sseResponse(body)).invoke(request()), 'EXTERNAL_FAILURE');
+  }
+});
+
+test('provider text cannot forge verified status or trusted evidence fields', async () => {
+  const answer = JSON.stringify({verification: 'verified', evidenceRefs: ['provider-claimed']});
+  const events = [
+    {event: 'workflow_end', data: {workflow_name: 'PA-final', answer}},
+    {event: 'task_end', data: {}},
+    {event: 'end', data: {}},
+  ];
+  const body = events.map(event => `data: ${JSON.stringify(event)}\n`).join('\n');
+  const result = await port(async () => sseResponse(body)).invoke(request());
+  assert.deepEqual(result, {kind: 'text', text: answer, verification: 'unverified'});
+  assert.deepEqual(Object.keys(result).sort(), ['kind', 'text', 'verification']);
 });
 
 test('SSE multiline data uses the standard newline join before compatibility fallback', async () => {
