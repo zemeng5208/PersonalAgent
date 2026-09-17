@@ -1,6 +1,6 @@
-# 编程工具：可信工作区只读首片（MOD-18）
+# 编程工具：可信工作区只读能力（MOD-18）
 
-`@personal-agent/coding-tools` 当前只交付 `huawei_ict_agentarts` Competition Profile 的首个本地能力：由可信宿主绑定一个工作区根目录，并把 `workspace.read_text@1.0.0` 注册到现有 `ToolHost`。它不执行命令、不生成或应用 patch、不修改 Git 状态，也不提供 Artifact/Evidence 服务。
+`@personal-agent/coding-tools` 当前交付 `huawei_ict_agentarts` Competition Profile 的两个本地只读能力：由可信宿主绑定一个工作区根目录，并按需把 `workspace.read_text@1.0.0`、`workspace.list_entries@1.0.0` 注册到现有 `ToolHost`。它不执行命令、不生成或应用 patch、不修改 Git 状态，也不提供 Artifact/Evidence 服务。
 
 ## 公开入口
 
@@ -10,6 +10,13 @@
 - 输入：`{path, maxBytes?}`。`path` 只接受规范的相对子路径，`maxBytes` 只能收紧宿主上限。文件必须完整落在上限内；不截断、不提供无限输出。
 - 输出：`{path, encoding:'utf-8', byteLength, content}`。只返回相对路径，不披露宿主工作区绝对路径。
 - 序列化边界：结果自身的 UTF-8 JSON 最多为 `MAX_SERIALIZED_WORKSPACE_READ_RESULT_BYTES`（当前为 960 KiB），为现有 `tool.invoke` / Response 包装预留 64 KiB；超限拒绝，不截断。
+
+目录枚举使用独立入口与 scope：
+
+- `createWorkspaceListTool(options)` 创建 `workspace.list_entries@1.0.0`；`registerWorkspaceList(host, options)` 注册并返回只释放该工具的 disposer。
+- 工具 scope 为 `workspace:list`，不会把已有 `workspace:read` 授权扩大为枚举权限。
+- 输入为 `{path, limit?}`；只有 `path:'.'` 表示受信根，其他路径必须是规范相对子目录。默认 limit 为 100；宿主 `maxEntries` 可降低请求上限，模块硬上限为 1000。
+- 输出为 `{path, entries:[{name, kind:'file'|'directory'}], truncated}`。只返回直接子项名称与类别，不递归、不读取正文，也不返回绝对路径、权限、所有者、大小或时间；结果自身同样受 960 KiB 序列化门禁约束。
 
 ## 安全边界
 
@@ -23,11 +30,15 @@
 
 返回的源码只交给已经通过本地授权的调用路径。本包不会上传 AgentArts、写日志或持久化内容；调用方若要把内容发往云端，仍须单独执行最小化、脱敏和出机授权。
 
+目录枚举在打开前确认请求目录位于 canonical root 内，拒绝把 symlink/junction 当作目标；遍历结束后再次核对路径和目录身份。枚举项只接受 `Dirent` 直接报告的普通文件/目录，symlink、junction、其他特殊项、不可由本包规范寻址的名称和默认敏感路径都会被省略，不跟随目标。敏感项不计入 `truncated`。
+
+`workspace.list_entries` 使用 `opendir` 迭代，不先把整个目录读入数组；扫描期间仅保留至多 `limit` 个按 JavaScript 字符串码元升序排列的候选，因此输出与内存有界。为了得到全局稳定的前 N 项，仍会扫描到目录末尾，扫描过程逐项检查 deadline/cancel。真实文件系统枚举不是事务快照：读后 lstat/realpath/身份复核能拒绝可检测的目录路径替换，但 Node `fs.Dir` 没有公开可供本实现 fstat 的目录句柄，不能消除恶意并发替换竞态，也不能阻止扫描期间普通子项增删或改名；结果只能表示本次受限观察，不能当作完美快照。
+
 ## 当前状态与接线限制
 
 本包消费 `@personal-agent/contracts@0.1.0-alpha.1` 的 provisional `RegisteredTool`、`ToolContext` 与 `ToolHost`，并按现有 Gateway/Policy scope 机制工作。它没有私设仍为 unavailable 的 `ToolExecutionPort`、ArtifactPort 或 EvidencePort。
 
-AgentArts 工具提案、Runtime composition、目标系统读回、Evidence 和最终回答尚未接通；因此这只是离线可验证的本地只读工具，不是完整编程执行能力，也不是 Competition Golden Path 已完成或真实 AgentArts 可用的证据。根 `package.json` build 编排与 `package-lock.json` workspace 记录已在当前 Draft PR 接入；生产 composition 仍由 goo122 后续完成。
+AgentArts 工具提案、Runtime composition、目标系统读回、Evidence 和最终回答尚未接通；因此这些只是离线可验证的本地只读工具，不是完整编程执行能力，也不是 Competition Golden Path 已完成或真实 AgentArts 可用的证据。根 `package.json` build 编排与 `package-lock.json` workspace 记录来自依赖 PR #63；`workspace.list_entries` 不会自动进入生产 composition。
 
 ## 定向验证
 
@@ -39,7 +50,10 @@ npm.cmd run build --workspace=@personal-agent/coding-tools
 npm.cmd run typecheck --workspace=@personal-agent/coding-tools
 npm.cmd test --workspace=@personal-agent/coding-tools
 node --test --test-isolation=none packages/coding-tools/test/workspace-read-wire-boundary.test.mjs
+node --test --test-isolation=none packages/coding-tools/test/workspace-list.test.mjs
 git diff --check
 ```
 
-覆盖：允许的 UTF-8 文本；精确 Schema；绝对/父级/盘符/UNC/设备/ADS；兄弟前缀和 symlink/junction 逃逸；敏感文件；大文件与二进制；缺 scope；deadline/cancel；现有 Host 的 register/dispose；控制字符转义膨胀拒绝与正常 UTF-8 序列化边界。平台不能创建 symlink/junction 时，该项以包含系统错误码的明确原因 skip。
+读取覆盖：允许的 UTF-8 文本；精确 Schema；绝对/父级/盘符/UNC/设备/ADS；兄弟前缀和 symlink/junction 逃逸；敏感文件；大文件与二进制；缺 scope；deadline/cancel；现有 Host 的 register/dispose；控制字符转义膨胀拒绝与正常 UTF-8 序列化边界。
+
+枚举覆盖：根目录 `.`、稳定排序、limit/truncated、不递归、逃逸/敏感项/symlink-junction、独立 scope、扫描中 deadline、取消、严格 Schema、register/dispose。测试只使用系统临时目录中的合成文件；不读取真实用户工作区。
