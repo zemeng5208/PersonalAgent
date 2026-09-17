@@ -37,5 +37,10 @@
 5. 本轮没有新的 deployment/version/API/trace 与本地 Evidence 配对读回，因此
    HTTP 200、历史 trace 或本地测试都不能证明真实 Golden Path 完成。
 
-下一步先接入已存在的 Desktop Workflow 启动增量，再在合法明确的云协议与数据出口下
+Desktop Workflow 启动增量 `0541a835` 已随后合入，main.js 的 Node24.15.0
+语法检查通过；选择 query 或明确配置的 inputs，不猜测生产 Workflow 变量名。
+PR51 页面虽显示 APPROVED，goo122 的批准实际绑定旧提交 `de9c400`，不是当前
+`82c7c0e`，因此本组合仍需登记非作者复审，不能据页面汇总状态合并 main。
+
+下一步在合法明确的云协议与数据出口下
 实施生产提案/续接；若平台仍阻止真实诊断，保留上述阻塞，不换工具规避。
