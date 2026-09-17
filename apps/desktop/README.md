@@ -13,6 +13,12 @@ Competition 文字接线由可信 Desktop 主进程显式选择，不由 Rendere
 `PA_AGENTARTS_AUTHORIZATION` 请求头值。Authorization 只在每次云调用时由主进程
 读取，不进入任务正文、Renderer 快照、日志或仓库。缺少或非法配置会让 Runtime
 初始化或调用明确失败；Competition 模式不会回退到盘古、Local Agent 或 Fake。
+调用只有一个目标字符串输入的 Workflow 时，可信启动环境可额外设置
+`PA_AGENTARTS_WORKFLOW_GOAL_INPUT` 为开始节点变量名，例如 `goal`。它按原值透传为
+Runtime 的 `workflowGoalInput`，发送 `{inputs:{goal:目标文本}}`；完全未设置时维持
+智能体 `{query:目标文本}`。显式空值或不符合当前 ASCII 标识符子集的值由工厂拒绝，
+不能通过 trim、空值默认或异常回退静默变成智能体模式。不会新增 Renderer 配置入口、
+写入盘古配置文件或发送其他 inputs/插件凭据。真实 Workflow 仍需独立验收。
 Competition 的 `task.submit` 使用 180 秒请求 deadline，以覆盖多工作流编排；该 deadline
 仍由 Client 写入请求并贯穿 TaskRuntime 与 AgentArts 调用。本地取消或超时沿现有契约
 传递：任务 deadline 到期时 Runtime 向协调与 AgentArts 调用传播终止信号，用户取消则
