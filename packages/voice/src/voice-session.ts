@@ -118,6 +118,8 @@ interface ActiveOperation<T = unknown> {
   interruptedByUser: boolean;
   abortCode?: VoiceErrorCode;
   abortMessage?: string;
+  releaseReason?: VoiceOperationStopReason;
+  releasePromise?: Promise<boolean>;
 }
 
 interface SessionRecord {
@@ -144,6 +146,8 @@ interface SessionRecord {
 interface VoiceListenerRegistration {
   readonly listener: VoiceSessionListener;
   active: boolean;
+  lastSessionId?: string;
+  lastRevision?: number;
 }
 
 function invalidArgument(message = 'Invalid voice session input'): never {
@@ -324,6 +328,8 @@ export class VoiceSessionManager {
   private readonly output: SpeechOutputPort;
   private readonly idFactory: (kind: VoiceIdKind) => string;
   private readonly listeners = new Set<VoiceListenerRegistration>();
+  private readonly notificationQueue: VoiceSessionSnapshot[] = [];
+  private publishingNotifications = false;
   private active?: SessionRecord;
 
   constructor(options: VoiceSessionManagerOptions = {}) {
@@ -402,6 +408,7 @@ export class VoiceSessionManager {
     this.requireState(record, ['listening']);
     const audio = validateAudioClip(clip);
     this.transition(record, 'recognizing');
+    this.assertUsable(record);
     const controller = new AbortController();
     const request: SpeechRecognitionRequest = Object.freeze({
       sessionId: record.sessionId,
@@ -453,6 +460,7 @@ export class VoiceSessionManager {
     // One-shot removal prevents an ambiguous consumer outcome from being submitted twice.
     record.transcripts.delete(transcriptId);
     this.transition(record, 'consuming');
+    this.assertUsable(record);
     const controller = new AbortController();
     const request: TranscriptConsumptionRequest = Object.freeze({
       sessionId: record.sessionId,
@@ -631,16 +639,39 @@ export class VoiceSessionManager {
   }
 
   private notify(record: SessionRecord): void {
-    const round = [...this.listeners];
-    for (const registration of round) {
-      if (!registration.active) continue;
-      const snapshot = this.snapshot(record);
-      try {
-        registration.listener(snapshot);
-      } catch {
-        // Listener failures are isolated and their messages are never surfaced.
+    const queued = this.snapshot(record);
+    this.notificationQueue.push(queued);
+    if (this.publishingNotifications) return;
+
+    this.publishingNotifications = true;
+    try {
+      while (this.notificationQueue.length > 0) {
+        const snapshot = this.notificationQueue.shift();
+        if (snapshot === undefined) continue;
+        const round = [...this.listeners];
+        for (const registration of round) {
+          if (this.hasSupersedingNotification(snapshot)) break;
+          if (!registration.active) continue;
+          if (registration.lastSessionId === snapshot.sessionId
+            && registration.lastRevision === snapshot.revision) continue;
+          registration.lastSessionId = snapshot.sessionId;
+          registration.lastRevision = snapshot.revision;
+          try {
+            registration.listener(Object.freeze({...snapshot}));
+          } catch {
+            // Listener failures are isolated and their messages are never surfaced.
+          }
+          if (this.hasSupersedingNotification(snapshot)) break;
+        }
       }
+    } finally {
+      this.publishingNotifications = false;
     }
+  }
+
+  private hasSupersedingNotification(snapshot: VoiceSessionSnapshot): boolean {
+    return this.notificationQueue.some(candidate => candidate.sessionId === snapshot.sessionId
+      && candidate.revision > snapshot.revision);
   }
 
   private scheduleDeadline(record: SessionRecord): void {
@@ -711,9 +742,17 @@ export class VoiceSessionManager {
     active: ActiveOperation,
     reason: VoiceOperationStopReason,
   ): Promise<boolean> {
+    const released = await this.releaseOperation(active, reason);
     active.detachRoot();
     record.operations.delete(active);
-    return this.safeStop(active.handle, reason);
+    return released;
+  }
+
+  private releaseOperation(active: ActiveOperation, reason: VoiceOperationStopReason): Promise<boolean> {
+    if (active.releasePromise !== undefined) return active.releasePromise;
+    active.releaseReason = reason;
+    active.releasePromise = Promise.resolve().then(() => this.safeStop(active.handle, reason));
+    return active.releasePromise;
   }
 
   private async safeStop(operation: VoiceOperation<unknown>, reason: VoiceOperationStopReason): Promise<boolean> {
@@ -752,7 +791,7 @@ export class VoiceSessionManager {
       operation.abortCode = details.code;
       operation.abortMessage = details.message;
       operation.controller.abort();
-      return this.safeStop(operation.handle, reason);
+      return this.releaseOperation(operation, reason);
     })).then(results => {
       resolveStop({
         sessionId: record.sessionId,
