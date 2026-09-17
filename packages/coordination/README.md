@@ -80,6 +80,17 @@ for cancellation, `TIMEOUT` for a deadline (the contract has no
 `DEADLINE_EXCEEDED`), and `EXTERNAL_FAILURE` for authorization, transport, HTTP, or
 malformed-response failures (the contract has no `EXTERNAL_SERVICE_ERROR`).
 
+For responses containing `workflow_start` or `workflow_end`, intermediate
+`message.data.text` is not the final result. The adapter keeps the latest
+`workflow_end.data.answer` candidate and requires a subsequent `task_end` then
+`end` before returning it. A new workflow start clears an earlier candidate;
+workflow events after termination and failure events are rejected. As an explicit
+compatibility choice, `workflow_end` can introduce this mode without a preceding
+`workflow_start`; the two terminal events are still mandatory. This does not
+validate a workflow's internal execution or elevate its answer to trusted Evidence.
+Pure `message` responses retain their existing text-only behavior. The synthetic
+multi-agent fixture reflects observed event fields, not a complete raw cloud trace.
+
 The adapter is not a claim that AgentArts is available. Real project/runtime setup,
 deployment, authentication, streaming behavior, trace/usage, and local Policy or
 ToolGateway read-back remain unverified; without explicit configuration composition
