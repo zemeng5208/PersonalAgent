@@ -45,8 +45,8 @@ npm.cmd run test --workspace=@personal-agent/voice
 npm.cmd run typecheck --workspace=@personal-agent/voice
 ```
 
-The root workspace build list and root lock file deliberately remain unchanged in this
-owner-scoped package. The integration owner must add this workspace to root build order,
-refresh the single root lock file, wire a trusted Desktop/Runtime composition, and keep
-the public wire capability unavailable until production adapters and real-device
-acceptance exist.
+The root build now runs this workspace immediately after contracts, and the single root
+lock file registers only the voice workspace/link; no external dependency was added or
+upgraded. A trusted integration owner must still wire the Desktop/Runtime composition
+and keep the public wire capability unavailable until production adapters and
+real-device acceptance exist.
