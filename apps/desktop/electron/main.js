@@ -1,4 +1,4 @@
-import {app, BrowserWindow, clipboard, ipcMain, Menu, nativeImage, safeStorage, screen, session, Tray} from 'electron';
+import {app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, safeStorage, screen, session, Tray} from 'electron';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
@@ -7,6 +7,7 @@ import {register} from './runtime.js';
 import {panelBounds, clampOrb, draggedGroupBounds} from './placement.js';
 import {Conversations} from './conversations.js';
 import {createDesktopHost} from './desktop-host.js';
+import {WorkspaceAccess} from './workspace-access.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -20,6 +21,16 @@ const competitionMode = !fakeMode && runtimeProfile === 'huawei_ict_agentarts';
 if (fakeMode || fakeModelMode) app.setPath('userData', path.resolve(dir, '../.cache/user-data'));
 if (process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1') app.setPath('userData', path.resolve(dir, `../.cache/test-user-data-${process.pid}`));
 if (process.env.PA_DESKTOP_TEST_USER_DATA) app.setPath('userData', path.resolve(process.env.PA_DESKTOP_TEST_USER_DATA));
+const workspaceAccess = new WorkspaceAccess({
+  selectDirectory: async () => {
+    const result = await dialog.showOpenDialog({
+      title: '选择允许 PersonalAgent 只读访问的工作区',
+      buttonLabel: '授权此工作区',
+      properties: ['openDirectory', 'dontAddToRecent'],
+    });
+    return result.canceled || result.filePaths.length !== 1 ? undefined : result.filePaths[0];
+  },
+});
 
 const ownsDesktopInstance = app.requestSingleInstanceLock();
 if (!ownsDesktopInstance) app.quit();
@@ -31,6 +42,10 @@ let client;
 let eventCursor;
 let eventPoll;
 let eventBusy = false;
+let workspaceRefreshTimer;
+let runtimeRebuildInProgress = false;
+let workspaceMutationPending = false;
+let workspaceMutationRevision = 0;
 let orb;
 let panel;
 let admin;
@@ -87,6 +102,11 @@ function snapshot(surface) {
     conversation: surface ?? 'all',
     capabilities: structuredClone(capabilities),
     health: structuredClone(health),
+    workspaceAccess: {
+      ...workspaceAccess.snapshot(),
+      pendingRuntimeRefresh: Boolean(workspaceRefreshTimer || runtimeRebuildInProgress || workspaceMutationPending),
+      available: competitionMode && Boolean(runtimeApplication),
+    },
     approvals: [...approvals.values()],
     notifications: [...notifications.values()],
     model: structuredClone(model),
@@ -170,7 +190,7 @@ function movePanelGroup(point) {
 }
 
 function openAdmin(page) {
-  if (page && ['settings','profile','models','tasks','capabilities','authorizations','git','connections'].includes(page)) {
+  if (page && ['settings','profile','models','tasks','capabilities','authorizations','git','connections','worktrees'].includes(page)) {
     adminNavigation = {page, revision:adminNavigation.revision + 1};
   }
   if (admin && !admin.isDestroyed()) { admin.show(); admin.focus(); publish(); return; }
@@ -512,6 +532,7 @@ async function initializeRuntime() {
       }
       runtimeApplication = runtimeModule.createAgentArtsRuntimeApplication({
         path: dbPath,
+        ...(workspaceAccess.tools().length ? {tools: workspaceAccess.tools()} : {}),
         gatewayUrl: process.env.PA_AGENTARTS_GATEWAY_URL ?? '',
         runtimeName: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
         invokeMode: agentArtsInvokeMode,
@@ -550,6 +571,76 @@ async function initializeRuntime() {
   await syncRuntimeSnapshots();
   await pumpEvents();
   eventPoll = setInterval(() => void pumpEvents(), 120);
+}
+
+const terminalTaskStates = new Set(['succeeded', 'failed', 'cancelled']);
+
+function hasUnfinishedTasks() {
+  return (runtimeApplication?.activeTaskCount ?? 0) > 0
+    || [...tasks.values()].some(task => !terminalTaskStates.has(task.state));
+}
+
+function beginWorkspaceMutation() {
+  workspaceMutationPending = true;
+  workspaceMutationRevision += 1;
+  return workspaceMutationRevision;
+}
+
+function completeWorkspaceMutation(revision) {
+  if (revision === workspaceMutationRevision) workspaceMutationPending = false;
+}
+
+async function waitForEventPumpIdle(timeoutMs = 1_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (eventBusy && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+  if (eventBusy) throw Error('Runtime 事件同步尚未结束，请稍后重试');
+}
+
+async function rebuildCompetitionRuntime() {
+  if (!competitionMode) throw Error('工作区读取仅在 Competition Profile 中装配');
+  if (runtimeRebuildInProgress) throw Error('Runtime 正在更新工作区能力');
+  if ((runtimeApplication?.activeTaskCount ?? 0) > 0) throw Error('Runtime 仍有活动任务，暂不能重建工作区能力');
+  runtimeRebuildInProgress = true;
+  try {
+    await waitForEventPumpIdle();
+    clearInterval(eventPoll);
+    eventPoll = undefined;
+    runtimeConnection?.dispose?.();
+    runtimeConnection = undefined;
+    client = undefined;
+    eventCursor = undefined;
+    runtimeApplication?.close();
+    runtimeApplication = undefined;
+    runtime = undefined;
+    capabilities = [];
+    health = [];
+    connectionLabel = 'Runtime 正在更新工作区能力';
+    await initializeRuntime();
+    runtimeError = '';
+  } finally {
+    runtimeRebuildInProgress = false;
+  }
+}
+
+function scheduleWorkspaceRevocationRefresh() {
+  if (workspaceRefreshTimer || !competitionMode) return;
+  const attempt = async () => {
+    workspaceRefreshTimer = undefined;
+    if ((runtimeApplication?.activeTaskCount ?? 0) > 0 || runtimeRebuildInProgress) {
+      workspaceRefreshTimer = setTimeout(() => void attempt(), 50);
+      return;
+    }
+    const revision = workspaceMutationRevision;
+    try {
+      await rebuildCompetitionRuntime();
+    } catch (error) {
+      runtimeError = error instanceof Error ? error.message : 'Runtime 工作区能力更新失败';
+    } finally {
+      completeWorkspaceMutation(revision);
+    }
+    publish();
+  };
+  workspaceRefreshTimer = setTimeout(() => void attempt(), 0);
 }
 
 async function waitForTerminalTask(taskId, timeoutMs = 5_000) {
@@ -630,9 +721,63 @@ async function action(event, name, payload) {
     if (sender !== panel && sender !== admin && sender !== workspace) throw Error('思考设置来源不受信任');
     return updateThinking(payload);
   }
+  if (name === 'workspace.root.select') {
+    if (sender !== admin) throw Error('工作区授权只能从管理后台操作');
+    if (!competitionMode || !runtimeApplication) throw Error('工作区读取仅在已连接的 Competition Profile 中可配置');
+    if (workspaceMutationPending || runtimeRebuildInProgress) throw Error('Runtime 正在更新工作区能力，请稍后重试');
+    const before = workspaceAccess.snapshot();
+    let mutationRevision;
+    let result;
+    try {
+      result = await workspaceAccess.select({
+        isBusy: hasUnfinishedTasks,
+        beforeCommit: () => { mutationRevision = beginWorkspaceMutation(); },
+        rendererPayload: payload,
+      });
+    } catch (error) {
+      if (mutationRevision !== undefined && before.configured && !workspaceAccess.snapshot().configured) {
+        try { await rebuildCompetitionRuntime(); }
+        catch (rebuildError) { runtimeError = rebuildError instanceof Error ? rebuildError.message : 'Runtime 工作区能力更新失败'; }
+        publish();
+      }
+      if (mutationRevision !== undefined) completeWorkspaceMutation(mutationRevision);
+      throw error;
+    }
+    if (result.changed) {
+      try {
+        await rebuildCompetitionRuntime();
+      } catch (error) {
+        workspaceAccess.revoke();
+        try { await rebuildCompetitionRuntime(); } catch {}
+        publish();
+        throw Error(`工作区未授权：${error instanceof Error ? error.message : 'Runtime 更新失败'}`);
+      } finally {
+        completeWorkspaceMutation(mutationRevision);
+      }
+      publish();
+    }
+    return result;
+  }
+  if (name === 'workspace.root.revoke') {
+    if (sender !== admin) throw Error('工作区授权只能从管理后台操作');
+    if (!competitionMode) throw Error('工作区读取仅在 Competition Profile 中可配置');
+    const mutationRevision = beginWorkspaceMutation();
+    const result = workspaceAccess.revoke({rendererPayload: payload});
+    publish();
+    if ((runtimeApplication?.activeTaskCount ?? 0) > 0 || runtimeRebuildInProgress) {
+      scheduleWorkspaceRevocationRefresh();
+    } else {
+      try { await rebuildCompetitionRuntime(); }
+      catch (error) { runtimeError = error instanceof Error ? error.message : 'Runtime 工作区能力更新失败'; }
+      finally { completeWorkspaceMutation(mutationRevision); }
+    }
+    publish();
+    return result;
+  }
   if (sender === orb) throw Error('Action unavailable from orb');
   if (!client) throw Error('Runtime 未连接，此操作尚不可用');
   if (name === 'task.submit') {
+    if (workspaceMutationPending) throw Error('Runtime 正在更新工作区能力，请稍后提交任务');
     if (sender !== panel && sender !== workspace) throw Error('请在对话工作区发送消息');
     if (typeof payload !== 'string' || !payload.trim()) throw Error('请输入有效任务');
     if (!fakeMode && model.enabled === false) throw Error('模型已停用，请先在模型设置中启用');
@@ -756,6 +901,7 @@ app.whenReady().then(async () => {
     app.isQuitting = true;
     clearInterval(poll);
     clearInterval(eventPoll);
+    clearTimeout(workspaceRefreshTimer);
     tray?.destroy();
     runtimeConnection?.dispose?.();
     try {
