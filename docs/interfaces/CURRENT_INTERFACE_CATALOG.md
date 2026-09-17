@@ -211,6 +211,17 @@ FactChangeFeed 继续保持 unavailable，直到消费语义确认并完成实�
 
 ## 7. 兼容与变更规则
 
+### MOD-09B-MEMORY-PORTS-01 开发登记（2026-09-17）
+
+`@personal-agent/memory` 公开 provisional `MemoryQueryPort`：`listCurrent`、`listHistory`、
+`getVersion`，并由 `/testing` 提供显式 `FakeMemoryHost`。可信宿主预绑定 namespace 和允许的
+sensitivity 集合；消费者无 namespace 选择、写入或出机许可入口。固定水位与不透明分页 token
+仅存在于 Fake 内存，精确版本隐藏/不存在统一拒绝，返回副本隔离；详见
+[工作包记录](../modules/MOD-09B-MEMORY-PORTS-01.md)。
+类型和离线 Fake 不代表生产事实库可用：SQLite 持久化、FactChangeFeed、ack、重启恢复、
+认知自动触发与真实私人数据接入均未交付，运行能力继续 unavailable。无新增 wire Schema、
+capability 或迁移；非作者评审和真实提供者验收前不得冻结。
+
 1. `frozen` 项删除字段、改变字段含义、收窄原有合法输入或新增消费者无法处理的必需状态，必须升级不兼容版本。
 2. 新增可选字段和新 operation 可以在 wire 1.x 中交付，但必须先通过 handshake/capability 公布；旧消费者可以忽略。
 3. `provisional` 项仍需记录精确提交、迁移说明和消费影响，不能无提示破坏。
