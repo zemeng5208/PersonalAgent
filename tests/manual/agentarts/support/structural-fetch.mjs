@@ -1,4 +1,6 @@
-const KNOWN_EVENT_NAMES = new Set([
+import { createHash } from "node:crypto";
+
+const EVENT_NAMES = Object.freeze([
   "task_start",
   "workflow_start",
   "message",
@@ -8,6 +10,8 @@ const KNOWN_EVENT_NAMES = new Set([
   "error",
   "status"
 ]);
+const EVENT_COUNT_NAMES = Object.freeze([...EVENT_NAMES, "other"]);
+const KNOWN_EVENT_NAMES = new Set(EVENT_NAMES);
 
 const FAILURE_MARKERS = new Set([
   "error",
@@ -33,13 +37,15 @@ const DATA_FIELDS = [
 const TOP_LEVEL_FIELDS = ["event", "type", "status", "data"];
 
 export const STRUCTURAL_DIAGNOSTIC_LIMITS = Object.freeze({
-  inspectedBytes: 128 * 1024,
+  inspectedBytes: 1024 * 1024,
   reportedBytes: 1024 * 1024 + 1,
   lineCharacters: 32 * 1024,
   eventPayloadCharacters: 64 * 1024,
-  events: 64,
+  eventWindow: 32,
   counters: 4097,
   stringLength: 16 * 1024 + 1,
+  textCharacters: 16_001,
+  indexedMessages: 1024,
   attempts: 4
 });
 
@@ -161,6 +167,75 @@ function sanitizeEvent(value) {
   return summary;
 }
 
+function createEventCounts() {
+  return Object.fromEntries(EVENT_COUNT_NAMES.map((name) => [name, 0]));
+}
+
+function createTextMetric() {
+  return {
+    lengthUnit: "utf16_code_units",
+    stringCountCapped: 0,
+    stringCountSaturated: false,
+    nonStringCountCapped: 0,
+    nonStringCountSaturated: false,
+    totalLengthCapped: 0,
+    totalLengthSaturated: false,
+    maxLengthCapped: 0,
+    maxLengthSaturated: false
+  };
+}
+
+function incrementMetric(metric, field, saturatedField) {
+  metric[field] = incrementCapped(metric[field]);
+  if (metric[field] >= STRUCTURAL_DIAGNOSTIC_LIMITS.counters) {
+    metric[saturatedField] = true;
+  }
+}
+
+function observeTextField(metric, owner, field) {
+  if (!owner || typeof owner !== "object" || !Object.hasOwn(owner, field)) {
+    return;
+  }
+  const value = owner[field];
+  if (typeof value !== "string") {
+    incrementMetric(metric, "nonStringCountCapped", "nonStringCountSaturated");
+    return;
+  }
+
+  incrementMetric(metric, "stringCountCapped", "stringCountSaturated");
+  metric.totalLengthCapped = addCapped(
+    metric.totalLengthCapped,
+    value.length,
+    STRUCTURAL_DIAGNOSTIC_LIMITS.textCharacters
+  );
+  if (metric.totalLengthCapped >= STRUCTURAL_DIAGNOSTIC_LIMITS.textCharacters) {
+    metric.totalLengthSaturated = true;
+  }
+  metric.maxLengthCapped = Math.max(
+    metric.maxLengthCapped,
+    Math.min(value.length, STRUCTURAL_DIAGNOSTIC_LIMITS.stringLength)
+  );
+  if (value.length >= STRUCTURAL_DIAGNOSTIC_LIMITS.stringLength) {
+    metric.maxLengthSaturated = true;
+  }
+}
+
+function createIndexedMessageMetric() {
+  return {
+    coverage: "complete",
+    trackedIndexCountCapped: 0,
+    validIndexOccurrenceCountCapped: 0,
+    validIndexOccurrenceCountSaturated: false,
+    invalidIndexCountCapped: 0,
+    invalidIndexCountSaturated: false,
+    missingIndexCountCapped: 0,
+    missingIndexCountSaturated: false,
+    conflictCountCapped: 0,
+    conflictCountSaturated: false,
+    conflictObserved: false
+  };
+}
+
 function createEventAnalyzer(record) {
   let decoder = new TextDecoder("utf-8", { fatal: true });
   let line = "";
@@ -169,14 +244,90 @@ function createEventAnalyzer(record) {
   let payloadOverflow = false;
   let payloadLineCount = 0;
   let finalized = false;
+  const indexedMessages = new Map();
 
-  function addEvent(value) {
-    record.eventCountCapped = incrementCapped(record.eventCountCapped);
-    if (record.events.length >= STRUCTURAL_DIAGNOSTIC_LIMITS.events) {
-      record.eventCountOverLimit = true;
+  function observeIndexedMessage(data) {
+    if (!data || typeof data !== "object" || typeof data.text !== "string") {
       return;
     }
-    record.events.push(sanitizeEvent(value));
+    if (!Object.hasOwn(data, "index")) {
+      incrementMetric(
+        record.indexedMessages,
+        "missingIndexCountCapped",
+        "missingIndexCountSaturated"
+      );
+      return;
+    }
+    const index = data.index;
+    if (!Number.isSafeInteger(index) || index < 0) {
+      incrementMetric(
+        record.indexedMessages,
+        "invalidIndexCountCapped",
+        "invalidIndexCountSaturated"
+      );
+      return;
+    }
+    incrementMetric(
+      record.indexedMessages,
+      "validIndexOccurrenceCountCapped",
+      "validIndexOccurrenceCountSaturated"
+    );
+
+    const previous = indexedMessages.get(index);
+    const digest = createHash("sha256")
+      .update(data.text, "utf16le")
+      .digest("hex");
+    if (previous !== undefined) {
+      if (previous.length !== data.text.length || previous.digest !== digest) {
+        record.indexedMessages.conflictObserved = true;
+        incrementMetric(
+          record.indexedMessages,
+          "conflictCountCapped",
+          "conflictCountSaturated"
+        );
+      }
+      return;
+    }
+    if (indexedMessages.size >= STRUCTURAL_DIAGNOSTIC_LIMITS.indexedMessages) {
+      record.indexedMessages.coverage = "partial";
+      return;
+    }
+    indexedMessages.set(index, { length: data.text.length, digest });
+    record.indexedMessages.trackedIndexCountCapped = indexedMessages.size;
+  }
+
+  function addEvent(value) {
+    const summary = sanitizeEvent(value);
+    record.eventCountCapped = incrementCapped(record.eventCountCapped);
+    if (record.eventCountCapped >= STRUCTURAL_DIAGNOSTIC_LIMITS.counters) {
+      record.eventCountOverLimit = true;
+    }
+    record.eventCounts[summary.name] = incrementCapped(
+      record.eventCounts[summary.name]
+    );
+    if (record.eventCounts[summary.name] >= STRUCTURAL_DIAGNOSTIC_LIMITS.counters) {
+      record.eventCounts.saturated = true;
+    }
+
+    const objectValue = value && typeof value === "object" && !Array.isArray(value)
+      ? value
+      : null;
+    if (summary.name === "message") {
+      observeTextField(record.textMetrics.messageText, objectValue?.data, "text");
+      observeIndexedMessage(objectValue?.data);
+    } else if (summary.name === "workflow_end") {
+      observeTextField(record.textMetrics.workflowAnswer, objectValue?.data, "answer");
+    }
+
+    if (record.eventWindow.head.length < STRUCTURAL_DIAGNOSTIC_LIMITS.eventWindow) {
+      record.eventWindow.head.push(summary);
+      return;
+    }
+    if (record.eventWindow.tail.length >= STRUCTURAL_DIAGNOSTIC_LIMITS.eventWindow) {
+      record.eventWindow.tail.shift();
+      record.eventWindow.truncated = true;
+    }
+    record.eventWindow.tail.push(summary);
   }
 
   function parseCandidate(candidate) {
@@ -399,9 +550,23 @@ function createAttemptRecord() {
     inspectionTruncated: false,
     utf8: "unknown",
     diagnosticOutcome: "ok",
-    eventInspection: "sse_only",
+    eventInspection: "unconfirmed",
     eventCountCapped: 0,
     eventCountOverLimit: false,
+    eventCounts: {
+      ...createEventCounts(),
+      saturated: false
+    },
+    eventWindow: {
+      head: [],
+      tail: [],
+      truncated: false
+    },
+    textMetrics: {
+      messageText: createTextMetric(),
+      workflowAnswer: createTextMetric()
+    },
+    indexedMessages: createIndexedMessageMetric(),
     framing: {
       linesCapped: 0,
       blankLinesCapped: 0,
@@ -413,8 +578,7 @@ function createAttemptRecord() {
       jsonParseFailuresCapped: 0,
       oversizedLinesCapped: 0,
       truncatedPayloadsCapped: 0
-    },
-    events: []
+    }
   };
   return { record, analyzer: createEventAnalyzer(record) };
 }
@@ -490,14 +654,18 @@ function wrapHeaders(headers, attempt) {
             const value = target.get(name);
             if (typeof name === "string" && name.toLowerCase() === "content-type") {
               attempt.record.contentType = classifyContentType(value);
-              if (attempt.record.contentType === "application/json") {
-                attempt.record.eventInspection = "json_unparsed";
-              }
+              attempt.record.eventInspection =
+                attempt.record.contentType === "text/event-stream"
+                  ? "sse_only"
+                  : attempt.record.contentType === "application/json"
+                    ? "json_unparsed"
+                    : "unconfirmed";
             }
             return value;
           } catch (error) {
             if (typeof name === "string" && name.toLowerCase() === "content-type") {
               attempt.record.contentType = "unreadable";
+              attempt.record.eventInspection = "unconfirmed";
             }
             throw error;
           }
@@ -699,8 +867,20 @@ function wrapResponse(response, attempt) {
 }
 
 function snapshotReport(attempts, callCount, attemptsOverLimit) {
+  for (const { record } of attempts) {
+    if (
+      record.bodyOutcome !== "complete"
+      || record.inspectionTruncated
+      || record.utf8 === "invalid"
+      || record.eventInspection !== "sse_only"
+      || record.framing.jsonParseFailuresCapped > 0
+      || record.diagnosticOutcome !== "ok"
+    ) {
+      record.indexedMessages.coverage = "partial";
+    }
+  }
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     callCountCapped: Math.min(callCount, STRUCTURAL_DIAGNOSTIC_LIMITS.counters),
     callCountOverLimit: callCount >= STRUCTURAL_DIAGNOSTIC_LIMITS.counters,
     attemptsOverLimit,

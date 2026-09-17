@@ -40,7 +40,12 @@ test("JSON responses explicitly report that their events were not parsed", async
   response.headers.get("content-type");
   const report = diagnostic.finish();
   assert.equal(report.attempts[0].eventInspection, "json_unparsed");
-  assert.deepEqual(report.attempts[0].events, []);
+  assert.equal(report.attempts[0].indexedMessages.coverage, "partial");
+  assert.deepEqual(report.attempts[0].eventWindow, {
+    head: [],
+    tail: [],
+    truncated: false
+  });
 });
 
 function createReader(chunks, failure) {
@@ -95,6 +100,10 @@ async function consumeReader(response) {
   }
 }
 
+function windowEvents(attempt) {
+  return [...attempt.eventWindow.head, ...attempt.eventWindow.tail];
+}
+
 test("passes one request and original chunks while emitting only allowlisted structure", async () => {
   const secretUrl = "https://secret.invalid/path?token=URL_CANARY";
   const init = {
@@ -131,14 +140,23 @@ test("passes one request and original chunks while emitting only allowlisted str
   assert.equal(output[2], third);
 
   const report = diagnostic.finish();
+  assert.equal(report.schemaVersion, 2);
   assert.deepEqual(
-    report.attempts[0].events.map((event) => event.name),
+    windowEvents(report.attempts[0]).map((event) => event.name),
     ["workflow_start", "message", "task_end"]
   );
   assert.equal(report.attempts[0].contentType, "text/event-stream");
+  assert.equal(report.attempts[0].eventInspection, "sse_only");
   assert.equal(report.attempts[0].bodyOutcome, "complete");
-  assert.equal(report.attempts[0].events[1].data.text.type, "string");
-  assert.equal(report.attempts[0].events[1].data.text.lengthCapped, 14);
+  assert.equal(report.attempts[0].indexedMessages.coverage, "complete");
+  assert.equal(report.attempts[0].eventWindow.head[1].data.text.type, "string");
+  assert.equal(report.attempts[0].eventWindow.head[1].data.text.lengthCapped, 14);
+  assert.equal(report.attempts[0].eventCounts.workflow_start, 1);
+  assert.equal(report.attempts[0].eventCounts.message, 1);
+  assert.equal(report.attempts[0].eventCounts.task_end, 1);
+  assert.equal(report.attempts[0].textMetrics.messageText.stringCountCapped, 1);
+  assert.equal(report.attempts[0].textMetrics.messageText.totalLengthCapped, 14);
+  assert.equal(report.attempts[0].textMetrics.messageText.maxLengthCapped, 14);
 
   const serialized = JSON.stringify(report);
   for (const canary of [
@@ -150,6 +168,57 @@ test("passes one request and original chunks while emitting only allowlisted str
   ]) {
     assert.equal(serialized.includes(canary), false);
   }
+});
+
+test("detects bounded indexed-message conflicts without exposing indexes or digests", async () => {
+  const events = [
+    { event: "message", data: { text: "INDEX_TEXT_A_CANARY", index: 7 } },
+    { event: "message", data: { text: "INDEX_TEXT_A_CANARY", index: 7 } },
+    { event: "message", data: { text: "INDEX_TEXT_B_CANARY", index: 7 } },
+    { event: "message", data: { text: null, index: -10 } },
+    { event: "message", data: { text: "INVALID_NEGATIVE_CANARY", index: -1 } },
+    { event: "message", data: { text: "INVALID_FRACTION_CANARY", index: 1.5 } },
+    { event: "message", data: { text: "INVALID_STRING_CANARY", index: "1" } },
+    { event: "message", data: { text: "MISSING_INDEX_CANARY" } },
+    { event: "message", data: { text: "\ud800", index: 8 } },
+    { event: "message", data: { text: "\ufffd", index: 8 } }
+  ];
+  const body = encoder.encode(
+    events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")
+  );
+  const diagnostic = createStructuralDiagnosticFetch(async () =>
+    createResponse({ chunks: [body] })
+  );
+  const response = await diagnostic.fetch("ignored", {});
+  response.headers.get("content-type");
+  await consumeReader(response);
+
+  const report = diagnostic.finish();
+  assert.deepEqual(report.attempts[0].indexedMessages, {
+    coverage: "complete",
+    trackedIndexCountCapped: 2,
+    validIndexOccurrenceCountCapped: 5,
+    validIndexOccurrenceCountSaturated: false,
+    invalidIndexCountCapped: 3,
+    invalidIndexCountSaturated: false,
+    missingIndexCountCapped: 1,
+    missingIndexCountSaturated: false,
+    conflictCountCapped: 2,
+    conflictCountSaturated: false,
+    conflictObserved: true
+  });
+  const serialized = JSON.stringify(report);
+  for (const canary of [
+    "INDEX_TEXT_A_CANARY",
+    "INDEX_TEXT_B_CANARY",
+    "INVALID_NEGATIVE_CANARY",
+    "INVALID_FRACTION_CANARY",
+    "INVALID_STRING_CANARY",
+    "MISSING_INDEX_CANARY"
+  ]) {
+    assert.equal(serialized.includes(canary), false);
+  }
+  assert.equal(/\b[0-9a-f]{64}\b/i.test(serialized), false);
 });
 
 test("maps malicious event names and fields to bounded shapes", async () => {
@@ -169,7 +238,7 @@ test("maps malicious event names and fields to bounded shapes", async () => {
   await consumeReader(response);
 
   const report = diagnostic.finish();
-  const event = report.attempts[0].events[0];
+  const event = report.attempts[0].eventWindow.head[0];
   assert.equal(event.name, "other");
   assert.equal(event.top.status.type, "string");
   assert.equal(event.data.message.type, "string");
@@ -246,14 +315,29 @@ test("passes AbortSignal by identity without attaching request observers", async
   assert.equal(passedInit.signal, controller.signal);
 });
 
-test("bounds events, inspected bytes, counters, and serialized report size", async () => {
-  const events = [];
-  for (let index = 0; index < STRUCTURAL_DIAGNOSTIC_LIMITS.events + 100; index += 1) {
-    events.push(
-      `data: {"event":"message","data":{"text":"LARGE_BODY_CANARY_${index}_${"x".repeat(1000)}"}}\n`
-    );
+test("keeps bounded head and tail structure plus saturated text metrics for a 466KB stream", async () => {
+  const messageText = `LARGE_BODY_CANARY_${"x".repeat(80)}`;
+  const workflowAnswer = "FINAL_ANSWER_CANARY".repeat(32);
+  const events = [
+    { event: "task_start", data: {} },
+    { event: "workflow_start", data: { workflow_name: "PRIVATE_WORKFLOW" } }
+  ];
+  for (let index = 0; index < 4_200; index += 1) {
+    events.push({ event: "message", data: { text: messageText, index } });
   }
-  const large = encoder.encode(events.join(""));
+  events.push(
+    { event: "message", data: { text: null } },
+    { event: "workflow_end", data: { answer: workflowAnswer } },
+    { event: "workflow_end", data: { answer: 42 } },
+    { event: "error", data: { message: "ERROR_BODY_CANARY" } },
+    { event: "task_end", data: {} },
+    { event: "end", data: {} }
+  );
+  const large = encoder.encode(
+    events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")
+  );
+  assert.equal(large.byteLength >= 466_000, true);
+  assert.equal(large.byteLength < STRUCTURAL_DIAGNOSTIC_LIMITS.inspectedBytes, true);
   const chunks = [];
   for (let offset = 0; offset < large.byteLength; offset += 4096) {
     chunks.push(large.subarray(offset, Math.min(offset + 4096, large.byteLength)));
@@ -270,11 +354,69 @@ test("bounds events, inspected bytes, counters, and serialized report size", asy
 
   const report = diagnostic.finish();
   const attempt = report.attempts[0];
-  assert.equal(attempt.events.length <= STRUCTURAL_DIAGNOSTIC_LIMITS.events, true);
-  assert.equal(attempt.inspectedByteCount <= STRUCTURAL_DIAGNOSTIC_LIMITS.inspectedBytes, true);
-  assert.equal(attempt.inspectionTruncated, true);
+  assert.equal(attempt.bodyOutcome, "complete");
+  assert.equal(attempt.inspectedByteCount, large.byteLength);
+  assert.equal(attempt.inspectionTruncated, false);
+  assert.equal(attempt.eventWindow.head.length, STRUCTURAL_DIAGNOSTIC_LIMITS.eventWindow);
+  assert.equal(attempt.eventWindow.tail.length, STRUCTURAL_DIAGNOSTIC_LIMITS.eventWindow);
+  assert.equal(attempt.eventWindow.truncated, true);
+  assert.deepEqual(
+    attempt.eventWindow.head.slice(0, 2).map((event) => event.name),
+    ["task_start", "workflow_start"]
+  );
+  assert.deepEqual(
+    attempt.eventWindow.tail.slice(-5).map((event) => event.name),
+    ["workflow_end", "workflow_end", "error", "task_end", "end"]
+  );
+  assert.equal(attempt.eventWindow.tail.at(-3).failureMarker, true);
+  assert.equal(attempt.eventCountCapped, STRUCTURAL_DIAGNOSTIC_LIMITS.counters);
+  assert.equal(attempt.eventCountOverLimit, true);
+  assert.equal(attempt.eventCounts.message, STRUCTURAL_DIAGNOSTIC_LIMITS.counters);
+  assert.equal(attempt.eventCounts.workflow_end, 2);
+  assert.equal(attempt.eventCounts.error, 1);
+  assert.equal(attempt.eventCounts.task_end, 1);
+  assert.equal(attempt.eventCounts.end, 1);
+  assert.equal(attempt.eventCounts.saturated, true);
+  assert.deepEqual(attempt.textMetrics.messageText, {
+    lengthUnit: "utf16_code_units",
+    stringCountCapped: STRUCTURAL_DIAGNOSTIC_LIMITS.counters,
+    stringCountSaturated: true,
+    nonStringCountCapped: 1,
+    nonStringCountSaturated: false,
+    totalLengthCapped: STRUCTURAL_DIAGNOSTIC_LIMITS.textCharacters,
+    totalLengthSaturated: true,
+    maxLengthCapped: messageText.length,
+    maxLengthSaturated: false
+  });
+  assert.deepEqual(attempt.textMetrics.workflowAnswer, {
+    lengthUnit: "utf16_code_units",
+    stringCountCapped: 1,
+    stringCountSaturated: false,
+    nonStringCountCapped: 1,
+    nonStringCountSaturated: false,
+    totalLengthCapped: workflowAnswer.length,
+    totalLengthSaturated: false,
+    maxLengthCapped: workflowAnswer.length,
+    maxLengthSaturated: false
+  });
+  assert.deepEqual(attempt.indexedMessages, {
+    coverage: "partial",
+    trackedIndexCountCapped: STRUCTURAL_DIAGNOSTIC_LIMITS.indexedMessages,
+    validIndexOccurrenceCountCapped: STRUCTURAL_DIAGNOSTIC_LIMITS.counters,
+    validIndexOccurrenceCountSaturated: true,
+    invalidIndexCountCapped: 0,
+    invalidIndexCountSaturated: false,
+    missingIndexCountCapped: 0,
+    missingIndexCountSaturated: false,
+    conflictCountCapped: 0,
+    conflictCountSaturated: false,
+    conflictObserved: false
+  });
   assert.equal(JSON.stringify(report).includes("LARGE_BODY_CANARY"), false);
-  assert.equal(JSON.stringify(report).length < 100_000, true);
+  assert.equal(JSON.stringify(report).includes("FINAL_ANSWER_CANARY"), false);
+  assert.equal(JSON.stringify(report).includes("ERROR_BODY_CANARY"), false);
+  assert.equal(JSON.stringify(report).includes("PRIVATE_WORKFLOW"), false);
+  assert.equal(JSON.stringify(report).length < 150_000, true);
 });
 
 test("marks invalid UTF-8 and preserves its bytes", async () => {
@@ -285,7 +427,23 @@ test("marks invalid UTF-8 and preserves its bytes", async () => {
   const response = await diagnostic.fetch("ignored", {});
   const output = await consumeReader(response);
   assert.equal(output[0], bytes);
-  assert.equal(diagnostic.finish().attempts[0].utf8, "invalid");
+  const report = diagnostic.finish();
+  assert.equal(report.attempts[0].utf8, "invalid");
+  assert.equal(report.attempts[0].indexedMessages.coverage, "partial");
+});
+
+test("marks indexed-message coverage partial after an SSE JSON parse failure", async () => {
+  const body = encoder.encode(
+    'data: NOT_JSON_CANARY\n\ndata: {"event":"task_end","data":{}}\n\n'
+  );
+  const diagnostic = createStructuralDiagnosticFetch(async () =>
+    createResponse({ chunks: [body] })
+  );
+  await consumeReader(await diagnostic.fetch("ignored", {}));
+  const report = diagnostic.finish();
+  assert.equal(report.attempts[0].framing.jsonParseFailuresCapped, 1);
+  assert.equal(report.attempts[0].indexedMessages.coverage, "partial");
+  assert.equal(JSON.stringify(report).includes("NOT_JSON_CANARY"), false);
 });
 
 test("normalizes missing and foreign content types without retaining values", async () => {
@@ -301,10 +459,30 @@ test("normalizes missing and foreign content types without retaining values", as
     await consumeReader(response);
     const report = diagnostic.finish();
     assert.equal(report.attempts[0].contentType, expected);
+    assert.equal(report.attempts[0].eventInspection, "unconfirmed");
+    assert.equal(report.attempts[0].indexedMessages.coverage, "partial");
     if (canary) {
       assert.equal(JSON.stringify(report).includes(canary), false);
     }
   }
+});
+
+test("does not claim complete coverage before confirming SSE content type", async () => {
+  const canary = "UNCONFIRMED_SSE_BODY_CANARY";
+  const body = encoder.encode(
+    `data: {"event":"message","data":{"text":"${canary}","index":1}}\n\n`
+  );
+  const diagnostic = createStructuralDiagnosticFetch(async () =>
+    createResponse({ chunks: [body] })
+  );
+  const response = await diagnostic.fetch("ignored", {});
+  await consumeReader(response);
+
+  const report = diagnostic.finish();
+  assert.equal(report.attempts[0].contentType, "unread");
+  assert.equal(report.attempts[0].eventInspection, "unconfirmed");
+  assert.equal(report.attempts[0].indexedMessages.coverage, "partial");
+  assert.equal(JSON.stringify(report).includes(canary), false);
 });
 
 test("keeps diagnostic parsing failures from changing response consumption", async () => {
@@ -323,6 +501,7 @@ test("keeps diagnostic parsing failures from changing response consumption", asy
   assert.equal(output[1], after);
   const report = diagnostic.finish();
   assert.equal(report.attempts[0].inspectionTruncated, true);
+  assert.equal(report.attempts[0].indexedMessages.coverage, "partial");
 });
 
 test("preserves async iterator return behavior and chunk identity", async () => {
@@ -432,7 +611,7 @@ test("supports native Response, Headers, ReadableStream, and reader getters", as
   assert.equal(report.attempts[0].status, 201);
   assert.equal(report.attempts[0].contentType, "text/event-stream");
   assert.deepEqual(
-    report.attempts[0].events.map((event) => event.name),
+    windowEvents(report.attempts[0]).map((event) => event.name),
     ["workflow_start", "task_end"]
   );
   assert.equal(JSON.stringify(report).includes("NATIVE_STATUS_TEXT_CANARY"), false);
@@ -457,7 +636,7 @@ test("observes the valid prefix of the chunk that crosses the inspection cap", a
   const report = diagnostic.finish();
   assert.equal(report.attempts[0].inspectionTruncated, true);
   assert.equal(
-    report.attempts[0].events.some((event) => event.name === "task_end"),
+    windowEvents(report.attempts[0]).some((event) => event.name === "task_end"),
     true
   );
   assert.equal(JSON.stringify(report).includes("TRAILING_CONTENT_CANARY"), false);
@@ -473,7 +652,7 @@ test("flushes a final decoder code point and unterminated data line", async () =
   await consumeReader(response);
   const report = diagnostic.finish();
   assert.deepEqual(
-    report.attempts[0].events.map((event) => event.name),
+    windowEvents(report.attempts[0]).map((event) => event.name),
     ["task_end"]
   );
 });
@@ -494,6 +673,7 @@ test("does not call an inspection-cap split UTF-8 code point invalid", async () 
   const report = diagnostic.finish();
   assert.equal(report.attempts[0].inspectionTruncated, true);
   assert.equal(report.attempts[0].utf8, "unknown");
+  assert.equal(report.attempts[0].indexedMessages.coverage, "partial");
   assert.equal(report.attempts[0].bodyOutcome, "complete");
   assert.equal(
     report.attempts[0].byteCountCapped,
