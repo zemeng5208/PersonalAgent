@@ -131,7 +131,12 @@ function cloneJsonValue(value: unknown, seen = new Set<object>(), depth = 0): un
     for (const key of keys as string[]) {
       const descriptor = descriptors[key];
       if (!descriptor?.enumerable || !('value' in descriptor)) invalidResult();
-      result[key] = cloneJsonValue(descriptor.value, seen, depth + 1);
+      // JSON keys are data, including __proto__; assignment would invoke its
+      // legacy setter on a normal object and silently change the argument shape.
+      Object.defineProperty(result, key, {
+        value: cloneJsonValue(descriptor.value, seen, depth + 1),
+        enumerable: true, writable: true, configurable: true,
+      });
     }
     return result;
   } finally {
