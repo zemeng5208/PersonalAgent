@@ -1,12 +1,11 @@
 import {Orb} from '../orb/orb.js';
 import {stateNames,isTerminal} from '../conversation/state.js';
 import {mountConversationRail} from '../conversation/rail.js';
+import {resultText} from '../conversation/result-text.js';
 import {connectorCards} from './connectors.js';
 
 const paths={settings:'M4 7h10m4 0h2M4 17h2m4 0h10M16 4v6M8 14v6',connectors:'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zm11 3h7m-3-3v7',close:'m6 6 12 12M6 18 18 6',maximize:'M5 5h14v14H5z',minimize:'M5 12h14',copy:'M8 8h12v12H8zM16 8V4H4v12h4',view:'M3 5h18v14H3zM9 5v14'};
 const icon=name=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${paths[name]}"/></svg>`;
-const resultText=value=>String(value||'').replace(/\s*\[model=[^;\]]+;\s*verification=[^;\]]+;\s*tokens=[^\]]+\]\s*$/,'').trim();
-
 export function mountWorkspace(root,invoke,escape){
   let current={tasks:[]},lastSignature='',cardsSignature='',inspected=null;
   root.innerHTML=`<section class="workspace focused-workspace">
