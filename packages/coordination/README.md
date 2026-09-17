@@ -104,3 +104,17 @@ must keep the capability unavailable and must not silently fall back to Local or
 Ports are text-only and not frozen. Tool proposals/results, deployment/version/trace,
 usage, resumable cloud runs and data-export consent require the next reviewed contract
 increment before real AgentArts is enabled. No wire Schema or storage migration changes.
+
+For a Workflow whose start node accepts a single goal string, the trusted host may
+set `workflowGoalInput: 'query'` (replace `query` with the configured variable).
+The adapter then sends `{inputs: {query: goal}}` instead of the default agent body
+`{query: goal}`. It never guesses the application type, sends both forms, adds
+plugin credentials, or retries with a different request shape. This first slice
+accepts ASCII variable identifiers of 1–128 characters; this is a local supported
+subset, not a statement of Huawei's complete naming rules. Workflows requiring
+additional inputs need a later explicit mapping, not fabricated placeholder values.
+`createAgentArtsRuntimeApplication` forwards this trusted option; Desktop settings
+do not yet expose it. Existing `event: 'message', data: {text, index}` parsing is
+reused without treating text as tool instructions. See the official
+[InvokeRuntime reference](https://support.huaweicloud.com/api-agentarts/InvokeRuntime.html)
+and [work package](../../docs/modules/MOD-30-WORKFLOW-INPUT-01.md).
