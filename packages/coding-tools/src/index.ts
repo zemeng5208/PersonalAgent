@@ -1,5 +1,5 @@
 import { constants as fsConstants, realpathSync, statSync } from 'node:fs';
-import { open, realpath, stat } from 'node:fs/promises';
+import { lstat, open, opendir, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep, win32 } from 'node:path';
 import { MAX_FRAME_BYTES, ProtocolError, validateToolValue } from '@personal-agent/contracts';
 import type { RegisteredTool, ToolContext, ToolDescriptor, ToolHost } from '@personal-agent/contracts';
@@ -9,7 +9,13 @@ export const WORKSPACE_READ_TOOL_VERSION = '1.0.0';
 export const WORKSPACE_READ_SCOPE = 'workspace:read';
 export const DEFAULT_MAX_READ_BYTES = 256 * 1024;
 export const WORKSPACE_READ_WIRE_WRAPPER_BUDGET_BYTES = 64 * 1024;
-export const MAX_SERIALIZED_WORKSPACE_READ_RESULT_BYTES = MAX_FRAME_BYTES - WORKSPACE_READ_WIRE_WRAPPER_BUDGET_BYTES;
+export const MAX_SERIALIZED_WORKSPACE_TOOL_RESULT_BYTES = MAX_FRAME_BYTES - WORKSPACE_READ_WIRE_WRAPPER_BUDGET_BYTES;
+export const MAX_SERIALIZED_WORKSPACE_READ_RESULT_BYTES = MAX_SERIALIZED_WORKSPACE_TOOL_RESULT_BYTES;
+export const WORKSPACE_LIST_TOOL_NAME = 'workspace.list_entries';
+export const WORKSPACE_LIST_TOOL_VERSION = '1.0.0';
+export const WORKSPACE_LIST_SCOPE = 'workspace:list';
+export const DEFAULT_WORKSPACE_LIST_LIMIT = 100;
+export const MAX_WORKSPACE_LIST_LIMIT = 1000;
 
 const MAX_SCHEMA_BYTES = 1024 * 1024;
 const DEFAULT_READ_CHUNK_BYTES = 64 * 1024;
@@ -82,6 +88,31 @@ export interface WorkspaceReadResult {
   content: string;
 }
 
+export interface WorkspaceListOptions {
+  /** Trusted host-provided workspace root. It is canonicalized before registration. */
+  rootPath: string;
+  /** Hard ceiling for a request's returned entry count. */
+  maxEntries?: number;
+  /** Trusted clock injection for deterministic deadline tests. */
+  now?: () => number;
+}
+
+interface WorkspaceListInput {
+  path: string;
+  limit?: number;
+}
+
+export interface WorkspaceListEntry {
+  name: string;
+  kind: 'file' | 'directory';
+}
+
+export interface WorkspaceListResult {
+  path: string;
+  entries: WorkspaceListEntry[];
+  truncated: boolean;
+}
+
 const utf8Encoder = new TextEncoder();
 
 const inputSchema = (maxReadBytes: number): ToolDescriptor['inputSchema'] => ({
@@ -114,6 +145,50 @@ const outputSchema = (maxReadBytes: number): ToolDescriptor['outputSchema'] => (
     encoding: {enum: ['utf-8']},
     byteLength: {type: 'integer', minimum: 0, maximum: maxReadBytes},
     content: {type: 'string'},
+  },
+});
+
+const listInputSchema = (maxEntries: number): ToolDescriptor['inputSchema'] => ({
+  type: 'object',
+  description: "List only the direct, non-sensitive file and directory children beneath a trusted workspace directory. Use '.' for the trusted root.",
+  required: ['path'],
+  additionalProperties: false,
+  properties: {
+    path: {
+      type: 'string',
+      minLength: 1,
+      maxLength: MAX_RELATIVE_PATH_LENGTH,
+      description: "Canonical relative workspace directory, or '.' for the trusted root. Symlinks and junctions are not traversed.",
+    },
+    limit: {
+      type: 'integer',
+      minimum: 1,
+      maximum: maxEntries,
+      description: 'Maximum returned direct children. Omission uses the smaller of 100 and the host ceiling.',
+    },
+  },
+});
+
+const listOutputSchema = (maxEntries: number): ToolDescriptor['outputSchema'] => ({
+  type: 'object',
+  required: ['path', 'entries', 'truncated'],
+  additionalProperties: false,
+  properties: {
+    path: {type: 'string', minLength: 1, maxLength: MAX_RELATIVE_PATH_LENGTH},
+    entries: {
+      type: 'array',
+      maxItems: maxEntries,
+      items: {
+        type: 'object',
+        required: ['name', 'kind'],
+        additionalProperties: false,
+        properties: {
+          name: {type: 'string', minLength: 1, maxLength: MAX_RELATIVE_PATH_LENGTH},
+          kind: {enum: ['file', 'directory']},
+        },
+      },
+    },
+    truncated: {type: 'boolean'},
   },
 });
 
@@ -171,9 +246,19 @@ function canonicalRelativePath(value: string): {normalized: string; segments: st
   return {normalized: segments.join('/'), segments};
 }
 
+function canonicalRelativeDirectoryPath(value: string): {normalized: string; segments: string[]} {
+  if (value === '.') return {normalized: '.', segments: []};
+  return canonicalRelativePath(value);
+}
+
 function pathIsWithinRoot(root: string, candidate: string): boolean {
   const relation = relative(root, candidate);
   return relation !== '' && relation !== '..' && !relation.startsWith(`..${sep}`) && !isAbsolute(relation);
+}
+
+function pathIsAtOrWithinRoot(root: string, candidate: string): boolean {
+  const relation = relative(root, candidate);
+  return relation === '' || (relation !== '..' && !relation.startsWith(`..${sep}`) && !isAbsolute(relation));
 }
 
 function sameCanonicalPath(left: string, right: string): boolean {
@@ -191,19 +276,24 @@ function isSensitivePath(normalizedPath: string): boolean {
   return blockedPrivateKeyExtensions.has(extension);
 }
 
-function checkContext(context: ToolContext, now: () => number): void {
-  if (!context.scopes.includes(WORKSPACE_READ_SCOPE)) {
-    throw new ProtocolError('SCOPE_DENIED', `Tool requires ${WORKSPACE_READ_SCOPE}`);
+function checkContext(
+  context: ToolContext,
+  now: () => number,
+  requiredScope = WORKSPACE_READ_SCOPE,
+  operationLabel = 'Workspace read',
+): void {
+  if (!context.scopes.includes(requiredScope)) {
+    throw new ProtocolError('SCOPE_DENIED', `Tool requires ${requiredScope}`);
   }
   if (context.signal.aborted) {
-    throw new ProtocolError('CANCELLED', 'Workspace read was cancelled');
+    throw new ProtocolError('CANCELLED', `${operationLabel} was cancelled`);
   }
   const deadline = Date.parse(context.deadline);
   if (!Number.isFinite(deadline)) {
-    throw new ProtocolError('INVALID_ARGUMENT', 'Workspace read deadline is invalid');
+    throw new ProtocolError('INVALID_ARGUMENT', `${operationLabel} deadline is invalid`);
   }
   if (deadline <= now()) {
-    throw new ProtocolError('TIMEOUT', 'Workspace read deadline expired');
+    throw new ProtocolError('TIMEOUT', `${operationLabel} deadline expired`);
   }
 }
 
@@ -231,11 +321,29 @@ function unchangedFile(left: Awaited<ReturnType<typeof stat>>, right: Awaited<Re
     && left.ctimeMs === right.ctimeMs;
 }
 
-function assertSerializedResultFits(result: WorkspaceReadResult): void {
+function assertSerializedResultFits(result: unknown, errorMessage: string): void {
   const serializedBytes = utf8Encoder.encode(JSON.stringify(result)).byteLength;
-  if (serializedBytes > MAX_SERIALIZED_WORKSPACE_READ_RESULT_BYTES) {
-    throw new ProtocolError('INVALID_ARGUMENT', 'Workspace read result exceeds the bounded serialized-output limit');
+  if (serializedBytes > MAX_SERIALIZED_WORKSPACE_TOOL_RESULT_BYTES) {
+    throw new ProtocolError('INVALID_ARGUMENT', errorMessage);
   }
+}
+
+function compareEntryNames(left: WorkspaceListEntry, right: WorkspaceListEntry): number {
+  if (left.name === right.name) return 0;
+  return left.name < right.name ? -1 : 1;
+}
+
+function retainSortedEntry(entries: WorkspaceListEntry[], entry: WorkspaceListEntry, limit: number): void {
+  let low = 0;
+  let high = entries.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (compareEntryNames(entries[middle]!, entry) <= 0) low = middle + 1;
+    else high = middle;
+  }
+  if (low >= limit && entries.length >= limit) return;
+  entries.splice(low, 0, entry);
+  if (entries.length > limit) entries.pop();
 }
 
 export function createWorkspaceReadTool(options: WorkspaceReadOptions): RegisteredTool {
@@ -348,7 +456,7 @@ export function createWorkspaceReadTool(options: WorkspaceReadOptions): Register
           byteLength: bytes.byteLength,
           content,
         };
-        assertSerializedResultFits(result);
+        assertSerializedResultFits(result, 'Workspace read result exceeds the bounded serialized-output limit');
         checkContext(context, now);
         return result;
       } catch (error) {
@@ -360,6 +468,122 @@ export function createWorkspaceReadTool(options: WorkspaceReadOptions): Register
   };
 }
 
+export function createWorkspaceListTool(options: WorkspaceListOptions): RegisteredTool {
+  const root = canonicalRoot(options?.rootPath);
+  const maxEntries = boundedInteger(
+    options.maxEntries,
+    MAX_WORKSPACE_LIST_LIMIT,
+    'maxEntries',
+    MAX_WORKSPACE_LIST_LIMIT,
+  );
+  const defaultLimit = Math.min(DEFAULT_WORKSPACE_LIST_LIMIT, maxEntries);
+  const now = options.now ?? Date.now;
+  const descriptor: ToolDescriptor = {
+    name: WORKSPACE_LIST_TOOL_NAME,
+    version: WORKSPACE_LIST_TOOL_VERSION,
+    inputSchema: listInputSchema(maxEntries),
+    outputSchema: listOutputSchema(maxEntries),
+    sideEffect: 'read',
+    requiredScopes: [WORKSPACE_LIST_SCOPE],
+    idempotencySupport: true,
+    recoverySupport: true,
+    requiresPresence: false,
+  };
+
+  return {
+    descriptor,
+    execute: async (input: unknown, context: ToolContext): Promise<WorkspaceListResult> => {
+      validateToolValue(descriptor.inputSchema, input);
+      checkContext(context, now, WORKSPACE_LIST_SCOPE, 'Workspace listing');
+      const request = input as WorkspaceListInput;
+      const path = canonicalRelativeDirectoryPath(request.path);
+      if (path.normalized !== '.' && isSensitivePath(path.normalized)) {
+        throw new ProtocolError('SCOPE_DENIED', 'Workspace directory is blocked by the default sensitive-file policy');
+      }
+      const effectiveLimit = boundedInteger(request.limit, defaultLimit, 'limit', maxEntries);
+      const candidate = resolve(root, ...path.segments);
+      if (!pathIsAtOrWithinRoot(root, candidate)) {
+        throw new ProtocolError('SCOPE_DENIED', 'Workspace directory escapes the configured root');
+      }
+
+      try {
+        checkContext(context, now, WORKSPACE_LIST_SCOPE, 'Workspace listing');
+        const requestedStat = await lstat(candidate);
+        if (requestedStat.isSymbolicLink()) {
+          throw new ProtocolError('SCOPE_DENIED', 'Workspace directory links are not traversed');
+        }
+
+        const resolvedBeforeOpen = await realpath(candidate);
+        if (!pathIsAtOrWithinRoot(root, resolvedBeforeOpen)) {
+          throw new ProtocolError('SCOPE_DENIED', 'Workspace directory escapes the configured root');
+        }
+        if (!sameCanonicalPath(candidate, resolvedBeforeOpen)) {
+          throw new ProtocolError('SCOPE_DENIED', 'Workspace directory aliases are not traversed');
+        }
+        const resolvedPolicyPath = relative(root, resolvedBeforeOpen).split(sep).join('/');
+        if (resolvedPolicyPath && isSensitivePath(resolvedPolicyPath)) {
+          throw new ProtocolError('SCOPE_DENIED', 'Workspace directory resolves to a sensitive path');
+        }
+
+        const openedStat = await stat(resolvedBeforeOpen);
+        if (!openedStat.isDirectory()) {
+          throw new ProtocolError('INVALID_ARGUMENT', 'Workspace path must identify a directory');
+        }
+
+        checkContext(context, now, WORKSPACE_LIST_SCOPE, 'Workspace listing');
+        const entries: WorkspaceListEntry[] = [];
+        let eligibleCount = 0;
+        const directory = await opendir(resolvedBeforeOpen);
+        for await (const dirent of directory) {
+          checkContext(context, now, WORKSPACE_LIST_SCOPE, 'Workspace listing');
+          const kind = dirent.isFile() ? 'file' : dirent.isDirectory() ? 'directory' : undefined;
+          if (!kind) continue;
+          const entryPath = path.normalized === '.' ? dirent.name : `${path.normalized}/${dirent.name}`;
+          try {
+            canonicalRelativePath(entryPath);
+          } catch (error) {
+            if (error instanceof ProtocolError) continue;
+            throw error;
+          }
+          if (isSensitivePath(entryPath)) continue;
+          eligibleCount = Math.min(effectiveLimit + 1, eligibleCount + 1);
+          retainSortedEntry(entries, {name: dirent.name, kind}, effectiveLimit);
+        }
+
+        checkContext(context, now, WORKSPACE_LIST_SCOPE, 'Workspace listing');
+        const requestedAfterRead = await lstat(candidate);
+        if (requestedAfterRead.isSymbolicLink()) {
+          throw new ProtocolError('SCOPE_DENIED', 'Workspace directory changed during enumeration');
+        }
+        const resolvedAfterRead = await realpath(candidate);
+        if (!pathIsAtOrWithinRoot(root, resolvedAfterRead)
+          || !sameCanonicalPath(resolvedBeforeOpen, resolvedAfterRead)) {
+          throw new ProtocolError('SCOPE_DENIED', 'Workspace directory changed during enumeration');
+        }
+        const completedStat = await stat(resolvedAfterRead);
+        if (!sameFileIdentity(openedStat, completedStat)) {
+          throw new ProtocolError('SCOPE_DENIED', 'Workspace directory changed during enumeration');
+        }
+
+        const result: WorkspaceListResult = {
+          path: path.normalized,
+          entries,
+          truncated: eligibleCount > effectiveLimit,
+        };
+        assertSerializedResultFits(result, 'Workspace list result exceeds the bounded serialized-output limit');
+        checkContext(context, now, WORKSPACE_LIST_SCOPE, 'Workspace listing');
+        return result;
+      } catch (error) {
+        mapFileSystemError(error);
+      }
+    },
+  };
+}
+
 export function register(host: ToolHost, options: WorkspaceReadOptions): () => void {
   return host.register(createWorkspaceReadTool(options));
+}
+
+export function registerWorkspaceList(host: ToolHost, options: WorkspaceListOptions): () => void {
+  return host.register(createWorkspaceListTool(options));
 }
