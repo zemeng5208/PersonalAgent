@@ -69,3 +69,43 @@ the caller explicitly rebound the complete affected dependency chain. The Fake
 tests run with the workspace suite. The SQLite restart scenario lives at
 `tests/integration/mod-27-28-persistent-cognition.test.mjs` and is run after the
 root build; it uses only temporary synthetic data.
+
+## Pure fact projection preview
+
+`previewFactProjection(graph, batch, memory, context, evaluatedAt)` consumes one
+already-delivered public `FactChangeBatch`, reads every exact `FactRef` through a
+host-bound `MemoryQueryPort`, and returns the existing `StoredImpact` shape with
+an isolated candidate snapshot and impact report. It never writes a store,
+confirms the batch, changes a checkpoint, rebinds a dependency, schedules work,
+or grants a normal consumer access to the trusted host confirmation method.
+
+This first slice supports only a strict projection subset: Memory fact IDs and
+revisions must equal the graph Fact node IDs and revisions, and new revisions
+must be consecutive. The first projected version must therefore be revision 1;
+a bootstrap head above revision 1 or any gap fails with `REBUILD_REQUIRED`.
+Exact repeated versions are no-ops only when every shared projection field is
+identical; drift fails with a fixed `INTEGRITY_ERROR`. A new revision must
+correct the exact preceding `FactRef`.
+
+The graph projection preserves summary, source reference, validity, sensitivity
+and state, fixes `reason` to `fact projection`, and has no dependencies.
+`observedAt`, `confirmation` and `corrects` remain authoritative Memory data and
+are not encoded into or substituted for `sourceRef`; the preview still validates
+the complete exact FactVersion shape, canonical timestamps, enums and correction
+reference before mapping any shared field. Reads are all-or-nothing from the
+caller's perspective and use a deadline/abort gate even when a provider never
+settles. Gate listeners and timers are removed, and late results or failures are
+observed without reaching candidate state. The returned report uses the existing exact dependency traversal, so
+only affected Goal/Decision/Plan nodes become RECHECK and unrelated nodes remain
+KEEP. This is not persistent feed consumption: durable dedupe, impact records,
+projection/checkpoint atomicity, restart recovery and complete bootstrap remain
+unavailable.
+
+Build Memory, Goals and Cognition before running the focused test:
+
+```powershell
+npm.cmd run build --workspace=@personal-agent/memory
+npm.cmd run build --workspace=@personal-agent/goals
+npm.cmd run build --workspace=@personal-agent/cognition
+node --test --test-isolation=none packages/cognition/test/fact-projection.test.mjs
+```
