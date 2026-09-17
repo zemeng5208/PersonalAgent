@@ -289,3 +289,88 @@ test('subscriptions publish consistent playback and terminal snapshots exactly o
   );
   finishPlayback();
 });
+
+test('a listener stop before recognition startup prevents the provider call and queues the terminal revision once', async () => {
+  const recognition = new FakeSpeechRecognitionPort(() => ({text: 'must not run'}));
+  const manager = new VoiceSessionManager({recognition, idFactory: ids()});
+  const first = [];
+  const second = [];
+  let stopping;
+  manager.subscribe(snapshot => {
+    first.push([snapshot.state, snapshot.revision]);
+    if (snapshot.state === 'recognizing') stopping = manager.stop(snapshot.sessionId);
+  });
+  manager.subscribe(snapshot => { second.push([snapshot.state, snapshot.revision]); });
+
+  const session = await manager.start({deadline: futureDeadline(), signal: new AbortController().signal});
+  await assert.rejects(
+    manager.recognizeAudio(session.sessionId, clip()),
+    error => error.code === 'CANCELLED',
+  );
+  await stopping;
+
+  assert.equal(recognition.calls.length, 0);
+  assert.deepEqual(first, [['listening', 0], ['recognizing', 1], ['stopped', 2]]);
+  assert.deepEqual(second, [['listening', 0], ['stopped', 2]]);
+  assert.equal(new Set(second.map(([state, revision]) => `${state}:${revision}`)).size, second.length);
+});
+
+test('a listener replacement before transcript consumption startup prevents the consumer call', async () => {
+  const recognition = new FakeSpeechRecognitionPort(() => ({text: 'replace before consume'}));
+  const consumer = new FakeTranscriptConsumerPort(() => ({replyText: 'must not run'}));
+  const manager = new VoiceSessionManager({recognition, idFactory: ids()});
+  const first = await manager.start({deadline: futureDeadline(), signal: new AbortController().signal});
+  const transcript = await manager.recognizeAudio(first.sessionId, clip());
+  let replacement;
+  manager.subscribe(snapshot => {
+    if (snapshot.sessionId === first.sessionId && snapshot.state === 'consuming') {
+      replacement = manager.start({deadline: futureDeadline(), signal: new AbortController().signal});
+    }
+  });
+
+  await assert.rejects(
+    manager.consumeTranscript(first.sessionId, transcript.transcriptId, consumer),
+    error => error.code === 'CANCELLED' || error.code === 'STALE_SESSION',
+  );
+  const next = await replacement;
+
+  assert.equal(consumer.calls.length, 0);
+  assert.notEqual(next.sessionId, first.sessionId);
+  await manager.stop(next.sessionId);
+});
+
+test('terminal cleanup and operation finally share one release and stop waits for it', async () => {
+  let release;
+  const releaseGate = new Promise(resolve => { release = resolve; });
+  const stopReasons = [];
+  const recognition = {
+    recognize() {
+      return {
+        result: new Promise(() => {}),
+        async stop(reason) {
+          stopReasons.push(reason);
+          await releaseGate;
+        },
+      };
+    },
+  };
+  const manager = new VoiceSessionManager({recognition, idFactory: ids()});
+  const session = await manager.start({deadline: futureDeadline(), signal: new AbortController().signal});
+  const recognizing = manager.recognizeAudio(session.sessionId, clip());
+  const rejected = assert.rejects(recognizing, error => error.code === 'CANCELLED');
+  let stopSettled = false;
+  const stopping = manager.stop(session.sessionId).then(result => {
+    stopSettled = true;
+    return result;
+  });
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.deepEqual(stopReasons, ['user']);
+  assert.equal(stopSettled, false);
+  release();
+  const result = await stopping;
+  await rejected;
+
+  assert.equal(result.resourcesReleased, true);
+  assert.deepEqual(stopReasons, ['user']);
+});
