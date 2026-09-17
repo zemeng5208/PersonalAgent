@@ -80,6 +80,22 @@ for cancellation, `TIMEOUT` for a deadline (the contract has no
 `DEADLINE_EXCEEDED`), and `EXTERNAL_FAILURE` for authorization, transport, HTTP, or
 malformed-response failures (the contract has no `EXTERNAL_SERVICE_ERROR`).
 
+For responses containing `workflow_start` or `workflow_end`, intermediate
+`message.data.text` is not the final result. The adapter keeps the latest
+`workflow_end.data.answer` candidate and requires a subsequent `task_end` then
+`end` before returning it. A new workflow start clears an earlier candidate;
+workflow events after termination and failure events are rejected. As an explicit
+compatibility choice, `workflow_end` can introduce this mode without a preceding
+`workflow_start`; the two terminal events are still mandatory. This does not
+validate a workflow's internal execution or elevate its answer to trusted Evidence.
+Pure `message` responses retain their existing text-only behavior. The synthetic
+multi-agent fixture reflects observed event fields, not a complete raw cloud trace.
+An explicit `workflow_start` begins a new message-index scope. Conflicting text for
+the same index inside that scope is still rejected, and the 16,000-character
+message budget remains cumulative across all workflows in the response. An
+end-only workflow does not reset indexes. This compatibility rule has synthetic
+coverage; the live global-conflict report does not identify each conflict's scope.
+
 The adapter is not a claim that AgentArts is available. Real project/runtime setup,
 deployment, authentication, streaming behavior, trace/usage, and local Policy or
 ToolGateway read-back remain unverified; without explicit configuration composition
@@ -88,3 +104,17 @@ must keep the capability unavailable and must not silently fall back to Local or
 Ports are text-only and not frozen. Tool proposals/results, deployment/version/trace,
 usage, resumable cloud runs and data-export consent require the next reviewed contract
 increment before real AgentArts is enabled. No wire Schema or storage migration changes.
+
+For a Workflow whose start node accepts a single goal string, the trusted host may
+set `workflowGoalInput: 'query'` (replace `query` with the configured variable).
+The adapter then sends `{inputs: {query: goal}}` instead of the default agent body
+`{query: goal}`. It never guesses the application type, sends both forms, adds
+plugin credentials, or retries with a different request shape. This first slice
+accepts ASCII variable identifiers of 1–128 characters; this is a local supported
+subset, not a statement of Huawei's complete naming rules. Workflows requiring
+additional inputs need a later explicit mapping, not fabricated placeholder values.
+`createAgentArtsRuntimeApplication` forwards this trusted option; Desktop settings
+do not yet expose it. Existing `event: 'message', data: {text, index}` parsing is
+reused without treating text as tool instructions. See the official
+[InvokeRuntime reference](https://support.huaweicloud.com/api-agentarts/InvokeRuntime.html)
+and [work package](../../docs/modules/MOD-30-WORKFLOW-INPUT-01.md).

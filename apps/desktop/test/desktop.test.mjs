@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {Client} from '@personal-agent/client';
 import {FakeRuntime} from '@personal-agent/testkit';
 import {panelBounds,clampOrb,draggedGroupBounds} from '../electron/placement.js';
+import {AGENTARTS_TASK_TIMEOUT_MS,taskSubmitOptions} from '../electron/runtime.js';
 import {orbState} from '../src/features/conversation/state.js';
 test('panel stays within negative-origin and small display work areas',()=>{
   for(const area of [{x:-1920,y:0,width:1920,height:1080},{x:0,y:-800,width:1280,height:800},{x:0,y:0,width:320,height:480}]) {
@@ -33,4 +34,43 @@ test('public client cancel remains waiting until runtime confirms terminal state
   const result=await client.call('task.cancel',{taskId});assert.equal(result.state,'cancelling');
   assert.equal(orbState(result),'waiting');runtime.advance(taskId);
   const task=await client.call('task.get',{taskId});assert.equal(task.state,'cancelled');assert.equal(orbState(task),'idle');
+});
+test('competition task submission extends the real request deadline and preserves cancellation',async()=>{
+  const runtime=new FakeRuntime({mode:'test',scenario:'success'});
+  let submittedRequest;
+  const transport={send(request,signal){
+    if(request.operation==='task.submit') submittedRequest=request;
+    return runtime.send(request,signal);
+  }};
+  const now=runtime.clock.now();
+  const client=new Client(transport,()=>now);await client.connect();
+  await client.call('task.submit',{goal:'Competition deadline',conversationId:'test'},taskSubmitOptions(true,'competition-deadline'));
+  assert.equal(Date.parse(submittedRequest.deadline)-now,AGENTARTS_TASK_TIMEOUT_MS);
+
+  const localRuntime=new FakeRuntime({mode:'test',scenario:'success'});
+  let localRequest;
+  const localClient=new Client({send(request,signal){
+    if(request.operation==='task.submit') localRequest=request;
+    return localRuntime.send(request,signal);
+  }},()=>localRuntime.clock.now());
+  await localClient.connect();
+  await localClient.call('task.submit',{goal:'Local deadline',conversationId:'test'},taskSubmitOptions(false,'local-deadline'));
+  assert.equal(Date.parse(localRequest.deadline)-localRuntime.clock.now(),10_000);
+
+  const cancellationRuntime=new FakeRuntime({mode:'test',scenario:'success'});
+  const cancellationClient=new Client({send(request,signal){
+    if(request.operation!=='task.submit') return cancellationRuntime.send(request,signal);
+    return new Promise((resolve,reject)=>{
+      signal.addEventListener('abort',()=>reject(signal.reason??Error('aborted')),{once:true});
+    });
+  }},Date.now);
+  await cancellationClient.connect();
+  const controller=new AbortController();
+  const pending=cancellationClient.call(
+    'task.submit',
+    {goal:'Competition cancellation',conversationId:'test'},
+    {...taskSubmitOptions(true,'competition-cancellation'),signal:controller.signal},
+  );
+  controller.abort();
+  await assert.rejects(pending,error=>error?.code==='CANCELLED'||error?.name==='AbortError');
 });
