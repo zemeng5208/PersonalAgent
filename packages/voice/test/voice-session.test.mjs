@@ -181,3 +181,111 @@ test('missing providers remain explicitly unavailable and provider errors are sa
   });
   await failing.stop(failingSession.sessionId);
 });
+
+test('subscriptions deliver frozen isolated snapshots and contain listener failures', async () => {
+  const manager = new VoiceSessionManager({idFactory: ids()});
+  const first = [];
+  const second = [];
+  manager.subscribe(snapshot => {
+    first.push(snapshot);
+    assert.equal(Reflect.set(snapshot, 'state', 'corrupted'), false);
+    throw Error('private-listener-message');
+  });
+  manager.subscribe(snapshot => { second.push(snapshot); });
+
+  const session = await manager.start({deadline: futureDeadline(), signal: new AbortController().signal});
+  assert.equal(first.length, 1);
+  assert.equal(second.length, 1);
+  assert.notEqual(first[0], second[0]);
+  assert.equal(Object.isFrozen(first[0]), true);
+  assert.equal(Object.isFrozen(second[0]), true);
+  assert.equal(second[0].state, 'listening');
+  assert.equal(manager.current().state, 'listening');
+  await manager.stop(session.sessionId);
+});
+
+test('unsubscribe is idempotent and subscriptions added during delivery start on the next update', async () => {
+  const recognition = new FakeSpeechRecognitionPort(() => ({text: 'next update'}));
+  const manager = new VoiceSessionManager({recognition, idFactory: ids()});
+  let firstCalls = 0;
+  let lateCalls = 0;
+  let unsubscribeFirst = () => {};
+  let unsubscribeLate = () => {};
+  unsubscribeFirst = manager.subscribe(() => {
+    firstCalls++;
+    unsubscribeFirst();
+    unsubscribeLate = manager.subscribe(() => { lateCalls++; });
+  });
+
+  const session = await manager.start({deadline: futureDeadline(), signal: new AbortController().signal});
+  assert.equal(firstCalls, 1);
+  assert.equal(lateCalls, 0);
+  await manager.recognizeAudio(session.sessionId, clip());
+  assert.equal(firstCalls, 1);
+  assert.equal(lateCalls, 2);
+  unsubscribeFirst();
+  unsubscribeLate();
+  unsubscribeLate();
+  await manager.stop(session.sessionId);
+  assert.equal(lateCalls, 2);
+});
+
+test('subscriptions publish consistent playback and terminal snapshots exactly once per revision', async () => {
+  let finishPlayback;
+  let playbackStarted;
+  const ready = new Promise(resolve => { playbackStarted = resolve; });
+  const recognition = new FakeSpeechRecognitionPort(() => ({text: '播放回复'}));
+  const consumer = new FakeTranscriptConsumerPort(() => ({replyText: '合成播报'}));
+  const output = new FakeSpeechOutputPort(() => {
+    playbackStarted();
+    return new Promise(resolve => { finishPlayback = resolve; });
+  });
+  const manager = new VoiceSessionManager({recognition, output, idFactory: ids()});
+  const snapshots = [];
+  manager.subscribe(snapshot => { snapshots.push(snapshot); });
+
+  const session = await manager.start({deadline: futureDeadline(), signal: new AbortController().signal});
+  const transcript = await manager.recognizeAudio(session.sessionId, clip());
+  const reply = await manager.consumeTranscript(session.sessionId, transcript.transcriptId, consumer);
+  const speaking = manager.speakReply(session.sessionId, reply.replyId);
+  await ready;
+  assert.deepEqual(
+    snapshots.map(snapshot => [snapshot.state, snapshot.playbackActive, snapshot.revision]),
+    [
+      ['listening', false, 0],
+      ['recognizing', false, 1],
+      ['awaiting_consume', false, 2],
+      ['consuming', false, 3],
+      ['awaiting_speech', false, 4],
+      ['speaking', true, 5],
+    ],
+  );
+
+  await manager.stopSpeaking(session.sessionId);
+  assert.deepEqual(await speaking, {sessionId: session.sessionId, completed: false, interrupted: true});
+  assert.deepEqual(
+    [snapshots.at(-1).state, snapshots.at(-1).playbackActive, snapshots.at(-1).revision],
+    ['listening', false, 6],
+  );
+  const stopped = await manager.stop(session.sessionId);
+  assert.equal(stopped.resourcesReleased, true);
+  assert.deepEqual(
+    {
+      state: snapshots.at(-1).state,
+      playbackActive: snapshots.at(-1).playbackActive,
+      revision: snapshots.at(-1).revision,
+      terminalReason: snapshots.at(-1).terminalReason,
+      transcriptReady: snapshots.at(-1).transcriptReady,
+      replyReady: snapshots.at(-1).replyReady,
+    },
+    {
+      state: 'stopped',
+      playbackActive: false,
+      revision: 7,
+      terminalReason: 'user',
+      transcriptReady: false,
+      replyReady: false,
+    },
+  );
+  finishPlayback();
+});

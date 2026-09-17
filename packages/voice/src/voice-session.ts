@@ -56,6 +56,8 @@ export interface VoiceSessionSnapshot {
   readonly terminalReason?: VoiceSessionTerminalReason;
 }
 
+export type VoiceSessionListener = (snapshot: VoiceSessionSnapshot) => void;
+
 export interface TranscriptReceipt {
   readonly sessionId: string;
   readonly transcriptId: string;
@@ -137,6 +139,11 @@ interface SessionRecord {
   deadlineTimer?: ReturnType<typeof setTimeout>;
   parentAbortListener?: () => void;
   stopPromise?: Promise<StopVoiceSessionResult>;
+}
+
+interface VoiceListenerRegistration {
+  readonly listener: VoiceSessionListener;
+  active: boolean;
 }
 
 function invalidArgument(message = 'Invalid voice session input'): never {
@@ -316,6 +323,7 @@ export class VoiceSessionManager {
   private readonly recognition: SpeechRecognitionPort;
   private readonly output: SpeechOutputPort;
   private readonly idFactory: (kind: VoiceIdKind) => string;
+  private readonly listeners = new Set<VoiceListenerRegistration>();
   private active?: SessionRecord;
 
   constructor(options: VoiceSessionManagerOptions = {}) {
@@ -369,11 +377,24 @@ export class VoiceSessionManager {
     this.scheduleDeadline(record);
     if (signalAborted(signal)) await this.terminate(record, 'cancelled');
     if (record.state === 'cancelled') throw new VoiceSessionError('CANCELLED', 'Voice session cancelled');
+    this.notify(record);
     return this.snapshot(record);
   }
 
   current(): VoiceSessionSnapshot | undefined {
     return this.active === undefined ? undefined : this.snapshot(this.active);
+  }
+
+  /** Read-only state updates. A subscription added during delivery starts on the next update. */
+  subscribe(listener: VoiceSessionListener): () => void {
+    if (typeof listener !== 'function') invalidArgument('Invalid voice session listener');
+    const registration: VoiceListenerRegistration = {listener, active: true};
+    this.listeners.add(registration);
+    return () => {
+      if (!registration.active) return;
+      registration.active = false;
+      this.listeners.delete(registration);
+    };
   }
 
   async recognizeAudio(sessionId: string, clip: VoiceAudioClip): Promise<TranscriptReceipt> {
@@ -473,7 +494,6 @@ export class VoiceSessionManager {
     const reply = record.replies.get(replyId);
     if (reply === undefined) throw new VoiceSessionError('INVALID_ARGUMENT', 'Unknown voice reply receipt');
     record.replies.delete(replyId);
-    this.transition(record, 'speaking');
     const controller = new AbortController();
     const request: SpeechOutputRequest = Object.freeze({
       sessionId: record.sessionId,
@@ -493,6 +513,7 @@ export class VoiceSessionManager {
         throw providerError('playback', error);
       }
       active = this.attachOperation(record, 'playback', controller, handle);
+      this.transition(record, 'speaking');
       await this.waitForOperation(record, active);
       if (active.interruptedByUser) {
         return {sessionId: record.sessionId, completed: false, interrupted: true};
@@ -589,10 +610,11 @@ export class VoiceSessionManager {
     if (record.state === state) return;
     record.state = state;
     record.revision += 1;
+    this.notify(record);
   }
 
   private snapshot(record: SessionRecord): VoiceSessionSnapshot {
-    const playbackActive = [...record.operations].some(operation => operation.kind === 'playback');
+    const playbackActive = record.state === 'speaking';
     const snapshot: VoiceSessionSnapshot = {
       sessionId: record.sessionId,
       state: record.state,
@@ -605,7 +627,20 @@ export class VoiceSessionManager {
       playbackActive,
       ...(record.terminalReason === undefined ? {} : {terminalReason: record.terminalReason}),
     };
-    return snapshot;
+    return Object.freeze(snapshot);
+  }
+
+  private notify(record: SessionRecord): void {
+    const round = [...this.listeners];
+    for (const registration of round) {
+      if (!registration.active) continue;
+      const snapshot = this.snapshot(record);
+      try {
+        registration.listener(snapshot);
+      } catch {
+        // Listener failures are isolated and their messages are never surfaced.
+      }
+    }
   }
 
   private scheduleDeadline(record: SessionRecord): void {
@@ -692,13 +727,17 @@ export class VoiceSessionManager {
 
   private terminate(record: SessionRecord, reason: VoiceSessionTerminalReason): Promise<StopVoiceSessionResult> {
     if (record.stopPromise !== undefined) return record.stopPromise;
+    let resolveStop: (result: StopVoiceSessionResult) => void = () => {};
+    const stopPromise = new Promise<StopVoiceSessionResult>(resolve => { resolveStop = resolve; });
+    // Publish the promise before terminal listeners run so reentrant stop calls stay idempotent.
+    record.stopPromise = stopPromise;
     const details = abortDetails(reason);
     record.terminalReason = reason;
     record.abortCode = details.code;
     record.abortMessage = details.message;
-    this.transition(record, terminalState(reason));
     record.transcripts.clear();
     record.replies.clear();
+    this.transition(record, terminalState(reason));
     if (record.deadlineTimer !== undefined) clearTimeout(record.deadlineTimer);
     if (record.parentAbortListener !== undefined) {
       try {
@@ -709,18 +748,20 @@ export class VoiceSessionManager {
     }
     record.root.abort();
     const operations = [...record.operations];
-    record.stopPromise = Promise.all(operations.map(async operation => {
+    void Promise.all(operations.map(async operation => {
       operation.abortCode = details.code;
       operation.abortMessage = details.message;
       operation.controller.abort();
       return this.safeStop(operation.handle, reason);
-    })).then(results => ({
-      sessionId: record.sessionId,
-      state: terminalState(reason),
-      reason,
-      stopped: true as const,
-      resourcesReleased: results.every(Boolean),
-    }));
-    return record.stopPromise;
+    })).then(results => {
+      resolveStop({
+        sessionId: record.sessionId,
+        state: terminalState(reason),
+        reason,
+        stopped: true,
+        resourcesReleased: results.every(Boolean),
+      });
+    });
+    return stopPromise;
   }
 }

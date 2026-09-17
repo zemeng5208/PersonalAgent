@@ -36,6 +36,7 @@ export type {
   TranscriptReceipt,
   VoiceIdKind,
   VoiceSessionManagerOptions,
+  VoiceSessionListener,
   VoiceSessionSnapshot,
   VoiceSessionState,
   VoiceSessionTerminalReason,

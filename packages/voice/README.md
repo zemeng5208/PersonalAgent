@@ -27,10 +27,17 @@ whether those handles released successfully. A parent cancellation or deadline d
 same with `cancelled` or `expired` state. Starting another session replaces the previous
 one; late provider callbacks are discarded.
 
-The session snapshot contains state and booleans only, never audio, transcript or reply
-text. Public failures use fixed messages and do not expose provider errors. Adapters own
-provider configuration, credentials, upload consent and transport. No provider is the
-default: recognition and output return `UNSUPPORTED_CAPABILITY`.
+`subscribe(listener)` is a provisional, in-process read-only state feed for trusted host
+composition. It emits an independently frozen snapshot after the initial session becomes
+observable and after each revision change, including playback stop and terminal states.
+Unsubscribe is idempotent. Listener failures are contained, and subscriptions added while
+an update is being delivered begin with the next update. The feed opens no device, grants
+no authorization, submits no task and is not the public wire event protocol.
+
+Each session snapshot contains state and booleans only, never audio, transcript or reply
+text. Public failures use fixed messages and do not expose provider or listener errors.
+Adapters own provider configuration, credentials, upload consent and transport. No
+provider is the default: recognition and output return `UNSUPPORTED_CAPABILITY`.
 
 ## Fake use and verification
 
