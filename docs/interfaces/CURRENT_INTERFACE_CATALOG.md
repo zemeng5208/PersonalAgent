@@ -128,7 +128,7 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | `ModelProvider`、`ModelGateway`、Agent 执行循环 | Fake Provider、Mock fetch、离线 Agent/工具测试 | Agent 依赖具体 `ModelGateway`；真实盘古工具调用未通过 | `provisional` |
 | `StructuredToolProvider` | 严格 JSON 解析、工具名/版本/参数校验单测 | 只是文字 JSON 提案适配器；没有真实盘古闭环，不是原生 function calling | `provisional` |
 | `CoordinationPort`、`CloudAgentPort`、`CompetitionCoordinator` | PR #36/#42 的文字端口、Fake、取消/deadline、Runtime 注入与防静默回退测试 | 结果仅允许文字；PR #36 缺正式非作者评审；工具、deployment/version/trace/usage 未进入端口 | `provisional` |
-| `AgentArtsCloudAgentPort` 与 Competition Runtime/Desktop 装配 | PR #41/#43 的严格 HTTP 响应校验、mock-fetch、配置选择和 Desktop smoke | 尚无真实项目、身份、部署/API/trace/usage 读回；不能作为真实 AgentArts 可用证据 | `provisional` |
+| `AgentArtsCloudAgentPort` 与 Competition Runtime/Desktop 装配 | PR #41/#43 的严格 HTTP 响应校验、mock-fetch、配置选择和 Desktop smoke；PR #44 已集成 conditional 控制台资源身份、提交版本及路由读回 | 已有云端构建读回不等于部署/API/trace/usage 或本地工具闭环已验收 | `provisional` |
 | `ConnectorPort`、`ConnectorHost`、`SecretStorePort.read` | 类型、FakeConnector、宿主单测 | 账号会话未持久化；wire connect/disconnect 未接 Runtime；无真实账号 | `provisional` |
 | `StoragePort` | contracts 类型、FakeStorage | 只有同步 get/set/delete；没有 revision、事务、容量和失败语义 | `provisional` |
 
@@ -160,8 +160,8 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | Skills | 本地 Skill 加载/版本/执行端口 | 对应 package 和闭环未提供 | MOD-07 `goo122` |
 | 决策 | 目标/事实/决策图谱的生产集成 | PR #37/#38/#40 已集成版本图、SQLite 存储与离线持久消费者；真实事实输入、Runtime/AgentArts 接线和删除未完成 | MOD-27 `zemeng`，存储 `goo122` |
 | 认知 | 事件驱动的完整计划修复 | PR #37 已集成离线影响分析与显式候选差异；持久事件消费和真实验收未完成 | MOD-28 `zemeng` |
-| AgentArts | Competition Profile 的身份、Agent/Workflow、MaaS/模型、知识、MCP/Skill、工具提案与多 Agent | 文字 HTTP Adapter 与 Runtime/Desktop 离线接线已集成；仍无真实项目、deployment/API/trace、工具闭环或多 Agent 读回 | MOD-29～31 `zemeng` |
-| AgentArts | Competition 发布、API、trace、评估、成本、回滚和端到端证据 | 无云资源读回、本地 Policy/ToolGateway 闭环或 profile 防静默回退证据 | MOD-32 `zemeng` |
+| AgentArts | Competition Profile 的身份、Agent/Workflow、MaaS/模型、知识、MCP/Skill、工具提案与多 Agent | 文字 HTTP Adapter 与 Runtime/Desktop 离线接线已集成；PR #44 已有 conditional 多 Agent/子工作流身份、提交版本及路由读回；deployment/API/trace、工具闭环仍未验收 | MOD-29～31 `zemeng` |
+| AgentArts | Competition 发布、API、trace、评估、成本、回滚和端到端证据 | 已有 conditional 云资源构建读回和离线防静默回退测试；真实发布/API/trace、本地 Policy/ToolGateway 闭环及完整 profile 验收仍缺失 | MOD-32 `zemeng` |
 | Windows | Named Pipe、DesktopActionPort、资源锁、用户接管 | 对应 Host/Client package 与真实应用验收未提供 | MOD-16 `zemeng` |
 | TraceGuard | 公开工具和 Evidence/恢复端口 | 仓库适配 package 未提供 | MOD-17 `zemeng` |
 | 编程 | Workspace/patch/command/artifact 端口 | 仓库 package 和隔离验收未提供 | MOD-18 `zemeng` |
@@ -183,8 +183,14 @@ kind/text/verification；工具提案、deployment/version/trace、usage、世�
 ### COMPETITION-HTTP-01 已集成离线首片
 
 PR #41 提供严格校验的 AgentArts 文字 HTTP Adapter，PR #43 将其接入 Runtime/Desktop
-Competition profile；两者均已批准合并。现有 main 证据只覆盖 mock-fetch、错误脱敏、取消/
-deadline、配置选择和离线 smoke。Draft PR #51 记录有条件真实文字调用及平台 trace，但尚未合并；工具提案与执行结果续跑仍无真实证据，因此保持 provisional。
+Competition profile；两者均已批准合并。现有 main 的运行链测试覆盖 mock-fetch、错误脱敏、取消/
+deadline、配置选择和离线 smoke。另有 PR #44 集成的
+[多 Agent 构建记录](../../tests/manual/agentarts/2026-09-12-multi-agent-build.json)，
+记录当时资源身份、submitted 状态、三个子工作流身份/版本及开始/默认/结束路由的真实控制台读回，等级为 conditional。
+同一记录也注明后续草稿 pending_update、重复引用及 safeToPublish=false；历史提交版本不能证明当前草稿可发布。
+该记录明确未验证 deployment、API invocation、model execution、trace、usage、工具执行与目标系统读回。
+Draft PR #51 的调用与诊断材料尚未合并，不能计为 main 的真实验收，也不能据此抹去 PR #44 已集成的构建证据。
+工具提案与执行结果续跑仍无真实闭环证据，因此保持 provisional。
 
 ### COORDINATION-STORE-01 已集成增量
 
@@ -228,4 +234,4 @@ FactChangeFeed 继续保持 unavailable，直到消费语义确认并完成实�
 
 截至 2026-09-14，**适合冻结的是 Core Runtime Profile 1 的消息、任务、会话与审批只读查询子集；不适合冻结整套协议、模型工具调用或 Agent 编排接口。** 产品当前只实施 Huawei ICT AgentArts Competition Profile；Local Profile 仅留存现有代码、当前不新增。该范围决定不改变接口证据状态。
 
-盘古当前没有已验证的原生工具调用，文字 JSON 工具提案也未完成真实闭环。因此 MOD-04/05 的离线实现继续保持 `review`，Local Model/Agent/Tool 相关接口保持 `provisional`。Competition 的文字 Coordination/CloudAgent、HTTP/Runtime/Desktop 离线首片、版本图/持久影响分析和 MOD-09A 契约夹具已集成但未冻结。真实 AgentArts 资源、工具闭环、统一世界状态接口、事实流与完整认知集成仍 `unavailable`。
+盘古当前没有已验证的原生工具调用，文字 JSON 工具提案也未完成真实闭环。因此 MOD-04/05 的离线实现继续保持 `review`，Local Model/Agent/Tool 相关接口保持 `provisional`。Competition 的文字 Coordination/CloudAgent、HTTP/Runtime/Desktop 离线首片、版本图/持久影响分析和 MOD-09A 契约夹具已集成但未冻结。AgentArts 资源构建已有 conditional 历史读回；真实部署/API/工具闭环、统一世界状态接口、事实流与完整认知集成仍 `unavailable`。
