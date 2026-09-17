@@ -44,6 +44,14 @@ Goal/Decision/Plan。读取端另有取消/截止竞速，即使提供者永不 
 因此真实持久投影与原子确认继续为 `unavailable`；Memory Fake 和本片纯预览
 不能提升接口冻结状态。
 
+## 后续架构提案（未实施）
+
+[ADR-0009](../adr/0009-external-fact-projection-identity.md) 提议把 Memory
+`FactRef` 与图 `NodeRef` 的版本空间分离，并用成对 externalRef/digest 保存映射完整性。
+它仍是 proposed，涉及 Goals 公共类型、严格 parser 和持久格式，须由 `goo122` 确认
+迁移与回滚后另行实施。当前 PR #73 的 ID/revision 相等、首次 revision 大于 1
+`REBUILD_REQUIRED` 限制保持不变；不得从本链接推断实现或生产能力已经可用。
+
 ## 验收
 
 目标测试使用合成事实，覆盖连续 correction 与最小 RECHECK、完整重复 no-op 和
