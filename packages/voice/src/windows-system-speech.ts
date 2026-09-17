@@ -220,6 +220,12 @@ function createFixedHostSpawner(): WindowsSpeechHostSpawner {
   const executable = path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   const script = fileURLToPath(new URL('../host/windows-system-speech.ps1', import.meta.url));
   if (!existsSync(executable) || !existsSync(script)) return () => { throw fixedUnavailable(); };
+  // Speech needs Windows/profile locations, never the Desktop's cloud credentials.
+  const environment: NodeJS.ProcessEnv = {SystemRoot: systemRoot, WINDIR: systemRoot};
+  for (const key of ['TEMP', 'TMP', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA']) {
+    const value = process.env[key];
+    if (value !== undefined) environment[key] = value;
+  }
   return mode => spawn(executable, [
     '-NoProfile',
     '-NonInteractive',
@@ -228,6 +234,7 @@ function createFixedHostSpawner(): WindowsSpeechHostSpawner {
   ], {
     shell: false,
     windowsHide: true,
+    env: environment,
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 }
