@@ -2,6 +2,7 @@ import {stateNames} from '../conversation/state.js';
 import {themePreference, saveTheme, saveCalm} from '../../ui/preferences.js';
 import {profilePage, bindProfile} from './profile.js';
 import {approvalPresentation, authorizationListHtml, nextApprovalExpiry} from './approval-status.js';
+import {agentArtsModelPage} from './agentarts-model.js';
 
 export const sections = {
   settings: '常规', import: '导入', profile: '个人资料', appearance: '外观', voice: '语音', configuration: '配置',
@@ -87,6 +88,7 @@ export function mountAdmin(root, invoke, escape) {
 
   function modelPage(data) {
     const item = data.model ?? {};
+    if (item.provider === 'agentarts') return agentArtsModelPage(item, escape);
     const configured = Boolean(item.configured);
     const enabled = configured && item.enabled !== false;
     const status = item.status === 'ready' ? '连接正常' : item.status === 'configured' ? '等待测试' : item.status === 'disabled' ? '已停用' : item.status === 'error' ? '连接失败' : '未配置';
