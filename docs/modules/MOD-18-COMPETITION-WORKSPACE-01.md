@@ -4,8 +4,8 @@
 
 - Profile：`huawei_ict_agentarts`。
 - 负责人 / 非作者评审：`zemeng` / `goo122`。
-- 分支：`codex/zemeng/workspace-competition`；状态：`review`（实现与定向测试已完成，
-  尚未提交、推送或完成非作者评审）。
+- 分支：`codex/zemeng/workspace-competition`；状态：`review`（实现与定向测试已提交，
+  尚未完成非作者评审或合并）。
 - 堆叠基线：PR #49 `03f9ab4`、PR #60 `d012a7d`，以及 MOD-18 coding-tools
   提交 `ada40a5`、`1fe234d` 与 PR #63 修复 `f8ee77c`（本分支 cherry-pick
   `fc694d8`、`8828227`、`e8aa1e0`）。这些依赖未合并不代表不存在；本工作包不复制其实现。
@@ -51,7 +51,7 @@ proposal。测试结束删除临时目录。
 - PR #49 已提供 proposal、审批恢复、Policy/ToolGateway、Evidence 引用和 continuation；
 - PR #60 保证提案参数和 continuation 结果中的合法 JSON 特殊键不会在隔离复制时丢失；
 - PR #63 让可信根的同步与异步规范化使用原生 realpath 语义，并在返回前拒绝超过
-  descriptor 输出 Schema 上限的序列化 JSON；
+  工具固定序列化输出上限的 JSON；上层 wire 编码仍执行最终帧大小检查；
 - MOD-18 provider 保持可信根、路径 containment、敏感文件、UTF-8、大小、deadline 和
   cancellation 边界；本片不重测所有细节。
 
@@ -73,8 +73,7 @@ node --test --test-isolation=none tests/integration/workspace-read-competition.t
 git diff --check
 ```
 
-实际复核复用原 coding-tools 工作树缓存中的 Node `v24.15.0`：
-`C:\Users\24035\.codex\worktrees\a9c8\PersonalAgent\.cache\npm\_npx\1c56de6e9acc34f8\node_modules\node\bin\node.exe`，
+实际复核复用原 coding-tools 工作树缓存中的 Node `v24.15.0`，
 没有下载第二份 Node。用该精确目标版本只重建 coding-tools 后，本文件登记的 3 项集成
 测试全部通过，0 failed。本次直接调用 Node/TypeScript，没有借此宣称 npm `11.12.x`
 已复核；本片也没有为适配执行器复制或修改 provider。
