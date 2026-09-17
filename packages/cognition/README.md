@@ -49,6 +49,19 @@ fixture copies. `mock` is deliberate: no host approval, storage, scheduling or
 external reminder execution is demonstrated. KEEP means no detected dependency
 or validity issue, not that the fixture's chosen times are semantically proven.
 
+## Local evaluation baseline
+
+Run `npm run evaluate --workspace=@personal-agent/cognition` for a fixed synthetic
+impact-classification evaluation using the existing meeting replay. Four stages
+are scored against explicit expected RECHECK sets and a deliberately simple
+recheck-everything reference. The JSON reports confusion counts, precision/recall
+(null for zero denominators), accuracy and unnecessary rechecks. Repeated runs
+measure determinism only, not independent statistical samples.
+
+This is a `mock` local-domain baseline, not AgentArts/model quality evaluation,
+measured latency or token savings. It performs no network calls, external actions
+or persistent writes. See [the work package](../../docs/modules/MOD-31-LOCAL-EVALUATION-01.md).
+
 ## Bound persistent-store consumer
 
 `analyzeStoredImpact(boundStore, evaluatedAt)` reads and analyzes the exact
