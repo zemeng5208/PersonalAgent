@@ -85,6 +85,8 @@
     "evidenceRefs": [],
     "silentLocalFallbackObserved": false,
     "automaticRetryPerformed": false,
+    "rawResponseCaptured": false,
+    "sanitizedEventStatisticsCaptured": false,
     "sameDatabaseRestartReadback": {
       "observedAt": "2026-09-17T16:40:09+08:00",
       "state": "failed",
