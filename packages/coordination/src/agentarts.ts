@@ -93,6 +93,8 @@ function asPlainObject(value: unknown): Record<string, unknown> | undefined {
 function validateRequest(request: CoordinationRequest): {deadlineMs: number; signal: AbortSignal} {
   const input = asPlainObject(request);
   if (!input) invalid('Invalid AgentArts coordination request');
+  // A text-only invocation cannot silently discard a future tool result.
+  if (input.continuation !== undefined) invalid('AgentArts text adapter does not support tool continuation');
 
   const taskId = input.taskId;
   if (typeof taskId !== 'string') invalid('Coordination taskId must be a string');

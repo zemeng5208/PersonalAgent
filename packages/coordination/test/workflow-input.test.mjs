@@ -28,6 +28,18 @@ const authorization = calls => ({
   },
 });
 
+test('text-only adapters reject tool continuations before authorization or transport', async () => {
+  const calls = {count: 0};
+  let transports = 0;
+  const cloud = new AgentArtsCloudAgentPort({gatewayUrl, runtimeName, workflowGoalInput: 'goal'},
+    authorization(calls), async () => { transports++; return response('unexpected'); });
+  await assert.rejects(cloud.invoke(request({continuation: {
+    proposalId: 'synthetic-proposal', state: 'confirmed', result: {value: 'synthetic'},
+  }})), {code: 'INVALID_ARGUMENT', message: 'AgentArts text adapter does not support tool continuation'});
+  assert.equal(calls.count, 0);
+  assert.equal(transports, 0);
+});
+
 test('omitting workflowGoalInput preserves the exact query request body', async () => {
   const authCalls = {count: 0};
   let seen;

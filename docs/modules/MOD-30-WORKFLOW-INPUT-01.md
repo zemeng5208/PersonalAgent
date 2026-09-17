@@ -13,6 +13,8 @@
 inputs 目标字符串。变量名在构造时校验并复制，支持 ASCII 标识符 1–128 字符；这只是本地
 首片支持范围，不把它说成平台限制。Runtime Application 工厂透传，不增加 Renderer 写入口。
 不增加任意 inputs 或 plugin_configs，不自动猜变量、补必填项或失败后换协议重试。
+跨入后续 Competition 工具契约时，当前文本适配器明确拒绝非 undefined 的 continuation，
+不得只发送 goal 而静默丢弃工具结果。此项拒绝在授权读取或网络调用之前发生。
 
 ## 验收边界
 
@@ -27,5 +29,6 @@ Node 24.15.0 下 coordination、goals 依赖和 Runtime 构建通过。适配器
 缺省 query、显式 inputs、构造后配置隔离、非法变量在 I/O 前拒绝及特殊键保真。
 Runtime 工厂定向测试 2/2：原 agent 与显式 Workflow 请求都经真实本地工厂和合成 fetch，
 任务不静默回退，返回仍 unverified、没有 Evidence。测试使用 `--test-isolation=none`。
+追加 continuation 拒绝定向回归 1/1 通过，确认授权读取和传输均为零；未重跑前述不变用例。
 本地 Runtime 依赖解析起初缺 goals，补本树被忽略的依赖链接并构建后通过；没有改共享依赖。
 未重复旧适配器全套、未跑本地全仓、没有真实云验收。合成 fetch 不证明实际 Workflow 可用。
