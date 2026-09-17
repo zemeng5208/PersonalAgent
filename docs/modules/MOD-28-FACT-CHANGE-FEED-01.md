@@ -1,7 +1,7 @@
 # MOD-28-FACT-CHANGE-FEED-01：事实变化消费首片
 
 - Profile：`huawei_ict_agentarts`；实施负责人 zemeng；非作者评审 goo122。
-- 分支 `codex/zemeng/fact-change-feed`，基于 PR #62 `c670433`；状态 in_progress。
+- 分支 `codex/zemeng/fact-change-feed`，基于 PR #62 `c670433`；状态 review。
 - 主任务拥有公开 feed 契约、输入验证器与本文；Sol 实施同一 FakeMemoryHost 的消费状态机。
 
 ## 解决的问题
@@ -31,4 +31,7 @@ checkpoint 和 graphRevision 各有用途，不能互换或用于任意跳过未
 公开批次解析验证器覆盖精确结构、上限、重复身份、输入副本隔离、getter/proxy 错误脱敏。
 Node 24.15.0 下 memory 构建通过，解析器目标测试 4/4 通过；其中覆盖数组 Proxy
 伪造 length 不能跳过条目验证，以及额外数组属性拒绝。使用 `--test-isolation=none`。
-Fake 状态机验证由对应目标测试登记；实际结果在交付前补齐，不以方案代替执行证据。
+Fake 状态机目标测试 6/6 通过，覆盖固定 bootstrap 水位、后续 changes、精确重读、空页、
+scope/consumer 隔离、可见性收缩重建、确认 CAS/幂等/完整性与取消超时。实际批次同时经过
+公开解析器验证。由于 append 在原事实记录增加 eventId，补跑原查询回归 6/6 通过。
+未运行本地全仓检查、生产数据库或云端验收；这些结果不代表持久投影或 MOD-28 全部完成。
