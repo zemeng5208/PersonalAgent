@@ -1,6 +1,8 @@
 # Offline Windows speech feasibility probe
 
-Status: prepared, execution blocked by the host PowerShell execution policy.
+Status: synthetic fixed-grammar probe passed once with explicit user authorization
+for a child-process execution-policy exception; normal production startup remains
+subject to the unchanged host execution policy.
 This is not a production SpeechRecognitionPort or microphone acceptance.
 
 Prerequisites: Windows PowerShell 5.1, installed System.Speech, a zh-CN recognizer
@@ -23,11 +25,22 @@ powershell.exe -NoProfile -NonInteractive -File tests/manual/voice/offline-speec
 
 On 2026-09-17 this invocation failed before script execution with
 `PSSecurityException / UnauthorizedAccess: running scripts is disabled`.
-No recognition or synthesis ran. No execution policy was changed. A one-process
-exception has been requested from the user; do not infer permission from this
-document or retry through another launcher to avoid that decision.
+No recognition or synthesis ran during that initial attempt.
 
-Even a future pass proves only fixed-grammar synthetic stream feasibility.
+Later on 2026-09-17, the user explicitly authorized exactly one invocation of this
+unchanged script with child-process `-ExecutionPolicy Bypass`. That invocation
+exited with code 0 and returned:
+
+```json
+{"scope":"synthetic-fixed-grammar-only","culture":"zh-CN","pcmBytes":43680,"sampleRate":16000,"channels":1,"matched":true,"textLength":2,"microphoneUsed":false,"audioPersisted":false,"cloudCalled":false}
+```
+
+The one-time authorization is consumed. No machine or user execution policy was
+changed. This result does not authorize a production bypass, another invocation,
+microphone capture, speaker playback or cloud upload. Do not infer permission
+from this document or retry through another launcher to avoid that decision.
+
+This pass proves only fixed-grammar synthetic stream feasibility.
 Dictation quality, live audio, privacy consent, Desktop IPC, bounded helper
 lifecycle and real voice interaction remain unverified.
 
