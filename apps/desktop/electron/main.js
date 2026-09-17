@@ -7,6 +7,7 @@ import {register} from './runtime.js';
 import {panelBounds, clampOrb, draggedGroupBounds} from './placement.js';
 import {Conversations} from './conversations.js';
 import {createDesktopHost} from './desktop-host.js';
+import {desktopDataPaths} from './data-paths.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -17,9 +18,17 @@ const agentArtsInvokeMode = process.env.PA_AGENTARTS_INVOKE_MODE === undefined
   ? 'published'
   : process.env.PA_AGENTARTS_INVOKE_MODE;
 const competitionMode = !fakeMode && runtimeProfile === 'huawei_ict_agentarts';
-if (fakeMode || fakeModelMode) app.setPath('userData', path.resolve(dir, '../.cache/user-data'));
-if (process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1') app.setPath('userData', path.resolve(dir, `../.cache/test-user-data-${process.pid}`));
+if (fakeMode || fakeModelMode) app.setPath('userData', app.isPackaged
+  ? path.join(app.getPath('temp'), `personal-agent-fake-${process.pid}`)
+  : path.resolve(dir, '../.cache/user-data'));
+if (process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1') app.setPath('userData', app.isPackaged
+  ? path.join(app.getPath('temp'), `personal-agent-test-${process.pid}`)
+  : path.resolve(dir, `../.cache/test-user-data-${process.pid}`));
 if (process.env.PA_DESKTOP_TEST_USER_DATA) app.setPath('userData', path.resolve(process.env.PA_DESKTOP_TEST_USER_DATA));
+const dataPaths = desktopDataPaths({electronDir: dir, userData: app.getPath('userData'),
+  packaged: app.isPackaged, fakeRuntime: fakeMode, fakeModel: fakeModelMode,
+  ephemeral: process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1',
+  testUserData: Boolean(process.env.PA_DESKTOP_TEST_USER_DATA)});
 
 const ownsDesktopInstance = app.requestSingleInstanceLock();
 if (!ownsDesktopInstance) app.quit();
@@ -497,14 +506,12 @@ async function initializeRuntime() {
     const {FakeRuntime} = await import('@personal-agent/testkit');
     runtime = new FakeRuntime({mode: 'test', scenario: 'success'});
     runtimeApplication = createRuntimeApplication({
-      path: path.resolve(dir, '../.cache/fake-runtime-application.sqlite'),
+      path: dataPaths.runtime,
       text: {mode: 'unavailable', model: modelConfig.model},
     });
     readEvents = after => runtime.readEvents('tasks', after);
   } else {
-    const dbPath = process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1' || process.env.PA_DESKTOP_TEST_USER_DATA
-      ? path.join(app.getPath('userData'), 'runtime.sqlite')
-      : path.resolve(dir, '../.cache/runtime.sqlite');
+    const dbPath = dataPaths.runtime;
     mkdirSync(path.dirname(dbPath), {recursive: true});
     if (competitionMode) {
       if (!process.env.PA_AGENTARTS_AUTHORIZATION) {
@@ -697,12 +704,7 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
   try {
-    const conversationPath = fakeMode || fakeModelMode || process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1'
-      ? null
-      : process.env.PA_DESKTOP_TEST_USER_DATA
-        ? path.join(app.getPath('userData'), 'conversations.json')
-        : path.resolve(dir, '../.cache/conversations.json');
-    conversations = new Conversations(conversationPath);
+    conversations = new Conversations(dataPaths.conversations);
     if (!competitionMode) restoreModelConfig();
     await initializeRuntime();
     await initializeModelFromEnvironment();
