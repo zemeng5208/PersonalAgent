@@ -54,6 +54,22 @@ parent it created; it does not dispose the wake controller or voice manager. Thi
 a public wire protocol and is not evidence of real microphone, wake-word, ASR, TTS,
 Desktop, Runtime, or AgentArts integration.
 
+## Explicit Runtime transcript consumption
+
+`RuntimeClientTranscriptConsumer` is a trusted-host `TranscriptConsumerPort` adapter for
+an already connected public `@personal-agent/client`. It remains idle until the caller
+explicitly invokes `consumeTranscript`. That call submits the transcript as the
+`task.submit` goal with the configured `conversationId` and a stable bounded idempotency
+key, then reads `task.get` until Runtime reports a terminal state. Submission acceptance,
+`waiting_approval`, and every other non-terminal state are not treated as a reply.
+
+Only a successful task's bounded `resultSummary` becomes reply text. Runtime and transport
+failures use fixed local errors without external messages. Deadline, parent abort, and
+`VoiceOperation.stop()` bound submit, polling, and non-cooperative Client promises, but
+they stop only this adapter's local wait: the adapter never calls `task.cancel`, retries a
+submission, starts Runtime directly, or invents terminal state. Real local Runtime
+composition remains a separate host-level acceptance step.
+
 ## Fake use and verification
 
 `@personal-agent/voice/testing` exports Fake recognition, explicit transcript consumer
