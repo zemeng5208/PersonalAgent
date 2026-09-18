@@ -24,6 +24,8 @@ const PCM_BYTES_PER_MILLISECOND = 32;
 const MAX_TIMER_MS = 2_147_483_647;
 const MAX_HOST_OUTPUT_BYTES = MAX_TRANSCRIPT_CHARACTERS * 4 + 1_024;
 const MAX_HOST_ERROR_BYTES = 8_192;
+// A cleanup budget is not proof that Windows has terminated the process.
+const HOST_CLEANUP_WAIT_MS = 2_000;
 const isoDeadline = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const byteLengthOf = Object.getOwnPropertyDescriptor(
   Object.getPrototypeOf(Uint8Array.prototype) as object,
@@ -60,6 +62,10 @@ function invalid(message = 'Invalid Windows speech input'): never {
 
 function fixedFailure(): VoiceSessionError {
   return new VoiceSessionError('EXTERNAL_FAILURE', 'Windows speech operation failed');
+}
+
+function fixedCleanupFailure(): VoiceSessionError {
+  return new VoiceSessionError('EXTERNAL_FAILURE', 'Windows speech helper cleanup was not confirmed');
 }
 
 function fixedUnavailable(): VoiceSessionError {
@@ -244,6 +250,8 @@ class WindowsSystemSpeechAdapter {
   readonly output: SpeechOutputPort;
   private readonly active = new Set<ActiveOperation>();
   private disposed = false;
+  private quarantined = false;
+  private disposePromise?: Promise<void>;
 
   constructor(private readonly spawnHost: WindowsSpeechHostSpawner) {
     this.recognition = Object.freeze({
@@ -260,10 +268,12 @@ class WindowsSystemSpeechAdapter {
     });
   }
 
-  async dispose(): Promise<void> {
-    if (this.disposed) return;
+  dispose(): Promise<void> {
+    if (this.disposePromise !== undefined) return this.disposePromise;
     this.disposed = true;
-    await Promise.all([...this.active].map(operation => operation.stop('disposed')));
+    this.disposePromise = Promise.all([...this.active].map(operation => operation.stop('disposed')))
+      .then(() => undefined);
+    return this.disposePromise;
   }
 
   private invoke<T>(
@@ -276,6 +286,15 @@ class WindowsSystemSpeechAdapter {
     if (this.disposed) {
       input.fill(0);
       return failedOperation(new VoiceSessionError('INVALID_STATE', 'Windows speech ports are disposed'));
+    }
+    if (this.quarantined) {
+      input.fill(0);
+      return failedOperation(fixedCleanupFailure());
+    }
+    // Do not start a replacement while a previous helper is still alive.
+    if (this.active.size > 0) {
+      input.fill(0);
+      return failedOperation(new VoiceSessionError('INVALID_STATE', 'Windows speech helper is still active'));
     }
     if (signal.aborted) {
       input.fill(0);
@@ -295,25 +314,39 @@ class WindowsSystemSpeechAdapter {
     }
 
     let settled = false;
+    let hostClosed = false;
     let terminalError: VoiceSessionError | undefined;
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
     let stdoutBytes = 0;
     let stderrBytes = 0;
     const stdout: Buffer[] = [];
     let resolveResult: (value: T) => void = () => {};
     let rejectResult: (error: VoiceSessionError) => void = () => {};
-    let resolveClosed: () => void = () => {};
-    const closed = new Promise<void>(resolve => { resolveClosed = resolve; });
+    let resolveReleased: () => void = () => {};
+    let rejectReleased: (error: VoiceSessionError) => void = () => {};
+    const released = new Promise<void>((resolve, reject) => {
+      resolveReleased = resolve;
+      rejectReleased = reject;
+    });
+    // Automatic cancellation may finish before the owner calls stop/dispose.
+    void released.catch(() => {});
     const result = new Promise<T>((resolve, reject) => {
       resolveResult = resolve;
       rejectResult = reject;
     });
+    void result.catch(() => {});
 
-    const cleanup = (): void => {
+    const detachRequest = (): void => {
       if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
       deadlineTimer = undefined;
       try { signal.removeEventListener('abort', onParentAbort); } catch { /* Best-effort detach. */ }
       input.fill(0);
+    };
+    const cleanup = (): void => {
+      detachRequest();
+      if (cleanupTimer !== undefined) clearTimeout(cleanupTimer);
+      cleanupTimer = undefined;
       this.active.delete(activeOperation);
     };
     const clearStdout = (): void => {
@@ -321,12 +354,24 @@ class WindowsSystemSpeechAdapter {
       stdout.length = 0;
     };
     const terminate = (error: VoiceSessionError): void => {
-      if (settled || terminalError !== undefined) return;
+      if (hostClosed || terminalError !== undefined) return;
       terminalError = error;
-      try { child.kill(); } catch { /* Close/error remains the release boundary. */ }
+      settled = true;
+      rejectResult(error);
+      detachRequest();
+      clearStdout();
+      try { child.stdin.destroy(); } catch { /* Keep tracking the exact child. */ }
+      cleanupTimer = setTimeout(() => {
+        if (hostClosed) return;
+        this.quarantined = true;
+        rejectReleased(fixedCleanupFailure());
+        // Keep the active record and close listener: timeout is not release.
+      }, HOST_CLEANUP_WAIT_MS);
+      try { child.kill(); } catch { /* Failure is bounded by the cleanup budget. */ }
     };
     const onParentAbort = (): void => terminate(fixedCancelled());
     const scheduleDeadline = (): void => {
+      if (settled || hostClosed) return;
       const remaining = deadlineMs - Date.now();
       if (remaining <= 0) {
         terminate(fixedTimeout());
@@ -336,10 +381,10 @@ class WindowsSystemSpeechAdapter {
       deadlineTimer.unref?.();
     };
     const activeOperation: ActiveOperation = {
-      stop: async (reason: VoiceOperationStopReason): Promise<void> => {
+      stop: (reason: VoiceOperationStopReason): Promise<void> => {
         terminate(reason === 'deadline' ? fixedTimeout() : fixedCancelled());
-        try { await result; } catch { /* Stop reports release, not operation output. */ }
-        await closed;
+        // Resolve only on actual close; reject rather than hang if unconfirmed.
+        return released;
       },
     };
     this.active.add(activeOperation);
@@ -360,17 +405,18 @@ class WindowsSystemSpeechAdapter {
       stderrBytes += bytes.byteLength;
       if (stderrBytes > MAX_HOST_ERROR_BYTES) terminate(fixedFailure());
     });
+    child.stdin.on('error', () => terminate(fixedFailure()));
     child.once('error', () => terminate(fixedFailure()));
     child.once('close', code => {
-      if (settled) return;
-      settled = true;
+      if (hostClosed) return;
+      hostClosed = true;
       cleanup();
-      resolveClosed();
-      if (terminalError !== undefined) {
+      resolveReleased();
+      if (settled) {
         clearStdout();
-        rejectResult(terminalError);
         return;
       }
+      settled = true;
       let text = '';
       try {
         text = Buffer.concat(stdout, stdoutBytes).toString('utf8').trim();
@@ -398,12 +444,9 @@ class WindowsSystemSpeechAdapter {
     if (signal.aborted) onParentAbort();
     scheduleDeadline();
 
-    if (terminalError !== undefined) {
-      child.stdin.destroy();
-    } else {
+    if (terminalError === undefined) {
       try {
         const bytes = Buffer.from(input.buffer, input.byteOffset, input.byteLength);
-        child.stdin.once('error', () => terminate(fixedFailure()));
         child.stdin.end(bytes);
       } catch {
         terminate(fixedFailure());

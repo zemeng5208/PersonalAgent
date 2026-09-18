@@ -21,7 +21,8 @@ PCM S16LE / 16 kHz / 单声道、严格 `zh-CN`、有限 ISO deadline 和 AbortS
 - output 只通过 stdin 接受最多 8,000 字符的 UTF-8 文本，选择已安装 zh-CN voice 并向
   默认音频设备播报，stdout 只返回完成 JSON；
 - stderr 被有界读取后丢弃，不写日志；无音频文件、网络、凭据或自动重试；
-- deadline、父取消、stop 和 dispose 终止精确子进程并等待 close；自有音频在终态覆零。
+- deadline、父取消、stop 和 dispose 请求终止精确子进程；结果失败与实际 close 分开，
+  清理等待有界，未收到 close 不报告已释放；自有输入及已缓存输出在取消或终态覆零。
 
 这新增了可信主进程调用固定子进程的 provisional 进程形态，但没有 Renderer shell、任意
 命令入口、公共 wire 或第二套 session/Runtime 循环。兼容性要求为 Windows、Windows
@@ -37,9 +38,23 @@ PowerShell 5.1、`.NET Framework System.Speech`、已安装 zh-CN recognizer/voi
 
 定向自动测试使用进程双替身，只验证正常识别/播报帧、输入快照、无重试、父取消与 stop
 等待 close、畸形/超长响应、默认策略在 helper 启动前拒绝时的 unavailable 映射，以及固定
-脱敏错误。本工作树已通过 voice TypeScript typecheck、build、3/3 定向测试和 31/31 voice
-workspace 测试；这些测试都没有启动 PowerShell、System.Speech、麦克风、扬声器或网络。
+脱敏错误。原工作树已通过 voice TypeScript typecheck、build、3/3 定向测试和 31/31 voice
+workspace 测试；这些历史测试都没有启动 PowerShell、System.Speech、麦克风、扬声器或网络。
 
 上述结果不证明当前生产脚本可被执行；当前开发机的
 默认 PowerShell 脚本策略仍可能阻止生产启动，因此 Desktop 必须继续显示 unavailable，
 直到具体签名/打包或持续生产权限另行授权并完成真实设备验收。
+
+## 2026-09-18 清理失败修复
+
+- operation 的取消/超时结果立即失败，不能无限等在子进程 close 上；stop/dispose 单独
+  等待资源释放。等待上限为 2,000 ms，这是错误收敛预算，不是 Windows 回收时限保证。
+- kill 返回 false、抛错或迟迟无 close 时，不盲目重试 kill，不按名称/PID 另杀进程。
+  预算耗尽后返回固定 `EXTERNAL_FAILURE`，保留精确子进程跟踪并将适配器隔离。
+- 同一适配器最多一个尚未 close 的 helper；隔离后拒绝新调用。晚到输出被丢弃，真实
+  close 仍执行本地清理，但不能反转既有取消/失败结果或自动解除隔离。
+- dispose 重复调用共享同一结果，不将先前清理失败改报成功。不更改固定 launcher、
+  执行策略、Desktop 默认 unavailable 或设备授权。
+- 新增两组进程替身/虚拟时钟回归覆盖取消+kill false、deadline+kill throw、清理未确认、
+  禁止新进程、重复 stop/dispose 及晚结果。实际检查结果以该修复头 CI/评审记录为准；
+  本增量不包含真实进程、麦克风、播放或云验收。
