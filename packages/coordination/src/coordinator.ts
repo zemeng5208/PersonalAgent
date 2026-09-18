@@ -1,8 +1,11 @@
 import {ProtocolError} from '@personal-agent/contracts';
-import {parseCoordinationTextResult} from './index.js';
-import type {CloudAgentPort, CoordinationPort, CoordinationRequest, CoordinationTextResult} from './index.js';
+import {parseCoordinationContinuation, parseCoordinationResult} from './index.js';
+import type {
+  CloudAgentPort, CoordinationContinuation, CoordinationPort, CoordinationRequest, CoordinationResult,
+} from './index.js';
 
 const requestFields = ['taskId', 'revision', 'goal', 'deadline', 'signal'];
+const continuationRequestFields = [...requestFields, 'continuation'];
 const isoDeadline = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 
 interface ValidatedRequest {
@@ -12,6 +15,7 @@ interface ValidatedRequest {
   readonly deadline: string;
   readonly signal: AbortSignal;
   readonly expiresAt: number;
+  readonly continuation?: CoordinationContinuation;
 }
 
 function invalidRequest(): never {
@@ -73,14 +77,18 @@ function validateRequest(request: CoordinationRequest): ValidatedRequest {
   let goal: unknown;
   let deadline: unknown;
   let signal: unknown;
+  let continuationValue: unknown;
   try {
+    const hasContinuation = request !== null && typeof request === 'object'
+      && Object.prototype.hasOwnProperty.call(request, 'continuation');
     if (request === null || typeof request !== 'object' || Array.isArray(request)
-      || !hasExactEnumerableKeys(request, requestFields)) invalidRequest();
+      || !hasExactEnumerableKeys(request, hasContinuation ? continuationRequestFields : requestFields)) invalidRequest();
     taskId = request.taskId;
     revision = request.revision;
     goal = request.goal;
     deadline = request.deadline;
     signal = request.signal;
+    continuationValue = hasContinuation ? request.continuation : undefined;
   } catch {
     // Request getters and proxies are untrusted input; never echo their errors.
     throw new ProtocolError('INVALID_ARGUMENT', 'Invalid coordination request');
@@ -96,7 +104,9 @@ function validateRequest(request: CoordinationRequest): ValidatedRequest {
   }
   if (readSignalAborted(signal)) throw new ProtocolError('CANCELLED', 'Coordination cancelled');
   if (expiresAt <= Date.now()) throw new ProtocolError('TIMEOUT', 'Coordination deadline expired');
-  return {taskId, revision, goal, deadline, signal, expiresAt};
+  const continuation = continuationValue === undefined ? undefined : parseCoordinationContinuation(continuationValue);
+  return {taskId, revision, goal, deadline, signal, expiresAt,
+    ...(continuation === undefined ? {} : {continuation})};
 }
 
 function sanitizeProviderError(error: unknown): never {
@@ -115,17 +125,17 @@ function sanitizeProviderError(error: unknown): never {
 
 /** Explicit absence of a cloud provider; never selects a fixture or Local Agent. */
 export class UnavailableCloudAgentPort implements CloudAgentPort {
-  async invoke(request: CoordinationRequest): Promise<CoordinationTextResult> {
+  async invoke(request: CoordinationRequest): Promise<CoordinationResult> {
     validateRequest(request);
     throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Cloud coordination is unavailable');
   }
 }
 
-/** One text exchange. Runtime owns task identity, persistence, retries and terminal state. */
+/** One bounded exchange. Runtime owns task identity, tools, persistence and terminal state. */
 export class CompetitionCoordinator implements CoordinationPort {
   constructor(private readonly cloud: CloudAgentPort) {}
 
-  async execute(request: CoordinationRequest): Promise<CoordinationTextResult> {
+  async execute(request: CoordinationRequest): Promise<CoordinationResult> {
     const validated = validateRequest(request);
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -167,6 +177,7 @@ export class CompetitionCoordinator implements CoordinationPort {
         goal: validated.goal,
         deadline: validated.deadline,
         signal: controller.signal,
+        ...(validated.continuation === undefined ? {} : {continuation: validated.continuation}),
       });
       const invocation = Promise.resolve().then(() => {
         if (controller.signal.aborted) throw new ProtocolError('CANCELLED', 'Coordination cancelled');
@@ -175,7 +186,7 @@ export class CompetitionCoordinator implements CoordinationPort {
       const result = await Promise.race([invocation, interrupted]);
       if (readSignalAborted(validated.signal)) throw new ProtocolError('CANCELLED', 'Coordination cancelled');
       if (validated.expiresAt <= Date.now()) throw new ProtocolError('TIMEOUT', 'Coordination deadline expired');
-      const parsed = parseCoordinationTextResult(result);
+      const parsed = parseCoordinationResult(result);
       // A result getter may synchronously cancel the caller while it is being parsed.
       if (readSignalAborted(validated.signal)) throw new ProtocolError('CANCELLED', 'Coordination cancelled');
       if (validated.expiresAt <= Date.now()) throw new ProtocolError('TIMEOUT', 'Coordination deadline expired');

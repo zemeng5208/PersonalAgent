@@ -1,6 +1,7 @@
 import {stateNames} from '../conversation/state.js';
 import {themePreference, saveTheme, saveCalm} from '../../ui/preferences.js';
 import {profilePage, bindProfile} from './profile.js';
+import {approvalPresentation, authorizationListHtml, nextApprovalExpiry} from './approval-status.js';
 
 export const sections = {
   settings: '常规', import: '导入', profile: '个人资料', appearance: '外观', voice: '语音', configuration: '配置',
@@ -43,7 +44,14 @@ export function mountAdmin(root, invoke, escape) {
   let section = 'settings';
   let navigationRevision = -1;
   let modelEditorOpen = false;
+  let approvalExpiryTimer;
   let current = {tasks: [], capabilities: [], health: [], approvals: []};
+  const clearApprovalExpiryTimer = () => {
+    if (approvalExpiryTimer === undefined) return;
+    clearTimeout(approvalExpiryTimer);
+    approvalExpiryTimer = undefined;
+  };
+  window.addEventListener('unload', clearApprovalExpiryTimer, {once: true});
   root.innerHTML = `<div class="admin"><header class="admin-bar"><span class="admin-title">PersonalAgent · 设置</span><span class="spacer"></span><button class="icon-btn hdr-btn" id="admin-close" title="关闭" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6 6 18"/></svg></button></header><aside class="side"><div class="side-home"><span class="brand">PersonalAgent</span><span>设置与管理</span></div><label class="admin-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="admin-search" type="search" placeholder="搜索设置…" aria-label="搜索设置"></label><nav aria-label="设置导航">${navGroups.map(group => `<section class="nav-group"><h2>${group.label}</h2>${group.items.map(id => `<button data-page="${id}">${icon(id)}<span>${sections[id]}</span></button>`).join('')}</section>`).join('')}</nav><footer>私人助理 · Windows<br>冷光青 / 标准毛玻璃</footer></aside><section class="main"><div class="eyebrow">PERSONAL WORKSPACE</div><h1 id="page-title"></h1><div class="banner" id="connection"></div><div id="content"></div><p class="error" role="alert" id="error"></p></section></div>`;
 
   const localSettingsButton = document.createElement('button');
@@ -67,16 +75,6 @@ export function mountAdmin(root, invoke, escape) {
   function healthTable(data) {
     const rows = data.health.map(item => `<tr><td>${escape(item.id)}</td><td>${badge(escape(item.state), item.state)}</td><td>${escape(item.reason ?? '—')}</td></tr>`).join('');
     return `<div class="sheet"><h2>连接健康</h2><div class="table-scroll"><table><thead><tr><th>能力</th><th>状态</th><th>说明</th></tr></thead><tbody>${rows || '<tr><td colspan="3" class="empty">暂无连接器健康信息。</td></tr>'}</tbody></table></div></div>`;
-  }
-
-  function authorizationList(data) {
-    const rows = data.approvals.map(item => {
-      const tool = item.toolName ?? item.action;
-      const args = item.arguments === undefined ? 'Runtime 未公开参数' : JSON.stringify(item.arguments);
-      const scopes = item.scopes?.length ? item.scopes.join(', ') : 'Runtime 未公开范围';
-      return `<tr><td>${escape(item.approvalId)}</td><td>${escape(item.taskId)}</td><td><b>${escape(tool)}</b><br><small>参数：${escape(args)}</small><br><small>范围：${escape(scopes)}</small></td><td>${item.revision}<br><button class="btn btn-sm" data-approval="allow_once" data-id="${escape(item.approvalId)}" data-task="${escape(item.taskId)}" data-revision="${item.revision}">允许一次</button> <button class="btn btn-sm btn-danger" data-approval="deny" data-id="${escape(item.approvalId)}" data-task="${escape(item.taskId)}" data-revision="${item.revision}">拒绝</button></td></tr>`;
-    }).join('');
-    return `<div class="sheet"><h2>待处理授权</h2><div class="table-scroll"><table><thead><tr><th>授权</th><th>任务</th><th>工具、参数与范围</th><th>决定</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="empty">没有待处理授权。授权决定由 Runtime 校验，界面不直接授予权限。</td></tr>'}</tbody></table></div></div>`;
   }
 
   function modelEditor(data) {
@@ -175,6 +173,7 @@ export function mountAdmin(root, invoke, escape) {
 
   function render(data) {
     current = data;
+    clearApprovalExpiryTimer();
     if (data.adminNavigation && data.adminNavigation.revision !== navigationRevision) {
       navigationRevision = data.adminNavigation.revision;
       if (sections[data.adminNavigation.page]) section = data.adminNavigation.page;
@@ -190,6 +189,8 @@ export function mountAdmin(root, invoke, escape) {
     root.querySelectorAll('[data-page]').forEach(button => button.setAttribute('aria-current', button.dataset.page === section ? 'page' : 'false'));
     const modelLabel = data.model?.status === 'ready' ? '已连接' : '未连接';
     const modelReason = data.model?.reason ?? '模型 Provider 状态未知';
+    // The HTML and expiry selection must describe the same instant.
+    const approvalNow = Date.now();
     let content = '';
     if (section === 'overview') {
       content = `<p class="muted">把注意力留给重要的事。</p><div class="cards"><div class="card"><span>本次会话任务</span><b>${data.tasks.length}</b></div><div class="card"><span>盘古大模型 2.0</span><b>${modelLabel}</b><span>${escape(modelReason)}</span></div><div class="card"><span>麦克风</span><b>未连接</b><span>语音供应商尚未接入</span></div></div>${taskTable(data)}`;
@@ -202,7 +203,7 @@ export function mountAdmin(root, invoke, escape) {
     } else if (section === 'tasks') {
       content = taskTable(data);
     } else if (section === 'authorizations') {
-      content = authorizationList(data);
+      content = authorizationListHtml(data.approvals, escape, approvalNow);
     } else if (directSettings[section]) {
       content = settingsPane(data, directSettings[section]);
     } else if (section === 'profile') {
@@ -213,6 +214,16 @@ export function mountAdmin(root, invoke, escape) {
       content = `<div class="sheet"><h2>${sections[section]}</h2><div class="empty">尚未连接${sections[section]}服务<br>连接后将在这里显示真实数据。</div></div>`;
     }
     root.querySelector('#content').innerHTML = content;
+    if (section === 'authorizations') {
+      const nextExpiry = nextApprovalExpiry(data.approvals, approvalNow);
+      if (nextExpiry !== undefined) {
+        const delay = Math.min(Math.max(nextExpiry - Date.now() + 25, 0), 2_147_483_647);
+        approvalExpiryTimer = setTimeout(() => {
+          approvalExpiryTimer = undefined;
+          render(current);
+        }, delay);
+      }
+    }
     if (section === 'profile') bindProfile(root, escape);
     root.querySelector('#quit')?.addEventListener('click', () => invoke('app.quit'));
     root.querySelector('#model-add')?.addEventListener('click', () => { modelEditorOpen = true; render(current); });
@@ -275,12 +286,16 @@ export function mountAdmin(root, invoke, escape) {
       catch (error) { root.querySelector('#error').textContent = error.message; }
     });
     root.querySelectorAll('[data-approval]').forEach(button => button.addEventListener('click', async () => {
+      // A rendered button is not an authorization or a fresh Runtime snapshot.
+      const approval = current.approvals?.find(item => item.approvalId === button.dataset.id
+        && item.taskId === button.dataset.task && item.revision === Number(button.dataset.revision));
+      if (!approvalPresentation(approval).actionable) { render(current); return; }
       button.disabled = true;
       try {
         await invoke('authorization.respond', {approvalId: button.dataset.id, taskId: button.dataset.task, decision: button.dataset.approval, expectedRevision: Number(button.dataset.revision)});
       } catch (error) {
+        render(current);
         root.querySelector('#error').textContent = error.message;
-        button.disabled = false;
       }
     }));
   }

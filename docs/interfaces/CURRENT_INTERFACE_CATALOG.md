@@ -187,6 +187,15 @@ provisional CoordinationStorePort、Fake，Runtime 提供绑定命名空间的 S
 [工作包](../modules/COORDINATION-STORE-01.md)。该存储首片已由非作者评审并集成，但尚缺真实消费者纵向验收，因此保持 provisional；不增加 wire capability；
 MemoryQueryPort、FactChangeFeed、AgentArts 和真实数据生产授权仍 unavailable。
 
+### COORDINATION-STORE-02 原子扩展（provisional，待评审集成）
+
+`@personal-agent/goals/store` 新增兼容旧端口的 `AtomicCoordinationStorePort`，
+提供 `appendBatch(expectedRevision, inputs)`，一批有序版本在一次 CAS/事务中全部提交或全部不写入。
+旧 `CoordinationStorePort.read/append` 不变；不支持新扩展的提供者不得用逐条 append 冒充原子提交。
+纯 `appendVersions`、Fake、SQLite 适配和 cognition 显式修复消费者见
+[COORDINATION-STORE-02](../modules/COORDINATION-STORE-02.md)。
+没有新增 wire/capability、依赖或迁移；真实语义修复、授权、工具执行和任务终态不由此接口证明。
+
 ### MOD-09A-WORLD-STATE-CONTRACT 准备
 
 当前仅在[工作包](../modules/MOD-09A-WORLD-STATE-CONTRACT.md)登记查询、变化流、
@@ -218,6 +227,16 @@ FactChangeFeed 继续保持 unavailable，直到消费语义确认并完成实�
 5. Fake 只证明接口和状态分支。真实盘古、AgentArts、账号、Windows 或外部写入能力必须保留独立的 `conditional`/`verified` 证据。
 
 ## 8. 当前结论
+
+### MOD-16-SYSTEM-OBSERVATION-01 开发登记（2026-09-17）
+
+`@personal-agent/windows-client` 本机聚合状态只读工具正在独立工作包中实现，消费基线
+`72cc76b` 的 `RegisteredTool`/`ToolContext`，不新增 wire operation，也不自动公布生产 capability。
+范围仅 CPU、内存和 uptime 等必要聚合观测；不依赖独立 TraceGuard 项目，不读取身份、
+进程命令行、文件或网络内容。PA-018 治理/恢复按用户修订排除。
+提供者、Fake 与实际本机读取验收按 [模块记录](../modules/MOD-16-SYSTEM-OBSERVATION-01.md) 分别登记；
+Competition 工具提案/Runtime Application/Desktop 装配仍未由此项交付，运行能力保持 unavailable。
+本包接口保持 provisional，非作者评审前不冻结。
 
 截至 2026-09-09，**适合冻结的是 Core Runtime Profile 1 的消息、任务、会话与审批只读查询子集；不适合冻结整套协议、模型工具调用或 Agent 编排接口。** 产品当前只实施 Huawei ICT AgentArts Competition Profile；Local Profile 仅留存现有代码、当前不新增。该范围决定不改变接口证据状态。
 

@@ -3,3 +3,6 @@ export type {ImpactCause, ImpactItem, ImpactReport, PlanRevisionRequest, PlanRev
 export {analyzeStoredImpact, commitStoredPlanRevision} from './persistent.js';
 export type {StoredImpact, StoredPlanRevisionRequest, StoredPlanRevisionResult,
   AppliedPlanRevision, ConflictedPlanRevision} from './persistent.js';
+export {previewStoredRepair, commitStoredRepair} from './repair.js';
+export type {StoredRepairChange, StoredRepairRequest, StoredRepairPreview,
+  StoredRepairResult, AppliedStoredRepair, ConflictedStoredRepair} from './repair.js';

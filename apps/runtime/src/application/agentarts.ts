@@ -11,7 +11,7 @@ import {
 } from './runtime-application.js';
 
 export interface AgentArtsRuntimeApplicationOptions
-  extends Omit<RuntimeApplicationOptions, 'profile' | 'coordination' | 'text' | 'tools'> {
+  extends Omit<RuntimeApplicationOptions, 'profile' | 'coordination' | 'text'> {
   gatewayUrl: string;
   runtimeName: string;
   invokeMode?: 'debug' | 'published';

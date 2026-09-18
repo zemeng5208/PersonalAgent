@@ -1,18 +1,17 @@
-# Coordination text ports
+# Coordination ports
 
 COMPETITION-PORTS-01 provides provisional, in-process `CoordinationPort.execute` and
 `CloudAgentPort.invoke` types. The consuming coordination package owns their shape.
 Runtime injects CoordinationPort; `AgentArtsCloudAgentPort` is the explicit,
 offline-testable HTTP implementation of the text-only CloudAgentPort boundary.
 
-MOD-04B adds `CompetitionCoordinator`, which implements the existing text port by
-calling an explicitly injected `CloudAgentPort` once. It validates input, forwards
-the task revision and deadline, relays cancellation through a child signal, bounds
-non-cooperative calls by the deadline, and validates results before returning them.
-Provider exception messages are not exposed. `UnavailableCloudAgentPort` explicitly
-rejects with `UNSUPPORTED_CAPABILITY`; provider-owned `CANCELLED`/`TIMEOUT` errors are
-sanitized as `EXTERNAL_FAILURE` because only the coordinator owns those lifecycle
-signals. There is no automatic fallback or retry.
+MOD-04B adds `CompetitionCoordinator`, which validates each bounded text/tool-proposal
+exchange with an explicitly injected `CloudAgentPort`. It forwards task revision and
+deadline, relays cancellation through a child signal, bounds non-cooperative calls,
+and validates results before returning them. Provider exception messages are not
+exposed. `UnavailableCloudAgentPort` explicitly rejects with
+`UNSUPPORTED_CAPABILITY`; provider-owned lifecycle errors are sanitized because only
+the coordinator owns cancellation and deadlines. There is no automatic fallback or retry.
 
 ```ts
 import {CompetitionCoordinator} from '@personal-agent/coordination';
@@ -26,23 +25,25 @@ const coordination = new CompetitionCoordinator(
 ```
 
 Runtime retains submission deduplication, persistent run identity, task state and
-recovery. The coordinator creates no second task store. Its fulfilled text promise
-does not certify external execution. A non-cooperative provider may continue its
-own internal work after cancellation, but its late result is discarded. The
-coordinator is an in-process boundary, not a sandbox or a data-export authorizer.
+recovery. The coordinator creates no second task store. Runtime owns the tool loop,
+Policy/Approval/ToolGateway and Evidence; the cloud may only propose a registered tool.
+A non-cooperative provider may continue its own internal work after cancellation, but
+its late result is discarded. The coordinator is an in-process boundary, not a sandbox
+or a data-export authorizer.
 
 Input is the submitted goal, task ID/revision, deadline and AbortSignal. It excludes
 conversation history, attachments, credentials, authorization and Runtime methods.
-The host must authorize any future cloud transmission; an available port is not consent.
-Only bounded text (`mock` or `unverified`) is accepted. Text completion is not proof
-of tools, real AgentArts deployment or a verified external action. Unknown fields,
-tool proposals, task-state and Evidence claims are rejected at the Runtime boundary.
+After a locally confirmed tool execution, Runtime may add a bounded continuation with
+the proposal ID and JSON result only for the explicit offline `mock` path. The host must
+authorize any real cloud transmission; an available port is not consent. Results may be
+bounded text or a strict tool proposal (`mock` or `unverified`), but Runtime rejects
+`unverified` tool execution/export in this slice. Proposals cannot contain authorization, Evidence or task state.
 
 Explicit offline fixtures live at `@personal-agent/coordination/testing`:
 `new FakeCoordinationPort(request => 'Fake: ' + request.goal)` and
 `new FakeCloudAgentPort(request => 'Fake cloud: ' + request.goal)`.
-Fixtures do not automatically enforce cancellation; responders must honor the supplied
-signal, allowing tests of both cooperative and non-cooperative adapters.
+Responders may return text or a strict result object. Fixtures do not automatically
+enforce cancellation; responders must honor the supplied signal.
 
 ## AgentArts HTTP adapter (Competition Profile)
 
@@ -71,8 +72,8 @@ const result = await cloud.invoke(request);
 ```
 
 Only bounded text is returned (`verification: 'unverified'`). Responses must declare
-`application/json` or `text/event-stream`; both forms are byte-limited and metadata/tool
-proposals are discarded. SSE follows the standard blank-line event boundary and joins
+`application/json` or `text/event-stream`; both forms are byte-limited. Metadata or tool
+payloads are not treated as executable proposals. SSE follows standard event boundaries and joins
 multiple `data:` lines with `\n`; for gateways that omit separators, a conservative
 fallback accepts only one complete JSON event per `data:` line. Malformed or conflicting
 events are rejected. This adapter uses the existing contract error names: `CANCELLED`
@@ -85,6 +86,12 @@ deployment, authentication, streaming behavior, trace/usage, and local Policy or
 ToolGateway read-back remain unverified; without explicit configuration composition
 must keep the capability unavailable and must not silently fall back to Local or Fake.
 
-Ports are text-only and not frozen. Tool proposals/results, deployment/version/trace,
-usage, resumable cloud runs and data-export consent require the next reviewed contract
-increment before real AgentArts is enabled. No wire Schema or storage migration changes.
+Ports are not frozen. The in-process Fake path covers strict tool proposals and
+confirmed-result continuation, but the real HTTP adapter remains text-only.
+Deployment/version/trace, usage, resumable real cloud runs and data-export consent need
+separate verified contracts. No wire Schema or storage migration changes.
+
+Tool proposal and confirmed continuation JSON copies preserve own special keys such
+as `__proto__` as ordinary data properties. They do not change the copied object's
+prototype or silently drop fields before validation and authorization. Repeated
+parsing preserves the same JSON payload; schema and Policy checks still apply.

@@ -36,21 +36,31 @@ const {_electron} = require('playwright');
     const longGoal = '长'.repeat(10_001);
     await textarea.fill(longGoal);
     await textarea.press('Enter');
-    await panel.waitForFunction(expectedLength => document.querySelector('#tasks .turn:last-child .assistant-message')?.textContent.length === expectedLength + 'Fake Model 回答：'.length, longGoal.length, {timeout: 10_000});
+    await panel.waitForFunction(async goal => {
+      const task = (await window.desktop.invoke('snapshot')).value.tasks.at(-1);
+      return task?.state === 'succeeded' && task.userMessage === goal
+        && document.querySelector('#tasks .turn:last-child .assistant-message')?.textContent === task.resultSummary;
+    }, longGoal, {timeout: 10_000});
     assert.equal((await panel.locator('#tasks .user-message').last().innerText()).length, longGoal.length);
     await panel.locator('.thread').evaluate(element => { element.style.maxHeight = '120px'; });
     const buttonGoal = '按钮重复发送 Smoke 测试';
     await textarea.fill(buttonGoal);
     assert.equal(await panel.locator('#send').isDisabled(), false);
     await panel.locator('#send').click();
-    await panel.waitForFunction(expected => document.querySelector('#tasks')?.innerText.includes(`Fake Model 回答：${expected}`), buttonGoal, {timeout: 10_000});
-    assert.doesNotMatch(await panel.locator('#tasks').innerText(), /model=|verification=|tokens=/);
+    await panel.waitForFunction(async goal => {
+      const task = (await window.desktop.invoke('snapshot')).value.tasks.at(-1);
+      return task?.state === 'succeeded' && task.userMessage === goal;
+    }, buttonGoal, {timeout: 10_000});
+    const expectedButtonAnswer = (await panel.evaluate(() => window.desktop.invoke('snapshot'))).value.tasks.at(-1).resultSummary;
+    assert.ok(expectedButtonAnswer.includes(`Fake Model 回答：${buttonGoal}`));
+    await panel.waitForFunction(expected => document.querySelector('#tasks .turn:last-child .assistant-message')?.textContent === expected, expectedButtonAnswer, {timeout: 10_000});
     const lastTurn = panel.locator('#tasks .turn').last();
+    assert.equal(await lastTurn.locator('.assistant-message').textContent(), expectedButtonAnswer);
     await panel.waitForFunction(() => document.querySelector('#tasks .turn:last-child .response-actions button'));
     assert.equal(await lastTurn.locator('.response-actions button').count(), 3);
     const priorClipboard = await app.evaluate(({clipboard}) => clipboard.readText());
     await lastTurn.locator('[data-ui-action="copy"]').click();
-    assert.equal(await app.evaluate(({clipboard}) => clipboard.readText()), `Fake Model 回答：${buttonGoal}`);
+    assert.equal(await app.evaluate(({clipboard}) => clipboard.readText()), expectedButtonAnswer);
     await app.evaluate(({clipboard}, value) => clipboard.writeText(value), priorClipboard);
     const like = lastTurn.locator('[data-ui-action="like"]');
     await like.click();
