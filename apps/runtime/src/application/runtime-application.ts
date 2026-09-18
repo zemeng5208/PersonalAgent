@@ -32,7 +32,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     this.profile = options.profile ?? 'local';
     if (!['local', 'huawei_ict_agentarts'].includes(this.profile)
       || (this.profile === 'local' && options.coordination !== undefined)
-      || (this.profile === 'huawei_ict_agentarts' && (options.text !== undefined || options.tools !== undefined))) {
+      || (this.profile === 'huawei_ict_agentarts' && options.text !== undefined)) {
       throw new ProtocolError('INVALID_ARGUMENT', 'Choose explicit competition coordination or existing local text configuration, not both');
     }
     this.coordination = options.coordination;
@@ -98,14 +98,29 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   close(): void { this.runtime.close(); }
 
   resumeTask(taskId: string): void {
-    this.requireLocalText();
     if (this.activeTextTasks.has(taskId)) return;
     if (this.runtime.getTask(taskId).state !== 'waiting_approval') throw new ProtocolError('REVISION_CONFLICT', 'Task is not awaiting approval');
+    const goal = this.runtime.loadCheckpoint(taskId, 'application-goal');
+    if (typeof goal !== 'string') throw new ProtocolError('NOT_FOUND', 'Task has no application checkpoint');
+
+    if (this.profile === 'huawei_ict_agentarts') {
+      const deadline = this.runtime.loadCheckpoint(taskId, 'application-deadline');
+      if (typeof deadline !== 'string') throw new ProtocolError('NOT_FOUND', 'Task has no deadline checkpoint');
+      const competition = this.runtime.loadCheckpoint(taskId, 'competition-loop') as {step: number} | undefined;
+      const competitionApproval = this.runtime.getApproval(`competition-tool-${taskId}-${competition?.step}`);
+      if (competitionApproval.state !== 'allowed') throw new ProtocolError('UNAUTHORIZED', 'Task approval has not been allowed');
+      const execution = startCoordinationTask(
+        this.runtime, this.coordination, this.tools, taskId, goal, deadline, {resume: true},
+      ).finally(() => this.activeTextTasks.delete(taskId));
+      this.activeTextTasks.set(taskId, execution);
+      void execution.catch(() => {});
+      return;
+    }
+
+    this.requireLocalText();
     const checkpoint = this.runtime.loadCheckpoint(taskId, 'agent-loop') as {step: number} | undefined;
     const approval = this.runtime.getApproval(`agent-run-${taskId}-${checkpoint?.step}`);
     if (approval.state !== 'allowed') throw new ProtocolError('UNAUTHORIZED', 'Task approval has not been allowed');
-    const goal = this.runtime.loadCheckpoint(taskId, 'application-goal');
-    if (typeof goal !== 'string') throw new ProtocolError('NOT_FOUND', 'Task has no application checkpoint');
     const context = this.runtime.loadCheckpoint(taskId, 'application-context') as {messages?: ModelMessage[]} | undefined;
     const execution = this.textApplication.startTask(this.runtime, taskId, goal, {
       resume: true,
@@ -123,8 +138,10 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     if (this.runtime.getTask(taskId).state !== 'created') return;
     if (this.profile === 'huawei_ict_agentarts') {
       this.runtime.saveCheckpoint(taskId, 'application-profile', this.profile);
+      this.runtime.saveCheckpoint(taskId, 'application-goal', goal);
+      this.runtime.saveCheckpoint(taskId, 'application-deadline', request.deadline);
       const execution = Promise.resolve().then(() => startCoordinationTask(
-        this.runtime, this.coordination, taskId, goal, request.deadline,
+        this.runtime, this.coordination, this.tools, taskId, goal, request.deadline,
       )).finally(() => this.activeTextTasks.delete(taskId));
       this.activeTextTasks.set(taskId, execution);
       void execution.catch(() => {});

@@ -60,7 +60,7 @@ test('missing competition port fails without local fallback', async () => {
 
 test('mixed profile configuration is rejected before opening a database', () => {
   for (const options of [{profile: 'huawei_ict_agentarts', text: {mode: 'fake'}},
-    {profile: 'huawei_ict_agentarts', tools: []}, {coordination: new FakeCoordinationPort(() => 'text')},
+    {coordination: new FakeCoordinationPort(() => 'text')},
     {profile: 'unknown'}]) {
     assert.throws(() => createRuntimeApplication({path: 'must-not-open.sqlite', ...options}), /Choose explicit/);
   }

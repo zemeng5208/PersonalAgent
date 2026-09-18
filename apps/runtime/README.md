@@ -9,8 +9,9 @@ Interface status is tracked per operation in the [current interface catalog](../
 `createAgentArtsRuntimeApplication(options)` 是可信 Competition 文字装配入口：
 它用显式的 HTTPS gateway、runtime 名称、调用模式和宿主
 `AgentArtsAuthorizationProvider` 构造云适配器，再注入现有
-`RuntimeApplication`。工厂不接受 Local text/tool 配置；AgentArts 返回仍只是
-`unverified` 文字，任务持久化和终态继续由 TaskRuntime 决定。
+`RuntimeApplication`。工厂不接受 Local text 配置，可注入本地
+`RegisteredTool`；当前 HTTP Adapter 返回仍只是 `unverified` 文字，
+任务持久化、授权、工具执行和终态继续由 TaskRuntime 决定。
 
 ## Implemented
 
@@ -23,23 +24,22 @@ in the existing Runtime database, with transaction-protected revision comparison
 No wire capability or AgentArts integration is enabled by this host-only API.
 See [COORDINATION-STORE-01](../../docs/modules/COORDINATION-STORE-01.md).
 
-### Competition text-port increment (COMPETITION-PORTS-01)
+### Competition coordination and offline tool loop
 
-Trusted composition may pass `profile: 'huawei_ict_agentarts'` and an explicit
-`coordination: CoordinationPort`. Only bounded text results are supported.
-Runtime owns submission, deduplication, cancellation, deadline and persisted terminal
-state. The request deadline is the execution deadline for this slice; it is not reset.
-Missing coordination fails with UNSUPPORTED_CAPABILITY. Local text/tools options and
-model configuration APIs are rejected in Competition mode. Existing Desktop callers
-without a profile retain their existing Local composition; no UI switch is delivered.
+Trusted composition may pass `profile: 'huawei_ict_agentarts'`, an explicit
+`coordination: CoordinationPort`, and local `RegisteredTool` values. Bounded text and
+strict proposals are parsed; only explicit `mock` proposals execute in this offline slice. Runtime owns submission, deduplication, cancellation,
+deadline and persisted terminal state. Missing coordination, or a proposal without a
+trusted local tool, fails with UNSUPPORTED_CAPABILITY. Local text/model configuration APIs
+remain rejected in Competition mode.
 
-Adapters receive no Runtime object, authorization, history or attachments. Late results
-after cancellation/timeout are ignored. This detaches a read-only request; it does not
-prove a remote cloud run has stopped. Adapters must honor cancellation, must not perform
-writes and must not start real cloud traffic without separately authorized composition.
-No real adapter is included. Results are mock/unverified text, not trusted tool Evidence.
-Approval resume, tool proposals, deployment trace, usage and cloud recovery remain outside
-this provisional slice. See [work package](../../docs/modules/COMPETITION-PORTS-01.md).
+Adapters receive no Runtime object, authorization, history or attachments. For the offline
+Fake path, Runtime checkpoints a proposal, enters `waiting_approval`, executes through the
+existing Policy/ToolGateway after `allow_once`, accumulates trusted Evidence references,
+and sends only a confirmed JSON result to the next coordination exchange. Unknown write
+results remain in reconciliation. The real AgentArts HTTP adapter is still text-only;
+deployment trace, usage and real cloud recovery remain unavailable. See
+[work package](../../docs/modules/COMPETITION-TOOL-LOOP-01.md).
 
 - SQLite-backed tasks, checkpoints, events and one-shot schedules.
 - Explicit task transition rules and immutable terminal states.
@@ -72,6 +72,7 @@ TaskRuntime implements the MOD-02 transport. With a tool gateway it also adverti
 The base Runtime advertises only operations it implements. `settings.get`, `settings.update`, `connector.connect`, `connector.disconnect`, `voice.start`, and `voice.stop` are schema-known but unavailable in production and must return `UNSUPPORTED_CAPABILITY`. Tool operations are advertised only when a ToolGateway is configured; their interfaces remain provisional until the real model-to-tool path is verified.
 
 Approvals persist for ten minutes and grant one use bound to task, tool and argument digest. Agent checkpoints retain the original proposal. After restart, repeating the matching approval response resumes an approved waiting task. Tool run IDs return confirmed stored results; unfinished runs require reconciliation. `readToolExecutions(taskId)` returns execution metadata and `readEvidence(taskId)` returns schema-valid summaries. Raw approved tool results are local task checkpoints, not public Evidence or logs.
+Competition checkpoints separately retain the cloud proposal, step, continuation and Evidence references; approval resumes the Competition loop without invoking Local Agent.
 
 dispatchDueSchedules() handles due schedules during normal operation. recoverMissedSchedules() is called after a stopped period and applies each schedule's run_once or skip policy atomically.
 
