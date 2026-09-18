@@ -132,6 +132,26 @@ function validateFactVersion(value: unknown, expected: FactRef): FactVersion {
   };
 }
 
+/** Provider exceptions are data, not safe public errors (even typed ones). */
+function rejectReadFailure(error: unknown): never {
+  let code: unknown;
+  try {
+    if (error instanceof MemoryQueryError) code = error.code;
+  } catch {
+    // A hostile getter/proxy must not leak its own exception either.
+  }
+  switch (code) {
+    case 'INVALID_ARGUMENT':
+    case 'NOT_FOUND':
+    case 'SCOPE_DENIED':
+    case 'TIMEOUT':
+    case 'CANCELLED':
+      throw new MemoryQueryError(code);
+    default:
+      return integrity();
+  }
+}
+
 async function readFactWithGate(
   memory: MemoryQueryPort,
   expected: FactRef,
@@ -167,7 +187,7 @@ async function readFactWithGate(
       deadline: context.deadline,
       signal: context.signal,
     });
-  });
+  }).catch(rejectReadFailure);
   // A gate may win while the provider ignores cancellation. Always observe a
   // later rejection, but never route a late result back into projection state.
   void read.catch(() => undefined);
