@@ -82,3 +82,24 @@ the caller explicitly rebound the complete affected dependency chain. The Fake
 tests run with the workspace suite. The SQLite restart scenario lives at
 `tests/integration/mod-27-28-persistent-cognition.test.mjs` and is run after the
 root build; it uses only temporary synthetic data.
+
+## Explicit multi-node repair consumer
+
+`previewStoredRepair(boundStore, evaluatedAt, request)` validates a non-empty,
+ordered set of explicit Goal/Decision/Plan changes against the original
+RECHECK report and applies them only to an isolated graph copy. Each candidate
+keeps the current node's source, sensitivity, validity window, state and kind;
+only summary, reason and explicitly supplied dependencies can differ. Missing,
+future-ordered or otherwise invalid dependency references are rejected by the
+public graph append preflight. The preview never calls `append` or
+`appendBatch`, and does not provide semantic approval or automatic rebinding.
+
+`commitStoredRepair(atomicStore, evaluatedAt, request)` repeats that preview and
+submits its ordered inputs through exactly one `AtomicCoordinationStorePort`
+`appendBatch` CAS. An old store port without `appendBatch` is rejected rather
+than falling back to partial writes. A graph CAS conflict returns one fresh,
+isolated snapshot and impact report without retrying; a stale node reference
+with an otherwise matching graph remains `REVISION_CONFLICT`. An applied result
+proves only the durable graph append. It does not approve repair text, change
+task state, schedule or execute actions, rebind dependencies automatically, or
+claim cloud/real execution evidence.

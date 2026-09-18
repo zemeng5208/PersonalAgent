@@ -7,7 +7,7 @@ import type {Migration} from '@personal-agent/storage';
 import {AuthorizationPolicy} from '@personal-agent/policy';
 import {SqliteAuthorizationStore} from './authorization-store.js';
 import {bindCoordinationStore} from './coordination-store.js';
-import type {CoordinationStorePort} from '@personal-agent/goals/store';
+import type {AtomicCoordinationStorePort} from '@personal-agent/goals/store';
 
 type TaskState = TaskSnapshot['state'];
 type TaskError = NonNullable<TaskSnapshot['error']>;
@@ -311,12 +311,12 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
   }
 
   /** Trusted host only; provisioning never clears an existing graph. */
-  provisionCoordinationStore(namespace: string): CoordinationStorePort {
+  provisionCoordinationStore(namespace: string): AtomicCoordinationStorePort {
     return bindCoordinationStore(this.db, namespace, true);
   }
 
   /** Does not provision: missing graphs report NOT_FOUND when used. */
-  bindCoordinationStore(namespace: string): CoordinationStorePort {
+  bindCoordinationStore(namespace: string): AtomicCoordinationStorePort {
     return bindCoordinationStore(this.db, namespace, false);
   }
 
