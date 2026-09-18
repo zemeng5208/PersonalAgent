@@ -1,7 +1,7 @@
 import {stateNames} from '../conversation/state.js';
 import {themePreference, saveTheme, saveCalm} from '../../ui/preferences.js';
 import {profilePage, bindProfile} from './profile.js';
-import {authorizationListHtml, nextApprovalExpiry} from './approval-status.js';
+import {approvalPresentation, authorizationListHtml, nextApprovalExpiry} from './approval-status.js';
 
 export const sections = {
   settings: '常规', import: '导入', profile: '个人资料', appearance: '外观', voice: '语音', configuration: '配置',
@@ -189,6 +189,8 @@ export function mountAdmin(root, invoke, escape) {
     root.querySelectorAll('[data-page]').forEach(button => button.setAttribute('aria-current', button.dataset.page === section ? 'page' : 'false'));
     const modelLabel = data.model?.status === 'ready' ? '已连接' : '未连接';
     const modelReason = data.model?.reason ?? '模型 Provider 状态未知';
+    // The HTML and expiry selection must describe the same instant.
+    const approvalNow = Date.now();
     let content = '';
     if (section === 'overview') {
       content = `<p class="muted">把注意力留给重要的事。</p><div class="cards"><div class="card"><span>本次会话任务</span><b>${data.tasks.length}</b></div><div class="card"><span>盘古大模型 2.0</span><b>${modelLabel}</b><span>${escape(modelReason)}</span></div><div class="card"><span>麦克风</span><b>未连接</b><span>语音供应商尚未接入</span></div></div>${taskTable(data)}`;
@@ -201,7 +203,7 @@ export function mountAdmin(root, invoke, escape) {
     } else if (section === 'tasks') {
       content = taskTable(data);
     } else if (section === 'authorizations') {
-      content = authorizationListHtml(data.approvals, escape);
+      content = authorizationListHtml(data.approvals, escape, approvalNow);
     } else if (directSettings[section]) {
       content = settingsPane(data, directSettings[section]);
     } else if (section === 'profile') {
@@ -213,7 +215,7 @@ export function mountAdmin(root, invoke, escape) {
     }
     root.querySelector('#content').innerHTML = content;
     if (section === 'authorizations') {
-      const nextExpiry = nextApprovalExpiry(data.approvals);
+      const nextExpiry = nextApprovalExpiry(data.approvals, approvalNow);
       if (nextExpiry !== undefined) {
         const delay = Math.min(Math.max(nextExpiry - Date.now() + 25, 0), 2_147_483_647);
         approvalExpiryTimer = setTimeout(() => {
@@ -284,12 +286,16 @@ export function mountAdmin(root, invoke, escape) {
       catch (error) { root.querySelector('#error').textContent = error.message; }
     });
     root.querySelectorAll('[data-approval]').forEach(button => button.addEventListener('click', async () => {
+      // A rendered button is not an authorization or a fresh Runtime snapshot.
+      const approval = current.approvals?.find(item => item.approvalId === button.dataset.id
+        && item.taskId === button.dataset.task && item.revision === Number(button.dataset.revision));
+      if (!approvalPresentation(approval).actionable) { render(current); return; }
       button.disabled = true;
       try {
         await invoke('authorization.respond', {approvalId: button.dataset.id, taskId: button.dataset.task, decision: button.dataset.approval, expectedRevision: Number(button.dataset.revision)});
       } catch (error) {
+        render(current);
         root.querySelector('#error').textContent = error.message;
-        button.disabled = false;
       }
     }));
   }
