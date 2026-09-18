@@ -26,6 +26,14 @@
 
 ## 2. 状态定义与冻结门槛
 
+### MOD-15 开发增量：唤醒生命周期
+
+`@personal-agent/voice-wake` 的 `WakeLifecycleController`、注入授权/事件源端口及
+`/testing` 显式 Fake 为 `provisional`。根构建登记该工作区；生命周期单测不代表
+真实麦克风、唤醒识别、连续语音或 Desktop/Runtime 组合可用。这些生产能力仍为
+`unavailable`。启用须提供显式有限 deadline；控制器不签发授权、不自动提交任务。
+详见 [MOD-15-WAKE-LIFECYCLE-01](../modules/MOD-15-WAKE-LIFECYCLE-01.md)。
+
 | 状态 | 含义 | 消费者规则 |
 | --- | --- | --- |
 | `frozen` | 单一来源、实现、Fake/失败夹具、消费端验证、非作者评审和 CI 均有证据；外部行为会改变语义时还需真实目标验证 | 可以并行开发；同一主版本内只做向后兼容扩展 |
