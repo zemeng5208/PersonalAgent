@@ -4,7 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {".": {"types": "./dist/index.d.ts", "import": "./dist/index.js"}},
-  "dependencies": {"@personal-agent/goals": "0.1.0-alpha.1"},
+  "dependencies": {
+    "@personal-agent/goals": "0.1.0-alpha.1",
+    "@personal-agent/memory": "0.1.0-alpha.1"
+  },
   "scripts": {
     "demo": "npm run build && node examples/meeting-replay.mjs",
     "build": "npm run build --workspace=@personal-agent/goals && tsc -p tsconfig.json",
