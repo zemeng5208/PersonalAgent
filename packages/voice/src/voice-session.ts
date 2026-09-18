@@ -356,7 +356,15 @@ export class VoiceSessionManager {
     if (expiresAt <= Date.now()) throw new VoiceSessionError('TIMEOUT', 'Voice session deadline expired');
     const validLocale = validateLocale(locale);
 
-    if (this.active !== undefined) await this.terminate(this.active, 'replaced');
+    // Another start can install a session while we await the old cleanup.
+    // Recheck and clean that session too before replacing the active pointer.
+    while (this.active !== undefined) {
+      const previous = this.active;
+      await this.terminate(previous, 'replaced');
+      if (this.active === previous) break;
+    }
+    if (signalAborted(signal)) throw new VoiceSessionError('CANCELLED', 'Voice session cancelled');
+    if (expiresAt <= Date.now()) throw new VoiceSessionError('TIMEOUT', 'Voice session deadline expired');
 
     const sessionId = this.createId('session');
     const record: SessionRecord = {
