@@ -90,13 +90,19 @@ export class NotificationService {
   /** 接收标准事件。重复 dedupeKey 静默忽略（计数披露在返回值）。单次状态写入，原子。 */
   ingest(items: readonly ConnectorItem[]): {accepted: number; duplicates: number} {
     const state = this.readState();
+    // Outstanding batches pin their keys independently of the bounded history
+    // window. Reconstruct from stored batches; no second dedupe store is needed.
+    const unacknowledgedKeys = new Set(state.batches
+      .filter(batch => batch.state === 'ready_for_delivery')
+      .flatMap(batch => batch.itemRefs));
     let accepted = 0;
     let duplicates = 0;
     for (const item of items) {
       if (!item || typeof item !== 'object' || typeof item.dedupeKey !== 'string' || item.dedupeKey.length === 0) {
         throw new ProtocolError('INVALID_ARGUMENT', 'Ingested items must be ConnectorItems with a dedupeKey');
       }
-      if (state.delivered.includes(item.dedupeKey) || state.pending.some(existing => existing.dedupeKey === item.dedupeKey)) {
+      if (unacknowledgedKeys.has(item.dedupeKey) || state.delivered.includes(item.dedupeKey)
+        || state.pending.some(existing => existing.dedupeKey === item.dedupeKey)) {
         duplicates += 1;
         continue;
       }
