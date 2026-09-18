@@ -81,18 +81,40 @@ test('cancel aborts port and ignores its late text result', async () => {
   });
 });
 
-test('request deadline reaches port and timeout settles a non-cooperative adapter', async () => {
+test('request deadline reaches port and timeout settles a non-cooperative adapter', async t => {
   const port = new FakeCoordinationPort(() => new Promise(() => {}));
   await fixture(port, async app => {
-    const deadline = new Date(Date.now() + 100).toISOString();
-    const response = await app.send({kind: 'request', protocolVersion: '1.0.0', requestId: 'deadline-request',
-      operation: 'task.submit', deadline, idempotencyKey: 'deadline',
-      payload: {goal: 'wait', conversationId: 'competition'}}, new AbortController().signal);
-    assert.equal(response.outcome, 'ok');
-    const task = await terminal(app, response.data.taskId);
-    assert.equal(task.error.code, 'TIMEOUT');
-    assert.equal(port.requests[0].deadline, deadline);
-    assert.equal(port.requests[0].signal.aborted, true);
+    // Persistence may take longer than 100 ms on Windows CI. Freeze time until
+    // the provider is entered, then advance the original deadline explicitly.
+    const nextTurn = () => new Promise(resolve => setImmediate(resolve));
+    t.mock.timers.enable({apis: ['Date', 'setTimeout'], now: Date.now()});
+    try {
+      const deadline = new Date(Date.now() + 100).toISOString();
+      const response = await app.send({kind: 'request', protocolVersion: '1.0.0', requestId: 'deadline-request',
+        operation: 'task.submit', deadline, idempotencyKey: 'deadline',
+        payload: {goal: 'wait', conversationId: 'competition'}}, new AbortController().signal);
+      assert.equal(response.outcome, 'ok');
+      await nextTurn();
+      assert.equal(port.requests.length, 1);
+      assert.equal(port.requests[0].deadline, deadline);
+      assert.equal(port.requests[0].signal.aborted, false);
+      t.mock.timers.tick(99);
+      await nextTurn();
+      assert.equal(app.runtime.getTask(response.data.taskId).state, 'running');
+      assert.equal(port.requests[0].signal.aborted, false);
+      t.mock.timers.tick(1);
+      await nextTurn();
+      const task = app.runtime.getTask(response.data.taskId);
+      assert.equal(task.state, 'failed');
+      assert.equal(task.error.code, 'TIMEOUT');
+      assert.equal(port.requests[0].signal.aborted, true);
+      assert.equal(app.activeTaskCount, 0);
+    } finally {
+      // Release the pending Runtime worker even when an assertion above fails.
+      t.mock.timers.tick(100);
+      await nextTurn();
+      t.mock.timers.reset();
+    }
   });
 });
 
