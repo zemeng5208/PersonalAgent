@@ -3,7 +3,7 @@ import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
 import {EventCursor} from '@personal-agent/client';
-import {register} from './runtime.js';
+import {register, requestTaskCancellation} from './runtime.js';
 import {panelBounds, clampOrb, draggedGroupBounds} from './placement.js';
 import {Conversations} from './conversations.js';
 import {createDesktopHost} from './desktop-host.js';
@@ -78,6 +78,7 @@ const tasks = new Map();
 const taskGoals = new Map();
 let conversations;
 const submitting = new Set();
+const terminalTaskStates = new Set(['succeeded', 'failed', 'cancelled']);
 const approvals = new Map();
 const notifications = new Map();
 let runtimeApplication;
@@ -426,14 +427,23 @@ async function initializeModelFromEnvironment() {
 async function refresh(taskId) {
   const task = await client.call('task.get', {taskId});
   tasks.set(taskId, task);
+  clearInactiveTaskExitWarning();
   publish();
   return task;
+}
+
+function clearInactiveTaskExitWarning() {
+  if (runtimeError === 'Runtime 仍有活动任务；请先等待完成或停止任务后再退出'
+    && [...tasks.values()].every(task => terminalTaskStates.has(task.state))) {
+    runtimeError = '';
+  }
 }
 
 function applyEvent(event) {
   if (event.type === 'notification.created' && event.payload) notifications.set(event.payload.notificationId, {...event.payload,occurredAt:event.occurredAt});
   if (event.taskId && event.payload && ['task.created', 'task.state_changed', 'task.completed', 'task.failed', 'task.cancelled'].includes(event.type)) {
     tasks.set(event.taskId, structuredClone(event.payload));
+    clearInactiveTaskExitWarning();
   }
   if (event.type === 'approval.requested' && event.payload) approvals.set(event.payload.approvalId, structuredClone(event.payload));
   if (event.type === 'task.cancelled' && event.payload?.taskId) {
@@ -559,22 +569,6 @@ async function initializeRuntime() {
   eventPoll = setInterval(() => void pumpEvents(), 120);
 }
 
-async function waitForTerminalTask(taskId, timeoutMs = 5_000) {
-  const terminal = new Set(['succeeded', 'failed', 'cancelled']);
-  const deadline = Date.now() + timeoutMs;
-  let task = await refresh(taskId);
-  while (!terminal.has(task.state) && Date.now() < deadline) {
-    await new Promise(resolve => setTimeout(resolve, 25));
-    task = await refresh(taskId);
-  }
-  if (!terminal.has(task.state)) throw Error('Runtime 未在限定时间内确认任务终态');
-  if (runtimeError === 'Runtime 仍有活动任务；请先等待完成或停止任务后再退出') {
-    runtimeError = '';
-    publish();
-  }
-  return task;
-}
-
 async function action(event, name, payload) {
   const sender = [orb, panel, admin, workspace].find(win => win && !win.isDestroyed() && win.webContents === event.sender);
   if (!sender || event.senderFrame !== sender.webContents.mainFrame) throw Error('Untrusted sender');
@@ -644,7 +638,7 @@ async function action(event, name, payload) {
     if (typeof payload !== 'string' || !payload.trim()) throw Error('请输入有效任务');
     if (!fakeMode && model.enabled === false) throw Error('模型已停用，请先在模型设置中启用');
     const surface = sender === workspace ? 'workspace' : 'panel';
-    if (submitting.has(surface) || [...tasks.values()].some(task => conversations.surface(task.taskId) === surface && !['succeeded','failed','cancelled'].includes(task.state))) throw Error('请等待当前回答完成，或先停止当前任务');
+    if (submitting.has(surface) || [...tasks.values()].some(task => conversations.surface(task.taskId) === surface && !terminalTaskStates.has(task.state))) throw Error('请等待当前回答完成，或先停止当前任务');
     submitting.add(surface);
     try {
     const goal = payload.trim();
@@ -659,9 +653,7 @@ async function action(event, name, payload) {
   if (name === 'task.cancel') {
     if (typeof payload !== 'string' || !tasks.has(payload)) throw Error('Unknown task');
     if (sender !== admin && conversations.surface(payload) !== (sender === workspace ? 'workspace' : 'panel')) throw Error('无法停止其他工作区的任务');
-    const result = await client.call('task.cancel', {taskId: payload, reason: '用户取消任务'});
-    const task = fakeMode ? await refresh(payload) : await waitForTerminalTask(payload);
-    return {...result, state: task.state};
+    return requestTaskCancellation(client, payload, refresh);
   }
   if (name === 'task.refresh') {
     if (!tasks.has(payload)) throw Error('Unknown task');
