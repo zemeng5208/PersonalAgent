@@ -6,7 +6,7 @@
 
 负责人 / 评审者：`zemeng` / `goo122`
 
-状态：`review`（模块实现与根 workspace/build/lock 已进入 Draft PR；生产 composition 未接）
+状态：`review`（PR #83 已从 `main@1e3b56b6` 重建；旧 Draft #63 已关闭；生产 composition 未接）
 
 拥有范围：`packages/coding-tools/**`、本文档
 
@@ -39,7 +39,7 @@
 
 ## 接口状态与集成交接
 
-- 消费：`@personal-agent/contracts@0.1.0-alpha.1` 的 `RegisteredTool`、`ToolContext`、`ToolHost`，当前均为 `provisional`；固定本分支提交供评审，准备随接口迁移。
+- 消费：`@personal-agent/contracts@0.1.0-alpha.1` 的 `RegisteredTool`、`ToolContext`、`ToolHost`，当前均为 `provisional`；PR #83 直接以 `main@1e3b56b665c116d0d0d26b624b566719a362088b` 为基线重建，旧 Draft #63 仅保留历史且不作为堆叠依赖。
 - 不新增公共 contracts，不定义 unavailable 的 `ToolExecutionPort`、ArtifactPort 或 EvidencePort。
 - 根 workspace 发现、build 顺序和 lockfile link 已接入；Policy/ToolGateway 黑盒集成测试覆盖未授权不执行、精确授权读取、撤销拒绝和 dispose 后 `UNSUPPORTED_CAPABILITY`。
 - 新 capability 尚未进入生产 Runtime/capability list；未装配时继续表现为未注册/`UNSUPPORTED_CAPABILITY`，不能启用 Fake 冒充。
@@ -52,7 +52,7 @@
 3. 使用 contracts 公开 `encodeFrame` 验证 JSON 转义膨胀；模块为结果自身预留明确包装预算，并覆盖膨胀拒绝与正常 UTF-8 精确边界。
 4. Windows Node 24 CI 暴露可信根与候选路径混用 legacy/native realpath 时的误拒绝；根改用 OS-native 同步 canonicalization，保持原有 `path.relative` containment、symlink/junction 与文件身份检查不放宽。
 
-仍需由 goo122 在后续独立生产 composition 工作包完成：
+仍需在后续独立生产 composition 工作包完成：
 
 1. 从用户明确授权的工作区配置注入 `rootPath`，通过现有 ToolGateway 注册/释放；不得从 proposal 参数构造根目录。
 2. capability 公布前补 Runtime 任务生命周期消费与发现测试；未装配时保持 `UNSUPPORTED_CAPABILITY`。
