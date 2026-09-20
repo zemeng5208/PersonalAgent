@@ -6,7 +6,7 @@
 
 负责人 / 评审者：`zemeng` / `goo122`
 
-状态：`review`（依赖 Draft PR #63；本工作包使用独立分支与后续 Draft PR）
+状态：`review`（PR #83 已从 `main@1e3b56b6` 重建；旧 Draft #63 已关闭；生产 composition 未接）
 
 拥有范围：`packages/coding-tools/**`、本文档
 
@@ -34,7 +34,7 @@
 
 ## 接口状态与依赖
 
-- 基线：`f8ee77c`，依赖分支 / Draft PR：`codex/zemeng/workspace-read-tool` / #63。
+- 基线：`main@1e3b56b665c116d0d0d26b624b566719a362088b`；PR #83 直接从该基线重建。旧 Draft #63 仅保留历史，不作为本 PR 的堆叠依赖。
 - 本工具只消费当前 contracts 的 `RegisteredTool`、`ToolContext`、`ToolHost`，状态仍为 `provisional`。
 - 不新增 ToolExecutionPort、ArtifactPort 或 EvidencePort，不接 Runtime capability list，不自动注册生产工具，不调用 AgentArts/Local 模型。
 - 本工作包没有命令、patch、Git 写入、用户文件读取、云调用或真实账号副作用。
