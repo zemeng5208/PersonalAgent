@@ -224,9 +224,9 @@ export class NotificationService {
     }
     const report: StatusReport = {
       pausedUntil: this.paused(now) ? (this.policy.pauseUntilUtc as string) : null,
-      quietUntil: quietEnd === null ? null : isoMinute(quietEnd),
+      quietUntil: quietEnd === null ? null : isoInstant(quietEnd),
       pending: state.pending.length,
-      nextDigestCloseAt: nextDigest === null ? null : isoMinute(nextDigest),
+      nextDigestCloseAt: nextDigest === null ? null : isoInstant(nextDigest),
       unacknowledgedBatches: state.batches.filter(batch => batch.state === 'ready_for_delivery').length,
     };
     return report;
@@ -239,13 +239,13 @@ export class NotificationService {
     const quietEnd = this.policy.quietHours === undefined ? null : nextQuietEndMs(this.policy.quietHours, now);
     if (quietEnd !== null) {
       plans.push({
-        scheduleId: `notifications:quiet-end:${isoMinute(quietEnd)}`,
+        scheduleId: `notifications:quiet-end:${isoInstant(quietEnd)}`,
         goal: '安静时段结束，裁定被持有的通知',
         conversationId,
-        runAt: isoMinute(quietEnd),
+        runAt: isoInstant(quietEnd),
         timeZone: 'UTC',
         missedRunPolicy: 'run_once',
-        taskIdempotencyKey: `notifications:quiet-end:${isoMinute(quietEnd)}`,
+        taskIdempotencyKey: `notifications:quiet-end:${isoInstant(quietEnd)}`,
       });
     }
     const status = this.status();
@@ -297,7 +297,7 @@ export class NotificationService {
   }
 
   private isoNow(): string {
-    return `${new Date(this.options.now()).toISOString().slice(0, 19)}.000Z`;
+    return new Date(this.options.now()).toISOString();
   }
 }
 
@@ -335,6 +335,6 @@ function earliest(entries: readonly PendingItem[]): string {
   return entries.reduce((min, entry) => entry.receivedAt < min ? entry.receivedAt : min, entries[0]?.receivedAt ?? '');
 }
 
-function isoMinute(ms: number): string {
-  return `${new Date(ms).toISOString().slice(0, 19)}.000Z`;
+function isoInstant(ms: number): string {
+  return new Date(ms).toISOString();
 }
