@@ -38,7 +38,7 @@
 
 本包消费 `@personal-agent/contracts@0.1.0-alpha.1` 的 provisional `RegisteredTool`、`ToolContext` 与 `ToolHost`，并按现有 Gateway/Policy scope 机制工作。它没有私设仍为 unavailable 的 `ToolExecutionPort`、ArtifactPort 或 EvidencePort。
 
-AgentArts 工具提案、Runtime composition、目标系统读回、Evidence 和最终回答尚未接通；因此这些只是离线可验证的本地只读工具，不是完整编程执行能力，也不是 Competition Golden Path 已完成或真实 AgentArts 可用的证据。根 `package.json` build 编排与 `package-lock.json` workspace 记录来自依赖 PR #63；`workspace.list_entries` 不会自动进入生产 composition。
+AgentArts 工具提案、Runtime composition、目标系统读回、Evidence 和最终回答尚未接通；因此这些只是离线可验证的本地只读工具，不是完整编程执行能力，也不是 Competition Golden Path 已完成或真实 AgentArts 可用的证据。根 `package.json` build 编排与 `package-lock.json` workspace 记录随 PR #83 直接从 `main@1e3b56b6` 重建；旧 Draft #63 已关闭且不作为本 PR 的堆叠依赖。`workspace.list_entries` 不会自动进入生产 composition。
 
 ## 定向验证
 
