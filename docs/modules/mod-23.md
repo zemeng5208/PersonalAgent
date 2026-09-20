@@ -1,0 +1,45 @@
+# MOD-23：通知汇总策略
+
+## 基本信息
+
+- 关联需求：PA-015（P1 统一通知与订阅——安静时段、暂停和频率设置）
+- GitHub 负责人：`Potatos498`
+- 评审者：`goo122`（非作者）
+- 独占目录：`packages/notifications/`
+- 当前状态：review（源码完成，待非作者评审；分支 `feat/mod-23-notifications`）
+
+## 职责
+
+对 `ConnectorItem` 标准事件流按用户规则裁定立即交付/安静持有/暂停持有/聚合摘要；安静时段 DST 安全并支持跨午夜窗口；按 dedupeKey 去重防重复通知。
+
+## 非职责
+
+调度执行（MOD-03）、通知展示（`zemeng`）、策略运行期编辑（桌面端设置）、事件采集（各连接器）。
+
+## 输入、输出与公共入口
+
+- 入口：`NotificationService.ingest/drain/status/planSchedules`；工具 `notifications.status`（只读）。
+- 输入：`ConnectorItem[]`＋装配期 `NotificationPolicy`（quietHours/pauseUntilUtc/digest）。
+- 输出：`NotificationBatch`（immediate/digest，引用 dedupeKey 不复制内容，附裁定理由）；调度建议为结构兼容 Runtime `ScheduleInput` 的自有类型。
+
+## 依赖
+
+- 前置模块：MOD-02（contracts）、MOD-03（Runtime 调度，经建议接入）。
+- 允许依赖：`@personal-agent/contracts`；测试 `@personal-agent/testkit`。
+- 禁止依赖：`apps/*`（ADR-0002）、自有调度器、自有持久任务库。
+
+## 权限与数据
+
+- Scope：`notifications:read`（唯一工具只读）。
+- 副作用：本地写仅限 StoragePort 的待裁队列与已交付标记。
+- 敏感数据：无凭据；事件内容仅暂存待裁，裁定后仅保留 dedupeKey 引用。
+
+## 验收
+
+- Fake/离线测试：12 项（安静窗口判定与 DST、暂停恢复、聚合窗口/上限/来源、去重、调度建议结构兼容与确定性、工具 schema/scope）。
+- 跨模块集成：与 feeds（PR #8）/calendar（PR #22）事件流的接线归 `goo122` 装配；摘要展示归桌面端。
+- 真实条件验收：本包为纯本地决策层，无外部端点；「真实」验收即宿主在真实调度点驱动 drain 的端到端行为，归装配工作包。
+
+## 排除项与已知限制
+
+聚合窗口相位由首事件到达时刻决定；安静结束建议按分钟粒度；暂停恢复被动察觉；已交付标记无 TTL（宿主清理）。详见包 README。
