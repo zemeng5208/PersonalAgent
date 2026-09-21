@@ -29,7 +29,7 @@ Coordination tool proposal
 - 提案不得携带 authorizationRef、Evidence、任务状态或 verified 声明。
 
 离线续跑请求只增加 proposalId、`confirmed` 状态和受信工具结果。Runtime 不向协调端发送授权引用或 Evidence 内容。
-当前只有显式 `mock` 提案可执行；`unverified` 提案在增加独立出机授权前返回不支持。
+`mock` 与严格解析后的 `unverified` 提案都必须经过相同的本地 Policy、审批与 ToolGateway；verification 只描述来源证据等级，不授予权限。
 所有对象按精确字段、有限标识符、有限深度/大小和纯 JSON 值校验。
 
 ## Runtime 行为
@@ -45,8 +45,8 @@ Coordination tool proposal
 
 - 新增 Coordination 契约测试：合法提案可克隆返回；伪造授权/Evidence/终态、verified、空 ID 和非 JSON 参数均拒绝。
 - 新增 Runtime 纵向测试：提案→审批查询→allow_once→单次工具执行→结果续跑→最终回答/Evidence。
-- 新增无工具与 unverified 提案失败测试，以及 Runtime 重启后的审批恢复测试。
-- 定向测试 6/6 通过；Coordination workspace 与 Runtime workspace 回归分别通过。
+- 新增无工具失败、unverified 提案审批执行测试，以及 Runtime 重启后的审批恢复测试。
+- 当前 Competition 工具循环定向测试 4/4 通过；Coordination workspace 与 Runtime workspace 回归分别通过。
 - `npm run check` 通过：架构、契约夹具、生成类型、全 workspace 类型检查和测试均无失败。
 - 验证环境：Node 24.15.0、npm 11.12.1；真实服务测试未运行。
 

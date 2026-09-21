@@ -39,7 +39,7 @@ async function waitForState(app, taskId, states) {
   throw Error('Task did not reach expected state');
 }
 
-test('competition tool proposal waits for local approval, executes once and resumes cloud answer', async () => {
+test('unverified competition tool proposal waits for local approval, executes once and resumes cloud answer', async () => {
   const base = new URL('../../../.cache/competition-tool-loop/', import.meta.url);
   await mkdir(base, {recursive: true});
   const directory = await mkdtemp(new URL('case-', base));
@@ -56,7 +56,7 @@ test('competition tool proposal waits for local approval, executes once and resu
         toolName: 'fixture.echo',
         toolVersion: '1.0.0',
         arguments: {value: 'Beijing'},
-        verification: 'mock',
+        verification: 'unverified',
       };
     }
     assert.deepEqual(request.continuation, {
@@ -64,7 +64,7 @@ test('competition tool proposal waits for local approval, executes once and resu
       state: 'confirmed',
       result: {value: 'Beijing'},
     });
-    return {kind: 'text', text: '工具结果已核实', verification: 'mock'};
+    return {kind: 'text', text: '工具结果已核实', verification: 'unverified'};
   });
   const app = createRuntimeApplication({
     path: directory + '/runtime.sqlite',
@@ -136,47 +136,6 @@ test('competition proposal fails explicitly when the trusted host has no tools',
     assert.equal(task.error.code, 'UNSUPPORTED_CAPABILITY');
     assert.equal(port.requests.length, 1);
     assert.deepEqual(task.evidenceRefs, []);
-  } finally {
-    app.close();
-    await rm(directory, {recursive: true, force: true});
-  }
-});
-test('unverified cloud proposal cannot export a local tool result', async () => {
-  const base = new URL('../../../.cache/competition-tool-loop/', import.meta.url);
-  await mkdir(base, {recursive: true});
-  const directory = await mkdtemp(new URL('case-', base));
-  let executions = 0;
-  const port = new FakeCoordinationPort(() => ({
-    kind: 'tool_proposal',
-    proposalId: 'proposal-real',
-    toolName: 'fixture.echo',
-    toolVersion: '1.0.0',
-    arguments: {value: 'private'},
-    verification: 'unverified',
-  }));
-  const app = createRuntimeApplication({
-    path: directory + '/runtime.sqlite',
-    profile: 'huawei_ict_agentarts',
-    coordination: port,
-    tools: [{...tool, execute: async input => {
-      executions++;
-      return input;
-    }}],
-  });
-  try {
-    const client = new Client(app, Date.now);
-    await client.connect();
-    const {taskId} = await client.call(
-      'task.submit',
-      {goal: '读取本地数据', conversationId: 'competition'},
-      {idempotencyKey: 'competition-unverified'},
-    );
-    const task = await waitForState(app, taskId, ['succeeded', 'failed']);
-    assert.equal(task.state, 'failed');
-    assert.equal(task.error.code, 'UNSUPPORTED_CAPABILITY');
-    assert.equal(executions, 0);
-    assert.equal(port.requests.length, 1);
-    assert.deepEqual((await client.call('approval.list', {taskId})).items, []);
   } finally {
     app.close();
     await rm(directory, {recursive: true, force: true});

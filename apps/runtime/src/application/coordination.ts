@@ -83,9 +83,6 @@ export function startCoordinationTask(
       if (result.kind === 'text') {
         return {resultSummary: summary(result.text, result.verification), evidenceRefs};
       }
-      if (result.verification !== 'mock') {
-        throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Real Competition tool result export is unavailable');
-      }
       if (!tools) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition tool execution is unavailable');
 
       const runId = `competition-tool-${taskId}-${step}`;
