@@ -73,6 +73,15 @@ let model = {
   persisted: false, enabled: false,
   reason: '盘古 Provider 已接入；请在“模型”页配置 Endpoint、模型和 API Key', lastTestAt: null, latencyMs: null,
 };
+if (competitionMode) {
+  model = {
+    ...model,
+    provider: 'agentarts', label: 'AgentArts · Competition Profile', verification: 'unverified',
+    baseUrl: '', model: 'AgentArts Runtime', deployment: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
+    keyConfigured: false,
+    reason: 'Competition Runtime 尚未完成初始化；请检查可信主进程配置',
+  };
+}
 let thinking = {depth: 1, fast: false, applied: false, reason: 'Runtime 尚未公开思考参数契约'};
 const tasks = new Map();
 const taskGoals = new Map();
