@@ -143,7 +143,7 @@ Profile 是受信组合入口的部署选择，不作为模型输出字段，也
 
 1. 已冻结本 profile 的职责、数据边界、验收矩阵和演示场景；Local 只保留现有代码，不新增能力。
 2. main 已集成最小 `CoordinationPort`、`CloudAgentPort`、Fake 和离线审批工具循环；Workflow 输入仍在堆叠分支，接口保持 provisional。
-3. 从最新 main 重建 Draft #68/#78 的独有差异，先完成 `workspace.read_text` 经审批、Policy、ToolGateway 和 continuation 的 Fake 端到端 Runtime 验收。
+3. #84 已从最新 main 重建旧 Draft #68 的独有差异，并提供 `workspace.read_text` 经审批、Policy、ToolGateway 和 continuation 的 Fake 端到端 Runtime 候选；等待 CI 与非作者评审后，再重建 Draft #78 的桌面组合差异。
 4. 建立真实 AgentArts 项目、Agent/Workflow、版本和部署，完成成功 API 调用并读回平台 trace。
 5. 打通真实可信闭环：Desktop → Runtime → AgentArts → 只读工具提案 → 本地 Policy/ToolGateway → 真实读回 → AgentArts 最终回答 → Evidence。
 6. 先将堆叠分支中的事实变化流、投影/CAS 从最新 main 重建集成，再接入真实链并展示 `KEEP/RECHECK/REVISE`。
@@ -183,4 +183,4 @@ Profile 是受信组合入口的部署选择，不作为模型输出字段，也
 
 ## 10. 当前结论
 
-截至 2026-09-21，Competition Profile 的产品定位与信任边界保持不变。main 已具备 provisional AgentArts Runtime 适配、Fake 审批工具循环、版本图/存储首片、固定合成评估及受限 `workspace.list` / `workspace.read_text`；Workflow 输入、事实变化流、投影/CAS 和语音仍在堆叠分支，不能算主分支能力。工作区工具尚未完成 Competition 消费链或真实目标系统读回；真实项目/版本/部署、成功 API/trace、完整 Evidence 和比赛 Golden Path 仍为 `unavailable`。
+截至 2026-09-21，Competition Profile 的产品定位与信任边界保持不变。main 已具备 provisional AgentArts Runtime 适配、Fake 审批工具循环、版本图/存储首片、固定合成评估及受限 `workspace.list` / `workspace.read_text`；Workflow 输入、事实变化流、投影/CAS 和语音仍在堆叠分支，不能算主分支能力。工作区工具的 Competition 消费链候选位于待评审 #84，尚未进入 main，也没有真实目标系统读回；真实项目/版本/部署、成功 API/trace、完整 Evidence 和比赛 Golden Path 仍为 `unavailable`。

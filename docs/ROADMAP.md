@@ -11,7 +11,7 @@
 - PR #69～#76、#79 只合并到了各自堆叠基线分支，并未进入 `main`；其工作区、语音、记忆和认知增量只能作为待重建候选，不能计为主分支能力。
 - PR #58 已进入 `main`，提供固定合成评估 runner；PR #79 仅在堆叠语音分支。两者都不是模型质量、真实麦克风或 AgentArts 成功证据。
 - PR #80 仅合并到旧 `codex/competition-tool-loop` 分支，尚未进入 `main`；PR #81 已进入 `main` 并修复通知摘要毫秒精度；PR #83 已进入 `main` 并交付受限 `workspace.list` / `workspace.read_text`。主分支基线为 `086b9674`。
-- 旧 #63、#65 已关闭且未直接进入 `main`；#83 是工作区列表/读取的最新主分支重建。当前开放的 #51、#68、#78 仍为 Draft；#56、#61、#62 与最新主分支冲突，不能作为已集成能力计算。旧状态文档 PR #48 已被本次更新替代。
+- 旧 #63、#65、#68 已关闭且未直接进入 `main`；#83 是工作区列表/读取的最新主分支重建，#84 是 #68 的最新主分支 Competition 审批消费链替代 PR，当前开放待评审。当前开放的 #51、#78 仍为 Draft；#56、#61、#62 与最新主分支冲突，不能作为已集成能力计算。旧状态文档 PR #48 已被本次更新替代。
 
 ### ARCH-03：Runtime Application 自主管理任务分派
 
@@ -96,7 +96,7 @@
 | MOD-15 | M4 后扩展 | in_progress | `zemeng` / 有界授权唤醒生命周期位于冲突的 #65/#70 堆叠分支，尚未进入 main；真实唤醒算法、设备、误触和回声测试未完成 |
 | MOD-16 | M2 TraceGuard 所需只读端口、M4 电脑操作 | todo | `zemeng` 已确定，未启动 |
 | MOD-17 | M2 只读、M4 治理 | todo | `zemeng` 已确定，未启动 |
-| MOD-18 | M4 | in_progress | `zemeng` / PR #83 已将受限 `workspace.list` 与 `workspace.read_text` 重建到 main；Competition 审批消费链仍待从 Draft #68 重建，写入、命令和 Artifact 未交付 |
+| MOD-18 | M4 | review | `zemeng` / PR #83 已将受限 `workspace.list` 与 `workspace.read_text` 重建到 main；#84 已从最新 main 重建 Competition 审批消费链并等待 CI/非作者评审，写入、命令和 Artifact 未交付 |
 | MOD-19 | M5 | todo | `zemeng` 已确定，未启动 |
 | MOD-20 | M2 本地提醒、M3 日历 | review | `Potatos498` / PR #22 已合并为 `cdb69a26`；待办 CRUD、提醒重验与 Fake 日历已验证，真实日历账号、授权和写入读回未完成 |
 | MOD-21 | M3 | review | `Potatos498` / PR #28 已合并为 `42db8f51`；QQ 增量同步、安全发送语义和受控真实读回已有证据，完整账号生命周期与长期稳定性未验收 |
