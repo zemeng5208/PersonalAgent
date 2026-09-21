@@ -1,6 +1,6 @@
 # 开发计划与进度
 
-更新：2026-09-20 · 当前阶段：Competition Profile 的离线审批工具循环已进入 main，堆叠分支中的语音、记忆、认知和工作区工具仍待重建集成 · 通用 Local Profile 仅保留现有实现 · Core Runtime Profile 1 已冻结；真实 AgentArts 部署、trace、工具读回和完整比赛闭环仍未验收
+更新：2026-09-21 · 当前阶段：Competition Profile 的离线审批工具循环及受限工作区列表/正文读取已进入 main，堆叠分支中的语音、记忆和认知增量仍待重建集成 · 通用 Local Profile 仅保留现有实现 · Core Runtime Profile 1 已冻结；真实 AgentArts 部署、trace、工具读回和完整比赛闭环仍未验收
 
 本文维护工作状态，需求以 PRD 为准，当前交付顺序以[华为 ICT AgentArts Competition Profile](competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)为先。模块负责人和独占目录唯一登记在 [模块分工](MODULE_ASSIGNMENTS.md)，契约见[公共开发协议](DEVELOPMENT_PROTOCOL.md)，逐接口冻结和可用性见[当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md)。`goo122` 负责共享底座、公共协议、Runtime、工具、知识与记忆；`zemeng` 负责 Competition Profile、AgentArts、核心认知和桌面执行；`Potatos498` 负责 MOD-20～26 业务连接器。Local Profile 只作为可选保留，不进入当前比赛退出条件。阶段不代表承诺日期；正式排期需根据比赛时间、团队人数和接口验证结果确定。
 
@@ -10,8 +10,8 @@
 - PR #54、#77 已集成 Desktop 取消受理语义和过期审批 fail-closed 展示；Desktop 仍没有完整真实比赛链验收。
 - PR #69～#76、#79 只合并到了各自堆叠基线分支，并未进入 `main`；其工作区、语音、记忆和认知增量只能作为待重建候选，不能计为主分支能力。
 - PR #58 已进入 `main`，提供固定合成评估 runner；PR #79 仅在堆叠语音分支。两者都不是模型质量、真实麦克风或 AgentArts 成功证据。
-- PR #80 仅合并到旧 `codex/competition-tool-loop` 分支，尚未进入 `main`；PR #81 已进入 `main` 并修复通知摘要毫秒精度。主分支基线为 `1e3b56b6`。
-- 当前开放的 #51、#63、#68、#78 仍为 Draft；#56、#61、#62、#65 与最新主分支冲突，不能作为已集成能力计算。旧状态文档 PR #48 已被本次更新替代。
+- PR #80 仅合并到旧 `codex/competition-tool-loop` 分支，尚未进入 `main`；PR #81 已进入 `main` 并修复通知摘要毫秒精度；PR #83 已进入 `main` 并交付受限 `workspace.list` / `workspace.read_text`。主分支基线为 `086b9674`。
+- 旧 #63、#65 已关闭且未直接进入 `main`；#83 是工作区列表/读取的最新主分支重建。当前开放的 #51、#68、#78 仍为 Draft；#56、#61、#62 与最新主分支冲突，不能作为已集成能力计算。旧状态文档 PR #48 已被本次更新替代。
 
 ### ARCH-03：Runtime Application 自主管理任务分派
 
@@ -69,7 +69,7 @@
 | M1.6 持续认知创新 | 版本化世界状态、Goal/Event、目标/事实/决策图谱、最小计划修复 | 事实变化产生可回放影响；AgentArts 只更新受影响计划；Evidence 闭环 | main 已有版本图和存储首片；事实查询/变化流、投影/CAS 仍在堆叠分支，真实 AgentArts/Evidence 闭环未完成 |
 | M2 首次可用 | Obsidian、提醒、研究天气、TraceGuard 只读、全部 P0 | 所有 P0 逐项验收，不只演示单场景 | 天气、待办/日历 Fake、研究源和部分只读工具已集成；完整 P0 与真实账号验收未完成 |
 | M3 信息管家 | 邮件、日历、订阅、通知、专业协作 | 真实连接器增量同步与授权写入验证 | 邮件、订阅、通知策略已集成；桌面通知消费、完整真实账号与授权写入验收未完成 |
-| M4 行动与扩展 | 电脑控制、编程、治理、流程学习、社交扩展 | 指定应用可控可验证；平台能力矩阵有证据 | 工作区列表/读取仍在 Draft #63；Windows 操作、写入与治理闭环未进入 main |
+| M4 行动与扩展 | 电脑控制、编程、治理、流程学习、社交扩展 | 指定应用可控可验证；平台能力矩阵有证据 | 受限工作区列表/正文读取已由 PR #83 进入 main，仍为 provisional；Windows 操作、写入与治理闭环未进入 main |
 | M5 参赛/分发 | 演示、打包、技术贡献材料 | 规则核验、真实证据、隔离安装运行卸载 | 未开始 |
 
 ## 2. 模块执行台账
@@ -96,7 +96,7 @@
 | MOD-15 | M4 后扩展 | in_progress | `zemeng` / 有界授权唤醒生命周期位于冲突的 #65/#70 堆叠分支，尚未进入 main；真实唤醒算法、设备、误触和回声测试未完成 |
 | MOD-16 | M2 TraceGuard 所需只读端口、M4 电脑操作 | todo | `zemeng` 已确定，未启动 |
 | MOD-17 | M2 只读、M4 治理 | todo | `zemeng` 已确定，未启动 |
-| MOD-18 | M4 | in_progress | `zemeng` / 工作区列表 #69 只合并到 Draft #63 的基线，列表和正文读取均未进入 main；写入、命令和 Artifact 未交付 |
+| MOD-18 | M4 | in_progress | `zemeng` / PR #83 已将受限 `workspace.list` 与 `workspace.read_text` 重建到 main；Competition 审批消费链仍待从 Draft #68 重建，写入、命令和 Artifact 未交付 |
 | MOD-19 | M5 | todo | `zemeng` 已确定，未启动 |
 | MOD-20 | M2 本地提醒、M3 日历 | review | `Potatos498` / PR #22 已合并为 `cdb69a26`；待办 CRUD、提醒重验与 Fake 日历已验证，真实日历账号、授权和写入读回未完成 |
 | MOD-21 | M3 | review | `Potatos498` / PR #28 已合并为 `42db8f51`；QQ 增量同步、安全发送语义和受控真实读回已有证据，完整账号生命周期与长期稳定性未验收 |
@@ -115,8 +115,8 @@
 ### 2.1 开工顺序与阻塞边界
 
 1. Core Runtime Profile 1 已冻结，可供 Competition Profile 复用；事件/Host/Agent/Tool 等未冻结面固定精确提交并保留迁移空间。
-2. main 中的 provisional Coordination/CloudAgent 与 ToolExecution 只作为受控开发面；语音、记忆、认知和工作区堆叠分支必须先从最新 main 重建，不能用“已合并到非 main”冒充集成。
-3. 下一条离线验收固定为 `Desktop/Runtime → Fake AgentArts → workspace.list → waiting_approval → allow_once → ToolGateway → continuation → 最终回答/Evidence`，不新增更多工具。
+2. main 中的 provisional Coordination/CloudAgent、ToolExecution 与受限工作区列表/读取只作为受控开发面；语音、记忆和认知堆叠分支必须先从最新 main 重建，不能用“已合并到非 main”冒充集成。
+3. 下一条离线验收固定为 `Runtime → Fake AgentArts → workspace.read_text → waiting_approval → allow_once → ToolGateway → continuation → 最终回答/Evidence`，不新增更多工具。
 4. 离线链稳定后再建立真实 AgentArts 项目、身份、Agent/Workflow、版本、部署和 API 读回；从第一天记录 deployment、trace、usage、失败和回滚。
 5. 首条真实闭环必须包含只读工具提案、本地 Policy/ToolGateway、目标系统读回、AgentArts 最终回答和 Evidence；正式 Demo 不静默回退 Local。
 6. 现有 `runAgent()`、ModelGateway、盘古/自有 Provider 代码保留为可选 Local baseline；当前不投入独立新功能，不计入比赛退出条件。

@@ -164,7 +164,7 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | AgentArts | Competition 发布、API、trace、评估、成本、回滚和端到端证据 | 无云资源读回、本地 Policy/ToolGateway 闭环或 profile 防静默回退证据 | MOD-32 `zemeng` |
 | Windows | Named Pipe、DesktopActionPort、资源锁、用户接管 | 对应 Host/Client package 与真实应用验收未提供 | MOD-16 `zemeng` |
 | TraceGuard | 公开工具和 Evidence/恢复端口 | 仓库适配 package 未提供 | MOD-17 `zemeng` |
-| 编程 | 正文读取、patch、command、artifact 端口 | 仅 `workspace.list` 受限列表已集成；其余能力和隔离验收未提供 | MOD-18 `zemeng` |
+| 编程 | 正文读取、patch、command、artifact 端口 | PR #83 已集成受限 `workspace.list` 与 `workspace.read_text`；两者仍为 provisional，patch、command、artifact 和完整隔离验收未提供 | MOD-18 `zemeng` |
 | 分发 | 生产装配、安装、升级、卸载生命周期契约 | 无安装包与隔离安装证据 | MOD-19 `zemeng`、根装配 `goo122` |
 
 生产 Runtime 对 Schema 已知但未公布的 operation 必须返回 `UNSUPPORTED_CAPABILITY`。管理界面可以展示规划项，但必须显示“不可用”，不能通过读取配置文件、私有数据库或启用 Fake 来伪装能力。
@@ -181,11 +181,11 @@ main 仅包含 PR #38 的 CoordinationStorePort/SQLite 首片。MemoryQueryPort�
 
 ### 6.3 桌面、语音、工具与通知增量（provisional）
 
-PR #54、#77、#81 已进入 main，分别补充取消受理、过期审批展示和通知时间精度。workspace.list、语音/唤醒、转写消费和合成语音记录仅存在于 #61/#63/#65 及其堆叠分支，尚未进入 main。
+PR #54、#77、#81 已进入 main，分别补充取消受理、过期审批展示和通知时间精度；PR #83 已集成受限 `workspace.list` 与 `workspace.read_text`。旧 #63、#65 已关闭且未直接进入 main；语音/唤醒、转写消费和合成语音记录仍只存在于 #61 及其堆叠分支。
 
 ### 6.4 下一冻结候选
 
-下一步只收敛一条离线 Competition 消费链：Desktop/Runtime → Fake AgentArts → workspace.list proposal → waiting_approval → allow_once → ToolGateway → continuation → 最终回答/Evidence。通过后仍保持 provisional；只有真实 AgentArts 部署/API/trace 与目标系统读回完成，才重新评估相关外部语义。
+下一步只收敛一条离线 Competition 消费链：Runtime → Fake AgentArts → `workspace.read_text` proposal → waiting_approval → allow_once → ToolGateway → continuation → 最终回答/Evidence。通过后仍保持 provisional；只有真实 AgentArts 部署/API/trace 与目标系统读回完成，才重新评估相关外部语义。
 
 | 待交付接口 | 语义提出方 | 公共类型/宿主提供方 | 下一验收 |
 | --- | --- | --- | --- |
@@ -215,6 +215,6 @@ PR #54、#77、#81 已进入 main，分别补充取消受理、过期审批展�
 Competition 工具提案/Runtime Application/Desktop 装配仍未由此项交付，运行能力保持 unavailable。
 本包接口保持 provisional，非作者评审前不冻结。
 
-截至 2026-09-20，**冻结范围仍只有 Core Runtime Profile 1 的消息、任务、会话与审批只读查询子集；不冻结整套协议、外部模型工具调用或 AgentArts 编排。** main 中只有 Competition 的离线 Coordination/审批工具循环，以及既有版本图和存储首片；事实变化流、认知投影、语音消费和工作区工具仍在堆叠分支，不能登记为主分支能力。
+截至 2026-09-21，**冻结范围仍只有 Core Runtime Profile 1 的消息、任务、会话与审批只读查询子集；不冻结整套协议、外部模型工具调用或 AgentArts 编排。** main 中已有 Competition 的离线 Coordination/审批工具循环、既有版本图/存储首片和受限工作区列表/正文读取；工作区能力仍为 provisional，事实变化流、认知投影和语音消费仍在堆叠分支。
 
 真实 AgentArts deployment/API/trace、目标系统工具读回、完整 Evidence、真实语音设备和外部事实提供者仍 `unavailable`。Fake、合成评估、HTTP 200、配置成功或平台截图都不能提升这些状态；正式比赛路径不得静默回退 Local。
