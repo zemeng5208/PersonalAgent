@@ -3,13 +3,13 @@
 ## 基本信息
 
 - Profile：`huawei_ict_agentarts`。
-- 负责人 / 非作者评审：`zemeng` / `goo122`。
-- 分支：`codex/zemeng/workspace-competition`；状态：`review`（实现与定向测试已提交，
-  尚未完成非作者评审或合并）。
-- 堆叠基线：PR #49 `03f9ab4`、PR #60 `d012a7d`，以及 MOD-18 coding-tools
-  提交 `ada40a5`、`1fe234d` 与 PR #63 修复 `f8ee77c`（本分支 cherry-pick
-  `fc694d8`、`8828227`、`e8aa1e0`）。这些依赖未合并不代表不存在；本工作包不复制其实现。
-- 本片新增范围：`tests/integration/workspace-read-competition.test.mjs` 与本文档。
+- 原实现负责人：`zemeng`；本次主分支重建：`goo122`；状态：`review`
+  （定向测试与全仓检查已通过，尚未完成非作者评审或合并）。
+- 分支：`codex/competition-workspace-approval-rebuild`。
+- 基线：`main@086b9674`，已包含 PR #49 的 Competition 离线审批工具循环和
+  PR #83 的受限 `workspace.list` / `workspace.read_text` provider。
+- 本片新增范围：`tests/integration/workspace-read-competition.test.mjs` 与本文档；
+  不复制 coding-tools 或 Runtime 实现。
 
 ## 目标与边界
 
@@ -49,11 +49,9 @@ proposal。测试结束删除临时目录。
 `provisional/mock`：
 
 - PR #49 已提供 proposal、审批恢复、Policy/ToolGateway、Evidence 引用和 continuation；
-- PR #60 保证提案参数和 continuation 结果中的合法 JSON 特殊键不会在隔离复制时丢失；
-- PR #63 让可信根的同步与异步规范化使用原生 realpath 语义，并在返回前拒绝超过
-  工具固定序列化输出上限的 JSON；上层 wire 编码仍执行最终帧大小检查；
-- MOD-18 provider 保持可信根、路径 containment、敏感文件、UTF-8、大小、deadline 和
-  cancellation 边界；本片不重测所有细节。
+- PR #83 已提供受限工作区 provider，包括原生 realpath 规范化、路径 containment、
+  敏感文件、UTF-8、大小、deadline、cancellation 与固定序列化输出上限；
+- 上层 wire 编码仍执行最终帧大小检查；本片只验证跨层组合，不重复 provider 单测。
 
 真实 `AgentArtsCloudAgentPort` 仍只发送 query、接收文本；没有真实 tool proposal、
 continuation、deployment/version/trace/usage 或数据出机读回。本片不把 Fake proposal
@@ -66,14 +64,14 @@ Desktop 接线应在独立工作包中完成，未配置时继续不注册、不
 
 ## 最少验证
 
-在只构建本测试所需 workspace 闭包后运行：
+在 Node `v24.15.0` / npm `11.12.1` 下运行：
 
 ```powershell
 node --test --test-isolation=none tests/integration/workspace-read-competition.test.mjs
+npm run check
 git diff --check
 ```
 
-实际复核复用原 coding-tools 工作树缓存中的 Node `v24.15.0`，
-没有下载第二份 Node。用该精确目标版本只重建 coding-tools 后，本文件登记的 3 项集成
-测试全部通过，0 failed。本次直接调用 Node/TypeScript，没有借此宣称 npm `11.12.x`
-已复核；本片也没有为适配执行器复制或修改 provider。
+当前重建分支的 Competition 定向测试 3/3 通过，`npm run check` 与差异空白检查
+均通过。该结果不复用旧堆叠分支证据，也不代表真实 AgentArts、真实用户工作区或
+Desktop 组合已经验收。
