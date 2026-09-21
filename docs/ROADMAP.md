@@ -11,7 +11,7 @@
 - PR #69～#76、#79 只合并到了各自堆叠基线分支，并未进入 `main`；其工作区、语音、记忆和认知增量只能作为待重建候选，不能计为主分支能力。
 - PR #58 已进入 `main`，提供固定合成评估 runner；PR #79 仅在堆叠语音分支。两者都不是模型质量、真实麦克风或 AgentArts 成功证据。
 - PR #80 仅合并到旧 `codex/competition-tool-loop` 分支，尚未进入 `main`；PR #81 已进入 `main` 并修复通知摘要毫秒精度；PR #83 已进入 `main` 并交付受限 `workspace.list` / `workspace.read_text`。主分支基线为 `086b9674`。
-- 旧 #63、#65、#68 已关闭且未直接进入 `main`；#83 是工作区列表/读取的最新主分支重建，#84 是 #68 的最新主分支 Competition 审批消费链替代 PR，当前开放待评审。当前开放的 #51、#78 仍为 Draft；#56、#61、#62 与最新主分支冲突，不能作为已集成能力计算。旧状态文档 PR #48 已被本次更新替代。
+- 旧 #63、#65、#68 已关闭且未直接进入 `main`；#83 已重建工作区列表/读取，#84 已作为 #68 的替代 PR 合入 Competition 审批消费链。当前开放的 #51、#78 仍为 Draft；#56、#61、#62 与最新主分支冲突，不能作为已集成能力计算。旧状态文档 PR #48 已被本次更新替代。
 
 ### ARCH-03：Runtime Application 自主管理任务分派
 
@@ -96,7 +96,7 @@
 | MOD-15 | M4 后扩展 | in_progress | `zemeng` / 有界授权唤醒生命周期位于冲突的 #65/#70 堆叠分支，尚未进入 main；真实唤醒算法、设备、误触和回声测试未完成 |
 | MOD-16 | M2 TraceGuard 所需只读端口、M4 电脑操作 | todo | `zemeng` 已确定，未启动 |
 | MOD-17 | M2 只读、M4 治理 | todo | `zemeng` 已确定，未启动 |
-| MOD-18 | M4 | review | `zemeng` / PR #83 已将受限 `workspace.list` 与 `workspace.read_text` 重建到 main；#84 已从最新 main 重建 Competition 审批消费链并等待 CI/非作者评审，写入、命令和 Artifact 未交付 |
+| MOD-18 | M4 | in_progress | `zemeng` / PR #83 已将受限 `workspace.list` 与 `workspace.read_text` 重建到 main；PR #84 已合入 Competition 审批消费链，证据仍仅为 provisional/mock；写入、命令和 Artifact 未交付 |
 | MOD-19 | M5 | todo | `zemeng` 已确定，未启动 |
 | MOD-20 | M2 本地提醒、M3 日历 | review | `Potatos498` / PR #22 已合并为 `cdb69a26`；待办 CRUD、提醒重验与 Fake 日历已验证，真实日历账号、授权和写入读回未完成 |
 | MOD-21 | M3 | review | `Potatos498` / PR #28 已合并为 `42db8f51`；QQ 增量同步、安全发送语义和受控真实读回已有证据，完整账号生命周期与长期稳定性未验收 |
@@ -116,7 +116,7 @@
 
 1. Core Runtime Profile 1 已冻结，可供 Competition Profile 复用；事件/Host/Agent/Tool 等未冻结面固定精确提交并保留迁移空间。
 2. main 中的 provisional Coordination/CloudAgent、ToolExecution 与受限工作区列表/读取只作为受控开发面；语音、记忆和认知堆叠分支必须先从最新 main 重建，不能用“已合并到非 main”冒充集成。
-3. 下一条离线验收固定为 `Runtime → Fake AgentArts → workspace.read_text → waiting_approval → allow_once → ToolGateway → continuation → 最终回答/Evidence`，不新增更多工具。
+3. PR #84 已将 `Runtime → Fake AgentArts → workspace.read_text → waiting_approval → allow_once → ToolGateway → continuation → 最终回答/Evidence` 离线链合入 main，仍仅为 provisional/mock；下一重建项是 #56 的 Desktop 只读 AgentArts 配置状态，再准备 #78 的桌面组合。
 4. 离线链稳定后再建立真实 AgentArts 项目、身份、Agent/Workflow、版本、部署和 API 读回；从第一天记录 deployment、trace、usage、失败和回滚。
 5. 首条真实闭环必须包含只读工具提案、本地 Policy/ToolGateway、目标系统读回、AgentArts 最终回答和 Evidence；正式 Demo 不静默回退 Local。
 6. 现有 `runAgent()`、ModelGateway、盘古/自有 Provider 代码保留为可选 Local baseline；当前不投入独立新功能，不计入比赛退出条件。

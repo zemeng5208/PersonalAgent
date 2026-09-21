@@ -1,6 +1,6 @@
 # 当前接口目录与冻结登记
 
-版本：1.2 · 日期：2026-09-20 · 基线提交：`1e3b56b665c116d0d0d26b624b566719a362088b`
+版本：1.2 · 日期：2026-09-21 · 基线提交：`f0867e2480a7061535eba7a74fa990df47284c54`
 
 协议负责人：`goo122` · 核心认知与 AgentArts 消费负责人：`zemeng` · 连接器消费负责人：`Potatos498`
 
@@ -185,11 +185,11 @@ PR #54、#77、#81 已进入 main，分别补充取消受理、过期审批展�
 
 ### 6.4 下一冻结候选
 
-#84 已从最新 main 重建这条离线 Competition 消费链：Runtime → Fake AgentArts → `workspace.read_text` proposal → waiting_approval → allow_once → ToolGateway → continuation → 最终回答/Evidence；当前等待 CI 与非作者评审。即使合并仍保持 provisional；只有真实 AgentArts 部署/API/trace 与目标系统读回完成，才重新评估相关外部语义。
+PR #84 已将这条离线 Competition 消费链合入 main：Runtime → Fake AgentArts → `workspace.read_text` proposal → waiting_approval → allow_once → ToolGateway → continuation → 最终回答/Evidence。该链仍保持 provisional/mock；只有真实 AgentArts 部署/API/trace 与目标系统读回完成，才重新评估相关外部语义。
 
 | 待交付接口 | 语义提出方 | 公共类型/宿主提供方 | 下一验收 |
 | --- | --- | --- | --- |
-| Competition 工具消费链 | `zemeng` | `goo122` 维护 Runtime/Policy/Tool 边界 | #84 完成 Runtime Fake 端到端与失败路径评审后，再从最新 main 重建 Draft #78 的 Desktop smoke |
+| Competition 工具消费链 | `zemeng` | `goo122` 维护 Runtime/Policy/Tool 边界 | PR #84 已完成 Runtime Fake 端到端与失败路径；从最新 main 重建 #56 后，再准备 Draft #78 的 Desktop smoke |
 | `EvidencePort` / `ArtifactPort` | 双方共同给出用例 | `goo122` | 越权、过期、超限、乱序、取消、敏感内容不入日志 |
 | 真实 AgentArts adapter 验收 | `zemeng` | `zemeng`，`goo122` 复核本地终态边界 | deployment/version/trace、成功 API、失败读回、无静默 Local 回退 |
 | 事实流确认与删除 | `zemeng` 提供消费语义 | `goo122` | 持久游标/确认、撤回/删除、敏感范围和跨重启真实提供者 |
