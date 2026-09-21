@@ -1,8 +1,9 @@
 # MOD-13-AGENTARTS-READONLY-01：Competition 后台只读配置状态
 
-- Profile：huawei_ict_agentarts；MOD-13 / PA-002、PA-026；负责人 zemeng，评审者 goo122。
-- 状态 review，待非作者评审与集成；基线 main `72cc76b`。
-- 工作树 `.worktrees/zemeng-desktop-agentarts-readonly`；分支 `codex/zemeng/desktop-agentarts-readonly`。
+- Profile：`huawei_ict_agentarts`；MOD-13 / PA-002、PA-026。
+- 原实现负责人：`zemeng`；本次主分支重建：`goo122`；状态：`review`，
+  待注册协作者完成非作者评审与集成。
+- 基线：`main@f0867e24`；分支：`codex/desktop-agentarts-readonly-rebuild`。
 
 后台原先在 AgentArts 模式也展示盘古编辑、测试及启停按钮，但可信主进程明确拒绝这些操作。
 本项以现有可信快照中的 `model.provider === 'agentarts'` 选择只读状态页，展示 Runtime 名称与原因，
@@ -15,18 +16,22 @@
 Local/Fake 原有页面不变；主进程权限检查仍保留，隐藏控件不构成授权边界。
 部署名及状态原因继续 HTML 转义；不展示密钥、凭据或未公开的 trace/version 字段。
 
-验收：定向纯函数测试及 AgentArts 后台页面渲染/导航检查；不运行全套 Electron 或真实云验收。
+验收：定向纯函数测试、Desktop 静态检查、基础 Electron smoke、workspace smoke 和全仓检查；不运行真实 AgentArts 云验收。
 
 ## 验证结果
 
+当前重建分支在 Node `v24.15.0` / npm `11.12.1` 下验证：
+
 - `node --test --test-isolation=none apps/desktop/test/agentarts-model.test.mjs`：1/1 通过，
   覆盖已配置/未配置文案、两种状态均不生成编辑控件，以及外部字段转义与凭据 canary 不展示。
-- `node --check`（main.js、view.js、agentarts-model.js、定向测试）及 `git diff --check` 通过。
-- 一次独立合成渲染：Playwright 1.63 / Electron 44.2，实际产品 CSS，
-  只读复用已安装第三方依赖，无内部包构建、Runtime 启动或 HTTP(S) 请求。
-- 页面标题与非空内容正确，无错误 overlay，pageerror/console error 均为 0；
-  已配置 AgentArts 状态无编辑/测试/启停控件，外部 HTML 仅显示为文字，密钥 canary 未出现。
-- 合成切回 Local 后可打开完整原有编辑器；父代理查看两张截图，未发现阻断性的裁切或重叠。
-- 未配置状态有纯函数覆盖，未单独运行 GUI；主进程初始化失败分支仅静态复核，
-  不把独立渲染夹具宣称为真实 Runtime 失败或 AgentArts 云端验收。
-- 测试 Electron 已退出；无公共协议、依赖、迁移或权限变化，可回滚单一提交。
+- `npm run typecheck --workspace=@personal-agent/desktop`：通过。
+- `npm run test:smoke --workspace=@personal-agent/desktop`：通过，保留 #77 的审批状态逻辑，
+  Electron 窗口、Preload、提交/取消及后台关闭均无页面错误。
+- `npm run test:workspace-smoke --workspace=@personal-agent/desktop`：首次在既有第 109 行断言
+  波动失败，未改代码立即重跑后通过；本项不把单次重跑提升为稳定性证据。
+- `npm run check`：退出码 0；`git diff --check`：通过。
+- 安装依赖时 npm 报告 1 个 moderate advisory；未运行 `npm audit fix --force`，锁文件未变化。
+
+本分支未重新执行旧 PR 记录的 AgentArts 专项 GUI 截图，因此不复用该截图作为当前证据。
+没有真实 AgentArts、Runtime 失败、云端、凭据或用户数据调用；配置状态不等于连接或任务验收。
+无公共协议、依赖、迁移或权限变化，可回滚单一功能提交。
