@@ -41,7 +41,7 @@ AgentArts 云端编排
 本地可信执行与 Evidence
 ```
 
-当前 main 已集成离线版本图、存储首片、Competition Runtime 适配、Fake 工具循环及受限工作区列表/正文读取；事实变化流、投影/CAS 和语音仍在堆叠分支。工作区能力仍为本地 provisional 工具，尚未形成统一生产世界状态、持续 Goal、真实 AgentArts 部署/API/trace 或比赛 Golden Path。
+当前 main 已集成离线版本图、SQLite/Fake 原子 appendBatch、显式修复预览/提交、Competition Runtime 适配、Fake 工具循环及受限工作区列表/正文读取；事实查询/变化流、自动事实投影和语音仍未进入 main。上述认知与工作区能力仍为本地 provisional 实现，尚未形成统一生产世界状态、持续 Goal、真实 AgentArts 部署/API/trace 或比赛 Golden Path。
 
 ## 3. Competition Profile 架构
 
@@ -133,7 +133,7 @@ Profile 是受信组合入口的部署选择，不作为模型输出字段，也
 | `CoordinationPort` | Runtime 调用选定编排后端 | `provisional`；Fake/离线工具循环已集成 | deadline、取消、task/world-state revision、结构化结果 |
 | `CloudAgentPort` | 隔离 AgentArts DTO 与身份配置 | `provisional`；基础 adapter 已有，Workflow 输入仍在堆叠分支，真实 deployment/API/trace 未验证 | deployment/version 引用、trace、提案、错误和 usage |
 | `MemoryQueryPort` / `FactChangeFeed` | 提供最小事实快照与变化 | `unavailable` 于 main；公开端口和 Fake 仍在 #62/#71 堆叠分支 | 来源、有效期、敏感范围、revision、撤回和游标 |
-| `CoordinationStorePort` | 保存 Goal/Decision/Plan 图谱 | `provisional`；main 有 SQLite/Fake 首片，原子 CAS 仍在堆叠分支 | expectedRevision、事务、冲突和命名空间隔离 |
+| `CoordinationStorePort` | 保存 Goal/Decision/Plan 图谱 | `provisional`；main 有 SQLite/Fake 原子 `appendBatch`、revision 校验、事务和 rollback | expectedRevision、事务、冲突和命名空间隔离 |
 | `ToolExecutionPort` | 执行 AgentArts 工具提案 | `provisional`；审批/continuation 离线链已集成 | Policy、Approval、pending/confirmed/unknown、读回 |
 | `EvidencePort` / `ArtifactPort` | 保存和读取可信证据 | `unavailable`；仅有内部 Evidence 片段 | 访问控制、过期、容量、脱敏和引用稳定性 |
 
@@ -146,7 +146,7 @@ Profile 是受信组合入口的部署选择，不作为模型输出字段，也
 3. PR #84 已将旧 Draft #68 的独有差异合入 main，证明 `workspace.read_text` 经审批、Policy、ToolGateway 和 continuation 的 Fake 端到端 Runtime 链；该证据仍仅为 provisional/mock。下一步从最新 main 重建 #56 的 Desktop 只读 AgentArts 配置状态，再准备 Draft #78 的桌面组合差异。
 4. 建立真实 AgentArts 项目、Agent/Workflow、版本和部署，完成成功 API 调用并读回平台 trace。
 5. 打通真实可信闭环：Desktop → Runtime → AgentArts → 只读工具提案 → 本地 Policy/ToolGateway → 真实读回 → AgentArts 最终回答 → Evidence。
-6. 先将堆叠分支中的事实变化流、投影/CAS 从最新 main 重建集成，再接入真实链并展示 `KEEP/RECHECK/REVISE`。
+6. 从最新 main 重建事实查询/变化流与自动事实投影的独有增量，再把已有显式修复预览/提交接入真实链并展示 `KEEP/RECHECK/REVISE`。
 7. 增加知识、MCP/Skill、多 Agent 和真实评估；每项只在真实平台证据存在后标记可用。
 8. 完成云端部署、可视化 Demo、失败降级说明、成本与回滚记录，再进行比赛验收。
 
@@ -164,7 +164,7 @@ Profile 是受信组合入口的部署选择，不作为模型输出字段，也
 | 知识接入 | 来源、检索结果、引用、敏感范围和失败测试 | `unavailable` |
 | 多 Agent | 角色必要性、交接、预算、降级和完整 trace | `unavailable` |
 | 效果评估 | 固定任务集、基线、指标、重复运行和结果 | 固定合成 runner 已集成；真实平台评估 `unavailable` |
-| 创新机制 | 世界状态 revision、影响边、最小 PlanPatch 回放 | main 有版本图/存储首片；事实流、投影和原子 CAS 仍在堆叠分支，真实回放 `unavailable` |
+| 创新机制 | 世界状态 revision、影响边、最小 PlanPatch 回放 | main 有版本图、原子存储和显式修复预览/提交；事实流、自动投影和真实回放仍 `unavailable` |
 
 文档、架构图、Fake、配置成功、云端页面截图或单次模型回答都不能单独把某项提升为完成。
 
@@ -183,4 +183,4 @@ Profile 是受信组合入口的部署选择，不作为模型输出字段，也
 
 ## 10. 当前结论
 
-截至 2026-09-21，Competition Profile 的产品定位与信任边界保持不变。main 已具备 provisional AgentArts Runtime 适配、Fake 审批工具循环、版本图/存储首片、固定合成评估及受限 `workspace.list` / `workspace.read_text`；Workflow 输入、事实变化流、投影/CAS 和语音仍在堆叠分支，不能算主分支能力。PR #84 已把工作区工具的 Competition 消费链合入 main，但证据仍仅为 provisional/mock，没有真实 AgentArts 或目标系统读回；真实项目/版本/部署、成功 API/trace、完整 Evidence 和比赛 Golden Path 仍为 `unavailable`。
+截至 2026-09-21，Competition Profile 的产品定位与信任边界保持不变。main 已具备 provisional AgentArts Runtime 适配、Fake 审批工具循环、版本图/存储首片、固定合成评估及受限 `workspace.list` / `workspace.read_text`；Workflow 输入、事实查询/变化流、自动事实投影和语音仍未进入 main；原子存储与显式修复预览/提交已是 main 上的 provisional 本地能力。PR #84 已把工作区工具的 Competition 消费链合入 main，但证据仍仅为 provisional/mock，没有真实 AgentArts 或目标系统读回；真实项目/版本/部署、成功 API/trace、完整 Evidence 和比赛 Golden Path 仍为 `unavailable`。

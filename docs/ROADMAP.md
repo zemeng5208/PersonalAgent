@@ -10,7 +10,7 @@
 - PR #54、#77 已集成 Desktop 取消受理语义和过期审批 fail-closed 展示；Desktop 仍没有完整真实比赛链验收。
 - PR #69～#76、#79 只合并到了各自堆叠基线分支，并未进入 `main`；其工作区、语音、记忆和认知增量只能作为待重建候选，不能计为主分支能力。
 - PR #58 已进入 `main`，提供固定合成评估 runner；PR #79 仅在堆叠语音分支。两者都不是模型质量、真实麦克风或 AgentArts 成功证据。
-- PR #80 仅合并到旧 `codex/competition-tool-loop` 分支，尚未进入 `main`；PR #81 已进入 `main` 并修复通知摘要毫秒精度；PR #83 已进入 `main` 并交付受限 `workspace.list` / `workspace.read_text`。主分支基线为 `086b9674`。
+- PR #80 仅合并到旧 `codex/competition-tool-loop` 分支，尚未进入 `main`；PR #81 已进入 `main` 并修复通知摘要毫秒精度；PR #83 以 `086b9674` 进入 `main` 并交付受限 `workspace.list` / `workspace.read_text`。当前文档基线以接口目录页首为准。
 - 旧 #63、#65、#68 已关闭且未直接进入 `main`；#83 已重建工作区列表/读取，#84 已作为 #68 的替代 PR 合入 Competition 审批消费链。当前开放的 #51、#78 仍为 Draft；#56、#61、#62 与最新主分支冲突，不能作为已集成能力计算。旧状态文档 PR #48 已被本次更新替代。
 
 ### ARCH-03：Runtime Application 自主管理任务分派
@@ -66,7 +66,7 @@
 | M0 设计基线 | PRD、架构、协作规范、工作包 | 文档检查通过；待决项登记 | 已建立并在 2026-09-09 同步分工、接口目录和 ADR |
 | M1 基础闭环 | 窗口、Runtime、盘古、工具、语音基础 | 真实请求到工具与验证链路；取消有效 | MOD-01/02/03 已集成；Core Runtime Profile 1 已冻结；真实模型工具链未完成 |
 | M1.5 Competition Profile | AgentArts 基础、Agent/Workflow、部署 API、可信工具 Golden Path、Demo/trace | AgentArts 构建/编排/部署可读回；一条真实工具闭环；不静默回退 Local | main 已有离线 Coordination、审批工具循环和合成评估；Workflow 输入仍在堆叠分支，真实部署/API/trace 与工具读回未完成 |
-| M1.6 持续认知创新 | 版本化世界状态、Goal/Event、目标/事实/决策图谱、最小计划修复 | 事实变化产生可回放影响；AgentArts 只更新受影响计划；Evidence 闭环 | main 已有版本图和存储首片；事实查询/变化流、投影/CAS 仍在堆叠分支，真实 AgentArts/Evidence 闭环未完成 |
+| M1.6 持续认知创新 | 版本化世界状态、Goal/Event、目标/事实/决策图谱、最小计划修复 | 事实变化产生可回放影响；AgentArts 只更新受影响计划；Evidence 闭环 | main 已有版本图、SQLite/Fake 原子 appendBatch 与显式修复预览/提交；事实查询/变化流、自动事实投影及真实 AgentArts/Evidence 闭环未完成 |
 | M2 首次可用 | Obsidian、提醒、研究天气、TraceGuard 只读、全部 P0 | 所有 P0 逐项验收，不只演示单场景 | 天气、待办/日历 Fake、研究源和部分只读工具已集成；完整 P0 与真实账号验收未完成 |
 | M3 信息管家 | 邮件、日历、订阅、通知、专业协作 | 真实连接器增量同步与授权写入验证 | 邮件、订阅、通知策略已集成；桌面通知消费、完整真实账号与授权写入验收未完成 |
 | M4 行动与扩展 | 电脑控制、编程、治理、流程学习、社交扩展 | 指定应用可控可验证；平台能力矩阵有证据 | 受限工作区列表/正文读取已由 PR #83 进入 main，仍为 provisional；Windows 操作、写入与治理闭环未进入 main |
@@ -105,8 +105,8 @@
 | MOD-24 | M2 | review | `Potatos498` / PR #47 已合并为 `2117908a`；OpenAlex、Fake、缓存三态和三项来源披露已验证，长期真实服务稳定性仍为 conditional |
 | MOD-25 | M2 | done | `Potatos498` / PR #4、#12、#23 与 Runtime 装配 PR #9 已合并；GeoNames 增强下 26 个世界大城市简体查询 26/26 高置信，真实门控测试 66/66；manifest 仍为 `conditional`，不等于长期生产稳定性验收 |
 | MOD-26 | M4 起逐平台验收 | todo | `Potatos498` 已登记，未授权启动 |
-| MOD-27 | M1.6 | review | `zemeng` / main 已集成 PR #37/#38 的版本图和存储首片；事实变化流 #71 与原子投影 #74 仍在堆叠分支，真实事实来源、确认消费和数据删除未完成 |
-| MOD-28 | M1.6 | in_progress | `zemeng` / 投影预览、原子 CAS 和身份 ADR 只合并到堆叠分支，尚未进入 main；真实 AgentArts 驱动、外部事实身份落地和 Evidence 闭环未完成 |
+| MOD-27 | M1.6 | review | `zemeng` / main 已有版本图及 SQLite/Fake 原子 `appendBatch`；事实查询/变化流与自动事实投影的后续增量仍在堆叠分支，真实事实来源、确认消费和数据删除未完成 |
+| MOD-28 | M1.6 | in_progress | `zemeng` / main 已有离线影响分析、显式修复预览/提交和原子 CAS；自动事实投影、外部事实身份落地、真实 AgentArts 驱动和 Evidence 闭环未完成 |
 | MOD-29 | M1.5 第一优先 | in_progress | `zemeng` / AgentArts Runtime 适配与配置入口已有 provisional 实现；真实项目、版本、部署、API 和 trace 读回仍无成功证据 |
 | MOD-30 | M1.5 第一优先 | in_progress | `zemeng` / PR #49 已进入 main，工具提案/审批/continuation 离线链可用；Workflow 输入 #72 和载荷边界 #80 尚未进入 main，真实 MCP/Skill 与目标系统读回未完成 |
 | MOD-31 | M1.5/M3 | in_progress | `zemeng` / PR #58 已合并固定合成评估 runner；真实多 Agent 角色、重复运行指标和平台评估未完成 |
