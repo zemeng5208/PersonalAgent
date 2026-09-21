@@ -189,7 +189,7 @@ PR #84 已将这条离线 Competition 消费链合入 main：Runtime → Fake Ag
 
 | 待交付接口 | 语义提出方 | 公共类型/宿主提供方 | 下一验收 |
 | --- | --- | --- | --- |
-| Competition 工具消费链 | `zemeng` | `goo122` 维护 Runtime/Policy/Tool 边界 | PR #84 已完成 Runtime Fake 端到端与失败路径；从最新 main 重建 #56 后，再准备 Draft #78 的 Desktop smoke |
+| Competition 工具消费链 | `zemeng` | `goo122` 维护 Runtime/Policy/Tool 边界 | PR #84 已完成 Runtime Fake 端到端与失败路径；PR #86 已在 `main@02191e8` 上重建 #56，当前 `head@9058686` 的标准 CI 已通过，等待非作者评审与合并；其进入 main 后再准备 Draft #78 的 Desktop smoke |
 | `EvidencePort` / `ArtifactPort` | 双方共同给出用例 | `goo122` | 越权、过期、超限、乱序、取消、敏感内容不入日志 |
 | 真实 AgentArts adapter 验收 | `zemeng` | `zemeng`，`goo122` 复核本地终态边界 | deployment/version/trace、成功 API、失败读回、无静默 Local 回退 |
 | 事实流确认与删除 | `zemeng` 提供消费语义 | `goo122` | 持久游标/确认、撤回/删除、敏感范围和跨重启真实提供者 |

@@ -143,7 +143,7 @@ Profile 是受信组合入口的部署选择，不作为模型输出字段，也
 
 1. 已冻结本 profile 的职责、数据边界、验收矩阵和演示场景；Local 只保留现有代码，不新增能力。
 2. main 已集成最小 `CoordinationPort`、`CloudAgentPort`、Fake 和离线审批工具循环；Workflow 输入仍在堆叠分支，接口保持 provisional。
-3. PR #84 已将旧 Draft #68 的独有差异合入 main，证明 `workspace.read_text` 经审批、Policy、ToolGateway 和 continuation 的 Fake 端到端 Runtime 链；该证据仍仅为 provisional/mock。下一步从最新 main 重建 #56 的 Desktop 只读 AgentArts 配置状态，再准备 Draft #78 的桌面组合差异。
+3. PR #84 已将旧 Draft #68 的独有差异合入 main，证明 `workspace.read_text` 经审批、Policy、ToolGateway 和 continuation 的 Fake 端到端 Runtime 链；该证据仍仅为 provisional/mock。PR #86 已在最新 `main@02191e8` 上重建 #56 的 Desktop 只读 AgentArts 配置状态，当前 `head@9058686` 的标准 CI 已通过，等待非作者评审与合并；其进入 main 后再准备 Draft #78 的桌面组合差异。
 4. 建立真实 AgentArts 项目、Agent/Workflow、版本和部署，完成成功 API 调用并读回平台 trace。
 5. 打通真实可信闭环：Desktop → Runtime → AgentArts → 只读工具提案 → 本地 Policy/ToolGateway → 真实读回 → AgentArts 最终回答 → Evidence。
 6. 从最新 main 重建事实查询/变化流与自动事实投影的独有增量，再把已有显式修复预览/提交接入真实链并展示 `KEEP/RECHECK/REVISE`。
