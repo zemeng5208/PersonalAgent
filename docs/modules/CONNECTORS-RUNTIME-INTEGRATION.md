@@ -1,26 +1,22 @@
 # 连接器与服务模块的 Runtime 接线方案
 
-版本：1.1（按 goo122 2026-09-22 评审意见修订）· 日期：2026-09-22 · 作者：`Potatos498` · 评审：`goo122`（根装配负责人）
+版本：1.2（按 goo122/zemeng 2026-09-22 二轮评审修订）· 日期：2026-09-22 · 作者：`Potatos498` · 评审：`goo122`（根装配负责人）
 
 ## 0. 目的、现状与 Profile 边界
 
-MOD-20/21/22/23/24/25 六个模块源码已全部合并，但 `apps/runtime` 目前只装配了 weather（PR #9）。本方案给出其余五个包（feeds / mail / productivity / notifications / research）接入 Runtime 的设计，供 `goo122` 评审后分阶段落地。
+MOD-20/21/22/23/24/25 六个模块源码已全部合并，但 `apps/runtime` 目前只装配了 weather（PR #9）。本方案给出其余五个包（feeds / mail / productivity / notifications / research）接入 Runtime 的设计。**组合入口只定义 Competition（`huawei_ict_agentarts`）侧装配；Local 全量入口属未授权后续项，仅记录。**
 
-**Profile 边界（v1.1 修正）**：当前仓库规则为新增实现只服务 `huawei_ict_agentarts` Competition Profile。本方案的组合入口因此**只定义 Competition 侧装配**（`createCompetitionConnectors…`，与 `agentarts.ts` 装配同层）。为 Local Profile 提供 `createLocalApplication` 全量入口属于**未授权后续项**，仅在此记录，不在本方案范围——需要时另行申请。
+## 1. 接线模式与工具注入路径（待 goo122 复核的代码事实）
 
-## 1. 接线模式（沿用 weather 先例）
+计划沿用 weather 的两段式（数组宿主收集 `RegisteredTool[]` → `createRuntimeApplication({tools, profile, …})`）。
 
-weather 的两段式先例（`weather-runtime.ts`）：
+**关于「Competition Profile 是否接受 `tools`」**：goo122 二轮评审指出会直接 `INVALID_ARGUMENT`；zemeng 06:01 按当前 `main@d78613a` 源码核对得出相反结论。代码事实（我本轮复核一致）：
 
-```ts
-// 1) 收集 RegisteredTool[]（数组宿主）
-const tools: RegisteredTool[] = [];
-registerX({register(tool) { tools.push(tool); return () => {};}}, {...});
-// 2) 交给应用工厂
-createRuntimeApplication({path, tools, profile: 'huawei_ict_agentarts', coordination});
-```
+- `runtime-application.ts:33-37` 的构造器只拒绝两种组合：`local + coordination` 与 `huawei_ict_agentarts + text`——**不拒绝 Competition + tools**；
+- `options.tools` 存在时构造 `ToolGateway` + `RuntimeToolInvoker`，两个 Profile 行为相同；
+- `AgentArtsRuntimeApplicationOptions` 仅 Omit `profile | coordination | text`，未 Omit `tools`；`startCoordinationTask` 会把 `this.tools` 传入 coordination 路径。
 
-`RuntimeApplication` 构造器内部把工具注册进 policy 校验的 `ToolGateway`，经 `RuntimeToolInvoker` 进入任务审批流——scope 授权沿用既有 `policy.grant({scopes})` + approval 机制（weather 集成测试同款）。**五包全部套用此模式，无新机制。**
+**本节结论为「待复核」而非定论**：若 goo122 复核后确认 Competition + tools 成立，Phase 1 按 §5 执行；若结论仍是应走 CoordinationPort 专属路径（或该行为属无意泄漏、将收紧），则本方案的注入路径需按其裁定改写或另提接口/ADR 变更——不沿用 weather 接法作为既定前提。
 
 ## 2. 各包接线规格（工具名与 scope 逐一经源码核实）
 
@@ -29,59 +25,57 @@ createRuntimeApplication({path, tools, profile: 'huawei_ict_agentarts', coordina
 | 包 | register 必填项 | 工具（scope） | 配置来源 |
 | --- | --- | --- | --- |
 | `@personal-agent/feeds` | `provider: new HttpFeedProvider()`；`subscriptions` | `feeds.collect`、`feeds.subscriptions`（均 `feeds:read`） | 订阅列表：宿主设置持久化 |
-| `@personal-agent/mail` | `provider`（见 §3 凭据边界）；多账号传 `registry` | `mail.inbox`、`mail.accounts`（均 `mail:read`） | 授权码经 SecretStorePort（§3） |
-| `@personal-agent/productivity` | `storage: StoragePort`；`conversationId` | `todo.list`（`todo:read`）；`todo.create`、`todo.update`（`todo:write`） | storage：§4 适配器；conversationId 应用级固定值 |
-| `@personal-agent/notifications` | `storage`；`policy: NotificationPolicy` | `notifications.status`（`notifications:read`） | policy：宿主设置持久化，缺省 `{}` |
-| `@personal-agent/research` | `provider: new OpenAlexProvider()` | `research.search`（`research:read`） | 免 key；mailto 可选 |
+| `@personal-agent/mail` | 凭据经 §3 受信路径 | `mail.inbox`、`mail.accounts`（均 `mail:read`） | 授权码：`qq-mail-authcode`（§3） |
+| `@personal-agent/productivity` | `storage: StoragePort`；`conversationId` | `todo.list`（`todo:read`）；`todo.create`、`todo.update`（`todo:write`） | storage：§4 适配器 |
+| `@personal-agent/notifications` | `storage`；`policy` | `notifications.status`（`notifications:read`） | policy：宿主设置，缺省 `{}` |
+| `@personal-agent/research` | `provider: new OpenAlexProvider()` | `research.search`（`research:read`） | 免 key |
 
-配置缺失时的行为：**连接器不注册、不报错**——与包内「provider 必填不静默降级」语义一致：没有配置就没有该工具，任务侧看到 `UNSUPPORTED_CAPABILITY`。
+配置缺失时：**连接器不注册、不报错**，任务侧看到 `UNSUPPORTED_CAPABILITY`。
 
-## 3. 凭据注入与脱敏（v1.1 新增，goo122 指定边界）
+## 3. 凭据注入与脱敏（v1.2：单一受信路径，消除 v1.1 的自相矛盾）
 
-**邮件授权码等敏感凭据不由组合代码直接读环境变量构造 Provider**。注入与责任划分：
+**v1.1 的错误**：同时主张「组合代码永不经手明文」与「装配层 `await secretStore.read` 后构造 Provider」——读取后丢弃局部变量不等于未持有明文，且裸调 `SecretStorePort.read` 绕过了 `ConnectorHost` 的 secretRefs 范围检查与取消检查。v1.2 收敛为一条路径：
 
-- **受信读取**：凭据经 `@personal-agent/connector-host` 的 **`SecretStorePort.read(secretRef, signal)`** 读取（Electron 侧由主进程实现该端口——加密存储照 Pangu API Key 先例；服务侧由部署环境注入实现）。组合代码只持有 `secretRef`（如 `qq-mail-authcode`），**永不经手明文**。
-- **构造时机**：Provider 构造移入读取方（桌面主进程 / SecretStore 实现方）提供的工厂回调，或在装配层经 `await secretStore.read(ref)` 后立即构造并丢弃中间量——具体形态由 goo122 在实现评审时定，本方案只锁定边界：**明文凭据只在 SecretStore 实现与 Provider 构造函数之间出现一次，不进入日志、快照、工具描述或 Runtime 事件**。
-- **脱敏责任**：包内已保证（mail 的错误映射不回显凭据/URL；README「重启与恢复」声明 actionId 证据不含凭据）。组合层补充验收：注入失败路径下——
-  1. `secretStore.read` 返回 `undefined`（无凭据）→ mail 连接器不注册、其余四包正常，启动无错；
-  2. `read` 抛错 → 同上（不吞错也不阻断其他连接器装配）；
-  3. 任何输出面（工具描述/事件/日志）不含凭据字符串——以占位凭据做断言测试。
+**责任主体二分**：
+
+| 主体 | 职责 | 明文接触 |
+| --- | --- | --- |
+| 普通组合层（Competition 组合代码） | 注册 `ConnectorFactory`（manifest + `create`）并**声明 `secretRefs: ['qq-mail-authcode']`**；持有 ConnectorHost 句柄；触发 `connect(id, signal)` | **永不** |
+| 受信边界（`ConnectorHost.open` 构造的 `ConnectorFactoryContext`） | 在 `factory.create(context)` 内部经 `context.readSecret(ref)` 取得凭据并构造 `QQMailProvider` | 仅在此出现一次 |
+
+`ConnectorFactoryContext.readSecret`（connector-host/src/index.ts:75-83）自带完整约束，本方案直接继承、不新增机制：
+
+- **范围检查**：请求未声明的 ref → `SCOPE_DENIED`；
+- **取消检查**：signal 中止 → `CANCELLED`；
+- **缺失语义**：SecretStore 返回 `undefined` → `UNAUTHORIZED`（固定协议错误码，无原始错误正文）；
+- **隔离性**：凭据注册与连接按 connectorId 独立——mail 连接失败不阻断其他四个连接器的装配与连接。
+
+**统一失败语义（凭据缺失与凭据存储故障同一出口）**：该连接器保持不可用（health `disconnected`/`unavailable`），失败以固定错误码 + 脱敏 reason 记录；不透传原始错误正文、不记为已连接、不吞错冒充成功。后续合成验收：以占位凭据断言（工具描述/Runtime 事件/日志均不含凭据字符串；`readSecret` 未声明范围被拒；signal 取消不半构造）。
 
 ## 4. 已识别缺口：StoragePort 适配器
 
-`@personal-agent/storage` 的 `openStorage(path)` 返回 SQLite `DatabaseSync`，而 productivity/notifications 需要契约里的 KV 式 `StoragePort`（get/set/delete）。**缺一个 ~30 行适配器**（归属请 goo122 定：`apps/runtime/src/` 或 storage 包）：
-
-```ts
-// kvNamespace(db: DatabaseSync, table: string): StoragePort
-// 单表 (namespace TEXT, key TEXT, value TEXT JSON)，WAL 已由 openStorage 开启；
-// 写路径 UPSERT，与两包「单键一次写入」原子语义对齐。
-```
-
-测试照 testkit `FakeStorage` 用法（两包既有测试全基于该接口）；适配器需契约一致性测试 + 并发读写冒烟。
+`@personal-agent/storage` 的 `openStorage(path)` 返回 SQLite `DatabaseSync`，而 productivity/notifications 需要契约的 KV 式 `StoragePort`（get/set/delete）。**缺 ~30 行适配器**（归属请 goo122 定）：`kvNamespace(db, table)` 单表 `(namespace, key, value JSON)`，UPSERT 写，与两包「单键一次写入」原子语义对齐。契约一致性测试 + 并发读写冒烟。
 
 ## 5. 分阶段落地
 
-**Phase 1——Competition Profile 工具注册（本方案批准后可开）**
-- 新增 Competition 侧组合（与 `application/agentarts.ts` 同层）：按 §2 装配五包进 `profile: 'huawei_ict_agentarts'` 的 `createRuntimeApplication`；凭据路径按 §3。
-- 含 §4 适配器与契约测试；每包至少一条「工具经审批流调用成功 + scope 拒绝 + 无凭据不注册」集成测试（照 `weather-integration.test.mjs` 模式，预计 +10~12 项）。
-- 验收：`npm run check` 全绿；无凭据环境启动不报错、工具列表只含已配置连接器；§3 三条失败路径断言通过。
+**Phase 1——Competition 工具注册（本方案批准后可开）**
+- 组合层（与 `application/agentarts.ts` 同层）：五包按 §2 装配、mail 按 §3 走 ConnectorHost 工厂；注入路径以 §1 的 goo122 复核结论为准。
+- 含 §4 适配器；每包至少一条「审批流调用成功 + scope 拒绝 + 无配置不注册」集成测试 + §3 三条失败路径断言（预计 +12~14 项）。
+- 验收：`npm run check` 全绿；无凭据环境启动正常、工具列表只含已配置连接器。
 
-**Phase 2——调度闭环（notifications/productivity 转 done 的最后一块）**
-- 组合层调度器：任务启动/恢复时把 `notifications.planSchedules()` 与 productivity 的 `ReminderTrigger` 交给 `runtime.createSchedule()`；schedule 触发时调 `drain()` 并把批次写入 Runtime 事件流（`acknowledge` 由桌面调用）。
-- 验收：安静时段结束自动裁定、提醒到点触发（fake 时钟集成测试）。
+**Phase 2——调度闭环**：`planSchedules`/`ReminderTrigger` → `runtime.createSchedule()`；schedule 触发调 `drain()` 写入事件流（`acknowledge` 由桌面调用）。验收：安静时段结束自动裁定、提醒到点触发（fake 时钟）。
 
-**Phase 3——桌面设置 UI（`zemeng`）**
-- 订阅管理、邮箱绑定（授权码入 SecretStore 加密存储）、通知策略设置页；绑定后热更新 registry。
-- 验收：PA-014/PA-015 用户可见闭环。
+**Phase 3——桌面设置 UI（`zemeng`）**：订阅管理、邮箱绑定（授权码写入 SecretStore 加密实现）、通知策略页；绑定后热更新。
 
-**未授权后续项（仅记录）**：Local Profile 全量入口 `createLocalApplication`；weather GeoNames 环境变量装配（goo122 既定事项）。
+**未授权后续项（仅记录）**：Local Profile 全量入口；weather GeoNames 环境变量装配。
 
 ## 6. 边界与不做
 
-- 根 `package.json`/锁文件不动（五包 build 行已在 main）。
-- 不改任何包公共接口；接线缺口回包内走正常 PR。
-- 不经 SecretStore 以任何形式在组合层处理明文凭据（§3）。
+- 根 `package.json`/锁文件不动；不改任何包公共接口。
+- 普通组合层不以任何形式经手明文凭据（§3 主体二分为唯一例外通道，由 ConnectorHost 承担）。
 
 ## 7. 请求
 
-请 @goo122 复审：① Profile 边界修订（§0）是否满足当前规则；② 凭据边界（§3）的形态是否可接受（工厂回调 vs 装配层单次读取，实现评审时定）；③ 适配器归属（§4）；④ Phase 1 授权与否。
+1. **@goo122**：按当前 `main` 源码复核 §1 的工具注入结论（zemeng 06:01 已给出具体行号引用；若维持拒绝结论请指出对应代码或裁定走 CoordinationPort 专属路径/ADR）。
+2. **@goo122**：确认 §3 单一受信路径（ConnectorHost 工厂 + 声明 secretRefs）是否满足边界要求。
+3. 适配器归属（§4）；Phase 1 授权与否。
