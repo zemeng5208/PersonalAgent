@@ -5,7 +5,11 @@
   "type": "module",
   "exports": {
     ".": {"types": "./dist/index.d.ts", "import": "./dist/index.js"},
+    "./sqlite": {"types": "./dist/sqlite.d.ts", "import": "./dist/sqlite.js"},
     "./testing": {"types": "./dist/testing.d.ts", "import": "./dist/testing.js"}
+  },
+  "dependencies": {
+    "@personal-agent/storage": "0.0.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

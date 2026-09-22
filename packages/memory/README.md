@@ -50,7 +50,16 @@ batches without exposing internal sequence numbers. A reader has no ack method;
 confirmation belongs to the trusted host and must match the complete delivered
 batch and checkpoint. `parseFactChangeBatch` validates the fixed envelope and
 isolates its references; it does not prove processing or advance consumption.
-The Fake increment exercises this protocol only. Durable checkpoints, production
-storage, physical deletion, real fact ingestion and cognition/Runtime projection
-remain later reviewed increments. See
-[ADR-0008](../../docs/adr/0008-fact-feed-consumption.md) (proposed).
+The Fake increment exercises protocol semantics only. The optional
+`@personal-agent/memory/sqlite` entry now persists immutable fact versions, opaque
+query snapshots/cursors, pending feed batches, checkpoints and idempotent receipts
+in a dedicated SQLite database. It uses `@personal-agent/storage` migrations and
+must not share a database file with another independent migration sequence.
+
+This adapter is not registered as a Runtime capability and does not make the ports
+`frozen`. Its confirmation transaction covers only the memory-owned delivery journal;
+Goal/cognition projection and feed confirmation are not yet one atomic host
+transaction. Physical deletion, retention/backup policy, real ingestion and
+cognition/Runtime projection remain unavailable. See
+[ADR-0008](../../docs/adr/0008-fact-feed-consumption.md) (proposed) and
+[MOD-09C](../../docs/modules/MOD-09C-MEMORY-SQLITE-01.md).
