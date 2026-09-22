@@ -250,10 +250,13 @@ function token(prefix: string): string {
   return `${prefix}-${randomUUID()}`;
 }
 
-function transaction<T>(db: DatabaseSync, action: () => T): T {
+function transaction<T>(db: DatabaseSync, action: () => T, checkActive?: () => void): T {
   db.exec('BEGIN IMMEDIATE');
   try {
+    // BEGIN may block on another writer; check again before work and before commit.
+    checkActive?.();
     const result = action();
+    checkActive?.();
     db.exec('COMMIT');
     return result;
   } catch (error) {
@@ -469,7 +472,7 @@ export class SqliteMemoryHost {
           active(operation, feedFail);
           const batch = transaction(this.db, () => this.readFeedBatch(
             namespace, allowed.consumerId!, bindingId, allowed.values, record.limit as number,
-          ));
+          ), () => active(operation, feedFail));
           active(operation, feedFail);
           return cloneBatch(batch);
         } catch (error) {
@@ -540,7 +543,7 @@ export class SqliteMemoryHost {
           confirmed_expected_checkpoint = ?, confirmed_handled_key = ?, receipt_checkpoint = ?
           WHERE batch_token = ?`).run(expectedCheckpoint, suppliedHandled, nextCheckpoint, batchToken);
         return {batchToken, checkpoint: nextCheckpoint};
-      });
+      }, () => active(operation, feedFail));
     } catch (error) {
       if (error instanceof FactChangeFeedError) throw error;
       return feedFail();

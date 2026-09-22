@@ -63,3 +63,9 @@ transaction. Physical deletion, retention/backup policy, real ingestion and
 cognition/Runtime projection remain unavailable. See
 [ADR-0008](../../docs/adr/0008-fact-feed-consumption.md) (proposed) and
 [MOD-09C](../../docs/modules/MOD-09C-MEMORY-SQLITE-01.md).
+
+Feed transactions check cancellation/deadline after acquiring the write lock and
+immediately before commit. Expired or cancelled work rolls back; a committed
+confirmation returns its durable receipt. Synchronous SQLite lock waits cannot
+be interrupted immediately. Recovery tests cover a second-process writer and
+injected receipt-write failure without using private user data.

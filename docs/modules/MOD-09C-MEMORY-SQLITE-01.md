@@ -51,7 +51,19 @@
 ## 已执行验证
 
 - `npm run build --workspace=@personal-agent/memory`
-- `npm run test --workspace=@personal-agent/memory`：19/19 通过，含 3 个 SQLite 重启用例。
+- `npm run test --workspace=@personal-agent/memory`：23/23 通过，含 7 个 SQLite 持久化/恢复用例。
 - `npm run check:architecture`：3/3 通过。
 - `npm run check`：通过生成类型检查、全 workspace 构建/类型检查/测试及 7/7
   根集成测试；真实服务测试按显式 opt-in 保持跳过。
+
+## 故障与并发验收增量
+
+- PR #90 已创建，等待非作者评审。
+- 独立 Node 进程持有 SQLite 写锁，复现旧实现在等待期间过期后仍确认成功的问题；
+  现在在取得写锁后、COMMIT 前检查 deadline/取消，失败回滚，不推进 checkpoint。
+- 超时读取不会持久化过期的 pending batch；后续重读仍能取得新变化。
+- 回执写入注入失败后，checkpoint、pending batch 与回执共同回滚；重新打开数据库后
+  精确重放原批次，成功确认仍幂等。提交前取消同样不留下部分写入。
+- SQLite 同步操作不保证即时抢占；已经 COMMIT 的确认以持久回执为准。
+- 下一工作包先确定事实精确 Ref 与图投影的持久映射及同事务提交方案，再接认知消费；
+  本片的 memory 专用库和 delivery journal 不提供跨库原子投影证据。
