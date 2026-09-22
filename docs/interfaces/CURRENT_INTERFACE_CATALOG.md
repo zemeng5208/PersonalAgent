@@ -1,6 +1,6 @@
 # 当前接口目录与冻结登记
 
-版本：1.2 · 日期：2026-09-21 · 基线提交：`02191e807b34bd7d4ee23d14e75770c2f1b74703`
+版本：1.3 · 日期：2026-09-22 · 基线提交：`d78613a226b5d490f8f2dd47f3e5c8236a3d7ec2`
 
 协议负责人：`goo122` · 核心认知与 AgentArts 消费负责人：`zemeng` · 连接器消费负责人：`Potatos498`
 
@@ -25,6 +25,15 @@
 | `local` | 可选保留 | 现有 Agent/Model 部分实现为 `provisional` | 不删除既有代码；新增 Local 能力不阻塞 Competition，也不计入比赛验收 |
 
 ## 2. 状态定义与冻结门槛
+
+### 事实变化消费开发增量
+
+分支 `codex/mod-09b-memory-ports-rebuild` 在最新 main 上重建 provisional 的进程内
+`MemoryQueryPort`、`FactChangeFeedPort`、批次解析与可信宿主 Fake。它区分 query snapshot、
+feed 水位、消费 checkpoint 和 graphRevision；读者不能任意 ack 序号。Fake 消费状态机不证明
+生产持久投影或原子确认。真实 FactChangeFeed 提供者与跨重启 MOD-27/28 投影仍 unavailable，
+不得新增 wire capability 或宣称 frozen。详见
+[MOD-28-FACT-CHANGE-FEED-01](../modules/MOD-28-FACT-CHANGE-FEED-01.md)。
 
 | 状态 | 含义 | 消费者规则 |
 | --- | --- | --- |
@@ -155,7 +164,7 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | 通知 | Runtime 列表/恢复、已读/隐藏、策略配置与 Desktop 展示 | NotificationService 已集成但尚未接 wire 或 Desktop；`notification.created` 仍无生产发布链 | MOD-23 `Potatos498`、MOD-13 `zemeng` |
 | 语音 | `voice.start` / `voice.stop`、ASR/TTS 流和设备适配 | session/wake/transcript consumer 仍在冲突的堆叠分支，main 无生产提供者；真实供应商、流协议和设备验收未提供 | MOD-14/15 `zemeng` |
 | 知识 | `KnowledgePort`、Obsidian/LLM Wiki | 对应 package 和 Fake 未提供 | MOD-08 `goo122` |
-| 记忆 | `MemoryQueryPort`、`FactChangeFeed`、真实事实提供、确认消费、修正/删除 | 公开端口与 Fake 仍在冲突的堆叠分支，尚未进入 main；真实来源、持久游标/确认和删除验收未提供 | MOD-09 `goo122` |
+| 记忆 | 生产 `MemoryQueryPort` / `FactChangeFeed` 提供者、确认消费、修正/删除 | 本重建分支已提供 provisional 公开端口与进程内 Fake；真实来源、持久游标/确认、跨重启恢复和删除验收未提供 | MOD-09 `goo122` |
 | MCP | 本地 MCP Host/Client 端口 | 对应 package、注册适配和真实调用未提供 | MOD-06 `goo122` |
 | Skills | 本地 Skill 加载/版本/执行端口 | 对应 package 和闭环未提供 | MOD-07 `goo122` |
 | 决策 | 目标/事实/决策图谱的生产集成 | main 已有版本图及 SQLite/Fake 原子 `appendBatch`；自动事实投影、真实事实来源与生产消费未完成 | MOD-27 `zemeng`，存储 `goo122` |
@@ -177,7 +186,7 @@ PR #36、#49 已进入 main，提供文字 Coordination/CloudAgent 与 Runtime �
 
 ### 6.2 世界状态与认知面（provisional）
 
-main 已包含版本化 CoordinationStore、SQLite/Fake `AtomicCoordinationStorePort.appendBatch`、事务 revision 校验与 rollback，以及通过该原子端口执行的显式修复预览/提交；仓库也有合成的 SQLite 重启读回集成测试源码。MemoryQueryPort、FactChangeFeedPort、自动事实投影及其后续增量仍未进入 main；真实事实提供者、确认消费、修正/删除和 AgentArts/Evidence 闭环均未交付。
+main 已包含版本化 CoordinationStore、SQLite/Fake `AtomicCoordinationStorePort.appendBatch`、事务 revision 校验与 rollback，以及通过该原子端口执行的显式修复预览/提交；仓库也有合成的 SQLite 重启读回集成测试源码。本重建分支补回 provisional `MemoryQueryPort`、`FactChangeFeedPort` 与进程内 Fake；自动事实投影、真实事实提供者、持久确认、修正/删除和 AgentArts/Evidence 闭环仍未交付。
 
 ### 6.3 桌面、语音、工具与通知增量（provisional）
 
@@ -189,13 +198,25 @@ PR #84 已将这条离线 Competition 消费链合入 main：Runtime → Fake Ag
 
 | 待交付接口 | 语义提出方 | 公共类型/宿主提供方 | 下一验收 |
 | --- | --- | --- | --- |
-| Competition 工具消费链 | `zemeng` | `goo122` 维护 Runtime/Policy/Tool 边界 | PR #84 已完成 Runtime Fake 端到端与失败路径；PR #86 已在 `main@02191e8` 上重建 #56，当前 `head@9058686` 的标准 CI 已通过，等待非作者评审与合并；其进入 main 后再准备 Draft #78 的 Desktop smoke |
+| Competition 工具消费链 | `zemeng` | `goo122` 维护 Runtime/Policy/Tool 边界 | PR #84 与 #86 已进入 main；离线 Fake 链保持 provisional，真实 AgentArts 验收按当前安排暂缓 |
 | `EvidencePort` / `ArtifactPort` | 双方共同给出用例 | `goo122` | 越权、过期、超限、乱序、取消、敏感内容不入日志 |
 | 真实 AgentArts adapter 验收 | `zemeng` | `zemeng`，`goo122` 复核本地终态边界 | deployment/version/trace、成功 API、失败读回、无静默 Local 回退 |
 | 事实流确认与删除 | `zemeng` 提供消费语义 | `goo122` | 持久游标/确认、撤回/删除、敏感范围和跨重启真实提供者 |
 | `ModelPort` 最小稳定面 | 可选 Local Agent 提供消费场景 | `goo122` | 可选后续；不阻塞 Competition Profile |
 
 ## 7. 兼容与变更规则
+
+### MOD-09B-MEMORY-PORTS-01 开发登记（2026-09-22）
+
+`@personal-agent/memory` 公开 provisional `MemoryQueryPort`：`listCurrent`、`listHistory`、
+`getVersion`，并由 `/testing` 提供显式 `FakeMemoryHost`。可信宿主预绑定 namespace 和允许的
+sensitivity 集合；消费者无 namespace 选择、写入或出机许可入口。固定水位与不透明分页 token
+仅存在于 Fake 内存，精确版本隐藏/不存在统一拒绝，返回副本隔离；详见
+[工作包记录](../modules/MOD-09B-MEMORY-PORTS-01.md)。
+同一包还公开 provisional `FactChangeFeedPort`、批次边界解析与 host-bound Fake 确认语义。
+这些类型和离线 Fake 不代表生产事实库可用：SQLite 持久化、生产 feed 提供者、持久确认、
+重启恢复、认知自动触发与真实私人数据接入均未交付，运行能力继续 unavailable。无新增
+wire Schema、capability 或迁移；非作者评审和真实提供者验收前不得冻结。
 
 1. `frozen` 项删除字段、改变字段含义、收窄原有合法输入或新增消费者无法处理的必需状态，必须升级不兼容版本。
 2. 新增可选字段和新 operation 可以在 wire 1.x 中交付，但必须先通过 handshake/capability 公布；旧消费者可以忽略。
