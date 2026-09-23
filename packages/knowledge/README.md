@@ -17,5 +17,17 @@ npm.cmd run build --workspace=@personal-agent/knowledge
 npm.cmd run test --workspace=@personal-agent/knowledge
 ```
 
-后续 MOD-08B 才设计真实 Vault 路径授权、越界与符号链接防护、索引更新及引用读回；
-MOD-08C 再评估 LLM Wiki。接口目前为 provisional，调用方不得默认启用或失败回退 Fake。
+MOD-08B 增加 `@personal-agent/knowledge/filesystem` 的脱机只读适配器。
+可信宿主必须先完成用户授权，再以绝对路径显式绑定一个 Vault；搜索请求本身不能
+指定根目录。适配器只读取 Vault 内普通 Markdown 文件，拒绝目录链接/符号链接、
+路径越界、无效 UTF-8、超大或在读取中变化的文件；引用读回会重新校验内容摘要。
+它不会写入、持久化正文、记录日志或发送云端。
+
+当前采用每次查询重扫，最多 1000 篇、1000 个目录、16 层、每篇 512 KiB。
+隐藏目录和文件不参与检索。超限或读失败会明确报错，不返回看似完整的部分结果。
+这是脱机文件路径，不是 Obsidian Vault API 插件；在可对抗的并发文件替换环境中，
+路径校验不能替代 OS 级沙箱。没有 Runtime/Policy 授权接线、真实私人 Vault 验收、
+持久索引、写入或 LLM Wiki，因此生产 capability 仍 unavailable。
+
+MOD-08C 再评估 Obsidian 插件路径、持久索引与 LLM Wiki。接口保持 provisional，
+调用方不得默认启用或失败回退 Fake。
