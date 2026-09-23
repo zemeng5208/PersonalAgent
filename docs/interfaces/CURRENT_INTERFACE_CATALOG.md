@@ -164,7 +164,7 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | 通知 | Runtime 列表/恢复、已读/隐藏、策略配置与 Desktop 展示 | NotificationService 已集成但尚未接 wire 或 Desktop；`notification.created` 仍无生产发布链 | MOD-23 `Potatos498`、MOD-13 `zemeng` |
 | 语音 | `voice.start` / `voice.stop`、ASR/TTS 流和设备适配 | session/wake/transcript consumer 仍在冲突的堆叠分支，main 无生产提供者；真实供应商、流协议和设备验收未提供 | MOD-14/15 `zemeng` |
 | 知识 | `KnowledgePort`、Obsidian/LLM Wiki | 对应 package 和 Fake 未提供 | MOD-08 `goo122` |
-| 记忆 | 生产 `MemoryQueryPort` / `FactChangeFeed` 提供者、确认消费、修正/删除 | 本重建分支已提供 provisional 公开端口与进程内 Fake；真实来源、持久游标/确认、跨重启恢复和删除验收未提供 | MOD-09 `goo122` |
+| 记忆 | 生产 `MemoryQueryPort` / `FactChangeFeed` 提供者、确认消费、修正/删除 | PR #89 已提供 provisional 端口与进程内 Fake；MOD-09C 分支增加专用 SQLite 事实、查询 token 与 delivery checkpoint 重启恢复，但 Runtime 注入、投影原子确认、真实来源和删除验收仍未提供 | MOD-09 `goo122` |
 | MCP | 本地 MCP Host/Client 端口 | 对应 package、注册适配和真实调用未提供 | MOD-06 `goo122` |
 | Skills | 本地 Skill 加载/版本/执行端口 | 对应 package 和闭环未提供 | MOD-07 `goo122` |
 | 决策 | 目标/事实/决策图谱的生产集成 | main 已有版本图及 SQLite/Fake 原子 `appendBatch`；自动事实投影、真实事实来源与生产消费未完成 | MOD-27 `zemeng`，存储 `goo122` |
@@ -186,7 +186,7 @@ PR #36、#49 已进入 main，提供文字 Coordination/CloudAgent 与 Runtime �
 
 ### 6.2 世界状态与认知面（provisional）
 
-main 已包含版本化 CoordinationStore、SQLite/Fake `AtomicCoordinationStorePort.appendBatch`、事务 revision 校验与 rollback，以及通过该原子端口执行的显式修复预览/提交；仓库也有合成的 SQLite 重启读回集成测试源码。本重建分支补回 provisional `MemoryQueryPort`、`FactChangeFeedPort` 与进程内 Fake；自动事实投影、真实事实提供者、持久确认、修正/删除和 AgentArts/Evidence 闭环仍未交付。
+main 已包含版本化 CoordinationStore、SQLite/Fake `AtomicCoordinationStorePort.appendBatch`、事务 revision 校验与 rollback，以及通过该原子端口执行的显式修复预览/提交；PR #89 也已合并 provisional `MemoryQueryPort`、`FactChangeFeedPort` 与进程内 Fake。MOD-09C 分支正验证 SQLite 事实、查询快照及 delivery checkpoint 跨重启恢复；自动事实投影、与 graph/impact 同事务确认、真实事实来源、删除和 AgentArts/Evidence 闭环仍未交付。
 
 ### 6.3 桌面、语音、工具与通知增量（provisional）
 
@@ -217,6 +217,17 @@ sensitivity 集合；消费者无 namespace 选择、写入或出机许可入口
 这些类型和离线 Fake 不代表生产事实库可用：SQLite 持久化、生产 feed 提供者、持久确认、
 重启恢复、认知自动触发与真实私人数据接入均未交付，运行能力继续 unavailable。无新增
 wire Schema、capability 或迁移；非作者评审和真实提供者验收前不得冻结。
+
+### MOD-09C-MEMORY-SQLITE-01 开发登记（2026-09-22）
+
+`@personal-agent/memory/sqlite` 在独立工作包中增加专用 SQLite 适配器：事实版本与变化事件
+同事务追加，query snapshot/cursor、未确认批次、checkpoint 和幂等回执可跨重启恢复。
+它复用 `@personal-agent/storage` 的有序迁移与 WAL，数据库文件不得与其他独立迁移序列共用。
+
+本片仍不公布 Runtime capability，也不把端口升级为 frozen。delivery checkpoint 的持久 CAS
+不等于 MOD-27/28 的 graph/impact 投影与确认同事务；真实 ingest、物理删除、保留/备份策略、
+自动认知投影和私人数据验收继续 unavailable。详见
+[MOD-09C 工作包](../modules/MOD-09C-MEMORY-SQLITE-01.md)。
 
 1. `frozen` 项删除字段、改变字段含义、收窄原有合法输入或新增消费者无法处理的必需状态，必须升级不兼容版本。
 2. 新增可选字段和新 operation 可以在 wire 1.x 中交付，但必须先通过 handshake/capability 公布；旧消费者可以忽略。
