@@ -28,7 +28,8 @@ export interface KnowledgePort {
 }
 
 export class KnowledgeError extends Error {
-  constructor(readonly code: 'INVALID_ARGUMENT' | 'CANCELLED' | 'TIMEOUT') {
+  constructor(readonly code: 'INVALID_ARGUMENT' | 'CANCELLED' | 'TIMEOUT'
+    | 'SCOPE_DENIED' | 'SOURCE_UNAVAILABLE' | 'SOURCE_CHANGED' | 'LIMIT_EXCEEDED') {
     super('Knowledge ' + code.toLowerCase());
     this.name = 'KnowledgeError';
   }
