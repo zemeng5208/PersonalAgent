@@ -2,7 +2,7 @@
 
 - 关联需求：PA-008
 - Profile：`huawei_ict_agentarts`
-- 基线：`origin/main@f56059a`
+- 基线：`origin/main@993674f`
 - 分支：`codex/mod-08a-knowledge-read`
 - 负责人：`goo122`
 - 评审者：`zemeng` 或其他已登记非作者协作者
