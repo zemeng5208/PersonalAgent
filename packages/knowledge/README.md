@@ -36,5 +36,15 @@ MOD-08C 新增可注入的 `@personal-agent/knowledge/tool`：固定名称
 本片仅在合成 Vault 上验证，未在 Desktop/Runtime 默认注册，也没有向 AgentArts
 发送私人内容。直接调用工具对象不是授权机制，生产必须通过现有 Gateway。
 
-MOD-08D 优先评估 Obsidian 插件只读路径；持久索引与 LLM Wiki 留待后续工作包。接口保持 provisional，
+MOD-08D 增加插件侧只读适配器；持久索引与 LLM Wiki 留待后续工作包。接口保持 provisional，
 调用方不得默认启用或失败回退 Fake。
+
+MOD-08D 的 `@personal-agent/knowledge/obsidian` 是面向
+[Obsidian Vault API](https://docs.obsidian.md/Plugins/Vault) 的插件侧只读适配器，
+由可信宿主显式传入 Vault、Vault ID 和允许的文件夹（`/` 表示明确选择整个 Vault）。
+它使用 `getMarkdownFiles()`、`read()` 和 `getAbstractFileByPath()`，仅搜索范围内的
+Markdown，返回内容摘要引用；文件修改、移动或删除后旧引用读回会被拒绝。
+每次搜索最多 1000 篇、每篇 512 KiB，不建立持久索引、不写入或上传正文。
+Obsidian 的单次 `read()` 不支持中途取消；适配器在调用前后检查取消和期限，
+取消后丢弃返回内容。当前没有插件入口、用户选库流程或 Runtime 默认注册，
+合成 Vault 测试不能替代真实插件和私人 Vault 验收。

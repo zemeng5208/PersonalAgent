@@ -6,6 +6,7 @@
   "exports": {
     ".": {"types": "./dist/index.d.ts", "import": "./dist/index.js"},
     "./filesystem": {"types": "./dist/filesystem.d.ts", "import": "./dist/filesystem.js"},
+    "./obsidian": {"types": "./dist/obsidian.d.ts", "import": "./dist/obsidian.js"},
     "./tool": {"types": "./dist/tool.d.ts", "import": "./dist/tool.js"},
     "./testing": {"types": "./dist/testing.d.ts", "import": "./dist/testing.js"}
   },
