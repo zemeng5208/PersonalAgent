@@ -86,7 +86,7 @@
 | MOD-05 | M1/M2 | review | goo122 / PR #7、#26、#49 已合并；任务级 SQLite 授权、参数绑定、审批恢复、工具 Evidence、幂等重放和 Competition 离线工具循环已验证；跨任务持续授权、真实 SecretStore 和真实写入恢复尚未完成 |
 | MOD-06 | M2 | todo | 未启动 |
 | MOD-07 | M2 | todo | 未启动 |
-| MOD-08 | M2 | in_progress | `goo122` / PR #93 已合并；PR #94 的脱机只读适配待评审；MOD-08C 分支增加显式 Policy 检索工具与合成授权测试，真实 Vault 授权/验收、默认 Runtime 注册、Obsidian 插件和 LLM Wiki 未完成 |
+| MOD-08 | M2 | in_progress | `goo122` / PR #93、#94、#95 已合并：provisional 只读端口、脱机文件适配器和显式 Policy 检索工具均通过离线测试；真实 Vault 授权/验收、默认 Runtime 注册、Obsidian 插件和 LLM Wiki 未完成 |
 | MOD-09 | M1.6/M4 | review | `goo122` / PR #89、#90、#91 已合并 provisional 端口、Fake、SQLite 重启恢复和确认后原子激活投影；生产 capability、真实来源和删除仍 unavailable |
 | MOD-10 | M4 后研究，无交付日期承诺 | todo | 未启动 |
 | MOD-11 | M1 | in_progress | `zemeng` / PR #54 已进入 main 并修复取消受理；转写任务消费 #75 仅合并到语音堆叠分支，DPI/透明命中及比赛实机验收仍未完成 |
