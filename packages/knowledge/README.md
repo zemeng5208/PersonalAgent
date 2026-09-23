@@ -26,7 +26,7 @@ MOD-08B 增加 `@personal-agent/knowledge/filesystem` 的脱机只读适配器�
 当前采用每次查询重扫，最多 1000 篇、1000 个目录、16 层、每篇 512 KiB。
 隐藏目录和文件不参与检索。超限或读失败会明确报错，不返回看似完整的部分结果。
 这是脱机文件路径，不是 Obsidian Vault API 插件；在可对抗的并发文件替换环境中，
-路径校验不能替代 OS 级沙箱。没有 Runtime/Policy 授权接线、真实私人 Vault 验收、
+路径校验不能替代 OS 级沙箱。没有生产 Runtime/Policy 默认注入、真实私人 Vault 验收、
 持久索引、写入或 LLM Wiki，因此生产 capability 仍 unavailable。
 
 MOD-08C 新增可注入的 `@personal-agent/knowledge/tool`：固定名称
@@ -36,5 +36,5 @@ MOD-08C 新增可注入的 `@personal-agent/knowledge/tool`：固定名称
 本片仅在合成 Vault 上验证，未在 Desktop/Runtime 默认注册，也没有向 AgentArts
 发送私人内容。直接调用工具对象不是授权机制，生产必须通过现有 Gateway。
 
-MOD-08D 再评估 Obsidian 插件路径、持久索引与 LLM Wiki。接口保持 provisional，
+MOD-08D 优先评估 Obsidian 插件只读路径；持久索引与 LLM Wiki 留待后续工作包。接口保持 provisional，
 调用方不得默认启用或失败回退 Fake。
