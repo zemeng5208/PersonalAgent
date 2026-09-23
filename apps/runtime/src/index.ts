@@ -8,6 +8,19 @@ import {AuthorizationPolicy} from '@personal-agent/policy';
 import {SqliteAuthorizationStore} from './authorization-store.js';
 import {bindCoordinationStore} from './coordination-store.js';
 import type {AtomicCoordinationStorePort} from '@personal-agent/goals/store';
+import {bindFactProjectionStore} from './fact-projection-store.js';
+import type {FactProjectionStore} from './fact-projection-store.js';
+
+export {FactProjectionError} from './fact-projection-store.js';
+export type {
+  CompleteFactImpactRequest,
+  FactProjectionLink,
+  FactProjectionReceipt,
+  FactProjectionRequest,
+  FactProjectionStore,
+  PendingFactImpact,
+  StagedFactProjection
+} from './fact-projection-store.js';
 
 type TaskState = TaskSnapshot['state'];
 type TaskError = NonNullable<TaskSnapshot['error']>;
@@ -230,6 +243,16 @@ export const RUNTIME_MIGRATIONS: readonly Migration[] = [{
 }, {
   version: 5,
   sql: 'CREATE TABLE coordination_graphs (namespace TEXT PRIMARY KEY, snapshot_json TEXT NOT NULL) STRICT;'
+}, {
+  version: 6,
+  sql: [
+    'CREATE TABLE coordination_fact_projections (graph_namespace TEXT NOT NULL, memory_namespace TEXT NOT NULL, fact_id TEXT NOT NULL, fact_revision INTEGER NOT NULL CHECK (fact_revision > 0), event_id TEXT NOT NULL, content_hash TEXT NOT NULL, node_id TEXT NOT NULL, node_revision INTEGER NOT NULL CHECK (node_revision > 0), graph_revision INTEGER NOT NULL CHECK (graph_revision > 0), PRIMARY KEY (graph_namespace, memory_namespace, fact_id, fact_revision), UNIQUE (graph_namespace, memory_namespace, event_id)) STRICT;',
+    'CREATE TABLE coordination_projection_receipts (graph_namespace TEXT NOT NULL, memory_namespace TEXT NOT NULL, consumer_key TEXT NOT NULL, batch_token TEXT NOT NULL, base_checkpoint TEXT NOT NULL, watermark TEXT NOT NULL, handled_key TEXT NOT NULL, graph_revision INTEGER NOT NULL CHECK (graph_revision >= 0), links_json TEXT NOT NULL, committed_at TEXT NOT NULL, PRIMARY KEY (graph_namespace, memory_namespace, consumer_key, batch_token)) STRICT;',
+    'CREATE TABLE coordination_pending_impacts (graph_namespace TEXT NOT NULL, memory_namespace TEXT NOT NULL, consumer_key TEXT NOT NULL, batch_token TEXT NOT NULL, graph_revision INTEGER NOT NULL CHECK (graph_revision > 0), links_json TEXT NOT NULL, created_at TEXT NOT NULL, handled_at TEXT, report_json TEXT, PRIMARY KEY (graph_namespace, memory_namespace, consumer_key, batch_token)) STRICT;'
+  ].join('\n')
+}, {
+  version: 7,
+  sql: 'CREATE TABLE coordination_projection_staging (graph_namespace TEXT NOT NULL, memory_namespace TEXT NOT NULL, consumer_key TEXT NOT NULL, batch_token TEXT NOT NULL, handled_key TEXT NOT NULL, payload_json TEXT NOT NULL, staged_at TEXT NOT NULL, PRIMARY KEY (graph_namespace, memory_namespace, consumer_key, batch_token)) STRICT;'
 }];
 
 export class RuntimeError extends Error {
@@ -318,6 +341,17 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
   /** Does not provision: missing graphs report NOT_FOUND when used. */
   bindCoordinationStore(namespace: string): AtomicCoordinationStorePort {
     return bindCoordinationStore(this.db, namespace, false);
+  }
+
+  /** Trusted host only; provisions the graph without publishing a Runtime capability. */
+  provisionFactProjectionStore(namespace: string): FactProjectionStore {
+    bindCoordinationStore(this.db, namespace, true);
+    return bindFactProjectionStore(this.db, namespace);
+  }
+
+  /** Does not provision: projection or pending reads report NOT_FOUND for a missing graph. */
+  bindFactProjectionStore(namespace: string): FactProjectionStore {
+    return bindFactProjectionStore(this.db, namespace);
   }
 
   close(): void {

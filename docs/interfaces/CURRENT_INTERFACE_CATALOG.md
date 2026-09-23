@@ -164,7 +164,7 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | 通知 | Runtime 列表/恢复、已读/隐藏、策略配置与 Desktop 展示 | NotificationService 已集成但尚未接 wire 或 Desktop；`notification.created` 仍无生产发布链 | MOD-23 `Potatos498`、MOD-13 `zemeng` |
 | 语音 | `voice.start` / `voice.stop`、ASR/TTS 流和设备适配 | session/wake/transcript consumer 仍在冲突的堆叠分支，main 无生产提供者；真实供应商、流协议和设备验收未提供 | MOD-14/15 `zemeng` |
 | 知识 | `KnowledgePort`、Obsidian/LLM Wiki | 对应 package 和 Fake 未提供 | MOD-08 `goo122` |
-| 记忆 | 生产 `MemoryQueryPort` / `FactChangeFeed` 提供者、确认消费、修正/删除 | PR #89 已提供 provisional 端口与进程内 Fake；MOD-09C 分支增加专用 SQLite 事实、查询 token 与 delivery checkpoint 重启恢复，但 Runtime 注入、投影原子确认、真实来源和删除验收仍未提供 | MOD-09 `goo122` |
+| 记忆 | 生产 `MemoryQueryPort` / `FactChangeFeed` 提供者、确认消费、修正/删除 | PR #89 已提供 provisional 端口与进程内 Fake；PR #90 已合并专用 SQLite 事实、查询 token、delivery checkpoint 与重启恢复，但 Runtime 注入、投影 Inbox、真实来源和删除验收仍未提供 | MOD-09 `goo122` |
 | MCP | 本地 MCP Host/Client 端口 | 对应 package、注册适配和真实调用未提供 | MOD-06 `goo122` |
 | Skills | 本地 Skill 加载/版本/执行端口 | 对应 package 和闭环未提供 | MOD-07 `goo122` |
 | 决策 | 目标/事实/决策图谱的生产集成 | main 已有版本图及 SQLite/Fake 原子 `appendBatch`；自动事实投影、真实事实来源与生产消费未完成 | MOD-27 `zemeng`，存储 `goo122` |
@@ -186,7 +186,7 @@ PR #36、#49 已进入 main，提供文字 Coordination/CloudAgent 与 Runtime �
 
 ### 6.2 世界状态与认知面（provisional）
 
-main 已包含版本化 CoordinationStore、SQLite/Fake `AtomicCoordinationStorePort.appendBatch`、事务 revision 校验与 rollback，以及通过该原子端口执行的显式修复预览/提交；PR #89 也已合并 provisional `MemoryQueryPort`、`FactChangeFeedPort` 与进程内 Fake。MOD-09C 分支正验证 SQLite 事实、查询快照及 delivery checkpoint 跨重启恢复；自动事实投影、与 graph/impact 同事务确认、真实事实来源、删除和 AgentArts/Evidence 闭环仍未交付。
+main 已包含版本化 CoordinationStore、SQLite/Fake `AtomicCoordinationStorePort.appendBatch`、事务 revision 校验与 rollback，以及通过该原子端口执行的显式修复预览/提交；PR #89 已合并 provisional `MemoryQueryPort`、`FactChangeFeedPort` 与进程内 Fake，PR #90 已合并 SQLite 事实、查询快照及 delivery checkpoint 跨重启恢复。自动事实投影、Goal 侧事务 Inbox、真实事实来源、删除和 AgentArts/Evidence 闭环仍未交付。
 
 ### 6.3 桌面、语音、工具与通知增量（provisional）
 
@@ -201,7 +201,7 @@ PR #84 已将这条离线 Competition 消费链合入 main：Runtime → Fake Ag
 | Competition 工具消费链 | `zemeng` | `goo122` 维护 Runtime/Policy/Tool 边界 | PR #84 与 #86 已进入 main；离线 Fake 链保持 provisional，真实 AgentArts 验收按当前安排暂缓 |
 | `EvidencePort` / `ArtifactPort` | 双方共同给出用例 | `goo122` | 越权、过期、超限、乱序、取消、敏感内容不入日志 |
 | 真实 AgentArts adapter 验收 | `zemeng` | `zemeng`，`goo122` 复核本地终态边界 | deployment/version/trace、成功 API、失败读回、无静默 Local 回退 |
-| 事实流确认与删除 | `zemeng` 提供消费语义 | `goo122` | 持久游标/确认、撤回/删除、敏感范围和跨重启真实提供者 |
+| 事实流投影与确认 | `zemeng` 提供消费语义 | `goo122` | 精确 FactRef 映射、事务 Inbox、待重检记录、崩溃重放和提交后 provider 确认 |
 | `ModelPort` 最小稳定面 | 可选 Local Agent 提供消费场景 | `goo122` | 可选后续；不阻塞 Competition Profile |
 
 ## 7. 兼容与变更规则
@@ -214,13 +214,13 @@ sensitivity 集合；消费者无 namespace 选择、写入或出机许可入口
 仅存在于 Fake 内存，精确版本隐藏/不存在统一拒绝，返回副本隔离；详见
 [工作包记录](../modules/MOD-09B-MEMORY-PORTS-01.md)。
 同一包还公开 provisional `FactChangeFeedPort`、批次边界解析与 host-bound Fake 确认语义。
-这些类型和离线 Fake 不代表生产事实库可用：SQLite 持久化、生产 feed 提供者、持久确认、
-重启恢复、认知自动触发与真实私人数据接入均未交付，运行能力继续 unavailable。无新增
-wire Schema、capability 或迁移；非作者评审和真实提供者验收前不得冻结。
+这些类型和离线 Fake 本身不代表生产事实库可用。PR #90 后，独立 SQLite 提供者、
+持久确认和重启恢复已进入 main；Runtime 注入、Goal/认知投影、真实来源、删除及私人数据
+验收仍未交付，运行能力继续 unavailable。无新增 wire Schema 或 capability；完整消费验收前不得冻结。
 
 ### MOD-09C-MEMORY-SQLITE-01 开发登记（2026-09-22）
 
-`@personal-agent/memory/sqlite` 在独立工作包中增加专用 SQLite 适配器：事实版本与变化事件
+PR #90 已由非作者批准并合并为 `f56059a`。`@personal-agent/memory/sqlite` 增加专用 SQLite 适配器：事实版本与变化事件
 同事务追加，query snapshot/cursor、未确认批次、checkpoint 和幂等回执可跨重启恢复。
 它复用 `@personal-agent/storage` 的有序迁移与 WAL，数据库文件不得与其他独立迁移序列共用。
 
@@ -228,6 +228,16 @@ wire Schema、capability 或迁移；非作者评审和真实提供者验收前�
 不等于 MOD-27/28 的 graph/impact 投影与确认同事务；真实 ingest、物理删除、保留/备份策略、
 自动认知投影和私人数据验收继续 unavailable。详见
 [MOD-09C 工作包](../modules/MOD-09C-MEMORY-SQLITE-01.md)。
+
+### MOD-09D-MEMORY-GOAL-PROJECTION-01 开发登记（2026-09-22）
+
+分支 `codex/mod-09d-memory-goal-projection` 在评审修复中采用未生效暂存 → Memory provider
+确认 → 本地原子激活：事实节点、精确 FactRef → NodeRef 映射、event/batch 去重、待重检
+记录和本地回执同事务提交。确认拒绝不暴露旧 scope 事实；确认后、激活前中断从暂存恢复。
+它不宣称跨数据库原子。修复后的 Runtime 68/68、架构门禁 3/3 与根 `npm run check`
+已通过；新 head 仍需 CI 和非作者复审。
+该入口仍为 provisional，未注册生产 composition、自动调度或 capability；详见
+[MOD-09D 工作包](../modules/MOD-09D-MEMORY-GOAL-PROJECTION-01.md)。
 
 1. `frozen` 项删除字段、改变字段含义、收窄原有合法输入或新增消费者无法处理的必需状态，必须升级不兼容版本。
 2. 新增可选字段和新 operation 可以在 wire 1.x 中交付，但必须先通过 handshake/capability 公布；旧消费者可以忽略。
@@ -247,6 +257,6 @@ wire Schema、capability 或迁移；非作者评审和真实提供者验收前�
 Competition 工具提案/Runtime Application/Desktop 装配仍未由此项交付，运行能力保持 unavailable。
 本包接口保持 provisional，非作者评审前不冻结。
 
-截至 2026-09-21，**冻结范围仍只有 Core Runtime Profile 1 的消息、任务、会话与审批只读查询子集；不冻结整套协议、外部模型工具调用或 AgentArts 编排。** main 中已有 Competition 的离线 Coordination/审批工具循环、版本图、原子存储、显式修复预览/提交和受限工作区列表/正文读取；这些能力仍为 provisional，事实查询/变化流、自动事实投影和语音消费仍未进入 main。
+截至 2026-09-22，**冻结范围仍只有 Core Runtime Profile 1 的消息、任务、会话与审批只读查询子集；不冻结整套协议、外部模型工具调用或 AgentArts 编排。** main 中已有 Competition 的离线 Coordination/审批工具循环、版本图、原子存储、显式修复预览/提交、受限工作区读取，以及 provisional 的 SQLite 事实查询/变化流；自动事实投影、Runtime Memory capability 和语音消费仍未进入 main。
 
 真实 AgentArts deployment/API/trace、目标系统工具读回、完整 Evidence、真实语音设备和外部事实提供者仍 `unavailable`。Fake、合成评估、HTTP 200、配置成功或平台截图都不能提升这些状态；正式比赛路径不得静默回退 Local。
