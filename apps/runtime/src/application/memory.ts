@@ -82,33 +82,46 @@ export function createMemoryProjectionApplication(
   const memoryNamespace = text(options.memoryNamespace);
   return Object.freeze({
     consume: async (request: MemoryReadContext & {readonly limit: number}): Promise<MemoryProjectionResult> => {
+      active(request);
       if (!Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > 100) {
         throw new FactProjectionError('INVALID_ARGUMENT');
       }
-      const batch = parseFactChangeBatch(await options.feed.read(request));
-      const facts = [];
-      for (const entry of batch.entries) {
-        facts.push(await readFactForImpact(options.memory, entry.fact, request));
+      let staged = options.projection.readStaged(consumerKey, memoryNamespace);
+      if (!staged) {
+        const batch = parseFactChangeBatch(await options.feed.read(request));
+        const facts = [];
+        for (const entry of batch.entries) {
+          facts.push(await readFactForImpact(options.memory, entry.fact, request));
+        }
+        options.projection.stage({
+          consumerKey, memoryNamespace, batch, facts, deadline: request.deadline, signal: request.signal
+        });
+        staged = {consumerKey, memoryNamespace, batch, facts};
       }
-      const projection = options.projection.project({
-        consumerKey,
-        memoryNamespace,
-        batch,
-        facts,
-        deadline: request.deadline,
-        signal: request.signal
-      });
-      const providerReceipt = await options.confirmation.confirm({
-        batchToken: batch.batchToken,
-        expectedCheckpoint: batch.baseCheckpoint,
-        handled: batch.entries,
-        deadline: request.deadline,
-        signal: request.signal
-      });
+      const {batch, facts} = staged;
+      let providerReceipt: FactChangeReceipt;
+      try {
+        providerReceipt = await options.confirmation.confirm({
+          batchToken: batch.batchToken,
+          expectedCheckpoint: batch.baseCheckpoint,
+          handled: batch.entries,
+          deadline: request.deadline,
+          signal: request.signal
+        });
+      } catch (error) {
+        if (error instanceof FactChangeFeedError
+          && ['REBUILD_REQUIRED', 'SCOPE_DENIED', 'REVISION_CONFLICT'].includes(error.code)) {
+          options.projection.discardStaged(consumerKey, memoryNamespace, batch.batchToken);
+        }
+        throw error;
+      }
       if (providerReceipt.batchToken !== batch.batchToken) {
         throw new FactChangeFeedError('REVISION_CONFLICT');
       }
       text(providerReceipt.checkpoint);
+      const projection = options.projection.project({
+        consumerKey, memoryNamespace, batch, facts, deadline: request.deadline, signal: request.signal
+      }, providerReceipt);
       return {batch, projection, providerReceipt};
     }
   });

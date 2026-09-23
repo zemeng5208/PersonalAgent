@@ -22,14 +22,13 @@ scope 变化或先前可见事实变为不可见，旧绑定失效并要求重�
 
 1. 事实版本和变化事件在 Memory 自己的本地事务中追加；Memory 的 delivery journal 只证明
    provider 侧持久投递，不证明 Goal 投影完成。
-2. Goal/Coordination 数据库使用持久事务 Inbox。在同一个宿主事务中提交事实投影、精确
-   FactRef → NodeRef 映射、事件/批次去重、待重检记录、本地 consumer checkpoint 和回执。
-3. 该事务提交后，可信宿主才调用 Memory 的 `confirmFeedBatch()`。如果在本地提交后、
-   provider 确认前崩溃，Memory 可以重放原批次；宿主必须依据已提交 Inbox 回执跳过重复
-   图写入并重试确认。
-4. provider checkpoint 与本地 Goal 数据库不宣称跨库原子。可恢复性来自“先提交本地
-   业务效果，再幂等确认 provider”，而不是 SQLite 跨文件事务或分布式事务。
-5. PR #57 的 `appendBatch` 仅覆盖图事务；先调用它再单独 ack、但不持久化 Inbox、精确
+2. Goal/Coordination 数据库先持久暂存批次与精确事实，此时图、映射和待重检记录均未生效。
+3. 可信宿主再调用 Memory 的 `confirmFeedBatch()`；明确拒绝确认的旧 scope 批次必须丢弃
+   暂存并要求重建。确认成功后，在一个本地事务中激活事实投影、精确 FactRef → NodeRef
+   映射、事件/批次去重、待重检记录、本地回执，并移除暂存。
+4. 确认前崩溃重试原批次；确认后、激活前崩溃先读取本地暂存，幂等重试确认，再激活，
+   不能直接读取下一批而丢失已确认事实。provider checkpoint 与 Goal 数据库不宣称跨库原子。
+5. PR #57 的 `appendBatch` 仅覆盖图事务；先调用它再单独 ack、但不持久化暂存、精确
    映射和待重检记录，不能称为原子消费。
 6. 相同 FactRef、event、batch 或 expected checkpoint 若绑定不同内容，必须作为完整性
    冲突拒绝，不能沿用旧回执。
@@ -43,6 +42,6 @@ scope 变化或先前可见事实变为不可见，旧绑定失效并要求重�
 
 单批次协议牺牲并发吞吐，换取首片可核验的确认边界。Fake 的内存确认不能证明崩溃恢复，
 也不能替代真实图投影、SQLite 事务测试或云端闭环。这里不承诺外部副作用 exactly-once。
-事务 Inbox 只保证本地投影与待重检登记的幂等效果；provider 确认是提交后的可重试步骤。
+本地事务只保证已确认批次的图投影与待重检登记幂等；暂存不进入 Goal/Cognition 生效视图。
 本地读取许可不等于出机许可。真实数据的保留、删除/派生内容/备份策略以及历史权限
 仍需产品决定；不擅自设置固定保留时长或默认永久保存。

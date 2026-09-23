@@ -231,10 +231,11 @@ PR #90 已由非作者批准并合并为 `f56059a`。`@personal-agent/memory/sql
 
 ### MOD-09D-MEMORY-GOAL-PROJECTION-01 开发登记（2026-09-22）
 
-分支 `codex/mod-09d-memory-goal-projection` 已实现 Goal/Coordination 侧事务 Inbox：事实节点、精确 FactRef → NodeRef 映射、
-event/batch 去重、待重检记录、本地 checkpoint 与回执在同一事务提交；随后才幂等确认
-Memory provider。它不宣称跨数据库原子，依靠提交后重放与 Inbox 回执避免重复图写入。
-Runtime 65/65、架构门禁 3/3 和根 `npm run check` 已通过，包含确认前中断的跨重启恢复；
+分支 `codex/mod-09d-memory-goal-projection` 在评审修复中采用未生效暂存 → Memory provider
+确认 → 本地原子激活：事实节点、精确 FactRef → NodeRef 映射、event/batch 去重、待重检
+记录和本地回执同事务提交。确认拒绝不暴露旧 scope 事实；确认后、激活前中断从暂存恢复。
+它不宣称跨数据库原子。修复后的 Runtime 68/68、架构门禁 3/3 与根 `npm run check`
+已通过；新 head 仍需 CI 和非作者复审。
 该入口仍为 provisional，未注册生产 composition、自动调度或 capability；详见
 [MOD-09D 工作包](../modules/MOD-09D-MEMORY-GOAL-PROJECTION-01.md)。
 

@@ -4,7 +4,7 @@ import {appendVersions, CoordinationStoreError} from '@personal-agent/goals/stor
 import {GraphError, parseGraph} from '@personal-agent/goals';
 import type {GraphSnapshot, NodeInput, NodeRef} from '@personal-agent/goals';
 import {parseFactChangeBatch} from '@personal-agent/memory';
-import type {FactChangeBatch, FactRef, FactVersion, MemoryReadContext} from '@personal-agent/memory';
+import type {FactChangeBatch, FactChangeReceipt, FactRef, FactVersion, MemoryReadContext} from '@personal-agent/memory';
 import type {ImpactReport} from '@personal-agent/cognition';
 
 export interface FactProjectionRequest extends MemoryReadContext {
@@ -31,8 +31,14 @@ export interface PendingFactImpact extends FactProjectionReceipt {
   readonly memoryNamespace: string;
 }
 
+export type StagedFactProjection = Pick<FactProjectionRequest,
+  'consumerKey' | 'memoryNamespace' | 'batch' | 'facts'>;
+
 export interface FactProjectionStore {
-  project(request: FactProjectionRequest): FactProjectionReceipt;
+  stage(request: FactProjectionRequest): void;
+  readStaged(consumerKey: string, memoryNamespace: string): StagedFactProjection | undefined;
+  discardStaged(consumerKey: string, memoryNamespace: string, batchToken: string): void;
+  project(request: FactProjectionRequest, providerReceipt: FactChangeReceipt): FactProjectionReceipt;
   readPending(limit?: number): readonly PendingFactImpact[];
   completeImpact(request: CompleteFactImpactRequest): void;
 }
@@ -236,9 +242,77 @@ interface NewProjection {
 export function bindFactProjectionStore(db: DatabaseSync, graphNamespace: string): FactProjectionStore {
   const namespace = text(graphNamespace);
   return Object.freeze({
-    project: (request: FactProjectionRequest): FactProjectionReceipt => {
+    stage: (request: FactProjectionRequest): void => {
       const input = validateRequest(request);
       const handledKey = digest({batch: input.batch, facts: input.facts});
+      storage(() => {
+        checkpoint(input);
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          checkpoint(input);
+          loadGraph(db, namespace);
+          const completed = db.prepare([
+            'SELECT handled_key FROM coordination_projection_receipts',
+            'WHERE graph_namespace = ? AND memory_namespace = ? AND consumer_key = ? AND batch_token = ?'
+          ].join(' ')).get(namespace, input.memoryNamespace, input.consumerKey,
+            input.batch.batchToken) as Record<string, unknown> | undefined;
+          if (completed) {
+            if (completed.handled_key !== handledKey) throw new FactProjectionError('INTEGRITY_CONFLICT');
+          } else {
+            const existing = db.prepare([
+              'SELECT batch_token, handled_key FROM coordination_projection_staging',
+              'WHERE graph_namespace = ? AND memory_namespace = ? AND consumer_key = ?'
+            ].join(' ')).all(namespace, input.memoryNamespace, input.consumerKey) as Record<string, unknown>[];
+            if (existing.length > 1 || (existing.length === 1
+              && (existing[0]!.batch_token !== input.batch.batchToken
+                || existing[0]!.handled_key !== handledKey))) {
+              throw new FactProjectionError('INTEGRITY_CONFLICT');
+            }
+            if (!existing.length) db.prepare([
+              'INSERT INTO coordination_projection_staging',
+              '(graph_namespace, memory_namespace, consumer_key, batch_token, handled_key, payload_json, staged_at)',
+              'VALUES (?, ?, ?, ?, ?, ?, ?)'
+            ].join(' ')).run(namespace, input.memoryNamespace, input.consumerKey,
+              input.batch.batchToken, handledKey,
+              JSON.stringify({batch: input.batch, facts: input.facts}), new Date().toISOString());
+          }
+          checkpoint(input);
+          db.exec('COMMIT');
+        } catch (error) {
+          db.exec('ROLLBACK');
+          throw error;
+        }
+      });
+    },
+    readStaged: (consumerKey: string, memoryNamespace: string): StagedFactProjection | undefined => storage(() => {
+      const consumer = text(consumerKey);
+      const memory = text(memoryNamespace);
+      const rows = db.prepare([
+        'SELECT batch_token, handled_key, payload_json FROM coordination_projection_staging',
+        'WHERE graph_namespace = ? AND memory_namespace = ? AND consumer_key = ?'
+      ].join(' ')).all(namespace, memory, consumer) as Record<string, unknown>[];
+      if (!rows.length) return undefined;
+      if (rows.length !== 1) throw new FactProjectionError('INTEGRITY_CONFLICT');
+      const payload = JSON.parse(rows[0]!.payload_json as string) as {batch: FactChangeBatch; facts: FactVersion[]};
+      const batch = parseFactChangeBatch(payload.batch);
+      const facts = payload.facts.map(parseFact);
+      if (batch.batchToken !== rows[0]!.batch_token
+        || digest({batch, facts}) !== rows[0]!.handled_key) throw new FactProjectionError('INTEGRITY_CONFLICT');
+      return {consumerKey: consumer, memoryNamespace: memory, batch, facts};
+    }),
+    discardStaged: (consumerKey: string, memoryNamespace: string, batchToken: string): void => storage(() => {
+      db.prepare([
+        'DELETE FROM coordination_projection_staging',
+        'WHERE graph_namespace = ? AND memory_namespace = ? AND consumer_key = ? AND batch_token = ?'
+      ].join(' ')).run(namespace, text(memoryNamespace), text(consumerKey), text(batchToken));
+    }),
+    project: (request: FactProjectionRequest, providerReceipt: FactChangeReceipt): FactProjectionReceipt => {
+      const input = validateRequest(request);
+      const handledKey = digest({batch: input.batch, facts: input.facts});
+      if (!providerReceipt || providerReceipt.batchToken !== input.batch.batchToken) {
+        throw new FactProjectionError('INVALID_ARGUMENT');
+      }
+      text(providerReceipt.checkpoint);
       return storage(() => {
         checkpoint(input);
         db.exec('BEGIN IMMEDIATE');
@@ -256,6 +330,17 @@ export function bindFactProjectionStore(db: DatabaseSync, graphNamespace: string
             checkpoint(input);
             db.exec('COMMIT');
             return result;
+          }
+
+          const staged = db.prepare([
+            'SELECT handled_key, payload_json FROM coordination_projection_staging',
+            'WHERE graph_namespace = ? AND memory_namespace = ? AND consumer_key = ? AND batch_token = ?'
+          ].join(' ')).get(namespace, input.memoryNamespace, input.consumerKey,
+            input.batch.batchToken) as Record<string, unknown> | undefined;
+          if (!staged) throw new FactProjectionError('NOT_FOUND');
+          if (staged.handled_key !== handledKey
+            || digest(JSON.parse(staged.payload_json as string)) !== handledKey) {
+            throw new FactProjectionError('INTEGRITY_CONFLICT');
           }
 
           const graph = loadGraph(db, namespace);
@@ -339,6 +424,10 @@ export function bindFactProjectionStore(db: DatabaseSync, graphNamespace: string
             ].join(' ')).run(namespace, input.memoryNamespace, input.consumerKey, input.batch.batchToken,
               next.revision, JSON.stringify(pendingLinks), now);
           }
+          db.prepare([
+            'DELETE FROM coordination_projection_staging',
+            'WHERE graph_namespace = ? AND memory_namespace = ? AND consumer_key = ? AND batch_token = ?'
+          ].join(' ')).run(namespace, input.memoryNamespace, input.consumerKey, input.batch.batchToken);
           checkpoint(input);
           db.exec('COMMIT');
           return {batchToken: input.batch.batchToken, graphRevision: next.revision, links: orderedLinks};

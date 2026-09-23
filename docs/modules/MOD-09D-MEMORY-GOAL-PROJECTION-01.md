@@ -8,7 +8,7 @@
 - 消费语义评审者：`zemeng`
 - 基线：`main@f56059a`（PR #90）
 - 分支：`codex/mod-09d-memory-goal-projection`
-- 当前状态：`review`；本地实现与全仓门禁已通过，待 `zemeng` 非作者评审
+- 当前状态：`review`；PR #91 收到 `CHANGES_REQUESTED`，修复后待新 head 门禁及 `zemeng` 复审
 - 文档范围：ADR-0008、本工作包、接口目录和路线图
 
 ## 职责
@@ -17,9 +17,9 @@
 
 1. 读取一个 host-bound `FactChangeBatch` 和其中的精确事实版本。
 2. 将每个精确 `FactRef` 持久映射到精确 `NodeRef`。
-3. 在 Goal/Coordination 数据库的一个事务中提交图投影、去重、待重检记录、
-   本地 checkpoint 和回执。
-4. 本地事务提交后幂等确认 Memory delivery；崩溃重放不得重复产生图版本。
+3. 在 Goal/Coordination 数据库先暂存未生效批次；Memory 确认成功后，才在一个事务中
+   激活图投影、去重、待重检记录和本地回执。
+4. 确认前与确认后、激活前崩溃都从暂存恢复；重放不得重复产生图版本。
 5. 通过持久待重检记录触发 Cognition 影响分析，首片只产生 `KEEP` 或 `RECHECK`。
 
 ## 非职责
@@ -57,14 +57,16 @@ node revision。两侧 revision 独立，必须通过持久映射解析，不能
 - 本地 consumer checkpoint；
 - 幂等投影回执。
 
-提交后才调用 Memory `confirmFeedBatch()`。故障恢复规则如下：
+暂存事务提交后调用 Memory `confirmFeedBatch()`，确认成功后才激活。故障恢复规则如下：
 
 | 故障点 | 恢复结果 |
 | --- | --- |
-| 本地事务前失败 | 不推进任何本地状态，原批次可重读 |
-| 本地事务中失败 | 整体回滚，不能留下图版本、映射或 pending 记录 |
-| 本地提交后、Memory 确认前崩溃 | Memory 重放；Inbox 返回原回执，不重复追加图版本，再重试确认 |
-| Memory 已确认后重试 | 两侧幂等回执保持同一 checkpoint 和 handled key |
+| 暂存前失败 | 不推进本地状态，原批次可重读 |
+| 暂存后、Memory 确认前崩溃 | 从未生效暂存重试确认；图和 pending 仍不可见 |
+| Memory 明确拒绝确认 | 丢弃旧暂存；`REBUILD_REQUIRED` 不激活旧 scope 事实 |
+| Memory 确认后、激活前崩溃 | 先恢复暂存并幂等重试确认，再激活；不读下一批 |
+| 激活事务中失败 | 图、映射、回执和 pending 整体回滚，暂存留待重试 |
+| 激活后重试 | 图版本不重复；本地回执保持同一 handled key |
 
 provider checkpoint 与本地 Goal 数据库不宣称跨库原子。事务 Inbox 提供本地 exactly-once
 效果；Memory delivery 使用至少一次投递和幂等确认。
@@ -75,7 +77,7 @@ provider checkpoint 与本地 Goal 数据库不宣称跨库原子。事务 Inbox
 | --- | --- | --- | --- |
 | `MemoryQueryPort` | `@personal-agent/memory` | provisional | 仅按 host-bound scope 读取精确版本 |
 | `FactChangeFeedPort` | `@personal-agent/memory` | provisional | consumer 无确认权限 |
-| SQLite Memory host confirm | `@personal-agent/memory/sqlite` | provisional | 仅可信宿主在本地投影提交后调用 |
+| SQLite Memory host confirm | `@personal-agent/memory/sqlite` | provisional | 仅可信宿主在持久暂存后、激活前调用 |
 | `AtomicCoordinationStorePort` | `@personal-agent/goals` | provisional | 现有 `appendBatch` 不单独充当消费事务 |
 | 持久投影宿主操作 | `@personal-agent/runtime` | provisional | 分支已有窄入口，不暴露 SQL 或通用事务回调；未注册 capability |
 
@@ -89,7 +91,7 @@ provider checkpoint 与本地 Goal 数据库不宣称跨库原子。事务 Inbox
 ## 权限与数据
 
 - feed binding 固定 namespace、consumer 和允许的 sensitivity。
-- 投影前重新校验精确 FactRef、scope、deadline 与取消信号。
+- 暂存前校验精确 FactRef、deadline 与取消信号；provider 确认再次校验 binding/scope。
 - 本地读取许可不包含出机、模型提示或 AgentArts 上传许可。
 - Evidence 只记录可信本地回执和 Ref，不记录秘密或私人正文。
 
@@ -97,20 +99,23 @@ provider checkpoint 与本地 Goal 数据库不宣称跨库原子。事务 Inbox
 
 1. 非作者评审本 ADR 与工作包，冻结映射和故障恢复语义。
 2. 在 Goal/Coordination SQLite 事务域实现映射、Inbox、pending impact 与回执。
-3. 增加 Runtime Application 消费器：read → exact query → project → provider confirm。
+3. 增加 Runtime Application 消费器：read → exact query → stage → provider confirm → activate。
 4. 增加 pending impact 恢复执行，只调用影响分析，不自动提交计划修订。
 5. 通过定向测试、架构门禁和根 `npm run check` 后，再评估 Runtime capability。
 
 ## 已实现增量
 
-- Runtime migration 6 增加 FactRef 映射、事务 Inbox、投影回执和 pending impact 表。
+- Runtime migration 6 增加 FactRef 映射、投影回执和 pending impact 表；migration 7
+  增加未生效批次暂存表，保留前一迁移的校验语义。
 - `FactProjectionStore.project()` 在一个 Runtime SQLite 事务中提交图版本、精确映射、
   去重回执和 pending impact；同一批次重放返回原回执。
 - `createMemoryProjectionApplication()` 执行一次
-  feed read → exact fact query → local project → provider confirm。
+  feed read → exact fact query → durable stage → provider confirm → atomic activation；
+  重启优先恢复暂存，确认被拒绝时不暴露图或 pending。
 - `createPendingImpactApplication()` 按持久 graph revision 运行现有 Cognition 影响分析，
   持久标记报告，只输出 `KEEP/RECHECK`，不提交 Plan 修订。
-- provider 确认前中断的跨重启测试证明：Memory 重放原批次，Runtime 不重复追加图版本。
+- 确认前中断、确认后激活前中断的跨重启测试，以及 scope 失效确认拒绝测试，
+  证明暂存不参与认知分析，恢复不重复追加图版本。
 
 ## 验收
 
@@ -127,9 +132,10 @@ provider checkpoint 与本地 Goal 数据库不宣称跨库原子。事务 Inbox
 ## 已执行验证
 
 - `npm run build --workspace=@personal-agent/runtime`
-- `npm run test --workspace=@personal-agent/runtime`：65/65 通过（全仓 `npm run check` 内执行）
+- `npm run test --workspace=@personal-agent/runtime`：68/68 通过（根检查内执行）
 - `npm run check:architecture`：3/3 通过
-- `npm run check`：通过全部 workspace 构建、类型、单测及根集成测试；根集成 7/7 通过
+- 修复后 `npm run check`：通过全部 workspace 构建、类型、单测及根集成测试；根集成 7/7 通过
+- 评审修复定向测试：11/11 通过，含 scope 失效及两个崩溃窗口
 - `git diff --check`：通过
 
 ## 排除项与已知限制

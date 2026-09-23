@@ -49,25 +49,46 @@ function request(revision = 1, overrides = {}) {
   };
 }
 
+function confirmedProject(store, input) {
+  store.stage(input);
+  return store.project(input, {batchToken: input.batch.batchToken, checkpoint: 'confirmed-checkpoint'});
+}
+
+test('staging cannot change the effective graph and activation requires that stage', t => {
+  const location = database();
+  const runtime = new TaskRuntime(location.path);
+  t.after(() => { runtime.close(); location.cleanup(); });
+  const store = runtime.provisionFactProjectionStore('primary');
+  const input = request();
+  const providerReceipt = {batchToken: input.batch.batchToken, checkpoint: 'confirmed-checkpoint'};
+  assert.throws(() => store.project(input, providerReceipt), {code: 'NOT_FOUND'});
+  store.stage(input);
+  assert.equal(runtime.bindCoordinationStore('primary').read().revision, 0);
+  assert.deepEqual(store.readPending(), []);
+  assert.deepEqual(store.readStaged(input.consumerKey, input.memoryNamespace)?.batch, input.batch);
+  assert.equal(store.project(input, providerReceipt).graphRevision, 1);
+  assert.equal(store.readStaged(input.consumerKey, input.memoryNamespace), undefined);
+});
+
 test('SQLite projection persists exact FactRef links and replays one batch without another graph version', t => {
   const location = database();
   let runtime = new TaskRuntime(location.path);
   t.after(() => { runtime.close(); location.cleanup(); });
   let store = runtime.provisionFactProjectionStore('primary');
 
-  const first = store.project(request());
+  const first = confirmedProject(store, request());
   assert.equal(first.graphRevision, 1);
   assert.deepEqual(first.links[0].fact, {id: 'calendar/location', revision: 1});
   assert.equal(first.links[0].node.revision, 1);
   assert.equal(runtime.bindCoordinationStore('primary').read().history.length, 1);
-  assert.deepEqual(store.project(request()), first);
+  assert.deepEqual(confirmedProject(store, request()), first);
   assert.equal(runtime.bindCoordinationStore('primary').read().history.length, 1);
   assert.equal(store.readPending().length, 1);
 
   runtime.close();
   runtime = new TaskRuntime(location.path);
   store = runtime.bindFactProjectionStore('primary');
-  assert.deepEqual(store.project(request()), first);
+  assert.deepEqual(confirmedProject(store, request()), first);
   assert.equal(runtime.bindCoordinationStore('primary').read().history.length, 1);
 });
 
@@ -76,8 +97,8 @@ test('SQLite projection keeps a stable node id while Memory and Goal revisions r
   const runtime = new TaskRuntime(location.path);
   t.after(() => { runtime.close(); location.cleanup(); });
   const store = runtime.provisionFactProjectionStore('primary');
-  const first = store.project(request(1));
-  const second = store.project(request(2));
+  const first = confirmedProject(store, request(1));
+  const second = confirmedProject(store, request(2));
 
   assert.equal(second.graphRevision, 2);
   assert.equal(second.links[0].node.id, first.links[0].node.id);
@@ -104,7 +125,7 @@ test('fact node ids separate namespace and fact id even when both contain the de
   right.facts = [fact(1, {ref: {id: 'b\\0c', revision: 1}})];
   right.batch.entries = [{eventId: 'event-1', fact: right.facts[0].ref}];
 
-  assert.notEqual(store.project(left).links[0].node.id, store.project(right).links[0].node.id);
+  assert.notEqual(confirmedProject(store, left).links[0].node.id, confirmedProject(store, right).links[0].node.id);
 });
 
 test('SQLite projection rejects a reused batch identity with different fact content', t => {
@@ -112,11 +133,11 @@ test('SQLite projection rejects a reused batch identity with different fact cont
   const runtime = new TaskRuntime(location.path);
   t.after(() => { runtime.close(); location.cleanup(); });
   const store = runtime.provisionFactProjectionStore('primary');
-  store.project(request());
+  confirmedProject(store, request());
   const changed = request(1);
   changed.facts = [fact(1, {summary: 'tampered'})];
 
-  assert.throws(() => store.project(changed), {code: 'INTEGRITY_CONFLICT'});
+  assert.throws(() => confirmedProject(store, changed), {code: 'INTEGRITY_CONFLICT'});
   assert.equal(runtime.bindCoordinationStore('primary').read().revision, 1);
   assert.equal(store.readPending().length, 1);
 });
@@ -134,7 +155,7 @@ test('SQLite projection rolls back graph, mapping, receipt and pending impact to
   ].join(' '));
   admin.close();
 
-  assert.throws(() => store.project(request()), {code: 'STORAGE_UNAVAILABLE'});
+  assert.throws(() => confirmedProject(store, request()), {code: 'STORAGE_UNAVAILABLE'});
   assert.deepEqual(runtime.bindCoordinationStore('primary').read(), {
     namespace: 'primary',
     revision: 0,
@@ -156,8 +177,8 @@ test('SQLite projection rejects cancellation and expired deadlines before any wr
 
   const cancelled = new AbortController();
   cancelled.abort();
-  assert.throws(() => store.project(request(1, {signal: cancelled.signal})), {code: 'CANCELLED'});
-  assert.throws(() => store.project(request(1, {
+  assert.throws(() => confirmedProject(store, request(1, {signal: cancelled.signal})), {code: 'CANCELLED'});
+  assert.throws(() => confirmedProject(store, request(1, {
     deadline: new Date(Date.now() - 1_000).toISOString()
   })), {code: 'TIMEOUT'});
   assert.equal(runtime.bindCoordinationStore('primary').read().revision, 0);
@@ -178,7 +199,7 @@ test('pending cognition analysis persists RECHECK without changing the graph or 
     signal: new AbortController().signal
   };
 
-  const first = projection.project(request(1));
+  const first = confirmedProject(projection, request(1));
   assert.deepEqual(application.process(operation)[0].items, []);
   assert.deepEqual(projection.readPending(), []);
   coordination.append(1, {
@@ -193,7 +214,7 @@ test('pending cognition analysis persists RECHECK without changing the graph or 
     reason: 'Depends on the meeting location',
     dependencies: [first.links[0].node]
   });
-  projection.project(request(2));
+  confirmedProject(projection, request(2));
 
   const reports = application.process(operation);
   assert.equal(reports.length, 1);

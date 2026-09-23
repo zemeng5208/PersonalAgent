@@ -18,7 +18,8 @@ export type {
   FactProjectionReceipt,
   FactProjectionRequest,
   FactProjectionStore,
-  PendingFactImpact
+  PendingFactImpact,
+  StagedFactProjection
 } from './fact-projection-store.js';
 
 type TaskState = TaskSnapshot['state'];
@@ -249,6 +250,9 @@ export const RUNTIME_MIGRATIONS: readonly Migration[] = [{
     'CREATE TABLE coordination_projection_receipts (graph_namespace TEXT NOT NULL, memory_namespace TEXT NOT NULL, consumer_key TEXT NOT NULL, batch_token TEXT NOT NULL, base_checkpoint TEXT NOT NULL, watermark TEXT NOT NULL, handled_key TEXT NOT NULL, graph_revision INTEGER NOT NULL CHECK (graph_revision >= 0), links_json TEXT NOT NULL, committed_at TEXT NOT NULL, PRIMARY KEY (graph_namespace, memory_namespace, consumer_key, batch_token)) STRICT;',
     'CREATE TABLE coordination_pending_impacts (graph_namespace TEXT NOT NULL, memory_namespace TEXT NOT NULL, consumer_key TEXT NOT NULL, batch_token TEXT NOT NULL, graph_revision INTEGER NOT NULL CHECK (graph_revision > 0), links_json TEXT NOT NULL, created_at TEXT NOT NULL, handled_at TEXT, report_json TEXT, PRIMARY KEY (graph_namespace, memory_namespace, consumer_key, batch_token)) STRICT;'
   ].join('\n')
+}, {
+  version: 7,
+  sql: 'CREATE TABLE coordination_projection_staging (graph_namespace TEXT NOT NULL, memory_namespace TEXT NOT NULL, consumer_key TEXT NOT NULL, batch_token TEXT NOT NULL, handled_key TEXT NOT NULL, payload_json TEXT NOT NULL, staged_at TEXT NOT NULL, PRIMARY KEY (graph_namespace, memory_namespace, consumer_key, batch_token)) STRICT;'
 }];
 
 export class RuntimeError extends Error {
