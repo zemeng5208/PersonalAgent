@@ -5,7 +5,7 @@
 - 基线：`main@b979eb5762af381bb2fddfbf85889978906706af`
 - 分支：`codex/mod-09c-memory-sqlite-v2`
 - 负责人：`goo122`
-- 状态：`review`
+- 状态：`done`；PR #90 已由 `zemeng5208` 非作者批准并合并为 `f56059a`
 - 非作者评审者：`zemeng` 或其他已登记协作者
 
 ## 目标
@@ -58,12 +58,13 @@
 
 ## 故障与并发验收增量
 
-- PR #90 已创建，等待非作者评审。
+- PR #90 已由 `zemeng5208` 非作者批准，并于 2026-09-22 合并为 `f56059a`。
 - 独立 Node 进程持有 SQLite 写锁，复现旧实现在等待期间过期后仍确认成功的问题；
   现在在取得写锁后、COMMIT 前检查 deadline/取消，失败回滚，不推进 checkpoint。
 - 超时读取不会持久化过期的 pending batch；后续重读仍能取得新变化。
 - 回执写入注入失败后，checkpoint、pending batch 与回执共同回滚；重新打开数据库后
   精确重放原批次，成功确认仍幂等。提交前取消同样不留下部分写入。
 - SQLite 同步操作不保证即时抢占；已经 COMMIT 的确认以持久回执为准。
-- 下一工作包先确定事实精确 Ref 与图投影的持久映射及同事务提交方案，再接认知消费；
-  本片的 memory 专用库和 delivery journal 不提供跨库原子投影证据。
+- 下一工作包 [MOD-09D](MOD-09D-MEMORY-GOAL-PROJECTION-01.md) 先冻结事实精确 Ref、
+  图投影持久映射和事务 Inbox，再接认知消费；本片的 memory 专用库和 delivery journal
+  不提供跨库原子投影证据。

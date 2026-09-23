@@ -87,7 +87,7 @@
 | MOD-06 | M2 | todo | 未启动 |
 | MOD-07 | M2 | todo | 未启动 |
 | MOD-08 | M2 | todo | 未启动 |
-| MOD-09 | M1.6/M4 | in_progress | `goo122` / PR #89 已合并 provisional MemoryQueryPort、FactChangeFeed 与进程内 Fake；`codex/mod-09c-memory-sqlite-v2` 正补 SQLite 事实、查询快照与 delivery checkpoint 重启恢复，Runtime 注入、投影原子确认、真实来源和删除仍 unavailable |
+| MOD-09 | M1.6/M4 | review | `goo122` / PR #89、#90 已合并 provisional 端口、Fake 与 SQLite 重启恢复；MOD-09D 分支已实现 Goal 侧事务 Inbox、精确 FactRef 投影、确认前中断重放和持久 `KEEP/RECHECK`，全仓门禁通过，待非作者评审；生产 capability、真实来源和删除仍 unavailable |
 | MOD-10 | M4 后研究，无交付日期承诺 | todo | 未启动 |
 | MOD-11 | M1 | in_progress | `zemeng` / PR #54 已进入 main 并修复取消受理；转写任务消费 #75 仅合并到语音堆叠分支，DPI/透明命中及比赛实机验收仍未完成 |
 | MOD-12 | M1 | in_progress | `zemeng` / 文字交互、会话恢复、状态展示、取消和大工作区可用；真实 AgentArts 对话、工具回传与语音组合尚未完成端到端验收 |
@@ -216,7 +216,7 @@
 - 端口 provisional，真实 AgentArts 仍 unavailable；完整范围与验证见 [工作包](modules/COMPETITION-PORTS-01.md)。
 - 下一步为 zemeng 消费评审，然后补云适配与工具提案/执行结果契约；不能将文字 Fake 视为 Golden Path 完成。
 
-当前继续入口以[接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md)和模块台账为准。Core Runtime Profile 1 可稳定消费；PR #89 已把 MemoryQueryPort 与 FactChangeFeed 的 provisional 端口/Fake 合入 main，MOD-09C 正在独立工作包中补 SQLite 事实、查询快照和 delivery checkpoint 重启恢复，但 Runtime capability 与跨模块投影原子确认继续 unavailable。其余公共接口仍按 Model/Coordination/ToolExecution/Evidence/Artifact 的最小端口与 Fake 推进。MOD-05 已具备任务级 SQLite 授权、审批恢复和本地 Evidence，但跨任务持续授权、真实 SecretStore、公开 Evidence 内容和真实写入恢复仍未完成。
+当前继续入口以[接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md)和模块台账为准。Core Runtime Profile 1 可稳定消费；PR #89 已把 MemoryQueryPort 与 FactChangeFeed 的 provisional 端口/Fake 合入 main，PR #90 已合并 SQLite 事实、查询快照和 delivery checkpoint 重启恢复。MOD-09D 分支已通过事务 Inbox 验证精确投影、提交后 provider 确认和持久 `KEEP/RECHECK`，待非作者评审；生产 capability、自动调度与真实数据仍 unavailable。其余公共接口仍按 Model/Coordination/ToolExecution/Evidence/Artifact 的最小端口与 Fake 推进。MOD-05 已具备任务级 SQLite 授权、审批恢复和本地 Evidence，但跨任务持续授权、真实 SecretStore、公开 Evidence 内容和真实写入恢复仍未完成。
 
 ### MOD-25 地理编码修复工作包（PR #12，历史验收）
 
