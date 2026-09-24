@@ -28,6 +28,11 @@ test('graph export uses actual snapshot versions and projection mapping, excludi
   assert.deepEqual(result.projectedFact, projection.links[0].node);
   assert.deepEqual(result.targets.map(item => item.node.id), ['attend', 'prepare', 'preparation']);
   assert.deepEqual(result.targets[0].dependencies, [{id: 'actual-projected-id', revision: 1}]);
+  assert.deepEqual(result.targets.map(item => item.requestedSummary), [
+    'Attend meeting at 17:00', 'Prepare one hour before 17:00 meeting', 'Prepare at 16:00']);
+  assert.deepEqual(result.targets.map(item => item.requestedDependencies), [
+    [{id: 'actual-projected-id', revision: 2}],
+    [{id: 'attend', revision: 2}], [{id: 'prepare', revision: 2}]]);
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE|local-only|sourceRef|sensitivity|unrelated/);
 });
 

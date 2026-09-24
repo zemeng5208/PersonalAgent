@@ -8,10 +8,13 @@ import {Client} from '@personal-agent/client';
 import {FakeCoordinationPort} from '@personal-agent/coordination/testing';
 import {createRuntimeApplication} from '@personal-agent/runtime/application';
 import {currentNodes} from '@personal-agent/goals';
+import {openSqliteMemoryHost} from '@personal-agent/memory/sqlite';
+import {createMemoryProjectionApplication} from '@personal-agent/runtime/application';
 import {createSyntheticMeetingToolset} from '../../../apps/desktop/electron/competition-synthetic-workspace.js';
 import {createSyntheticRepairHost} from '../../../apps/desktop/electron/competition-repair-host.js';
 
 const fixtureRoot = fileURLToPath(new URL('./fixtures/mvp-meeting/', import.meta.url));
+const namespace = 'mvp-synthetic-meeting';
 async function state(app, taskId, wanted) {
   for (let attempt = 0; attempt < 300; attempt++) {
     const task = app.runtime.getTask(taskId);
@@ -118,4 +121,43 @@ test('confirmed synthetic read produces exact graph-bound candidate, separate ap
   assert.equal(app.runtime.getTask(local.taskId).state, 'succeeded');
   assert.deepEqual(host.readGraph(), after);
   assert.equal(cloud.requests.length, 2, 'Readback never replays paid cloud calls');
+});
+
+test('synthetic host resumes baseline seeding after a committed fact-only projection', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'pa-mvp-baseline-recovery-'));
+  const runtimePath = join(directory, 'runtime.sqlite');
+  const memoryPath = join(directory, 'memory.sqlite');
+  let runtimeApp = createRuntimeApplication({path: runtimePath, profile: 'huawei_ict_agentarts'});
+  let memoryHost = openSqliteMemoryHost(memoryPath);
+  let host;
+  t.after(() => {
+    host?.close(); memoryHost?.close(); runtimeApp?.close();
+    rmSync(directory, {recursive: true, force: true});
+  });
+  memoryHost.provision(namespace);
+  const memory = memoryHost.bind(namespace, {allowedSensitivities: ['private']});
+  const feed = memoryHost.bindFeed(namespace,
+    {consumerId: 'mvp-cognition', allowedSensitivities: ['private']});
+  const now = Date.now();
+  memoryHost.append(namespace, {ref: {id: 'meeting/time', revision: 1},
+    summary: 'Synthetic meeting starts at 15:00', sourceRef: 'synthetic/mvp/baseline',
+    observedAt: new Date(now).toISOString(), validFrom: new Date(now - 60_000).toISOString(),
+    validUntil: new Date(now + 24 * 60 * 60_000).toISOString(),
+    sensitivity: 'private', state: 'active', confirmation: 'external_observation'});
+  const projection = runtimeApp.runtime.provisionFactProjectionStore(namespace);
+  const memoryApp = createMemoryProjectionApplication({consumerKey: 'mvp-cognition',
+    memoryNamespace: namespace, feed, memory, projection,
+    confirmation: {confirm: request => memoryHost.confirmFeedBatch(namespace, 'mvp-cognition', request)}});
+  const signal = new AbortController().signal;
+  await memoryApp.consume({limit: 10, deadline: new Date(now + 60_000).toISOString(), signal});
+  assert.equal(runtimeApp.runtime.bindCoordinationStore(namespace).read().revision, 1);
+  memoryHost.close(); memoryHost = undefined;
+  runtimeApp.close(); runtimeApp = undefined;
+  runtimeApp = createRuntimeApplication({path: runtimePath, profile: 'huawei_ict_agentarts'});
+  host = createSyntheticRepairHost(memoryPath);
+  await host.initialize(runtimeApp.runtime);
+  const graph = host.readGraph();
+  assert.equal(graph.revision, 5);
+  assert.deepEqual(currentNodes(graph).filter(item => item.kind !== 'fact').map(item => item.id),
+    ['attend', 'prepare', 'preparation', 'unrelated']);
 });

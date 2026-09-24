@@ -57,27 +57,28 @@ async function launch() {
     session = await launch();
     report.stage = 'submit';
     const {app, panel} = session;
-    await app.evaluate(async () => {
-      const {RuntimeApplication} = await import('@personal-agent/runtime/application');
-      const originalGuard = RuntimeApplication.prototype.assertCompetitionExportAllowed;
-      RuntimeApplication.prototype.assertCompetitionExportAllowed = function (...args) {
-        try { return originalGuard.apply(this, args); }
-        catch (error) {
-          const allowed = new Set(['Competition export is not bound to this task',
-            'Competition result export policy changed', 'Competition result export scope denied',
-            'Real Competition tool result export is unavailable',
-            'Competition result export cancelled', 'Competition result export expired']);
-          globalThis.__mvpGuardFailure = {code: error?.code ?? 'other',
-            reason: allowed.has(error?.message) ? error.message : 'other'};
-          throw error;
-        }
-      };
+    await app.evaluate(() => {
       const originalFetch = globalThis.fetch;
       globalThis.__mvpFetchInfo = [];
       globalThis.fetch = async (...args) => {
-        const response = await originalFetch(...args);
-        const item = {status: response.status, contentType: response.headers.get('content-type')};
+        const item = {attempt: globalThis.__mvpFetchInfo.length + 1,
+          startedAt: new Date().toISOString()};
+        const headers = args[1]?.headers;
+        const requestId = headers?.['X-Request-Id'];
+        const sessionId = headers?.['x-hw-agentarts-session-id'];
+        if (typeof requestId === 'string' && /^[0-9a-f-]{36}$/.test(requestId)) item.requestId = requestId;
+        if (typeof sessionId === 'string' && /^[0-9a-f-]{36}$/.test(sessionId)) item.sessionId = sessionId;
         globalThis.__mvpFetchInfo.push(item);
+        let response;
+        try { response = await originalFetch(...args); }
+        catch (error) {
+          item.fetchRejected = true;
+          item.errorName = ['AbortError', 'TimeoutError', 'TypeError'].includes(error?.name)
+            ? error.name : 'other';
+          throw error;
+        }
+        item.status = response.status;
+        item.contentType = response.headers.get('content-type');
         void response.clone().text().then(body => {
           item.characters = body.length;
           let answer;
@@ -214,7 +215,6 @@ async function launch() {
     if (report.stage === 'launch') report.launchError = error?.message?.slice(0, 250);
     if (session) {
       report.fetchInfo = await session.app.evaluate(() => globalThis.__mvpFetchInfo ?? []).catch(() => []);
-      report.guardFailure = await session.app.evaluate(() => globalThis.__mvpGuardFailure ?? null).catch(() => null);
     }
     process.exitCode = 1;
   } finally {

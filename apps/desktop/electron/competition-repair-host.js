@@ -99,12 +99,13 @@ export function createSyntheticRepairHost(memoryPath, {decision} = {}) {
         memory, projection, confirmation: {confirm: request => memoryHost.confirmFeedBatch(namespace, consumerKey, request)}});
       impacts = createPendingImpactApplication({coordination: graph, projection});
       const existing = graph.read();
-      if (existing.revision > 0) {
+      if (existing.revision >= 5) {
         if (existing.history[0]?.kind !== 'fact' || existing.history[0].summary !== 'Synthetic meeting starts at 15:00'
           || existing.history[0].sourceRef !== 'synthetic/mvp/baseline'
           || existing.history.length < 5) fail();
         return;
       }
+      if (existing.revision !== 0 && existing.revision !== 1) fail();
       const signal = new AbortController().signal;
       const current = await memory.listCurrent({...readContext(signal), at: new Date().toISOString(), factId: 'meeting/time'});
       let initial = current.facts[0];
@@ -117,10 +118,19 @@ export function createSyntheticRepairHost(memoryPath, {decision} = {}) {
           sensitivity: 'private', state: 'active', confirmation: 'external_observation'});
       }
       if (initial.ref.revision !== 1 || initial.sourceRef !== 'synthetic/mvp/baseline') fail();
-      const projected = await memoryApp.consume(readContext(signal));
-      if (projected.projection.links.length !== 1 || projected.projection.links[0].fact.revision !== 1) fail();
+      let factRef;
+      if (existing.revision === 1) {
+        const baseline = existing.history[0];
+        if (existing.history.length !== 1 || baseline?.kind !== 'fact'
+          || baseline.summary !== initial.summary || baseline.sourceRef !== initial.sourceRef
+          || baseline.revision !== 1) fail();
+        factRef = {id: baseline.id, revision: baseline.revision};
+      } else {
+        const projected = await memoryApp.consume(readContext(signal));
+        if (projected.projection.links.length !== 1 || projected.projection.links[0].fact.revision !== 1) fail();
+        factRef = projected.projection.links[0].node;
+      }
       impacts.process({...readContext(signal), at: new Date().toISOString()});
-      const factRef = projected.projection.links[0].node;
       graph.appendBatch(graph.read().revision, [
         node('attend', 'goal', 'Attend meeting at 15:00', [factRef], initial.validFrom, initial.validUntil),
         node('prepare', 'decision', 'Prepare one hour before meeting', [{id: 'attend', revision: 1}], initial.validFrom, initial.validUntil),

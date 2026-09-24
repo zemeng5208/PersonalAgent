@@ -2,6 +2,7 @@ import {createWorkspaceReadTool, WORKSPACE_READ_TOOL_NAME, WORKSPACE_READ_TOOL_V
 import {lstatSync, realpathSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {SYNTHETIC_REPAIR_EXPORT_POLICY} from './competition-repair-context.js';
 
 export const SYNTHETIC_MEETING_PATH = 'meeting-update.json';
 const MAX_BYTES = 2048;
@@ -62,7 +63,7 @@ export function createSyntheticMeetingToolset(rootPath, projectConfirmed = undef
     competitionToolExports: [{
       toolName: WORKSPACE_READ_TOOL_NAME,
       toolVersion: WORKSPACE_READ_TOOL_VERSION,
-      exportPolicyVersion: projectConfirmed ? 'synthetic-meeting-graph-v2' : 'synthetic-meeting-v1',
+      exportPolicyVersion: projectConfirmed ? SYNTHETIC_REPAIR_EXPORT_POLICY : 'synthetic-meeting-v1',
       accepts: ({arguments: args}) => exactDataObject(args, ['path']) && args.path === SYNTHETIC_MEETING_PATH,
       project: ({taskId, proposalId, result, signal}) => {
         if (signal.aborted) throw Error('Synthetic meeting result export cancelled');

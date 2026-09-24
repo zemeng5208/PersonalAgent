@@ -51,6 +51,10 @@ gets 180000ms; normal Local/Fake requests retain the Client default. Keep
 
 The development-only opt-in `PA_DESKTOP_SYNTHETIC_MVP=1` binds the existing
 `workspace.read_text@1.0.0` to this repository's dedicated synthetic fixture root.
+`PA_AGENTARTS_RESPONSE_MODE=tool-proposal-json` and
+`PA_AGENTARTS_REPAIR_CANDIDATE_VERSION=1.0` explicitly enable the strict
+proposal/candidate parser for this development fixture. The candidate remains
+unverified until a separate local repair task passes Policy and graph CAS.
 Only exact arguments `{ "path": "meeting-update.json" }` are export-eligible.
 Runtime still requests normal local approval; the export gate does not grant it.
 The actual confirmed file result must match the approved synthetic meeting fields
@@ -112,15 +116,20 @@ improvement checklist, not completed claims; changing only the name is insuffici
 
 ## Open evidence gaps
 
-- A's current local authorization environment is absent; secure loading unresolved.
-- Final A/B/D integrated commit and real cloud/local tool continuation not verified.
-- Persistent meeting repair and Desktop restart not verified under one local task
-  with separate real cloud invocations; native same-run resume unavailable.
-- Existing `StoredRepairRequest` checks graph versions and RECHECK, but does not
-  itself bind task/Evidence/FactRef authorization. Existing Coordination `text`
-  is display text, not an implicit repair protocol. Do not parse task summaries
-  into graph mutations. Runtime-approved candidate submission requires an explicit
-  agreed port; until delivered, only the offline fixture proves persistence.
+- The trusted Desktop host loads an existing AgentArts key from an ignored,
+  current-user Windows DPAPI file for manual runs. Credential presence is not
+  proof of any cloud request; the one-time loopback setup is closed.
+- Independent real AgentArts proposal and graph-bound candidate queries passed,
+  but they are not the same Desktop task. The Desktop first invocation, local
+  allow-once, confirmed read and graph revision 6 passed; its second invocation
+  returned an application-specific JSON object without `kind`, so the source
+  task failed closed. No candidate preview, approved CAS or restart receipt from
+  that real Desktop task exists yet.
+- Native same-cloud-run resume remains unavailable. The selected MVP uses two
+  separate published invocations correlated by one local task and Evidence.
+- Runtime now has a provisional task/Evidence/FactRef-bound local repair path;
+  its Fake-cloud SQLite test covers separate Policy approval and restart. This
+  is not real-cloud repair acceptance. Do not parse task summaries into writes.
 - No claim of real microphone/speaker acceptance or packaging delivery.
 
 ## D controlled integration receipt (2026-09-24)
@@ -145,3 +154,31 @@ The factory-level immediate-before-send host guard is still being connected by B
 do not treat the earlier handoff guard alone as closing every revocation window.
 Versioned repair-candidate binding and Runtime-approved local graph commit remain
 separate pending work. The read-only test does not silently perform that repair.
+
+## D2 integrated receipt (2026-09-24)
+
+The clean D2 branch at `2d947ffa` incorporates the final A/B/C source commits
+available at this checkpoint. Node 24 targeted Desktop synthetic/cognition/real
+SQLite host tests passed 7/7; B local repair tests passed 11/11. The existing
+Electron Runtime Application smoke passed, and Electron 44.2.0 was installed
+from its official cached package. The opt-in manual harness is
+`tests/manual/agentarts/support/desktop-synthetic-e2e.cjs`; it uses isolated
+ignored user data and saves only a redacted receipt. It automates the synthetic
+UI approval clicks for validation, which are not a human authorization claim.
+
+A's separate published AgentArts probes each returned HTTP 200: text,
+`tool_proposal`, then graph-bound `repair_candidate` v1.0 matching the three
+synthetic target references and dependencies. These are three independent query
+receipts, not a resumed provider run or a Desktop completion.
+
+The latest real Desktop attempt used the exact successful first-stage proposal
+goal. The source task received a strict `tool_proposal`, displayed a local
+read approval, consumed `allow_once`, confirmed `workspace.read_text`, projected
+Fact revision 2 to graph revision 6, and saved the task/Evidence binding.
+Its second published invocation was sent and returned HTTP 200 with complete
+SSE and no error event. The final answer was valid JSON but lacked the required
+`kind`/candidate shape, so the adapter rejected it and the Runtime marked the
+source task `EXTERNAL_FAILURE`. No plan write occurred. The next integration
+step is a bounded trusted continuation query that asks for the strict candidate
+using only the approved synthetic projection, followed by the real Desktop
+preview, local approval, CAS and same-database restart check.

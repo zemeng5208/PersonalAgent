@@ -1,6 +1,6 @@
 import {currentNodes} from '@personal-agent/goals';
 
-export const SYNTHETIC_REPAIR_EXPORT_POLICY = 'synthetic-meeting-graph-v2';
+export const SYNTHETIC_REPAIR_EXPORT_POLICY = 'synthetic-meeting-graph-v3';
 const targets = Object.freeze([
   ['attend', 'goal', 'Attend meeting at 15:00'],
   ['prepare', 'decision', 'Prepare one hour before meeting'],
@@ -47,7 +47,16 @@ export function projectSyntheticRepairContext(snapshot, projection) {
     projectedFact: ref(fact),
     allowedDependencies: [ref(fact), ...selected.flatMap(node => [ref(node),
       {id: node.id, revision: node.revision + 1}])],
-    targets: selected.map(node => ({node: ref(node), summary: node.summary,
-      dependencies: node.dependencies.map(ref)})),
+    targets: selected.map((node, index) => ({node: ref(node), summary: node.summary,
+      dependencies: node.dependencies.map(ref),
+      requestedSummary: [
+        'Attend meeting at 17:00',
+        'Prepare one hour before 17:00 meeting',
+        'Prepare at 16:00',
+      ][index],
+      requestedDependencies: [[ref(fact)],
+        [{id: selected[0].id, revision: selected[0].revision + 1}],
+        [{id: selected[1].id, revision: selected[1].revision + 1}]][index],
+    })),
   };
 }
