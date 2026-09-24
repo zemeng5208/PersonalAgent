@@ -5,7 +5,7 @@ import type {CloudAgentPort, CoordinationContinuation, CoordinationRequest, Coor
 
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_TEXT_CHARS = 16_000;
-const MAX_CONTINUATION_RESULT_BYTES = 8_192;
+const MAX_CONTINUATION_BYTES = 8_192;
 const MAX_AUTHORIZATION_CHARS = 4_096;
 const MAX_REQUEST_ID_CHARS = 64;
 const MAX_TIMER_DELAY = 2_147_483_647;
@@ -103,7 +103,7 @@ function validateRequest(request: CoordinationRequest, responseMode: 'text' | 't
   if (input.continuation !== undefined) {
     if (responseMode === 'text') invalid('AgentArts text adapter does not support tool continuation');
     continuation = parseCoordinationContinuation(input.continuation);
-    if (new TextEncoder().encode(JSON.stringify(continuation.result)).byteLength > MAX_CONTINUATION_RESULT_BYTES) {
+    if (new TextEncoder().encode(JSON.stringify(continuation)).byteLength > MAX_CONTINUATION_BYTES) {
       invalid('AgentArts continuation projection exceeds the byte limit');
     }
   }
@@ -658,7 +658,7 @@ function parseApplicationResult(text: string): CoordinationResult {
   return parseCoordinationResult({...value, verification: 'unverified'});
 }
 
-/** Offline-testable text adapter for the huawei_ict_agentarts Competition Profile. */
+/** Bounded HTTP adapter; JSON proposals require explicit trusted-host opt-in. */
 export class AgentArtsCloudAgentPort implements CloudAgentPort {
   private readonly gatewayOrigin: string;
   private readonly runtimeName: string;
