@@ -22,3 +22,21 @@
 4. 如需宣称 Competition 端到端可用，另记录真实 AgentArts deployment/API/trace、工具提案、Runtime 授权/执行及 Desktop 展示的一次关联读回。离线 Fake 与 Linux 运行结果不能替代该证据。
 
 本环境没有 Windows 设备，实机步骤未执行。此切片不宣称 MOD-17、PA-011 或整体 MVP 完成。
+
+### 先行的 provider 实机取证
+
+在普通用户、非管理员 PowerShell 中，从仓库根执行（输出放在 Git 忽略的 `data/` 目录，
+执行前确保该目标文件不存在）：
+
+```powershell
+npm ci
+npm run build --workspace=@personal-agent/contracts
+npm run build --workspace=@personal-agent/windows-client
+node packages/windows-client/scripts/capture-windows-evidence.mjs .\data\mod17-provider-evidence.json
+```
+
+脚本仅允许 Windows、只创建新文件，成功终端输出 `PASS`，失败仅输出脱敏错误码且退出非零。
+证据 JSON 不含原始 CPU/内存值、主机名、用户名、文件路径、网络信息或凭据。
+检查 `source=node:os`、`schemaValid=true`、`aggregateValuesPresent=true`、采样时间与不可用项；
+`productionAuthorizationVerified=false` 和 `agentArtsVerified=false` 是刻意保留的边界。
+这一步直调 provider，不能替代上面的 ToolHost 权限拒绝、能力握手或 AgentArts 真实闭环验收。
