@@ -103,3 +103,21 @@ with an otherwise matching graph remains `REVISION_CONFLICT`. An applied result
 proves only the durable graph append. It does not approve repair text, change
 task state, schedule or execute actions, rebind dependencies automatically, or
 claim cloud/real execution evidence.
+
+## Provisional Laya advice consumer
+
+`ProactiveDecisionService` takes a bounded local decision model.
+`LayaDecisionModel` and `LocalLayaHttpTransport` connect it to an authenticated
+loopback Laya server supplied by a trusted host. The service returns suggestions
+only; uncalibrated suppression or execution labels, low confidence, and model
+failure escalate to AgentArts instead of changing task, approval or tool state.
+
+`decideProjectedFactImpact(decision, {projection, impact, deadline, signal})`
+accepts the committed receipt from Runtime's existing memory projection and a
+matching impact report. It asks the decision service only for Fact changes that
+caused RECHECK, with at most four links per call. This adapter neither polls the
+feed nor starts the Laya process. The synthetic local probe is
+`examples/projected-fact-laya-probe.mjs`; it requires an already running local
+server plus `LAYA_PORT` and `LAYA_API_KEY` in its process environment. The
+Desktop production Fact consumer has not been connected yet. See
+[`MOD-28-LAYA-DECISION-01`](../../docs/modules/MOD-28-LAYA-DECISION-01.md).
