@@ -162,7 +162,7 @@ async function launch() {
       const data = await snapshot(admin);
       return data.approvals.find(item => item.taskId === repair.taskId && item.state === 'pending');
     }, 15_000);
-    assert.equal(localApproval.toolName, 'cognition.commit_repair');
+    assert.equal(localApproval.action, 'cognition.commit_repair');
     await admin.locator(`[data-approval="allow_once"][data-id="${localApproval.approvalId}"]`).click();
     const localDone = await waitUntil(async () => {
       const data = await snapshot(admin);

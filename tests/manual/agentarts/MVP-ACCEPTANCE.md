@@ -119,17 +119,16 @@ improvement checklist, not completed claims; changing only the name is insuffici
 - The trusted Desktop host loads an existing AgentArts key from an ignored,
   current-user Windows DPAPI file for manual runs. Credential presence is not
   proof of any cloud request; the one-time loopback setup is closed.
-- Independent real AgentArts proposal and graph-bound candidate queries passed,
-  but they are not the same Desktop task. The Desktop first invocation, local
-  allow-once, confirmed read and graph revision 6 passed; its second invocation
-  returned an application-specific JSON object without `kind`, so the source
-  task failed closed. No candidate preview, approved CAS or restart receipt from
-  that real Desktop task exists yet.
+- An earlier Desktop continuation returned application-specific JSON without
+  `kind`; the strict adapter rejected it. After the candidate-only continuation
+  contract and versioned synthetic projection, one later Desktop source task
+  completed both published cloud invocations and received a strict candidate.
+  A separate approved repair task committed graph revision 9 and survived restart.
 - Native same-cloud-run resume remains unavailable. The selected MVP uses two
   separate published invocations correlated by one local task and Evidence.
-- Runtime now has a provisional task/Evidence/FactRef-bound local repair path;
-  its Fake-cloud SQLite test covers separate Policy approval and restart. This
-  is not real-cloud repair acceptance. Do not parse task summaries into writes.
+- Runtime has a provisional task/Evidence/FactRef-bound local repair path. The
+  real synthetic Desktop task and Fake-cloud SQLite test now cover separate
+  Policy approval and restart. Do not parse task summaries into writes.
 - No claim of real microphone/speaker acceptance or packaging delivery.
 
 ## D controlled integration receipt (2026-09-24)
@@ -178,7 +177,33 @@ Fact revision 2 to graph revision 6, and saved the task/Evidence binding.
 Its second published invocation was sent and returned HTTP 200 with complete
 SSE and no error event. The final answer was valid JSON but lacked the required
 `kind`/candidate shape, so the adapter rejected it and the Runtime marked the
-source task `EXTERNAL_FAILURE`. No plan write occurred. The next integration
-step is a bounded trusted continuation query that asks for the strict candidate
-using only the approved synthetic projection, followed by the real Desktop
-preview, local approval, CAS and same-database restart check.
+source task `EXTERNAL_FAILURE`. No plan write occurred in that failed attempt.
+
+After the candidate-only continuation contract and export policy v3 landed,
+the later real Desktop source task in ignored `.cache/desktop-agentarts-wu7Qlf`
+received two HTTP 200 published responses with distinct request IDs. The first
+was a strict `tool_proposal`; the Desktop displayed and consumed `allow_once`,
+the trusted tool confirmed the synthetic read, Fact revision 2 projected to
+graph revision 6, and a task/Evidence binding was saved. The second response
+was a strict `repair_candidate` v1.0; the source task succeeded and the native
+preview path produced a candidate with all three expected summaries. The manual
+harness substituted the dialog answer to create the local approval task; this
+verifies dialog content and code path, not a human click or a screenshot of the
+actual composited native dialog.
+
+The initial harness then stopped on its own assertion of `toolName` in a UI
+approval snapshot; the UI field is `action`. It had not approved or written the
+graph. A corrected local-only resume launched the same user-data directory,
+clicked the pending `cognition.commit_repair` approval in the Admin UI, and read
+back a succeeded local task and graph revision 9. A second restart read both
+tasks as succeeded, the attendance and preparation summaries at 17:00/16:00,
+the unrelated plan still at revision 1, and two confirmed tool execution records.
+The resume made zero cloud requests. Redacted receipts are
+`.cache/desktop-agentarts-wu7Qlf/receipt.json` and
+`.cache/desktop-agentarts-wu7Qlf/local-resume-receipt.json`.
+
+Laya was not configured in this real Desktop run. The separate real Laya model
+probe and Fake DecisionPort injection do not establish live Desktop consumption;
+that remains a separate acceptance item. Native same-cloud-run resume, a human
+dialog click, packaging and production/private-data use also remain outside this
+receipt.
