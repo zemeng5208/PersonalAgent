@@ -77,5 +77,9 @@ SQLite/Graph快照生成的忽略文件读取graphRevision、FactRef、三个目
 没有保存原始云响应和凭据。脱敏结构报告保留在本工作树忽略目录
 `.cache/agentarts-candidate/`。这一次独立探针只验证云候选格式与引用；后续 D2
 同本地 task 的第二次云 invocation、可信 preview、本地 Policy/ToolGateway CAS、
-Evidence 及重启读回均有单独收据，见上方链接。服务端原生同 run 恢复、部署版本、
-平台 trace 和评估仍未读回。
+Evidence 及重启读回均有单独收据，见上方链接。平台 trace 已按同会话、输入语义
+和时间读回两条成功记录，分别对应工具提案与修复候选；
+平台未显示调用方 `X-Request-Id`，所以不能宣称精确 ID join。已发布应用版本、
+运行时 `v6`、trace token 拆分与未取得的费用/评估证据见
+[TOOL-INVOCATIONS-MVP.md](TOOL-INVOCATIONS-MVP.md)。服务端原生同 run 恢复与
+AgentArts 评估仍未验证。
