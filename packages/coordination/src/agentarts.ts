@@ -1,10 +1,11 @@
 import {ProtocolError} from '@personal-agent/contracts';
-import {createHash} from 'node:crypto';
-import {parseCoordinationTextResult} from './index.js';
-import type {CloudAgentPort, CoordinationRequest, CoordinationTextResult} from './index.js';
+import {createHash, randomUUID} from 'node:crypto';
+import {parseCoordinationContinuation, parseCoordinationResult, parseCoordinationTextResult} from './index.js';
+import type {CloudAgentPort, CoordinationContinuation, CoordinationRequest, CoordinationResult} from './index.js';
 
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_TEXT_CHARS = 16_000;
+const MAX_CONTINUATION_BYTES = 8_192;
 const MAX_AUTHORIZATION_CHARS = 4_096;
 const MAX_REQUEST_ID_CHARS = 64;
 const MAX_TIMER_DELAY = 2_147_483_647;
@@ -21,6 +22,10 @@ export interface AgentArtsRuntimeConfig {
   gatewayUrl: string;
   runtimeName: string;
   invokeMode?: 'debug' | 'published';
+  /** Trusted host opt-in: map the goal to one Workflow start-node variable. */
+  workflowGoalInput?: string;
+  /** Explicit application protocol; separate invocations, never native run resume. */
+  responseMode?: 'text' | 'tool-proposal-json';
 }
 
 export interface AgentArtsFetchInit {
@@ -88,9 +93,20 @@ function asPlainObject(value: unknown): Record<string, unknown> | undefined {
   }
 }
 
-function validateRequest(request: CoordinationRequest): {deadlineMs: number; signal: AbortSignal} {
+function validateRequest(request: CoordinationRequest, responseMode: 'text' | 'tool-proposal-json'): {
+  deadlineMs: number; signal: AbortSignal; continuation?: CoordinationContinuation;
+} {
   const input = asPlainObject(request);
   if (!input) invalid('Invalid AgentArts coordination request');
+  // A text-only invocation cannot silently discard a future tool result.
+  let continuation: CoordinationContinuation | undefined;
+  if (input.continuation !== undefined) {
+    if (responseMode === 'text') invalid('AgentArts text adapter does not support tool continuation');
+    continuation = parseCoordinationContinuation(input.continuation);
+    if (new TextEncoder().encode(JSON.stringify(continuation)).byteLength > MAX_CONTINUATION_BYTES) {
+      invalid('AgentArts continuation projection exceeds the byte limit');
+    }
+  }
 
   const taskId = input.taskId;
   if (typeof taskId !== 'string') invalid('Coordination taskId must be a string');
@@ -119,7 +135,7 @@ function validateRequest(request: CoordinationRequest): {deadlineMs: number; sig
   const signal = candidateSignal as AbortSignal;
   if (signal.aborted) throw abortError('cancelled');
   if (deadlineMs <= Date.now()) throw abortError('deadline');
-  return {deadlineMs, signal};
+  return {deadlineMs, signal, ...(continuation === undefined ? {} : {continuation})};
 }
 
 function validateGatewayUrl(gatewayUrl: string): string {
@@ -149,6 +165,8 @@ function validateRuntimeConfig(config: AgentArtsRuntimeConfig): {
   gatewayOrigin: string;
   runtimeName: string;
   invokeMode: 'debug' | 'published';
+  workflowGoalInput?: string;
+  responseMode: 'text' | 'tool-proposal-json';
 } {
   const value = asPlainObject(config);
   if (!value) invalid('AgentArts runtime config is invalid');
@@ -159,7 +177,15 @@ function validateRuntimeConfig(config: AgentArtsRuntimeConfig): {
   }
   const invokeMode = value.invokeMode === undefined ? 'published' : value.invokeMode;
   if (invokeMode !== 'debug' && invokeMode !== 'published') invalid('AgentArts invokeMode is invalid');
-  return {gatewayOrigin, runtimeName, invokeMode};
+  const responseMode = value.responseMode === undefined ? 'text' : value.responseMode;
+  if (responseMode !== 'text' && responseMode !== 'tool-proposal-json') invalid('AgentArts responseMode is invalid');
+  const workflowGoalInput = value.workflowGoalInput;
+  if (workflowGoalInput !== undefined && (typeof workflowGoalInput !== 'string'
+    || !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(workflowGoalInput))) {
+    invalid('AgentArts workflow goal input is invalid');
+  }
+  return {gatewayOrigin, runtimeName, invokeMode, responseMode,
+    ...(workflowGoalInput === undefined ? {} : {workflowGoalInput})};
 }
 
 function makeCombinedSignal(parent: AbortSignal, deadlineMs: number): CombinedSignal {
@@ -368,12 +394,24 @@ async function readResponseText(response: AgentArtsResponse, combined: CombinedS
   }
 }
 
+type WorkflowIdentity = {id: string | undefined; name: string | undefined};
+
 class TextCollector {
   private readonly indexed = new Map<number, string>();
   private readonly unindexed: string[] = [];
-  private length = 0;
+  private messageLength = 0;
+  private workflowSeen = false;
+  private workflowActive = false;
+  private workflowIdentity: WorkflowIdentity | undefined;
+  private finalWorkflowAnswer: string | undefined;
+  private terminalPhase: 'open' | 'task-ended' | 'ended' | 'invalid' = 'open';
+
+  constructor(private readonly strictCompletion = false) {}
 
   add(text: string, index: number | undefined): void {
+    if (this.strictCompletion && this.terminalPhase !== 'open') {
+      external('AgentArts text follows the task terminal');
+    }
     if (index !== undefined) {
       if (this.indexed.has(index)) {
         if (this.indexed.get(index) !== text) external('AgentArts response contains conflicting text');
@@ -383,17 +421,74 @@ class TextCollector {
     } else {
       this.unindexed.push(text);
     }
-    this.length += text.length;
-    if (this.length > MAX_TEXT_CHARS) external('AgentArts response exceeds the text limit');
+    this.messageLength += text.length;
+    if (this.messageLength > MAX_TEXT_CHARS) external('AgentArts response exceeds the text limit');
   }
 
-  finish(): string {
+  startWorkflow(identity: WorkflowIdentity): void {
+    if (this.terminalPhase !== 'open' || this.workflowActive) external('AgentArts workflow event order is malformed');
+    this.workflowSeen = true;
+    this.workflowActive = true;
+    this.workflowIdentity = identity;
+    this.finalWorkflowAnswer = undefined;
+    this.indexed.clear();
+  }
+
+  completeWorkflow(answer: string | null, identity: WorkflowIdentity): void {
+    // A multi-agent stream can expose intermediate workflow results. Keep only
+    // the most recently completed workflow as a candidate; it does not become
+    // the invocation result until task_end followed by end is observed.
+    if (this.terminalPhase !== 'open' || !this.workflowActive
+      || (['id', 'name'] as const).some(key => identity[key] !== undefined
+        && this.workflowIdentity?.[key] !== undefined && identity[key] !== this.workflowIdentity[key])) {
+      external('AgentArts workflow event order is malformed');
+    }
+    this.workflowSeen = true;
+    this.workflowActive = false;
+    if (answer === null) {
+      this.finalWorkflowAnswer = undefined;
+      return;
+    }
+    if (answer.length > MAX_TEXT_CHARS) external('AgentArts response exceeds the text limit');
+    this.finalWorkflowAnswer = answer;
+  }
+
+  markTaskEnd(): void {
+    if (this.terminalPhase !== 'open') {
+      this.terminalPhase = 'invalid';
+      if (this.workflowSeen) external('AgentArts workflow event order is malformed');
+      return;
+    }
+    this.terminalPhase = 'task-ended';
+  }
+
+  markEnd(): void {
+    if (this.terminalPhase === 'task-ended') {
+      this.terminalPhase = 'ended';
+      return;
+    }
+    this.terminalPhase = 'invalid';
+    if (this.workflowSeen) external('AgentArts workflow event order is malformed');
+  }
+
+  finish(requireCompletion = false): string {
+    if ((requireCompletion || (this.strictCompletion && this.terminalPhase !== 'open'))
+      && this.terminalPhase !== 'ended') {
+      external('AgentArts workflow event order is malformed');
+    }
     const indexedText = [...this.indexed.entries()]
       .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
       .map(([, text]) => text);
-    const text = indexedText.concat(this.unindexed).join('');
-    if (text.trim().length === 0) external('AgentArts response contains no text');
-    return text;
+    const messageText = indexedText.concat(this.unindexed).join('');
+    if (this.workflowSeen) {
+      if (this.terminalPhase !== 'ended' || this.finalWorkflowAnswer?.trim().length === 0
+        || this.finalWorkflowAnswer === undefined) {
+        external('AgentArts response contains no text');
+      }
+      return this.finalWorkflowAnswer;
+    }
+    if (messageText.trim().length > 0) return messageText;
+    external('AgentArts response contains no text');
   }
 }
 
@@ -421,6 +516,31 @@ function consumeEvent(value: unknown, collector: TextCollector): void {
 
   const eventName = event.event;
   if (typeof eventName !== 'string') external('AgentArts response event is malformed');
+  // These optional fields are correlation hints, never authorization. Sequential
+  // starts/ends still have to pair even when the gateway omits identity metadata.
+  const workflowIdentity = {
+    id: typeof data?.workflow_id === 'string' ? data.workflow_id : undefined,
+    name: typeof data?.workflow_name === 'string' ? data.workflow_name : undefined,
+  };
+  if (eventName === 'workflow_start') {
+    collector.startWorkflow(workflowIdentity);
+    return;
+  }
+  if (eventName === 'workflow_end') {
+    if (!data || (typeof data.answer !== 'string' && data.answer !== null)) {
+      external('AgentArts workflow_end event is malformed');
+    }
+    collector.completeWorkflow(data.answer, workflowIdentity);
+    return;
+  }
+  if (eventName === 'task_end') {
+    collector.markTaskEnd();
+    return;
+  }
+  if (eventName === 'end') {
+    collector.markEnd();
+    return;
+  }
   if (eventName !== 'message') return;
   if (!data || (typeof data.text !== 'string' && data.text !== null)) {
     external('AgentArts message event is malformed');
@@ -466,15 +586,20 @@ function flushSseData(data: string[], collector: TextCollector): boolean {
   return false;
 }
 
-function parseSseStandard(payload: string, collector: TextCollector): void {
+function parseSseStandard(payload: string, collector: TextCollector, strictCompletion: boolean): void {
   const data: string[] = [];
   const lines = payload.split(/\r\n|\r|\n/);
+  let done = false;
   for (const line of lines) {
     if (line === '') {
-      if (flushSseData(data, collector)) return;
+      if (flushSseData(data, collector)) {
+        if (!strictCompletion) return;
+        done = true;
+      }
       continue;
     }
     if (line.startsWith(':')) continue;
+    if (done) external('AgentArts event follows the stream terminator');
     if (!line.startsWith('data:')) external('AgentArts SSE response is malformed');
     let value = line.slice('data:'.length);
     if (value.startsWith(' ')) value = value.slice(1);
@@ -483,12 +608,16 @@ function parseSseStandard(payload: string, collector: TextCollector): void {
   flushSseData(data, collector);
 }
 
-function parseSseWithoutSeparators(payload: string): TextCollector {
-  const collector = new TextCollector();
+function parseSseWithoutSeparators(payload: string, strictCompletion: boolean): TextCollector {
+  const collector = new TextCollector(strictCompletion);
   const lines = payload.split(/\r\n|\r|\n/);
   let done = false;
   for (const line of lines) {
-    if (done || line === '' || line.startsWith(':')) continue;
+    if (line === '' || line.startsWith(':')) continue;
+    if (done) {
+      if (strictCompletion) external('AgentArts event follows the stream terminator');
+      continue;
+    }
     if (!line.startsWith('data:')) external('AgentArts SSE response is malformed');
     let value = line.slice('data:'.length);
     if (value.startsWith(' ')) value = value.slice(1);
@@ -509,24 +638,24 @@ function parseSseWithoutSeparators(payload: string): TextCollector {
   return collector;
 }
 
-function parseSsePayload(payload: string): TextCollector {
-  const standard = new TextCollector();
+function parseSsePayload(payload: string, strictCompletion: boolean): TextCollector {
+  const standard = new TextCollector(strictCompletion);
   try {
-    parseSseStandard(payload, standard);
+    parseSseStandard(payload, standard, strictCompletion);
     return standard;
   } catch {
     // Some gateways omit the blank separator between self-contained JSON events.
     // Retry only with the conservative line-oriented form; a valid standard
     // multiline event is returned above without ever being split.
-    return parseSseWithoutSeparators(payload);
+    return parseSseWithoutSeparators(payload, strictCompletion);
   }
 }
 
-function parseResponsePayload(payload: string, contentType: string | undefined): string {
+function parseResponsePayload(payload: string, contentType: string | undefined, strictCompletion = false): string {
   const mediaType = contentType?.split(';', 1)[0]?.trim().toLowerCase();
-  if (mediaType === 'text/event-stream') return parseSsePayload(payload).finish();
+  if (mediaType === 'text/event-stream') return parseSsePayload(payload, strictCompletion).finish(strictCompletion);
   if (mediaType === 'application/json') {
-    const collector = new TextCollector();
+    const collector = new TextCollector(strictCompletion);
     parseJsonPayload(payload, collector);
     return collector.finish();
   }
@@ -537,34 +666,61 @@ function defaultFetch(url: string, init: AgentArtsFetchInit): Promise<AgentArtsR
   return globalThis.fetch(url, init);
 }
 
-/** Offline-testable text adapter for the huawei_ict_agentarts Competition Profile. */
+function parseApplicationResult(text: string): CoordinationResult {
+  const value = asPlainObject(JSON.parse(text) as unknown);
+  if (!value || Object.prototype.hasOwnProperty.call(value, 'verification')) {
+    external('AgentArts application response is malformed');
+  }
+  // Verification is a host decision. Strict existing result parsers reject
+  // arbitrary fields, authorization, Evidence and task terminal claims.
+  return parseCoordinationResult({...value, verification: 'unverified'});
+}
+
+/** Bounded HTTP adapter; JSON proposals require explicit trusted-host opt-in. */
 export class AgentArtsCloudAgentPort implements CloudAgentPort {
   private readonly gatewayOrigin: string;
   private readonly runtimeName: string;
   private readonly invokeMode: 'debug' | 'published';
+  private readonly workflowGoalInput: string | undefined;
+  private readonly responseMode: 'text' | 'tool-proposal-json';
   private readonly authorizationProvider: AgentArtsAuthorizationProvider;
   private readonly fetchImpl: AgentArtsFetch;
+  private readonly beforeSend: ((request: CoordinationRequest) => void) | undefined;
 
   constructor(
     config: AgentArtsRuntimeConfig,
     authorizationProvider: AgentArtsAuthorizationProvider,
     fetchImpl?: AgentArtsFetch,
+    beforeSend?: (request: CoordinationRequest) => void,
   ) {
     const validated = validateRuntimeConfig(config);
     if (!authorizationProvider || typeof authorizationProvider.read !== 'function') {
       invalid('AgentArts authorization provider is invalid');
     }
     if (fetchImpl !== undefined && typeof fetchImpl !== 'function') invalid('AgentArts fetch implementation is invalid');
+    if (beforeSend !== undefined && typeof beforeSend !== 'function') invalid('AgentArts beforeSend guard is invalid');
     this.gatewayOrigin = validated.gatewayOrigin;
     this.runtimeName = validated.runtimeName;
     this.invokeMode = validated.invokeMode;
+    this.workflowGoalInput = validated.workflowGoalInput;
+    this.responseMode = validated.responseMode;
     this.authorizationProvider = authorizationProvider;
     this.fetchImpl = fetchImpl ?? defaultFetch;
+    this.beforeSend = beforeSend;
   }
 
-  async invoke(request: CoordinationRequest): Promise<CoordinationTextResult> {
-    const {deadlineMs, signal} = validateRequest(request);
+  async invoke(request: CoordinationRequest): Promise<CoordinationResult> {
+    const {deadlineMs, signal, continuation} = validateRequest(request, this.responseMode);
+    if (continuation !== undefined && this.beforeSend === undefined) {
+      throw new ProtocolError('UNAUTHORIZED', 'AgentArts continuation export guard is unavailable');
+    }
+    const query = continuation === undefined ? request.goal : JSON.stringify({continuation});
     const combined = makeCombinedSignal(signal, deadlineMs);
+    const sendRequest: CoordinationRequest = Object.freeze({
+      taskId: request.taskId, revision: request.revision, goal: request.goal,
+      deadline: request.deadline, signal: combined.signal,
+      ...(continuation === undefined ? {} : {continuation}),
+    });
     try {
       const initialAbort = currentAbortError(combined);
       if (initialAbort) throw initialAbort;
@@ -581,8 +737,8 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
       const headerAbort = currentAbortError(combined);
       if (headerAbort) throw headerAbort;
 
-      const sessionId = deriveSessionId(request.taskId);
-      const requestId = deriveRequestId(sessionId, request.revision);
+      const sessionId = deriveSessionId(sendRequest.taskId);
+      const requestId = this.responseMode === 'text' ? deriveRequestId(sessionId, sendRequest.revision) : randomUUID();
       const url = `${this.gatewayOrigin}/runtimes/${encodeURIComponent(this.runtimeName)}/invocations`;
       const init: AgentArtsFetchInit = {
         method: 'POST',
@@ -594,10 +750,29 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
           'X-Invoke-Mode': this.invokeMode,
           'X-Request-Id': requestId,
         },
-        body: JSON.stringify({query: request.goal}),
+        body: JSON.stringify(this.workflowGoalInput === undefined
+          ? {query}
+          : {inputs: {[this.workflowGoalInput]: query}}),
         signal: combined.signal,
         redirect: 'error',
       };
+
+      // The host must revalidate dynamic export permission AFTER any asynchronous
+      // credential read. This callback is synchronous; no await may split the
+      // final permission check from the actual fetch invocation below.
+      if (this.beforeSend !== undefined) {
+        try {
+          const guardResult: unknown = this.beforeSend(sendRequest);
+          if (guardResult !== undefined) {
+            void Promise.resolve(guardResult).catch(() => undefined);
+            throw new Error();
+          }
+        } catch {
+          throw currentAbortError(combined) ?? new ProtocolError('UNAUTHORIZED', 'AgentArts export permission denied');
+        }
+      }
+      const sendAbort = currentAbortError(combined);
+      if (sendAbort) throw sendAbort;
 
       let response: AgentArtsResponse;
       try {
@@ -627,6 +802,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
         text = parseResponsePayload(
           await readResponseText(response, combined),
           response.headers?.get('content-type') ?? undefined,
+          this.responseMode === 'tool-proposal-json',
         );
       } catch (error) {
         throw currentAbortError(combined) ?? new ProtocolError('EXTERNAL_FAILURE', 'AgentArts response validation failed');
@@ -634,6 +810,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
       const bodyAbort = currentAbortError(combined);
       if (bodyAbort) throw bodyAbort;
       try {
+        if (this.responseMode === 'tool-proposal-json') return parseApplicationResult(text);
         return parseCoordinationTextResult({kind: 'text', text, verification: 'unverified'});
       } catch (error) {
         throw currentAbortError(combined) ?? new ProtocolError('EXTERNAL_FAILURE', 'AgentArts response validation failed');

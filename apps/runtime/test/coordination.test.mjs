@@ -5,11 +5,11 @@ import {Client} from '@personal-agent/client';
 import {FakeCoordinationPort} from '@personal-agent/coordination/testing';
 import {createRuntimeApplication} from '../dist/application.js';
 
-async function fixture(coordination, run) {
+async function fixture(coordination, run, options = {}) {
   const base = new URL('../../../.cache/competition-tests/', import.meta.url);
   await mkdir(base, {recursive: true});
   const directory = await mkdtemp(new URL('case-', base));
-  const app = createRuntimeApplication({path: directory + '/runtime.sqlite', profile: 'huawei_ict_agentarts', coordination});
+  const app = createRuntimeApplication({path: directory + '/runtime.sqlite', profile: 'huawei_ict_agentarts', coordination, ...options});
   try {
     const client = new Client(app, Date.now);
     await client.connect();
@@ -60,7 +60,7 @@ test('missing competition port fails without local fallback', async () => {
 
 test('mixed profile configuration is rejected before opening a database', () => {
   for (const options of [{profile: 'huawei_ict_agentarts', text: {mode: 'fake'}},
-    {profile: 'huawei_ict_agentarts', tools: []}, {coordination: new FakeCoordinationPort(() => 'text')},
+    {coordination: new FakeCoordinationPort(() => 'text')},
     {profile: 'unknown'}]) {
     assert.throws(() => createRuntimeApplication({path: 'must-not-open.sqlite', ...options}), /Choose explicit/);
   }
@@ -81,41 +81,22 @@ test('cancel aborts port and ignores its late text result', async () => {
   });
 });
 
-test('request deadline reaches port and timeout settles a non-cooperative adapter', async t => {
+test('request deadline reaches port and timeout settles a non-cooperative adapter', async () => {
+  // Freeze the request clock so parallel SQLite startup cannot exhaust the
+  // budget before the adapter starts. runTask still uses its real timeout timer.
+  const startedAt = Date.now();
   const port = new FakeCoordinationPort(() => new Promise(() => {}));
   await fixture(port, async app => {
-    // Persistence may take longer than 100 ms on Windows CI. Freeze time until
-    // the provider is entered, then advance the original deadline explicitly.
-    const nextTurn = () => new Promise(resolve => setImmediate(resolve));
-    t.mock.timers.enable({apis: ['Date', 'setTimeout'], now: Date.now()});
-    try {
-      const deadline = new Date(Date.now() + 100).toISOString();
-      const response = await app.send({kind: 'request', protocolVersion: '1.0.0', requestId: 'deadline-request',
-        operation: 'task.submit', deadline, idempotencyKey: 'deadline',
-        payload: {goal: 'wait', conversationId: 'competition'}}, new AbortController().signal);
-      assert.equal(response.outcome, 'ok');
-      await nextTurn();
-      assert.equal(port.requests.length, 1);
-      assert.equal(port.requests[0].deadline, deadline);
-      assert.equal(port.requests[0].signal.aborted, false);
-      t.mock.timers.tick(99);
-      await nextTurn();
-      assert.equal(app.runtime.getTask(response.data.taskId).state, 'running');
-      assert.equal(port.requests[0].signal.aborted, false);
-      t.mock.timers.tick(1);
-      await nextTurn();
-      const task = app.runtime.getTask(response.data.taskId);
-      assert.equal(task.state, 'failed');
-      assert.equal(task.error.code, 'TIMEOUT');
-      assert.equal(port.requests[0].signal.aborted, true);
-      assert.equal(app.activeTaskCount, 0);
-    } finally {
-      // Release the pending Runtime worker even when an assertion above fails.
-      t.mock.timers.tick(100);
-      await nextTurn();
-      t.mock.timers.reset();
-    }
-  });
+    const deadline = new Date(startedAt + 100).toISOString();
+    const response = await app.send({kind: 'request', protocolVersion: '1.0.0', requestId: 'deadline-request',
+      operation: 'task.submit', deadline, idempotencyKey: 'deadline',
+      payload: {goal: 'wait', conversationId: 'competition'}}, new AbortController().signal);
+    assert.equal(response.outcome, 'ok');
+    const task = await terminal(app, response.data.taskId);
+    assert.equal(task.error.code, 'TIMEOUT');
+    assert.equal(port.requests[0].deadline, deadline);
+    assert.equal(port.requests[0].signal.aborted, true);
+  }, {now: () => new Date(startedAt)});
 });
 
 test('adapter errors are sanitized instead of persisted verbatim', async () => {

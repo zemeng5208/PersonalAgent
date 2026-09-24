@@ -1,5 +1,6 @@
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
+import {resultText} from '../src/features/conversation/result-text.js';
 
 // Desktop-owned metadata. Runtime still owns task state and results.
 export class Conversations {
@@ -31,7 +32,7 @@ export class Conversations {
       if (task.taskId === taskId) break;
       const goal = this.goal(task.taskId);
       if (!goal || this.surface(task.taskId) !== surface || task.state !== 'succeeded') continue;
-      const answer = (task.resultSummary ?? '').replace(/\s*\[model=[^;\]]+;\s*verification=[^;\]]+;\s*tokens=[^\]]+\]\s*$/, '').trim();
+      const answer = resultText(task.resultSummary);
       if (answer) messages.push({role:'user',content:goal},{role:'assistant',content:answer});
     }
     return messages;

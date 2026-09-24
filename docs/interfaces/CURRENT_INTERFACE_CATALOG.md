@@ -1,6 +1,6 @@
 # 当前接口目录与冻结登记
 
-版本：1.1 · 日期：2026-09-09 · 基线提交：`58b3dc842e37ca62b68d30dda5e9daecc6c3793f`
+版本：1.3 · 日期：2026-09-22 · 基线提交：`d78613a226b5d490f8f2dd47f3e5c8236a3d7ec2`
 
 协议负责人：`goo122` · 核心认知与 AgentArts 消费负责人：`zemeng` · 连接器消费负责人：`Potatos498`
 
@@ -21,18 +21,18 @@
 
 | 部署 profile | 优先级 | 当前能力 | 接口规则 |
 | --- | --- | --- | --- |
-| `huawei_ict_agentarts` | 当前唯一优先实现与比赛验收路径 | 架构 accepted；运行 `unavailable` | 先交付 Coordination/CloudAgent/Tool/Evidence 端口；正式证据不静默回退 |
+| `huawei_ict_agentarts` | 当前唯一优先实现与比赛验收路径 | 架构 accepted；离线 Runtime/工具循环为 `provisional`；真实云运行 `unavailable` | 已有端口与 Fake 仅供受控开发；正式证据不静默回退 |
 | `local` | 可选保留 | 现有 Agent/Model 部分实现为 `provisional` | 不删除既有代码；新增 Local 能力不阻塞 Competition，也不计入比赛验收 |
 
 ## 2. 状态定义与冻结门槛
 
-### MOD-15 开发增量：唤醒生命周期
+### 事实变化消费开发增量
 
-`@personal-agent/voice-wake` 的 `WakeLifecycleController`、注入授权/事件源端口及
-`/testing` 显式 Fake 为 `provisional`。根构建登记该工作区；生命周期单测不代表
-真实麦克风、唤醒识别、连续语音或 Desktop/Runtime 组合可用。这些生产能力仍为
-`unavailable`。启用须提供显式有限 deadline；控制器不签发授权、不自动提交任务。
-详见 [MOD-15-WAKE-LIFECYCLE-01](../modules/MOD-15-WAKE-LIFECYCLE-01.md)。
+PR #89～#91 已合入 provisional 的 `MemoryQueryPort`、`FactChangeFeedPort`、批次解析、
+Fake、SQLite 提供者与可恢复投影。它区分 query snapshot、feed 水位、消费 checkpoint
+和 graphRevision；读者不能任意 ack 序号。离线持久实现不证明真实事实来源或生产自动消费，
+不得新增 wire capability 或宣称 frozen。详见
+[MOD-28-FACT-CHANGE-FEED-01](../modules/MOD-28-FACT-CHANGE-FEED-01.md)。
 
 | 状态 | 含义 | 消费者规则 |
 | --- | --- | --- |
@@ -137,6 +137,8 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | `StructuredToolProvider` | 严格 JSON 解析、工具名/版本/参数校验单测 | 只是文字 JSON 提案适配器；没有真实盘古闭环，不是原生 function calling | `provisional` |
 | `ConnectorPort`、`ConnectorHost`、`SecretStorePort.read` | 类型、FakeConnector、宿主单测 | 账号会话未持久化；wire connect/disconnect 未接 Runtime；无真实账号 | `provisional` |
 | `StoragePort` | contracts 类型、FakeStorage | 只有同步 get/set/delete；没有 revision、事务、容量和失败语义 | `provisional` |
+| `CoordinationPort`、`CloudAgentPort`、Competition Runtime/工具循环 | PR #36、#49：Fake、审批恢复和 continuation 离线循环 | Workflow 输入 #72 与载荷边界 #80 尚未进入 main；真实 deployment/version/trace、成功云 API、MCP/Skill 和目标系统读回未验证 | `provisional` |
+| NotificationService | PR #27、#81：持久批次、ack、DST、摘要与毫秒窗口测试 | 无 Runtime wire 查询、Desktop 展示和真实通知通道 | `provisional` |
 
 这些接口可以继续迭代，但消费者必须固定精确包版本或提交，并准备迁移；不能称为“冻结接口”。
 
@@ -149,7 +151,7 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | 模型 | 盘古原生 function calling | Pangu Provider 明确声明 `toolCalling=false`；需真实部署能力探测和闭环验收 | MOD-04A `goo122` |
 | 模型 | 盘古文字 JSON 工具提案的真实闭环 | 手动脚本默认 SKIPPED；需真实盘古→提案→审批→工具→读回→回答证据 | MOD-04A/04B |
 | 模型 | 流式、视觉、稳定结构化输出 | 当前 Pangu Provider 均声明不支持 | MOD-04A `goo122` |
-| Agent | `CoordinationPort` / 可注入 Competition 执行边界 | Runtime 仍直接导入 Local Agent/模型具体实现；需依赖倒置、Competition 实现和 Fake | MOD-04B `zemeng`、MOD-03 `goo122` |
+| Agent | 真实 AgentArts deployment/version/trace 与多 Agent 结果 | provisional Competition 适配和 Fake 已集成；真实云端成功路径、结果解析和完整 trace 未验收 | MOD-29～32 `zemeng` |
 | 结果 | 结构化 `TaskResult` | 当前仅 `resultSummary` 字符串；需正文、模型、usage、verification、plan/evidence 分离 | MOD-02/03 `goo122` |
 | 会话 | 显式创建、重命名、归档、删除、重试关联 | 当前只有 `task.submit` 携带 conversationId 和只读列表 | MOD-02/03 `goo122` |
 | 调度 | 循环规则、唤醒计时器、睡眠恢复公共 API | Runtime 只有内部一次性调度，没有 wire operation | MOD-03 `goo122` |
@@ -158,66 +160,83 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | 设置 | 生产 `settings.get` / `settings.update` | Schema 和 Fake 存在；生产 Runtime 不公布也不处理 | MOD-02/03 `goo122` |
 | 连接器 | 生产 `connector.connect` / `connector.disconnect` wire 路由 | Schema 与 ConnectorHost 存在，但 Runtime 未公布/分派，账号语义不一致 | MOD-05 `goo122` |
 | 凭据 | SecretStore save/replace/delete/status 与迁移 | 只有 ConnectorHost 私有 read 端口；无公共管理面或 Windows 适配 | MOD-05 `goo122`、MOD-16 `zemeng` |
-| 通知 | 列表/恢复、已读/隐藏、策略配置 | 只有 `notification.created` Schema，无生产模块或查询 operation | MOD-23 `Potatos498`、MOD-13 `zemeng` |
-| 语音 | `voice.start` / `voice.stop` 和 ASR/TTS 流 | 只有 Schema 声明，无 VoicePort、生产实现或流协议 | MOD-14/15 `zemeng` |
-| 知识 | `KnowledgePort`、Obsidian/LLM Wiki | 对应 package 和 Fake 未提供 | MOD-08 `goo122` |
-| 记忆 | `MemoryQueryPort`、`FactChangeFeed`、修正/删除 | MOD-09A 已开始需求与合成夹具准备；package、公开类型、存储、Fake 和真实删除仍未提供 | MOD-09 `goo122` |
+| 通知 | Runtime 列表/恢复、已读/隐藏、策略配置与 Desktop 展示 | NotificationService 已集成但尚未接 wire 或 Desktop；`notification.created` 仍无生产发布链 | MOD-23 `Potatos498`、MOD-13 `zemeng` |
+| 语音 | `voice.start` / `voice.stop`、ASR/TTS 流和设备适配 | session/wake/transcript consumer 仍在冲突的堆叠分支，main 无生产提供者；真实供应商、流协议和设备验收未提供 | MOD-14/15 `zemeng` |
+| 知识 | `KnowledgePort`、Obsidian/LLM Wiki | PR #93～#95、#97、#98 已合并：provisional `KnowledgePort`、脱机及 Obsidian 只读适配器、显式 `knowledge.search` ToolGateway/Policy 接线、公开演示资料的 Fake Competition 审批链已完成离线验收。真实 Vault 授权/验收、生产 Runtime 注册、可安装插件、私人结果云端发送控制和 LLM Wiki 仍 unavailable | MOD-08 `goo122` |
+| 记忆 | 生产 `MemoryQueryPort` / `FactChangeFeed` 提供者、确认消费、修正/删除 | PR #89、#90、#91 已合并 provisional 端口、Fake、SQLite 恢复与确认后原子激活投影；生产 Runtime capability、真实来源和删除验收仍未提供 | MOD-09 `goo122` |
 | MCP | 本地 MCP Host/Client 端口 | 对应 package、注册适配和真实调用未提供 | MOD-06 `goo122` |
 | Skills | 本地 Skill 加载/版本/执行端口 | 对应 package 和闭环未提供 | MOD-07 `goo122` |
-| 决策 | 目标/事实/决策图谱的生产集成 | PR #37 已集成纯领域版本图；存储端口首片见下，真实消费集成未完成 | MOD-27 `zemeng`，存储 `goo122` |
-| 认知 | 事件驱动的完整计划修复 | PR #37 已集成离线影响分析与显式候选差异；持久事件消费和真实验收未完成 | MOD-28 `zemeng` |
-| AgentArts | Competition Profile 的身份、Agent/Workflow、MaaS/模型、知识、MCP/Skill、工具提案与多 Agent | 当前第一优先；仓库没有 AgentArts adapter、deployment 或 API 实调 | MOD-29～31 `zemeng` |
+| 决策 | 目标/事实/决策图谱的生产集成 | main 已有版本图及 SQLite/Fake 原子 `appendBatch`；自动事实投影、真实事实来源与生产消费未完成 | MOD-27 `zemeng`，存储 `goo122` |
+| 认知 | 事件驱动的完整计划修复 | main 已有离线影响分析与显式修复预览/提交，并通过原子 `appendBatch` 写入；事实变化流、自动投影和真实 Evidence 未完成 | MOD-28 `zemeng` |
+| AgentArts | Competition Profile 的真实身份、Agent/Workflow、MaaS/模型、知识、MCP/Skill、工具提案与多 Agent | main 已有 provisional adapter 和离线工具循环；Workflow 输入仍在堆叠分支，没有成功 deployment/API/trace 与真实 MCP/Skill 读回 | MOD-29～31 `zemeng` |
 | AgentArts | Competition 发布、API、trace、评估、成本、回滚和端到端证据 | 无云资源读回、本地 Policy/ToolGateway 闭环或 profile 防静默回退证据 | MOD-32 `zemeng` |
 | Windows | Named Pipe、DesktopActionPort、资源锁、用户接管 | 对应 Host/Client package 与真实应用验收未提供 | MOD-16 `zemeng` |
 | TraceGuard | 公开工具和 Evidence/恢复端口 | 仓库适配 package 未提供 | MOD-17 `zemeng` |
-| 编程 | Workspace/patch/command/artifact 端口 | 仓库 package 和隔离验收未提供 | MOD-18 `zemeng` |
+| 编程 | 正文读取、patch、command、artifact 端口 | PR #83 已集成受限 `workspace.list` 与 `workspace.read_text`；两者仍为 provisional，patch、command、artifact 和完整隔离验收未提供 | MOD-18 `zemeng` |
 | 分发 | 生产装配、安装、升级、卸载生命周期契约 | 无安装包与隔离安装证据 | MOD-19 `zemeng`、根装配 `goo122` |
 
 生产 Runtime 对 Schema 已知但未公布的 operation 必须返回 `UNSUPPORTED_CAPABILITY`。管理界面可以展示规划项，但必须显示“不可用”，不能通过读取配置文件、私有数据库或启用 Fake 来伪装能力。
 
-## 6. 新分工需要的接口冻结包
+## 6. 已集成增量与下一冻结包
 
-### COMPETITION-PORTS-01 分支增量
+### 6.1 Competition 执行面（provisional）
 
-在 codex/competition-coordination-ports 中，`@personal-agent/coordination`
-新增 provisional 的文字 CoordinationPort / CloudAgentPort 和 testing 导出的 Fake；
-Runtime Application 可显式注入 CoordinationPort。PR #36 已合并为 `5944061`，尚未冻结、非作者消费评审证据待补齐，
-不提升上表的真实 AgentArts 能力状态。当前只传 taskId/revision/goal/deadline/signal，
-只返回 kind/text/verification；工具提案、deployment/version/trace、usage、世界状态、
-云端续跑与出机同意尚未交付，不能据此接入真实服务。详见
-[工作包](../modules/COMPETITION-PORTS-01.md)。
+PR #36、#49 已进入 main，提供文字 Coordination/CloudAgent 与 Runtime 审批工具循环。Workflow 输入 #72 和总载荷边界 #80 只合并到堆叠分支，尚未进入 main。现有 Fake 证据不包含成功真实 AgentArts 调用、deployment/version/trace、MCP/Skill 或目标系统读回。
 
-### COORDINATION-STORE-01 已集成增量
+### 6.2 世界状态与认知面（provisional）
 
-基于 PR #37 的 `41ea79d`，PR #38（合并提交 `87ee444`）在 `@personal-agent/goals/store` 提供
-provisional CoordinationStorePort、Fake，Runtime 提供绑定命名空间的 SQLite 适配。
-显式 provision/bind、read(revision?) 与事务 append(expectedRevision,node) 详见
-[工作包](../modules/COORDINATION-STORE-01.md)。该存储首片已由非作者评审并集成，但尚缺真实消费者纵向验收，因此保持 provisional；不增加 wire capability；
-MemoryQueryPort、FactChangeFeed、AgentArts 和真实数据生产授权仍 unavailable。
+main 已包含版本化 CoordinationStore、SQLite/Fake `AtomicCoordinationStorePort.appendBatch`、事务 revision 校验与 rollback，以及通过该原子端口执行的显式修复预览/提交；PR #89～#91 已合并 provisional Memory 端口/Fake、SQLite 查询与 delivery checkpoint、Goal 侧未生效暂存及确认后原子激活投影。生产自动消费、真实事实来源、删除和 AgentArts/Evidence 闭环仍未交付。
 
-### MOD-09A-WORLD-STATE-CONTRACT 准备
+### 6.3 桌面、语音、工具与通知增量（provisional）
 
-当前仅在[工作包](../modules/MOD-09A-WORLD-STATE-CONTRACT.md)登记查询、变化流、
-敏感范围、修正/撤回/删除和合成会议夹具。该准备不定义公共方法签名，不增加 package、
-exports、Schema operation、数据库迁移或 capability；MemoryQueryPort 与
-FactChangeFeed 继续保持 unavailable，直到消费语义确认并完成实现、Fake、重启/游标
-测试和非作者评审。
+PR #54、#77、#81 已进入 main，分别补充取消受理、过期审批展示和通知时间精度；PR #83 已集成受限 `workspace.list` 与 `workspace.read_text`。旧 #63、#65 已关闭且未直接进入 main；语音/唤醒、转写消费和合成语音记录仍只存在于 #61 及其堆叠分支。
 
-以下是完整接口的待交付要求；已提供的文字与存储子集以上述增量为准，不代表完整接口冻结：
+### 6.4 下一冻结候选
 
-| 待交付接口 | 语义提出方 | 公共类型/宿主提供方 | 最小验收 |
+PR #84 已将这条离线 Competition 消费链合入 main：Runtime → Fake AgentArts → `workspace.read_text` proposal → waiting_approval → allow_once → ToolGateway → continuation → 最终回答/Evidence。该链仍保持 provisional/mock；只有真实 AgentArts 部署/API/trace 与目标系统读回完成，才重新评估相关外部语义。
+
+| 待交付接口 | 语义提出方 | 公共类型/宿主提供方 | 下一验收 |
 | --- | --- | --- | --- |
-| `CoordinationPort` | `zemeng` | 类型由消费模块拥有；Runtime 由 `goo122` 注入 | Competition 为默认实现目标；FakeCoordination 可让 Runtime 独立跑任务；真实实现不直接改 TaskRuntime |
-| `CloudAgentPort` | `zemeng` | `zemeng` | 第一优先；Fake AgentArts 与真实 deployment/version/trace/提案/usage/error；云端不能携带本地授权或设置任务终态 |
-| `MemoryQueryPort` / `FactChangeFeed` | `zemeng` 提供事实消费语义 | `goo122` | 游标、revision、来源、撤回、敏感范围和跨重启 Fake |
-| `CoordinationStorePort` | `zemeng` | `goo122` 提供命名空间存储适配 | expectedRevision、事务、冲突和隔离测试 |
-| `ToolExecutionPort` | `zemeng` 消费 | `goo122` | 保持 pending/confirmed/unknown、授权绑定和读回核实 |
+| Competition 工具消费链 | `zemeng` | `goo122` 维护 Runtime/Policy/Tool 边界 | PR #84 与 #86 已进入 main；离线 Fake 链保持 provisional，真实 AgentArts 验收按当前安排暂缓 |
 | `EvidencePort` / `ArtifactPort` | 双方共同给出用例 | `goo122` | 越权、过期、超限、乱序、取消、敏感内容不入日志 |
-| `ModelPort` 最小稳定面 | 可选 Local Agent 提供消费场景 | `goo122` | 可选后续；Agent 只依赖接口而非 `ModelGateway`；不阻塞 Competition Profile |
-
-交付顺序：先提交 Competition 的 Coordination/CloudAgent/Tool/Evidence 语义与消费者测试，再由接口负责人交付公开类型/Fake，随后完成 AgentArts deployment/API Golden Path；Memory/Goal/Event 与完整评估在此基础上扩展。Local ModelPort 为可选后续。未完成前保持 `unavailable`。
+| 真实 AgentArts adapter 验收 | `zemeng` | `zemeng`，`goo122` 复核本地终态边界 | deployment/version/trace、成功 API、失败读回、无静默 Local 回退 |
+| 事实流投影与确认 | `zemeng` 提供消费语义 | `goo122` | 精确 FactRef 映射、事务 Inbox、待重检记录、崩溃重放和提交后 provider 确认 |
+| `ModelPort` 最小稳定面 | 可选 Local Agent 提供消费场景 | `goo122` | 可选后续；不阻塞 Competition Profile |
 
 ## 7. 兼容与变更规则
+
+### MOD-09B-MEMORY-PORTS-01 开发登记（2026-09-22）
+
+`@personal-agent/memory` 公开 provisional `MemoryQueryPort`：`listCurrent`、`listHistory`、
+`getVersion`，并由 `/testing` 提供显式 `FakeMemoryHost`。可信宿主预绑定 namespace 和允许的
+sensitivity 集合；消费者无 namespace 选择、写入或出机许可入口。固定水位与不透明分页 token
+仅存在于 Fake 内存，精确版本隐藏/不存在统一拒绝，返回副本隔离；详见
+[工作包记录](../modules/MOD-09B-MEMORY-PORTS-01.md)。
+同一包还公开 provisional `FactChangeFeedPort`、批次边界解析与 host-bound Fake 确认语义。
+这些类型和离线 Fake 本身不代表生产事实库可用。PR #90 后，独立 SQLite 提供者、
+持久确认和重启恢复已进入 main；Runtime 注入、Goal/认知投影、真实来源、删除及私人数据
+验收仍未交付，运行能力继续 unavailable。无新增 wire Schema 或 capability；完整消费验收前不得冻结。
+
+### MOD-09C-MEMORY-SQLITE-01 开发登记（2026-09-22）
+
+PR #90 已由非作者批准并合并为 `f56059a`。`@personal-agent/memory/sqlite` 增加专用 SQLite 适配器：事实版本与变化事件
+同事务追加，query snapshot/cursor、未确认批次、checkpoint 和幂等回执可跨重启恢复。
+它复用 `@personal-agent/storage` 的有序迁移与 WAL，数据库文件不得与其他独立迁移序列共用。
+
+本片仍不公布 Runtime capability，也不把端口升级为 frozen。delivery checkpoint 的持久 CAS
+不等于 MOD-27/28 的 graph/impact 投影与确认同事务；真实 ingest、物理删除、保留/备份策略、
+自动认知投影和私人数据验收继续 unavailable。详见
+[MOD-09C 工作包](../modules/MOD-09C-MEMORY-SQLITE-01.md)。
+
+### MOD-09D-MEMORY-GOAL-PROJECTION-01 开发登记（2026-09-22）
+
+PR #91 已经非作者评审、Foundation CI 通过并合并；采用未生效暂存 → Memory provider
+确认 → 本地原子激活：事实节点、精确 FactRef → NodeRef 映射、event/batch 去重、待重检
+记录和本地回执同事务提交。确认拒绝不暴露旧 scope 事实；确认后、激活前中断从暂存恢复。
+它不宣称跨数据库原子。修复后的 Runtime 68/68、架构门禁 3/3 与根 `npm run check`
+已通过；本记录只覆盖离线与合成数据。
+该入口仍为 provisional，未注册生产 composition、自动调度或 capability；详见
+[MOD-09D 工作包](../modules/MOD-09D-MEMORY-GOAL-PROJECTION-01.md)。
 
 1. `frozen` 项删除字段、改变字段含义、收窄原有合法输入或新增消费者无法处理的必需状态，必须升级不兼容版本。
 2. 新增可选字段和新 operation 可以在 wire 1.x 中交付，但必须先通过 handshake/capability 公布；旧消费者可以忽略。
@@ -227,6 +246,16 @@ FactChangeFeed 继续保持 unavailable，直到消费语义确认并完成实�
 
 ## 8. 当前结论
 
-截至 2026-09-09，**适合冻结的是 Core Runtime Profile 1 的消息、任务、会话与审批只读查询子集；不适合冻结整套协议、模型工具调用或 Agent 编排接口。** 产品当前只实施 Huawei ICT AgentArts Competition Profile；Local Profile 仅留存现有代码、当前不新增。该范围决定不改变接口证据状态。
+### MOD-16-SYSTEM-OBSERVATION-01 开发登记（2026-09-17）
 
-盘古当前没有已验证的原生工具调用，文字 JSON 工具提案也未完成真实闭环。因此 MOD-04/05 的离线实现继续保持 `review`，Local Model/Agent/Tool 相关接口保持 `provisional`。截至 2026-09-12，Competition 的文字 Coordination/CloudAgent 子集、离线版本图/影响分析和存储首片均已集成但未冻结。真实 AgentArts、统一世界状态、事实流与完整认知集成仍 `unavailable`。
+`@personal-agent/windows-client` 本机聚合状态只读工具正在独立工作包中实现，消费基线
+`72cc76b` 的 `RegisteredTool`/`ToolContext`，不新增 wire operation，也不自动公布生产 capability。
+范围仅 CPU、内存和 uptime 等必要聚合观测；不依赖独立 TraceGuard 项目，不读取身份、
+进程命令行、文件或网络内容。PA-018 治理/恢复按用户修订排除。
+提供者、Fake 与实际本机读取验收按 [模块记录](../modules/MOD-16-SYSTEM-OBSERVATION-01.md) 分别登记；
+Competition 工具提案/Runtime Application/Desktop 装配仍未由此项交付，运行能力保持 unavailable。
+本包接口保持 provisional，非作者评审前不冻结。
+
+截至 2026-09-24，**冻结范围仍只有 Core Runtime Profile 1 的消息、任务、会话与审批只读查询子集；不冻结整套协议、外部模型工具调用或 AgentArts 编排。** main 中已有 Competition 的离线 Coordination/审批工具循环、版本图、原子存储、显式修复预览/提交、受限工作区读取、公开演示知识检索，以及 provisional 的 SQLite 事实查询/变化流与可恢复投影；生产自动消费、Runtime Memory capability 和语音消费仍未进入 main。
+
+真实 AgentArts deployment/API/trace、目标系统工具读回、完整 Evidence、真实语音设备和外部事实提供者仍 `unavailable`。Fake、合成评估、HTTP 200、配置成功或平台截图都不能提升这些状态；正式比赛路径不得静默回退 Local。

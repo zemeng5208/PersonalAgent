@@ -14,3 +14,9 @@ export async function register(host) {
     },
   };
 }
+
+export async function requestTaskCancellation(client, taskId, refreshTask) {
+  const result = await client.call('task.cancel', {taskId, reason: '用户取消任务'});
+  const task = await refreshTask(taskId);
+  return {...result, state: task.state};
+}

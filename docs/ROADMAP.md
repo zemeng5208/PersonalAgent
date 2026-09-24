@@ -1,24 +1,17 @@
 # 开发计划与进度
 
-更新：2026-09-13 · 当前阶段：只实施华为 ICT AgentArts Competition Profile 架构与最小 Golden Path；通用 Local Profile 可选留存 · 已集成：ARCH-01/02/03、MOD-01/02/03/25、MOD-04/05 离线增量、PR #31/#34 会话与查询恢复、PR #33 桌面本地外壳、PR #36 Competition 文字端口、PR #37/38 离线认知图谱及持久化 · Core Runtime Profile 1 已冻结；AgentArts 运行链与完整产品闭环未完成
+更新：2026-09-24 · 当前阶段：Competition Profile 的离线审批工具循环、公开演示资料知识检索、SQLite Memory 与可恢复事实投影已进入 main；语音仍待重建集成 · 通用 Local Profile 仅保留现有实现 · Core Runtime Profile 1 已冻结；真实知识工具读回和完整比赛闭环仍未验收
 
 本文维护工作状态，需求以 PRD 为准，当前交付顺序以[华为 ICT AgentArts Competition Profile](competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)为先。模块负责人和独占目录唯一登记在 [模块分工](MODULE_ASSIGNMENTS.md)，契约见[公共开发协议](DEVELOPMENT_PROTOCOL.md)，逐接口冻结和可用性见[当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md)。`goo122` 负责共享底座、公共协议、Runtime、工具、知识与记忆；`zemeng` 负责 Competition Profile、AgentArts、核心认知和桌面执行；`Potatos498` 负责 MOD-20～26 业务连接器。Local Profile 只作为可选保留，不进入当前比赛退出条件。阶段不代表承诺日期；正式排期需根据比赛时间、团队人数和接口验证结果确定。
 
-### 2026-09-10 集成与存储首片更新
+### 2026-09-20 主分支状态更新（历史快照）
 
-- PR #36 已合并为 `5944061`：Competition 文字 Coordination/CloudAgent 端口与 Runtime 注入为 provisional；非作者消费评审仍需补齐，不标记完整比赛链 done。
-- PR #37 已评审合并为 `41ea79d`：MOD-27/28 纯领域图谱与离线影响分析、根构建接线已集成；持久化和真实运行仍是后续工作。
-- COORDINATION-STORE-01：goo122，done；PR #38 已由 `zemeng5208` 批准并合并为 `87ee444`，绑定命名空间的存储端口、Fake、SQLite 原子版本提交与重启测试已集成。接口仍为 provisional，待真实消费者验证后评估冻结。详见[工作包](modules/COORDINATION-STORE-01.md)。
-- zemeng 已在下述工作包消费绑定端口，验证持久图的会议影响分析与冲突刷新；MemoryQueryPort、FactChangeFeed 和真实 AgentArts 仍 unavailable。
-- MOD-09A-WORLD-STATE-CONTRACT：`goo122`，review；世界状态查询/变化流场景、合成夹具和自检已形成，未发布接口或迁移。待非作者评审及消费语义确认。详见[工作包](modules/MOD-09A-WORLD-STATE-CONTRACT.md)。
-
-### MOD-28-PERSISTENT-CONSUMER-01（2026-09-12）
-
-- 负责人 zemeng；实现基线 PR #38 / `87ee444`，已同步 PR #39 / `188f925`；
-  状态 review（本地验证通过，待非作者评审与集成）。
-- `packages/cognition` 消费绑定的 provisional CoordinationStorePort，提供持久快照影响分析、
-  显式 Plan 追加及 CAS 冲突后的重新分析；不重试写入，不修改 TaskRuntime 终态。
-- Fake 与 SQLite 重启验收、边界及未交付项见[工作包](modules/MOD-28-PERSISTENT-CONSUMER-01.md)。
+- PR #49 已合并为 `7f57f46b`：Competition Runtime 的离线 `tool_proposal → waiting_approval → allow_once → ToolGateway → continuation` 循环已集成；原始任务 deadline、审批过期、取消、幂等和载荷上限由测试覆盖。该证据仅为 Fake/离线，不代表真实 AgentArts 工具闭环。
+- PR #54、#77 已集成 Desktop 取消受理语义和过期审批 fail-closed 展示；Desktop 仍没有完整真实比赛链验收。
+- PR #69～#76、#79 只合并到了各自堆叠基线分支，并未进入 `main`；其工作区、语音、记忆和认知增量只能作为待重建候选，不能计为主分支能力。
+- PR #58 已进入 `main`，提供固定合成评估 runner；PR #79 仅在堆叠语音分支。两者都不是模型质量、真实麦克风或 AgentArts 成功证据。
+- PR #80 仅合并到旧 `codex/competition-tool-loop` 分支，尚未进入 `main`；PR #81 已进入 `main` 并修复通知摘要毫秒精度；PR #83 以 `086b9674` 进入 `main` 并交付受限 `workspace.list` / `workspace.read_text`。当前文档基线以接口目录页首为准。
+- 旧 #63、#65、#68 已关闭且未直接进入 `main`；#83 已重建工作区列表/读取，#84 已作为 #68 的替代 PR 合入 Competition 审批消费链。当前开放的 #51、#78 仍为 Draft；#56、#61、#62 与最新主分支冲突，不能作为已集成能力计算。旧状态文档 PR #48 已被本次更新替代。
 
 ### ARCH-03：Runtime Application 自主管理任务分派
 
@@ -72,16 +65,16 @@
 | --- | --- | --- | --- |
 | M0 设计基线 | PRD、架构、协作规范、工作包 | 文档检查通过；待决项登记 | 已建立并在 2026-09-09 同步分工、接口目录和 ADR |
 | M1 基础闭环 | 窗口、Runtime、盘古、工具、语音基础 | 真实请求到工具与验证链路；取消有效 | MOD-01/02/03 已集成；Core Runtime Profile 1 已冻结；真实模型工具链未完成 |
-| M1.5 Competition Profile | AgentArts 基础、Agent/Workflow、部署 API、可信工具 Golden Path、Demo/trace | AgentArts 构建/编排/部署可读回；一条真实工具闭环；不静默回退 Local | 架构 accepted；MOD-29～32 未实现 |
-| M1.6 持续认知创新 | 版本化世界状态、Goal/Event、目标/事实/决策图谱、最小计划修复 | 事实变化产生可回放影响；AgentArts 只更新受影响计划；Evidence 闭环 | MOD-27/28 离线领域核心及图谱持久化已集成；事实流、消费者纵向接线、AgentArts 与 Evidence 闭环未完成 |
-| M2 首次可用 | Obsidian、提醒、研究天气、TraceGuard 只读、全部 P0 | 所有 P0 逐项验收，不只演示单场景 | 未开始 |
-| M3 信息管家 | 邮件、日历、订阅、通知、专业协作 | 真实连接器增量同步与授权写入验证 | 未开始 |
-| M4 行动与扩展 | 电脑控制、编程、治理、流程学习、社交扩展 | 指定应用可控可验证；平台能力矩阵有证据 | 未开始 |
+| M1.5 Competition Profile | AgentArts 基础、Agent/Workflow、部署 API、可信工具 Golden Path、Demo/trace | AgentArts 构建/编排/部署可读回；一条真实工具闭环；不静默回退 Local | main 已有离线 Coordination、审批工具循环和合成评估；Workflow 输入仍在堆叠分支，真实部署/API/trace 与工具读回未完成 |
+| M1.6 持续认知创新 | 版本化世界状态、Goal/Event、目标/事实/决策图谱、最小计划修复 | 事实变化产生可回放影响；AgentArts 只更新受影响计划；Evidence 闭环 | main 已有版本图、SQLite/Fake 原子 appendBatch 与显式修复预览/提交；事实查询/变化流、自动事实投影及真实 AgentArts/Evidence 闭环未完成 |
+| M2 首次可用 | Obsidian、提醒、研究天气、TraceGuard 只读、全部 P0 | 所有 P0 逐项验收，不只演示单场景 | 天气、待办/日历 Fake、研究源和部分只读工具已集成；完整 P0 与真实账号验收未完成 |
+| M3 信息管家 | 邮件、日历、订阅、通知、专业协作 | 真实连接器增量同步与授权写入验证 | 邮件、订阅、通知策略已集成；桌面通知消费、完整真实账号与授权写入验收未完成 |
+| M4 行动与扩展 | 电脑控制、编程、治理、流程学习、社交扩展 | 指定应用可控可验证；平台能力矩阵有证据 | 受限工作区列表/正文读取已由 PR #83 进入 main，仍为 provisional；Windows 操作、写入与治理闭环未进入 main |
 | M5 参赛/分发 | 演示、打包、技术贡献材料 | 规则核验、真实证据、隔离安装运行卸载 | 未开始 |
 
 ## 2. 模块执行台账
 
-MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；PR #31 的多轮上下文和 PR #34 的公开查询/恢复面均已合并。MOD-25 的源码、Runtime 根装配和地理编码修复已完成评审并合并。MOD-04/05 的离线持久审批、Evidence 与 Fake 垂直链路已随 PR #26 集成，但真实模型工具链和完整持续授权仍未验收。桌面 PR #18/#25/#33 与查询消费 PR #34 已合并，MOD-11/12/13 仍按未完成项保持 in_progress。PR #8 的历史冲突仍由原负责人处理；PR #19 已合并并移除误提交报告。每行可拆多个子任务，只有全部约定交付通过后模块才为 done。
+模块状态以已合并代码和可复现证据为准；PR 合并不自动把整个 MOD 标记为 done。MOD-01/02/03 已完成基础底座，MOD-04/05 与 Competition 工具循环已有离线证据；MOD-20～25 的当前增量均已进入主分支。真实 AgentArts、真实设备、外部账号和写入读回仍分别验收。每行可拆多个子任务，只有全部约定交付通过后模块才为 done。
 
 | 模块 ID | 计划阶段 | 状态 | 当前执行人 / PR / 证据 |
 | --- | --- | --- | --- |
@@ -89,43 +82,43 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；PR #
 | MOD-02 | M1 起步门槛 | done | goo122 / PR #1 原始 14 operation；PR #34 增至 17 operation 并完成 Desktop 消费验证；只冻结 Core Runtime Profile 1，不冻结整包 |
 | MOD-03 | M1/M2 | done | goo122 / PR #5 / 合并提交 e14aebf / 7 项 Runtime 测试及评审通过 |
 | MOD-04A | Local Profile 可选模型层 | review | `goo122` / 历史 PR #10、#11、#26 已合并；ModelGateway、Pangu 文本 Provider、JSON 提案适配离线通过；代码保留，但新增 Local 能力不进入当前比赛优先级 |
-| MOD-04B | Competition Coordination；Local Agent 可选 | in_progress | `zemeng` / 需先交付 Competition Profile 的 Coordination/CloudAgent 消费边界；既有有界 Agent 与 PR #31 上下文保留为可选 Local baseline |
-| MOD-05 | M1/M2 | review | goo122 / PR #7、#26 已合并；任务级 SQLite 授权、参数绑定、审批恢复、工具 Evidence 与幂等重放已离线验证；跨任务持续授权、真实 SecretStore 和真实写入恢复尚未完成 |
+| MOD-04B | Competition Coordination；Local Agent 可选 | review | `zemeng` / PR #36、#49 已进入 main，离线审批工具循环已验证；Workflow 输入 #72 和 continuation 边界 #80 仅在堆叠分支，真实 AgentArts 调用和多 Agent 结果仍未验收 |
+| MOD-05 | M1/M2 | review | goo122 / PR #7、#26、#49 已合并；任务级 SQLite 授权、参数绑定、审批恢复、工具 Evidence、幂等重放和 Competition 离线工具循环已验证；跨任务持续授权、真实 SecretStore 和真实写入恢复尚未完成 |
 | MOD-06 | M2 | todo | 未启动 |
 | MOD-07 | M2 | todo | 未启动 |
-| MOD-08 | M2 | todo | 未启动 |
-| MOD-09 | M1.6/M4 | in_progress | `goo122` / MOD-09A 仅准备 MemoryQueryPort、FactChangeFeed 的消费场景与合成夹具；接口、存储、Fake、删除和真实数据仍 unavailable |
+| MOD-08 | M2 | in_progress | `goo122` / PR #93～#95、#97、#98 已经非作者评审并合并；只读端口、脱机及 Obsidian 只读适配器、Policy 检索工具和公开演示资料的 Competition Fake 审批链均完成离线验收。真实私人 Vault 授权/验收、生产注册、可安装插件、私人结果出机控制和 LLM Wiki 未完成 |
+| MOD-09 | M1.6/M4 | in_progress | `goo122` / PR #89～#91 已合并 provisional 端口、Fake、SQLite 重启恢复和确认后原子激活投影；09D 离线工作片已完成，生产 capability、真实来源和删除仍 unavailable |
 | MOD-10 | M4 后研究，无交付日期承诺 | todo | 未启动 |
-| MOD-11 | M1 | in_progress | `zemeng` / PR #13、#14、#18、#25、#33、#34 已合并；窗口、安全桥、托盘、公开恢复和本地外壳可运行，DPI/透明命中及实机验收仍未完成 |
-| MOD-12 | M1 | in_progress | `zemeng` / PR #18、#25、#34 已合并；文字交互、会话恢复、状态展示、取消和大工作区可用，真实盘古对话与语音仍未验收 |
-| MOD-13 | M1 基础页面、M2 配置闭环 | in_progress | `zemeng` / PR #13、#18、#25、#34 已合并；脱敏审批恢复、后台导航和模型配置可用，设置/连接器生产 API 与完整授权管理仍未完成 |
-| MOD-14 | M1 基础、M2 验收 | todo | `zemeng` 已确定，未启动 |
-| MOD-15 | M4 后扩展 | todo | `zemeng` 已确定，未启动 |
+| MOD-11 | M1 | in_progress | `zemeng` / PR #54 已进入 main 并修复取消受理；转写任务消费 #75 仅合并到语音堆叠分支，DPI/透明命中及比赛实机验收仍未完成 |
+| MOD-12 | M1 | in_progress | `zemeng` / 文字交互、会话恢复、状态展示、取消和大工作区可用；真实 AgentArts 对话、工具回传与语音组合尚未完成端到端验收 |
+| MOD-13 | M1 基础页面、M2 配置闭环 | in_progress | `zemeng` / PR #77 增加过期审批 fail-closed；设置/连接器生产 API、只读 AgentArts 配置状态和完整授权管理仍未完成 |
+| MOD-14 | M1 基础、M2 验收 | in_progress | `zemeng` / 会话、唤醒组合、Runtime 转写消费与合成记录仅在 #61/#70/#75/#79 堆叠分支，尚未进入 main；真实麦克风、ASR/TTS 和 Desktop 组合未验收 |
+| MOD-15 | M4 后扩展 | in_progress | `zemeng` / 有界授权唤醒生命周期位于冲突的 #65/#70 堆叠分支，尚未进入 main；真实唤醒算法、设备、误触和回声测试未完成 |
 | MOD-16 | M2 TraceGuard 所需只读端口、M4 电脑操作 | todo | `zemeng` 已确定，未启动 |
 | MOD-17 | M2 只读、M4 治理 | todo | `zemeng` 已确定，未启动 |
-| MOD-18 | M4 | todo | `zemeng` 已确定，未启动 |
+| MOD-18 | M4 | in_progress | `zemeng` / PR #83 已将受限 `workspace.list` 与 `workspace.read_text` 重建到 main；PR #84 已合入 Competition 审批消费链，证据仍仅为 provisional/mock；写入、命令和 Artifact 未交付 |
 | MOD-19 | M5 | todo | `zemeng` 已确定，未启动 |
-| MOD-20 | M2 本地提醒、M3 日历 | review | `Potatos498` / PR #22（分支 `feat/mod-20-productivity`），指定 `goo122` 非作者评审；模块设计见 [mod-20](modules/mod-20.md)。交付 `packages/productivity`（待办 CRUD 读回、DST 回拨取较早、due 改期重验提醒）与 `packages/connectors/calendar`（Fake 日历：窗口增量、跨页搜索、respond 幂等）。实测：productivity 16 项 + calendar 10 项全过；已获 `goo122` 非作者评审批准（2026-09-14），待合并 |
-| MOD-21 | M3 | review | `Potatos498` / PR #28；增量同步（uidValidity 游标）、多账号绑定、mark_seen 幂等、发送超时→unknown 先核对；QQ 真实链路已验证（22/22 含真实读回与自发自收）；goo122 复审意见全部修复（JSON 编码幂等复合键）。待复审合并 |
+| MOD-20 | M2 本地提醒、M3 日历 | review | `Potatos498` / PR #22 已合并为 `cdb69a26`；待办 CRUD、提醒重验与 Fake 日历已验证，真实日历账号、授权和写入读回未完成 |
+| MOD-21 | M3 | review | `Potatos498` / PR #28 已合并为 `42db8f51`；QQ 增量同步、安全发送语义和受控真实读回已有证据，完整账号生命周期与长期稳定性未验收 |
 | MOD-22 | M3 | done | `Potatos498` / PR #8 已合并（RSS 2.0/Atom 增量、趟水位线分页修复、真实源读回验证） |
-| MOD-23 | M3 | todo | `Potatos498` 已登记，未授权启动 |
-| MOD-24 | M2 | review | `Potatos498` / PR #47；OpenAlex 学术源（免 key）＋Fake；三披露（来源/发布时间/获取时间）＋失败/过期区分（缓存三态、stale 标注）；signal 透传；JSON 编码缓存键；离线 14＋live 15 全过。goo122 复审意见全部修复，待复审合并 |
+| MOD-23 | M3 | review | `Potatos498` / PR #27、#81 已合并；通知裁定、持久批次、ack、DST 和毫秒摘要窗口已验证，Runtime/Desktop 通知查询与展示尚未接通 |
+| MOD-24 | M2 | review | `Potatos498` / PR #47 已合并为 `2117908a`；OpenAlex、Fake、缓存三态和三项来源披露已验证，长期真实服务稳定性仍为 conditional |
 | MOD-25 | M2 | done | `Potatos498` / PR #4、#12、#23 与 Runtime 装配 PR #9 已合并；GeoNames 增强下 26 个世界大城市简体查询 26/26 高置信，真实门控测试 66/66；manifest 仍为 `conditional`，不等于长期生产稳定性验收 |
 | MOD-26 | M4 起逐平台验收 | todo | `Potatos498` 已登记，未授权启动 |
-| MOD-27 | M1.6 | review | `zemeng` 领域核心 PR #37、`goo122` 存储 PR #38 已合并；版本图、Fake、SQLite 原子提交及重启读回已离线验证；真实事实流、消费者接线和数据删除未完成 |
-| MOD-28 | M1.6 | review | `zemeng` / PR #37 已合并离线 KEEP/RECHECK 与显式 REVISE 候选；持久图消费者本地验收完成、待非作者评审；真实事实订阅、AgentArts 驱动和 Evidence 闭环未完成 |
-| MOD-29 | M1.5 第一优先 | todo | `zemeng` / AgentArts 云端基础、身份、MaaS/模型和部署适配；无部署/API 证据 |
-| MOD-30 | M1.5 第一优先 | todo | `zemeng` / AgentArts Agent/Workflow、知识、MCP/Skill 与工具提案映射；未提供 |
-| MOD-31 | M1.5/M3 | todo | `zemeng` / AgentArts 多 Agent 与评估；未提供 |
-| MOD-32 | M1.5/M5 第一优先 | todo | `zemeng` / AgentArts 发布、API、观测、profile 证据与端到端验收；未提供 |
+| MOD-27 | M1.6 | review | `zemeng` / main 已有版本图及 SQLite/Fake 原子 `appendBatch`；事实查询/变化流与自动事实投影的后续增量仍在堆叠分支，真实事实来源、确认消费和数据删除未完成 |
+| MOD-28 | M1.6 | in_progress | `zemeng` / main 已有离线影响分析、显式修复预览/提交和原子 CAS；自动事实投影、外部事实身份落地、真实 AgentArts 驱动和 Evidence 闭环未完成 |
+| MOD-29 | M1.5 第一优先 | in_progress | `zemeng` / AgentArts Runtime 适配与配置入口已有 provisional 实现；真实项目、版本、部署、API 和 trace 读回仍无成功证据 |
+| MOD-30 | M1.5 第一优先 | in_progress | `zemeng` / PR #49 已进入 main，工具提案/审批/continuation 离线链可用；Workflow 输入 #72 和载荷边界 #80 尚未进入 main，真实 MCP/Skill 与目标系统读回未完成 |
+| MOD-31 | M1.5/M3 | in_progress | `zemeng` / PR #58 已合并固定合成评估 runner；真实多 Agent 角色、重复运行指标和平台评估未完成 |
+| MOD-32 | M1.5/M5 第一优先 | in_progress | `zemeng` / 手动验收脚手架和失败诊断已有记录；真实发布、健康读回、trace、成本、回滚和端到端成功证据未提供 |
 
 ### 2.1 开工顺序与阻塞边界
 
 1. Core Runtime Profile 1 已冻结，可供 Competition Profile 复用；事件/Host/Agent/Tool 等未冻结面固定精确提交并保留迁移空间。
-2. 先交付 `CoordinationPort`、`CloudAgentPort`、`ToolExecutionPort` 和 Evidence 最小消费语义、Fake 与注入槽；ModelPort 仅为可选 Local Profile 所需，不阻塞比赛主路径。
-3. MOD-29 建立 AgentArts 项目、身份、Agent/Workflow、版本、部署和 API 读回；MOD-30 先完成一条工具提案路径；MOD-32 从第一天记录 deployment、trace、usage、失败和回滚。
-4. 首条真实闭环为任务→AgentArts Agent/Workflow→只读工具提案→本地 Policy/ToolGateway→目标系统读回→AgentArts 最终回答→Evidence。正式 Demo 不静默回退 Local。
-5. 在 Golden Path 后接入 MOD-09/27/28，演示版本化世界状态和 `KEEP/RECHECK/REVISE`；再扩大知识、MCP/Skill、多 Agent 和评估。
+2. main 中的 provisional Coordination/CloudAgent、ToolExecution 与受限工作区列表/读取只作为受控开发面；语音、记忆和认知堆叠分支必须先从最新 main 重建，不能用“已合并到非 main”冒充集成。
+3. PR #84 已将 `Runtime → Fake AgentArts → workspace.read_text → waiting_approval → allow_once → ToolGateway → continuation → 最终回答/Evidence` 离线链合入 main，仍仅为 provisional/mock；PR #86 已在最新 `main@02191e8` 上重建 #56 的 Desktop 只读 AgentArts 配置状态，当前 `head@9058686` 的标准 CI 已通过，等待非作者评审与合并；其进入 main 后再准备 #78 的桌面组合。
+4. 离线链稳定后再建立真实 AgentArts 项目、身份、Agent/Workflow、版本、部署和 API 读回；从第一天记录 deployment、trace、usage、失败和回滚。
+5. 首条真实闭环必须包含只读工具提案、本地 Policy/ToolGateway、目标系统读回、AgentArts 最终回答和 Evidence；正式 Demo 不静默回退 Local。
 6. 现有 `runAgent()`、ModelGateway、盘古/自有 Provider 代码保留为可选 Local baseline；当前不投入独立新功能，不计入比赛退出条件。
 7. MOD-25 当前工作包已由 `Potatos498` 完成；MOD-20～26 分工不因 AgentArts 调整而改变。
 8. 公共目录、锁文件和迁移由 `goo122` 集成；`zemeng` 与业务模块交付公开注册入口，不同时编辑应用根装配。
@@ -151,7 +144,7 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；PR #
 
 - 赛事：华为 ICT 创新赛道及 AgentArts 赛题已确认；仍需正式通知确认届次、截止时间、评分细则和提交材料。
 - 模型：未验证盘古账号、具体部署、工具调用、成本与限流。
-- AgentArts：区域、项目、身份、模型、Workflow/API、费用和日志条件均未读回；当前没有仓库适配或云端验收证据。
+- AgentArts：仓库已有 provisional Runtime 适配、Workflow 输入和离线工具循环，但区域、真实项目/版本/部署、成功 API/trace、费用和日志条件仍未形成可复现读回证据。
 - Profile：当前只实施 Competition Profile；若 Local 兼容工作抢占比赛主路径、或 Competition 失败后静默回退 Local，会造成赛题证据失真。
 - 接口：只有 Core Runtime Profile 1 冻结；未提供能力若被 UI、Fake 或 Schema 误当作可用，会形成错误依赖。
 - 平台：首批邮箱/日历/社交账号类型未知；先做可替换契约，不虚构全平台能力。
@@ -176,6 +169,8 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；PR #
 - 2026-09-07：登记 MOD-25 增强工作包「地理编码 GeoNames 第二源」（分支 `feat/mod-25-geonames`，用户明确授权）。动机与实测证据：合并 main 后对 26 个世界大城市以简体中文查询，16 高置信命中、7 个 `NOT_FOUND`（纽约/首尔/温哥华/利马/内罗毕/伊斯坦布尔/胡志明市）、3 个低置信误解析（东京→江苏、伦敦→安大略、罗马→昆士兰）、1 个高置信静默错误（开罗→美国伊利诺伊州 Cairo，PPLA2 人口 1733 被 `ADMIN_SEAT_CODES` 无条件信任，而埃及开罗根本不在 `zh` 索引返回里）。范围：`OpenMeteoProvider` 增加可选 `geonamesUsername`（装配层注入，不进仓库），配置后对汉字输入增加 GeoNames 官方 API `name_equals` 精确名检索层——返回 geonameId 再经 Open-Meteo `/v1/get?id=` 取规范记录（时区/人口/feature_code 齐全，两源同为 GeoNames id 可按 id 合并），命中即「输入串是该地点已知名」的精确语义，参与 exact-match 排序。`secure.geonames.org` 已实测可达（免费账号，日 3 万次额度）；Wikidata/Nominatim 从本机不可达已排除。失败语义：GeoNames 层任何错误降级为跳过该层，回退现有 Open-Meteo 行为。不在范围：`ADMIN_SEAT_CODES` 置信度规则收紧与提示串 exact-match 修复（另行授权）、显示名简繁统一、非汉字输入的第二源检索。本条只是登记，本工作包尚无实现、无测试证据。
 - 2026-09-07：MOD-25 增强工作包「地理编码 GeoNames 第二源」实现完成。交付：`OpenMeteoProvider` 新增可选 `geonamesUsername`/`geonamesBaseUrl` 装配项；配置后汉字输入增加 GeoNames 官方 API `name_equals` 精确名检索层（并行于既有语言轮，展示名优先序置于最前），命中 id 经 Open-Meteo `/v1/get` 规范化（与搜索同 id 体系、同字段），`name_equals` 命中作为「输入串是已知名」参与 exact-match 排序（`伦敦`→`倫敦` 不同写法不阻断）；该层尽力而为——账号缺失不发请求、401/额度超限/网络失败降级为仅 Open-Meteo、`/v1/get` 404 只丢该候选、层内取消不被吞。manifest `configSchema` 与工具描述同步。实测：**26 个世界大城市简体查询从 16/26 高置信（7 个 NOT_FOUND、3 个误解析、1 个开罗静默错）提升到 26/26 高置信**（纽约→America/New_York、开罗→Africa/Cairo、东京→Asia/Tokyo 等）；根 `npm run check` 退出码 0；weather 包离线 66 项 62 通过＋4 项门控跳过，`PA_WEATHER_LIVE=1 PA_GEONAMES_USERNAME=<账号>` 下 66/66 全过（新增 GeoNames 端到端 live 测试）。账号不进仓库，由装配层从环境变量注入（README 已写明 `PA_GEONAMES_USERNAME` 约定与 `apps/runtime` 接线归 `goo122`）。未在本工作包内：`ADMIN_SEAT_CODES` 置信度规则收紧、提示串 exact-match 修复（`开罗+Cairo` 类场景现由 GeoNames 层覆盖，机制 bug 仍在）、显示名简繁统一。ROADMAP 相对链接检查通过。
 - 2026-09-07：PR #24（ARCH-03）、PR #26（MOD-04/05 离线审批与工具执行）和 PR #25（Desktop 工作区与模型管理）已进入 `main`。合并后复查中，完整 `npm run check`、Runtime Application smoke 与文字 smoke 通过；基础 Electron smoke 仍保留 372px 旧断言而与 420px 实现不一致，workspace smoke 在当前 Windows/DPI 下出现 1.5px 居中偏差。用户决定先保留合并结果，这两项作为 Desktop 回归债务继续跟踪，不据此把 MOD-11/12/13 标为 done。
+- 2026-09-07：登记 MOD-23 通知汇总策略工作包（分支 `feat/mod-23-notifications`）。用户本轮明确授权启动，台账由 `todo` 改为 `in_progress`。按 PROJECT_STRUCTURE §11 登记要素：负责人 `Potatos498`、评审者 `goo122`、独占目录 `packages/notifications/`、生产依赖仅 `@personal-agent/contracts`（MOD-03 Runtime 调度经结构兼容 `ScheduleInput` 的建议接入，不导入 apps——与 productivity 同款边界）。公共输入输出：`ConnectorItem` 标准事件流＋用户规则（安静时段〔IANA 时区、DST 安全、支持跨午夜窗口〕、暂停〔含恢复时刻〕、聚合〔窗口/条数上限/来源筛选〕）→ 通知裁定（立即条目或摘要请求，含裁定理由与所应用规则的披露）。Fake 验收：fake 时钟注入验证安静时段进出、暂停与恢复、聚合窗口关闭与上限触发、跨午夜与跨 DST 的安静窗口、dedupeKey 去重；工具经 FakeToolHost 的 schema/scope 校验。不在范围：通知展示（`zemeng` 桌面端）、调度执行（MOD-03）、真实事件源（feeds/calendar 由各自工作包提供）。本条只是登记，MOD-23 尚无实现、无测试证据。
+- 2026-09-07：MOD-23 实现完成，台账由 `in_progress` 改为 `review`，模块设计补 [mod-23](modules/mod-23.md)。交付 `packages/notifications`（`@personal-agent/notifications`）：裁定次序＝暂停 > 聚合 > 安静；安静窗口经 `Intl` 换算 DST 安全（纽约回拨夜同一墙上时刻仍安静）、支持跨午夜（start>end＝晚段或早段）、含 start 不含 end；聚合窗口自最早未裁事件起算、`maxItems` 先到先触发、非聚合来源立即交付、摘要交付尊重安静；dedupeKey 去重含已交付持久标记；`planSchedules` 产安静结束与摘要关闭两条建议（scheduleId＝幂等键确定性，字段与 Runtime `ScheduleInput` 结构兼容、不导入 apps）；StoragePort 注入持久化待裁队列，无自有调度器/任务库；工具 `notifications.status` 只读（scope `notifications:read`），storage/policy 必填不静默降级。根 `package.json` build 脚本 +1 行（weather 之后）、锁文件 +14 行纯工作区链接（无新外部依赖），归 `goo122` 集成确认。实测：根 `npm run check` 退出码 0（架构门禁通过），notifications 12 项全过（安静判定/DST/去重/暂停恢复/聚合三触发/调度建议兼容性/工具校验），全离线无网络。ROADMAP 相对链接检查通过。
 - 2026-09-07：登记 MOD-21 邮件连接器第一个提供商工作包「QQ 邮箱」（分支 `feat/mod-21-mail-qq`，按 MODULE_ASSIGNMENTS「邮件可按提供商拆分」）。用户本轮明确授权启动并指定范围仅 QQ 邮箱。按 PROJECT_STRUCTURE §11 登记要素：负责人 `Potatos498`、评审者 `goo122`、独占目录 `packages/connectors/mail/`（族入口，单负责人）。公共输入输出：账号游标/查询/动作 → 邮件页（`ConnectorItem`，`occurredAt`=邮件 Date 头的 UTC 瞬间，`sensitivity: 'private'`）、动作结果（`mark_seen` 幂等；`send` 为外部写——**发送超时映射为 `state: 'unknown'` 并要求先核对结果，同幂等键重放返回先前结果不盲重试**，对应 PA-014）。增量语义：游标 = `uidValidity:lastUid`，仅返回 UID 更大的新邮件；`uidValidity` 变化 → `CURSOR_EXPIRED`（与 feeds 同规则）。依赖决策：新增外部依赖 `imapflow`（IMAP，imap.qq.com:993）与 `nodemailer`（SMTP，smtp.qq.com:465）——理由：真实账号集成需要协议正确的客户端，自写 TLS 协议栈未经真实验证风险更高；`fast-xml-parser` 已有获批先例，归 `goo122` 评审确认。Fake 验收：分页与增量、重复事件不重复投递、游标过期、mark_seen 幂等、send 超时→unknown→同键核对不重发；工具经 FakeToolHost 校验。真实验收：QQ 邮箱 IMAP/SMTP 服务开启＋授权码（用户侧操作），live 测试以 `PA_MAIL_LIVE=1` + 环境变量门控，发送类 live 另设独立开关防止误发。本条只是登记，本工作包尚无实现、无测试证据。
 - 2026-09-07：MOD-21「QQ 邮箱」工作包实现完成，台账改 `review`，模块设计补 [mod-21](modules/mod-21.md)。交付 `packages/connectors/mail`（`@personal-agent/mail`）：`MailProvider` 端口（listFolders/fetchPage/getMessage/markSeen/send）＋QQ 形状 Fake（收件箱 8 封含已读/无 Date 头/跨 DST 边界夹具）＋`QQMailProvider`（imapflow IMAP 读侧：UID SEARCH 增量、ENVELOPE+FLAGS 元数据、STORE \Seen；nodemailer SMTP 写侧：socketTimeout＋AUTH LOGIN；认证失败→UNAUTHORIZED、超时→TIMEOUT、连接故障→EXTERNAL_FAILURE）＋`MailService`（服务层聚合提供商分页至 limit；条目 `occurredAt`=Date 头、缺失回退抓取时刻并在 contentRef 标注、`sensitivity:'private'` 不含正文、`dedupeKey=folder:uid:messageId`）＋ConnectorPort 与只读工具 `mail.inbox`（scope `mail:read`）。**发送语义（PA-014）**：超时→`state:'unknown'`＋证据链 `unconfirmed`，同幂等键重放返回先前结果不产生第二次发送（离线测试固定）；`mark_seen` 幂等；`uidValidity` 变化→`CURSOR_EXPIRED`。外部依赖 `imapflow@1.7.8`＋`nodemailer@10.0.0`（MIT，锁文件 +288 行含传递依赖）与根 build 一行归 `goo122` 确认。实测：根 `npm run check` 退出码 0（架构门禁通过），全仓 164 项 159 通过＋5 项门控跳过（mail 2：live 读回/发送需授权码；weather 3），mail 离线 12 项全过。**QQ 真实链路未验证**（需用户开启 IMAP/SMTP 并提供授权码，双开关门控命令已写入 README），live 证据待补记后 `verification` 才能由 `conditional` 主张为已验证。ROADMAP 相对链接检查通过。
 - 2026-09-07：登记 MOD-20 待办与日历工作包（分支 `feat/mod-20-productivity`）。用户本轮明确授权启动，台账由 `todo` 改为 `in_progress`。按 PROJECT_STRUCTURE §11 登记要素：负责人 `Potatos498`、评审者 `goo122`、独占目录 `packages/productivity/` 与 `packages/connectors/calendar/`、生产依赖仅 `@personal-agent/contracts`。公共输入输出：待办/时间 → 条目（含状态机与 revision）＋触发定义（结构兼容 Runtime `ScheduleInput`，`missedRunPolicy` 对应 PA-009 的补跑/标记错过，`taskIdempotencyKey` 防重复提醒）；日历账号/时间窗 → `ConnectorItem` 事件（`validFor` 承载起止区间）与 `respond` 动作结果（幂等键）。Fake 验收：注入 fake 时钟/日历/FakeStorage/FakeToolHost 验证 CRUD 读回、时区与 DST、触发确定性、窗口增量去重与动作幂等。真实验收：PA-013 的真实日历提供商授权读回留待独立后续工作包。本条只是登记，MOD-20 尚无实现、无测试、无真实读回证据。
@@ -221,7 +216,7 @@ MOD-01/02 已通过 PR #1 评审并集成，MOD-03 已通过 PR #5 集成；PR #
 - 端口 provisional，真实 AgentArts 仍 unavailable；完整范围与验证见 [工作包](modules/COMPETITION-PORTS-01.md)。
 - 下一步为 zemeng 消费评审，然后补云适配与工具提案/执行结果契约；不能将文字 Fake 视为 Golden Path 完成。
 
-当前继续入口以[接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md)和模块台账为准。Core Runtime Profile 1 可稳定消费；下一公共接口工作是 Model/Coordination/Memory/ToolExecution/Evidence/Artifact 的最小端口与 Fake。MOD-05 已具备任务级 SQLite 授权、审批恢复和本地 Evidence，但跨任务持续授权、真实 SecretStore、公开 Evidence 内容和真实写入恢复仍未完成。PR #8 的历史冲突由原负责人处理；PR #19 已合并。
+当前继续入口以[接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md)和模块台账为准。Core Runtime Profile 1 可稳定消费；PR #89～#91 已将 provisional Memory 端口/Fake、SQLite 事实与 delivery checkpoint 重启恢复，以及未生效暂存 → provider 确认 → 原子激活的持久 `KEEP/RECHECK` 投影合入 main。PR #98 已完成公开演示资料知识检索的 Fake Competition 审批链离线验收；真实知识工具提案、私人 Vault、生产 Memory capability、自动调度与真实数据仍未验收。MOD-05 已具备任务级持久授权、审批恢复和本地 Evidence，但跨任务持续授权、真实 SecretStore、公开 Evidence 内容和真实写入恢复仍未完成。
 
 ### MOD-25 地理编码修复工作包（PR #12，历史验收）
 

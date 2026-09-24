@@ -7,6 +7,7 @@
   "dependencies": {"@personal-agent/goals": "0.1.0-alpha.1"},
   "scripts": {
     "demo": "npm run build && node examples/meeting-replay.mjs",
+    "evaluate": "npm run build && node examples/impact-evaluation.mjs",
     "build": "npm run build --workspace=@personal-agent/goals && tsc -p tsconfig.json",
     "typecheck": "npm run build --workspace=@personal-agent/goals && tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test test/*.test.mjs"

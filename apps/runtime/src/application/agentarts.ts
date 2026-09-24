@@ -11,10 +11,12 @@ import {
 } from './runtime-application.js';
 
 export interface AgentArtsRuntimeApplicationOptions
-  extends Omit<RuntimeApplicationOptions, 'profile' | 'coordination' | 'text' | 'tools'> {
+  extends Omit<RuntimeApplicationOptions, 'profile' | 'coordination' | 'text'> {
   gatewayUrl: string;
   runtimeName: string;
   invokeMode?: 'debug' | 'published';
+  workflowGoalInput?: string;
+  responseMode?: 'text' | 'tool-proposal-json';
   authorizationProvider: AgentArtsAuthorizationProvider;
   fetchImpl?: AgentArtsFetch;
 }
@@ -30,22 +32,29 @@ export function createAgentArtsRuntimeApplication(
     gatewayUrl,
     runtimeName,
     invokeMode,
+    workflowGoalInput,
+    responseMode,
     authorizationProvider,
     fetchImpl,
     ...runtimeOptions
   } = options;
+  let application: RuntimeApplication;
   const cloud = new AgentArtsCloudAgentPort(
     {
       gatewayUrl,
       runtimeName,
       ...(invokeMode === undefined ? {} : {invokeMode}),
+      ...(workflowGoalInput === undefined ? {} : {workflowGoalInput}),
+      ...(responseMode === undefined ? {} : {responseMode}),
     },
     authorizationProvider,
     fetchImpl,
+    request => application.assertCompetitionExportAllowed(request),
   );
-  return createRuntimeApplication({
+  application = createRuntimeApplication({
     ...runtimeOptions,
     profile: 'huawei_ict_agentarts',
     coordination: new CompetitionCoordinator(cloud),
   });
+  return application;
 }

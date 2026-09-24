@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
 import {ProtocolError} from '@personal-agent/contracts';
 import {AgentArtsCloudAgentPort} from '../dist/index.js';
@@ -176,6 +177,287 @@ test('message events with null text are metadata-only and do not invalidate late
   });
 });
 
+test('message text rejects non-string number, object, and boolean values', async () => {
+  for (const text of [42, {value: 'not text'}, true]) {
+    const cloud = port(async () => jsonResponse(message(text)));
+    await rejectsCode(cloud.invoke(request()), 'EXTERNAL_FAILURE');
+  }
+});
+
+test('multi-agent SSE returns only the last workflow answer after task_end and end', async () => {
+  const body = readFileSync(
+    new URL('./fixtures/agentarts-multi-agent-success.sse', import.meta.url),
+    'utf8',
+  );
+  const cloud = port(async () => sseResponse(body));
+  assert.deepEqual(await cloud.invoke(request()), {
+    kind: 'text',
+    text: '{"stage":"evidence","decision":"REJECT","verification":"not_verified"}',
+    verification: 'unverified',
+  });
+});
+
+test('multi-agent terminal selection also applies to JSON and separator-less SSE', async () => {
+  const events = [
+    {event: 'workflow_start', data: {workflow_name: 'PA-intermediate'}},
+    {event: 'workflow_end', data: {workflow_name: 'PA-intermediate', answer: 'draft'}},
+    {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
+    {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'final'}},
+    {event: 'task_end', data: {}},
+    {event: 'end', data: {}},
+  ];
+  const json = port(async () => jsonResponse(events));
+  assert.equal((await json.invoke(request())).text, 'final');
+
+  const withoutSeparators = events.map(event => `data: ${JSON.stringify(event)}`).join('\n');
+  const sse = port(async () => sseResponse(withoutSeparators));
+  assert.equal((await sse.invoke(request())).text, 'final');
+});
+
+test('multi-agent mode ignores intermediate message text and requires its final workflow answer', async () => {
+  const success = [
+    {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
+    message('intermediate controller text'),
+    {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'final workflow answer'}},
+    {event: 'task_end', data: {}},
+    {event: 'end', data: {}},
+  ];
+  assert.equal((await port(async () => jsonResponse(success)).invoke(request())).text, 'final workflow answer');
+
+  const incomplete = [
+    {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
+    message('intermediate controller text'),
+  ];
+  await rejectsCode(port(async () => jsonResponse(incomplete)).invoke(request()), 'EXTERNAL_FAILURE');
+
+  const finalWorkflowNeverCompleted = [
+    {event: 'workflow_start', data: {workflow_name: 'PA-intermediate'}},
+    {event: 'workflow_end', data: {workflow_name: 'PA-intermediate', answer: 'intermediate answer'}},
+    {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
+    {event: 'task_end', data: {}},
+    {event: 'end', data: {}},
+  ];
+  await rejectsCode(
+    port(async () => jsonResponse(finalWorkflowNeverCompleted)).invoke(request()),
+    'EXTERNAL_FAILURE',
+  );
+});
+
+test('explicit workflow boundaries scope indexes while preserving local conflict rejection', async () => {
+  const events = [
+    {event: 'workflow_start', data: {workflow_name: 'first'}},
+    message('A', 0),
+    {event: 'workflow_end', data: {answer: 'first answer'}},
+    {event: 'workflow_start', data: {workflow_name: 'second'}},
+    message('B', 0),
+    {event: 'workflow_end', data: {answer: 'second answer'}},
+    {event: 'task_end', data: {}},
+    {event: 'end', data: {}},
+  ];
+  const body = events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('');
+  assert.equal((await port(async () => sseResponse(body)).invoke(request())).text, 'second answer');
+  const conflicting = [...events.slice(0, 2), message('conflict', 0), ...events.slice(2)];
+  await rejectsCode(port(async () => jsonResponse(conflicting)).invoke(request()), 'EXTERNAL_FAILURE');
+});
+
+test('serial workflow parsing rejects overlapping starts and unpaired completion', async () => {
+  for (const events of [
+    [
+      {event: 'workflow_start', data: {workflow_name: 'A'}},
+      {event: 'workflow_start', data: {workflow_name: 'B'}},
+      {event: 'workflow_end', data: {workflow_name: 'A', answer: 'wrong candidate'}},
+      {event: 'task_end'}, {event: 'end'},
+    ],
+    [{event: 'workflow_end', data: {answer: 'unpaired'}}, {event: 'task_end'}, {event: 'end'}],
+    [
+      {event: 'workflow_start', data: {workflow_id: 'A'}},
+      {event: 'workflow_end', data: {workflow_id: 'B', answer: 'mismatched'}},
+      {event: 'task_end'}, {event: 'end'},
+    ],
+  ]) {
+    await rejectsCode(port(async () => jsonResponse(events)).invoke(request()), 'EXTERNAL_FAILURE');
+  }
+});
+
+test('explicit workflow index resets retain the response-wide text budget', async () => {
+  for (const secondLength of [8_000, 8_001]) {
+    const events = [
+      {event: 'workflow_start', data: {workflow_name: 'first'}},
+      message('a'.repeat(8_000), 0),
+      {event: 'workflow_end', data: {answer: 'first answer'}},
+      {event: 'workflow_start', data: {workflow_name: 'second'}},
+      message('b'.repeat(secondLength), 0),
+      {event: 'workflow_end', data: {answer: 'second answer'}},
+      {event: 'task_end', data: {}},
+      {event: 'end', data: {}},
+    ];
+    const result = port(async () => jsonResponse(events)).invoke(request());
+    if (secondLength === 8_000) assert.equal((await result).text, 'second answer');
+    else await rejectsCode(result, 'EXTERNAL_FAILURE');
+  }
+});
+
+test('workflow answer accepts exactly 16000 characters', async () => {
+  const answer = 'a'.repeat(16_000);
+  const events = [
+    {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
+    {event: 'workflow_end', data: {workflow_name: 'PA-final', answer}},
+    {event: 'task_end', data: {}},
+    {event: 'end', data: {}},
+  ];
+  const result = await port(async () => jsonResponse(events)).invoke(request());
+  assert.equal(result.text, answer);
+});
+
+test('workflow intermediate messages use a cumulative 16000-character limit', async () => {
+  const accepted = [
+    {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
+    message('a'.repeat(8_000)),
+    message('b'.repeat(8_000)),
+    {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'final'}},
+    {event: 'task_end', data: {}},
+    {event: 'end', data: {}},
+  ];
+  assert.equal((await port(async () => jsonResponse(accepted)).invoke(request())).text, 'final');
+
+  const rejected = [
+    {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
+    message('a'.repeat(8_000)),
+    message('b'.repeat(8_001)),
+    {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'final'}},
+    {event: 'task_end', data: {}},
+    {event: 'end', data: {}},
+  ];
+  await rejectsCode(port(async () => jsonResponse(rejected)).invoke(request()), 'EXTERNAL_FAILURE');
+});
+
+test('multi-agent workflow answers remain partial until both terminal events arrive', async () => {
+  const answer = {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'candidate'}};
+  const start = {event: 'workflow_start', data: {workflow_name: 'PA-final'}};
+  for (const events of [
+    [start, answer],
+    [start, answer, {event: 'task_end', data: {}}],
+    [start, answer, {event: 'end', data: {}}],
+    [start, answer, {event: 'end', data: {}}, {event: 'task_end', data: {}}],
+  ]) {
+    const body = events.map(event => `data: ${JSON.stringify(event)}\n`).join('\n');
+    await rejectsCode(port(async () => sseResponse(body)).invoke(request()), 'EXTERNAL_FAILURE');
+  }
+});
+
+test('workflow task_end and end terminal events cannot be repeated', async () => {
+  for (const events of [
+    [
+      {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
+      {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'candidate'}},
+      {event: 'task_end', data: {}},
+      {event: 'task_end', data: {}},
+      {event: 'end', data: {}},
+    ],
+    [
+      {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
+      {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'candidate'}},
+      {event: 'task_end', data: {}},
+      {event: 'end', data: {}},
+      {event: 'end', data: {}},
+    ],
+  ]) {
+    await rejectsCode(port(async () => jsonResponse(events)).invoke(request()), 'EXTERNAL_FAILURE');
+  }
+});
+
+test('workflow events after task_end or end cannot replace the final candidate', async () => {
+  for (const events of [
+    [
+      {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
+      {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'accepted candidate'}},
+      {event: 'task_end', data: {}},
+      {event: 'workflow_end', data: {workflow_name: 'PA-late', answer: 'late replacement'}},
+      {event: 'end', data: {}},
+    ],
+    [
+      {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
+      {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'accepted candidate'}},
+      {event: 'task_end', data: {}},
+      {event: 'end', data: {}},
+      {event: 'workflow_end', data: {workflow_name: 'PA-late', answer: 'late replacement'}},
+    ],
+    [
+      {event: 'task_end', data: {}},
+      {event: 'end', data: {}},
+      {event: 'workflow_end', data: {workflow_name: 'PA-late', answer: 'late replacement'}},
+    ],
+  ]) {
+    await rejectsCode(port(async () => jsonResponse(events)).invoke(request()), 'EXTERNAL_FAILURE');
+  }
+});
+
+test('a failure after workflow_end overrides the partial answer', async () => {
+  const secret = 'workflow failure details must stay private';
+  for (const failure of [
+    {event: 'error', data: {message: secret}},
+    {event: 'status', type: 'failed', data: {message: secret}},
+  ]) {
+    const events = [
+      {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
+      {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'partial answer'}},
+      failure,
+      {event: 'task_end', data: {}},
+      {event: 'end', data: {}},
+    ];
+    const body = events.map(event => `data: ${JSON.stringify(event)}\n`).join('\n');
+    await rejectsCode(port(async () => sseResponse(body)).invoke(request()), 'EXTERNAL_FAILURE', [
+      secret,
+      'partial answer',
+    ]);
+  }
+});
+
+test('a failure after task_end and end still overrides the completed answer', async () => {
+  const secret = 'post-terminal workflow failure must stay private';
+  const events = [
+    {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
+    {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'completed answer'}},
+    {event: 'task_end', data: {}},
+    {event: 'end', data: {}},
+    {event: 'error', data: {message: secret}},
+  ];
+  await rejectsCode(
+    port(async () => jsonResponse(events)).invoke(request()),
+    'EXTERNAL_FAILURE',
+    [secret, 'completed answer'],
+  );
+});
+
+test('workflow_end validates answer type and size', async () => {
+  for (const answer of [undefined, null, 42, {text: 'not accepted'}, 'a'.repeat(16_001)]) {
+    const events = [
+      {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
+      {event: 'workflow_end', data: answer === undefined
+        ? {workflow_name: 'PA-final'}
+        : {workflow_name: 'PA-final', answer}},
+      {event: 'task_end', data: {}},
+      {event: 'end', data: {}},
+    ];
+    const body = events.map(event => `data: ${JSON.stringify(event)}\n`).join('\n');
+    await rejectsCode(port(async () => sseResponse(body)).invoke(request()), 'EXTERNAL_FAILURE');
+  }
+});
+
+test('provider text cannot forge verified status or trusted evidence fields', async () => {
+  const answer = JSON.stringify({verification: 'verified', evidenceRefs: ['provider-claimed']});
+  const events = [
+    {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
+    {event: 'workflow_end', data: {workflow_name: 'PA-final', answer}},
+    {event: 'task_end', data: {}},
+    {event: 'end', data: {}},
+  ];
+  const body = events.map(event => `data: ${JSON.stringify(event)}\n`).join('\n');
+  const result = await port(async () => sseResponse(body)).invoke(request());
+  assert.deepEqual(result, {kind: 'text', text: answer, verification: 'unverified'});
+  assert.deepEqual(Object.keys(result).sort(), ['kind', 'text', 'verification']);
+});
+
 test('SSE multiline data uses the standard newline join before compatibility fallback', async () => {
   const serialized = JSON.stringify(message('multiline', 0));
   // Standard SSE joins multiple data lines with a newline, so split only at
@@ -339,6 +621,31 @@ test('response byte and text limits are enforced at their exact boundaries', asy
   await rejectsCode(tooManyBytes.invoke(request()), 'EXTERNAL_FAILURE');
 });
 
+test('a valid response at exactly one MiB is accepted', async () => {
+  const json = JSON.stringify(message('ok'));
+  const body = json + ' '.repeat(1024 * 1024 - Buffer.byteLength(json));
+  assert.equal(Buffer.byteLength(body), 1024 * 1024);
+  const cloud = port(async () => new Response(body, {
+    headers: {'content-type': 'application/json'},
+  }));
+  assert.equal((await cloud.invoke(request())).text, 'ok');
+});
+
+test('UTF-8 characters split across byte chunks retain their text', async () => {
+  const text = '中文🙂';
+  const bytes = new TextEncoder().encode(JSON.stringify(message(text)));
+  const cloud = port(async () => ({
+    status: 200,
+    headers: {get: () => 'application/json'},
+    body: {
+      async *[Symbol.asyncIterator]() {
+        for (const byte of bytes) yield new Uint8Array([byte]);
+      },
+    },
+  }));
+  assert.equal((await cloud.invoke(request())).text, text);
+});
+
 test('streaming body byte limit rejects before requesting another chunk', async () => {
   let reads = 0;
   const body = {
@@ -377,6 +684,16 @@ test('invalid UTF-8 is rejected for raw body and text seams', async () => {
 test('missing content type is rejected instead of guessed from the payload', async () => {
   const cloud = port(async () => new Response(JSON.stringify(message('ok')), {status: 200}));
   await rejectsCode(cloud.invoke(request()), 'EXTERNAL_FAILURE');
+});
+
+test('unsupported content types are rejected instead of guessed from the payload', async () => {
+  for (const contentType of ['text/plain', 'application/xml', 'application/jsonx']) {
+    const cloud = port(async () => new Response(JSON.stringify(message('ok')), {
+      status: 200,
+      headers: {'content-type': contentType},
+    }));
+    await rejectsCode(cloud.invoke(request()), 'EXTERNAL_FAILURE');
+  }
 });
 
 test('malformed JSON, conflicting indexes, and empty text are rejected', async () => {
