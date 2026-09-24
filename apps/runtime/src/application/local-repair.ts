@@ -67,7 +67,9 @@ function requireSource(runtime: TaskRuntime, intent: LocalRepairIntent): unknown
   if (source.state !== 'succeeded' || !source.evidenceRefs.includes(intent.evidenceId)
     || !record || record.taskId !== intent.sourceTaskId || record.toolName !== intent.sourceTool.name
     || record.toolVersion !== intent.sourceTool.version || record.state !== 'confirmed'
-    || record.policyDecision !== 'allow' || !record.executionStarted) denied();
+    || record.policyDecision !== 'allow' || !record.executionStarted
+    || !runtime.matchesToolExecutionInput(record, {arguments: intent.sourceTool.arguments,
+      scopeRef: intent.evidenceId})) denied();
   const approval = runtime.getApproval(intent.evidenceId);
   if (approval.state !== 'allowed' || approval.taskId !== intent.sourceTaskId
     || approval.toolName !== intent.sourceTool.name

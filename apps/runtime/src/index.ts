@@ -271,6 +271,12 @@ function canonical(value: unknown): string {
   return '{' + Object.keys(record).sort().map(key => JSON.stringify(key) + ':' + canonical(record[key])).join(',') + '}';
 }
 
+function toolInputDigest(taskId: string, payload: {
+  toolName: string; toolVersion: string; arguments: Record<string, unknown>; scopeRef: string;
+}): string {
+  return createHash('sha256').update(canonical({taskId, payload})).digest('hex');
+}
+
 function requireText(value: string, name: string): string {
   if (!value.trim()) throw new RuntimeError('INVALID_ARGUMENT', name + ' must not be empty');
   return value;
@@ -622,7 +628,7 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
             throw new RuntimeError('REVISION_CONFLICT', 'Tools can only be invoked for a running task');
           }
           const runId = request.idempotencyKey ?? this.idFactory();
-          const inputDigest = createHash('sha256').update(canonical({taskId: request.taskId, payload: request.payload})).digest('hex');
+          const inputDigest = toolInputDigest(request.taskId, request.payload);
           const previousRow = this.db.prepare('SELECT record_json FROM tool_execution_records WHERE evidence_id = ?').get(runId);
           if (previousRow) {
             const previous = JSON.parse(previousRow.record_json as string) as ToolExecutionRecord;
@@ -773,6 +779,16 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     const row = this.db.prepare('SELECT task_id FROM task_idempotency WHERE idempotency_key = ?')
       .get(requireText(idempotencyKey, 'idempotencyKey')) as {task_id: string} | undefined;
     return row ? this.getTask(row.task_id) : undefined;
+  }
+
+  /** Compare the persisted request with the exact trusted source invocation. */
+  matchesToolExecutionInput(record: ToolExecutionRecord, input: {
+    arguments: Record<string, unknown>; scopeRef: string;
+  }): boolean {
+    return record.inputDigest === toolInputDigest(record.taskId, {
+      toolName: record.toolName, toolVersion: record.toolVersion,
+      arguments: input.arguments, scopeRef: input.scopeRef,
+    });
   }
 
   private writeSnapshot(snapshot: TaskSnapshot): void {
