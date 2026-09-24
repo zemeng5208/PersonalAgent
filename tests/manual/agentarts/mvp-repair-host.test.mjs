@@ -33,6 +33,7 @@ test('confirmed synthetic read produces exact graph-bound candidate, separate ap
   const memoryPath = join(directory, 'memory.sqlite');
   let host;
   let app;
+  let decisionCalls = 0;
   t.after(() => {
     try { app?.close(); } finally { host?.close(); rmSync(directory, {recursive: true, force: true}); }
   });
@@ -55,7 +56,13 @@ test('confirmed synthetic read produces exact graph-bound candidate, separate ap
       ]}};
   });
   async function open() {
-    host = createSyntheticRepairHost(memoryPath);
+    host = createSyntheticRepairHost(memoryPath, {decision: {async decide(request) {
+      decisionCalls += 1;
+      assert.equal(request.events.length, 1);
+      assert.deepEqual(request.events[0].facts, [{id: 'meeting/time', revision: 2}]);
+      assert.deepEqual(request.events[0].authorization, {state: 'none', revision: 0});
+      return [];
+    }}});
     app = createRuntimeApplication({path: runtimePath, profile: 'huawei_ict_agentarts',
       coordination: cloud, repairCandidateVersion: '1.0', localRepair: host.localRepair,
       ...createSyntheticMeetingToolset(fixtureRoot, input => host.projectConfirmed(input))});
@@ -72,6 +79,8 @@ test('confirmed synthetic read produces exact graph-bound candidate, separate ap
   const source = await state(app, taskId, ['succeeded', 'failed']);
   assert.equal(source.state, 'succeeded');
   assert.equal(cloud.requests.length, 2);
+  assert.equal(decisionCalls, 1);
+  assert.deepEqual(app.runtime.loadCheckpoint(taskId, 'mvp-local-impact-advice'), []);
   if (process.env.PA_MVP_CONTEXT_OUTPUT) {
     const context = cloud.requests[1].continuation.result.repairContext;
     writeFileSync(process.env.PA_MVP_CONTEXT_OUTPUT, JSON.stringify(context, null, 2));

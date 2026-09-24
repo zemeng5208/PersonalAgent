@@ -22,6 +22,8 @@ const competitionMode = !fakeMode && runtimeProfile === 'huawei_ict_agentarts';
 const syntheticMvp = process.env.PA_DESKTOP_SYNTHETIC_MVP === '1';
 const agentArtsResponseMode = process.env.PA_AGENTARTS_RESPONSE_MODE;
 const repairCandidateVersion = process.env.PA_AGENTARTS_REPAIR_CANDIDATE_VERSION;
+const layaPort = process.env.PA_DESKTOP_LAYA_PORT;
+const layaKey = process.env.PA_DESKTOP_LAYA_API_KEY;
 const taskSubmitOptions = competitionMode ? {timeoutMs: 180_000} : {};
 if (fakeMode || fakeModelMode) app.setPath('userData', app.isPackaged
   ? path.join(app.getPath('temp'), `personal-agent-fake-${process.pid}`)
@@ -572,6 +574,10 @@ async function initializeRuntime() {
     || !syntheticMvp || agentArtsResponseMode !== 'tool-proposal-json')) {
     throw Error('版本化修复候选只允许合成 Competition JSON 模式显式启用');
   }
+  if ((layaPort !== undefined || layaKey !== undefined)
+    && (!syntheticMvp || !layaPort || !layaKey || !/^\d+$/.test(layaPort))) {
+    throw Error('本地 Laya 判断只允许显式合成 MVP 配置并要求回环端口及密钥');
+  }
   if (fakeMode) {
     const {FakeRuntime} = await import('@personal-agent/testkit');
     runtime = new FakeRuntime({mode: 'test', scenario: 'success'});
@@ -593,8 +599,14 @@ async function initializeRuntime() {
           (...args) => syntheticRepairHost.projectConfirmed(...args))
         : {};
       if (syntheticMvp) {
+        const cognitionModule = layaPort ? await import('@personal-agent/cognition') : undefined;
+        const decision = layaPort ? (() => {
+          const {ProactiveDecisionService, LayaDecisionModel, LocalLayaHttpTransport} = cognitionModule;
+          return new ProactiveDecisionService(new LayaDecisionModel(
+            new LocalLayaHttpTransport(Number(layaPort), () => layaKey)));
+        })() : undefined;
         syntheticRepairHost = (await import('./competition-repair-host.js')).createSyntheticRepairHost(
-          path.join(path.dirname(dbPath), 'mvp-synthetic-memory.sqlite'));
+          path.join(path.dirname(dbPath), 'mvp-synthetic-memory.sqlite'), {decision});
       }
       runtimeApplication = runtimeModule.createAgentArtsRuntimeApplication({
         path: dbPath,

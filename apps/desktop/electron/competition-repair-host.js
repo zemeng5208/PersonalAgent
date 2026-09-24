@@ -1,6 +1,7 @@
 import {isDeepStrictEqual} from 'node:util';
 import {openSqliteMemoryHost} from '@personal-agent/memory/sqlite';
 import {createMemoryProjectionApplication, createPendingImpactApplication} from '@personal-agent/runtime/application';
+import {decideProjectedFactImpact} from '@personal-agent/cognition';
 import {projectSyntheticMeetingResult} from './competition-synthetic-workspace.js';
 import {projectSyntheticRepairContext, SYNTHETIC_REPAIR_EXPORT_POLICY} from './competition-repair-context.js';
 
@@ -18,7 +19,7 @@ const node = (id, kind, summary, dependencies, validFrom, validUntil) => ({
 const same = (a, b) => a?.id === b?.id && a?.revision === b?.revision;
 
 /** Explicit Competition development fixture; its memory store never becomes a general user data source. */
-export function createSyntheticRepairHost(memoryPath) {
+export function createSyntheticRepairHost(memoryPath, {decision} = {}) {
   const memoryHost = openSqliteMemoryHost(memoryPath);
   memoryHost.provision(namespace);
   const memory = memoryHost.bind(namespace, {allowedSensitivities: ['private']});
@@ -161,6 +162,13 @@ export function createSyntheticRepairHost(memoryPath) {
       const report = reports.find(item => item.graphRevision === context.expectedGraphRevision);
       if (!report || context.targets.some(target => !report.items.some(item =>
         same(item.node, target.node) && item.action === 'RECHECK'))) fail();
+      if (decision) {
+        const suggestions = await decideProjectedFactImpact(decision, {
+          projection: projectionReceipt.projection, impact: report,
+          deadline: new Date(Date.now() + 15_000).toISOString(), signal,
+        });
+        runtime.saveCheckpoint(taskId, 'mvp-local-impact-advice', suggestions);
+      }
       const binding = {fact: context.fact, node: context.projectedFact,
         graphRevision: context.expectedGraphRevision,
         allowedTargets: context.targets.map(item => item.node),
