@@ -112,10 +112,13 @@ loopback Laya server supplied by a trusted host. The service returns suggestions
 only; uncalibrated suppression or execution labels, low confidence, and model
 failure escalate to AgentArts instead of changing task, approval or tool state.
 
-`decideProjectedFactImpact(decision, {projection, impact, deadline, signal})`
+`decideProjectedFactImpact(decision, {graphNamespace, projection, impact, deadline, signal})`
 accepts the committed receipt from Runtime's existing memory projection and a
-matching impact report. It asks the decision service only for Fact changes that
-caused RECHECK, with at most four links per call. This adapter neither polls the
+matching impact report. The trusted host binds `graphNamespace`; each cause's
+`currentRevision` must match the projected Fact node revision. It asks the
+decision service only for Fact changes that caused RECHECK, with at most four
+links per call. Empty and unrelated batches still check cancellation and
+deadline without calling the model. This adapter neither polls the
 feed nor starts the Laya process. The synthetic local probe is
 `examples/projected-fact-laya-probe.mjs`; it requires an already running local
 server plus `LAYA_PORT` and `LAYA_API_KEY` in its process environment. The
