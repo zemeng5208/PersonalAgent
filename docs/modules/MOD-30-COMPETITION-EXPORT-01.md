@@ -32,6 +32,12 @@ receipt 同时保存出机规则版本，重启后缺失或版本不同直接拒
 `createAgentArtsRuntimeApplication` 另透传 PR #99 的 `workflowGoalInput`：
 省略保持 `{query: goal}`，配置后由 adapter 发 `{inputs: {[name]: goal}}`。
 
+消费 PR #103 `bcee4d7` 的显式 `responseMode: 'tool-proposal-json'`（缺省 `text`）：
+云调用一输出无授权字段的 JSON 工具提案；Runtime 审批与投影后发起新的云调用二，
+仅发送 confirmed continuation。两个调用共享本地 task，独立 Request-Id，不称同云 run 恢复。
+factory 注入同步 `beforeSend`：凭据读取后、实际 fetch 前重新核对当前任务 running、
+原 deadline、持久 receipt/投影、规则版本、最新 accepts 与 signal。mock receipt 不能通过真实出口。
+
 ## 验证与证据边界
 
 - Node 24.15.0；依赖安装使用 npm 11.16.0（与仓库 npm 11.12.x 有版本偏差）。
@@ -43,13 +49,15 @@ receipt 同时保存出机规则版本，重启后缺失或版本不同直接拒
   固定该测试提交时钟，保留真实 timeout timer 和原断言后补跑 Runtime 90/90、integration 11/11；
   未重复全套。未运行 Electron、真实模型、云浏览器或长期服务。
 - 评审修复定向验证 36/36：包含投影期间撤权、磁盘重启后收紧规则拒绝旧投影、原工具不重做；
-  已纳入 PR #99 的 `cfdb170` Workflow 终态配对修复。后续真实适配器凭据等待后的最终 fetch
-  门禁由适配器与 Runtime factory 的独立消费增量继续接线，本片不能冒称已覆盖实际云发送。
+  已纳入 PR #99 的 `cfdb170` Workflow 终态配对修复。
+- 最终 fetch 门禁与两个 HTTP invocation 的 factory 消费定向 31/31 通过，包括凭据等待时撤权
+  后零第二次 fetch。HTTP 均为合成夹具，不是线上 AgentArts 成功证据。
 - 所有网络响应与提案均为显式离线夹具；`unverified` 测试输入不代表真实 AgentArts 已支持工具事件。
 
 ## 尚缺的真实链路
 
-PR #99 仍是文字 adapter，真实工具提案及 continuation 协议明确不可用。本片提供本地可信门禁，
+PR #103 的多 invocation JSON 模式已有消费验证；真实平台提案/工具/后续总结仍待单独验收。
+同云 run 原生暂停/恢复仍 unavailable。本片提供本地可信门禁，
 不会把云文字成功解释为工具执行完成，也不会回退 Local 或把真实调用标 mock。
 
 PR #78 的 loopback MCP 桥不在本 PR 中整体引入。历史桥只支持预创建、已批准、running 的任务。

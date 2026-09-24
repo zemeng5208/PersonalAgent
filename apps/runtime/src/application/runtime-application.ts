@@ -6,8 +6,8 @@ import {ToolGateway, toolArgumentsDigest} from '@personal-agent/tool-gateway';
 import {TaskRuntime} from '../index.js';
 import {createTextApplication, type TextApplication, type TextApplicationOptions} from './text.js';
 import type {ModelMessage} from '@personal-agent/models';
-import type {CoordinationPort} from '@personal-agent/coordination';
-import {startCoordinationTask, type CompetitionToolExport} from './coordination.js';
+import type {CoordinationPort, CoordinationRequest} from '@personal-agent/coordination';
+import {startCoordinationTask, assertCompetitionExportAllowed, type CompetitionToolExport} from './coordination.js';
 type SuccessfulResponse = Extract<Response, {outcome: 'ok'}>;
 
 const CONVERSATION_HISTORY_LIMIT = 20;
@@ -99,6 +99,11 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   }
 
   readEvents(afterSequence = 0): Event[] { return this.runtime.readEvents(afterSequence); }
+
+  /** Host-only real-adapter guard; never exposed as a wire or Renderer operation. */
+  assertCompetitionExportAllowed(request: CoordinationRequest): void {
+    assertCompetitionExportAllowed(this.runtime, this.tools, this.competitionToolExports, request);
+  }
 
   configureText(options: TextApplicationOptions): TextApplication['deployment'] {
     this.requireLocalText();

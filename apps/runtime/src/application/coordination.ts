@@ -53,6 +53,31 @@ function requireExportBinding(
   return binding;
 }
 
+/** Final trusted check for real adapter I/O, after asynchronous credential reads. */
+export function assertCompetitionExportAllowed(
+  runtime: TaskRuntime,
+  tools: AgentToolPort | undefined,
+  bindings: readonly CompetitionToolExport[],
+  request: {taskId: string; deadline: string; signal: AbortSignal; continuation?: CoordinationContinuation},
+): void {
+  if (!request.continuation) return;
+  const checkpoint = runtime.loadCheckpoint(request.taskId, 'competition-loop') as CompetitionCheckpoint | undefined;
+  const receipt = checkpoint?.receipts?.find(item => item.proposal.proposalId === request.continuation?.proposalId);
+  if (runtime.getTask(request.taskId).state !== 'running'
+    || runtime.loadCheckpoint(request.taskId, 'application-profile') !== 'huawei_ict_agentarts'
+    || runtime.loadCheckpoint(request.taskId, 'application-deadline') !== request.deadline
+    || !receipt || receipt.proposal.verification === 'mock'
+    || !isDeepStrictEqual(receipt.continuation, request.continuation)) {
+    throw new ProtocolError('UNAUTHORIZED', 'Competition export is not bound to this task');
+  }
+  const binding = requireExportBinding(receipt.proposal, request.taskId, tools, bindings);
+  if (!binding || !receipt.exportPolicyVersion || binding.exportPolicyVersion !== receipt.exportPolicyVersion) {
+    throw new ProtocolError('UNAUTHORIZED', 'Competition result export policy changed');
+  }
+  if (request.signal.aborted) throw new ProtocolError('CANCELLED', 'Competition result export cancelled');
+  if (Date.now() >= Date.parse(request.deadline)) throw new ProtocolError('TIMEOUT', 'Competition result export expired');
+}
+
 async function projectResult(binding: CompetitionToolExport, input: Parameters<CompetitionToolExport['project']>[0]): Promise<unknown> {
   let onAbort = () => {};
   const cancelled = new Promise<never>((_resolve, reject) => {
