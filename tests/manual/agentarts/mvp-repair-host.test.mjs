@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdtempSync, rmSync} from 'node:fs';
+import {mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -72,6 +72,10 @@ test('confirmed synthetic read produces exact graph-bound candidate, separate ap
   const source = await state(app, taskId, ['succeeded', 'failed']);
   assert.equal(source.state, 'succeeded');
   assert.equal(cloud.requests.length, 2);
+  if (process.env.PA_MVP_CONTEXT_OUTPUT) {
+    const context = cloud.requests[1].continuation.result.repairContext;
+    writeFileSync(process.env.PA_MVP_CONTEXT_OUTPUT, JSON.stringify(context, null, 2));
+  }
   const candidate = app.readRepairCandidate(taskId);
   assert.equal(candidate.candidate.expectedGraphRevision, 6);
   app.runtime.saveCheckpoint(taskId, 'competition-repair-candidate', {...candidate,
