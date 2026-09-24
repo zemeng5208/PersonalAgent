@@ -48,6 +48,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     this.localRepair = options.localRepair;
     if (this.localRepair && (!this.localRepair.graphNamespace?.trim() || !this.localRepair.bindingVersion?.trim()
       || typeof this.localRepair.resolveBinding !== 'function' || typeof this.localRepair.matchesSource !== 'function'
+      || typeof this.localRepair.withSourceLock !== 'function'
       || typeof this.localRepair.memory?.listCurrent !== 'function')) {
       throw new ProtocolError('INVALID_ARGUMENT', 'Invalid local repair host configuration');
     }

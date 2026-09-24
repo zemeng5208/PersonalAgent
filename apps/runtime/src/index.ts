@@ -768,6 +768,13 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     return structuredClone(this.transaction(() => this.submitInTransaction(input)));
   }
 
+  /** Trusted host read for binding an existing task before checking mutable state. */
+  findTaskByIdempotencyKey(idempotencyKey: string): TaskSnapshot | undefined {
+    const row = this.db.prepare('SELECT task_id FROM task_idempotency WHERE idempotency_key = ?')
+      .get(requireText(idempotencyKey, 'idempotencyKey')) as {task_id: string} | undefined;
+    return row ? this.getTask(row.task_id) : undefined;
+  }
+
   private writeSnapshot(snapshot: TaskSnapshot): void {
     this.db.prepare('UPDATE tasks SET state = ?, revision = ?, updated_at = ?, steps_json = ?, evidence_refs_json = ?, result_summary = ?, error_json = ?, cancel_requested = ? WHERE task_id = ?').run(
       snapshot.state,

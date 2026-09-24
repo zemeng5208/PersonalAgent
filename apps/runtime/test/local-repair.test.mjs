@@ -53,9 +53,17 @@ function fixture(t, overrides = {}) {
   let executions = 0;
   let binding;
   let fact;
+  let sourceQueue = Promise.resolve();
   const host = {
     graphNamespace: 'synthetic-meeting', bindingVersion: 'fixture-v1', sourceTool,
     memory: {async listCurrent() { return {snapshot: 'synthetic', facts: fact ? [structuredClone(fact)] : []}; }},
+    async withSourceLock(work) {
+      const before = sourceQueue;
+      let release;
+      sourceQueue = new Promise(resolve => {release = resolve;});
+      await before;
+      try {return await work();} finally {release();}
+    },
     resolveBinding: () => structuredClone(binding),
     matchesSource: ({result, fact}) => result.time === '17:00' && fact.summary === 'Meeting at 17:00',
   };
@@ -127,7 +135,10 @@ test('approved separate local task commits the selected plan by CAS and reads ba
   const f = fixture(t);
   const {client, taskId, evidenceId} = await f.source();
   const before = f.app.runtime.bindCoordinationStore(f.host.graphNamespace).read();
-  const repair = await f.repair(taskId, evidenceId);
+  const request = {sourceTaskId: taskId, evidenceId, idempotencyKey: 'approved-once',
+    deadline: new Date(Date.now() + 30_000).toISOString()};
+  const repair = f.app.submitLocalRepair(request);
+  assert.equal((await settle(f.app, repair.taskId, ['waiting_approval'])).state, 'waiting_approval');
   assert.equal(f.executions(), 1);
   assert.deepEqual(f.app.runtime.bindCoordinationStore(f.host.graphNamespace).read(), before);
   assert.equal((await client.call('approval.list', {taskId: repair.taskId})).items.length, 1);
@@ -145,6 +156,10 @@ test('approved separate local task commits the selected plan by CAS and reads ba
   f.replaceApp(reopened);
   assert.equal(reopened.runtime.getTask(repair.taskId).state, 'succeeded');
   assert.deepEqual(reopened.runtime.bindCoordinationStore(f.host.graphNamespace).read(), after);
+  const repeat = reopened.submitLocalRepair(request);
+  assert.equal(repeat.taskId, repair.taskId);
+  assert.equal(repeat.state, 'succeeded');
+  assert.equal(reopened.runtime.bindCoordinationStore(f.host.graphNamespace).read().revision, 5);
 });
 
 test('denied local approval leaves the graph and source task unchanged', async t => {
@@ -185,6 +200,38 @@ test('stale graph and denied selection both fail before a write', async t => {
     evidenceId: source2.evidenceId, idempotencyKey: 'out-of-scope', deadline: later()}),
   {code: 'UNAUTHORIZED'});
   assert.equal(f2.app.runtime.bindCoordinationStore(f2.host.graphNamespace).read().revision, 4);
+});
+
+test('candidate cannot silently remove a baseline plan dependency', async t => {
+  const f = fixture(t);
+  const {taskId, evidenceId} = await f.source();
+  const candidate = f.app.readRepairCandidate(taskId);
+  candidate.candidate.changes[0].dependencies = [];
+  f.app.runtime.saveCheckpoint(taskId, 'competition-repair-candidate', candidate);
+  assert.throws(() => f.app.submitLocalRepair({sourceTaskId: taskId, evidenceId,
+    idempotencyKey: 'sever-fact-link', deadline: later()}), {code: 'UNAUTHORIZED'});
+  assert.equal(f.app.runtime.bindCoordinationStore(f.host.graphNamespace).read().revision, 4);
+});
+
+test('shared source lock serializes Fact ingestion before the repair reads current Fact', async t => {
+  const f = fixture(t);
+  const {client, taskId, evidenceId} = await f.source();
+  const repair = await f.repair(taskId, evidenceId);
+  let entered;
+  const lockEntered = new Promise(resolve => {entered = resolve;});
+  let release;
+  const gate = new Promise(resolve => {release = resolve;});
+  const ingest = f.host.withSourceLock(async () => {
+    entered();
+    await gate;
+    f.setFact({...f.fact(), ref: {id: 'meeting', revision: 3}});
+  });
+  await lockEntered;
+  await approve(client, repair.taskId);
+  release();
+  await ingest;
+  assert.equal((await settle(f.app, repair.taskId, ['failed'])).state, 'failed');
+  assert.equal(f.app.runtime.bindCoordinationStore(f.host.graphNamespace).read().revision, 4);
 });
 
 test('unknown result after durable CAS survives restart and never replays the local write', async t => {
