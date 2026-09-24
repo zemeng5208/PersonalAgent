@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import {once} from 'node:events';
+import {createServer} from 'node:http';
 import {test} from 'node:test';
 import {ProactiveDecisionService} from '../dist/proactive-decision.js';
 import {LayaDecisionModel, LocalLayaHttpTransport} from '../dist/laya-decision.js';
@@ -27,6 +29,17 @@ test('same version is merged before one model call; changed authorization cannot
     [['REMIND', 'model'], ['MERGE', 'rule_duplicate']]);
   await assert.rejects(() => service.decide(request([event(), event({authorization: {state: 'revoked', revision: 1}})])),
     {code: 'INVALID_ARGUMENT'});
+});
+
+test('suggestions retain source when distinct sources reuse one event ID', async () => {
+  const service = new ProactiveDecisionService({async choose() {
+    return [{intervention: 'REMIND', confidence: 0.9},
+      {intervention: 'REQUEST_DECISION', confidence: 0.9}];
+  }});
+  const results = await service.decide(request([event({source: 'calendar'}), event({source: 'mail'})]));
+  assert.deepEqual(results.map(item => [item.source, item.eventId, item.intervention]), [
+    ['calendar', 'change-1', 'REMIND'], ['mail', 'change-1', 'REQUEST_DECISION'],
+  ]);
 });
 
 test('uncalibrated suppression and action labels never become executable results', async () => {
@@ -102,4 +115,36 @@ test('HTTP transport stays on authenticated loopback and does not return provide
     async () => new Response('secret remote error', {status: 500}));
   await assert.rejects(() => failed.infer({model: 'multilingual', state: {events: []}, questions: {}},
     new AbortController().signal), /^Error: Local Laya unavailable$/);
+});
+
+test('real fetch rejects a redirect before POST data reaches another local server', async () => {
+  let redirectedHits = 0;
+  const redirected = createServer((incoming, response) => {
+    redirectedHits++;
+    incoming.resume();
+    response.writeHead(200, {'content-type': 'application/json'});
+    response.end('{}');
+  });
+  const source = createServer((incoming, response) => {
+    incoming.resume();
+    response.writeHead(307, {location: `http://127.0.0.1:${redirected.address().port}/receive`});
+    response.end();
+  });
+  try {
+    redirected.listen(0, '127.0.0.1');
+    await once(redirected, 'listening');
+    source.listen(0, '127.0.0.1');
+    await once(source, 'listening');
+    const port = source.address().port;
+    const transport = new LocalLayaHttpTransport(port, () => 'local-test-token');
+    await assert.rejects(() => transport.infer({model: 'multilingual',
+      state: {events: [{index: 0, observation: 'synthetic-only', facts: []}]}, questions: {}},
+    new AbortController().signal));
+    assert.equal(redirectedHits, 0);
+  } finally {
+    source.closeAllConnections();
+    redirected.closeAllConnections();
+    await Promise.all([new Promise(resolve => source.close(resolve)),
+      new Promise(resolve => redirected.close(resolve))]);
+  }
 });

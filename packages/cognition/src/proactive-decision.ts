@@ -21,6 +21,7 @@ export interface DecisionRequest {
 }
 export interface DecisionSuggestion {
   readonly eventId: string;
+  readonly source: string;
   readonly intervention: Intervention;
   readonly confidence: number | null;
   readonly reason: 'rule_duplicate' | 'model' | 'uncalibrated_model' | 'low_confidence' | 'model_unavailable';
@@ -143,7 +144,7 @@ function versionKey(event: DecisionEvent): string {
 }
 function suggestion(event: DecisionEvent, intervention: Intervention, confidence: number | null,
   reason: DecisionSuggestion['reason']): DecisionSuggestion {
-  return {eventId: event.eventId, intervention, confidence, reason,
+  return {eventId: event.eventId, source: event.source, intervention, confidence, reason,
     facts: event.facts.map(item => ({...item})), ...(event.plan ? {plan: {...event.plan}} : {}),
     authorizationRevision: event.authorization.revision};
 }

@@ -103,6 +103,7 @@ export class LocalLayaHttpTransport implements LayaInferencePort {
       headers: {'content-type': 'application/json', authorization: `Bearer ${apiKey}`},
       body: JSON.stringify(payload),
       signal,
+      redirect: 'error',
     });
     if (!response.ok) {
       await response.body?.cancel();
