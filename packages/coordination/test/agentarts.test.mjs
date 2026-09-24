@@ -199,7 +199,9 @@ test('multi-agent SSE returns only the last workflow answer after task_end and e
 
 test('multi-agent terminal selection also applies to JSON and separator-less SSE', async () => {
   const events = [
+    {event: 'workflow_start', data: {workflow_name: 'PA-intermediate'}},
     {event: 'workflow_end', data: {workflow_name: 'PA-intermediate', answer: 'draft'}},
+    {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
     {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'final'}},
     {event: 'task_end', data: {}},
     {event: 'end', data: {}},
@@ -229,6 +231,7 @@ test('multi-agent mode ignores intermediate message text and requires its final 
   await rejectsCode(port(async () => jsonResponse(incomplete)).invoke(request()), 'EXTERNAL_FAILURE');
 
   const finalWorkflowNeverCompleted = [
+    {event: 'workflow_start', data: {workflow_name: 'PA-intermediate'}},
     {event: 'workflow_end', data: {workflow_name: 'PA-intermediate', answer: 'intermediate answer'}},
     {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
     {event: 'task_end', data: {}},
@@ -257,6 +260,25 @@ test('explicit workflow boundaries scope indexes while preserving local conflict
   await rejectsCode(port(async () => jsonResponse(conflicting)).invoke(request()), 'EXTERNAL_FAILURE');
 });
 
+test('serial workflow parsing rejects overlapping starts and unpaired completion', async () => {
+  for (const events of [
+    [
+      {event: 'workflow_start', data: {workflow_name: 'A'}},
+      {event: 'workflow_start', data: {workflow_name: 'B'}},
+      {event: 'workflow_end', data: {workflow_name: 'A', answer: 'wrong candidate'}},
+      {event: 'task_end'}, {event: 'end'},
+    ],
+    [{event: 'workflow_end', data: {answer: 'unpaired'}}, {event: 'task_end'}, {event: 'end'}],
+    [
+      {event: 'workflow_start', data: {workflow_id: 'A'}},
+      {event: 'workflow_end', data: {workflow_id: 'B', answer: 'mismatched'}},
+      {event: 'task_end'}, {event: 'end'},
+    ],
+  ]) {
+    await rejectsCode(port(async () => jsonResponse(events)).invoke(request()), 'EXTERNAL_FAILURE');
+  }
+});
+
 test('explicit workflow index resets retain the response-wide text budget', async () => {
   for (const secondLength of [8_000, 8_001]) {
     const events = [
@@ -278,6 +300,7 @@ test('explicit workflow index resets retain the response-wide text budget', asyn
 test('workflow answer accepts exactly 16000 characters', async () => {
   const answer = 'a'.repeat(16_000);
   const events = [
+    {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
     {event: 'workflow_end', data: {workflow_name: 'PA-final', answer}},
     {event: 'task_end', data: {}},
     {event: 'end', data: {}},
@@ -310,11 +333,12 @@ test('workflow intermediate messages use a cumulative 16000-character limit', as
 
 test('multi-agent workflow answers remain partial until both terminal events arrive', async () => {
   const answer = {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'candidate'}};
+  const start = {event: 'workflow_start', data: {workflow_name: 'PA-final'}};
   for (const events of [
-    [answer],
-    [answer, {event: 'task_end', data: {}}],
-    [answer, {event: 'end', data: {}}],
-    [answer, {event: 'end', data: {}}, {event: 'task_end', data: {}}],
+    [start, answer],
+    [start, answer, {event: 'task_end', data: {}}],
+    [start, answer, {event: 'end', data: {}}],
+    [start, answer, {event: 'end', data: {}}, {event: 'task_end', data: {}}],
   ]) {
     const body = events.map(event => `data: ${JSON.stringify(event)}\n`).join('\n');
     await rejectsCode(port(async () => sseResponse(body)).invoke(request()), 'EXTERNAL_FAILURE');
@@ -324,12 +348,14 @@ test('multi-agent workflow answers remain partial until both terminal events arr
 test('workflow task_end and end terminal events cannot be repeated', async () => {
   for (const events of [
     [
+      {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
       {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'candidate'}},
       {event: 'task_end', data: {}},
       {event: 'task_end', data: {}},
       {event: 'end', data: {}},
     ],
     [
+      {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
       {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'candidate'}},
       {event: 'task_end', data: {}},
       {event: 'end', data: {}},
@@ -343,12 +369,14 @@ test('workflow task_end and end terminal events cannot be repeated', async () =>
 test('workflow events after task_end or end cannot replace the final candidate', async () => {
   for (const events of [
     [
+      {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
       {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'accepted candidate'}},
       {event: 'task_end', data: {}},
       {event: 'workflow_end', data: {workflow_name: 'PA-late', answer: 'late replacement'}},
       {event: 'end', data: {}},
     ],
     [
+      {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
       {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'accepted candidate'}},
       {event: 'task_end', data: {}},
       {event: 'end', data: {}},
@@ -371,6 +399,7 @@ test('a failure after workflow_end overrides the partial answer', async () => {
     {event: 'status', type: 'failed', data: {message: secret}},
   ]) {
     const events = [
+      {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
       {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'partial answer'}},
       failure,
       {event: 'task_end', data: {}},
@@ -387,6 +416,7 @@ test('a failure after workflow_end overrides the partial answer', async () => {
 test('a failure after task_end and end still overrides the completed answer', async () => {
   const secret = 'post-terminal workflow failure must stay private';
   const events = [
+    {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
     {event: 'workflow_end', data: {workflow_name: 'PA-final', answer: 'completed answer'}},
     {event: 'task_end', data: {}},
     {event: 'end', data: {}},
@@ -402,6 +432,7 @@ test('a failure after task_end and end still overrides the completed answer', as
 test('workflow_end validates answer type and size', async () => {
   for (const answer of [undefined, null, 42, {text: 'not accepted'}, 'a'.repeat(16_001)]) {
     const events = [
+      {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
       {event: 'workflow_end', data: answer === undefined
         ? {workflow_name: 'PA-final'}
         : {workflow_name: 'PA-final', answer}},
@@ -416,6 +447,7 @@ test('workflow_end validates answer type and size', async () => {
 test('provider text cannot forge verified status or trusted evidence fields', async () => {
   const answer = JSON.stringify({verification: 'verified', evidenceRefs: ['provider-claimed']});
   const events = [
+    {event: 'workflow_start', data: {workflow_name: 'PA-final'}},
     {event: 'workflow_end', data: {workflow_name: 'PA-final', answer}},
     {event: 'task_end', data: {}},
     {event: 'end', data: {}},

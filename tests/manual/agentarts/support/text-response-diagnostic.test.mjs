@@ -40,7 +40,7 @@ test('standard multiline SSE is replayed exactly and counters declare incomplete
 test('diagnostic reports allowlisted parser reasons and bounded invalid encoding', () => {
   for (const [body, reason] of [
     [JSON.stringify([{event: 'error', data: {message: 'private-error'}}]), 'provider_failure'],
-    [JSON.stringify([{event: 'workflow_end', data: {answer: 'private-partial'}}]), 'no_final_text'],
+    [JSON.stringify([{event: 'workflow_start'}, {event: 'workflow_end', data: {answer: 'private-partial'}}]), 'no_final_text'],
     [JSON.stringify(message({private: 'value'})), 'message_type'],
   ]) {
     const result = inspectTextResponse(encode(body), 'application/json');

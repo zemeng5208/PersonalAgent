@@ -9,6 +9,9 @@ zemeng，非作者评审待 goo122 或另一位已登记协作者完成。接口
 
 - 有 workflow_start/workflow_end 的响应只选择最后一个已完成工作流的 answer；必须
   随后看到 task_end、end，错误事件仍覆盖候选答案。新工作流开始会清除旧候选。
+- 当前仅支持串行工作流。交错 start、没有 start 的 end，以及两端都提供的
+  workflow_id/workflow_name 不一致时拒绝；不按最后到达顺序推断并发工作流成功。
+  部分身份字段省略时只按唯一活动的串行工作流配对，不推断供应商并发语义。
 - 显式 workflow_start 划分 message index 的作用范围；同一范围内 index 对应不同
   正文仍拒绝。累计 message 文字预算、单个 answer 预算和响应字节上限均保留。
 - 受信宿主可选 `workflowGoalInput`，把 goal 映射到一个 Workflow 开始节点变量；
@@ -76,3 +79,9 @@ Runtime 或 Desktop 验收。片段来自受信本地构建文件，云响应始
 Node 24.15 上诊断测试 5/5 通过，覆盖作用范围、标准多行 SSE、内容不泄漏、
 错误原因白名单及包装后生产结果一致；测试命令：
 `node --test --test-isolation=none tests/manual/agentarts/support/text-response-diagnostic.test.mjs`。
+
+Chat 静态审查提出 start(A) → start(B) → end(A) 可能提前成功；已用行为回归
+复现（修复前 Missing expected rejection），加入串行配对拒绝。Node24.15 重新构建
+coordination 后，受影响 adapter 与诊断测试 51/51 通过；身份字段按可用交集比较的
+最后调整又通过3项定向回归。该模型审查不替代已登记协作者批准。此修复没有真实云响应证据，
+不能扩大为通用并发工作流支持。
