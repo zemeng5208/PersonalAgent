@@ -1,5 +1,5 @@
-import {DecisionError} from './proactive-decision.js';
-import type {DecisionPort, DecisionRef, DecisionSuggestion} from './proactive-decision.js';
+import {DecisionError, INTERVENTIONS} from './proactive-decision.js';
+import type {DecisionEvent, DecisionPort, DecisionRef, DecisionSuggestion} from './proactive-decision.js';
 
 /** Structural view of Runtime's committed FactProjectionReceipt. No Runtime dependency. */
 export interface ProjectedFactDecisionInput {
@@ -33,6 +33,73 @@ function checkLifecycle(deadline: string, signal: AbortSignal): void {
   if (Date.now() >= Date.parse(deadline)) throw new DecisionError('TIMEOUT');
 }
 
+function invalidResult(): never { throw new Error('Invalid projected fact decision result'); }
+
+function exactRecord(value: unknown, keys: readonly string[]): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) invalidResult();
+  let descriptors: PropertyDescriptorMap;
+  try { descriptors = Object.getOwnPropertyDescriptors(value); } catch { invalidResult(); }
+  const own = Reflect.ownKeys(descriptors);
+  if (own.length !== keys.length || own.some(key => typeof key !== 'string' || !keys.includes(key))
+    || keys.some(key => !Object.hasOwn(descriptors, key))) invalidResult();
+  const copy: Record<string, unknown> = {};
+  for (const key of keys) {
+    const descriptor = descriptors[key];
+    if (!descriptor?.enumerable || !('value' in descriptor)) invalidResult();
+    copy[key] = descriptor.value;
+  }
+  return copy;
+}
+
+function exactArray(value: unknown, maximum: number): readonly unknown[] {
+  if (!Array.isArray(value) || value.length > maximum) invalidResult();
+  const own = Reflect.ownKeys(value);
+  if (own.length !== value.length + 1 || own.some(key => key !== 'length'
+    && (typeof key !== 'string' || !/^(0|[1-9]\d*)$/.test(key)
+      || Number(key) >= value.length))) invalidResult();
+  const copy: unknown[] = [];
+  for (let index = 0; index < value.length; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor?.enumerable || !('value' in descriptor)) invalidResult();
+    copy.push(descriptor.value);
+  }
+  return copy;
+}
+
+/** Treat even an injected DecisionPort's output as advisory data, not a trusted binding. */
+function validatedSuggestions(value: unknown, events: readonly DecisionEvent[]): readonly DecisionSuggestion[] {
+  const rawSuggestions = exactArray(value, events.length);
+  const expected = new Map(events.map(event => [event.eventId, event]));
+  const seen = new Set<string>();
+  return rawSuggestions.map(raw => {
+    const item = exactRecord(raw, ['eventId', 'source', 'intervention', 'confidence', 'reason',
+      'facts', 'authorizationRevision']);
+    const event = expected.get(item.eventId as string);
+    if (!event || seen.has(event.eventId) || item.source !== event.source
+      || item.authorizationRevision !== event.authorization.revision
+      || !INTERVENTIONS.includes(item.intervention as DecisionSuggestion['intervention'])
+      || !['rule_duplicate', 'model', 'uncalibrated_model', 'low_confidence',
+        'model_unavailable'].includes(item.reason as string)
+      || (item.confidence !== null && (typeof item.confidence !== 'number'
+        || !Number.isFinite(item.confidence) || item.confidence < 0 || item.confidence > 1))) {
+      invalidResult();
+    }
+    const submittedFacts = exactArray(item.facts, event.facts.length);
+    if (submittedFacts.length !== event.facts.length) invalidResult();
+    seen.add(event.eventId);
+    const facts = event.facts.map((reference, index) => {
+      const fact = exactRecord(submittedFacts[index], ['id', 'revision']);
+      if (fact.id !== reference.id || fact.revision !== reference.revision) invalidResult();
+      return {...reference};
+    });
+    return {eventId: event.eventId, source: event.source,
+      intervention: item.intervention as DecisionSuggestion['intervention'],
+      confidence: item.confidence as number | null,
+      reason: item.reason as DecisionSuggestion['reason'], facts,
+      authorizationRevision: event.authorization.revision};
+  });
+}
+
 /** Called after the existing projection and impact processing, never from a new poller. */
 export async function decideProjectedFactImpact(
   decision: DecisionPort, input: ProjectedFactDecisionInput
@@ -62,9 +129,14 @@ export async function decideProjectedFactImpact(
       authorization: {state: 'none' as const, revision: 0},
     }];
   });
+  if (new Set(events.map(event => event.eventId)).size !== events.length) {
+    throw new DecisionError('INVALID_ARGUMENT');
+  }
   if (events.length === 0) {
     checkLifecycle(deadline, signal);
     return [];
   }
-  return decision.decide({events, deadline, signal});
+  const suggestions = await decision.decide({events, deadline, signal});
+  checkLifecycle(deadline, signal);
+  return validatedSuggestions(suggestions, events);
 }

@@ -85,3 +85,34 @@ test('empty or unrelated events still honor cancellation and deadline without mo
   await assert.rejects(() => decideProjectedFactImpact(decision, expired), {code: 'TIMEOUT'});
   assert.equal(calls, 0);
 });
+
+test('a DecisionPort cannot replace the projected Fact identity or smuggle extra action data', async () => {
+  const valid = event => ({eventId: event.eventId, source: event.source,
+    intervention: 'REMIND', confidence: 0.9, reason: 'model', facts: event.facts,
+    authorizationRevision: 0});
+  const forged = [
+    event => ({...valid(event), source: 'other-source'}),
+    event => ({...valid(event), facts: [{id: event.facts[0].id, revision: 99}]}),
+    event => ({...valid(event), authorizationRevision: 1}),
+    event => ({...valid(event), toolArguments: {path: 'unexpected'}}),
+    event => ({...valid(event), confidence: Infinity}),
+  ];
+  for (const make of forged) {
+    await assert.rejects(() => decideProjectedFactImpact({
+      async decide({events}) { return [make(events[0])]; },
+    }, input()), /Invalid projected fact decision result/);
+  }
+  await assert.rejects(() => decideProjectedFactImpact({
+    async decide({events}) { return [valid(events[0]), valid(events[0])]; },
+  }, input()), /Invalid projected fact decision result/);
+});
+
+test('an ignored cancellation still prevents a late decision result from being returned', async () => {
+  const controller = new AbortController();
+  const request = input();
+  request.signal = controller.signal;
+  await assert.rejects(() => decideProjectedFactImpact({async decide() {
+    controller.abort();
+    return [];
+  }}, request), {code: 'CANCELLED'});
+});
