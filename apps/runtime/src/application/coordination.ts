@@ -146,7 +146,7 @@ export function startCoordinationTask(
   taskId: string,
   goal: string,
   deadline: string,
-  options: {resume?: boolean; toolExports?: readonly CompetitionToolExport[]} = {},
+  options: {resume?: boolean; toolExports?: readonly CompetitionToolExport[]; repairCandidateVersion?: '1.0'} = {},
 ): Promise<TaskSnapshot> {
   return runtime.runTask(taskId, async context => {
     if (!port) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition coordination is unavailable');
@@ -176,6 +176,13 @@ export function startCoordinationTask(
       });
       if (result.kind === 'text') {
         return {resultSummary: summary(result.text, result.verification), evidenceRefs};
+      }
+      if (result.kind === 'repair_candidate') {
+        if (options.repairCandidateVersion !== '1.0') {
+          throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Repair candidates are not enabled');
+        }
+        context.saveCheckpoint('competition-repair-candidate', result);
+        return {resultSummary: summary('Plan repair candidate is ready for local preview; no plan changes committed', 'unverified'), evidenceRefs};
       }
       const exportBinding = requireExportBinding(result, taskId, tools, options.toolExports);
       if (!tools) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition tool execution is unavailable');

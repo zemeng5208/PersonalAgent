@@ -1,5 +1,8 @@
 import {ProtocolError} from '@personal-agent/contracts';
 import {Buffer} from 'node:buffer';
+import {parseCoordinationRepairCandidate, type CoordinationRepairCandidateResult} from './repair-candidate.js';
+export {parseCoordinationRepairCandidate};
+export type {CoordinationRepairCandidateResult};
 
 const textResultFields = ['kind', 'text', 'verification'] as const;
 const proposalResultFields = ['kind', 'proposalId', 'toolName', 'toolVersion', 'arguments', 'verification'] as const;
@@ -50,7 +53,7 @@ export interface CoordinationContinuation {
   result: unknown;
 }
 
-export type CoordinationResult = CoordinationTextResult | CoordinationToolProposalResult;
+export type CoordinationResult = CoordinationTextResult | CoordinationToolProposalResult | CoordinationRepairCandidateResult;
 
 export interface CoordinationPort {
   execute(request: CoordinationRequest): Promise<CoordinationResult>;
@@ -256,6 +259,7 @@ export function parseCoordinationResult(value: unknown): CoordinationResult {
   }
   if (kind === 'text') return parseCoordinationTextResult(value);
   if (kind === 'tool_proposal') return parseCoordinationToolProposal(value);
+  if (kind === 'repair_candidate') return parseCoordinationRepairCandidate(value);
   return invalidResult();
 }
 
