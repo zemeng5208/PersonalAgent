@@ -21,6 +21,8 @@ export interface AgentArtsRuntimeConfig {
   gatewayUrl: string;
   runtimeName: string;
   invokeMode?: 'debug' | 'published';
+  /** Trusted host opt-in: map the goal to one Workflow start-node variable. */
+  workflowGoalInput?: string;
 }
 
 export interface AgentArtsFetchInit {
@@ -91,6 +93,8 @@ function asPlainObject(value: unknown): Record<string, unknown> | undefined {
 function validateRequest(request: CoordinationRequest): {deadlineMs: number; signal: AbortSignal} {
   const input = asPlainObject(request);
   if (!input) invalid('Invalid AgentArts coordination request');
+  // A text-only invocation cannot silently discard a future tool result.
+  if (input.continuation !== undefined) invalid('AgentArts text adapter does not support tool continuation');
 
   const taskId = input.taskId;
   if (typeof taskId !== 'string') invalid('Coordination taskId must be a string');
@@ -149,6 +153,7 @@ function validateRuntimeConfig(config: AgentArtsRuntimeConfig): {
   gatewayOrigin: string;
   runtimeName: string;
   invokeMode: 'debug' | 'published';
+  workflowGoalInput?: string;
 } {
   const value = asPlainObject(config);
   if (!value) invalid('AgentArts runtime config is invalid');
@@ -159,7 +164,13 @@ function validateRuntimeConfig(config: AgentArtsRuntimeConfig): {
   }
   const invokeMode = value.invokeMode === undefined ? 'published' : value.invokeMode;
   if (invokeMode !== 'debug' && invokeMode !== 'published') invalid('AgentArts invokeMode is invalid');
-  return {gatewayOrigin, runtimeName, invokeMode};
+  const workflowGoalInput = value.workflowGoalInput;
+  if (workflowGoalInput !== undefined && (typeof workflowGoalInput !== 'string'
+    || !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(workflowGoalInput))) {
+    invalid('AgentArts workflow goal input is invalid');
+  }
+  return {gatewayOrigin, runtimeName, invokeMode,
+    ...(workflowGoalInput === undefined ? {} : {workflowGoalInput})};
 }
 
 function makeCombinedSignal(parent: AbortSignal, deadlineMs: number): CombinedSignal {
@@ -368,10 +379,17 @@ async function readResponseText(response: AgentArtsResponse, combined: CombinedS
   }
 }
 
+type WorkflowIdentity = {id: string | undefined; name: string | undefined};
+
 class TextCollector {
   private readonly indexed = new Map<number, string>();
   private readonly unindexed: string[] = [];
-  private length = 0;
+  private messageLength = 0;
+  private workflowSeen = false;
+  private workflowActive = false;
+  private workflowIdentity: WorkflowIdentity | undefined;
+  private finalWorkflowAnswer: string | undefined;
+  private terminalPhase: 'open' | 'task-ended' | 'ended' | 'invalid' = 'open';
 
   add(text: string, index: number | undefined): void {
     if (index !== undefined) {
@@ -383,17 +401,70 @@ class TextCollector {
     } else {
       this.unindexed.push(text);
     }
-    this.length += text.length;
-    if (this.length > MAX_TEXT_CHARS) external('AgentArts response exceeds the text limit');
+    this.messageLength += text.length;
+    if (this.messageLength > MAX_TEXT_CHARS) external('AgentArts response exceeds the text limit');
+  }
+
+  startWorkflow(identity: WorkflowIdentity): void {
+    if (this.terminalPhase !== 'open' || this.workflowActive) external('AgentArts workflow event order is malformed');
+    this.workflowSeen = true;
+    this.workflowActive = true;
+    this.workflowIdentity = identity;
+    this.finalWorkflowAnswer = undefined;
+    this.indexed.clear();
+  }
+
+  completeWorkflow(answer: string | null, identity: WorkflowIdentity): void {
+    // A multi-agent stream can expose intermediate workflow results. Keep only
+    // the most recently completed workflow as a candidate; it does not become
+    // the invocation result until task_end followed by end is observed.
+    if (this.terminalPhase !== 'open' || !this.workflowActive
+      || (['id', 'name'] as const).some(key => identity[key] !== undefined
+        && this.workflowIdentity?.[key] !== undefined && identity[key] !== this.workflowIdentity[key])) {
+      external('AgentArts workflow event order is malformed');
+    }
+    this.workflowSeen = true;
+    this.workflowActive = false;
+    if (answer === null) {
+      this.finalWorkflowAnswer = undefined;
+      return;
+    }
+    if (answer.length > MAX_TEXT_CHARS) external('AgentArts response exceeds the text limit');
+    this.finalWorkflowAnswer = answer;
+  }
+
+  markTaskEnd(): void {
+    if (this.terminalPhase !== 'open') {
+      this.terminalPhase = 'invalid';
+      if (this.workflowSeen) external('AgentArts workflow event order is malformed');
+      return;
+    }
+    this.terminalPhase = 'task-ended';
+  }
+
+  markEnd(): void {
+    if (this.terminalPhase === 'task-ended') {
+      this.terminalPhase = 'ended';
+      return;
+    }
+    this.terminalPhase = 'invalid';
+    if (this.workflowSeen) external('AgentArts workflow event order is malformed');
   }
 
   finish(): string {
     const indexedText = [...this.indexed.entries()]
       .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
       .map(([, text]) => text);
-    const text = indexedText.concat(this.unindexed).join('');
-    if (text.trim().length === 0) external('AgentArts response contains no text');
-    return text;
+    const messageText = indexedText.concat(this.unindexed).join('');
+    if (this.workflowSeen) {
+      if (this.terminalPhase !== 'ended' || this.finalWorkflowAnswer?.trim().length === 0
+        || this.finalWorkflowAnswer === undefined) {
+        external('AgentArts response contains no text');
+      }
+      return this.finalWorkflowAnswer;
+    }
+    if (messageText.trim().length > 0) return messageText;
+    external('AgentArts response contains no text');
   }
 }
 
@@ -421,6 +492,31 @@ function consumeEvent(value: unknown, collector: TextCollector): void {
 
   const eventName = event.event;
   if (typeof eventName !== 'string') external('AgentArts response event is malformed');
+  // These optional fields are correlation hints, never authorization. Sequential
+  // starts/ends still have to pair even when the gateway omits identity metadata.
+  const workflowIdentity = {
+    id: typeof data?.workflow_id === 'string' ? data.workflow_id : undefined,
+    name: typeof data?.workflow_name === 'string' ? data.workflow_name : undefined,
+  };
+  if (eventName === 'workflow_start') {
+    collector.startWorkflow(workflowIdentity);
+    return;
+  }
+  if (eventName === 'workflow_end') {
+    if (!data || (typeof data.answer !== 'string' && data.answer !== null)) {
+      external('AgentArts workflow_end event is malformed');
+    }
+    collector.completeWorkflow(data.answer, workflowIdentity);
+    return;
+  }
+  if (eventName === 'task_end') {
+    collector.markTaskEnd();
+    return;
+  }
+  if (eventName === 'end') {
+    collector.markEnd();
+    return;
+  }
   if (eventName !== 'message') return;
   if (!data || (typeof data.text !== 'string' && data.text !== null)) {
     external('AgentArts message event is malformed');
@@ -542,6 +638,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
   private readonly gatewayOrigin: string;
   private readonly runtimeName: string;
   private readonly invokeMode: 'debug' | 'published';
+  private readonly workflowGoalInput: string | undefined;
   private readonly authorizationProvider: AgentArtsAuthorizationProvider;
   private readonly fetchImpl: AgentArtsFetch;
 
@@ -558,6 +655,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
     this.gatewayOrigin = validated.gatewayOrigin;
     this.runtimeName = validated.runtimeName;
     this.invokeMode = validated.invokeMode;
+    this.workflowGoalInput = validated.workflowGoalInput;
     this.authorizationProvider = authorizationProvider;
     this.fetchImpl = fetchImpl ?? defaultFetch;
   }
@@ -594,7 +692,9 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
           'X-Invoke-Mode': this.invokeMode,
           'X-Request-Id': requestId,
         },
-        body: JSON.stringify({query: request.goal}),
+        body: JSON.stringify(this.workflowGoalInput === undefined
+          ? {query: request.goal}
+          : {inputs: {[this.workflowGoalInput]: request.goal}}),
         signal: combined.signal,
         redirect: 'error',
       };
