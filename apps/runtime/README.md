@@ -51,6 +51,8 @@ is configured by default. The complete continuation JSON, including its envelope
 to 8KiB. Change `exportPolicyVersion` when changing the export rules: saved projections with
 a missing or different version are denied, never re-executed. Dynamic scope is checked again
 at the adapter handoff after projection. `createAgentArtsRuntimeApplication` also forwards `workflowGoalInput`
+and explicit `responseMode: 'tool-proposal-json'` (default `text`), and supplies a final
+synchronous receipt/scope check after credential reads, immediately before the adapter fetch
 to the cloud adapter. See [export work package](../../docs/modules/MOD-30-COMPETITION-EXPORT-01.md)
 for the precise offline boundary and the unresolved real cloud/MCP lifecycle.
 

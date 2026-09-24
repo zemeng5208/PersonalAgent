@@ -53,6 +53,31 @@ function requireExportBinding(
   return binding;
 }
 
+/** Final trusted check for real adapter I/O, after asynchronous credential reads. */
+export function assertCompetitionExportAllowed(
+  runtime: TaskRuntime,
+  tools: AgentToolPort | undefined,
+  bindings: readonly CompetitionToolExport[],
+  request: {taskId: string; deadline: string; signal: AbortSignal; continuation?: CoordinationContinuation},
+): void {
+  if (!request.continuation) return;
+  const checkpoint = runtime.loadCheckpoint(request.taskId, 'competition-loop') as CompetitionCheckpoint | undefined;
+  const receipt = checkpoint?.receipts?.find(item => item.proposal.proposalId === request.continuation?.proposalId);
+  if (runtime.getTask(request.taskId).state !== 'running'
+    || runtime.loadCheckpoint(request.taskId, 'application-profile') !== 'huawei_ict_agentarts'
+    || runtime.loadCheckpoint(request.taskId, 'application-deadline') !== request.deadline
+    || !receipt || receipt.proposal.verification === 'mock'
+    || !isDeepStrictEqual(receipt.continuation, request.continuation)) {
+    throw new ProtocolError('UNAUTHORIZED', 'Competition export is not bound to this task');
+  }
+  const binding = requireExportBinding(receipt.proposal, request.taskId, tools, bindings);
+  if (!binding || !receipt.exportPolicyVersion || binding.exportPolicyVersion !== receipt.exportPolicyVersion) {
+    throw new ProtocolError('UNAUTHORIZED', 'Competition result export policy changed');
+  }
+  if (request.signal.aborted) throw new ProtocolError('CANCELLED', 'Competition result export cancelled');
+  if (Date.now() >= Date.parse(request.deadline)) throw new ProtocolError('TIMEOUT', 'Competition result export expired');
+}
+
 async function projectResult(binding: CompetitionToolExport, input: Parameters<CompetitionToolExport['project']>[0]): Promise<unknown> {
   let onAbort = () => {};
   const cancelled = new Promise<never>((_resolve, reject) => {
@@ -121,7 +146,7 @@ export function startCoordinationTask(
   taskId: string,
   goal: string,
   deadline: string,
-  options: {resume?: boolean; toolExports?: readonly CompetitionToolExport[]} = {},
+  options: {resume?: boolean; toolExports?: readonly CompetitionToolExport[]; repairCandidateVersion?: '1.0'} = {},
 ): Promise<TaskSnapshot> {
   return runtime.runTask(taskId, async context => {
     if (!port) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition coordination is unavailable');
@@ -152,6 +177,13 @@ export function startCoordinationTask(
       if (result.kind === 'text') {
         return {resultSummary: summary(result.text, result.verification), evidenceRefs};
       }
+      if (result.kind === 'repair_candidate') {
+        if (options.repairCandidateVersion !== '1.0') {
+          throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Repair candidates are not enabled');
+        }
+        context.saveCheckpoint('competition-repair-candidate', result);
+        return {resultSummary: summary('Plan repair candidate is ready for local preview; no plan changes committed', 'unverified'), evidenceRefs};
+      }
       const exportBinding = requireExportBinding(result, taskId, tools, options.toolExports);
       if (!tools) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition tool execution is unavailable');
 
@@ -164,6 +196,12 @@ export function startCoordinationTask(
         pending = undefined;
         context.saveCheckpoint('competition-loop', {step: step + 1, continuation, evidenceRefs, receipts});
         continue;
+      }
+
+      // A new execution needs one further exchange to deliver its result. Do
+      // not consume approval or perform a tool action that cannot be continued.
+      if (step >= MAX_COMPETITION_STEPS) {
+        throw new ProtocolError('TIMEOUT', 'Competition has no remaining tool continuation step');
       }
 
       const runId = `competition-tool-${taskId}-${step}`;

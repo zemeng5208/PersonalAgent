@@ -38,6 +38,10 @@ text 保留原请求/返回行为，拒绝 continuation；JSON 模式必须由�
 现有 provisional DTO；适配器拒绝云端携带 verification，并只在本机补入 unverified，
 再调用现有严格解析器。额外授权、Evidence、任务终态等字段均拒绝。文本不转换成工具。
 
+JSON模式的SSE必须显式按序task_end→end；无workflow事件也不能省略此条件。
+缺终结、倒序/重复终结、task_end后出现正文、[DONE]后出现任何事件均拒绝，不产生
+提案。默认text模式保持原兼容语义；非流式application/json仍按完整HTTP对象校验。
+
 初次请求仍为 query=goal（或显式 workflowGoalInput 对应的一个字符串变量）。续接请求
 的 query 仅为序列化 `{continuation:{proposalId,state:'confirmed',result:<投影>}}`；
 不重发 goal、完整工具输出、授权或 Evidence。既有 continuation 校验和最多8192 UTF-8
@@ -77,3 +81,7 @@ Runtime审批纵向消费由B接线验证，完整仓库门禁由该组合增量
 随后增加最终发送门禁的4项回归，重新编译并通过新模式13/13测试：凭据await期间
 撤权、guard缺失、异步guard、凭据/guard内取消均阻止fetch。之前的60项不重复记为
 此最后补丁的全量结果。
+
+第四轮Chat静态审查的缺终结路径已在旧构建复现（Missing expected rejection）。
+修复仅收紧JSON/SSE模式；Node24.15构建及adapter/诊断共66/66通过，最后追加的
+终结后正文拒绝又运行了对应定向回归。Runtime不产生审批/工具的纵向反例交B验证。
