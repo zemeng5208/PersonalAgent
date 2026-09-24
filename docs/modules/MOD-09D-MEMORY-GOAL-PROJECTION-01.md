@@ -8,7 +8,7 @@
 - 消费语义评审者：`zemeng`
 - 基线：`main@f56059a`（PR #90）
 - 分支：`codex/mod-09d-memory-goal-projection`
-- 当前状态：`review`；PR #91 收到 `CHANGES_REQUESTED`，修复后待新 head 门禁及 `zemeng` 复审
+- 当前状态：`done`（仅本片离线验收）；PR #91 修复评审阻断后获 `zemeng` 非作者批准，Foundation CI 通过并合并到 `main`
 - 文档范围：ADR-0008、本工作包、接口目录和路线图
 
 ## 职责
@@ -127,7 +127,7 @@ provider checkpoint 与本地 Goal 数据库不宣称跨库原子。事务 Inbox
 - 受影响计划只进入持久 `RECHECK`；无关计划保持 `KEEP`。
 - 不自动修改计划、不执行工具、不改变任务终态。
 - 受影响 workspace 测试、`npm run check:architecture` 和 `npm run check` 通过。
-- 非作者评审并合并后才从 `review` 转为 `done`。
+- 非作者评审与合并已完成；MOD-09 整体的生产接线和真实来源仍未完成。
 
 ## 已执行验证
 
