@@ -49,4 +49,30 @@ Runtime 的 `createAgentArtsRuntimeApplication` options、解构和 AgentArts co
 - 原 npm 测试在沙箱中因 spawn EPERM 未执行用例；最小权限重跑同一脚本后通过。
 - Node 26.3.0 / npm 11.16.0；未按仓库指定 Node 24.15.x / npm 11.12.x 验证。
   仅安装两个 workspace 的必要依赖并忽略安装脚本，未修改锁文件。
+- 随后定位到既有 Node 24.15.0；用该版本运行相同 coordination 测试（单进程
+  `--test-isolation=none`）73/73 通过；npm 11.12 仍未验证。
 - 本记录不包含本日真实 API、Desktop 或同库成功结果重启验收。
+
+## 不含内容的单次诊断
+
+`support/run-text-probe.mjs` 是显式手工入口，使用与 Desktop 一致的受信进程环境
+PA_AGENTARTS_AUTHORIZATION / PA_AGENTARTS_GATEWAY_URL / PA_AGENTARTS_RUNTIME_NAME，
+可选 PA_AGENTARTS_WORKFLOW_GOAL_INPUT。缺配置只报告 not_configured 且零网络请求。
+凭据由本机受信宿主配置，不贴入聊天、命令参数或提交文件。它只提交内置合成场景，
+最多一个 HTTP 请求，180 秒 deadline，无自动重试、无工具、无 Electron。
+
+`support/text-response-diagnostic.mjs` 的 fetch 包装器将原字节交给生产适配器；在
+内存中额外保留至多 1 MiB。完整接收后，以同工作树编译后的解析器代码片段进行
+诊断重放，记录该编译文件 SHA256、固定拒绝类别、类型/计数/长度/终结顺序及
+global/workflow index 冲突数。此重放不做网络请求、不改变生产接受条件，也不代表
+Runtime 或 Desktop 验收。片段来自受信本地构建文件，云响应始终只作为数据。
+若构建布局变化会显式 diagnostic_internal；未知错误不会输出原始消息。
+
+结构计数仅支持完整 JSON data 行；标准多行 SSE 标 not_fully_inspected，但仍由
+实际解析器重放。该标志不允许把部分统计推断成完整事件证据。输出只含白名单
+类别和数字，不保存响应正文、工作流名称、Authorization 或请求 ID。报告保存在
+忽略的 `.cache/agentarts-text/`；人工复核后才选择性加入真实验收记录。
+
+Node 24.15 上诊断测试 5/5 通过，覆盖作用范围、标准多行 SSE、内容不泄漏、
+错误原因白名单及包装后生产结果一致；测试命令：
+`node --test --test-isolation=none tests/manual/agentarts/support/text-response-diagnostic.test.mjs`。
