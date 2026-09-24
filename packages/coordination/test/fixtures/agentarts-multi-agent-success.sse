@@ -1,0 +1,18 @@
+data: {"event":"task_start","data":{"executionId":"00000000-0000-4000-8000-000000000000"}}
+
+data: {"event":"workflow_start","data":{"workflow_name":"PA-world-impact"}}
+
+data: {"event":"workflow_end","data":{"workflow_name":"PA-world-impact","answer":"{\"stage\":\"world\",\"disposition\":\"RECHECK\"}"}}
+
+data: {"event":"workflow_start","data":{"workflow_name":"PA-minimal-plan-repair"}}
+
+data: {"event":"workflow_end","data":{"workflow_name":"PA-minimal-plan-repair","answer":"{\"stage\":\"plan\",\"disposition\":\"REVISE\"}"}}
+
+data: {"event":"workflow_start","data":{"workflow_name":"PA-evidence-safety"}}
+
+data: {"event":"workflow_end","data":{"workflow_name":"PA-evidence-safety","answer":"{\"stage\":\"evidence\",\"decision\":\"REJECT\",\"verification\":\"not_verified\"}"}}
+
+data: {"event":"task_end","data":{}}
+
+data: {"event":"end","data":{}}
+
