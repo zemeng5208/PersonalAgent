@@ -62,6 +62,7 @@ export interface MemoryQueryPort {
 export type MemoryQueryErrorCode =
   | 'INVALID_ARGUMENT'
   | 'NOT_FOUND'
+  | 'REVISION_CONFLICT'
   | 'SCOPE_DENIED'
   | 'TIMEOUT'
   | 'CANCELLED';
@@ -69,6 +70,7 @@ export type MemoryQueryErrorCode =
 const errorMessages: Readonly<Record<MemoryQueryErrorCode, string>> = Object.freeze({
   INVALID_ARGUMENT: 'Invalid memory query',
   NOT_FOUND: 'Memory namespace is unavailable',
+  REVISION_CONFLICT: 'Memory source revision changed',
   SCOPE_DENIED: 'Memory fact is unavailable',
   TIMEOUT: 'Memory query deadline expired',
   CANCELLED: 'Memory query cancelled',
