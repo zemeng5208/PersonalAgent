@@ -12,6 +12,8 @@ const MAX_COMPETITION_STEPS = 4;
 export interface CompetitionToolExport {
   readonly toolName: string;
   readonly toolVersion: string;
+  /** Must change whenever the host narrows or changes the projection policy. */
+  readonly exportPolicyVersion: string;
   /** Restrict to the explicitly selected synthetic data before local approval. */
   accepts(input: {taskId: string; proposalId: string; arguments: Record<string, unknown>}): boolean;
   /** Return only the permitted projection; raw results and Evidence stay local. */
@@ -23,11 +25,32 @@ interface CompetitionCheckpoint {
   continuation?: CoordinationContinuation;
   pending?: CoordinationToolProposalResult;
   evidenceRefs: string[];
-  receipts?: {proposal: CoordinationToolProposalResult; continuation: CoordinationContinuation}[];
+  receipts?: {proposal: CoordinationToolProposalResult; continuation: CoordinationContinuation; exportPolicyVersion?: string}[];
 }
 
 function summary(text: string, verification: 'mock' | 'unverified'): string {
   return `${text}\n[profile=huawei_ict_agentarts; verification=${verification}]`;
+}
+
+function requireExportBinding(
+  proposal: CoordinationToolProposalResult,
+  taskId: string,
+  tools: AgentToolPort | undefined,
+  bindings: readonly CompetitionToolExport[] | undefined,
+): CompetitionToolExport | undefined {
+  if (proposal.verification === 'mock') return undefined;
+  const binding = bindings?.find(item => item.toolName === proposal.toolName && item.toolVersion === proposal.toolVersion);
+  if (!binding || !tools?.list().some(tool => tool.name === proposal.toolName
+    && tool.version === proposal.toolVersion && tool.sideEffect === 'read')) {
+    throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Real Competition tool result export is unavailable');
+  }
+  let accepted = false;
+  try {
+    accepted = binding.accepts({taskId, proposalId: proposal.proposalId,
+      arguments: structuredClone(proposal.arguments)}) === true;
+  } catch { /* Host errors may include private data. */ }
+  if (!accepted) throw new ProtocolError('UNAUTHORIZED', 'Competition result export scope denied');
+  return binding;
 }
 
 async function projectResult(binding: CompetitionToolExport, input: Parameters<CompetitionToolExport['project']>[0]): Promise<unknown> {
@@ -54,6 +77,7 @@ async function exchange(
   goal: string,
   context: {deadline: string; signal: AbortSignal},
   continuation?: CoordinationContinuation,
+  beforeInvoke?: () => void,
 ): Promise<CoordinationResult> {
   let onAbort: () => void = () => {};
   const cancelled = new Promise<never>((_resolve, reject) => {
@@ -63,19 +87,24 @@ async function exchange(
   });
   try {
     return parseCoordinationResult(await Promise.race([
-      Promise.resolve().then(() => {
+      Promise.resolve().then(async () => {
         if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Coordination request cancelled');
-        return port.execute(Object.freeze({
+        // Recheck dynamic export scope at the actual adapter handoff, after
+        // tool execution/projection and on every replay of a saved result.
+        beforeInvoke?.();
+        try {
+          return await port.execute(Object.freeze({
           taskId,
           goal,
           revision: runtime.getTask(taskId).revision,
           deadline: context.deadline,
           signal: context.signal,
           ...(continuation === undefined ? {} : {continuation}),
-        }));
-      }).catch(() => {
-        // Adapter errors may contain credentials or private response bodies.
-        throw new ProtocolError('EXTERNAL_FAILURE', 'Coordination adapter failed');
+          }));
+        } catch {
+          // Adapter errors may contain credentials or private response bodies.
+          throw new ProtocolError('EXTERNAL_FAILURE', 'Coordination adapter failed');
+        }
       }),
       cancelled,
     ]));
@@ -109,26 +138,21 @@ export function startCoordinationTask(
         completedUnits: step - 1,
         totalUnits: MAX_COMPETITION_STEPS,
       });
-      const result = pending ?? await exchange(runtime, port, taskId, goal, context, continuation);
+      const result = pending ?? await exchange(runtime, port, taskId, goal, context, continuation, () => {
+        const prior = receipts.find(item => item.proposal.proposalId === continuation?.proposalId);
+        if (prior) {
+          const current = requireExportBinding(prior.proposal, taskId, tools, options.toolExports);
+          if (current && (!prior.exportPolicyVersion || current.exportPolicyVersion !== prior.exportPolicyVersion)) {
+            throw new ProtocolError('UNAUTHORIZED', 'Competition result export policy changed');
+          }
+          if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Competition result export cancelled');
+          if (Date.now() >= Date.parse(context.deadline)) throw new ProtocolError('TIMEOUT', 'Competition result export expired');
+        }
+      });
       if (result.kind === 'text') {
         return {resultSummary: summary(result.text, result.verification), evidenceRefs};
       }
-      const exportBinding = options.toolExports?.find(binding =>
-        binding.toolName === result.toolName && binding.toolVersion === result.toolVersion);
-      if (result.verification !== 'mock') {
-        // Both the host's explicit data selection and the registered read-only
-        // descriptor are required. Cloud verification labels grant no authority.
-        if (!exportBinding || !tools?.list().some(tool => tool.name === result.toolName
-          && tool.version === result.toolVersion && tool.sideEffect === 'read')) {
-          throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Real Competition tool result export is unavailable');
-        }
-        let accepted = false;
-        try {
-          accepted = exportBinding.accepts({taskId, proposalId: result.proposalId,
-            arguments: structuredClone(result.arguments)}) === true;
-        } catch { /* Host errors may include private data. */ }
-        if (!accepted) throw new ProtocolError('UNAUTHORIZED', 'Competition result export scope denied');
-      }
+      const exportBinding = requireExportBinding(result, taskId, tools, options.toolExports);
       if (!tools) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition tool execution is unavailable');
 
       const receipt = receipts.find(item => item.proposal.proposalId === result.proposalId);
@@ -169,9 +193,10 @@ export function startCoordinationTask(
             result: structuredClone(exportedResult), signal: context.signal});
           // Use the existing strict JSON validator: getters, cycles, unsupported
           // values and oversized projections must never reach the cloud adapter.
-          exportedResult = parseCoordinationContinuation({proposalId: result.proposalId,
-            state: 'confirmed', result: exportedResult}).result;
-          if (Buffer.byteLength(JSON.stringify(exportedResult), 'utf8') > 8192) throw Error();
+          const projected = parseCoordinationContinuation({proposalId: result.proposalId,
+            state: 'confirmed', result: exportedResult});
+          if (Buffer.byteLength(JSON.stringify(projected), 'utf8') > 8192) throw Error();
+          exportedResult = projected.result;
         } catch {
           throw new ProtocolError('UNAUTHORIZED', 'Competition result export denied');
         }
@@ -182,7 +207,8 @@ export function startCoordinationTask(
         state: 'confirmed',
         result: exportedResult,
       };
-      receipts.push({proposal: result, continuation});
+      receipts.push({proposal: result, continuation,
+        ...(exportBinding ? {exportPolicyVersion: exportBinding.exportPolicyVersion} : {})});
       pending = undefined;
       context.saveCheckpoint('competition-loop', {step: step + 1, continuation, evidenceRefs, receipts});
     }

@@ -42,6 +42,8 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     for (const binding of this.competitionToolExports) {
       const key = JSON.stringify([binding.toolName, binding.toolVersion]);
       if (!binding.toolName || !binding.toolVersion || typeof binding.accepts !== 'function'
+        || typeof binding.exportPolicyVersion !== 'string' || !binding.exportPolicyVersion.trim()
+        || binding.exportPolicyVersion.length > 128
         || typeof binding.project !== 'function' || exportNames.has(key)) {
         throw new ProtocolError('INVALID_ARGUMENT', 'Invalid Competition export configuration');
       }

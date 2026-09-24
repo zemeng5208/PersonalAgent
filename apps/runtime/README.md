@@ -42,12 +42,15 @@ deployment trace, usage and real cloud recovery remain unavailable. See
 [work package](../../docs/modules/COMPETITION-TOOL-LOOP-01.md).
 
 Trusted composition can explicitly configure `competitionToolExports` for selected synthetic
-read-only tools. Each binding fixes a tool name/version, checks task/proposal/arguments with
+read-only tools. Each binding fixes a tool name/version and an `exportPolicyVersion`, checks task/proposal/arguments with
 `accepts`, and projects the confirmed result with `project`. This export permission does not
 grant tool execution: local approval, deadline and Policy still apply. Only the bounded JSON
 projection reaches continuation; raw results and Evidence remain local. Repeated confirmed
 proposal IDs replay the saved projection and changed inputs are rejected. No export binding
-is configured by default. `createAgentArtsRuntimeApplication` also forwards `workflowGoalInput`
+is configured by default. The complete continuation JSON, including its envelope, is limited
+to 8KiB. Change `exportPolicyVersion` when changing the export rules: saved projections with
+a missing or different version are denied, never re-executed. Dynamic scope is checked again
+at the adapter handoff after projection. `createAgentArtsRuntimeApplication` also forwards `workflowGoalInput`
 to the cloud adapter. See [export work package](../../docs/modules/MOD-30-COMPETITION-EXPORT-01.md)
 for the precise offline boundary and the unresolved real cloud/MCP lifecycle.
 
