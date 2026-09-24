@@ -21,7 +21,8 @@
 3. 复核未注册与未授权时无 probe 读取，分别记录 `UNSUPPORTED_CAPABILITY` 与策略拒绝。检查 UI 明示不支持的指标和来源，不凭 CPU/内存作因果诊断。
 4. 如需宣称 Competition 端到端可用，另记录真实 AgentArts deployment/API/trace、工具提案、Runtime 授权/执行及 Desktop 展示的一次关联读回。离线 Fake 与 Linux 运行结果不能替代该证据。
 
-本环境没有 Windows 设备，实机步骤未执行。此切片不宣称 MOD-17、PA-011 或整体 MVP 完成。
+本执行代理环境没有 Windows 设备；本地主控的 Windows provider 直读证据见文末。
+完整的生产工具/AgentArts 实机步骤未执行。此切片不宣称 MOD-17、PA-011 或整体 MVP 完成。
 
 ### 先行的 provider 实机取证
 
@@ -46,3 +47,35 @@ Windows 文件 ACL 继承该用户目录；只在本地保留，分享前再次�
 这一步直调 provider，不能自动证明 PowerShell 未提权，也不能替代上面的 ToolHost 权限拒绝、
 能力握手或 AgentArts 真实闭环验收。记录操作人对普通用户会话的确认即可，不在证据 JSON 中
 伪造“已验证普通权限”。
+
+### 本地主控回传的 Windows 直读证据（2026-09-24）
+
+本地主控报告在干净独立工作树、固定 PR #119 远端 head
+`69654b185c97215e54dca705087fb907562aff16` 上执行，普通用户会话确认
+`ADMIN_TOKEN=false`。环境为 Windows NT 10.0.26200.0、Node 24.19.0、npm 11.16.0、
+SDK 8.0.424。Node/npm 与仓库建议的 24.15.x / 11.12.x 不一致，出现版本警告。
+此前 `npm_config_offline=true` 使依赖获取失败（`ENOTCACHED`）；平台批准后改为
+`offline=false`，从锁文件执行 `npm ci --ignore-scripts`，安装 96 packages、退出码 0，
+未改全局配置或 registry。仅构建 contracts 与 windows-client，均退出码 0；
+一次 provider 取证脚本退出码 0，并输出 `PASS`。本次不是完整根检查。
+
+脱敏 JSON 的 SHA-256：
+`A93BBBC2CEBEFCC1BBB838CE62B8F17FBA3B70CA9C66434454ED2D77851455CA`。
+核对的字段如下；本记录不包含本机证据路径、CPU/内存原始数值或设备身份。
+
+| 字段 | 回传值 |
+| --- | --- |
+| `source` | `node:os` |
+| `sampledFrom` | `2026-09-24T13:33:52.192Z` |
+| `sampledUntil` / `capturedAt` | `2026-09-24T13:33:52.447Z` |
+| `requestedSampleWindowMs` / `actualSampleWindowMs` | `250` / `254.93` |
+| `schemaValid` / `aggregateValuesPresent` | `true` / `true` |
+| `unavailable` | `process_breakdown`, `disk_io`, `thermal`, `network_activity` |
+| `productionAuthorizationVerified` / `agentArtsVerified` | `false` / `false` |
+
+证据等级仅为上述固定 head 的真实 Windows provider 直接读取。后续文档提交未经
+Windows 重跑；普通用户状态是本地主控确认，脚本未自动验证令牌。生产 Policy/ToolHost、
+capability 握手、AgentArts 工具提案及 Desktop 展示仍未验证。
+
+状态分别记录：代码切片已实现并获此 provider 实机读回；PR #115/#119 仍在评审中，
+需非作者评审；MOD-17/PA-011 未完成；整体 MVP 未完成。
