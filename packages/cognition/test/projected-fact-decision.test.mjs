@@ -116,3 +116,23 @@ test('an ignored cancellation still prevents a late decision result from being r
     return [];
   }}, request), {code: 'CANCELLED'});
 });
+
+test('port mutation cannot rewrite the private Fact, source or authorization binding', async () => {
+  const mutate = [
+    event => { event.source = 'forged-source'; },
+    event => { event.facts[0].revision = 99; },
+    event => { event.authorization.revision = 1; },
+  ];
+  for (const change of mutate) {
+    const request = input();
+    await assert.rejects(() => decideProjectedFactImpact({async decide({events}) {
+      change(events[0]);
+      const event = events[0];
+      return [{eventId: event.eventId, source: event.source,
+        intervention: 'REMIND', confidence: 0.9, reason: 'model', facts: event.facts,
+        authorizationRevision: event.authorization.revision}];
+    }}, request), /Invalid projected fact decision result/);
+    assert.deepEqual(request.projection.links[0].fact,
+      {id: 'calendar/location', revision: 2}, 'the original projection is never exposed');
+  }
+});

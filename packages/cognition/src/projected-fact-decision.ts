@@ -136,7 +136,18 @@ export async function decideProjectedFactImpact(
     checkLifecycle(deadline, signal);
     return [];
   }
-  const suggestions = await decision.decide({events, deadline, signal});
+  // Keep the expected binding private. An injected port can mutate its request
+  // while awaiting, so neither the projection input nor the validation baseline
+  // may be shared with the events handed to that port.
+  const expectedEvents = events.map(event => ({...event,
+    facts: event.facts.map(reference => ({...reference})),
+    authorization: {...event.authorization},
+  }));
+  const submittedEvents = expectedEvents.map(event => ({...event,
+    facts: event.facts.map(reference => ({...reference})),
+    authorization: {...event.authorization},
+  }));
+  const suggestions = await decision.decide({events: submittedEvents, deadline, signal});
   checkLifecycle(deadline, signal);
-  return validatedSuggestions(suggestions, events);
+  return validatedSuggestions(suggestions, expectedEvents);
 }
