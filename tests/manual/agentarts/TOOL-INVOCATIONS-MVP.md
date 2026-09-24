@@ -40,7 +40,9 @@ text 保留原请求/返回行为，拒绝 continuation；JSON 模式必须由�
 
 JSON模式的SSE必须显式按序task_end→end；无workflow事件也不能省略此条件。
 缺终结、倒序/重复终结、task_end后出现正文、[DONE]后出现任何事件均拒绝，不产生
-提案。默认text模式保持原兼容语义；非流式application/json仍按完整HTTP对象校验。
+提案。非流式application/json中的单个message对象或仅含message的数组可保持兼容；
+一旦出现显式task_end/end，就必须按序完整结束，终结后正文拒绝。默认text模式保留
+原兼容语义。
 
 初次请求仍为 query=goal（或显式 workflowGoalInput 对应的一个字符串变量）。续接请求
 的 query 仅为序列化 `{continuation:{proposalId,state:'confirmed',result:<投影>}}`；
@@ -85,6 +87,9 @@ Runtime审批纵向消费由B接线验证，完整仓库门禁由该组合增量
 第四轮Chat静态审查的缺终结路径已在旧构建复现（Missing expected rejection）。
 修复仅收紧JSON/SSE模式；Node24.15构建及adapter/诊断共66/66通过，最后追加的
 终结后正文拒绝又运行了对应定向回归。Runtime不产生审批/工具的纵向反例交B验证。
+第六轮审查发现JSON事件数组可倒序终结后仍返回提案；先用定向测试复现，随后只对
+显式JSON模式增加终结顺序校验。Node24.15重新编译，受影响adapter/文字/诊断
+67/67通过；单个message和无生命周期数组保持接受。
 
 ## 2026-09-24 真实云端基线（单独验收表面）
 
