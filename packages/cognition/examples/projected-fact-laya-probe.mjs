@@ -11,10 +11,12 @@ if (!Number.isSafeInteger(port) || !key) throw new Error('Local Laya configurati
 const decision = new ProactiveDecisionService(
   new LayaDecisionModel(new LocalLayaHttpTransport(port, () => key)));
 const input = {
+  graphNamespace: 'mvp-synthetic-meeting',
   projection: {graphRevision: 3, links: [{eventId: 'synthetic-change-2',
     fact: {id: 'meeting/time', revision: 2}, node: {id: 'memory-fact:meeting-time', revision: 2}}]},
   impact: {namespace: 'mvp-synthetic-meeting', graphRevision: 3,
-    items: [{action: 'RECHECK', causes: [{reference: {id: 'memory-fact:meeting-time', revision: 1}}]}]},
+    items: [{action: 'RECHECK', causes: [{reference: {id: 'memory-fact:meeting-time', revision: 1},
+      currentRevision: 2}]}]},
   deadline: new Date(Date.now() + 30_000).toISOString(),
   signal: new AbortController().signal,
 };
