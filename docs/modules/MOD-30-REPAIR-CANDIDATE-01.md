@@ -61,12 +61,16 @@ graph namespace/binding version 与 deadline；
 空依赖或替换为无关节点会在审批前与提交前拒绝。
 同一幂等键先只读找到原任务并核对完整 intent；CAS 后图版本已变化仍返回原任务，
 不会以新候选重新提交。
+TaskRuntime 在一个事务中写入 task/idempotency 与 `local-repair-intent`；两次写入间中断
+会整体回滚。旧版留下的 `created` 且缺 intent 任务仅在 attachment 完整摘要与本次
+intent 一致时补写恢复；已启动任务、改参数或摘要不符均拒绝，不自动重做工具执行。
 修复任务操作的图 namespace 从持久 intent 读取，并核对图读回值；宿主配置在
 异步 Fact 查询期间临时切换，不会把已批准的 CAS 重定向到另一个图。
 
 本地合成测试覆盖批准后 CAS、拒绝、当前 FactRef 变化、图变化、越界选择、
 幂等 intent 冲突、两个真实批准读取互借 Evidence 的失败路径、断链拒绝、
-共享锁排序、临时切图及 CAS 后结果未知并重开数据库。
+共享锁排序、临时切图、原子 checkpoint 写入失败回滚、旧版 created 缺口安全恢复，
+以及 CAS 后结果未知并重开数据库。
 当前性保证依赖同一进程所有 Memory 摄入/投影写入都使用宿主提供的同一把锁；
 若另一个进程绕过该锁先写 Memory 而未更新图，仍可能存在两存储间窗口，
 不能宣称跨进程原子提交。尚未验证实际 AgentArts 云端

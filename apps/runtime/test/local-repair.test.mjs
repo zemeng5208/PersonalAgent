@@ -362,3 +362,54 @@ test('one idempotency key is bound to the original candidate and deadline', asyn
     {code: 'REVISION_CONFLICT'});
   assert.equal(f.app.runtime.bindCoordinationStore(f.host.graphNamespace).read().revision, 4);
 });
+
+test('task and intent checkpoint roll back together when the checkpoint write fails', async t => {
+  const f = fixture(t);
+  const {taskId, evidenceId} = await f.source();
+  const request = {sourceTaskId: taskId, evidenceId, idempotencyKey: 'atomic-intent',
+    deadline: new Date(Date.now() + 30_000).toISOString()};
+  const runtime = f.app.runtime;
+  const saveCheckpoint = runtime.saveCheckpoint.bind(runtime);
+  runtime.saveCheckpoint = (id, key, value) => {
+    if (key === 'local-repair-intent') throw Error('Simulated crash before intent persistence');
+    return saveCheckpoint(id, key, value);
+  };
+  assert.throws(() => f.app.submitLocalRepair(request), /Simulated crash/);
+  assert.equal(runtime.findTaskByIdempotencyKey('local-repair:atomic-intent'), undefined);
+  runtime.saveCheckpoint = saveCheckpoint;
+  f.app.close();
+  const reopened = f.create();
+  f.replaceApp(reopened);
+  const repair = reopened.submitLocalRepair(request);
+  assert.equal((await settle(reopened, repair.taskId, ['waiting_approval'])).state, 'waiting_approval');
+  assert.ok(reopened.runtime.loadCheckpoint(repair.taskId, 'local-repair-intent'));
+  assert.equal(reopened.runtime.bindCoordinationStore(f.host.graphNamespace).read().revision, 4);
+});
+
+test('legacy created task with matching digest and no intent recovers once after restart', async t => {
+  const f = fixture(t);
+  const {taskId, evidenceId} = await f.source();
+  const request = {sourceTaskId: taskId, evidenceId, idempotencyKey: 'legacy-created-gap',
+    deadline: new Date(Date.now() + 30_000).toISOString()};
+  const runtime = f.app.runtime;
+  runtime.submitTaskWithCheckpoint = input => {
+    runtime.submitTask(input);
+    throw Error('Simulated old process loss after task commit');
+  };
+  assert.throws(() => f.app.submitLocalRepair(request), /Simulated old process loss/);
+  const orphan = runtime.findTaskByIdempotencyKey('local-repair:legacy-created-gap');
+  assert.equal(orphan.state, 'created');
+  assert.equal(runtime.loadCheckpoint(orphan.taskId, 'local-repair-intent'), undefined);
+  assert.throws(() => f.app.submitLocalRepair({...request, deadline: later()}),
+    {code: 'REVISION_CONFLICT'});
+  f.app.close();
+  const reopened = f.create();
+  f.replaceApp(reopened);
+  const repair = reopened.submitLocalRepair(request);
+  assert.equal(repair.taskId, orphan.taskId);
+  assert.equal((await settle(reopened, repair.taskId, ['waiting_approval'])).state, 'waiting_approval');
+  assert.ok(reopened.runtime.loadCheckpoint(repair.taskId, 'local-repair-intent'));
+  assert.equal(reopened.runtime.bindCoordinationStore(f.host.graphNamespace).read().revision, 4);
+  assert.throws(() => reopened.submitLocalRepair({...request, deadline: later()}),
+    {code: 'REVISION_CONFLICT'});
+});
