@@ -61,6 +61,13 @@ It uses real temporary SQLite stores and public APIs, but an explicitly supplied
 synthetic repair candidate. It does not invoke AgentArts, authorize a tool, or
 qualify as the final real-cloud acceptance.
 
+2026-09-24 D preparation result: Node 24.15.0 compiled the matching-worktree
+Runtime dependency closure (12 workspaces); the single persistence scenario
+passed (1/1). The first executed attempt rejected an extra `limit` argument on
+the test's `getVersion` call; the fixture call was corrected and the same test
+passed without changing or weakening the production validator. Desktop/cloud
+composition remains unverified.
+
 Cloud console readback by D on 2026-09-24: target app
 `32d4d44c-eade-4f3f-8f76-209c74609e79` is published (displayed publication time
 2026-09-17 16:09:47). API panel shows POST
@@ -99,4 +106,9 @@ improvement checklist, not completed claims; changing only the name is insuffici
 - Final A/B/D integrated commit and real cloud/local tool continuation not verified.
 - Persistent meeting repair and Desktop restart not verified under one local task
   with separate real cloud invocations; native same-run resume unavailable.
+- Existing `StoredRepairRequest` checks graph versions and RECHECK, but does not
+  itself bind task/Evidence/FactRef authorization. Existing Coordination `text`
+  is display text, not an implicit repair protocol. Do not parse task summaries
+  into graph mutations. Runtime-approved candidate submission requires an explicit
+  agreed port; until delivered, only the offline fixture proves persistence.
 - No claim of real microphone/speaker acceptance or packaging delivery.

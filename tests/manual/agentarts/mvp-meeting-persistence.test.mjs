@@ -104,7 +104,8 @@ test('synthetic meeting correction projects exact fact refs, repairs only affect
   assert.deepEqual(runtime.bindCoordinationStore(namespace).read(), repaired.snapshot);
   assert.deepEqual(runtime.bindCoordinationStore(namespace).read(beforeRepair.revision), beforeRepair);
   assert.deepEqual(runtime.bindFactProjectionStore(namespace).readPending(), []);
+  const {deadline, signal} = context();
   const exactFact = await memory.bind(namespace, {allowedSensitivities: ['private']})
-    .getVersion({...context(), fact: changedLink.fact});
+    .getVersion({deadline, signal, fact: changedLink.fact});
   assert.deepEqual(exactFact, fact(2, '17:00'));
 });
