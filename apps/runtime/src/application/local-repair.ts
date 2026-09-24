@@ -150,7 +150,7 @@ export function createLocalRepairTool(getRuntime: () => TaskRuntime, host: Local
       const intent = runtime.loadCheckpoint(context.taskId, LOCAL_REPAIR_CHECKPOINT) as LocalRepairIntent | undefined;
       if (!intent || (input as {intentDigest?: string}).intentDigest !== toolArgumentsDigest(intent)) denied();
       return host.withSourceLock(async () => {
-      const store = runtime.bindCoordinationStore(host.graphNamespace);
+      const store = runtime.bindCoordinationStore(intent.graphNamespace);
       // A pre-write rejection is a confirmed no-write result, not an unknown write.
       let fact: FactVersion;
       try {
@@ -166,6 +166,7 @@ export function createLocalRepairTool(getRuntime: () => TaskRuntime, host: Local
           || !isDeepStrictEqual(host.resolveBinding({sourceTaskId: intent.sourceTaskId, evidenceId: intent.evidenceId}), intent.binding)) denied();
         const sourceResult = requireSource(runtime, intent);
         const graph = store.read();
+        if (graph.namespace !== intent.graphNamespace) denied();
         validateSelection(intent, graph);
         const node = graph.history.findLast(item => item.id === intent.binding.node.id);
         const now = Date.now();
