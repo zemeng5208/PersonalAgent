@@ -15,6 +15,7 @@ export interface AgentArtsRuntimeApplicationOptions
   gatewayUrl: string;
   runtimeName: string;
   invokeMode?: 'debug' | 'published';
+  workflowGoalInput?: string;
   authorizationProvider: AgentArtsAuthorizationProvider;
   fetchImpl?: AgentArtsFetch;
 }
@@ -30,6 +31,7 @@ export function createAgentArtsRuntimeApplication(
     gatewayUrl,
     runtimeName,
     invokeMode,
+    workflowGoalInput,
     authorizationProvider,
     fetchImpl,
     ...runtimeOptions
@@ -39,6 +41,7 @@ export function createAgentArtsRuntimeApplication(
       gatewayUrl,
       runtimeName,
       ...(invokeMode === undefined ? {} : {invokeMode}),
+      ...(workflowGoalInput === undefined ? {} : {workflowGoalInput}),
     },
     authorizationProvider,
     fetchImpl,

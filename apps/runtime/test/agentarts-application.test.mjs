@@ -122,3 +122,24 @@ test('invalid AgentArts deployment configuration fails before creating Runtime s
     await rm(directory, {recursive: true, force: true});
   }
 });
+
+test('trusted factory forwards the configured workflow start input', async () => {
+  const bodies = [];
+  const app = createAgentArtsRuntimeApplication({
+    path: ':memory:', gatewayUrl: 'https://agentarts.example.test', runtimeName: 'workflow',
+    workflowGoalInput: 'goal', authorizationProvider: {read: async () => 'Bearer synthetic-token'},
+    fetchImpl: async (_url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return new Response(JSON.stringify(event('Synthetic workflow result')), {
+        status: 200, headers: {'content-type': 'application/json'},
+      });
+    },
+  });
+  try {
+    const client = new Client(app);
+    await client.connect();
+    const {taskId} = await client.call('task.submit', {goal: 'Synthetic meeting', conversationId: 'workflow'}, {idempotencyKey: 'workflow'});
+    assert.equal((await terminal(app, taskId)).state, 'succeeded');
+    assert.deepEqual(bodies, [{inputs: {goal: 'Synthetic meeting'}}]);
+  } finally { app.close(); }
+});
