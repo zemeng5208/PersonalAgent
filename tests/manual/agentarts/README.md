@@ -57,6 +57,12 @@
 引用、input/output token 拆分和证据边界见[有界多次云调用工具 MVP](TOOL-INVOCATIONS-MVP.md)。
 运行时页面显示日志记录未开启；trace 可见不等于日志、账单或本地执行证据。
 
+随后另一组 Desktop 合成请求中，本地第一请求 HTTP 200，第二请求在 fetch 阶段以
+`TypeError` 结束且没有 HTTP 状态。平台在第一请求时段只读回一条成功 trace，第二
+请求后刷新未见新 trace；平台没有给出 `X-Request-Id` 精确关联，远端是否收到第二
+请求仍为未知。详见同一[调用记录](TOOL-INVOCATIONS-MVP.md)，不可与前述两条
+成功 trace 合并计数。
+
 基于当前 Competition Profile，剩余最小平台工作包按下列顺序验收，均须另取当前证据：
 
 1. **角色编排与发布配置**：核对六个卡与“未配置”槽的实际路由含义，清理经确认
