@@ -93,28 +93,23 @@ export function prepareLocalRepair(
   requireSource(runtime, intent);
   const digest = toolArgumentsDigest(intent);
   const key = 'local-repair:' + request.idempotencyKey;
+  const taskInput = {goal: 'Apply explicitly approved plan repair',
+    conversationId: runtime.getTask(request.sourceTaskId).conversationId ?? 'local-repair',
+    attachmentRefs: ['local-repair-intent:' + digest], idempotencyKey: key};
   const prior = runtime.findTaskByIdempotencyKey(key);
   if (prior) {
     const saved = runtime.loadCheckpoint(prior.taskId, LOCAL_REPAIR_CHECKPOINT);
     if (!prior.attachmentRefs?.includes('local-repair-intent:' + digest)
-      || saved === undefined || toolArgumentsDigest(saved) !== digest) {
+      || (saved !== undefined && toolArgumentsDigest(saved) !== digest)
+      || (saved === undefined && prior.state !== 'created')) {
       throw new ProtocolError('REVISION_CONFLICT', 'Local repair intent conflict or missing checkpoint');
     }
-    return prior;
+    return saved === undefined
+      ? runtime.submitTaskWithCheckpoint(taskInput, LOCAL_REPAIR_CHECKPOINT, intent)
+      : prior;
   }
   validateSelection(intent, runtime.bindCoordinationStore(host.graphNamespace).read());
-  // TaskRuntime's existing transaction binds the key to the full intent digest.
-  // There is no worker between task creation and the durable intent write.
-  const task = runtime.submitTask({goal: 'Apply explicitly approved plan repair',
-    conversationId: runtime.getTask(request.sourceTaskId).conversationId ?? 'local-repair',
-    attachmentRefs: ['local-repair-intent:' + digest], idempotencyKey: key});
-  const existing = runtime.loadCheckpoint(task.taskId, LOCAL_REPAIR_CHECKPOINT);
-  if (existing !== undefined && toolArgumentsDigest(existing) !== digest) denied('Local repair intent conflict');
-  if (existing === undefined) {
-    if (task.state !== 'created') denied('Local repair intent is missing');
-    runtime.saveCheckpoint(task.taskId, LOCAL_REPAIR_CHECKPOINT, intent);
-  }
-  return task;
+  return runtime.submitTaskWithCheckpoint(taskInput, LOCAL_REPAIR_CHECKPOINT, intent);
 }
 
 function validateSelection(intent: LocalRepairIntent, graph: GraphSnapshot): void {

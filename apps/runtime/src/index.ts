@@ -774,6 +774,28 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     return structuredClone(this.transaction(() => this.submitInTransaction(input)));
   }
 
+  /** Trusted host operation: task/idempotency and its launch intent commit together. */
+  submitTaskWithCheckpoint(input: SubmitTaskInput, checkpointKey: string, value: unknown): TaskSnapshot {
+    const key = requireText(checkpointKey, 'checkpoint key');
+    const encoded = JSON.stringify(value);
+    if (encoded === undefined) throw new RuntimeError('INVALID_ARGUMENT', 'Checkpoint must be JSON serializable');
+    return structuredClone(this.transaction(() => {
+      const task = this.submitInTransaction(input);
+      const existing = this.loadCheckpoint(task.taskId, key);
+      if (existing !== undefined) {
+        if (canonical(existing) !== canonical(JSON.parse(encoded))) {
+          throw new RuntimeError('REVISION_CONFLICT', 'Task checkpoint identity conflict');
+        }
+        return task;
+      }
+      if (task.state !== 'created') {
+        throw new RuntimeError('REVISION_CONFLICT', 'Task checkpoint is missing after execution started');
+      }
+      this.saveCheckpoint(task.taskId, key, JSON.parse(encoded));
+      return task;
+    }));
+  }
+
   /** Trusted host read for binding an existing task before checking mutable state. */
   findTaskByIdempotencyKey(idempotencyKey: string): TaskSnapshot | undefined {
     const row = this.db.prepare('SELECT task_id FROM task_idempotency WHERE idempotency_key = ?')
