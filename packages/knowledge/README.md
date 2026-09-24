@@ -48,3 +48,12 @@ Markdown，返回内容摘要引用；文件修改、移动或删除后旧引用
 Obsidian 的单次 `read()` 不支持中途取消；适配器在调用前后检查取消和期限，
 取消后丢弃返回内容。当前没有插件入口、用户选库流程或 Runtime 默认注册，
 合成 Vault 测试不能替代真实插件和私人 Vault 验收。
+
+MOD-08E 用合成 Vault 验证 Competition Runtime 显式注入 `knowledge.search` 后的
+Fake 工具提案、本地审批和一次性执行；审批前不读取，真实云端提案仍在执行前拒绝。
+审批拒绝时不检索，也不产生发往编排端的 continuation。
+该测试不启用生产注册，不读取私人 Vault，也不允许将私人检索结果发给 AgentArts。
+生产接线前必须另行确定用户选库授权和独立的云端发送范围/同意流程。
+注意：本包的适配器本身不持久化正文，但现有 Runtime 会把确认后的工具结果
+写入 SQLite 检查点。私人 Vault 接入前还需解决本地保留/WAL/备份和重启重放边界，
+参见[ADR-0009 提案](../../docs/adr/0009-knowledge-data-boundary.md)。
