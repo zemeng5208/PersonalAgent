@@ -26,6 +26,8 @@ export interface AgentArtsRuntimeConfig {
   workflowGoalInput?: string;
   /** Explicit application protocol; separate invocations, never native run resume. */
   responseMode?: 'text' | 'tool-proposal-json';
+  /** Opt in only after composition supports the versioned, untrusted candidate. */
+  repairCandidateVersion?: '1.0';
 }
 
 export interface AgentArtsFetchInit {
@@ -167,6 +169,7 @@ function validateRuntimeConfig(config: AgentArtsRuntimeConfig): {
   invokeMode: 'debug' | 'published';
   workflowGoalInput?: string;
   responseMode: 'text' | 'tool-proposal-json';
+  repairCandidateVersion?: '1.0';
 } {
   const value = asPlainObject(config);
   if (!value) invalid('AgentArts runtime config is invalid');
@@ -179,12 +182,17 @@ function validateRuntimeConfig(config: AgentArtsRuntimeConfig): {
   if (invokeMode !== 'debug' && invokeMode !== 'published') invalid('AgentArts invokeMode is invalid');
   const responseMode = value.responseMode === undefined ? 'text' : value.responseMode;
   if (responseMode !== 'text' && responseMode !== 'tool-proposal-json') invalid('AgentArts responseMode is invalid');
+  const repairCandidateVersion = value.repairCandidateVersion;
+  if (repairCandidateVersion !== undefined && (repairCandidateVersion !== '1.0' || responseMode !== 'tool-proposal-json')) {
+    invalid('AgentArts repair candidate version is invalid');
+  }
   const workflowGoalInput = value.workflowGoalInput;
   if (workflowGoalInput !== undefined && (typeof workflowGoalInput !== 'string'
     || !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(workflowGoalInput))) {
     invalid('AgentArts workflow goal input is invalid');
   }
   return {gatewayOrigin, runtimeName, invokeMode, responseMode,
+    ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
     ...(workflowGoalInput === undefined ? {} : {workflowGoalInput})};
 }
 
@@ -406,7 +414,12 @@ class TextCollector {
   private finalWorkflowAnswer: string | undefined;
   private terminalPhase: 'open' | 'task-ended' | 'ended' | 'invalid' = 'open';
 
+  constructor(private readonly strictCompletion = false) {}
+
   add(text: string, index: number | undefined): void {
+    if (this.strictCompletion && this.terminalPhase !== 'open') {
+      external('AgentArts text follows the task terminal');
+    }
     if (index !== undefined) {
       if (this.indexed.has(index)) {
         if (this.indexed.get(index) !== text) external('AgentArts response contains conflicting text');
@@ -466,7 +479,10 @@ class TextCollector {
     if (this.workflowSeen) external('AgentArts workflow event order is malformed');
   }
 
-  finish(): string {
+  finish(requireCompletion = false): string {
+    if (requireCompletion && this.terminalPhase !== 'ended') {
+      external('AgentArts workflow event order is malformed');
+    }
     const indexedText = [...this.indexed.entries()]
       .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
       .map(([, text]) => text);
@@ -577,15 +593,20 @@ function flushSseData(data: string[], collector: TextCollector): boolean {
   return false;
 }
 
-function parseSseStandard(payload: string, collector: TextCollector): void {
+function parseSseStandard(payload: string, collector: TextCollector, strictCompletion: boolean): void {
   const data: string[] = [];
   const lines = payload.split(/\r\n|\r|\n/);
+  let done = false;
   for (const line of lines) {
     if (line === '') {
-      if (flushSseData(data, collector)) return;
+      if (flushSseData(data, collector)) {
+        if (!strictCompletion) return;
+        done = true;
+      }
       continue;
     }
     if (line.startsWith(':')) continue;
+    if (done) external('AgentArts event follows the stream terminator');
     if (!line.startsWith('data:')) external('AgentArts SSE response is malformed');
     let value = line.slice('data:'.length);
     if (value.startsWith(' ')) value = value.slice(1);
@@ -594,12 +615,16 @@ function parseSseStandard(payload: string, collector: TextCollector): void {
   flushSseData(data, collector);
 }
 
-function parseSseWithoutSeparators(payload: string): TextCollector {
-  const collector = new TextCollector();
+function parseSseWithoutSeparators(payload: string, strictCompletion: boolean): TextCollector {
+  const collector = new TextCollector(strictCompletion);
   const lines = payload.split(/\r\n|\r|\n/);
   let done = false;
   for (const line of lines) {
-    if (done || line === '' || line.startsWith(':')) continue;
+    if (line === '' || line.startsWith(':')) continue;
+    if (done) {
+      if (strictCompletion) external('AgentArts event follows the stream terminator');
+      continue;
+    }
     if (!line.startsWith('data:')) external('AgentArts SSE response is malformed');
     let value = line.slice('data:'.length);
     if (value.startsWith(' ')) value = value.slice(1);
@@ -620,22 +645,22 @@ function parseSseWithoutSeparators(payload: string): TextCollector {
   return collector;
 }
 
-function parseSsePayload(payload: string): TextCollector {
-  const standard = new TextCollector();
+function parseSsePayload(payload: string, strictCompletion: boolean): TextCollector {
+  const standard = new TextCollector(strictCompletion);
   try {
-    parseSseStandard(payload, standard);
+    parseSseStandard(payload, standard, strictCompletion);
     return standard;
   } catch {
     // Some gateways omit the blank separator between self-contained JSON events.
     // Retry only with the conservative line-oriented form; a valid standard
     // multiline event is returned above without ever being split.
-    return parseSseWithoutSeparators(payload);
+    return parseSseWithoutSeparators(payload, strictCompletion);
   }
 }
 
-function parseResponsePayload(payload: string, contentType: string | undefined): string {
+function parseResponsePayload(payload: string, contentType: string | undefined, strictCompletion = false): string {
   const mediaType = contentType?.split(';', 1)[0]?.trim().toLowerCase();
-  if (mediaType === 'text/event-stream') return parseSsePayload(payload).finish();
+  if (mediaType === 'text/event-stream') return parseSsePayload(payload, strictCompletion).finish(strictCompletion);
   if (mediaType === 'application/json') {
     const collector = new TextCollector();
     parseJsonPayload(payload, collector);
@@ -648,10 +673,14 @@ function defaultFetch(url: string, init: AgentArtsFetchInit): Promise<AgentArtsR
   return globalThis.fetch(url, init);
 }
 
-function parseApplicationResult(text: string): CoordinationResult {
+function parseApplicationResult(text: string, repairCandidateVersion: '1.0' | undefined): CoordinationResult {
   const value = asPlainObject(JSON.parse(text) as unknown);
   if (!value || Object.prototype.hasOwnProperty.call(value, 'verification')) {
     external('AgentArts application response is malformed');
+  }
+  if (value.kind === 'repair_candidate' && (repairCandidateVersion === undefined
+    || value.candidateVersion !== repairCandidateVersion)) {
+    external('AgentArts repair candidate is unavailable');
   }
   // Verification is a host decision. Strict existing result parsers reject
   // arbitrary fields, authorization, Evidence and task terminal claims.
@@ -665,6 +694,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
   private readonly invokeMode: 'debug' | 'published';
   private readonly workflowGoalInput: string | undefined;
   private readonly responseMode: 'text' | 'tool-proposal-json';
+  private readonly repairCandidateVersion: '1.0' | undefined;
   private readonly authorizationProvider: AgentArtsAuthorizationProvider;
   private readonly fetchImpl: AgentArtsFetch;
   private readonly beforeSend: ((request: CoordinationRequest) => void) | undefined;
@@ -686,6 +716,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
     this.invokeMode = validated.invokeMode;
     this.workflowGoalInput = validated.workflowGoalInput;
     this.responseMode = validated.responseMode;
+    this.repairCandidateVersion = validated.repairCandidateVersion;
     this.authorizationProvider = authorizationProvider;
     this.fetchImpl = fetchImpl ?? defaultFetch;
     this.beforeSend = beforeSend;
@@ -784,6 +815,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
         text = parseResponsePayload(
           await readResponseText(response, combined),
           response.headers?.get('content-type') ?? undefined,
+          this.responseMode === 'tool-proposal-json',
         );
       } catch (error) {
         throw currentAbortError(combined) ?? new ProtocolError('EXTERNAL_FAILURE', 'AgentArts response validation failed');
@@ -791,7 +823,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
       const bodyAbort = currentAbortError(combined);
       if (bodyAbort) throw bodyAbort;
       try {
-        if (this.responseMode === 'tool-proposal-json') return parseApplicationResult(text);
+        if (this.responseMode === 'tool-proposal-json') return parseApplicationResult(text, this.repairCandidateVersion);
         return parseCoordinationTextResult({kind: 'text', text, verification: 'unverified'});
       } catch (error) {
         throw currentAbortError(combined) ?? new ProtocolError('EXTERNAL_FAILURE', 'AgentArts response validation failed');
