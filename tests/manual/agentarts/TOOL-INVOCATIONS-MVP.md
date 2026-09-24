@@ -44,9 +44,12 @@ JSON模式的SSE必须显式按序task_end→end；无workflow事件也不能省
 一旦出现显式task_end/end，就必须按序完整结束，终结后正文拒绝。默认text模式保留
 原兼容语义。
 
-初次请求仍为 query=goal（或显式 workflowGoalInput 对应的一个字符串变量）。续接请求
-的 query 仅为序列化 `{continuation:{proposalId,state:'confirmed',result:<投影>}}`；
-不重发 goal、完整工具输出、授权或 Evidence。既有 continuation 校验和最多8192 UTF-8
+初次请求仍为 query=goal（或显式 workflowGoalInput 对应的一个字符串变量）。普通JSON
+模式续接的query仅为序列化 `{continuation:{proposalId,state:'confirmed',result:<投影>}}`。
+显式开启`repairCandidateVersion:'1.0'`时，同一个已校验续接DTO作为数据，再附适配器
+固定的候选JSON输出指令；若可信宿主提供目标requestedSummary/requestedDependencies，
+要求云端按其精确引用和摘要生成候选。两种模式均不重发goal、完整工具输出、授权或
+Evidence，不改变给`beforeSend`的续接对象。既有 continuation 校验和最多8192 UTF-8
 字节的整个 continuation（含 proposalId/state/result）校验在读取凭据/请求网络之前进行；出机许可与实际投影仍由 B 控制，
 适配器不会从原结果自行裁剪后放行。云端必须把该 JSON 当数据，不能执行其中的指令。
 
@@ -66,10 +69,10 @@ session ID；两者仅是调用方请求/会话关联信息，不伪造服务端
 离线验证需覆盖：显式开关、严格提案/文本、伪造 verification/额外字段、结构错误、
 8KiB投影边界、无授权零网络失败、取消/deadline、同task不同request身份与无自动重试。
 真实验收使用合成目录/文件与显式本地批准；必须读回工具结果、Evidence、最终文字及
-同库重启。当前尚未完成这些本地闭环步骤，不能宣称工具闭环可用。
+同库重启。2026-09-24 的合成 Desktop 闭环读回见下文；它不等于生产数据或比赛全项验收。
 
 云原生工具暂停/同run恢复、跨进程恢复云run及正式MCP桥仍 unavailable。多invocation
-可能增加云调用/模型成本；只有真实运行后才能报告费用和trace。不得自动回退 Local，
+可能增加云调用/模型成本；真实运行后仍须单独读回费用和平台 trace。不得自动回退 Local，
 不得把真实工具标 mock，取消后不发第二次云请求。
 
 ## 当前验证
@@ -93,15 +96,57 @@ Runtime审批纵向消费由B接线验证，完整仓库门禁由该组合增量
 
 ## 2026-09-24 真实云端基线（单独验收表面）
 
-经用户批准的当前用户DPAPI受信配置，A使用Node24.15对现有published query部署
-各发一次合成请求，均为单次调用，无自动重试、云配置修改或Local回退。文字请求
-11:01:04Z—11:01:52Z收到HTTP 200、完整SSE 108169字节，当前适配解析出586字，
-verification=unverified。工作流开始/结束各3次，工作流内索引冲突0；跨工作流全局
-索引重复2次。脱敏报告在本工作树忽略目录`.cache/agentarts-text/`，未保存正文。
+经用户批准的当前用户DPAPI受信配置，A使用Node24.15对同一个现有published query
+部署分别发出三次合成请求。表中耗时从探针开始到解析完成，包含凭据读取、HTTP和
+本地解析，不等于平台模型耗时；每行均为`networkCalls:1`、HTTP 200、完整SSE、
+`verification:'unverified'`，无自动重试、云全局配置修改或Local回退。
 
-首次JSON提案只在query中给出固定合成输出约束，现有云配置未改。11:04:12Z—
-11:04:49Z收到HTTP 200、完整SSE 185108字节；实际`tool-proposal-json`适配返回
-`tool_proposal`，proposalId、`workspace.read_text@1.0.0`及唯一参数
-`meeting-update.json`均精确匹配，verification=unverified。脱敏报告在忽略目录
-`.cache/agentarts-proposal/`。此调用只观察提案，没有本地审批、工具执行或第二次
-续接；候选修复、Desktop与同库重启仍需分别验收。
+| 表面 | UTC时间 / 端到端耗时 | 响应大小 | 本机读回 |
+| --- | --- | ---: | --- |
+| 文字，默认`responseMode:'text'` | 11:01:04.902—11:01:52.088 / 47.186秒 | 108169字节 | 586字；`.cache/agentarts-text/`脱敏结构报告 |
+| 工具提案，`responseMode:'tool-proposal-json'` | 11:04:12.963—11:04:49.254 / 36.291秒 | 185108字节 | `tool_proposal`；proposalId、`workspace.read_text@1.0.0`及唯一参数`meeting-update.json`精确匹配；`.cache/agentarts-proposal/`报告 |
+| 修复候选，JSON模式且`repairCandidateVersion:'1.0'` | 11:20:50.072—11:22:37.649 / 107.577秒 | 495820字节 | `repair_candidate`；图版本、三个目标NodeRef、摘要和唯一新依赖Ref逐项匹配本地投影；`.cache/agentarts-candidate/`报告 |
+
+三次SSE均有3对workflow_start/end和一对task_end/end；工作流内索引冲突0，跨工作流
+全局索引重复2次，解析均通过。未保存原始正文、凭据或完整本地图谱。上述忽略目录
+是本机脱敏收据，结构化结果已在此记录供审查。
+
+提案与候选均只在query中给出严格JSON输出约束，无需改变现有云应用prompt。候选
+query使用D2从真实本地合成SQLite/Graph快照导出的版本化目标、更新后的FactRef和
+允许依赖白名单；只投影会议从15:00到17:00及准备事项到16:00的必要字段，不发送
+Evidence、凭据或私人日程。`invokeMode`未显式设置，适配使用默认published。
+Desktop消费须由可信composition显式设置相应`responseMode`和候选版本，并保持
+JSON续接的同步`beforeSend`出机门禁。首次提案探针没有执行工具；候选探针没有审批或
+写图。三次独立API探针不能替代下列 Desktop 证据。候选契约与前置输入见
+`REPAIR-CANDIDATE-ADAPTER.md`。
+
+## 2026-09-24 合成 Desktop 真实云闭环读回
+
+D2 的运行时源码基线为 `02f7273`，已包含 A 的候选续调修复 `edae887`；当时的手工
+脚本修正随后提交为 D2 `c2ec9a2`，本文核对时 D2 checkout 为 `e408314`。A 当前
+`565ad48` 的后续改动仅增加拒绝把候选藏在审核摘要里的负例测试。收据保留在 D2
+工作树被忽略的 `.cache/desktop-agentarts-wu7Qlf/`，不纳入 Git，也不含本文所需的
+原始云正文或凭据。D2 的完整验收描述位于
+[PR #104](https://github.com/zemeng5208/PersonalAgent/pull/104) 的
+`tests/manual/agentarts/MVP-ACCEPTANCE.md`（本地提交 `c2ec9a2`）。
+
+同一个本地 source task 在 published AgentArts API 发出两次**不同的云请求**，调用方
+`X-Request-Id` 脱敏引用分别为 `300bf45a…32f2c`、`c7d97e82…6b87c`；它们不是平台
+runId/trace。两次均为 HTTP 200、完整 SSE、无 error event。第一次最终对象为严格
+`tool_proposal`；Desktop 呈现并在合成 UI 自动化中消费本地 `allow_once` 读取审批，
+ToolGateway 确认合成文件读取，Fact revision 2 投影为 graph revision 6，持久保存
+任务与 Evidence 绑定。第二次最终对象为严格 `repair_candidate` v1.0，本地 source
+task 读回 `succeeded`，原生预览路径生成三个目标的候选摘要。候选只是建议，云端
+没有写图；自动化代答预览对话框不构成人工点击或桌面合成画面的视觉验收。
+
+首次手工脚本在进入写入审批阶段时把 UI 快照的 `action` 错认作 `toolName`，因此脚本
+收据为 `ERR_ASSERTION`/`failed`；此时 source task 已成功，候选已预览，但本地修复
+尚未批准或提交。修正后的同库恢复通过 Admin UI 的 `cognition.commit_repair`
+`allow_once` 审批，读回独立 local task `succeeded`、graph revision 9、图内容与执行
+Evidence；再次重启仍读到两任务成功及修复结果。恢复阶段 `cloudRequests:0`。这两段
+证据不能合写成一次无中断通过的脚本运行，也不能解释为云原生同 run 暂停/恢复。
+
+目前已验证 published API 的文字、提案、候选格式，以及这一次合成 Desktop 的工具
+执行、候选预览、本地审批/CAS 和重启读回。尚未读回对应平台部署版本、服务端 trace/
+runId、usage/费用和 AgentArts 评估结果；真实私人数据、原生同云 run 恢复、人工预览
+点击与正式比赛提交均不在这份 MVP 证据内。
