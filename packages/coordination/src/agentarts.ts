@@ -1,10 +1,11 @@
 import {ProtocolError} from '@personal-agent/contracts';
-import {createHash} from 'node:crypto';
-import {parseCoordinationTextResult} from './index.js';
-import type {CloudAgentPort, CoordinationRequest, CoordinationTextResult} from './index.js';
+import {createHash, randomUUID} from 'node:crypto';
+import {parseCoordinationContinuation, parseCoordinationResult, parseCoordinationTextResult} from './index.js';
+import type {CloudAgentPort, CoordinationContinuation, CoordinationRequest, CoordinationResult} from './index.js';
 
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_TEXT_CHARS = 16_000;
+const MAX_CONTINUATION_RESULT_BYTES = 8_192;
 const MAX_AUTHORIZATION_CHARS = 4_096;
 const MAX_REQUEST_ID_CHARS = 64;
 const MAX_TIMER_DELAY = 2_147_483_647;
@@ -23,6 +24,8 @@ export interface AgentArtsRuntimeConfig {
   invokeMode?: 'debug' | 'published';
   /** Trusted host opt-in: map the goal to one Workflow start-node variable. */
   workflowGoalInput?: string;
+  /** Explicit application protocol; separate invocations, never native run resume. */
+  responseMode?: 'text' | 'tool-proposal-json';
 }
 
 export interface AgentArtsFetchInit {
@@ -90,11 +93,20 @@ function asPlainObject(value: unknown): Record<string, unknown> | undefined {
   }
 }
 
-function validateRequest(request: CoordinationRequest): {deadlineMs: number; signal: AbortSignal} {
+function validateRequest(request: CoordinationRequest, responseMode: 'text' | 'tool-proposal-json'): {
+  deadlineMs: number; signal: AbortSignal; continuation?: CoordinationContinuation;
+} {
   const input = asPlainObject(request);
   if (!input) invalid('Invalid AgentArts coordination request');
   // A text-only invocation cannot silently discard a future tool result.
-  if (input.continuation !== undefined) invalid('AgentArts text adapter does not support tool continuation');
+  let continuation: CoordinationContinuation | undefined;
+  if (input.continuation !== undefined) {
+    if (responseMode === 'text') invalid('AgentArts text adapter does not support tool continuation');
+    continuation = parseCoordinationContinuation(input.continuation);
+    if (new TextEncoder().encode(JSON.stringify(continuation.result)).byteLength > MAX_CONTINUATION_RESULT_BYTES) {
+      invalid('AgentArts continuation projection exceeds the byte limit');
+    }
+  }
 
   const taskId = input.taskId;
   if (typeof taskId !== 'string') invalid('Coordination taskId must be a string');
@@ -123,7 +135,7 @@ function validateRequest(request: CoordinationRequest): {deadlineMs: number; sig
   const signal = candidateSignal as AbortSignal;
   if (signal.aborted) throw abortError('cancelled');
   if (deadlineMs <= Date.now()) throw abortError('deadline');
-  return {deadlineMs, signal};
+  return {deadlineMs, signal, ...(continuation === undefined ? {} : {continuation})};
 }
 
 function validateGatewayUrl(gatewayUrl: string): string {
@@ -154,6 +166,7 @@ function validateRuntimeConfig(config: AgentArtsRuntimeConfig): {
   runtimeName: string;
   invokeMode: 'debug' | 'published';
   workflowGoalInput?: string;
+  responseMode: 'text' | 'tool-proposal-json';
 } {
   const value = asPlainObject(config);
   if (!value) invalid('AgentArts runtime config is invalid');
@@ -164,12 +177,14 @@ function validateRuntimeConfig(config: AgentArtsRuntimeConfig): {
   }
   const invokeMode = value.invokeMode === undefined ? 'published' : value.invokeMode;
   if (invokeMode !== 'debug' && invokeMode !== 'published') invalid('AgentArts invokeMode is invalid');
+  const responseMode = value.responseMode === undefined ? 'text' : value.responseMode;
+  if (responseMode !== 'text' && responseMode !== 'tool-proposal-json') invalid('AgentArts responseMode is invalid');
   const workflowGoalInput = value.workflowGoalInput;
   if (workflowGoalInput !== undefined && (typeof workflowGoalInput !== 'string'
     || !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(workflowGoalInput))) {
     invalid('AgentArts workflow goal input is invalid');
   }
-  return {gatewayOrigin, runtimeName, invokeMode,
+  return {gatewayOrigin, runtimeName, invokeMode, responseMode,
     ...(workflowGoalInput === undefined ? {} : {workflowGoalInput})};
 }
 
@@ -616,12 +631,23 @@ function defaultFetch(url: string, init: AgentArtsFetchInit): Promise<AgentArtsR
   return globalThis.fetch(url, init);
 }
 
+function parseApplicationResult(text: string): CoordinationResult {
+  const value = asPlainObject(JSON.parse(text) as unknown);
+  if (!value || Object.prototype.hasOwnProperty.call(value, 'verification')) {
+    external('AgentArts application response is malformed');
+  }
+  // Verification is a host decision. Strict existing result parsers reject
+  // arbitrary fields, authorization, Evidence and task terminal claims.
+  return parseCoordinationResult({...value, verification: 'unverified'});
+}
+
 /** Offline-testable text adapter for the huawei_ict_agentarts Competition Profile. */
 export class AgentArtsCloudAgentPort implements CloudAgentPort {
   private readonly gatewayOrigin: string;
   private readonly runtimeName: string;
   private readonly invokeMode: 'debug' | 'published';
   private readonly workflowGoalInput: string | undefined;
+  private readonly responseMode: 'text' | 'tool-proposal-json';
   private readonly authorizationProvider: AgentArtsAuthorizationProvider;
   private readonly fetchImpl: AgentArtsFetch;
 
@@ -639,12 +665,14 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
     this.runtimeName = validated.runtimeName;
     this.invokeMode = validated.invokeMode;
     this.workflowGoalInput = validated.workflowGoalInput;
+    this.responseMode = validated.responseMode;
     this.authorizationProvider = authorizationProvider;
     this.fetchImpl = fetchImpl ?? defaultFetch;
   }
 
-  async invoke(request: CoordinationRequest): Promise<CoordinationTextResult> {
-    const {deadlineMs, signal} = validateRequest(request);
+  async invoke(request: CoordinationRequest): Promise<CoordinationResult> {
+    const {deadlineMs, signal, continuation} = validateRequest(request, this.responseMode);
+    const query = continuation === undefined ? request.goal : JSON.stringify({continuation});
     const combined = makeCombinedSignal(signal, deadlineMs);
     try {
       const initialAbort = currentAbortError(combined);
@@ -663,7 +691,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
       if (headerAbort) throw headerAbort;
 
       const sessionId = deriveSessionId(request.taskId);
-      const requestId = deriveRequestId(sessionId, request.revision);
+      const requestId = this.responseMode === 'text' ? deriveRequestId(sessionId, request.revision) : randomUUID();
       const url = `${this.gatewayOrigin}/runtimes/${encodeURIComponent(this.runtimeName)}/invocations`;
       const init: AgentArtsFetchInit = {
         method: 'POST',
@@ -676,8 +704,8 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
           'X-Request-Id': requestId,
         },
         body: JSON.stringify(this.workflowGoalInput === undefined
-          ? {query: request.goal}
-          : {inputs: {[this.workflowGoalInput]: request.goal}}),
+          ? {query}
+          : {inputs: {[this.workflowGoalInput]: query}}),
         signal: combined.signal,
         redirect: 'error',
       };
@@ -717,6 +745,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
       const bodyAbort = currentAbortError(combined);
       if (bodyAbort) throw bodyAbort;
       try {
+        if (this.responseMode === 'tool-proposal-json') return parseApplicationResult(text);
         return parseCoordinationTextResult({kind: 'text', text, verification: 'unverified'});
       } catch (error) {
         throw currentAbortError(combined) ?? new ProtocolError('EXTERNAL_FAILURE', 'AgentArts response validation failed');
