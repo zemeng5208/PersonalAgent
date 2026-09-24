@@ -1,9 +1,31 @@
 import {createWorkspaceReadTool, WORKSPACE_READ_TOOL_NAME, WORKSPACE_READ_TOOL_VERSION} from '@personal-agent/coding-tools';
+import {lstatSync, realpathSync} from 'node:fs';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 
 export const SYNTHETIC_MEETING_PATH = 'meeting-update.json';
 const MAX_BYTES = 2048;
 const approvedKeys = ['meetingId', 'revision', 'start', 'timezone'];
 const approved = Object.freeze({meetingId: 'mvp-meeting', revision: 2, start: '17:00', timezone: 'Asia/Shanghai'});
+const fixtureRoot = fileURLToPath(new URL('../../../tests/manual/agentarts/fixtures/mvp-meeting/', import.meta.url));
+const native = value => path.normalize(value).toLowerCase();
+
+function requireSyntheticFixtureRoot(rootPath) {
+  const deny = () => { throw Error('Synthetic fixture root unavailable'); };
+  if (typeof rootPath !== 'string' || native(path.resolve(rootPath)) !== native(path.resolve(fixtureRoot))) return deny();
+  try {
+    // Reject junctions/reparse points before the generic workspace tool canonically
+    // follows them. Only the dedicated checked-in fixture may become a tool root.
+    for (let current = fixtureRoot, end = path.resolve(fixtureRoot, '../../../..');;
+      current = path.dirname(current)) {
+      if (lstatSync(current).isSymbolicLink()) return deny();
+      if (native(current) === native(end)) break;
+    }
+    if (native(realpathSync.native(fixtureRoot)) !== native(path.resolve(fixtureRoot))
+      || lstatSync(path.join(fixtureRoot, SYNTHETIC_MEETING_PATH)).isSymbolicLink()) return deny();
+  } catch { return deny(); }
+  return fixtureRoot;
+}
 
 function exactDataObject(value, keys) {
   if (!value || typeof value !== 'object' || Array.isArray(value)
@@ -34,7 +56,7 @@ export function projectSyntheticMeetingResult(result) {
 
 /** Called only by trusted Competition composition with the dedicated fixture root. */
 export function createSyntheticMeetingToolset(rootPath) {
-  const tool = createWorkspaceReadTool({rootPath, maxReadBytes: MAX_BYTES});
+  const tool = createWorkspaceReadTool({rootPath: requireSyntheticFixtureRoot(rootPath), maxReadBytes: MAX_BYTES});
   return {
     tools: [tool],
     competitionToolExports: [{
