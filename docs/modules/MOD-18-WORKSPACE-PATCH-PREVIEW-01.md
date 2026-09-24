@@ -19,7 +19,7 @@
 {"path":"src/example.ts","expectedSha256":"<64 lowercase hex>","edits":[{"oldText":"before","newText":"after"}]}
 ```
 
-- 只接受相对路径、1～32 条编辑和精确字段；路径、敏感文件、link/junction、UTF-8、二进制、字节上限、deadline 与取消全部复用 `workspace.read_text`。
+- 只接受相对路径、1～32 条编辑和精确字段；路径、敏感文件、越界或指向敏感路径的 link/junction、UTF-8、二进制、字节上限、deadline 与取消全部复用 `workspace.read_text`。根内且目标不敏感的文件链接仍按 reader 规则处理，并非一概拒绝。
 - 输入在首个 `await` 前复制为普通 own-data 结构；拒绝 getter、稀疏/超长数组、未知字段、重复 `oldText` 和超限序列化输入。
 - 每条 `oldText` 按数组顺序在当前候选中定位，必须非空且精确出现一次；缺失、多处出现或前序编辑造成后续歧义都拒绝。
 - `expectedSha256` 对读取到的精确 UTF-8 字节做并发前置检查。由于既有 reader 会剥离 UTF-8 BOM，无法精确重建原始字节的文本直接拒绝，不伪造 hash。
@@ -48,6 +48,6 @@ git diff --cached --check
 
 当前在 Node 24.15.0 下完成 contracts/coding-tools 构建，预览模块测试 5/5 通过，
 `git diff --check` 通过。模块测试覆盖精确 hash、非 ASCII、输入快照、编辑唯一性与顺序、
-BOM/UTF-8/控制字符、路径/敏感/link、上限、scope、取消/deadline 和注册释放；
+BOM/UTF-8/控制字符、路径/敏感/越界 link、上限、scope、取消/deadline 和注册释放；
 成功预览与关键失败路径核对原文件未变。没有在此分支重跑 Policy/ToolGateway 集成测试。
 这些均为本地合成证据；生产装配、真实工作区和 AgentArts 仍未验证。
