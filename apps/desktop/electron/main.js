@@ -18,6 +18,7 @@ const agentArtsInvokeMode = process.env.PA_AGENTARTS_INVOKE_MODE === undefined
   ? 'published'
   : process.env.PA_AGENTARTS_INVOKE_MODE;
 const competitionMode = !fakeMode && runtimeProfile === 'huawei_ict_agentarts';
+const taskSubmitOptions = competitionMode ? {timeoutMs: 180_000} : {};
 if (fakeMode || fakeModelMode) app.setPath('userData', app.isPackaged
   ? path.join(app.getPath('temp'), `personal-agent-fake-${process.pid}`)
   : path.resolve(dir, '../.cache/user-data'));
@@ -541,6 +542,9 @@ async function initializeRuntime() {
         gatewayUrl: process.env.PA_AGENTARTS_GATEWAY_URL ?? '',
         runtimeName: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
         invokeMode: agentArtsInvokeMode,
+        ...(process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT === undefined ? {} : {
+          workflowGoalInput: process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT,
+        }),
         authorizationProvider: {
           read: async () => {
             const authorization = process.env.PA_AGENTARTS_AUTHORIZATION;
@@ -651,7 +655,7 @@ async function action(event, name, payload) {
     submitting.add(surface);
     try {
     const goal = payload.trim();
-    const result = await client.call('task.submit', {goal, conversationId: `desktop-${surface}`}, {idempotencyKey: crypto.randomUUID()});
+    const result = await client.call('task.submit', {goal, conversationId: `desktop-${surface}`}, {...taskSubmitOptions, idempotencyKey: crypto.randomUUID()});
     conversations.add(result.taskId, surface, goal);
     taskGoals.set(result.taskId, goal);
     if (sender === panel) pinned = true;
