@@ -35,7 +35,14 @@ npm run test --workspace=@personal-agent/windows-client
 ```
 
 Windows 普通用户实机读回：先在仓库根执行 `npm ci`、构建 contracts 与本包，然后在非管理员
-PowerShell 执行 `node packages/windows-client/scripts/capture-windows-evidence.mjs .\\data\\mod17-provider-evidence.json`。
-输出文件必须不存在，脚本不会覆盖；`data/` 被 Git 忽略。脚本只保存来源、采样时间、
+PowerShell 用独立新文件执行：
+
+```powershell
+$evidence = Join-Path $env:LOCALAPPDATA ("mod17-provider-" + [guid]::NewGuid().ToString("N") + ".json")
+node packages/windows-client/scripts/capture-windows-evidence.mjs $evidence
+```
+
+输出文件必须不存在，脚本不会覆盖；Windows 文件访问权限继承用户的 LocalAppData 目录，
+仅在本机保存并分享经审核的脱敏内容。脚本只保存来源、采样时间、
 Schema 校验与不可用项等脱敏元数据，不保存 CPU/内存数值、用户名或设备标识。
-这次调用直达 provider，**不验证**生产授权、capability 握手、AgentArts 或 Desktop。
+这次调用直达 provider，**不验证**终端是否已提权、生产授权、capability 握手、AgentArts 或 Desktop。

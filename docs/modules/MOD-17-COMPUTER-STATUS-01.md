@@ -25,18 +25,24 @@
 
 ### 先行的 provider 实机取证
 
-在普通用户、非管理员 PowerShell 中，从仓库根执行（输出放在 Git 忽略的 `data/` 目录，
-执行前确保该目标文件不存在）：
+在普通用户、非管理员 PowerShell 中，从仓库根执行（输出文件在用户的 LocalAppData 下，
+每次使用新 GUID 文件名）：
 
 ```powershell
 npm ci
 npm run build --workspace=@personal-agent/contracts
 npm run build --workspace=@personal-agent/windows-client
-node packages/windows-client/scripts/capture-windows-evidence.mjs .\data\mod17-provider-evidence.json
+$evidence = Join-Path $env:LOCALAPPDATA ("mod17-provider-" + [guid]::NewGuid().ToString("N") + ".json")
+node packages/windows-client/scripts/capture-windows-evidence.mjs $evidence
+if ($LASTEXITCODE -ne 0) { throw "provider evidence capture failed" }
+Get-Content $evidence
 ```
 
 脚本仅允许 Windows、只创建新文件，成功终端输出 `PASS`，失败仅输出脱敏错误码且退出非零。
+Windows 文件 ACL 继承该用户目录；只在本地保留，分享前再次检查脱敏字段。
 证据 JSON 不含原始 CPU/内存值、主机名、用户名、文件路径、网络信息或凭据。
 检查 `source=node:os`、`schemaValid=true`、`aggregateValuesPresent=true`、采样时间与不可用项；
 `productionAuthorizationVerified=false` 和 `agentArtsVerified=false` 是刻意保留的边界。
-这一步直调 provider，不能替代上面的 ToolHost 权限拒绝、能力握手或 AgentArts 真实闭环验收。
+这一步直调 provider，不能自动证明 PowerShell 未提权，也不能替代上面的 ToolHost 权限拒绝、
+能力握手或 AgentArts 真实闭环验收。记录操作人对普通用户会话的确认即可，不在证据 JSON 中
+伪造“已验证普通权限”。
