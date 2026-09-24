@@ -34,12 +34,21 @@ async function projectionFrom(path) {
     preparation: 'Prepare at 14:00',
   };
   const targets = new Map();
+  const requested = new Map();
+  let hasRequested;
   for (const value of raw.targets) {
-    if (!plain(value, ['node', 'summary', 'dependencies'])) throw Error('Invalid synthetic graph projection');
+    const extended = plain(value, ['node', 'summary', 'dependencies',
+      'requestedSummary', 'requestedDependencies']);
+    if (!extended && !plain(value, ['node', 'summary', 'dependencies']))
+      throw Error('Invalid synthetic graph projection');
+    if (hasRequested !== undefined && hasRequested !== extended) throw Error('Invalid synthetic graph projection');
+    hasRequested = extended;
     const node = ref(value.node);
     if (!Object.hasOwn(oldSummaries, node.id) || targets.has(node.id)
       || value.summary !== oldSummaries[node.id]) throw Error('Invalid synthetic graph projection');
     targets.set(node.id, node);
+    if (extended) requested.set(node.id, {summary: value.requestedSummary,
+      dependencies: value.requestedDependencies});
   }
   const attend = targets.get('attend');
   const prepare = targets.get('prepare');
@@ -50,18 +59,29 @@ async function projectionFrom(path) {
     if (!allowed.some(value => sameRef(value, dependency))) throw Error('Invalid synthetic graph projection');
   }
   const summaries = ['Attend meeting at 17:00', 'Prepare one hour before 17:00 meeting', 'Prepare at 16:00'];
+  const expected = [attend, prepare, preparation].map((node, index) => ({
+    node, summary: summaries[index], dependencies: [[projectedFact], [attendNext], [prepareNext]][index],
+  }));
+  if (hasRequested) {
+    for (const change of expected) {
+      const target = requested.get(change.node.id);
+      if (target?.summary !== change.summary || !Array.isArray(target.dependencies)
+        || target.dependencies.length !== 1
+        || !sameRef(ref(target.dependencies[0]), change.dependencies[0]))
+        throw Error('Invalid synthetic graph projection');
+    }
+  }
   return {
     projection: {
       expectedGraphRevision: raw.expectedGraphRevision,
       meetingChange: {startBefore: '15:00', startAfter: '17:00', preparationAfter: '16:00'},
       projectedFact,
-      targets: [attend, prepare, preparation].map((node, index) => ({node, previousSummary: oldSummaries[node.id],
-        nextSummary: summaries[index]})),
+      targets: expected.map(change => ({node: change.node, previousSummary: oldSummaries[change.node.id],
+        ...(hasRequested ? {requestedSummary: change.summary,
+          requestedDependencies: change.dependencies} : {nextSummary: change.summary})})),
       allowedDependencies: [projectedFact, attendNext, prepareNext],
     },
-    expected: [attend, prepare, preparation].map((node, index) => ({
-      node, summary: summaries[index], dependencies: [[projectedFact], [attendNext], [prepareNext]][index],
-    })),
+    expected,
   };
 }
 
@@ -89,7 +109,7 @@ if (!configured) {
       taskId: `synthetic-candidate-probe-${Date.now()}`, revision: 1,
       goal: `合成验收。以下是本地可信图谱投影，仅供建议，不是执行或授权：${JSON.stringify(projection)}。` +
         '请只输出一个合法JSON对象，无Markdown和额外字段：kind为repair_candidate，candidateVersion为1.0，candidate包含expectedGraphRevision与恰好3个changes。' +
-        '按targets顺序逐项使用原node引用、nextSummary作为summary；reason简短解释会议从15:00改到17:00及准备时间变化。' +
+        '按targets顺序逐项使用原node引用、requestedSummary（旧版为nextSummary）作为summary；reason简短解释会议从15:00改到17:00及准备时间变化。' +
         '各changes.dependencies依次仅使用allowedDependencies中的projectedFact、attend下一revision、prepare下一revision。' +
         '不得输出verification、Evidence、授权、工具执行或已写图声明。',
       deadline: new Date(Date.now() + 180_000).toISOString(), signal: new AbortController().signal,

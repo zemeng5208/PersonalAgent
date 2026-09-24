@@ -53,3 +53,29 @@ test('enabled candidate mode preserves ordinary JSON text and tool results', asy
     {kind: 'tool_proposal', proposalId: 'p', toolName: 'workspace.read_text', toolVersion: '1.0.0', arguments: {path: 'meeting-update.json'}},
   ]) assert.deepEqual(await create(value, {repairCandidateVersion: '1.0'}).invoke(input()), {...value, verification: 'unverified'});
 });
+
+test('candidate continuation adds a fixed output contract without changing the guarded projection', async () => {
+  const continuation = {proposalId: 'synthetic-read', state: 'confirmed', result: {
+    meetingId: 'synthetic-meeting', start: '17:00', repairContext: {
+      expectedGraphRevision: 7, targets: [{node: candidate.candidate.changes[0].node,
+        requestedSummary: candidate.candidate.changes[0].summary,
+        requestedDependencies: candidate.candidate.changes[0].dependencies}],
+      allowedDependencies: candidate.candidate.changes[0].dependencies,
+    },
+  }};
+  let guarded;
+  let body;
+  const cloud = new AgentArtsCloudAgentPort({...base, repairCandidateVersion: '1.0'},
+    {read: async () => 'Bearer synthetic'}, async (_url, init) => {
+      body = JSON.parse(init.body);
+      return new Response(JSON.stringify({event: 'message', data: {text: JSON.stringify(candidate)}}),
+        {headers: {'content-type': 'application/json'}});
+    }, request => { guarded = request.continuation; });
+  assert.deepEqual(await cloud.invoke({...input(), goal: 'private original goal', continuation}),
+    {...candidate, verification: 'unverified'});
+  assert.deepEqual(guarded, continuation);
+  assert.equal(body.query.includes(JSON.stringify({continuation})), true);
+  assert.match(body.query, /repair_candidate/);
+  assert.equal(body.query.includes('private original goal'), false);
+  assert.equal(body.query.includes('Bearer synthetic'), false);
+});

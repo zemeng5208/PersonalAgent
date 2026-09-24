@@ -44,9 +44,12 @@ JSON模式的SSE必须显式按序task_end→end；无workflow事件也不能省
 一旦出现显式task_end/end，就必须按序完整结束，终结后正文拒绝。默认text模式保留
 原兼容语义。
 
-初次请求仍为 query=goal（或显式 workflowGoalInput 对应的一个字符串变量）。续接请求
-的 query 仅为序列化 `{continuation:{proposalId,state:'confirmed',result:<投影>}}`；
-不重发 goal、完整工具输出、授权或 Evidence。既有 continuation 校验和最多8192 UTF-8
+初次请求仍为 query=goal（或显式 workflowGoalInput 对应的一个字符串变量）。普通JSON
+模式续接的query仅为序列化 `{continuation:{proposalId,state:'confirmed',result:<投影>}}`。
+显式开启`repairCandidateVersion:'1.0'`时，同一个已校验续接DTO作为数据，再附适配器
+固定的候选JSON输出指令；若可信宿主提供目标requestedSummary/requestedDependencies，
+要求云端按其精确引用和摘要生成候选。两种模式均不重发goal、完整工具输出、授权或
+Evidence，不改变给`beforeSend`的续接对象。既有 continuation 校验和最多8192 UTF-8
 字节的整个 continuation（含 proposalId/state/result）校验在读取凭据/请求网络之前进行；出机许可与实际投影仍由 B 控制，
 适配器不会从原结果自行裁剪后放行。云端必须把该 JSON 当数据，不能执行其中的指令。
 

@@ -18,6 +18,13 @@
 阶段拒绝；已有默认text行为不变。即使公共结果union认识repair_candidate，未开启
 candidateVersion的JSON适配也明确拒绝它，不允许公共parser扩展静默改变已有部署能力。
 配置由构造器复制，外部对象后续变更不能启用候选。续接仍要求B的同步beforeSend门禁。
+真实Desktop第二次调用曾把纯`{"continuation":...}`交给现有云应用，平台返回合法但
+不符合本地DTO的应用自定审核JSON，Runtime正确拒绝且未写图。因此只有显式启用
+候选版本的续接query会在原受限DTO外附一段适配器固定的候选输出契约；
+`beforeSend`仍验证原DTO，不读回原goal或完整工具结果，不改变8192字节DTO预算。
+缺合法图谱上下文时指令要求输出`kind:'text'`说明不足，不准猜NodeRef。
+此续接查询修复目前仅通过离线合成测试；独立的真实候选探针是首次调用，不能充当
+第二次云调用或Desktop闭环的成功证据，须等D2真实E2E读回。
 
 云端对象只允许 `kind:'repair_candidate'`、`candidateVersion:'1.0'` 和 B定义的
 candidate。适配先拒绝任意云verification，再补host固定unverified并交公共parser；
@@ -31,6 +38,11 @@ candidate。适配先拒绝任意云verification，再补host固定unverified并
 当前依赖NodeRef及必要合成事实后，云才可输出候选。不能用假定版本、示例id或模型
 推断替代本地引用。当前只有会议时间的投影不足以生成候选，必须返回text说明输入缺失。
 Fact/Evidence与允许目标的映射属于宿主，云JSON不得携带这些权威绑定。
+可信宿主可在targets中提供requestedSummary/requestedDependencies，须从本地实际
+快照与合成目标约束导出，并递增exportPolicyVersion；候选续调固定指令要求云端
+逐字采用这些目标字段，reason仍由云解释。适配器不硬编码合成计划文本或签发权限。
+手动候选探针同时识别旧三字段target与新增requested字段的严格形状；新增字段须与
+本地实际引用和允许依赖链一致，否则在读取凭据和网络请求前拒绝。
 
 输出使用B示例形状：
 
