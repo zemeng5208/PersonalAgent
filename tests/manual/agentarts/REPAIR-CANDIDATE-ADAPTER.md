@@ -18,6 +18,13 @@
 阶段拒绝；已有默认text行为不变。即使公共结果union认识repair_candidate，未开启
 candidateVersion的JSON适配也明确拒绝它，不允许公共parser扩展静默改变已有部署能力。
 配置由构造器复制，外部对象后续变更不能启用候选。续接仍要求B的同步beforeSend门禁。
+真实Desktop第二次调用曾把纯`{"continuation":...}`交给现有云应用，平台返回合法但
+不符合本地DTO的应用自定审核JSON，Runtime正确拒绝且未写图。因此只有显式启用
+候选版本的续接query会在原受限DTO外附一段适配器固定的候选输出契约；
+`beforeSend`仍验证原DTO，不读回原goal或完整工具结果，不改变8192字节DTO预算。
+缺合法图谱上下文时指令要求输出`kind:'text'`说明不足，不准猜NodeRef。
+此续接查询修复目前仅通过离线合成测试；独立的真实候选探针是首次调用，不能充当
+第二次云调用或Desktop闭环的成功证据，须等D2真实E2E读回。
 
 云端对象只允许 `kind:'repair_candidate'`、`candidateVersion:'1.0'` 和 B定义的
 candidate。适配先拒绝任意云verification，再补host固定unverified并交公共parser；
@@ -31,6 +38,11 @@ candidate。适配先拒绝任意云verification，再补host固定unverified并
 当前依赖NodeRef及必要合成事实后，云才可输出候选。不能用假定版本、示例id或模型
 推断替代本地引用。当前只有会议时间的投影不足以生成候选，必须返回text说明输入缺失。
 Fact/Evidence与允许目标的映射属于宿主，云JSON不得携带这些权威绑定。
+可信宿主可在targets中提供requestedSummary/requestedDependencies，须从本地实际
+快照与合成目标约束导出，并递增exportPolicyVersion；候选续调固定指令要求云端
+逐字采用这些目标字段，reason仍由云解释。适配器不硬编码合成计划文本或签发权限。
+手动候选探针同时识别旧三字段target与新增requested字段的严格形状；新增字段须与
+本地实际引用和允许依赖链一致，否则在读取凭据和网络请求前拒绝。
 
 输出使用B示例形状：
 
@@ -48,5 +60,16 @@ Fact/Evidence与允许目标的映射属于宿主，云JSON不得携带这些权
 
 在A工作树合入上述精确B依赖后，Node24.15编译通过；公共parser4项、adapter候选4项、
 提案/续接/最终门禁13项，共21/21通过，git diff --check通过。
-没有改动B公共parser/Runtime实现，没有运行云端、Desktop、本地写图或整个产品验收。
+没有改动B公共parser/Runtime实现；上述离线验收时尚未运行云端、Desktop、本地写图或整个产品验收。
 此记录不替代B/D组合验证、CI和goo122等已登记非作者批准；接口仍provisional。
+
+2026-09-24后续真实云候选验证：在用户批准的仅合成投影范围内，A从D2本地可信
+SQLite/Graph快照生成的忽略文件读取graphRevision、FactRef、三个目标NodeRef及允许
+的新依赖引用，前置校验后仅发送必要字段。现有published AgentArts应用未改全局prompt，
+通过query级约束进行一次付费调用（11:20:50Z—11:22:37Z），HTTP 200、完整SSE
+495820字节；显式`tool-proposal-json`和`repairCandidateVersion:'1.0'`适配返回
+`repair_candidate`，本地主机补`verification:'unverified'`。候选图版本、三个目标、
+精确摘要和各唯一新依赖引用与本地投影逐项匹配。无自动重试、Local回退、审批或写图；
+没有保存原始云响应和凭据。脱敏结构报告保留在本工作树忽略目录
+`.cache/agentarts-candidate/`。这验证云候选格式与引用，不代替Desktop可信preview、
+用户批准后Policy/ToolGateway的CAS写入、Evidence及同库重启验收。
