@@ -39,37 +39,6 @@ text. Public failures use fixed messages and do not expose provider or listener 
 Adapters own provider configuration, credentials, upload consent and transport. No
 provider is the default: recognition and output return `UNSUPPORTED_CAPABILITY`.
 
-## Provisional wake composition
-
-`bindVoiceWake({wake, voice})` is an explicit, in-process trusted-host binding to the
-provisional `@personal-agent/voice-wake` lifecycle. The host wires the wake controller's
-`onWake` callback to `binding.handleWake(event)`. The binding translates only a current,
-authorized wake session into `voice.start()`, propagates the finite wake expiry as the
-voice deadline, aborts the corresponding voice parent when wake listening ends, and
-synchronizes voice `playbackActive` back to wake suppression.
-
-The binding never enables a device, grants authorization, submits a task, or owns the
-supplied controllers. `dispose()` only removes its subscriptions and aborts the voice
-parent it created; it does not dispose the wake controller or voice manager. This is not
-a public wire protocol and is not evidence of real microphone, wake-word, ASR, TTS,
-Desktop, Runtime, or AgentArts integration.
-
-## Explicit Runtime transcript consumption
-
-`RuntimeClientTranscriptConsumer` is a trusted-host `TranscriptConsumerPort` adapter for
-an already connected public `@personal-agent/client`. It remains idle until the caller
-explicitly invokes `consumeTranscript`. That call submits the transcript as the
-`task.submit` goal with the configured `conversationId` and a stable bounded idempotency
-key, then reads `task.get` until Runtime reports a terminal state. Submission acceptance,
-`waiting_approval`, and every other non-terminal state are not treated as a reply.
-
-Only a successful task's bounded `resultSummary` becomes reply text. Runtime and transport
-failures use fixed local errors without external messages. Deadline, parent abort, and
-`VoiceOperation.stop()` bound submit, polling, and non-cooperative Client promises, but
-they stop only this adapter's local wait: the adapter never calls `task.cancel`, retries a
-submission, starts Runtime directly, or invents terminal state. Real local Runtime
-composition remains a separate host-level acceptance step.
-
 ## Windows System.Speech adapters
 
 `createWindowsSystemSpeechPorts()` returns provider-specific recognition and output ports
@@ -92,7 +61,6 @@ The production launcher never passes an execution-policy bypass; if the fixed sc
 blocked by system execution policy or missing language components, the ports return
 unavailable (`UNSUPPORTED_CAPABILITY`). Desktop and Runtime must keep their Unavailable
 ports and UI state until authorized production setup and real-device acceptance pass.
-
 ## Fake use and verification
 
 `@personal-agent/voice/testing` exports Fake recognition, explicit transcript consumer
@@ -106,7 +74,7 @@ npm.cmd run test --workspace=@personal-agent/voice
 npm.cmd run typecheck --workspace=@personal-agent/voice
 ```
 
-The root build now runs this workspace immediately after contracts, and the single root
+The root build now runs this workspace immediately after client, and the single root
 lock file registers only the voice workspace/link; no external dependency was added or
 upgraded. A trusted integration owner must still wire the Desktop/Runtime composition
 and keep the public wire capability unavailable until production adapters and

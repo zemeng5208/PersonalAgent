@@ -17,7 +17,7 @@ test('two conversations retain independent metadata and context after restart',(
     journal.add('big-2','workspace','继续');
     const reloaded=new Conversations(file);
     const tasks=[{taskId:'small-1',state:'succeeded',resultSummary:'小窗口回答 [model=p/a/b; verification=mock; tokens=unknown]'},{taskId:'big-1',state:'succeeded',resultSummary:'大窗口回答'},{taskId:'small-2',state:'running'},{taskId:'big-2',state:'running'}];
-    assert.deepEqual(reloaded.history(tasks,'small-2'),[{role:'user',content:'我的小窗口信息'},{role:'assistant',content:'小窗口回答'}]);
+    assert.deepEqual(reloaded.history(tasks,'small-2'),[{role:'user',content:'我的小窗口信息'},{role:'assistant',content:'小窗口回答 [model=p/a/b; verification=mock; tokens=unknown]'}]);
     assert.deepEqual(reloaded.history(tasks,'big-2'),[{role:'user',content:'我的大窗口信息'},{role:'assistant',content:'大窗口回答'}]);
     assert.equal(reloaded.goal('small-1'),'我的小窗口信息');
     assert.equal(reloaded.surface('legacy-record'),'panel');

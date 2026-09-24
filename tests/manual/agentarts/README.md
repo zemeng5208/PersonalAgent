@@ -27,3 +27,12 @@ deployment、API、trace、usage、评估、知识/MCP/Skill、工具提案与�
 
 重新验收时应在不暴露凭据的前提下读回同一资源及版本；任何重新部署、试运行或
 真实 API 调用都需要单独记录费用、身份、输入范围、trace 和失败/回滚结果。
+
+## 固定合成分类 runner
+
+[`support/fixed-synthetic-batch.mjs`](support/fixed-synthetic-batch.mjs) 提供 MOD-31 的离线
+三案例分类 runner。它只接受显式注入的 CoordinationPort、未来 UTC deadline 和取消
+信号；内置 prompt 不接收私人输入，也不写入案例预期答案。直接 CLI 要求 `--deadline`，
+并始终使用返回私有固定序列的显式 Fake，仅验证 runner plumbing，不衡量模型能力；它不会
+读取环境凭据或自动连接 AgentArts。输出只记录 case 状态、验证等级、固定错误码、计数和
+耗时；`mock` 结果不构成真实 AgentArts、工具执行或 Evidence 验收。

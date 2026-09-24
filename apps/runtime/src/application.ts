@@ -2,3 +2,12 @@ export {createRuntimeApplication, RuntimeApplication} from './application/runtim
 export type {RuntimeApplicationOptions, RuntimeApplicationTransport} from './application/runtime-application.js';
 export {createAgentArtsRuntimeApplication} from './application/agentarts.js';
 export type {AgentArtsRuntimeApplicationOptions} from './application/agentarts.js';
+export {createMemoryProjectionApplication, createPendingImpactApplication} from './application/memory.js';
+export type {
+  FactChangeConfirmationPort,
+  MemoryProjectionApplication,
+  MemoryProjectionApplicationOptions,
+  MemoryProjectionResult,
+  PendingImpactApplication,
+  PendingImpactApplicationOptions
+} from './application/memory.js';

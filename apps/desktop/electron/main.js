@@ -3,10 +3,11 @@ import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
 import {EventCursor} from '@personal-agent/client';
-import {register} from './runtime.js';
+import {register, requestTaskCancellation} from './runtime.js';
 import {panelBounds, clampOrb, draggedGroupBounds} from './placement.js';
 import {Conversations} from './conversations.js';
 import {createDesktopHost} from './desktop-host.js';
+import {desktopDataPaths} from './data-paths.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -17,9 +18,17 @@ const agentArtsInvokeMode = process.env.PA_AGENTARTS_INVOKE_MODE === undefined
   ? 'published'
   : process.env.PA_AGENTARTS_INVOKE_MODE;
 const competitionMode = !fakeMode && runtimeProfile === 'huawei_ict_agentarts';
-if (fakeMode || fakeModelMode) app.setPath('userData', path.resolve(dir, '../.cache/user-data'));
-if (process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1') app.setPath('userData', path.resolve(dir, `../.cache/test-user-data-${process.pid}`));
+if (fakeMode || fakeModelMode) app.setPath('userData', app.isPackaged
+  ? path.join(app.getPath('temp'), `personal-agent-fake-${process.pid}`)
+  : path.resolve(dir, '../.cache/user-data'));
+if (process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1') app.setPath('userData', app.isPackaged
+  ? path.join(app.getPath('temp'), `personal-agent-test-${process.pid}`)
+  : path.resolve(dir, `../.cache/test-user-data-${process.pid}`));
 if (process.env.PA_DESKTOP_TEST_USER_DATA) app.setPath('userData', path.resolve(process.env.PA_DESKTOP_TEST_USER_DATA));
+const dataPaths = desktopDataPaths({electronDir: dir, userData: app.getPath('userData'),
+  packaged: app.isPackaged, fakeRuntime: fakeMode, fakeModel: fakeModelMode,
+  ephemeral: process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1',
+  testUserData: Boolean(process.env.PA_DESKTOP_TEST_USER_DATA)});
 
 const ownsDesktopInstance = app.requestSingleInstanceLock();
 if (!ownsDesktopInstance) app.quit();
@@ -64,11 +73,21 @@ let model = {
   persisted: false, enabled: false,
   reason: '盘古 Provider 已接入；请在“模型”页配置 Endpoint、模型和 API Key', lastTestAt: null, latencyMs: null,
 };
+if (competitionMode) {
+  model = {
+    ...model,
+    provider: 'agentarts', label: 'AgentArts · Competition Profile', verification: 'unverified',
+    baseUrl: '', model: 'AgentArts Runtime', deployment: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
+    keyConfigured: false,
+    reason: 'Competition Runtime 尚未完成初始化；请检查可信主进程配置',
+  };
+}
 let thinking = {depth: 1, fast: false, applied: false, reason: 'Runtime 尚未公开思考参数契约'};
 const tasks = new Map();
 const taskGoals = new Map();
 let conversations;
 const submitting = new Set();
+const terminalTaskStates = new Set(['succeeded', 'failed', 'cancelled']);
 const approvals = new Map();
 const notifications = new Map();
 let runtimeApplication;
@@ -417,14 +436,23 @@ async function initializeModelFromEnvironment() {
 async function refresh(taskId) {
   const task = await client.call('task.get', {taskId});
   tasks.set(taskId, task);
+  clearInactiveTaskExitWarning();
   publish();
   return task;
+}
+
+function clearInactiveTaskExitWarning() {
+  if (runtimeError === 'Runtime 仍有活动任务；请先等待完成或停止任务后再退出'
+    && [...tasks.values()].every(task => terminalTaskStates.has(task.state))) {
+    runtimeError = '';
+  }
 }
 
 function applyEvent(event) {
   if (event.type === 'notification.created' && event.payload) notifications.set(event.payload.notificationId, {...event.payload,occurredAt:event.occurredAt});
   if (event.taskId && event.payload && ['task.created', 'task.state_changed', 'task.completed', 'task.failed', 'task.cancelled'].includes(event.type)) {
     tasks.set(event.taskId, structuredClone(event.payload));
+    clearInactiveTaskExitWarning();
   }
   if (event.type === 'approval.requested' && event.payload) approvals.set(event.payload.approvalId, structuredClone(event.payload));
   if (event.type === 'task.cancelled' && event.payload?.taskId) {
@@ -497,14 +525,12 @@ async function initializeRuntime() {
     const {FakeRuntime} = await import('@personal-agent/testkit');
     runtime = new FakeRuntime({mode: 'test', scenario: 'success'});
     runtimeApplication = createRuntimeApplication({
-      path: path.resolve(dir, '../.cache/fake-runtime-application.sqlite'),
+      path: dataPaths.runtime,
       text: {mode: 'unavailable', model: modelConfig.model},
     });
     readEvents = after => runtime.readEvents('tasks', after);
   } else {
-    const dbPath = process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1' || process.env.PA_DESKTOP_TEST_USER_DATA
-      ? path.join(app.getPath('userData'), 'runtime.sqlite')
-      : path.resolve(dir, '../.cache/runtime.sqlite');
+    const dbPath = dataPaths.runtime;
     mkdirSync(path.dirname(dbPath), {recursive: true});
     if (competitionMode) {
       if (!process.env.PA_AGENTARTS_AUTHORIZATION) {
@@ -550,22 +576,6 @@ async function initializeRuntime() {
   await syncRuntimeSnapshots();
   await pumpEvents();
   eventPoll = setInterval(() => void pumpEvents(), 120);
-}
-
-async function waitForTerminalTask(taskId, timeoutMs = 5_000) {
-  const terminal = new Set(['succeeded', 'failed', 'cancelled']);
-  const deadline = Date.now() + timeoutMs;
-  let task = await refresh(taskId);
-  while (!terminal.has(task.state) && Date.now() < deadline) {
-    await new Promise(resolve => setTimeout(resolve, 25));
-    task = await refresh(taskId);
-  }
-  if (!terminal.has(task.state)) throw Error('Runtime 未在限定时间内确认任务终态');
-  if (runtimeError === 'Runtime 仍有活动任务；请先等待完成或停止任务后再退出') {
-    runtimeError = '';
-    publish();
-  }
-  return task;
 }
 
 async function action(event, name, payload) {
@@ -637,7 +647,7 @@ async function action(event, name, payload) {
     if (typeof payload !== 'string' || !payload.trim()) throw Error('请输入有效任务');
     if (!fakeMode && model.enabled === false) throw Error('模型已停用，请先在模型设置中启用');
     const surface = sender === workspace ? 'workspace' : 'panel';
-    if (submitting.has(surface) || [...tasks.values()].some(task => conversations.surface(task.taskId) === surface && !['succeeded','failed','cancelled'].includes(task.state))) throw Error('请等待当前回答完成，或先停止当前任务');
+    if (submitting.has(surface) || [...tasks.values()].some(task => conversations.surface(task.taskId) === surface && !terminalTaskStates.has(task.state))) throw Error('请等待当前回答完成，或先停止当前任务');
     submitting.add(surface);
     try {
     const goal = payload.trim();
@@ -652,9 +662,7 @@ async function action(event, name, payload) {
   if (name === 'task.cancel') {
     if (typeof payload !== 'string' || !tasks.has(payload)) throw Error('Unknown task');
     if (sender !== admin && conversations.surface(payload) !== (sender === workspace ? 'workspace' : 'panel')) throw Error('无法停止其他工作区的任务');
-    const result = await client.call('task.cancel', {taskId: payload, reason: '用户取消任务'});
-    const task = fakeMode ? await refresh(payload) : await waitForTerminalTask(payload);
-    return {...result, state: task.state};
+    return requestTaskCancellation(client, payload, refresh);
   }
   if (name === 'task.refresh') {
     if (!tasks.has(payload)) throw Error('Unknown task');
@@ -697,12 +705,7 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
   try {
-    const conversationPath = fakeMode || fakeModelMode || process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1'
-      ? null
-      : process.env.PA_DESKTOP_TEST_USER_DATA
-        ? path.join(app.getPath('userData'), 'conversations.json')
-        : path.resolve(dir, '../.cache/conversations.json');
-    conversations = new Conversations(conversationPath);
+    conversations = new Conversations(dataPaths.conversations);
     if (!competitionMode) restoreModelConfig();
     await initializeRuntime();
     await initializeModelFromEnvironment();

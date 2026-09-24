@@ -91,14 +91,22 @@ Agent、ModelGateway 或具体供应商。Fake 测试覆盖：
 - 未配置供应商明确返回 `UNSUPPORTED_CAPABILITY`，外部错误不泄露私文；
 - stop 重复调用幂等。
 
+2026-09-24 对齐当前 main 后，定向 TypeScript typecheck/build 通过，
+`concurrent-start.test.mjs` 与 `voice-session.test.mjs` 共 14/14 通过，架构依赖检查
+1/1 通过。并发替换清理、订阅重入和 operation 单次释放修复保留。当前工作树未安装
+`node_modules`，TypeScript 使用主工作树已安装的同版本编译器与 Node 类型运行；
+本机 Node/npm 为 26.3.0/11.16.0，正式版本门禁以 CI 为准。
+
 本记录的证据仅为 `mock`。真实麦克风采集、回声/VAD、真实 ASR/TTS、Windows 音频设备、
 播报打断实机体验、数据出机同意、供应商费用/限流、Desktop 状态显示和公共 wire 接线
 均未验收，因此 PA-007 与 MOD-14 整体不能标记 done。
 
 ## 根接线状态与剩余交接
 
-1. 根 `package.json` 已在 contracts 后加入 `@personal-agent/voice`；唯一根
+1. 根 `package.json` 已在 client 后加入 `@personal-agent/voice`；唯一根
    `package-lock.json` 已离线刷新，仅增加 voice workspace 和 node_modules link。
+   与当前 main 合并时保留了 main 的 Runtime deadline 测试和接口目录；共享根差异仅为
+   voice 工作区构建顺序与 lock 登记，待 `goo122` 非作者复核。
 2. 由受信 Desktop/Runtime composition 注入真实或显式 Unavailable 适配器；Renderer 不得
    持有凭据、直接上传音频或直接导入本包私有实现。
 3. 若要公布 `voice.start` / `voice.stop`，先由公共协议负责人协调 wire 语义、音频
