@@ -13,7 +13,7 @@
 
 ## Windows 实机验收步骤与证据
 
-在普通用户 Windows 会话中，由独立受信测试宿主调用类库（该宿主不能作为产品部署入口），只用临时、无私人内容的记事本文本：
+在普通用户 Windows 会话中，先从仓库根目录运行 `dotnet run --project apps/windows-host/manual/ManualNotepadProbe.csproj`。它启动一个新进程/临时合成文件，只在操作者目视确认并输入 `CONFIRM` 后尝试执行，不从其他已有记事本窗口挑选目标；该诊断程序不代表产品授权链，不能作为产品部署入口。随后按下列步骤补足负向和集成验收：
 
 1. 记录 Windows/.NET/记事本版本、实际 `notepad.exe` 路径、完整 `dotnet build` 退出码；若记事本并非 System32 或只有 Document/TextPattern，记录拒绝并更新目标实现后重新评审，不能将拒绝当成功。
 2. 人工确认 HWND、PID、进程启动时间、预期文本和替换文本；测试缺确认、另一 PID、重启后的同 PID、背景窗口、第二编辑控件、只读控件、超过长度及预期文本变化均不发生替换。
