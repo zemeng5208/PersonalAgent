@@ -14,7 +14,7 @@ const response = value => new Response(JSON.stringify({event: 'message', data: {
 function setup(fetchImpl, settings = {}) {
   let reads = 0;
   const cloud = new AgentArtsCloudAgentPort({...config, ...settings},
-    {read: async () => { reads++; return 'Bearer synthetic-token'; }}, fetchImpl);
+    {read: async () => { reads++; return 'Bearer synthetic-token'; }}, fetchImpl, () => {});
   return {cloud, reads: () => reads};
 }
 
@@ -107,7 +107,10 @@ test('continuation is copied before authorization awaits and named Workflow inpu
   const waiting = new Promise(resolve => { release = resolve; });
   let body;
   const cloud = new AgentArtsCloudAgentPort({...config, workflowGoalInput: 'goal'}, {read: async () => waiting},
-    async (_url, init) => { body = JSON.parse(init.body); return response({kind: 'text', text: 'ok'}); });
+    async (_url, init) => { body = JSON.parse(init.body); return response({kind: 'text', text: 'ok'}); }, guardRequest => {
+      assert.deepEqual(guardRequest.continuation, continuation);
+      assert.equal(Object.isFrozen(guardRequest), true);
+    });
   const mutable = structuredClone(continuation);
   const pending = cloud.invoke(request({continuation: mutable}));
   mutable.result.time = 'private-replacement';
@@ -133,4 +136,51 @@ test('JSON mode honors terminal SSE validation before reading proposal JSON', as
   const {cloud} = setup(async () => new Response(sequence.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''),
     {headers: {'content-type': 'text/event-stream'}}));
   assert.deepEqual(await cloud.invoke(request()), {...proposal, verification: 'unverified'});
+});
+
+test('continuation without an explicit synchronous host export guard fails before credentials', async () => {
+  let reads = 0;
+  const cloud = new AgentArtsCloudAgentPort(config, {read: async () => { reads++; return 'Bearer synthetic'; }},
+    async () => { throw Error('unexpected transport'); });
+  await assert.rejects(cloud.invoke(request({continuation})), {code: 'UNAUTHORIZED'});
+  assert.equal(reads, 0);
+});
+
+test('export revoked during credential read is denied at the final send boundary', async () => {
+  let release;
+  const credentials = new Promise(resolve => { release = resolve; });
+  let allowed = true;
+  let calls = 0;
+  const cloud = new AgentArtsCloudAgentPort(config, {read: async () => credentials},
+    async () => { calls++; return response({kind: 'text', text: 'unexpected'}); }, () => {
+      if (!allowed) throw new Error('private policy denial');
+    });
+  const pending = cloud.invoke(request({continuation}));
+  allowed = false;
+  release('Bearer synthetic');
+  await assert.rejects(pending, {code: 'UNAUTHORIZED', message: 'AgentArts export permission denied'});
+  assert.equal(calls, 0);
+});
+
+test('async guards cannot postpone their decision until after transport dispatch', async () => {
+  let calls = 0;
+  const cloud = new AgentArtsCloudAgentPort(config, {read: async () => 'Bearer synthetic'},
+    async () => { calls++; return response({kind: 'text', text: 'unexpected'}); }, async () => {});
+  await assert.rejects(cloud.invoke(request({continuation})), {code: 'UNAUTHORIZED'});
+  assert.equal(calls, 0);
+});
+
+test('cancellation during credential read or inside final guard prevents transport', async () => {
+  for (const phase of ['credentials', 'guard']) {
+    const controller = new AbortController();
+    let calls = 0;
+    const cloud = new AgentArtsCloudAgentPort(config, {read: async () => {
+      if (phase === 'credentials') controller.abort();
+      return 'Bearer synthetic';
+    }}, async () => { calls++; return response({kind: 'text', text: 'unexpected'}); }, () => {
+      if (phase === 'guard') controller.abort();
+    });
+    await assert.rejects(cloud.invoke(request({continuation, signal: controller.signal})), {code: 'CANCELLED'});
+    assert.equal(calls, 0);
+  }
 });

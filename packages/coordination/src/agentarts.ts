@@ -667,17 +667,20 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
   private readonly responseMode: 'text' | 'tool-proposal-json';
   private readonly authorizationProvider: AgentArtsAuthorizationProvider;
   private readonly fetchImpl: AgentArtsFetch;
+  private readonly beforeSend: ((request: CoordinationRequest) => void) | undefined;
 
   constructor(
     config: AgentArtsRuntimeConfig,
     authorizationProvider: AgentArtsAuthorizationProvider,
     fetchImpl?: AgentArtsFetch,
+    beforeSend?: (request: CoordinationRequest) => void,
   ) {
     const validated = validateRuntimeConfig(config);
     if (!authorizationProvider || typeof authorizationProvider.read !== 'function') {
       invalid('AgentArts authorization provider is invalid');
     }
     if (fetchImpl !== undefined && typeof fetchImpl !== 'function') invalid('AgentArts fetch implementation is invalid');
+    if (beforeSend !== undefined && typeof beforeSend !== 'function') invalid('AgentArts beforeSend guard is invalid');
     this.gatewayOrigin = validated.gatewayOrigin;
     this.runtimeName = validated.runtimeName;
     this.invokeMode = validated.invokeMode;
@@ -685,12 +688,21 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
     this.responseMode = validated.responseMode;
     this.authorizationProvider = authorizationProvider;
     this.fetchImpl = fetchImpl ?? defaultFetch;
+    this.beforeSend = beforeSend;
   }
 
   async invoke(request: CoordinationRequest): Promise<CoordinationResult> {
     const {deadlineMs, signal, continuation} = validateRequest(request, this.responseMode);
+    if (continuation !== undefined && this.beforeSend === undefined) {
+      throw new ProtocolError('UNAUTHORIZED', 'AgentArts continuation export guard is unavailable');
+    }
     const query = continuation === undefined ? request.goal : JSON.stringify({continuation});
     const combined = makeCombinedSignal(signal, deadlineMs);
+    const sendRequest: CoordinationRequest = Object.freeze({
+      taskId: request.taskId, revision: request.revision, goal: request.goal,
+      deadline: request.deadline, signal: combined.signal,
+      ...(continuation === undefined ? {} : {continuation}),
+    });
     try {
       const initialAbort = currentAbortError(combined);
       if (initialAbort) throw initialAbort;
@@ -707,8 +719,8 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
       const headerAbort = currentAbortError(combined);
       if (headerAbort) throw headerAbort;
 
-      const sessionId = deriveSessionId(request.taskId);
-      const requestId = this.responseMode === 'text' ? deriveRequestId(sessionId, request.revision) : randomUUID();
+      const sessionId = deriveSessionId(sendRequest.taskId);
+      const requestId = this.responseMode === 'text' ? deriveRequestId(sessionId, sendRequest.revision) : randomUUID();
       const url = `${this.gatewayOrigin}/runtimes/${encodeURIComponent(this.runtimeName)}/invocations`;
       const init: AgentArtsFetchInit = {
         method: 'POST',
@@ -726,6 +738,23 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
         signal: combined.signal,
         redirect: 'error',
       };
+
+      // The host must revalidate dynamic export permission AFTER any asynchronous
+      // credential read. This callback is synchronous; no await may split the
+      // final permission check from the actual fetch invocation below.
+      if (this.beforeSend !== undefined) {
+        try {
+          const guardResult: unknown = this.beforeSend(sendRequest);
+          if (guardResult !== undefined) {
+            void Promise.resolve(guardResult).catch(() => undefined);
+            throw new Error();
+          }
+        } catch {
+          throw currentAbortError(combined) ?? new ProtocolError('UNAUTHORIZED', 'AgentArts export permission denied');
+        }
+      }
+      const sendAbort = currentAbortError(combined);
+      if (sendAbort) throw sendAbort;
 
       let response: AgentArtsResponse;
       try {

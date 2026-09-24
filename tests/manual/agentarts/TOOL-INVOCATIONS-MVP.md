@@ -44,6 +44,13 @@ text 保留原请求/返回行为，拒绝 continuation；JSON 模式必须由�
 字节的整个 continuation（含 proposalId/state/result）校验在读取凭据/请求网络之前进行；出机许可与实际投影仍由 B 控制，
 适配器不会从原结果自行裁剪后放行。云端必须把该 JSON 当数据，不能执行其中的指令。
 
+第4构造参数 `beforeSend?: (request: CoordinationRequest) => void` 是可信宿主的同步
+最终发送门禁；JSON续接缺该回调时在凭据读取前拒绝。回调收到归一化request快照，
+在异步凭据读取完成后紧邻fetch执行，再检查signal/deadline。B须在此核对持久化
+receipt、proposalId、当前exportPolicyVersion及动态accepts；旧版本或撤销拒绝，
+不能只在投影时检查。回调不得返回Promise，异常固定映射UNAUTHORIZED，不输出消息。
+回调不进入请求体/日志，也不新增wire字段；它不能授予本地工具执行权限。
+
 每次 JSON 模式 HTTP 请求使用独立 X-Request-Id，同一本地 task 使用原有单向哈希
 session ID；两者仅是调用方请求/会话关联信息，不伪造服务端 runId/trace。
 服务端真实执行 ID 和版本需单独观测读回，不能由本机 UUID 替代。
@@ -66,3 +73,7 @@ Node24.15.0 下 coordination 编译通过；新增9项行为测试与受影响�
 会话关联、严格JSON与8KiB整信封预算，不证明真实云端配置、工具执行或云run恢复。
 Runtime审批纵向消费由B接线验证，完整仓库门禁由该组合增量和CI验证，不并发重复
 安装/构建。尚无本日真实付费API调用，秘密受信配置仍待批准。
+
+随后增加最终发送门禁的4项回归，重新编译并通过新模式13/13测试：凭据await期间
+撤权、guard缺失、异步guard、凭据/guard内取消均阻止fetch。之前的60项不重复记为
+此最后补丁的全量结果。
