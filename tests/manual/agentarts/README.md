@@ -21,12 +21,24 @@
 - 四个资源提交版本后出现部署配置弹窗；本次均选择取消，没有填写模型 API Key，
   没有部署、试运行或发起模型调用。
 
-因此，本记录只证明 AgentArts 构建、版本化、多智能体成员与路由槽位配置的云端读回。
-deployment、API、trace、usage、评估、知识/MCP/Skill、工具提案与本地可信执行闭环
-仍为 `unavailable`，不能把本次记录计为比赛 Golden Path 完成。
+因此，**2026-09-12 这份记录本身**只证明 AgentArts 构建、版本化、多智能体成员与
+路由槽位配置的云端读回。当时 deployment、API、trace、usage、评估、知识/MCP/Skill、
+工具提案与本地可信执行闭环均未验收；不能把当时的提交计为比赛 Golden Path 完成。
 
 重新验收时应在不暴露凭据的前提下读回同一资源及版本；任何重新部署、试运行或
 真实 API 调用都需要单独记录费用、身份、输入范围、trace 和失败/回滚结果。
+
+## 2026-09-24 Competition Profile 证据索引
+
+| 表面 | 当前可核对证据 | 证据边界 |
+| --- | --- | --- |
+| 云端构建与版本化 | [2026-09-12 控制台读回](2026-09-12-multi-agent-build.json)：多智能体和三个子工作流提交版本，起始/默认/结束路由槽位 | 当时取消部署；后续当前草稿/部署版本未重新读回 |
+| 已发布部署的调用 | [有界多次云调用工具 MVP](TOOL-INVOCATIONS-MVP.md)：2026-09-24 三次独立 published API 合成探针，文字、提案、候选各 HTTP 200；另有同一本地 source task 的两次云请求均 HTTP 200 | 证明指定 published 端点能响应；未读回控制台当前 deployment/version、服务端 trace/runId、usage/费用 |
+| 本地执行与修复 | [D2 PR #104](https://github.com/zemeng5208/PersonalAgent/pull/104) 的 `tests/manual/agentarts/MVP-ACCEPTANCE.md`（本地提交 `c2ec9a2`）、[A 脱敏调用读回](TOOL-INVOCATIONS-MVP.md)：合成读取经审批与 ToolGateway，候选经预览，本地修复另经审批/CAS，graph revision 9 与 Evidence 在同库重启后读回 | 初次手工脚本因自身断言失败；同库零云请求恢复单独通过；未证明云原生同 run 恢复或生产私人数据 |
+| 平台评估与扩展能力 | 尚无当前评估分数、可复现评估集、知识/MCP/Skill 的真实云端读回 | 不据此声称完整比赛验收、正式演示或发布完成 |
+
+后续云请求的调用方 `X-Request-Id` 只能关联本机请求，不代替平台 trace。上述索引
+覆盖本次合成 MVP，不扩大为 AgentArts 原生暂停/恢复或全部比赛要求已完成。
 
 ## 固定合成分类 runner
 

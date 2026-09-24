@@ -69,10 +69,10 @@ session ID；两者仅是调用方请求/会话关联信息，不伪造服务端
 离线验证需覆盖：显式开关、严格提案/文本、伪造 verification/额外字段、结构错误、
 8KiB投影边界、无授权零网络失败、取消/deadline、同task不同request身份与无自动重试。
 真实验收使用合成目录/文件与显式本地批准；必须读回工具结果、Evidence、最终文字及
-同库重启。当前尚未完成这些本地闭环步骤，不能宣称工具闭环可用。
+同库重启。2026-09-24 的合成 Desktop 闭环读回见下文；它不等于生产数据或比赛全项验收。
 
 云原生工具暂停/同run恢复、跨进程恢复云run及正式MCP桥仍 unavailable。多invocation
-可能增加云调用/模型成本；只有真实运行后才能报告费用和trace。不得自动回退 Local，
+可能增加云调用/模型成本；真实运行后仍须单独读回费用和平台 trace。不得自动回退 Local，
 不得把真实工具标 mock，取消后不发第二次云请求。
 
 ## 当前验证
@@ -115,8 +115,38 @@ Runtime审批纵向消费由B接线验证，完整仓库门禁由该组合增量
 query使用D2从真实本地合成SQLite/Graph快照导出的版本化目标、更新后的FactRef和
 允许依赖白名单；只投影会议从15:00到17:00及准备事项到16:00的必要字段，不发送
 Evidence、凭据或私人日程。`invokeMode`未显式设置，适配使用默认published。
-Desktop消费时须由可信composition显式设置相应`responseMode`和候选版本，并保持
+Desktop消费须由可信composition显式设置相应`responseMode`和候选版本，并保持
 JSON续接的同步`beforeSend`出机门禁。首次提案探针没有执行工具；候选探针没有审批或
-写图。第二次云invocation、同一本地task的Evidence与终态、可信preview、Policy/
-ToolGateway CAS提交和同库重启仍需B/D2在真实Desktop链路分别验收；三次独立API
-探针不能替代这些证据。候选契约与前置输入见`REPAIR-CANDIDATE-ADAPTER.md`。
+写图。三次独立API探针不能替代下列 Desktop 证据。候选契约与前置输入见
+`REPAIR-CANDIDATE-ADAPTER.md`。
+
+## 2026-09-24 合成 Desktop 真实云闭环读回
+
+D2 的运行时源码基线为 `02f7273`，已包含 A 的候选续调修复 `edae887`；当时的手工
+脚本修正随后提交为 D2 `c2ec9a2`，本文核对时 D2 checkout 为 `e408314`。A 当前
+`565ad48` 的后续改动仅增加拒绝把候选藏在审核摘要里的负例测试。收据保留在 D2
+工作树被忽略的 `.cache/desktop-agentarts-wu7Qlf/`，不纳入 Git，也不含本文所需的
+原始云正文或凭据。D2 的完整验收描述位于
+[PR #104](https://github.com/zemeng5208/PersonalAgent/pull/104) 的
+`tests/manual/agentarts/MVP-ACCEPTANCE.md`（本地提交 `c2ec9a2`）。
+
+同一个本地 source task 在 published AgentArts API 发出两次**不同的云请求**，调用方
+`X-Request-Id` 脱敏引用分别为 `300bf45a…32f2c`、`c7d97e82…6b87c`；它们不是平台
+runId/trace。两次均为 HTTP 200、完整 SSE、无 error event。第一次最终对象为严格
+`tool_proposal`；Desktop 呈现并在合成 UI 自动化中消费本地 `allow_once` 读取审批，
+ToolGateway 确认合成文件读取，Fact revision 2 投影为 graph revision 6，持久保存
+任务与 Evidence 绑定。第二次最终对象为严格 `repair_candidate` v1.0，本地 source
+task 读回 `succeeded`，原生预览路径生成三个目标的候选摘要。候选只是建议，云端
+没有写图；自动化代答预览对话框不构成人工点击或桌面合成画面的视觉验收。
+
+首次手工脚本在进入写入审批阶段时把 UI 快照的 `action` 错认作 `toolName`，因此脚本
+收据为 `ERR_ASSERTION`/`failed`；此时 source task 已成功，候选已预览，但本地修复
+尚未批准或提交。修正后的同库恢复通过 Admin UI 的 `cognition.commit_repair`
+`allow_once` 审批，读回独立 local task `succeeded`、graph revision 9、图内容与执行
+Evidence；再次重启仍读到两任务成功及修复结果。恢复阶段 `cloudRequests:0`。这两段
+证据不能合写成一次无中断通过的脚本运行，也不能解释为云原生同 run 暂停/恢复。
+
+目前已验证 published API 的文字、提案、候选格式，以及这一次合成 Desktop 的工具
+执行、候选预览、本地审批/CAS 和重启读回。尚未读回对应平台部署版本、服务端 trace/
+runId、usage/费用和 AgentArts 评估结果；真实私人数据、原生同云 run 恢复、人工预览
+点击与正式比赛提交均不在这份 MVP 证据内。
