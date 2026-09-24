@@ -11,18 +11,21 @@
 保留。`RuntimeApplicationOptions.competitionToolExports` 是受信进程内组合配置，
 不来自 Renderer、云提案或 wire 请求。缺省继续拒绝 `unverified` 工具提案。
 
-每项配置固定 `toolName`、`toolVersion`；`accepts({taskId, proposalId, arguments})`
+每项配置固定 `toolName`、`toolVersion`、`exportPolicyVersion`；规则变化必须更新后者。
+`accepts({taskId, proposalId, arguments})`
 必须显式选择本次合成输入，注册 descriptor 必须为 `read`。配置仅许可结果出机，
 不能代替 Runtime/Policy 的用户审批。审批恢复时重新检查出机选择，仍沿用原始 deadline。
 
 执行确认后调用 `project({taskId, proposalId, result, signal})`，仅把其纯 JSON 输出放进
-既有 `CoordinationContinuation`；最大 8192 UTF-8 字节。投影异常、非法 JSON、超限和取消
+既有 `CoordinationContinuation`；包含 proposalId/state/result 的整个 JSON 最多 8192 UTF-8 字节。投影异常、非法 JSON、超限和取消
 均阻止 continuation，错误使用固定文本，已产生的本地执行记录和 Evidence 保留。
 投影不接收 grant、scope 或 Evidence 内容。合成选择及字段白名单是受信宿主责任，
 不得将任意私人文件读取配上原样回传函数。
 
 同一任务的已确认 proposal ID 保存到既有 `competition-loop` checkpoint：
 相同提案重放已裁剪结果，参数/工具/版本或 verification 改变则拒绝，不重复审批或执行。
+receipt 同时保存出机规则版本，重启后缺失或版本不同直接拒绝旧投影，不重新执行工具。
+异步投影完成后、实际适配器调用前再次检查动态出机范围、取消信号及期限。
 没有数据库迁移、新 wire DTO、Policy 改动或 capability。旧 checkpoint 缺少 receipts 时
 按空列表兼容；本地 Fake 的 mock 路径保持原有行为。
 
@@ -39,6 +42,9 @@
   Runtime 为 89/90：既有 100ms deadline 测试受并行 SQLite 启动延迟影响，适配器尚未开始就过期。
   固定该测试提交时钟，保留真实 timeout timer 和原断言后补跑 Runtime 90/90、integration 11/11；
   未重复全套。未运行 Electron、真实模型、云浏览器或长期服务。
+- 评审修复定向验证 36/36：包含投影期间撤权、磁盘重启后收紧规则拒绝旧投影、原工具不重做；
+  已纳入 PR #99 的 `cfdb170` Workflow 终态配对修复。后续真实适配器凭据等待后的最终 fetch
+  门禁由适配器与 Runtime factory 的独立消费增量继续接线，本片不能冒称已覆盖实际云发送。
 - 所有网络响应与提案均为显式离线夹具；`unverified` 测试输入不代表真实 AgentArts 已支持工具事件。
 
 ## 尚缺的真实链路
