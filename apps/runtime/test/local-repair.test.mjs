@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {Client} from '@personal-agent/client';
 import {ProtocolError} from '@personal-agent/contracts';
 import {FakeCoordinationPort} from '@personal-agent/coordination/testing';
+import {toolArgumentsDigest} from '@personal-agent/tool-gateway';
 import {createRuntimeApplication} from '../dist/application.js';
 
 const sourceArguments = {id: 'synthetic-meeting'};
@@ -229,6 +230,45 @@ test('source Evidence must bind the exact invocation arguments and authorization
   assert.equal(runtime.bindCoordinationStore(f.host.graphNamespace).read().revision, 4);
 });
 
+test('two real approvals cannot lend one Evidence ID to the other invocation', async t => {
+  const f = fixture(t);
+  const seed = await f.source();
+  const runtime = f.app.runtime;
+  const source = runtime.submitTask({goal: 'Separate approved reads', conversationId: 'synthetic-repair',
+    idempotencyKey: 'two-real-approvals'});
+  runtime.transitionTask(source.taskId, 'planning');
+  runtime.transitionTask(source.taskId, 'running');
+  const otherArguments = {id: 'synthetic-other'};
+  const evidenceA = 'source-read-a';
+  const evidenceB = 'source-read-b';
+  for (const [evidenceId, args] of [[evidenceA, sourceArguments], [evidenceB, otherArguments]]) {
+    const approval = runtime.requestToolApproval(evidenceId, source.taskId, sourceDescriptor,
+      later(), toolArgumentsDigest(args));
+    runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
+    runtime.transitionTask(source.taskId, 'running');
+  }
+  const response = await runtime.send({kind: 'request', protocolVersion: '1.0.0',
+    requestId: 'borrowed-invocation', taskId: source.taskId, idempotencyKey: evidenceA,
+    deadline: later(), operation: 'tool.invoke', payload: {toolName: sourceTool.name,
+      toolVersion: sourceTool.version, arguments: otherArguments, scopeRef: evidenceB}},
+  new AbortController().signal);
+  assert.equal(response.outcome, 'ok');
+  assert.equal(response.data.state, 'confirmed');
+  const record = runtime.readToolExecutions(source.taskId)[0];
+  assert.equal(record.evidenceId, evidenceA);
+  assert.equal(record.policyDecision, 'allow');
+  assert.equal(runtime.getApproval(evidenceA).state, 'allowed');
+  assert.equal(runtime.getApproval(evidenceB).state, 'allowed');
+  runtime.saveCheckpoint(source.taskId, 'competition-repair-candidate',
+    f.app.readRepairCandidate(seed.taskId));
+  runtime.transitionTask(source.taskId, 'verifying');
+  runtime.transitionTask(source.taskId, 'succeeded', {resultSummary: 'Synthetic reads completed',
+    evidenceRefs: [evidenceA]});
+  assert.throws(() => f.app.submitLocalRepair({sourceTaskId: source.taskId,
+    evidenceId: evidenceA, idempotencyKey: 'borrowed-source', deadline: later()}), {code: 'UNAUTHORIZED'});
+  assert.equal(runtime.bindCoordinationStore(f.host.graphNamespace).read().revision, 4);
+});
+
 test('shared source lock serializes Fact ingestion before the repair reads current Fact', async t => {
   const f = fixture(t);
   const {client, taskId, evidenceId} = await f.source();
@@ -248,6 +288,36 @@ test('shared source lock serializes Fact ingestion before the repair reads curre
   await ingest;
   assert.equal((await settle(f.app, repair.taskId, ['failed'])).state, 'failed');
   assert.equal(f.app.runtime.bindCoordinationStore(f.host.graphNamespace).read().revision, 4);
+});
+
+test('a temporary host namespace switch cannot redirect the approved CAS to another graph', async t => {
+  const f = fixture(t);
+  const {client, taskId, evidenceId} = await f.source();
+  const repair = await f.repair(taskId, evidenceId);
+  const originalNamespace = f.host.graphNamespace;
+  const originalGraph = f.app.runtime.bindCoordinationStore(originalNamespace).read();
+  const otherNamespace = 'unapproved-other-graph';
+  f.app.runtime.provisionCoordinationStore(otherNamespace).appendBatch(0,
+    originalGraph.history.map(({revision, graphRevision, ...input}) => input));
+  let entered;
+  const duringRead = new Promise(resolve => {entered = resolve;});
+  let release;
+  const gate = new Promise(resolve => {release = resolve;});
+  const originalRead = f.host.memory.listCurrent;
+  f.host.memory.listCurrent = async input => {
+    entered();
+    await gate;
+    f.host.graphNamespace = originalNamespace;
+    return originalRead(input);
+  };
+  f.host.graphNamespace = otherNamespace;
+  await approve(client, repair.taskId);
+  await duringRead;
+  release();
+  const task = await settle(f.app, repair.taskId, ['succeeded', 'failed', 'waiting_reconciliation']);
+  assert.equal(task.state, 'succeeded', JSON.stringify(task.error));
+  assert.equal(f.app.runtime.bindCoordinationStore(originalNamespace).read().revision, 5);
+  assert.equal(f.app.runtime.bindCoordinationStore(otherNamespace).read().revision, 4);
 });
 
 test('unknown result after durable CAS survives restart and never replays the local write', async t => {
