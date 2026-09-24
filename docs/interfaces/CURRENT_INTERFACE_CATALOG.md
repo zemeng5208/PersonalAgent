@@ -163,7 +163,7 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | 凭据 | SecretStore save/replace/delete/status 与迁移 | 只有 ConnectorHost 私有 read 端口；无公共管理面或 Windows 适配 | MOD-05 `goo122`、MOD-16 `zemeng` |
 | 通知 | Runtime 列表/恢复、已读/隐藏、策略配置与 Desktop 展示 | NotificationService 已集成但尚未接 wire 或 Desktop；`notification.created` 仍无生产发布链 | MOD-23 `Potatos498`、MOD-13 `zemeng` |
 | 语音 | `voice.start` / `voice.stop`、ASR/TTS 流和设备适配 | session/wake/transcript consumer 仍在冲突的堆叠分支，main 无生产提供者；真实供应商、流协议和设备验收未提供 | MOD-14/15 `zemeng` |
-| 知识 | `KnowledgePort`、Obsidian/LLM Wiki | PR #93、#94、#95 已合并：provisional `KnowledgePort`、脱机只读适配器及显式 `knowledge.search` ToolGateway/Policy 接线均完成离线测试。真实 Vault 授权/验收、默认 Runtime 注册、Obsidian 插件和 LLM Wiki 仍 unavailable | MOD-08 `goo122` |
+| 知识 | `KnowledgePort`、Obsidian/LLM Wiki | PR #93～#97 已合并：provisional `KnowledgePort`、脱机只读适配器、显式 `knowledge.search` ToolGateway/Policy 接线及 Obsidian 插件侧只读适配器均有合成数据测试。MOD-08E 的 Fake Competition 提案/本地审批离线测试已通过，待评审；真实 Vault 授权/验收、生产 Runtime 注册、可安装插件、私人结果云端发送控制和 LLM Wiki 仍 unavailable | MOD-08 `goo122` |
 | 记忆 | 生产 `MemoryQueryPort` / `FactChangeFeed` 提供者、确认消费、修正/删除 | PR #89、#90、#91 已合并 provisional 端口、Fake、SQLite 恢复与确认后原子激活投影；生产 Runtime capability、真实来源和删除验收仍未提供 | MOD-09 `goo122` |
 | MCP | 本地 MCP Host/Client 端口 | 对应 package、注册适配和真实调用未提供 | MOD-06 `goo122` |
 | Skills | 本地 Skill 加载/版本/执行端口 | 对应 package 和闭环未提供 | MOD-07 `goo122` |
