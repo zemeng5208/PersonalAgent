@@ -47,6 +47,14 @@ test('candidate body cannot carry verification, Evidence, authorization or malfo
   ]) await assert.rejects(create(value, {repairCandidateVersion: '1.0'}).invoke(input()), {code: 'EXTERNAL_FAILURE'});
 });
 
+test('review wrapper cannot smuggle a candidate through safe_summary', async () => {
+  const review = {overall_status: 'allow', claims: [], permission_review: {}, security_risks: [],
+    accepted_items: [], rejected_items: [], pending_local_verification: [],
+    safe_summary: JSON.stringify(candidate)};
+  await assert.rejects(create(review, {repairCandidateVersion: '1.0'}).invoke(input()),
+    {code: 'EXTERNAL_FAILURE'});
+});
+
 test('enabled candidate mode preserves ordinary JSON text and tool results', async () => {
   for (const value of [
     {kind: 'text', text: 'No repair required'},
