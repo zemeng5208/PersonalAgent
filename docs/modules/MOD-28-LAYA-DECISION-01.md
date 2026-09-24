@@ -15,14 +15,14 @@ PR #92 的[设计文档](https://github.com/zemeng5208/PersonalAgent/pull/92)标
 
 ## Laya 身份与部署准备
 
-官方 [模型卡](https://huggingface.co/convaiinnovations/laya)说明 Laya 是 Convai Innovations 的 Apache-2.0 非自回归 typed-decision 模型。中文优先建议只加载 `convaiinnovations/laya` 的 `multilingual` 子目录（mmBERT-base，322M 参数，权重约 647 MB）；其 Python SDK 和 `laya[serve]` 提供 `POST /v1/systemone`。官方给出的约 32.8ms 单问题延迟来自 Tesla T4，不能当成本机指标。项目与 `D:\MODELS` 当前均未发现 Laya 权重或运行入口；本片尚未安装、加载或测量真实模型。
+官方 [模型卡](https://huggingface.co/convaiinnovations/laya)说明 Laya 是 Convai Innovations 的 Apache-2.0 非自回归 typed-decision 模型。中文优先只加载 `convaiinnovations/laya` 的 `multilingual` 子目录（mmBERT-base，322M 参数，权重约 647 MB）；其 Python SDK 和 `laya[serve]` 提供 `POST /v1/systemone`。官方给出的约 32.8ms 单问题延迟来自 Tesla T4，不能当成本机指标。安装前项目与 `D:\MODELS` 均未发现 Laya 权重或运行入口。
 
-用户要求安装在 `D:\PersonalAgent` 项目内。待主控安排资源窗口后，计划把虚拟环境、Hugging Face 权重和 pip 缓存放在被 Git 忽略的 `D:\PersonalAgent\.cache\laya\` 下，先用 CPU 兼容的最小依赖方案核对 wheel 和磁盘成本。当前 D 盘读回可用约 83 GB；仅权重约 647 MB，Python/PyTorch/Transformers 与下载缓存因 wheel 而异，预估稳态 3–6 GB、安装峰值预留 8–10 GB，需以 dry-run 和实测修正。服务必须配置 `LAYA_HOST=127.0.0.1`、`LAYA_MODELS=multilingual` 和受信宿主提供的 `LAYA_API_KEY`；官方默认 `0.0.0.0` 且无鉴权，不直接采用。HTTP 客户端拒绝重定向，避免 307/308 把摘要和引用转发到其他主机。密钥不写入仓库、提示、日志或测试夹具。
+按用户要求，Python 3.12 隔离虚拟环境、Hugging Face 权重和 pip 缓存已放在被 Git 忽略的 `D:\PersonalAgent\.cache\laya\` 下。官方 CPU wheel 索引与 pip dry-run 后安装 `laya[serve]==0.3.20`、`torch==2.14.0+cpu` 和 `transformers==5.17.0`，无 CUDA 依赖。实测磁盘：venv 863,158,424 字节、单 multilingual 权重缓存 678,214,360 字节、pip 缓存 185,935,914 字节，合计约 1.73 GB。服务使用 `LAYA_HOST=127.0.0.1`、`LAYA_MODELS=multilingual`、`LAYA_DEVICE=cpu` 和一次性进程环境 `LAYA_API_KEY`；官方默认 `0.0.0.0` 且无鉴权，不直接采用。HTTP 客户端拒绝重定向，避免 307/308 把摘要和引用转发到其他主机。密钥未写入仓库、提示、日志或测试夹具。
 
-服务常驻时只预加载这一 checkpoint，避免逐事件冷启动；请求最多四项，保留 deadline/取消。未来分别记录首次加载、首调用、热调用延迟与内存，不借用官方 GPU 基准作为本机验收。正式启用前需要合成标注集测准确度、漏报、误提醒、校准和延迟；小样本接口测试不能证明质量。
+单服务预加载这一 checkpoint，避免逐事件冷启动；请求最多四项，保留 deadline/取消。一次合成样本实调：首次含下载和 CPU 预加载到 `/health` 就绪为 52.5 秒，缓存模型再次启动为 12.2 秒；`/health` 读回 `loaded=["multilingual"]`、`device=cpu`。首个真实 `POST /v1/systemone` 经本地适配耗时 437.4 ms，随后两次为 221.2 ms、200.1 ms；模型原始输出 `MERGE`、confidence 0.1446，服务按低置信度升级为 `ESCALATE_AGENTARTS`，没有触发动作。实际 Python worker PID 38360 的加载后 RSS 为 1652.9 MiB；测量后 launcher PID 36380 与 worker 均已停止，回环端口读回不可达。数字仅对应本机单次启动与三次合成调用，不能证明稳态 P95 或决策质量。正式启用前仍需独立标注集测准确度、漏报、误提醒和校准。
 
 ## 接线与验收
 
 整合者可在明确的可信 composition 中注入 `ProactiveDecisionService(new LayaDecisionModel(new LocalLayaHttpTransport(port, getApiKey)))`，通过共享文件所有权协调导出模块内部端口。FactChangeFeed/Goal 的实际输入仍取已公布的 provisional 端口，并由可信宿主裁剪；不得从连接器、Renderer 或模型直接签发授权。服务不可用时保留明确升级结果，AgentArts 不可用时不能用 Laya/Fake 冒充比赛云端成功。
 
-当前定向验证使用合成数据：通过本机现有 TypeScript 编译器单独编译两个新增源文件；`node --test --test-isolation=none packages/cognition/test/laya-decision.test.mjs` 通过 8/8，覆盖重复合并、不同 source 同名事件归因、版本冲突、未校准标签升级、模型失败脱敏、deadline/取消、typed-choice 形状与回环鉴权，以及两个本地服务器模拟的 307 转发目标零命中。普通 `node --test` 在当前 Windows 沙箱因测试隔离子进程 `spawn EPERM` 失败，不能计作测试失败或通过。未运行真实 Laya、真实 AgentArts、Python 安装、全仓检查或桌面验收；没有公共接口冻结或迁移。
+定向验证使用合成数据：通过本机现有 TypeScript 编译器单独编译两个新增源文件；`node --test --test-isolation=none packages/cognition/test/laya-decision.test.mjs` 通过 8/8，覆盖重复合并、不同 source 同名事件归因、版本冲突、未校准标签升级、模型失败脱敏、deadline/取消、typed-choice 形状与回环鉴权，以及两个本地服务器模拟的 307 转发目标零命中。普通 `node --test` 在当前 Windows 沙箱因测试隔离子进程 `spawn EPERM` 失败，不能计作测试失败或通过。另有上述单一真实模型的合成接口与资源读回；未运行真实 AgentArts、全仓检查或桌面验收，没有公共接口冻结或迁移。
