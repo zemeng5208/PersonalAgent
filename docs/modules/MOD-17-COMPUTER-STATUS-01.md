@@ -1,6 +1,6 @@
 # MOD-17-COMPUTER-STATUS-01：电脑状态只读提供者
 
-- Profile：`huawei_ict_agentarts`；负责人 `zemeng`；非作者评审 `goo122`；需求 PA-011。
+- Profile：`huawei_ict_agentarts`；负责人 `zemeng`；本地主控审查与 GitHub 非作者评审分别记录；需求 PA-011。
 - 基线：`4efa7f60feaaa007d73c80e7d90091e0caab3bc7`；状态：review 前的实现切片。
 - 复用已合并 PR #59 的 `computer.system.observe@1.0.0` 与 `computer:system:read`。旧 `MOD-16-SYSTEM-OBSERVATION-01` 记录保留为历史；当前 MOD-16 的 Windows 执行另行开发。
 
