@@ -45,6 +45,8 @@ export function projectSyntheticRepairContext(snapshot, projection) {
     expectedGraphRevision: snapshot.revision,
     fact: {id: link.fact.id, revision: link.fact.revision},
     projectedFact: ref(fact),
+    allowedDependencies: [ref(fact), ...selected.flatMap(node => [ref(node),
+      {id: node.id, revision: node.revision + 1}])],
     targets: selected.map(node => ({node: ref(node), summary: node.summary,
       dependencies: node.dependencies.map(ref)})),
   };

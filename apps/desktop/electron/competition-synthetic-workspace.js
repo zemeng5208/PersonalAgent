@@ -55,18 +55,19 @@ export function projectSyntheticMeetingResult(result) {
 }
 
 /** Called only by trusted Competition composition with the dedicated fixture root. */
-export function createSyntheticMeetingToolset(rootPath) {
+export function createSyntheticMeetingToolset(rootPath, projectConfirmed = undefined) {
   const tool = createWorkspaceReadTool({rootPath: requireSyntheticFixtureRoot(rootPath), maxReadBytes: MAX_BYTES});
   return {
     tools: [tool],
     competitionToolExports: [{
       toolName: WORKSPACE_READ_TOOL_NAME,
       toolVersion: WORKSPACE_READ_TOOL_VERSION,
-      exportPolicyVersion: 'synthetic-meeting-v1',
+      exportPolicyVersion: projectConfirmed ? 'synthetic-meeting-graph-v2' : 'synthetic-meeting-v1',
       accepts: ({arguments: args}) => exactDataObject(args, ['path']) && args.path === SYNTHETIC_MEETING_PATH,
-      project: ({result, signal}) => {
+      project: ({taskId, proposalId, result, signal}) => {
         if (signal.aborted) throw Error('Synthetic meeting result export cancelled');
-        return projectSyntheticMeetingResult(result);
+        const meeting = projectSyntheticMeetingResult(result);
+        return projectConfirmed ? projectConfirmed({taskId, proposalId, result, meeting, signal}) : meeting;
       },
     }],
   };

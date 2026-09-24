@@ -1,5 +1,6 @@
-import {app, BrowserWindow, clipboard, ipcMain, Menu, nativeImage, safeStorage, screen, session, Tray} from 'electron';
+import {app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, safeStorage, screen, session, Tray} from 'electron';
 import {fileURLToPath} from 'node:url';
+import {createHash} from 'node:crypto';
 import path from 'node:path';
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
 import {EventCursor} from '@personal-agent/client';
@@ -19,6 +20,8 @@ const agentArtsInvokeMode = process.env.PA_AGENTARTS_INVOKE_MODE === undefined
   : process.env.PA_AGENTARTS_INVOKE_MODE;
 const competitionMode = !fakeMode && runtimeProfile === 'huawei_ict_agentarts';
 const syntheticMvp = process.env.PA_DESKTOP_SYNTHETIC_MVP === '1';
+const agentArtsResponseMode = process.env.PA_AGENTARTS_RESPONSE_MODE;
+const repairCandidateVersion = process.env.PA_AGENTARTS_REPAIR_CANDIDATE_VERSION;
 const taskSubmitOptions = competitionMode ? {timeoutMs: 180_000} : {};
 if (fakeMode || fakeModelMode) app.setPath('userData', app.isPackaged
   ? path.join(app.getPath('temp'), `personal-agent-fake-${process.pid}`)
@@ -93,6 +96,8 @@ const terminalTaskStates = new Set(['succeeded', 'failed', 'cancelled']);
 const approvals = new Map();
 const notifications = new Map();
 let runtimeApplication;
+let syntheticRepairHost;
+const repairPrompts = new Set();
 
 function snapshot(surface) {
   return {
@@ -472,6 +477,11 @@ async function pumpEvents() {
     const accepted = eventCursor.accept(events);
     for (const event of accepted) {
       applyEvent(event);
+      if (event.type === 'task.completed' && syntheticRepairHost && repairCandidateVersion === '1.0') {
+        void promptSyntheticRepairCandidate(event.taskId).catch(() => {
+          runtimeError = '本地修复预览未能显示；计划未被自动修改'; publish();
+        });
+      }
       if (event.type === 'approval.requested') {
         const result = await client.call('approval.list', {approvalId: event.payload.approvalId, limit: 1});
         if (result.items[0]) approvals.set(event.payload.approvalId, structuredClone(result.items[0]));
@@ -513,6 +523,35 @@ async function syncRuntimeSnapshots() {
   eventCursor.reset(snapshotSequence ?? 0);
 }
 
+async function promptSyntheticRepairCandidate(taskId) {
+  if (!syntheticRepairHost || !runtimeApplication || repairPrompts.has(taskId)
+    || runtimeApplication.runtime.loadCheckpoint(taskId, 'mvp-repair-submitted')) return;
+  const candidate = runtimeApplication.readRepairCandidate(taskId);
+  if (!candidate) return;
+  const source = syntheticRepairHost.readBinding(taskId);
+  if (!source || source.binding.graphRevision !== candidate.candidate.expectedGraphRevision) return;
+  repairPrompts.add(taskId);
+  try {
+    const lines = candidate.candidate.changes.map(item =>
+      `${item.node.id}#${item.node.revision} → ${item.summary}\n原因：${item.reason}\n依赖：${item.dependencies.map(dep => `${dep.id}#${dep.revision}`).join(', ')}`);
+    const options = {
+      type: 'question', title: '合成会议计划修复预览',
+      message: 'AgentArts 提供了未验证的计划修复候选',
+      detail: `当前图版本 ${source.binding.graphRevision}；候选涉及：\n${lines.join('\n')}\n\n确认后仅创建独立的本地审批任务，写入仍需通过 Policy 的一次性批准。`,
+      buttons: ['创建本地审批任务', '暂不执行'], defaultId: 1, cancelId: 1, noLink: true,
+    };
+    const answer = panel && !panel.isDestroyed()
+      ? await dialog.showMessageBox(panel, options) : await dialog.showMessageBox(options);
+    if (answer.response !== 0) return;
+    const idempotencyKey = createHash('sha256').update(taskId + ':' + source.evidenceId).digest('hex');
+    const repair = runtimeApplication.submitLocalRepair({sourceTaskId: taskId,
+      evidenceId: source.evidenceId, idempotencyKey,
+      deadline: new Date(Date.now() + 10 * 60_000).toISOString()});
+    runtimeApplication.runtime.saveCheckpoint(taskId, 'mvp-repair-submitted', {taskId: repair.taskId});
+    await refresh(repair.taskId);
+  } finally { repairPrompts.delete(taskId); }
+}
+
 async function initializeRuntime() {
   const runtimeModule = await import('@personal-agent/runtime/application');
   const {createRuntimeApplication} = runtimeModule;
@@ -525,6 +564,13 @@ async function initializeRuntime() {
   }
   if (syntheticMvp && (!competitionMode || app.isPackaged)) {
     throw Error('合成 MVP 工具只允许显式 Competition 开发验收，不适用于 Local/Fake 或安装包');
+  }
+  if (agentArtsResponseMode !== undefined && !['text', 'tool-proposal-json'].includes(agentArtsResponseMode)) {
+    throw Error('PA_AGENTARTS_RESPONSE_MODE 只允许 text 或 tool-proposal-json');
+  }
+  if (repairCandidateVersion !== undefined && (repairCandidateVersion !== '1.0'
+    || !syntheticMvp || agentArtsResponseMode !== 'tool-proposal-json')) {
+    throw Error('版本化修复候选只允许合成 Competition JSON 模式显式启用');
   }
   if (fakeMode) {
     const {FakeRuntime} = await import('@personal-agent/testkit');
@@ -543,11 +589,19 @@ async function initializeRuntime() {
       }
       const syntheticTools = syntheticMvp
         ? (await import('./competition-synthetic-workspace.js')).createSyntheticMeetingToolset(
-          path.resolve(dir, '../../../tests/manual/agentarts/fixtures/mvp-meeting'))
+          path.resolve(dir, '../../../tests/manual/agentarts/fixtures/mvp-meeting'),
+          (...args) => syntheticRepairHost.projectConfirmed(...args))
         : {};
+      if (syntheticMvp) {
+        syntheticRepairHost = (await import('./competition-repair-host.js')).createSyntheticRepairHost(
+          path.join(path.dirname(dbPath), 'mvp-synthetic-memory.sqlite'));
+      }
       runtimeApplication = runtimeModule.createAgentArtsRuntimeApplication({
         path: dbPath,
         ...syntheticTools,
+        ...(syntheticMvp ? {localRepair: syntheticRepairHost.localRepair} : {}),
+        ...(agentArtsResponseMode === undefined ? {} : {responseMode: agentArtsResponseMode}),
+        ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
         gatewayUrl: process.env.PA_AGENTARTS_GATEWAY_URL ?? '',
         runtimeName: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
         invokeMode: agentArtsInvokeMode,
@@ -562,6 +616,7 @@ async function initializeRuntime() {
           },
         },
       });
+      if (syntheticRepairHost) await syntheticRepairHost.initialize(runtimeApplication.runtime);
     } else {
       const createApplication = process.argv.includes('--weather-tools')
         ? (await import('@personal-agent/runtime/weather')).createOpenMeteoApplication
@@ -588,6 +643,11 @@ async function initializeRuntime() {
   await syncCapabilities();
   await syncRuntimeSnapshots();
   await pumpEvents();
+  if (syntheticRepairHost && repairCandidateVersion === '1.0') {
+    for (const task of tasks.values()) {
+      if (task.state === 'succeeded') void promptSyntheticRepairCandidate(task.taskId).catch(() => {});
+    }
+  }
   eventPoll = setInterval(() => void pumpEvents(), 120);
 }
 
@@ -777,6 +837,7 @@ app.whenReady().then(async () => {
     try {
       if (runtimeApplication) runtimeApplication.close();
       else runtime?.close?.();
+      syntheticRepairHost?.close();
     } catch (error) {
       event.preventDefault();
       runtimeError = error instanceof Error ? error.message : 'Runtime 仍有活动任务，无法安全退出';
