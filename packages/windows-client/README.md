@@ -4,11 +4,17 @@
 `RegisteredTool` / ToolGateway 边界调用的只读聚合观测工具。
 
 它用两次 `node:os` CPU tick 采样计算系统整体利用率，同时返回逻辑处理器数量、内存总量/
-可用量、系统 uptime 和采集时间。`requestedSampleWindowMs` 只表示请求的 tick 间隔，不冒充
-实测采样耗时。它不会读取或返回 hostname、用户名、进程、命令行、路径、
+空闲量、系统 uptime 和采集时间。`sampledFrom` / `sampledUntil` 为两次读取的墙钟边界，
+`actualSampleWindowMs` 为单调时钟测得的读取区间（含 probe 开销）；
+`requestedSampleWindowMs` 仅是请求的等待间隔。时钟被注入时这些字段只属于合成证据。
+它不会读取或返回 hostname、用户名、进程、命令行、路径、
 文件、网络地址或凭据，也不会提权、启动 PowerShell、接入或发布 TraceGuard。
 
-进程归因、磁盘 I/O、温度和网络活动在结果中明确标记为 `unavailable`。这些聚合值只说明
+`describeSystemObservationCapabilities()` 公开提供者支持的 CPU、内存和 uptime 字段，及未实现的
+进程归因、磁盘 I/O、温度和网络活动；它不是生产握手或本次读取成功的保证。实际调用成功后，
+这些未实现字段仍在结果中标记为 `unavailable`。采样失败返回脱敏 `EXTERNAL_FAILURE`，
+取消返回 `CANCELLED`，deadline 过期返回 `TIMEOUT`；不会把缺失/失败值伪装成零。
+这些聚合值只说明
 观测到的资源压力，不能证明电脑变慢的原因。
 
 工具需要最小 scope `computer:system:read`，输入必须是空对象；deadline 或取消会中止采样并
@@ -16,7 +22,8 @@
 开发机数据。使用注入 probe 时结果固定标记 `source=injected`，不构成真实本机观测证据；仅默认
 适配器标记 `source=node:os`。
 
-当前只交付 provider slice。Competition Profile 仍是 text-only，未接本地工具提案；因此本包
+当前只交付 provider slice；ToolHost 必须显式注册才能在生产能力发现中公布工具。
+Competition Profile 已有离线工具循环，生产 Desktop / Runtime / AgentArts 接线尚未完成；因此本包
 不代表 Desktop、AgentArts、MOD-16 或 PA-011 已完整验收。
 
 验证：

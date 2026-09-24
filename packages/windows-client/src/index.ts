@@ -1,4 +1,5 @@
 import os from 'node:os';
+import {performance} from 'node:perf_hooks';
 import {ProtocolError} from '@personal-agent/contracts';
 import type {RegisteredTool, ToolContext, ToolDescriptor} from '@personal-agent/contracts';
 
@@ -24,6 +25,9 @@ export interface SystemObservationProbe {
 export interface SystemObservation {
   source: 'node:os' | 'injected';
   capturedAt: string;
+  sampledFrom: string;
+  sampledUntil: string;
+  actualSampleWindowMs: number;
   requestedSampleWindowMs: number;
   cpu: {
     logicalProcessorCount: number;
@@ -37,6 +41,26 @@ export interface SystemObservation {
   };
   uptimeSeconds: number;
   unavailable: readonly ['process_breakdown', 'disk_io', 'thermal', 'network_activity'];
+}
+
+/** Supported fields describe the adapter, not a guarantee that this particular read succeeds. */
+export const SYSTEM_OBSERVATION_SUPPORTED = Object.freeze(['cpu', 'memory', 'uptime'] as const);
+export const SYSTEM_OBSERVATION_UNAVAILABLE = Object.freeze([
+  'process_breakdown', 'disk_io', 'thermal', 'network_activity',
+] as const);
+
+export function describeSystemObservationCapabilities(): {
+  toolName: typeof SYSTEM_OBSERVATION_TOOL_NAME;
+  requiredScope: typeof SYSTEM_OBSERVATION_SCOPE;
+  supported: typeof SYSTEM_OBSERVATION_SUPPORTED;
+  unavailable: typeof SYSTEM_OBSERVATION_UNAVAILABLE;
+} {
+  return {
+    toolName: SYSTEM_OBSERVATION_TOOL_NAME,
+    requiredScope: SYSTEM_OBSERVATION_SCOPE,
+    supported: SYSTEM_OBSERVATION_SUPPORTED,
+    unavailable: SYSTEM_OBSERVATION_UNAVAILABLE,
+  };
 }
 
 export interface SystemObservationToolOptions {
@@ -59,6 +83,9 @@ const outputSchema: ToolDescriptor['outputSchema'] = {
   properties: {
     source: {enum: ['node:os', 'injected']},
     capturedAt: {type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$'},
+    sampledFrom: {type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$'},
+    sampledUntil: {type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$'},
+    actualSampleWindowMs: {type: 'number', minimum: 0},
     requestedSampleWindowMs: {type: 'integer', minimum: 1, maximum: 5_000},
     cpu: {
       type: 'object',
@@ -219,10 +246,14 @@ export function createSystemObservationTool(options: SystemObservationToolOption
     }),
     execute: async (_input: unknown, context: ToolContext): Promise<SystemObservation> => {
       requireActive(context, now);
+      const sampledFrom = safeNow(now).toISOString();
+      const monotonicFrom = performance.now();
       const before = cpuTotals(probe);
       await waitForSample(sampleWindowMs, context, now);
       if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'System observation was cancelled');
       const after = cpuTotals(probe);
+      const monotonicUntil = performance.now();
+      const sampledUntil = safeNow(now).toISOString();
       if (before.count !== after.count) throw observationError();
       const totalDelta = after.total - before.total;
       const idleDelta = after.idle - before.idle;
@@ -234,6 +265,9 @@ export function createSystemObservationTool(options: SystemObservationToolOption
       const observation: SystemObservation = {
         source,
         capturedAt: safeNow(now).toISOString(),
+        sampledFrom,
+        sampledUntil,
+        actualSampleWindowMs: Math.max(0, Math.round((monotonicUntil - monotonicFrom) * 100) / 100),
         requestedSampleWindowMs: sampleWindowMs,
         cpu: {
           logicalProcessorCount: after.count,
@@ -241,7 +275,7 @@ export function createSystemObservationTool(options: SystemObservationToolOption
         },
         memory: readMemory(probe),
         uptimeSeconds,
-        unavailable: ['process_breakdown', 'disk_io', 'thermal', 'network_activity'],
+        unavailable: SYSTEM_OBSERVATION_UNAVAILABLE,
       };
       requireActive(context, now);
       return structuredClone(observation);
