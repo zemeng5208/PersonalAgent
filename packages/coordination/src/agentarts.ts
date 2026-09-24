@@ -26,6 +26,8 @@ export interface AgentArtsRuntimeConfig {
   workflowGoalInput?: string;
   /** Explicit application protocol; separate invocations, never native run resume. */
   responseMode?: 'text' | 'tool-proposal-json';
+  /** Opt in only after composition supports the versioned, untrusted candidate. */
+  repairCandidateVersion?: '1.0';
 }
 
 export interface AgentArtsFetchInit {
@@ -167,6 +169,7 @@ function validateRuntimeConfig(config: AgentArtsRuntimeConfig): {
   invokeMode: 'debug' | 'published';
   workflowGoalInput?: string;
   responseMode: 'text' | 'tool-proposal-json';
+  repairCandidateVersion?: '1.0';
 } {
   const value = asPlainObject(config);
   if (!value) invalid('AgentArts runtime config is invalid');
@@ -179,12 +182,17 @@ function validateRuntimeConfig(config: AgentArtsRuntimeConfig): {
   if (invokeMode !== 'debug' && invokeMode !== 'published') invalid('AgentArts invokeMode is invalid');
   const responseMode = value.responseMode === undefined ? 'text' : value.responseMode;
   if (responseMode !== 'text' && responseMode !== 'tool-proposal-json') invalid('AgentArts responseMode is invalid');
+  const repairCandidateVersion = value.repairCandidateVersion;
+  if (repairCandidateVersion !== undefined && (repairCandidateVersion !== '1.0' || responseMode !== 'tool-proposal-json')) {
+    invalid('AgentArts repair candidate version is invalid');
+  }
   const workflowGoalInput = value.workflowGoalInput;
   if (workflowGoalInput !== undefined && (typeof workflowGoalInput !== 'string'
     || !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(workflowGoalInput))) {
     invalid('AgentArts workflow goal input is invalid');
   }
   return {gatewayOrigin, runtimeName, invokeMode, responseMode,
+    ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
     ...(workflowGoalInput === undefined ? {} : {workflowGoalInput})};
 }
 
@@ -648,10 +656,14 @@ function defaultFetch(url: string, init: AgentArtsFetchInit): Promise<AgentArtsR
   return globalThis.fetch(url, init);
 }
 
-function parseApplicationResult(text: string): CoordinationResult {
+function parseApplicationResult(text: string, repairCandidateVersion: '1.0' | undefined): CoordinationResult {
   const value = asPlainObject(JSON.parse(text) as unknown);
   if (!value || Object.prototype.hasOwnProperty.call(value, 'verification')) {
     external('AgentArts application response is malformed');
+  }
+  if (value.kind === 'repair_candidate' && (repairCandidateVersion === undefined
+    || value.candidateVersion !== repairCandidateVersion)) {
+    external('AgentArts repair candidate is unavailable');
   }
   // Verification is a host decision. Strict existing result parsers reject
   // arbitrary fields, authorization, Evidence and task terminal claims.
@@ -665,6 +677,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
   private readonly invokeMode: 'debug' | 'published';
   private readonly workflowGoalInput: string | undefined;
   private readonly responseMode: 'text' | 'tool-proposal-json';
+  private readonly repairCandidateVersion: '1.0' | undefined;
   private readonly authorizationProvider: AgentArtsAuthorizationProvider;
   private readonly fetchImpl: AgentArtsFetch;
   private readonly beforeSend: ((request: CoordinationRequest) => void) | undefined;
@@ -686,6 +699,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
     this.invokeMode = validated.invokeMode;
     this.workflowGoalInput = validated.workflowGoalInput;
     this.responseMode = validated.responseMode;
+    this.repairCandidateVersion = validated.repairCandidateVersion;
     this.authorizationProvider = authorizationProvider;
     this.fetchImpl = fetchImpl ?? defaultFetch;
     this.beforeSend = beforeSend;
@@ -791,7 +805,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
       const bodyAbort = currentAbortError(combined);
       if (bodyAbort) throw bodyAbort;
       try {
-        if (this.responseMode === 'tool-proposal-json') return parseApplicationResult(text);
+        if (this.responseMode === 'tool-proposal-json') return parseApplicationResult(text, this.repairCandidateVersion);
         return parseCoordinationTextResult({kind: 'text', text, verification: 'unverified'});
       } catch (error) {
         throw currentAbortError(combined) ?? new ProtocolError('EXTERNAL_FAILURE', 'AgentArts response validation failed');
