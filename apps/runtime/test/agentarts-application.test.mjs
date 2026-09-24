@@ -122,3 +122,103 @@ test('invalid AgentArts deployment configuration fails before creating Runtime s
     await rm(directory, {recursive: true, force: true});
   }
 });
+
+test('trusted factory forwards the configured workflow start input', async () => {
+  const bodies = [];
+  const app = createAgentArtsRuntimeApplication({
+    path: ':memory:', gatewayUrl: 'https://agentarts.example.test', runtimeName: 'workflow',
+    workflowGoalInput: 'goal', authorizationProvider: {read: async () => 'Bearer synthetic-token'},
+    fetchImpl: async (_url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return new Response(JSON.stringify(event('Synthetic workflow result')), {
+        status: 200, headers: {'content-type': 'application/json'},
+      });
+    },
+  });
+  try {
+    const client = new Client(app);
+    await client.connect();
+    const {taskId} = await client.call('task.submit', {goal: 'Synthetic meeting', conversationId: 'workflow'}, {idempotencyKey: 'workflow'});
+    assert.equal((await terminal(app, taskId)).state, 'succeeded');
+    assert.deepEqual(bodies, [{inputs: {goal: 'Synthetic meeting'}}]);
+  } finally { app.close(); }
+});
+
+test('explicit JSON mode binds real adapter sends to current Runtime export permission', async t => {
+  for (const revokeDuringCredentials of [false, true]) await t.test(`credential-time revocation=${revokeDuringCredentials}`, async () => {
+  const requests = [];
+  let executions = 0;
+  let permitted = true;
+  let credentialReads = 0;
+  const proposal = {kind: 'tool_proposal', proposalId: 'synthetic-meeting-1',
+    toolName: 'fixture.meeting', toolVersion: '1.0.0', arguments: {id: 'synthetic-meeting'}};
+  const app = createAgentArtsRuntimeApplication({
+    path: ':memory:', gatewayUrl: 'https://agentarts.example.test', runtimeName: 'workflow',
+    responseMode: 'tool-proposal-json', authorizationProvider: {read: async () => {
+      credentialReads++;
+      if (credentialReads === 2 && revokeDuringCredentials) {
+        await new Promise(resolve => setImmediate(resolve));
+        permitted = false;
+      }
+      return 'Bearer synthetic-token';
+    }},
+    competitionToolExports: [{toolName: proposal.toolName, toolVersion: proposal.toolVersion,
+      exportPolicyVersion: 'synthetic-v1',
+      accepts: ({arguments: args}) => permitted && args.id === 'synthetic-meeting', project: ({result}) => ({time: result.time})}],
+    tools: [{descriptor: {name: proposal.toolName, version: proposal.toolVersion,
+      inputSchema: {type: 'object', required: ['id'], additionalProperties: false, properties: {id: {type: 'string'}}},
+      outputSchema: {type: 'object', required: ['time', 'localOnly'], additionalProperties: false,
+        properties: {time: {type: 'string'}, localOnly: {type: 'string'}}},
+      sideEffect: 'read', requiredScopes: ['fixture:read'], idempotencySupport: true,
+      recoverySupport: true, requiresPresence: false},
+    execute: async () => {executions++; return {time: '17:00', localOnly: 'synthetic-private-marker'};}}],
+    fetchImpl: async (_url, init) => {
+      requests.push({headers: new Headers(init.headers), body: JSON.parse(init.body)});
+      const result = requests.length === 1 ? proposal : {kind: 'text', text: 'Synthetic meeting confirmed at 17:00'};
+      return new Response(JSON.stringify(event(JSON.stringify(result))), {
+        status: 200, headers: {'content-type': 'application/json'},
+      });
+    },
+  });
+  try {
+    const client = new Client(app);
+    await client.connect();
+    const {taskId} = await client.call('task.submit', {goal: 'Synthetic meeting', conversationId: 'json-mode'},
+      {idempotencyKey: 'json-mode'});
+    for (let i = 0; i < 200 && app.runtime.getTask(taskId).state !== 'waiting_approval'; i++) {
+      if (['succeeded', 'failed'].includes(app.runtime.getTask(taskId).state)) break;
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(app.runtime.getTask(taskId).state, 'waiting_approval');
+    assert.equal(requests.length, 1);
+    assert.equal(executions, 0);
+    const approval = (await client.call('approval.list', {taskId})).items[0];
+    await client.call('authorization.respond', {approvalId: approval.approvalId,
+      expectedRevision: approval.revision, decision: 'allow_once'});
+    const task = await terminal(app, taskId);
+    assert.equal(executions, 1);
+    assert.equal(app.runtime.readToolExecutions(taskId).length, 1);
+    if (revokeDuringCredentials) {
+      assert.equal(task.state, 'failed');
+      assert.equal(requests.length, 1);
+      assert.equal(app.runtime.readEvidence(taskId).length, 1);
+      return;
+    }
+    assert.equal(task.state, 'succeeded');
+    assert.match(task.resultSummary, /17:00/);
+    assert.match(task.resultSummary, /verification=unverified/);
+    assert.equal(executions, 1);
+    assert.equal(requests.length, 2);
+    assert.deepEqual(requests[0].body, {query: 'Synthetic meeting'});
+    assert.deepEqual(JSON.parse(requests[1].body.query), {continuation: {
+      proposalId: proposal.proposalId, state: 'confirmed', result: {time: '17:00'},
+    }});
+    const firstRequestId = requests[0].headers.get('X-Request-Id');
+    assert.ok(firstRequestId);
+    assert.notEqual(requests[1].headers.get('X-Request-Id'), firstRequestId);
+    assert.doesNotMatch(JSON.stringify(requests.map(request => request.body)), /synthetic-private-marker|authorizationRef|evidenceRefs/);
+    assert.deepEqual(task.evidenceRefs, [approval.approvalId]);
+    assert.equal(app.runtime.readToolExecutions(taskId).length, 1);
+  } finally { app.close(); }
+  });
+});

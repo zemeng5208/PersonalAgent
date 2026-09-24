@@ -28,7 +28,7 @@ See [COORDINATION-STORE-01](../../docs/modules/COORDINATION-STORE-01.md).
 
 Trusted composition may pass `profile: 'huawei_ict_agentarts'`, an explicit
 `coordination: CoordinationPort`, and local `RegisteredTool` values. Bounded text and
-strict proposals are parsed; only explicit `mock` proposals execute in this offline slice. Runtime owns submission, deduplication, cancellation,
+strict proposals are parsed; `unverified` proposals are denied by default. Runtime owns submission, deduplication, cancellation,
 deadline and persisted terminal state. Missing coordination, or a proposal without a
 trusted local tool, fails with UNSUPPORTED_CAPABILITY. Local text/model configuration APIs
 remain rejected in Competition mode.
@@ -40,6 +40,21 @@ and sends only a confirmed JSON result to the next coordination exchange. Unknow
 results remain in reconciliation. The real AgentArts HTTP adapter is still text-only;
 deployment trace, usage and real cloud recovery remain unavailable. See
 [work package](../../docs/modules/COMPETITION-TOOL-LOOP-01.md).
+
+Trusted composition can explicitly configure `competitionToolExports` for selected synthetic
+read-only tools. Each binding fixes a tool name/version and an `exportPolicyVersion`, checks task/proposal/arguments with
+`accepts`, and projects the confirmed result with `project`. This export permission does not
+grant tool execution: local approval, deadline and Policy still apply. Only the bounded JSON
+projection reaches continuation; raw results and Evidence remain local. Repeated confirmed
+proposal IDs replay the saved projection and changed inputs are rejected. No export binding
+is configured by default. The complete continuation JSON, including its envelope, is limited
+to 8KiB. Change `exportPolicyVersion` when changing the export rules: saved projections with
+a missing or different version are denied, never re-executed. Dynamic scope is checked again
+at the adapter handoff after projection. `createAgentArtsRuntimeApplication` also forwards `workflowGoalInput`
+and explicit `responseMode: 'tool-proposal-json'` (default `text`), and supplies a final
+synchronous receipt/scope check after credential reads, immediately before the adapter fetch
+to the cloud adapter. See [export work package](../../docs/modules/MOD-30-COMPETITION-EXPORT-01.md)
+for the precise offline boundary and the unresolved real cloud/MCP lifecycle.
 
 - SQLite-backed tasks, checkpoints, events and one-shot schedules.
 - Explicit task transition rules and immutable terminal states.
