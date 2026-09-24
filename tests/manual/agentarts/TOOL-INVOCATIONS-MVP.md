@@ -93,15 +93,27 @@ Runtime审批纵向消费由B接线验证，完整仓库门禁由该组合增量
 
 ## 2026-09-24 真实云端基线（单独验收表面）
 
-经用户批准的当前用户DPAPI受信配置，A使用Node24.15对现有published query部署
-各发一次合成请求，均为单次调用，无自动重试、云配置修改或Local回退。文字请求
-11:01:04Z—11:01:52Z收到HTTP 200、完整SSE 108169字节，当前适配解析出586字，
-verification=unverified。工作流开始/结束各3次，工作流内索引冲突0；跨工作流全局
-索引重复2次。脱敏报告在本工作树忽略目录`.cache/agentarts-text/`，未保存正文。
+经用户批准的当前用户DPAPI受信配置，A使用Node24.15对同一个现有published query
+部署分别发出三次合成请求。表中耗时从探针开始到解析完成，包含凭据读取、HTTP和
+本地解析，不等于平台模型耗时；每行均为`networkCalls:1`、HTTP 200、完整SSE、
+`verification:'unverified'`，无自动重试、云全局配置修改或Local回退。
 
-首次JSON提案只在query中给出固定合成输出约束，现有云配置未改。11:04:12Z—
-11:04:49Z收到HTTP 200、完整SSE 185108字节；实际`tool-proposal-json`适配返回
-`tool_proposal`，proposalId、`workspace.read_text@1.0.0`及唯一参数
-`meeting-update.json`均精确匹配，verification=unverified。脱敏报告在忽略目录
-`.cache/agentarts-proposal/`。此调用只观察提案，没有本地审批、工具执行或第二次
-续接；候选修复、Desktop与同库重启仍需分别验收。
+| 表面 | UTC时间 / 端到端耗时 | 响应大小 | 本机读回 |
+| --- | --- | ---: | --- |
+| 文字，默认`responseMode:'text'` | 11:01:04.902—11:01:52.088 / 47.186秒 | 108169字节 | 586字；`.cache/agentarts-text/`脱敏结构报告 |
+| 工具提案，`responseMode:'tool-proposal-json'` | 11:04:12.963—11:04:49.254 / 36.291秒 | 185108字节 | `tool_proposal`；proposalId、`workspace.read_text@1.0.0`及唯一参数`meeting-update.json`精确匹配；`.cache/agentarts-proposal/`报告 |
+| 修复候选，JSON模式且`repairCandidateVersion:'1.0'` | 11:20:50.072—11:22:37.649 / 107.577秒 | 495820字节 | `repair_candidate`；图版本、三个目标NodeRef、摘要和唯一新依赖Ref逐项匹配本地投影；`.cache/agentarts-candidate/`报告 |
+
+三次SSE均有3对workflow_start/end和一对task_end/end；工作流内索引冲突0，跨工作流
+全局索引重复2次，解析均通过。未保存原始正文、凭据或完整本地图谱。上述忽略目录
+是本机脱敏收据，结构化结果已在此记录供审查。
+
+提案与候选均只在query中给出严格JSON输出约束，无需改变现有云应用prompt。候选
+query使用D2从真实本地合成SQLite/Graph快照导出的版本化目标、更新后的FactRef和
+允许依赖白名单；只投影会议从15:00到17:00及准备事项到16:00的必要字段，不发送
+Evidence、凭据或私人日程。`invokeMode`未显式设置，适配使用默认published。
+Desktop消费时须由可信composition显式设置相应`responseMode`和候选版本，并保持
+JSON续接的同步`beforeSend`出机门禁。首次提案探针没有执行工具；候选探针没有审批或
+写图。第二次云invocation、同一本地task的Evidence与终态、可信preview、Policy/
+ToolGateway CAS提交和同库重启仍需B/D2在真实Desktop链路分别验收；三次独立API
+探针不能替代这些证据。候选契约与前置输入见`REPAIR-CANDIDATE-ADAPTER.md`。
