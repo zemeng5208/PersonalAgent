@@ -122,3 +122,26 @@ improvement checklist, not completed claims; changing only the name is insuffici
   into graph mutations. Runtime-approved candidate submission requires an explicit
   agreed port; until delivered, only the offline fixture proves persistence.
 - No claim of real microphone/speaker acceptance or packaging delivery.
+
+## D controlled integration receipt (2026-09-24)
+
+This is not main and not a real-cloud acceptance. Composition tested at
+`b69dcaa`: main `c5c4ada`, A PR #99 `cfdb170`, A PR #103 `bcee4d7`,
+B PR #101 `f04086a`, D PR #102 `970bb35`, and D synthetic tool composition
+`66efd54`. Newer source PR heads must be explicitly incorporated and rechecked
+only for their affected paths.
+
+- Node 24.15.0: matching Client/Coordination/Runtime incremental compilation passed.
+- `apps/desktop/test/competition-synthetic-workspace.test.mjs`: 3/3 passed.
+- `tests/manual/agentarts/mvp-readonly-runtime.test.mjs`: 1/1 passed. This uses a
+  Fake cloud port with unverified proposals but real Runtime/Policy/ToolGateway,
+  actual synthetic file read, explicit allow-once, minimal export, persisted
+  conditional execution Evidence and same-database restart. It does not count as
+  two real cloud invocations or a real Desktop interaction.
+- `tests/architecture/dependency-boundaries.test.mjs`: 1/1 passed.
+- Node syntax checks and `git diff --check`: passed.
+
+The factory-level immediate-before-send host guard is still being connected by B;
+do not treat the earlier handoff guard alone as closing every revocation window.
+Versioned repair-candidate binding and Runtime-approved local graph commit remain
+separate pending work. The read-only test does not silently perform that repair.
