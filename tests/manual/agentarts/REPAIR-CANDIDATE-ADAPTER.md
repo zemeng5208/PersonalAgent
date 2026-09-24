@@ -48,5 +48,16 @@ Fact/Evidence与允许目标的映射属于宿主，云JSON不得携带这些权
 
 在A工作树合入上述精确B依赖后，Node24.15编译通过；公共parser4项、adapter候选4项、
 提案/续接/最终门禁13项，共21/21通过，git diff --check通过。
-没有改动B公共parser/Runtime实现，没有运行云端、Desktop、本地写图或整个产品验收。
+没有改动B公共parser/Runtime实现；上述离线验收时尚未运行云端、Desktop、本地写图或整个产品验收。
 此记录不替代B/D组合验证、CI和goo122等已登记非作者批准；接口仍provisional。
+
+2026-09-24后续真实云候选验证：在用户批准的仅合成投影范围内，A从D2本地可信
+SQLite/Graph快照生成的忽略文件读取graphRevision、FactRef、三个目标NodeRef及允许
+的新依赖引用，前置校验后仅发送必要字段。现有published AgentArts应用未改全局prompt，
+通过query级约束进行一次付费调用（11:20:50Z—11:22:37Z），HTTP 200、完整SSE
+495820字节；显式`tool-proposal-json`和`repairCandidateVersion:'1.0'`适配返回
+`repair_candidate`，本地主机补`verification:'unverified'`。候选图版本、三个目标、
+精确摘要和各唯一新依赖引用与本地投影逐项匹配。无自动重试、Local回退、审批或写图；
+没有保存原始云响应和凭据。脱敏结构报告保留在本工作树忽略目录
+`.cache/agentarts-candidate/`。这验证云候选格式与引用，不代替Desktop可信preview、
+用户批准后Policy/ToolGateway的CAS写入、Evidence及同库重启验收。
