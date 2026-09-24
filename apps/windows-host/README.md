@@ -9,3 +9,5 @@
 构建要求 Windows 及 .NET 8 Windows Desktop SDK：`dotnet build apps/windows-host/WindowsHost.csproj`。Linux 环境没有 .NET SDK，不能执行或声称构建与 UIA 实测。详情及手工验收见 [模块记录](../../docs/modules/MOD-16-WINDOWS-EXECUTION-01.md)。
 
 普通用户可从仓库根目录执行 `dotnet run --project apps/windows-host/manual/ManualNotepadProbe.csproj` 进行一次手工探测。程序只启动一个新记事本进程和新建的随机合成临时文本文件；必须亲眼确认窗口文本，输入 `CONFIRM` 后在五秒内手动切回该窗口。结果为 `Verified` 时还需目视确认，再关闭记事本且不保存。若系统把新标签页放在已有记事本进程、应用路径不符合 System32 或不提供单一 ValuePattern，本探测将拒绝，不能另选已有私人窗口重试。此程序不经过产品授权链，仅供测试，不能作为生产入口；探测并非 PA-016 的端到端验收。
+
+定向时序回归：Windows 上运行 `dotnet run --project apps/windows-host/test/WindowsHost.Timing.csproj`，受控交错在预期文本读取后改变输入 tick，以及不改变 tick 的程序改值，两者均必须在写前拒绝。UIA 读取和 `SetValue` 之间没有原子 compare-and-swap；tick 与前台检查仍不能捕获所有接管，不能用此回归代替真实交互验收。

@@ -1,7 +1,11 @@
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
 using System.Security.Principal;
 using System.Windows.Automation;
+
+[assembly: InternalsVisibleTo("WindowsHost.Timing")]
 
 namespace PersonalAgent.WindowsHost;
 
@@ -47,6 +51,9 @@ public static class NotepadAction
             if (new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator))
                 return new(ActionState.Rejected, "Elevated host is not supported");
 
+            // Baseline precedes all UIA reads: a user edit during discovery must not
+            // become the new baseline for an otherwise matching expected value.
+            var inputTick = LastInputTick();
             if (!IsSameForegroundTarget(target))
                 return new(ActionState.Rejected, "Confirmed target is no longer foreground");
 
@@ -59,14 +66,14 @@ public static class NotepadAction
                 return new(ActionState.Rejected, "Exactly one editable UIA text control is required");
             var edit = edits[0];
             var value = (ValuePattern)pattern;
-            if (!edit.Current.IsEnabled || value.Current.IsReadOnly ||
-                value.Current.Value != target.ExpectedText)
+            if (!edit.Current.IsEnabled || value.Current.IsReadOnly)
                 return new(ActionState.Rejected, "Target text changed or is not editable");
 
-            var inputTick = LastInputTick();
             cancellationToken.ThrowIfCancellationRequested();
-            if (!IsSameForegroundTarget(target) || LastInputTick() != inputTick)
-                return new(ActionState.Rejected, "User took control before execution");
+            if (!PrewriteStable(inputTick, target.ExpectedText, () => value.Current.Value,
+                    LastInputTick, () => IsSameForegroundTarget(target)))
+                return new(ActionState.Rejected, "User input or target text changed before execution");
+            cancellationToken.ThrowIfCancellationRequested();
 
             // SetValue can mutate before returning or throwing. Any subsequent failure is unknown.
             mutationStarted = true;
@@ -101,6 +108,15 @@ public static class NotepadAction
                 mutationStarted ? "UIA failure after mutation; reconcile before retry" : "Target validation failed");
         }
         finally { InputLock.Release(); }
+    }
+
+    internal static bool PrewriteStable(uint baseline, string expectedText,
+        Func<string> readText, Func<uint> readInputTick, Func<bool> sameTarget)
+    {
+        if (readText() != expectedText) return false;
+        if (readInputTick() != baseline || !sameTarget()) return false;
+        // A programmatic UIA edit need not update the last-user-input tick.
+        return readText() == expectedText && readInputTick() == baseline && sameTarget();
     }
 
     private static bool IsSameForegroundTarget(ConfirmedNotepadTarget target)
