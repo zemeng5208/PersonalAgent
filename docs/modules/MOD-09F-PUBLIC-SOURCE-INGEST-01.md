@@ -2,7 +2,7 @@
 
 - Profile：`huawei_ict_agentarts`；关联 PA-024、PA-025
 - 负责人：`goo122`；Memory → Goal 消费语义由 `zemeng` 非作者评审
-- 状态：`in_progress`（本地离线实现与测试中；MOD-09E PR #118 尚待非作者评审）
+- 状态：`review`（PR #126 已提交待非作者评审；MOD-09E PR #118 亦待评审）
 - 基线：`main@902e110`；分支：`codex/mod09f-source-ingest`
 - 文件所有权：`packages/memory/**`、`apps/runtime/src/application/`、Runtime 的
   workspace 依赖、根锁文件、本工作包和定向测试
@@ -92,4 +92,4 @@ FactRef；旧版本由现有 `memory_facts` 保留，不以文件哈希全局去
   迁移成功，原 FactVersion 保留；此项为本机跨版本手动验收，尚非 CI 夹具。
 - `npm run check`：架构门禁、契约夹具、生成类型、全部 workspace 构建/类型/测试
   与根集成 15/15 通过；`git diff --check` 通过。
-- 以上全是公开/合成离线验证；#118 仍待非作者评审，本工作包未提交或合并。
+- 以上全是公开/合成离线验证；#118 和 #126 均待非作者评审，尚未合并。
