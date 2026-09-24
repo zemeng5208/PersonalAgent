@@ -3,7 +3,7 @@
 - Profile：huawei_ict_agentarts；状态：in_progress / provisional。
 - 实现：zemeng 委派 Runtime 消费执行者；公共新增候选解析唯一 owner 为本工作包。
 - 非作者评审：需 goo122；未冻结、未合并，不以模型意见代替真实协作者批准。
-- 基线：Runtime 出机 PR #101（ce95203），AgentArts 多 invocation PR #103（bcee4d7）。
+- 基线：Runtime 出机 PR #101（c8274ca），AgentArts 候选适配 PR #105（8c2d1fb）。
 
 ## 显式兼容与边界
 
@@ -45,5 +45,17 @@ candidate/version、当前 Fact/NodeRef、允许目标、图基线及参数摘�
 再通过已有 RegisteredTool `local_write`、Policy/allow_once 与 ToolGateway 执行一次 CAS。
 云文本不是权限；未选节点业务字段必须保持不变；新 Fact、旧投影、目标越界或图冲突拒绝。
 
-graph 已写、confirmed receipt 未写的崩溃窗口必须按未知结果待核实处理，不能重做写入。
-目前不宣称该提交后继已实现；完成代码与必要失败验证后更新本节与真实验收边界。
+graph 已写、confirmed receipt 未写的崩溃窗口按 `waiting_reconciliation` 保留；
+同一 intent 重复提交返回原任务，不能重做写入。真实系统须人工核对图和执行记录。
+
+Runtime 已提供 host-only `readRepairCandidate(taskId)` 与 `submitLocalRepair(request)`，
+以及 `LocalRepairHostOptions`：受信宿主提供原始 Fact/NodeRef 选择、当前 Memory 查询和
+真实工具结果与 Fact 对应关系。提交前绑定已确认 source task、真实 read Evidence、
+工具参数摘要、候选、允许节点、graph namespace/binding version 与 deadline；
+新任务等待 `cognition.commit_repair@1.0.0` 的 `cognition:repair` 单次批准。
+执行时重读当前 Fact、原始授权和图版本，经 `previewStoredRepair` 后同步 CAS，
+再按持久图修订号读回。失效、拒绝、取消和冲突均不得修改图。
+
+本地合成测试覆盖批准后 CAS、拒绝、当前 FactRef 变化、图变化、越界选择、
+幂等 intent 冲突及 CAS 后结果未知并重开数据库。尚未验证实际 AgentArts 云端
+生成符合形状的候选，或 Desktop 最终组合与人工确认流程；不得宣称比赛真实闭环。

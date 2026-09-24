@@ -46,6 +46,7 @@ export function createAgentArtsRuntimeApplication(
       ...(invokeMode === undefined ? {} : {invokeMode}),
       ...(workflowGoalInput === undefined ? {} : {workflowGoalInput}),
       ...(responseMode === undefined ? {} : {responseMode}),
+      ...(options.repairCandidateVersion === undefined ? {} : {repairCandidateVersion: options.repairCandidateVersion}),
     },
     authorizationProvider,
     fetchImpl,

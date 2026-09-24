@@ -1,13 +1,16 @@
 import {ProtocolError, validateToolValue} from '@personal-agent/contracts';
-import type {Event, Request, Response, RegisteredTool} from '@personal-agent/contracts';
+import type {Event, Request, Response, RegisteredTool, TaskSnapshot} from '@personal-agent/contracts';
 import {RuntimeToolInvoker} from '@personal-agent/agents';
 import type {AgentToolPort} from '@personal-agent/agents';
 import {ToolGateway, toolArgumentsDigest} from '@personal-agent/tool-gateway';
 import {TaskRuntime} from '../index.js';
 import {createTextApplication, type TextApplication, type TextApplicationOptions} from './text.js';
 import type {ModelMessage} from '@personal-agent/models';
-import type {CoordinationPort, CoordinationRequest} from '@personal-agent/coordination';
+import {parseCoordinationRepairCandidate} from '@personal-agent/coordination';
+import type {CoordinationPort, CoordinationRequest, CoordinationRepairCandidateResult} from '@personal-agent/coordination';
 import {startCoordinationTask, assertCompetitionExportAllowed, type CompetitionToolExport} from './coordination.js';
+import {createLocalRepairTool, prepareLocalRepair, startLocalRepairTask, LOCAL_REPAIR_CHECKPOINT} from './local-repair.js';
+import type {LocalRepairHostOptions, SubmitLocalRepairRequest} from './local-repair.js';
 type SuccessfulResponse = Extract<Response, {outcome: 'ok'}>;
 
 const CONVERSATION_HISTORY_LIMIT = 20;
@@ -17,7 +20,7 @@ function assistantText(resultSummary: string): string {
   return resultSummary.replace(MODEL_METADATA, '').trim();
 }
 
-export interface RuntimeApplicationOptions { path: string; now?: () => Date; idFactory?: () => string; text?: TextApplicationOptions; tools?: readonly RegisteredTool[]; profile?: 'local' | 'huawei_ict_agentarts'; coordination?: CoordinationPort; competitionToolExports?: readonly CompetitionToolExport[]; }
+export interface RuntimeApplicationOptions { path: string; now?: () => Date; idFactory?: () => string; text?: TextApplicationOptions; tools?: readonly RegisteredTool[]; profile?: 'local' | 'huawei_ict_agentarts'; coordination?: CoordinationPort; competitionToolExports?: readonly CompetitionToolExport[]; repairCandidateVersion?: '1.0'; localRepair?: LocalRepairHostOptions; }
 export interface RuntimeApplicationTransport { send(request: Request, signal: AbortSignal): Promise<Response>; }
 
 export class RuntimeApplication implements RuntimeApplicationTransport {
@@ -28,15 +31,26 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   readonly profile: 'local' | 'huawei_ict_agentarts';
   private readonly coordination: CoordinationPort | undefined;
   private readonly competitionToolExports: readonly CompetitionToolExport[];
+  private readonly repairCandidateVersion: '1.0' | undefined;
+  private readonly localRepair: LocalRepairHostOptions | undefined;
 
   constructor(options: RuntimeApplicationOptions) {
     this.profile = options.profile ?? 'local';
     if (!['local', 'huawei_ict_agentarts'].includes(this.profile)
-      || (this.profile === 'local' && (options.coordination !== undefined || options.competitionToolExports !== undefined))
+      || (this.profile === 'local' && (options.coordination !== undefined || options.competitionToolExports !== undefined || options.repairCandidateVersion !== undefined))
+      || (options.repairCandidateVersion !== undefined && options.repairCandidateVersion !== '1.0')
+      || (options.localRepair !== undefined && options.repairCandidateVersion !== '1.0')
       || (this.profile === 'huawei_ict_agentarts' && options.text !== undefined)) {
       throw new ProtocolError('INVALID_ARGUMENT', 'Choose explicit competition coordination or existing local text configuration, not both');
     }
     this.coordination = options.coordination;
+    this.repairCandidateVersion = options.repairCandidateVersion;
+    this.localRepair = options.localRepair;
+    if (this.localRepair && (!this.localRepair.graphNamespace?.trim() || !this.localRepair.bindingVersion?.trim()
+      || typeof this.localRepair.resolveBinding !== 'function' || typeof this.localRepair.matchesSource !== 'function'
+      || typeof this.localRepair.memory?.listCurrent !== 'function')) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Invalid local repair host configuration');
+    }
     this.competitionToolExports = (options.competitionToolExports ?? []).map(binding => Object.freeze({...binding}));
     const exportNames = new Set<string>();
     for (const binding of this.competitionToolExports) {
@@ -53,9 +67,10 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     this.runtime = new TaskRuntime(options.path, {
       ...(options.now ? {now: options.now} : {}),
       ...(options.idFactory ? {idFactory: options.idFactory} : {}),
-      ...(options.tools ? {createToolGateway: (policy: import('@personal-agent/policy').AuthorizationPolicy) => {
+      ...(options.tools || this.localRepair ? {createToolGateway: (policy: import('@personal-agent/policy').AuthorizationPolicy) => {
         gateway = new ToolGateway({policy, now: () => (options.now?.() ?? new Date()).getTime()});
         for (const tool of options.tools ?? []) gateway.register(tool);
+        if (this.localRepair) gateway.register(createLocalRepairTool(() => this.runtime, this.localRepair));
         return gateway;
       }} : {}),
     });
@@ -100,6 +115,36 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
 
   readEvents(afterSequence = 0): Event[] { return this.runtime.readEvents(afterSequence); }
 
+  /** Explicit host preview only; neither this read nor a cloud candidate grants a write. */
+  readRepairCandidate(taskId: string): CoordinationRepairCandidateResult | undefined {
+    if (this.repairCandidateVersion !== '1.0') throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Repair candidates are not enabled');
+    if (this.runtime.getTask(taskId).state !== 'succeeded') return undefined;
+    const result = this.runtime.loadCheckpoint(taskId, 'competition-repair-candidate');
+    return result === undefined ? undefined : parseCoordinationRepairCandidate(result);
+  }
+
+  /** An explicit trusted-host action creates a separate local task; never a cloud callback. */
+  submitLocalRepair(request: SubmitLocalRepairRequest): TaskSnapshot {
+    if (!this.localRepair || !this.tools) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Local repair is not configured');
+    if (!this.readRepairCandidate(request.sourceTaskId)) throw new ProtocolError('NOT_FOUND', 'No completed repair candidate');
+    const task = prepareLocalRepair(this.runtime, this.localRepair, request);
+    if (task.state === 'created') this.dispatchLocalRepair(task.taskId);
+    else if (['planning', 'running', 'verifying'].includes(task.state) && !this.activeTextTasks.has(task.taskId)) {
+      return this.runtime.transitionTask(task.taskId, 'waiting_reconciliation', {
+        error: {code: 'RESULT_UNKNOWN', message: 'Local repair was interrupted; verify persisted graph before any further action', retryable: false},
+      });
+    }
+    return this.runtime.getTask(task.taskId);
+  }
+
+  private dispatchLocalRepair(taskId: string, resume = false): void {
+    if (this.activeTextTasks.has(taskId)) return;
+    const execution = Promise.resolve().then(() => startLocalRepairTask(this.runtime, this.tools!, taskId, resume))
+      .finally(() => this.activeTextTasks.delete(taskId));
+    this.activeTextTasks.set(taskId, execution);
+    void execution.catch(() => {});
+  }
+
   /** Host-only real-adapter guard; never exposed as a wire or Renderer operation. */
   assertCompetitionExportAllowed(request: CoordinationRequest): void {
     assertCompetitionExportAllowed(this.runtime, this.tools, this.competitionToolExports, request);
@@ -118,6 +163,13 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   resumeTask(taskId: string): void {
     if (this.activeTextTasks.has(taskId)) return;
     if (this.runtime.getTask(taskId).state !== 'waiting_approval') throw new ProtocolError('REVISION_CONFLICT', 'Task is not awaiting approval');
+    if (this.runtime.loadCheckpoint(taskId, LOCAL_REPAIR_CHECKPOINT) !== undefined) {
+      if (!this.localRepair || !this.tools || this.runtime.getApproval('local-repair-' + taskId).state !== 'allowed') {
+        throw new ProtocolError('UNAUTHORIZED', 'Local repair is unavailable or not approved');
+      }
+      this.dispatchLocalRepair(taskId, true);
+      return;
+    }
     const goal = this.runtime.loadCheckpoint(taskId, 'application-goal');
     if (typeof goal !== 'string') throw new ProtocolError('NOT_FOUND', 'Task has no application checkpoint');
 
@@ -129,7 +181,8 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       if (competitionApproval.state !== 'allowed') throw new ProtocolError('UNAUTHORIZED', 'Task approval has not been allowed');
       const execution = startCoordinationTask(
         this.runtime, this.coordination, this.tools, taskId, goal, deadline,
-        {resume: true, toolExports: this.competitionToolExports},
+        {resume: true, toolExports: this.competitionToolExports,
+          ...(this.repairCandidateVersion ? {repairCandidateVersion: this.repairCandidateVersion} : {})},
       ).finally(() => this.activeTextTasks.delete(taskId));
       this.activeTextTasks.set(taskId, execution);
       void execution.catch(() => {});
@@ -161,7 +214,8 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       this.runtime.saveCheckpoint(taskId, 'application-deadline', request.deadline);
       const execution = Promise.resolve().then(() => startCoordinationTask(
         this.runtime, this.coordination, this.tools, taskId, goal, request.deadline,
-        {toolExports: this.competitionToolExports},
+        {toolExports: this.competitionToolExports,
+          ...(this.repairCandidateVersion ? {repairCandidateVersion: this.repairCandidateVersion} : {})},
       )).finally(() => this.activeTextTasks.delete(taskId));
       this.activeTextTasks.set(taskId, execution);
       void execution.catch(() => {});
