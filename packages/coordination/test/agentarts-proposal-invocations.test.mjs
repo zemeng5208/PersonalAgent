@@ -138,6 +138,31 @@ test('JSON mode honors terminal SSE validation before reading proposal JSON', as
   assert.deepEqual(await cloud.invoke(request()), {...proposal, verification: 'unverified'});
 });
 
+test('JSON SSE rejects missing or reversed terminals and every event after DONE', async () => {
+  const proposalEvent = {event: 'message', data: {text: JSON.stringify(proposal)}};
+  const taskEnd = {event: 'task_end'};
+  const end = {event: 'end'};
+  for (const separators of ['\n', '\n\n']) {
+    for (const sequence of [
+      [{event: 'task_start'}, proposalEvent],
+      [proposalEvent, end, taskEnd],
+      [taskEnd, end, proposalEvent],
+      [proposalEvent, taskEnd, end, '[DONE]', {event: 'error', data: {message: 'private failure'}}],
+    ]) {
+      const body = sequence.map(value => `data: ${typeof value === 'string' ? value : JSON.stringify(value)}`).join(separators);
+      const {cloud} = setup(async () => new Response(body, {headers: {'content-type': 'text/event-stream'}}));
+      await assert.rejects(new CompetitionCoordinator(cloud).execute(request()), {code: 'EXTERNAL_FAILURE'});
+    }
+  }
+});
+
+test('JSON SSE without workflows accepts ordered task_end/end and final DONE', async () => {
+  const body = [{event: 'message', data: {text: JSON.stringify(proposal)}}, {event: 'task_end'}, {event: 'end'}]
+    .map(value => `data: ${JSON.stringify(value)}\n\n`).join('') + 'data: [DONE]\n\n';
+  const {cloud} = setup(async () => new Response(body, {headers: {'content-type': 'text/event-stream'}}));
+  assert.deepEqual(await cloud.invoke(request()), {...proposal, verification: 'unverified'});
+});
+
 test('continuation without an explicit synchronous host export guard fails before credentials', async () => {
   let reads = 0;
   const cloud = new AgentArtsCloudAgentPort(config, {read: async () => { reads++; return 'Bearer synthetic'; }},

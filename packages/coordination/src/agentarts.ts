@@ -406,7 +406,12 @@ class TextCollector {
   private finalWorkflowAnswer: string | undefined;
   private terminalPhase: 'open' | 'task-ended' | 'ended' | 'invalid' = 'open';
 
+  constructor(private readonly strictCompletion = false) {}
+
   add(text: string, index: number | undefined): void {
+    if (this.strictCompletion && this.terminalPhase !== 'open') {
+      external('AgentArts text follows the task terminal');
+    }
     if (index !== undefined) {
       if (this.indexed.has(index)) {
         if (this.indexed.get(index) !== text) external('AgentArts response contains conflicting text');
@@ -466,7 +471,10 @@ class TextCollector {
     if (this.workflowSeen) external('AgentArts workflow event order is malformed');
   }
 
-  finish(): string {
+  finish(requireCompletion = false): string {
+    if (requireCompletion && this.terminalPhase !== 'ended') {
+      external('AgentArts workflow event order is malformed');
+    }
     const indexedText = [...this.indexed.entries()]
       .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
       .map(([, text]) => text);
@@ -577,15 +585,20 @@ function flushSseData(data: string[], collector: TextCollector): boolean {
   return false;
 }
 
-function parseSseStandard(payload: string, collector: TextCollector): void {
+function parseSseStandard(payload: string, collector: TextCollector, strictCompletion: boolean): void {
   const data: string[] = [];
   const lines = payload.split(/\r\n|\r|\n/);
+  let done = false;
   for (const line of lines) {
     if (line === '') {
-      if (flushSseData(data, collector)) return;
+      if (flushSseData(data, collector)) {
+        if (!strictCompletion) return;
+        done = true;
+      }
       continue;
     }
     if (line.startsWith(':')) continue;
+    if (done) external('AgentArts event follows the stream terminator');
     if (!line.startsWith('data:')) external('AgentArts SSE response is malformed');
     let value = line.slice('data:'.length);
     if (value.startsWith(' ')) value = value.slice(1);
@@ -594,12 +607,16 @@ function parseSseStandard(payload: string, collector: TextCollector): void {
   flushSseData(data, collector);
 }
 
-function parseSseWithoutSeparators(payload: string): TextCollector {
-  const collector = new TextCollector();
+function parseSseWithoutSeparators(payload: string, strictCompletion: boolean): TextCollector {
+  const collector = new TextCollector(strictCompletion);
   const lines = payload.split(/\r\n|\r|\n/);
   let done = false;
   for (const line of lines) {
-    if (done || line === '' || line.startsWith(':')) continue;
+    if (line === '' || line.startsWith(':')) continue;
+    if (done) {
+      if (strictCompletion) external('AgentArts event follows the stream terminator');
+      continue;
+    }
     if (!line.startsWith('data:')) external('AgentArts SSE response is malformed');
     let value = line.slice('data:'.length);
     if (value.startsWith(' ')) value = value.slice(1);
@@ -620,22 +637,22 @@ function parseSseWithoutSeparators(payload: string): TextCollector {
   return collector;
 }
 
-function parseSsePayload(payload: string): TextCollector {
-  const standard = new TextCollector();
+function parseSsePayload(payload: string, strictCompletion: boolean): TextCollector {
+  const standard = new TextCollector(strictCompletion);
   try {
-    parseSseStandard(payload, standard);
+    parseSseStandard(payload, standard, strictCompletion);
     return standard;
   } catch {
     // Some gateways omit the blank separator between self-contained JSON events.
     // Retry only with the conservative line-oriented form; a valid standard
     // multiline event is returned above without ever being split.
-    return parseSseWithoutSeparators(payload);
+    return parseSseWithoutSeparators(payload, strictCompletion);
   }
 }
 
-function parseResponsePayload(payload: string, contentType: string | undefined): string {
+function parseResponsePayload(payload: string, contentType: string | undefined, strictCompletion = false): string {
   const mediaType = contentType?.split(';', 1)[0]?.trim().toLowerCase();
-  if (mediaType === 'text/event-stream') return parseSsePayload(payload).finish();
+  if (mediaType === 'text/event-stream') return parseSsePayload(payload, strictCompletion).finish(strictCompletion);
   if (mediaType === 'application/json') {
     const collector = new TextCollector();
     parseJsonPayload(payload, collector);
@@ -784,6 +801,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
         text = parseResponsePayload(
           await readResponseText(response, combined),
           response.headers?.get('content-type') ?? undefined,
+          this.responseMode === 'tool-proposal-json',
         );
       } catch (error) {
         throw currentAbortError(combined) ?? new ProtocolError('EXTERNAL_FAILURE', 'AgentArts response validation failed');
