@@ -847,9 +847,9 @@ app.whenReady().then(async () => {
     tray?.destroy();
     runtimeConnection?.dispose?.();
     try {
+      syntheticRepairHost?.close();
       if (runtimeApplication) runtimeApplication.close();
       else runtime?.close?.();
-      syntheticRepairHost?.close();
     } catch (error) {
       event.preventDefault();
       runtimeError = error instanceof Error ? error.message : 'Runtime 仍有活动任务，无法安全退出';

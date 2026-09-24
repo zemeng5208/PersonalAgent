@@ -30,6 +30,8 @@ export function createSyntheticRepairHost(memoryPath, {decision} = {}) {
   let memoryApp;
   let impacts;
   let lockTail = Promise.resolve();
+  const adviceControllers = new Set();
+  let closed = false;
 
   async function withSourceLock(work) {
     const previous = lockTail;
@@ -127,7 +129,11 @@ export function createSyntheticRepairHost(memoryPath, {decision} = {}) {
       ]);
     },
     async projectConfirmed(input) { return withSourceLock(() => projectConfirmedLocked(input)); },
-    close() { memoryHost.close(); },
+    close() {
+      closed = true;
+      for (const controller of adviceControllers) controller.abort();
+      memoryHost.close();
+    },
     readGraph() { requireBound(); return graph.read(); },
     readBinding(taskId) {
       requireBound();
@@ -162,13 +168,6 @@ export function createSyntheticRepairHost(memoryPath, {decision} = {}) {
       const report = reports.find(item => item.graphRevision === context.expectedGraphRevision);
       if (!report || context.targets.some(target => !report.items.some(item =>
         same(item.node, target.node) && item.action === 'RECHECK'))) fail();
-      if (decision) {
-        const suggestions = await decideProjectedFactImpact(decision, {
-          projection: projectionReceipt.projection, impact: report,
-          deadline: new Date(Date.now() + 15_000).toISOString(), signal,
-        });
-        runtime.saveCheckpoint(taskId, 'mvp-local-impact-advice', suggestions);
-      }
       const binding = {fact: context.fact, node: context.projectedFact,
         graphRevision: context.expectedGraphRevision,
         allowedTargets: context.targets.map(item => item.node),
@@ -177,6 +176,32 @@ export function createSyntheticRepairHost(memoryPath, {decision} = {}) {
       const receipt = {sourceTaskId: taskId, evidenceId, binding};
       if (existing && !isDeepStrictEqual(existing, receipt)) fail();
       if (!existing) runtime.saveCheckpoint(taskId, bindingKey, receipt);
+      // Advice consumes this immutable receipt after the source lock is released.
+      // It cannot delay the AgentArts continuation or authorize a graph write.
+      if (decision && !closed) {
+        const controller = new AbortController();
+        adviceControllers.add(controller);
+        const onAbort = () => controller.abort();
+        signal.addEventListener('abort', onAbort, {once: true});
+        runtime.saveCheckpoint(taskId, 'mvp-local-impact-advice',
+          {graphRevision: context.expectedGraphRevision, status: 'pending'});
+        setImmediate(() => {
+          void decideProjectedFactImpact(decision, {
+            graphNamespace: namespace, projection: projectionReceipt.projection, impact: report,
+            deadline: new Date(Date.now() + 15_000).toISOString(), signal: controller.signal,
+          }).then(suggestions => {
+            if (!closed) runtime.saveCheckpoint(taskId, 'mvp-local-impact-advice',
+              {graphRevision: context.expectedGraphRevision, status: 'ready', suggestions});
+          }).catch(error => {
+            if (!closed) runtime.saveCheckpoint(taskId, 'mvp-local-impact-advice',
+              {graphRevision: context.expectedGraphRevision, status: 'unavailable',
+                reason: ['CANCELLED', 'TIMEOUT'].includes(error?.code) ? error.code : 'model_unavailable'});
+          }).finally(() => {
+            adviceControllers.delete(controller);
+            signal.removeEventListener('abort', onAbort);
+          });
+        });
+      }
       // Export only selected synthetic plan context; Evidence identity stays local.
       return {...meeting, repairContext: context};
   }

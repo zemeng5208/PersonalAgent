@@ -79,8 +79,12 @@ test('confirmed synthetic read produces exact graph-bound candidate, separate ap
   const source = await state(app, taskId, ['succeeded', 'failed']);
   assert.equal(source.state, 'succeeded');
   assert.equal(cloud.requests.length, 2);
+  for (let attempt = 0; attempt < 100
+    && app.runtime.loadCheckpoint(taskId, 'mvp-local-impact-advice')?.status !== 'ready'; attempt++)
+    await new Promise(resolve => setTimeout(resolve, 5));
   assert.equal(decisionCalls, 1);
-  assert.deepEqual(app.runtime.loadCheckpoint(taskId, 'mvp-local-impact-advice'), []);
+  assert.deepEqual(app.runtime.loadCheckpoint(taskId, 'mvp-local-impact-advice'),
+    {graphRevision: 6, status: 'ready', suggestions: []});
   if (process.env.PA_MVP_CONTEXT_OUTPUT) {
     const context = cloud.requests[1].continuation.result.repairContext;
     writeFileSync(process.env.PA_MVP_CONTEXT_OUTPUT, JSON.stringify(context, null, 2));
