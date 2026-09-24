@@ -93,11 +93,10 @@ public static class NotepadAction
             return new(mutationStarted ? ActionState.ResultUnknown : ActionState.Rejected,
                 mutationStarted ? "Cancelled after mutation; reconcile before retry" : "Cancelled before mutation");
         }
-        catch (Exception ex) when (ex is AutomationException or InvalidOperationException or
-                                   ArgumentException or System.ComponentModel.Win32Exception or
-                                   System.Security.SecurityException or UnauthorizedAccessException)
+        catch (Exception)
         {
-            // Do not return target text, process path, window title or exception messages.
+            // UIA and process APIs may throw COM, Win32 or provider-specific exceptions.
+            // Never leak target text, process path, window title or exception messages.
             return new(mutationStarted ? ActionState.ResultUnknown : ActionState.Rejected,
                 mutationStarted ? "UIA failure after mutation; reconcile before retry" : "Target validation failed");
         }
