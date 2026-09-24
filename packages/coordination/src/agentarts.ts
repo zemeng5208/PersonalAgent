@@ -379,11 +379,15 @@ async function readResponseText(response: AgentArtsResponse, combined: CombinedS
   }
 }
 
+type WorkflowIdentity = {id: string | undefined; name: string | undefined};
+
 class TextCollector {
   private readonly indexed = new Map<number, string>();
   private readonly unindexed: string[] = [];
   private messageLength = 0;
   private workflowSeen = false;
+  private workflowActive = false;
+  private workflowIdentity: WorkflowIdentity | undefined;
   private finalWorkflowAnswer: string | undefined;
   private terminalPhase: 'open' | 'task-ended' | 'ended' | 'invalid' = 'open';
 
@@ -401,19 +405,26 @@ class TextCollector {
     if (this.messageLength > MAX_TEXT_CHARS) external('AgentArts response exceeds the text limit');
   }
 
-  startWorkflow(): void {
-    if (this.terminalPhase !== 'open') external('AgentArts workflow event order is malformed');
+  startWorkflow(identity: WorkflowIdentity): void {
+    if (this.terminalPhase !== 'open' || this.workflowActive) external('AgentArts workflow event order is malformed');
     this.workflowSeen = true;
+    this.workflowActive = true;
+    this.workflowIdentity = identity;
     this.finalWorkflowAnswer = undefined;
     this.indexed.clear();
   }
 
-  completeWorkflow(answer: string | null): void {
+  completeWorkflow(answer: string | null, identity: WorkflowIdentity): void {
     // A multi-agent stream can expose intermediate workflow results. Keep only
     // the most recently completed workflow as a candidate; it does not become
     // the invocation result until task_end followed by end is observed.
-    if (this.terminalPhase !== 'open') external('AgentArts workflow event order is malformed');
+    if (this.terminalPhase !== 'open' || !this.workflowActive
+      || (['id', 'name'] as const).some(key => identity[key] !== undefined
+        && this.workflowIdentity?.[key] !== undefined && identity[key] !== this.workflowIdentity[key])) {
+      external('AgentArts workflow event order is malformed');
+    }
     this.workflowSeen = true;
+    this.workflowActive = false;
     if (answer === null) {
       this.finalWorkflowAnswer = undefined;
       return;
@@ -481,15 +492,21 @@ function consumeEvent(value: unknown, collector: TextCollector): void {
 
   const eventName = event.event;
   if (typeof eventName !== 'string') external('AgentArts response event is malformed');
+  // These optional fields are correlation hints, never authorization. Sequential
+  // starts/ends still have to pair even when the gateway omits identity metadata.
+  const workflowIdentity = {
+    id: typeof data?.workflow_id === 'string' ? data.workflow_id : undefined,
+    name: typeof data?.workflow_name === 'string' ? data.workflow_name : undefined,
+  };
   if (eventName === 'workflow_start') {
-    collector.startWorkflow();
+    collector.startWorkflow(workflowIdentity);
     return;
   }
   if (eventName === 'workflow_end') {
     if (!data || (typeof data.answer !== 'string' && data.answer !== null)) {
       external('AgentArts workflow_end event is malformed');
     }
-    collector.completeWorkflow(data.answer);
+    collector.completeWorkflow(data.answer, workflowIdentity);
     return;
   }
   if (eventName === 'task_end') {
