@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@personal-agent/client": "0.1.0-alpha.1",
+    "@personal-agent/coding-tools": "0.1.0-alpha.1",
     "@personal-agent/runtime": "0.1.0-alpha.1"
   },
   "devDependencies": {

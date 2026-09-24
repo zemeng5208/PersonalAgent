@@ -49,6 +49,16 @@ passed through unchanged for strict adapter validation. Competition submission
 gets 180000ms; normal Local/Fake requests retain the Client default. Keep
 `requestTaskCancellation` and `desktopDataPaths` intact.
 
+The development-only opt-in `PA_DESKTOP_SYNTHETIC_MVP=1` binds the existing
+`workspace.read_text@1.0.0` to this repository's dedicated synthetic fixture root.
+Only exact arguments `{ "path": "meeting-update.json" }` are export-eligible.
+Runtime still requests normal local approval; the export gate does not grant it.
+The actual confirmed file result must match the approved synthetic meeting fields
+exactly before those four fields can leave the machine. Paths, raw file content,
+extra fields and Evidence claims are not exported. Default startup exposes none
+of these tools, and this development-only opt-in is rejected in Local/Fake or
+packaged execution. No arbitrary user directory is accepted.
+
 Run syntax/diff checks for the composition change; then the necessary targeted
 integration check after A/B dependencies are integrated. One real synthetic
 multi-invocation scenario and its same-database restart readback are the MVP acceptance, not

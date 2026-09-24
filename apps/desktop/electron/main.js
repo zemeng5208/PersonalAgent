@@ -18,6 +18,7 @@ const agentArtsInvokeMode = process.env.PA_AGENTARTS_INVOKE_MODE === undefined
   ? 'published'
   : process.env.PA_AGENTARTS_INVOKE_MODE;
 const competitionMode = !fakeMode && runtimeProfile === 'huawei_ict_agentarts';
+const syntheticMvp = process.env.PA_DESKTOP_SYNTHETIC_MVP === '1';
 const taskSubmitOptions = competitionMode ? {timeoutMs: 180_000} : {};
 if (fakeMode || fakeModelMode) app.setPath('userData', app.isPackaged
   ? path.join(app.getPath('temp'), `personal-agent-fake-${process.pid}`)
@@ -522,6 +523,9 @@ async function initializeRuntime() {
   if (!fakeMode && fakeModelMode && runtimeProfile === 'huawei_ict_agentarts') {
     throw Error('Competition Profile 不能与 fake-model 同时启用；不会静默切换到 Local 或真实云端');
   }
+  if (syntheticMvp && (!competitionMode || app.isPackaged)) {
+    throw Error('合成 MVP 工具只允许显式 Competition 开发验收，不适用于 Local/Fake 或安装包');
+  }
   if (fakeMode) {
     const {FakeRuntime} = await import('@personal-agent/testkit');
     runtime = new FakeRuntime({mode: 'test', scenario: 'success'});
@@ -537,8 +541,13 @@ async function initializeRuntime() {
       if (!process.env.PA_AGENTARTS_AUTHORIZATION) {
         throw Error('PA_AGENTARTS_AUTHORIZATION 未配置；Competition Runtime 不会启动');
       }
+      const syntheticTools = syntheticMvp
+        ? (await import('./competition-synthetic-workspace.js')).createSyntheticMeetingToolset(
+          path.resolve(dir, '../../../tests/manual/agentarts/fixtures/mvp-meeting'))
+        : {};
       runtimeApplication = runtimeModule.createAgentArtsRuntimeApplication({
         path: dbPath,
+        ...syntheticTools,
         gatewayUrl: process.env.PA_AGENTARTS_GATEWAY_URL ?? '',
         runtimeName: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
         invokeMode: agentArtsInvokeMode,
