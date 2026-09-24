@@ -7,3 +7,5 @@
 这只是 Host 内部的防护，尚无可信 Runtime 调用入口；传入 `ConfirmedNotepadTarget` **不代表**授权证据，也没有跨进程资源锁、持久化 runId、重启恢复或人工确认 UI。未来接口必须由 Runtime/Policy/ToolGateway 消费授权，并经受信 Desktop 展示目标确认。UIA `ValuePattern` 并不适用于所有版本记事本；多控件、不可访问控件或 MSIX 路径均拒绝。读回只证明当前控件文本等于新值，不证明文件保存、模型提案或完整任务完成。`GetLastInputInfo` 与前台窗口检查不能捕获所有并发接管，实机仍需有意插入输入/窗口切换验证。
 
 构建要求 Windows 及 .NET 8 Windows Desktop SDK：`dotnet build apps/windows-host/WindowsHost.csproj`。Linux 环境没有 .NET SDK，不能执行或声称构建与 UIA 实测。详情及手工验收见 [模块记录](../../docs/modules/MOD-16-WINDOWS-EXECUTION-01.md)。
+
+定向时序回归：Windows 上运行 `dotnet run --project apps/windows-host/test/WindowsHost.Timing.csproj`，受控交错在预期文本读取后改变输入 tick，以及不改变 tick 的程序改值，两者均必须在写前拒绝。UIA 读取和 `SetValue` 之间没有原子 compare-and-swap；tick 与前台检查仍不能捕获所有接管，不能用此回归代替真实交互验收。
