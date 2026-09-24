@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -12,6 +13,7 @@ import {openSqliteMemoryHost} from '@personal-agent/memory/sqlite';
 import {createMemoryProjectionApplication} from '@personal-agent/runtime/application';
 import {createSyntheticMeetingToolset} from '../../../apps/desktop/electron/competition-synthetic-workspace.js';
 import {createSyntheticRepairHost} from '../../../apps/desktop/electron/competition-repair-host.js';
+import {restoreSyntheticRepairSubmission} from '../../../apps/desktop/electron/competition-repair-submission.js';
 
 const fixtureRoot = fileURLToPath(new URL('./fixtures/mvp-meeting/', import.meta.url));
 const namespace = 'mvp-synthetic-meeting';
@@ -105,8 +107,9 @@ test('confirmed synthetic read produces exact graph-bound candidate, separate ap
   assert.deepEqual(binding.binding.fact, {id: 'meeting/time', revision: 2});
   const before = host.readGraph();
   const unrelated = currentNodes(before).find(item => item.id === 'unrelated');
+  const repairKey = createHash('sha256').update(taskId + ':' + binding.evidenceId).digest('hex');
   const local = app.submitLocalRepair({sourceTaskId: taskId, evidenceId: binding.evidenceId,
-    idempotencyKey: 'mvp-repair-local', deadline: new Date(Date.now() + 60_000).toISOString()});
+    idempotencyKey: repairKey, deadline: new Date(Date.now() + 60_000).toISOString()});
   assert.equal((await state(app, local.taskId, ['waiting_approval', 'failed'])).state, 'waiting_approval');
   assert.deepEqual(host.readGraph(), before, 'A candidate and pending approval cannot write the graph');
   await approve(client, local.taskId);
@@ -120,6 +123,13 @@ test('confirmed synthetic read produces exact graph-bound candidate, separate ap
   assert.equal(app.runtime.getTask(taskId).state, 'succeeded');
   assert.equal(app.runtime.getTask(local.taskId).state, 'succeeded');
   assert.deepEqual(host.readGraph(), after);
+  assert.equal(app.runtime.loadCheckpoint(taskId, 'mvp-repair-submitted'), undefined);
+  const recovered = restoreSyntheticRepairSubmission(app, host, taskId,
+    host.readBinding(taskId), app.readRepairCandidate(taskId), repairKey);
+  assert.equal(recovered.taskId, local.taskId);
+  assert.equal(recovered.state, 'succeeded');
+  assert.deepEqual(app.runtime.loadCheckpoint(taskId, 'mvp-repair-submitted'), {taskId: local.taskId});
+  assert.deepEqual(host.readGraph(), after, 'Marker recovery never repeats the graph CAS');
   assert.equal(cloud.requests.length, 2, 'Readback never replays paid cloud calls');
 });
 

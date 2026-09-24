@@ -63,6 +63,10 @@ async function launch() {
       globalThis.fetch = async (...args) => {
         const item = {attempt: globalThis.__mvpFetchInfo.length + 1,
           startedAt: new Date().toISOString()};
+        const url = String(args[0]);
+        item.kind = process.env.PA_DESKTOP_LAYA_PORT
+          && url === `http://127.0.0.1:${process.env.PA_DESKTOP_LAYA_PORT}/v1/systemone`
+          ? 'laya' : 'agentarts';
         const headers = args[1]?.headers;
         const requestId = headers?.['X-Request-Id'];
         const sessionId = headers?.['x-hw-agentarts-session-id'];
@@ -172,6 +176,8 @@ async function launch() {
     }, 30_000);
     report.localState = localDone.state;
     report.stage = 'restart';
+    report.fetchInfo = await app.evaluate(() => globalThis.__mvpFetchInfo ?? []);
+    assert.equal(report.fetchInfo.filter(item => item.kind === 'agentarts').length, 2);
     await panel.screenshot({path: path.join(userData, 'desktop-result.png')});
     await app.close();
     session = await launch();
@@ -206,6 +212,16 @@ async function launch() {
       report.graphRevision = graph.revision;
       report.graphReadback = true;
       report.executionEvidenceReadback = true;
+      if (process.env.PA_DESKTOP_LAYA_PORT) {
+        const advice = readback.runtime.loadCheckpoint(source.taskId, 'mvp-local-impact-advice');
+        assert.equal(advice?.graphRevision, 6);
+        assert.equal(advice?.status, 'ready');
+        assert.equal(report.fetchInfo.filter(item => item.kind === 'laya'
+          && item.status === 200).length, 1);
+        report.layaAdvice = {graphRevision: advice.graphRevision, status: advice.status,
+          suggestions: advice.suggestions.map(item => ({intervention: item.intervention,
+            reason: item.reason}))};
+      }
     } finally { readback.close(); }
     report.restartReadback = true;
     report.outcome = 'passed';

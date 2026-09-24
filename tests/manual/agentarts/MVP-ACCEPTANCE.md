@@ -207,3 +207,12 @@ probe and Fake DecisionPort injection do not establish live Desktop consumption;
 that remains a separate acceptance item. Native same-cloud-run resume, a human
 dialog click, packaging and production/private-data use also remain outside this
 receipt.
+
+After this receipt, the Desktop source-marker recovery was hardened for a crash
+between durable local-repair submission and writing `mvp-repair-submitted`.
+On restart the trusted host finds the existing local task by its stable key,
+validates its saved intent and source binding, then records the missing marker.
+It never creates a second approval or repeats a completed graph write. A real
+SQLite restart test fault-injects the absent marker after a confirmed commit;
+the existing task and graph are preserved with no additional cloud call. This
+is a recovery test, not another paid cloud run.

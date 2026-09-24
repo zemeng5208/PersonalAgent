@@ -9,6 +9,7 @@ import {panelBounds, clampOrb, draggedGroupBounds} from './placement.js';
 import {Conversations} from './conversations.js';
 import {createDesktopHost} from './desktop-host.js';
 import {desktopDataPaths} from './data-paths.js';
+import {restoreSyntheticRepairSubmission} from './competition-repair-submission.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -526,14 +527,18 @@ async function syncRuntimeSnapshots() {
 }
 
 async function promptSyntheticRepairCandidate(taskId) {
-  if (!syntheticRepairHost || !runtimeApplication || repairPrompts.has(taskId)
-    || runtimeApplication.runtime.loadCheckpoint(taskId, 'mvp-repair-submitted')) return;
-  const candidate = runtimeApplication.readRepairCandidate(taskId);
-  if (!candidate) return;
-  const source = syntheticRepairHost.readBinding(taskId);
-  if (!source || source.binding.graphRevision !== candidate.candidate.expectedGraphRevision) return;
+  if (!syntheticRepairHost || !runtimeApplication || repairPrompts.has(taskId)) return;
   repairPrompts.add(taskId);
   try {
+    if (runtimeApplication.runtime.loadCheckpoint(taskId, 'mvp-repair-submitted')) return;
+    const candidate = runtimeApplication.readRepairCandidate(taskId);
+    if (!candidate) return;
+    const source = syntheticRepairHost.readBinding(taskId);
+    if (!source || source.binding.graphRevision !== candidate.candidate.expectedGraphRevision) return;
+    const idempotencyKey = createHash('sha256').update(taskId + ':' + source.evidenceId).digest('hex');
+    const prior = restoreSyntheticRepairSubmission(runtimeApplication, syntheticRepairHost,
+      taskId, source, candidate, idempotencyKey);
+    if (prior) { await refresh(prior.taskId); return; }
     const lines = candidate.candidate.changes.map(item =>
       `${item.node.id}#${item.node.revision} → ${item.summary}\n原因：${item.reason}\n依赖：${item.dependencies.map(dep => `${dep.id}#${dep.revision}`).join(', ')}`);
     const options = {
@@ -545,7 +550,10 @@ async function promptSyntheticRepairCandidate(taskId) {
     const answer = panel && !panel.isDestroyed()
       ? await dialog.showMessageBox(panel, options) : await dialog.showMessageBox(options);
     if (answer.response !== 0) return;
-    const idempotencyKey = createHash('sha256').update(taskId + ':' + source.evidenceId).digest('hex');
+    if (runtimeApplication.runtime.loadCheckpoint(taskId, 'mvp-repair-submitted')) return;
+    const concurrent = restoreSyntheticRepairSubmission(runtimeApplication, syntheticRepairHost,
+      taskId, source, candidate, idempotencyKey);
+    if (concurrent) { await refresh(concurrent.taskId); return; }
     const repair = runtimeApplication.submitLocalRepair({sourceTaskId: taskId,
       evidenceId: source.evidenceId, idempotencyKey,
       deadline: new Date(Date.now() + 10 * 60_000).toISOString()});
