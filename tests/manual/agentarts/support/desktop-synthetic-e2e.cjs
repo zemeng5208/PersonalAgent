@@ -76,11 +76,19 @@ async function launch() {
         let response;
         try { response = await originalFetch(...args); }
         catch (error) {
+          item.endedAt = new Date().toISOString();
           item.fetchRejected = true;
           item.errorName = ['AbortError', 'TimeoutError', 'TypeError'].includes(error?.name)
             ? error.name : 'other';
+          item.signalAborted = args[1]?.signal?.aborted === true;
+          item.causeName = ['ConnectTimeoutError', 'HeadersTimeoutError', 'SocketError',
+            'TypeError', 'Error'].includes(error?.cause?.name) ? error.cause.name : 'other';
+          item.causeCode = ['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND',
+            'ECONNREFUSED', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET']
+            .includes(error?.cause?.code) ? error.cause.code : 'other';
           throw error;
         }
+        item.responseAt = new Date().toISOString();
         item.status = response.status;
         item.contentType = response.headers.get('content-type');
         void response.clone().text().then(body => {
@@ -216,8 +224,6 @@ async function launch() {
         const advice = readback.runtime.loadCheckpoint(source.taskId, 'mvp-local-impact-advice');
         assert.equal(advice?.graphRevision, 6);
         assert.equal(advice?.status, 'ready');
-        assert.equal(report.fetchInfo.filter(item => item.kind === 'laya'
-          && item.status === 200).length, 1);
         report.layaAdvice = {graphRevision: advice.graphRevision, status: advice.status,
           suggestions: advice.suggestions.map(item => ({intervention: item.intervention,
             reason: item.reason}))};
@@ -235,6 +241,31 @@ async function launch() {
     process.exitCode = 1;
   } finally {
     if (session) await session.app.close().catch(() => {});
+    if (report.outcome !== 'passed' && report.sourceTaskId) {
+      try {
+        const {createRuntimeApplication} = await import('@personal-agent/runtime/application');
+        const readback = createRuntimeApplication({path: path.join(userData, 'runtime.sqlite'),
+          profile: 'huawei_ict_agentarts'});
+        try {
+          const source = readback.runtime.getTask(report.sourceTaskId);
+          const tools = readback.runtime.readToolExecutions(report.sourceTaskId);
+          const graph = readback.runtime.bindCoordinationStore('mvp-synthetic-meeting').read();
+          report.partialReadback = {sourceState: source.state,
+            sourceErrorCode: source.error?.code,
+            confirmedReads: tools.filter(item => item.toolName === 'workspace.read_text'
+              && item.state === 'confirmed').length,
+            graphRevision: graph.revision};
+          if (process.env.PA_DESKTOP_LAYA_PORT) {
+            const advice = readback.runtime.loadCheckpoint(report.sourceTaskId,
+              'mvp-local-impact-advice');
+            if (advice) report.layaAdvice = {graphRevision: advice.graphRevision,
+              status: advice.status,
+              ...(advice.status === 'ready' ? {suggestions: advice.suggestions.map(item =>
+                ({intervention: item.intervention, reason: item.reason}))} : {})};
+          }
+        } finally { readback.close(); }
+      } catch { report.partialReadbackUnavailable = true; }
+    }
     report.finishedAt = new Date().toISOString();
     fs.writeFileSync(path.join(userData, 'receipt.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify({...report, userData: path.basename(userData)}, null, 2));

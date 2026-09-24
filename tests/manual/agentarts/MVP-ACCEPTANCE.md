@@ -216,3 +216,42 @@ It never creates a second approval or repeats a completed graph write. A real
 SQLite restart test fault-injects the absent marker after a confirmed commit;
 the existing task and graph are preserved with no additional cloud call. This
 is a recovery test, not another paid cloud run.
+
+## D2 Laya Desktop run (2026-09-24)
+
+The first wrapper start stopped before starting Laya or Electron: Windows
+PowerShell 5.1 lacks the script's static random-byte method. After that ignored
+wrapper was corrected and syntax-checked, the one authorized corrected run used
+the same DPAPI credential and synthetic fixture. Its isolated data is
+`.cache/desktop-agentarts-Yz7VtO`; `receipt.json` records the live request
+boundary and `partial-readback.json` records the closed-database inspection.
+
+Laya passed loopback health. The first published AgentArts invocation returned
+HTTP 200 and a strict `tool_proposal`; the synthetic Admin UI responded
+`allow_once`, and Runtime confirmed `workspace.read_text` with Evidence. The
+confirmed correction projected Fact revision 2 and graph revision 6. The
+Desktop-configured Laya DecisionPort then saved `mvp-local-impact-advice` as
+`ready` at graph revision 6 with `ESCALATE_AGENTARTS / low_confidence`. That is
+real Desktop consumption of local Laya, with advisory-only effect; the model
+did not authorize a graph write. The harness installed its global fetch observer
+after Desktop constructed the Laya transport, so its fetch count does not
+measure that local request. The persisted advice and explicit transport
+configuration are the evidence for this stage.
+
+The second published AgentArts fetch began with a distinct request ID but
+rejected locally with `TypeError` before an HTTP response was observed. Whether
+the remote service received it is unknown. Runtime marked the source task
+`failed / EXTERNAL_FAILURE`; no repair candidate, separate local write task or
+plan-node CAS was created. The source plan nodes and unrelated plan remain at
+revision 1. The wrapper reported its Laya service stopped and zero remaining
+child/new Laya processes. No automatic paid retry was made. This partial run
+does not replace the earlier completed two-invocation Desktop acceptance above
+or establish a single new complete Laya-enabled run.
+
+The receipt stores both fetch start times and the first response's HTTP 200,
+but did not store the exact first-response arrival time, the rejected fetch's
+`cause.name`/`cause.code`, or its abort-signal state. Runtime's saved deadline
+was 13:19:53 UTC, after the harness finished at 13:17:35 UTC; the failure was
+not a task-deadline expiry. The manual harness now records allowlisted cause
+metadata, abort state and response/finish times for a future necessary run.
+This change cannot reconstruct missing details from the completed attempt.
