@@ -213,6 +213,22 @@ test('candidate cannot silently remove a baseline plan dependency', async t => {
   assert.equal(f.app.runtime.bindCoordinationStore(f.host.graphNamespace).read().revision, 4);
 });
 
+test('source Evidence must bind the exact invocation arguments and authorization reference', async t => {
+  const f = fixture(t);
+  const {taskId, evidenceId} = await f.source();
+  const runtime = f.app.runtime;
+  const record = runtime.readToolExecutions(taskId)[0];
+  assert.equal(runtime.matchesToolExecutionInput(record, {arguments: sourceArguments,
+    scopeRef: evidenceId}), true);
+  assert.equal(runtime.matchesToolExecutionInput(record, {arguments: sourceArguments,
+    scopeRef: 'different-authorization'}), false);
+  const saved = runtime.loadCheckpoint(taskId, `tool-result-${evidenceId}`);
+  runtime.saveToolExecution({...record, inputDigest: '0'.repeat(64)}, saved.result);
+  assert.throws(() => f.app.submitLocalRepair({sourceTaskId: taskId, evidenceId,
+    idempotencyKey: 'mismatched-source-invocation', deadline: later()}), {code: 'UNAUTHORIZED'});
+  assert.equal(runtime.bindCoordinationStore(f.host.graphNamespace).read().revision, 4);
+});
+
 test('shared source lock serializes Fact ingestion before the repair reads current Fact', async t => {
   const f = fixture(t);
   const {client, taskId, evidenceId} = await f.source();

@@ -52,7 +52,8 @@ Runtime 已提供 host-only `readRepairCandidate(taskId)` 与 `submitLocalRepair
 以及 `LocalRepairHostOptions`：受信宿主提供原始 Fact/NodeRef 选择、当前 Memory 查询和
 真实工具结果与 Fact 对应关系，并用 `withSourceLock` 与 Fact 摄入/投影共享写锁。
 提交前绑定已确认 source task、真实 read Evidence、
-工具参数摘要、候选、允许节点、graph namespace/binding version 与 deadline；
+工具参数摘要和实际执行记录的完整 inputDigest（含授权引用）、候选、允许节点、
+graph namespace/binding version 与 deadline；
 新任务等待 `cognition.commit_repair@1.0.0` 的 `cognition:repair` 单次批准。
 执行时重读当前 Fact、原始授权和图版本，经 `previewStoredRepair` 后同步 CAS，
 再按持久图修订号读回。失效、拒绝、取消和冲突均不得修改图。
@@ -62,7 +63,7 @@ Runtime 已提供 host-only `readRepairCandidate(taskId)` 与 `submitLocalRepair
 不会以新候选重新提交。
 
 本地合成测试覆盖批准后 CAS、拒绝、当前 FactRef 变化、图变化、越界选择、
-幂等 intent 冲突、断链拒绝、共享锁排序及 CAS 后结果未知并重开数据库。
+幂等 intent 冲突、来源执行记录摘要错配、断链拒绝、共享锁排序及 CAS 后结果未知并重开数据库。
 当前性保证依赖同一进程所有 Memory 摄入/投影写入都使用宿主提供的同一把锁；
 若另一个进程绕过该锁先写 Memory 而未更新图，仍可能存在两存储间窗口，
 不能宣称跨进程原子提交。尚未验证实际 AgentArts 云端
