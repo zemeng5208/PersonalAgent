@@ -480,7 +480,8 @@ class TextCollector {
   }
 
   finish(requireCompletion = false): string {
-    if (requireCompletion && this.terminalPhase !== 'ended') {
+    if ((requireCompletion || (this.strictCompletion && this.terminalPhase !== 'open'))
+      && this.terminalPhase !== 'ended') {
       external('AgentArts workflow event order is malformed');
     }
     const indexedText = [...this.indexed.entries()]
@@ -662,7 +663,7 @@ function parseResponsePayload(payload: string, contentType: string | undefined, 
   const mediaType = contentType?.split(';', 1)[0]?.trim().toLowerCase();
   if (mediaType === 'text/event-stream') return parseSsePayload(payload, strictCompletion).finish(strictCompletion);
   if (mediaType === 'application/json') {
-    const collector = new TextCollector();
+    const collector = new TextCollector(strictCompletion);
     parseJsonPayload(payload, collector);
     return collector.finish();
   }

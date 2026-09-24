@@ -40,7 +40,9 @@ text 保留原请求/返回行为，拒绝 continuation；JSON 模式必须由�
 
 JSON模式的SSE必须显式按序task_end→end；无workflow事件也不能省略此条件。
 缺终结、倒序/重复终结、task_end后出现正文、[DONE]后出现任何事件均拒绝，不产生
-提案。默认text模式保持原兼容语义；非流式application/json仍按完整HTTP对象校验。
+提案。非流式application/json中的单个message对象或仅含message的数组可保持兼容；
+一旦出现显式task_end/end，就必须按序完整结束，终结后正文拒绝。默认text模式保留
+原兼容语义。
 
 初次请求仍为 query=goal（或显式 workflowGoalInput 对应的一个字符串变量）。续接请求
 的 query 仅为序列化 `{continuation:{proposalId,state:'confirmed',result:<投影>}}`；
@@ -64,7 +66,7 @@ session ID；两者仅是调用方请求/会话关联信息，不伪造服务端
 离线验证需覆盖：显式开关、严格提案/文本、伪造 verification/额外字段、结构错误、
 8KiB投影边界、无授权零网络失败、取消/deadline、同task不同request身份与无自动重试。
 真实验收使用合成目录/文件与显式本地批准；必须读回工具结果、Evidence、最终文字及
-同库重启。当前云应用未配置该输出契约、真实调用未执行，不能宣称工具闭环可用。
+同库重启。当前尚未完成这些本地闭环步骤，不能宣称工具闭环可用。
 
 云原生工具暂停/同run恢复、跨进程恢复云run及正式MCP桥仍 unavailable。多invocation
 可能增加云调用/模型成本；只有真实运行后才能报告费用和trace。不得自动回退 Local，
@@ -76,7 +78,7 @@ Node24.15.0 下 coordination 编译通过；新增9项行为测试与受影响�
 回归共60/60通过，git diff --check通过。合成HTTP两次调用已证明新请求身份、同task
 会话关联、严格JSON与8KiB整信封预算，不证明真实云端配置、工具执行或云run恢复。
 Runtime审批纵向消费由B接线验证，完整仓库门禁由该组合增量和CI验证，不并发重复
-安装/构建。尚无本日真实付费API调用，秘密受信配置仍待批准。
+安装/构建。此段记录的是离线验证；本日真实调用另见下文。
 
 随后增加最终发送门禁的4项回归，重新编译并通过新模式13/13测试：凭据await期间
 撤权、guard缺失、异步guard、凭据/guard内取消均阻止fetch。之前的60项不重复记为
@@ -85,3 +87,21 @@ Runtime审批纵向消费由B接线验证，完整仓库门禁由该组合增量
 第四轮Chat静态审查的缺终结路径已在旧构建复现（Missing expected rejection）。
 修复仅收紧JSON/SSE模式；Node24.15构建及adapter/诊断共66/66通过，最后追加的
 终结后正文拒绝又运行了对应定向回归。Runtime不产生审批/工具的纵向反例交B验证。
+第六轮审查发现JSON事件数组可倒序终结后仍返回提案；先用定向测试复现，随后只对
+显式JSON模式增加终结顺序校验。Node24.15重新编译，受影响adapter/文字/诊断
+67/67通过；单个message和无生命周期数组保持接受。
+
+## 2026-09-24 真实云端基线（单独验收表面）
+
+经用户批准的当前用户DPAPI受信配置，A使用Node24.15对现有published query部署
+各发一次合成请求，均为单次调用，无自动重试、云配置修改或Local回退。文字请求
+11:01:04Z—11:01:52Z收到HTTP 200、完整SSE 108169字节，当前适配解析出586字，
+verification=unverified。工作流开始/结束各3次，工作流内索引冲突0；跨工作流全局
+索引重复2次。脱敏报告在本工作树忽略目录`.cache/agentarts-text/`，未保存正文。
+
+首次JSON提案只在query中给出固定合成输出约束，现有云配置未改。11:04:12Z—
+11:04:49Z收到HTTP 200、完整SSE 185108字节；实际`tool-proposal-json`适配返回
+`tool_proposal`，proposalId、`workspace.read_text@1.0.0`及唯一参数
+`meeting-update.json`均精确匹配，verification=unverified。脱敏报告在忽略目录
+`.cache/agentarts-proposal/`。此调用只观察提案，没有本地审批、工具执行或第二次
+续接；候选修复、Desktop与同库重启仍需分别验收。

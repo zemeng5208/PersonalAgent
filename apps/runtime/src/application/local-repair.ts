@@ -6,7 +6,7 @@ import {parseCoordinationRepairCandidate} from '@personal-agent/coordination';
 import type {CoordinationRepairCandidateResult} from '@personal-agent/coordination';
 import {commitStoredRepair, previewStoredRepair} from '@personal-agent/cognition';
 import type {FactRef, FactVersion, MemoryQueryPort} from '@personal-agent/memory';
-import type {NodeRef, NodeVersion} from '@personal-agent/goals';
+import type {GraphSnapshot, NodeRef, NodeVersion} from '@personal-agent/goals';
 import {toolArgumentsDigest} from '@personal-agent/tool-gateway';
 import type {TaskRuntime} from '../index.js';
 
@@ -27,6 +27,8 @@ export interface LocalRepairHostOptions {
   bindingVersion: string;
   sourceTool: {name: string; version: string; arguments: Record<string, unknown>};
   memory: MemoryQueryPort;
+  /** Shared with trusted Fact ingestion and projection writes for this source. */
+  withSourceLock<T>(work: () => Promise<T>): Promise<T>;
   resolveBinding(input: {sourceTaskId: string; evidenceId: string}): LocalRepairBinding;
   matchesSource(input: {result: unknown; fact: FactVersion; node: NodeVersion}): boolean;
 }
@@ -87,13 +89,23 @@ export function prepareLocalRepair(
   const intent: LocalRepairIntent = {...request, candidate, binding,
     graphNamespace: host.graphNamespace, bindingVersion: host.bindingVersion, sourceTool: structuredClone(host.sourceTool)};
   requireSource(runtime, intent);
-  validateSelection(intent);
   const digest = toolArgumentsDigest(intent);
+  const key = 'local-repair:' + request.idempotencyKey;
+  const prior = runtime.findTaskByIdempotencyKey(key);
+  if (prior) {
+    const saved = runtime.loadCheckpoint(prior.taskId, LOCAL_REPAIR_CHECKPOINT);
+    if (!prior.attachmentRefs?.includes('local-repair-intent:' + digest)
+      || saved === undefined || toolArgumentsDigest(saved) !== digest) {
+      throw new ProtocolError('REVISION_CONFLICT', 'Local repair intent conflict or missing checkpoint');
+    }
+    return prior;
+  }
+  validateSelection(intent, runtime.bindCoordinationStore(host.graphNamespace).read());
   // TaskRuntime's existing transaction binds the key to the full intent digest.
   // There is no worker between task creation and the durable intent write.
   const task = runtime.submitTask({goal: 'Apply explicitly approved plan repair',
     conversationId: runtime.getTask(request.sourceTaskId).conversationId ?? 'local-repair',
-    attachmentRefs: ['local-repair-intent:' + digest], idempotencyKey: 'local-repair:' + request.idempotencyKey});
+    attachmentRefs: ['local-repair-intent:' + digest], idempotencyKey: key});
   const existing = runtime.loadCheckpoint(task.taskId, LOCAL_REPAIR_CHECKPOINT);
   if (existing !== undefined && toolArgumentsDigest(existing) !== digest) denied('Local repair intent conflict');
   if (existing === undefined) {
@@ -103,13 +115,20 @@ export function prepareLocalRepair(
   return task;
 }
 
-function validateSelection(intent: LocalRepairIntent): void {
+function validateSelection(intent: LocalRepairIntent, graph: GraphSnapshot): void {
   const {binding, candidate} = intent;
-  if (!binding || candidate.candidate.expectedGraphRevision !== binding.graphRevision
+  if (!binding || graph.revision !== binding.graphRevision
+    || candidate.candidate.expectedGraphRevision !== binding.graphRevision
     || !Array.isArray(binding.allowedTargets) || !Array.isArray(binding.allowedDependencies)) denied();
   for (const change of candidate.candidate.changes) {
     if (!binding.allowedTargets.some(ref => sameRef(ref, change.node))
       || change.dependencies.some(ref => !binding.allowedDependencies.some(allowed => sameRef(ref, allowed)))) denied('Repair candidate exceeds selected nodes');
+    const original = graph.history.findLast(item => item.id === change.node.id);
+    if (!original || !sameRef(original, change.node)
+      || original.dependencies.length !== change.dependencies.length
+      || original.dependencies.some(ref => !change.dependencies.some(next => next.id === ref.id))) {
+      denied('Repair candidate changes the selected dependency identities');
+    }
   }
 }
 
@@ -128,6 +147,7 @@ export function createLocalRepairTool(getRuntime: () => TaskRuntime, host: Local
       const runtime = getRuntime();
       const intent = runtime.loadCheckpoint(context.taskId, LOCAL_REPAIR_CHECKPOINT) as LocalRepairIntent | undefined;
       if (!intent || (input as {intentDigest?: string}).intentDigest !== toolArgumentsDigest(intent)) denied();
+      return host.withSourceLock(async () => {
       const store = runtime.bindCoordinationStore(host.graphNamespace);
       // A pre-write rejection is a confirmed no-write result, not an unknown write.
       let fact: FactVersion;
@@ -142,9 +162,9 @@ export function createLocalRepairTool(getRuntime: () => TaskRuntime, host: Local
         if (host.bindingVersion !== intent.bindingVersion || host.graphNamespace !== intent.graphNamespace
           || !isDeepStrictEqual(host.sourceTool, intent.sourceTool)
           || !isDeepStrictEqual(host.resolveBinding({sourceTaskId: intent.sourceTaskId, evidenceId: intent.evidenceId}), intent.binding)) denied();
-        validateSelection(intent);
         const sourceResult = requireSource(runtime, intent);
         const graph = store.read();
+        validateSelection(intent, graph);
         const node = graph.history.findLast(item => item.id === intent.binding.node.id);
         const now = Date.now();
         const grant = runtime.policy.get(context.authorizationRef);
@@ -172,6 +192,7 @@ export function createLocalRepairTool(getRuntime: () => TaskRuntime, host: Local
         throw new ProtocolError('RESULT_UNKNOWN', 'Repair commit requires reconciliation');
       }
       return {kind: 'applied', graphRevision: result.snapshot.revision};
+      });
     },
   };
 }

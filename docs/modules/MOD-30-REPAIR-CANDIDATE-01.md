@@ -50,12 +50,20 @@ graph 已写、confirmed receipt 未写的崩溃窗口按 `waiting_reconciliatio
 
 Runtime 已提供 host-only `readRepairCandidate(taskId)` 与 `submitLocalRepair(request)`，
 以及 `LocalRepairHostOptions`：受信宿主提供原始 Fact/NodeRef 选择、当前 Memory 查询和
-真实工具结果与 Fact 对应关系。提交前绑定已确认 source task、真实 read Evidence、
+真实工具结果与 Fact 对应关系，并用 `withSourceLock` 与 Fact 摄入/投影共享写锁。
+提交前绑定已确认 source task、真实 read Evidence、
 工具参数摘要、候选、允许节点、graph namespace/binding version 与 deadline；
 新任务等待 `cognition.commit_repair@1.0.0` 的 `cognition:repair` 单次批准。
 执行时重读当前 Fact、原始授权和图版本，经 `previewStoredRepair` 后同步 CAS，
 再按持久图修订号读回。失效、拒绝、取消和冲突均不得修改图。
+候选的每个修复目标必须保留原图中全部依赖身份，只允许已选同一节点的新 revision；
+空依赖或替换为无关节点会在审批前与提交前拒绝。
+同一幂等键先只读找到原任务并核对完整 intent；CAS 后图版本已变化仍返回原任务，
+不会以新候选重新提交。
 
 本地合成测试覆盖批准后 CAS、拒绝、当前 FactRef 变化、图变化、越界选择、
-幂等 intent 冲突及 CAS 后结果未知并重开数据库。尚未验证实际 AgentArts 云端
+幂等 intent 冲突、断链拒绝、共享锁排序及 CAS 后结果未知并重开数据库。
+当前性保证依赖同一进程所有 Memory 摄入/投影写入都使用宿主提供的同一把锁；
+若另一个进程绕过该锁先写 Memory 而未更新图，仍可能存在两存储间窗口，
+不能宣称跨进程原子提交。尚未验证实际 AgentArts 云端
 生成符合形状的候选，或 Desktop 最终组合与人工确认流程；不得宣称比赛真实闭环。

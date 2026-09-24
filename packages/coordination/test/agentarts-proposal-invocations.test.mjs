@@ -163,6 +163,23 @@ test('JSON SSE without workflows accepts ordered task_end/end and final DONE', a
   assert.deepEqual(await cloud.invoke(request()), {...proposal, verification: 'unverified'});
 });
 
+test('JSON response arrays reject reversed terminals and text after completion', async () => {
+  const message = {event: 'message', data: {text: JSON.stringify(proposal)}};
+  for (const events of [
+    [message, {event: 'end'}, {event: 'task_end'}],
+    [{event: 'task_end'}, {event: 'end'}, message],
+  ]) {
+    const {cloud} = setup(async () => new Response(JSON.stringify(events),
+      {headers: {'content-type': 'application/json'}}));
+    await assert.rejects(new CompetitionCoordinator(cloud).execute(request()), {code: 'EXTERNAL_FAILURE'});
+  }
+  for (const events of [message, [message], [message, {event: 'task_end'}, {event: 'end'}]]) {
+    const {cloud} = setup(async () => new Response(JSON.stringify(events),
+      {headers: {'content-type': 'application/json'}}));
+    assert.deepEqual(await cloud.invoke(request()), {...proposal, verification: 'unverified'});
+  }
+});
+
 test('continuation without an explicit synchronous host export guard fails before credentials', async () => {
   let reads = 0;
   const cloud = new AgentArtsCloudAgentPort(config, {read: async () => { reads++; return 'Bearer synthetic'; }},
