@@ -247,3 +247,18 @@ test('restart with a narrower export policy never replays an old projection or r
   assert.equal(records.filter(record => record.evidenceId === `competition-tool-${restarted.taskId}-1`).length, 1);
   assert.equal(records.length, 2);
 });
+
+test('last exchange cannot approve or execute a new proposal without continuation budget', async t => {
+  let calls = 0;
+  const f = await fixture(t, {respond: () => ++calls < 4 ? proposal : {...proposal, proposalId: 'too-late'}});
+  await state(f.app, f.taskId, ['waiting_approval']);
+  await f.approve('allow_once');
+  const task = await state(f.app, f.taskId, ['failed']);
+  assert.equal(task.error.code, 'TIMEOUT');
+  assert.equal(f.executions(), 1);
+  assert.equal(f.port.requests.length, 4);
+  assert.equal((await f.client.call('approval.list', {taskId: f.taskId})).items.length, 1);
+  const checkpoint = f.app.runtime.loadCheckpoint(f.taskId, 'competition-loop');
+  assert.equal(checkpoint.step, 4);
+  assert.equal(checkpoint.pending, undefined);
+});

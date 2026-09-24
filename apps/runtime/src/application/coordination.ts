@@ -198,6 +198,12 @@ export function startCoordinationTask(
         continue;
       }
 
+      // A new execution needs one further exchange to deliver its result. Do
+      // not consume approval or perform a tool action that cannot be continued.
+      if (step >= MAX_COMPETITION_STEPS) {
+        throw new ProtocolError('TIMEOUT', 'Competition has no remaining tool continuation step');
+      }
+
       const runId = `competition-tool-${taskId}-${step}`;
       context.saveCheckpoint('competition-loop', {step, continuation, pending: result, evidenceRefs, receipts});
       const toolResult: ToolInvocationResult = await tools.invoke({
