@@ -10,9 +10,11 @@
 | --- | --- |
 | goo122 | 工程与存储底座、公共协议、TaskRuntime、ModelGateway/Provider、本地 Policy/工具/MCP/Skills、知识与记忆 |
 | zemeng | 主 Agent 与核心认知架构、桌面/语音/Windows/TraceGuard/编程/分发、目标决策图谱、持续认知、AgentArts |
-| Potatos498 | 待办、日历、邮件、订阅、通知、搜索、天气、微信与社交连接器；MOD-20～26 保持原分工 |
+| Potatos498 | 待办、日历、邮件、订阅、通知、搜索、天气、微信与社交连接器；保留 MOD-20～26 的长期目录所有权，当前工作顺序见 §5 |
 
 产品负责人决定当前只实施华为 ICT AgentArts Competition Profile，通用 Local Profile 仅留存现有代码。核心认知、Goal/Decision/Plan 语义、Competition Profile 及 AgentArts 本地—云边界由 zemeng 负责；公共 Schema、根配置、迁移、锁文件和根装配由 goo122 维护。历史 PR 的作者、评审者和 Evidence 按事实保留，不能因新分工改写。
+
+2026-09-24 的 MVP 协作优先级不改变上述模块所有权：goo122 优先复核 #106 的最终 head 并裁定 #88 的公共接线边界；zemeng 统筹的 AgentArts、Runtime/本地修复、Laya 与 Desktop 实际整合继续由现有 A/B/C/D2 工作包推进。Potatos498 今日只处理 §5 的业务侧文档工作，不承接共享 Runtime、SecretStore 或根装配。
 
 ## 2. 共同所有权规则
 
@@ -64,7 +66,7 @@ goo122 必须让上述模块在没有真实 Desktop、AgentArts 或 zemeng 私�
 
 zemeng 必须优先交付 MOD-29/30/32 的 Competition Golden Path，并让模块在没有 goo122 的真实数据库或未合并实现时使用 Fake Memory/Tool/Runtime 独立开发。AgentArts 成功不能直接把本地任务标为完成；Local Agent 新能力当前不作为必交项。
 
-## 5. Potatos498：业务连接器（保持不变）
+## 5. Potatos498：业务连接器与当前工作顺序
 
 | ID | 模块 / 需求 | 独占目录 | 依赖 | 独立交付与验收 |
 | --- | --- | --- | --- | --- |
@@ -76,7 +78,12 @@ zemeng 必须优先交付 MOD-29/30/32 的 Competition Golden Path，并让模�
 | MOD-25 | 天气 / PA-010 | packages/connectors/weather | MOD-02、05 | 地点不静默猜测；缓存状态和真实提供商证据分开 |
 | MOD-26 | 微信与社交扩展 / PA-019 | packages/connectors/social/platform | MOD-02、05；交互模式另依赖 MOD-16 | 每个平台单独子任务；账号类型、能力和不支持项明确 |
 
-MOD-20～26 的负责人和业务范围不因 AgentArts 调整而改变。AgentArts 只消费这些连接器经 MOD-05 公布的工具能力，不接管连接器实现。
+MOD-20～26 的长期负责人和目录所有权保持不变。AgentArts 只消费这些连接器经 MOD-05 公布的工具能力，不接管连接器实现。2026-09-24 的串行安排如下；这是当前 MVP 的任务顺序，不表示这些能力已进入生产 Competition 装配：
+
+1. **P0：维护现有 #88 设计 PR。** Potatos498 从最新 main 安全同步该分支，收敛五包接线方案的工具清单和状态：`feeds.collect`、`feeds.subscriptions`、`mail.inbox`、`mail.accounts`、`todo.list`、`todo.create`、`todo.update`、`notifications.status`、`research.search` 共 9 个已实现的模块工具；`calendar.events` 和 weather 不属于 #88 的五包清单。模块公开 `register` 不等于 Runtime 已注册或 Competition capability 已公布。Competition 工具注入、ConnectorHost 凭据错误规范化和 StoragePort 适配器由 goo122 作公共边界裁定；#88 的设计或 CI 通过不授权五包广域接线。当前合成会议 MVP 使用受限 `workspace.read_text`，不等待这五包接入。
+2. **P1：仅在 D2 明确需要业务输入说明时补现有演示说明。** 复用已有合成会议资料，说明会议由 15:00 改至 17:00、准备由 14:00 改至 16:00（均后移两小时，准备仍比会议早一小时），无关计划不变；不新增 DTO、工具或另一套夹具。
+
+今日不安排多连接器广域生产接线、真实 mail/social 账号写入或 Windows 打包安装。公共协议、SecretStore、Runtime 与根装配继续由 goo122 负责；业务连接器的独立源码增量如以后确有需求，再按对应 MOD 单独登记。
 
 ## 6. 跨负责人冻结边界
 
