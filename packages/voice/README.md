@@ -70,6 +70,29 @@ they stop only this adapter's local wait: the adapter never calls `task.cancel`,
 submission, starts Runtime directly, or invents terminal state. Real local Runtime
 composition remains a separate host-level acceptance step.
 
+## Windows System.Speech adapters
+
+`createWindowsSystemSpeechPorts()` returns provider-specific recognition and output ports
+for the installed Windows `.NET Framework` `System.Speech` engine. The implementation
+starts one hidden Windows PowerShell 5.1 child per explicit operation with a fixed system
+executable, fixed adjacent script, fixed `zh-CN` culture and fixed `recognize` / `speak`
+mode. Callers cannot provide a command, script path, executable, device or execution
+policy. PCM or UTF-8 text uses bounded stdin; stdout is one bounded JSON result; stderr is
+drained without logging. There is no file, network, credential or automatic retry path.
+
+Deadline, parent abort, `stop()` and adapter disposal terminate the exact child and wait
+for its close. The adapter copies and later zeroes its audio input. Recognition responses
+are restricted to 8,000 characters and all process/provider failures use fixed local
+errors. The helper uses open dictation for recognition and the installed `zh-CN` default
+audio voice for speech.
+
+Source availability is not runtime availability. This adapter implementation does not
+verify dictation accuracy, microphone capture, speaker playback, or host execution policy.
+The production launcher never passes an execution-policy bypass; if the fixed script is
+blocked by system execution policy or missing language components, the ports return
+unavailable (`UNSUPPORTED_CAPABILITY`). Desktop and Runtime must keep their Unavailable
+ports and UI state until authorized production setup and real-device acceptance pass.
+
 ## Fake use and verification
 
 `@personal-agent/voice/testing` exports Fake recognition, explicit transcript consumer
