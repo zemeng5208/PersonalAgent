@@ -50,6 +50,25 @@ graph revision 为 9；本次结果只覆盖授权的合成会议场景。上述
 
 新批次只增补实际出现的证据和缺项；不为每个 MOD 另跑主链或新建采集脚本。
 
+### 2026-09-25 非会议单次候选：独立回执
+
+MOD-04B 已有脱敏回执 `mod04b-nonmeeting-2026-09-25T11-30-13.198Z.json`
+（隔离工作树忽略目录，仅本机保存）。11:30:13—11:30:53 UTC 的一次合成
+`draft-review`/`delivery-deadline` query 使用新的调用方请求 ID `11ba1b05…6c2e`：
+一次云请求、HTTP 200、完整 SSE、三对 workflow 开始/结束、零 error event；
+本地严格解析得到匹配契约的 `repair_candidate` v1.0，验证等级仍为
+`unverified`。回执明确 `localToolExecuted=false`、`graphWritten=false`、
+`localFallback=false`、`automaticRetry=false`。这只证明普通非会议输入的一次
+query 级候选格式，不证明工具提案、本地审批/执行、真实 continuation、Policy/CAS
+或目标系统读回；不能与上方会议链拼成新的端到端通过。
+
+该回执报告主控版本 `v20260925192219`、证据审查版本 `v20260925191806`，
+但 `requestDeploymentVersion=unavailable`，且无可精确关联的服务端 trace/usage。
+这两个报告版本不是本请求的实际部署绑定证明。MOD-29 只读核对平台记录，
+MOD-31 复用同一请求观察角色与评估；在读回前相关格仍为未知。
+MOD-04B 的 [PR #128](https://github.com/zemeng5208/PersonalAgent/pull/128)
+涉及 continuation prompt，但本次只有首次 query；PR 存在不能替代其真实续接验收。
+
 ## 展示口径与 MOD-04B 接口需求
 
 对每次 invocation 分开呈现：本地请求 ID 的脱敏引用、本地 task、目标 Runtime
@@ -90,7 +109,7 @@ Runtime 名称、API 200、模型正文和控制台当前 `Latest` 都不能代�
 | --- | --- | --- |
 | 代码 | `origin/main@ec43a55` 有 provisional AgentArts 适配；请求级平台版本/trace/usage 仍无可验证读取。MOD-32 本包只新增证据文档，不能算功能实现完成 | MOD-04B/29 根据真实脱敏结构交付请求关联和可信展示所需数据；保留 unknown 与失败路径 |
 | PR | 本包 [#134](https://github.com/zemeng5208/PersonalAgent/pull/134) 为 draft；较早证据 [#108](https://github.com/zemeng5208/PersonalAgent/pull/108) 和集成 [#104](https://github.com/zemeng5208/PersonalAgent/pull/104) 仍各有独立依赖与评审。创建 PR、CI 或作者自查均不等于合并 | 各 owner 解决自己的冲突/依赖，取得已登记非作者评审，再以最新 Git/PR 状态核实合并 |
-| MOD-32 真实验收 | 合成会议链的两次云 API 与本地执行/重启已通过；新请求的部署版本、trace、usage、费用、失败及回退仍未读回，MOD-32 保持 `in_progress` | 在主控分配的云资源时段，逐请求读回版本/trace/usage 与账单依据，另行验证失败核实和发布回退；每项保存脱敏证据 |
+| MOD-32 真实验收 | 合成会议链的两次云 API 与本地执行/重启已通过；另一次非会议 query 级候选匹配但未执行工具。请求级部署版本、trace、usage、费用、失败及回退仍未读回，MOD-32 保持 `in_progress` | 复用 AgentArts 链同批回执逐请求读回版本/trace/usage 与账单依据，另行验证失败核实和发布回退；每项保存脱敏证据 |
 | 整体 MVP | 单个合成 Golden Path 不能证明除 Windows 打包安装外的全部约定功能；本 MOD 也不能代表其他 zemeng 模块或 goo122/Potatos 模块完成 | 主控汇总各模块的代码、非作者评审/集成、真实场景读回后逐项判定；未满足的项继续列缺口，不用本记录代替全项验收 |
 
 MOD-32 剩余验收：新版本与请求级部署绑定、精确 trace/usage/费用读回、平台失败
