@@ -49,8 +49,12 @@ Renderer 指定任意词表。检测器须在 `ready` 前真正完成限定语�
 
 已对照 #156 head `197415f` 的 `VoicePcmFrameSourcePort`：`subscribe({signal,deadline,onFrame,onEnd})`
 返回的 `{ready,closed,unsubscribe}` 与本适配器的结构类型一致；其中 `ready` 由可信宿主
-`binding.start` 返回有效释放句柄后解决，提前终止会拒绝。限定词检测器的实际导出仍未交付；
-本适配器只证明结构接口和失败路径，不能声称已经连接真实麦克风或识别“你好小派”。
+`binding.start` 返回有效释放句柄后解决，提前终止会拒绝。已对照 #169 head `43ad0b9`
+的实际 `SpeechKeywordDetectorPort` 与 `SpeechKeywordSession`：`start({signal,deadline,onDetected})`
+返回的 `{ready,closed,accept,stop}` 与本适配器结构类型一致。使用两份 PR 的实际端口类型
+对本包接口做严格 TypeScript 结构赋值检查通过。#169 仍为 Draft，尚未与 #156、MOD-11
+可信宿主及 MOD-14 组合共同接线，也未读回目标机中文引擎或真实唤醒命中；本适配器
+不能据此声称已经识别“你好小派”。
 
 ## 明确排除
 
@@ -89,15 +93,17 @@ PCM 适配器增量复用同一编译入口，并定向运行
 本模块由 `zemeng` 负责并交由 `goo122` 进行非作者评审；本代理自测不能替代该批准。
 MOD-14 旧组合 PR #70 曾提供只读 `subscribeLifecycle` / `VoiceSessionManager.subscribe`
 绑定及播放状态抑制，但其代码已从当前 #61 净差异移出；当前包不包含生产音频源、
-授权提供者或算法。供应商选择、实际麦克风释放、误触率、回声与打断仍需独立真实验收。
+授权提供者或算法。首选检测器已在 #169 单独实现；实际麦克风释放、误触率、回声与打断
+仍需统一实机验收。
 
-## 中文唤醒的条件路径（2026-09-25，只读选型，未接入）
+## 中文唤醒的条件路径（2026-09-25，首选检测器已提 PR，未完成接线）
 
 优先复用 MOD-14 的 Windows System.Speech 宿主，条件是目标机
 `InstalledRecognizers()` 读回可用的 zh-CN 引擎，并在同一授权音频流上完成中文限定词表
 识别、释放与误触/回声实测。微软提供限定 `Grammar`、连续
-`RecognizeAsync(RecognizeMode.Multiple)` 和 `SetInputToAudioStream` API；当前 #124
-宿主仅用 `DictationGrammar` 对完整片段调用 `Recognize()`，不能把它称为持续唤醒源。
+`RecognizeAsync(RecognizeMode.Multiple)` 和 `SetInputToAudioStream` API；原 #124
+宿主仅用 `DictationGrammar` 对完整片段调用 `Recognize()`。#169 新增限定词连续识别宿主，
+但真实设备与中文引擎尚未验收，不能把 PR 代码视为可用唤醒源。
 API 依据：[已安装识别器](https://learn.microsoft.com/en-us/dotnet/api/system.speech.recognition.speechrecognitionengine.installedrecognizers?view=netframework-4.8.1)、
 [异步识别](https://learn.microsoft.com/en-us/dotnet/api/system.speech.recognition.speechrecognitionengine.recognizeasync?view=netframework-4.8.1)。
 
@@ -110,8 +116,9 @@ KWS 模型和从同一路 16 kHz 单声道 PCM 转为 `Float32Array` 后输入 K
 [KWS 模型](https://k2-fsa.github.io/sherpa/onnx/kws/pretrained_models/index.html)、
 [Node 示例](https://github.com/k2-fsa/sherpa-onnx/blob/master/nodejs-addon-examples/test_keyword_spotter_transducer.js)。
 
-两条路径均依赖 MOD-11/14 的**同一个**显式授权、有限期限的实时 PCM 帧源；当前 #122
-只提供片段缓冲，#124 只提供整段识别/播报，尚无可供本包订阅的公开连续帧入口。
+两条路径均依赖 MOD-11/14 的**同一个**显式授权、有限期限的实时 PCM 帧源。#122
+只提供片段缓冲；#156 已提供连续帧端口，#160 提供单物理麦克风 fanout/refcount
+宿主草案，但尚未共同接线并在目标设备验收。
 撤销、期限、设备失效和关闭时需停源并读回实际麦克风释放；本包的同步
 `unsubscribe()` 只能证明已请求退订和旧事件失效，不能证明物理设备已关闭。
 此项随 MOD-14 语音链集中实机验收，不单独重复跑整链。
