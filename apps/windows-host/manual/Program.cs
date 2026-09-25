@@ -7,14 +7,23 @@ using PersonalAgent.WindowsHost;
 var expected = $"PA_MOD16_SYNTHETIC_{Guid.NewGuid():N}";
 var replacement = expected + "_VERIFIED";
 var temporaryFile = Path.Combine(Path.GetTempPath(), $"pa-mod16-{Guid.NewGuid():N}.txt");
-var existingProcessIds = Process.GetProcessesByName("notepad").Select(p =>
-{
-    try { return p.Id; }
-    finally { p.Dispose(); }
-}).ToHashSet();
 Process? launched = null;
 try
 {
+    var existingProcesses = new Dictionary<int, DateTime>();
+    var existingWindows = new HashSet<(nint Window, int Pid, DateTime StartUtc)>();
+    foreach (var process in Process.GetProcessesByName("notepad"))
+    {
+        using (process)
+        {
+            var startUtc = process.StartTime.ToUniversalTime();
+            existingProcesses.Add(process.Id, startUtc);
+            // Snapshot all top-level handles, including hidden and owned windows.
+            // A pre-existing window becoming visible is never a new target.
+            foreach (var handle in WindowsForProcess(process.Id, visibleUnownedOnly: false))
+                existingWindows.Add((handle, process.Id, startUtc));
+        }
+    }
     File.WriteAllText(temporaryFile, expected);
     var executable = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
         "System32", "notepad.exe");
@@ -35,30 +44,39 @@ try
     DateTime targetStartUtc = default;
     for (var attempt = 0; attempt < 40; attempt++)
     {
-        // Only new Notepad processes can receive this synthetic target. An existing
-        // process accepting a new tab cannot be bound without inspecting private tabs.
+        // A new window may belong to an existing Notepad PID, but an old HWND
+        // accepting a new tab is never eligible. No title or tab content is read.
         var candidates = new List<(nint Window, int Pid, DateTime StartUtc)>();
-        var ambiguous = false;
+        var unverifiable = false;
         foreach (var process in Process.GetProcessesByName("notepad"))
         {
             using (process)
             {
-                if (existingProcessIds.Contains(process.Id)) continue;
                 try
                 {
                     var startUtc = process.StartTime.ToUniversalTime();
-                    if (startUtc < launchStartUtc || !NotepadAction.IsTrustedNotepadProcess(process)) continue;
-                    var windows = WindowsForProcess(process.Id);
-                    if (windows.Count > 1) ambiguous = true;
-                    foreach (var handle in windows) candidates.Add((handle, process.Id, startUtc));
+                    if (startUtc < launchStartUtc &&
+                        (!existingProcesses.TryGetValue(process.Id, out var originalStart) || originalStart != startUtc))
+                        continue;
+                    foreach (var handle in WindowsForProcess(process.Id, visibleUnownedOnly: true))
+                    {
+                        if (existingWindows.Contains((handle, process.Id, startUtc))) continue;
+                        if (!NotepadAction.IsTrustedNotepadProcess(process)) unverifiable = true;
+                        else candidates.Add((handle, process.Id, startUtc));
+                    }
                 }
                 catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or
-                                           System.ComponentModel.Win32Exception) { ambiguous = true; }
+                                           System.ComponentModel.Win32Exception) { unverifiable = true; }
             }
         }
-        if (ambiguous || candidates.Count > 1)
+        if (unverifiable)
         {
-            Console.WriteLine("REFUSED: multiple or unverifiable new Notepad windows");
+            Console.WriteLine("REFUSED: new Notepad window identity could not be verified");
+            return 2;
+        }
+        if (candidates.Count > 1)
+        {
+            Console.WriteLine("REFUSED: multiple new Notepad windows");
             return 2;
         }
         if (candidates.Count == 1)
@@ -70,7 +88,7 @@ try
     }
     if (window == 0)
     {
-        Console.WriteLine("REFUSED: no unique new Notepad window; existing windows and tabs were not inspected");
+        Console.WriteLine("REFUSED: no new visible Notepad window; existing windows and tabs were not inspected");
         return 2;
     }
     if (!NotepadAction.HasSingleTabForManualProbe(window, targetPid, targetStartUtc))
@@ -120,13 +138,14 @@ finally
     catch (UnauthorizedAccessException) { Console.WriteLine("Temporary test file could not be removed; delete it manually."); }
 }
 
-static List<nint> WindowsForProcess(int pid)
+static List<nint> WindowsForProcess(int pid, bool visibleUnownedOnly)
 {
     var windows = new List<nint>();
     if (!WindowDiscoveryNative.EnumWindows((handle, _) =>
         {
             if (WindowDiscoveryNative.GetWindowThreadProcessId(handle, out var owner) != 0 && owner == pid &&
-                WindowDiscoveryNative.IsWindowVisible(handle) && WindowDiscoveryNative.GetWindow(handle, 4) == 0) // GW_OWNER
+                (!visibleUnownedOnly ||
+                 (WindowDiscoveryNative.IsWindowVisible(handle) && WindowDiscoveryNative.GetWindow(handle, 4) == 0))) // GW_OWNER
                 windows.Add(handle);
             return true;
         }, 0)) throw new InvalidOperationException("Window enumeration failed");
