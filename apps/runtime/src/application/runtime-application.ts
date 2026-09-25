@@ -16,6 +16,8 @@ import type {EvidenceReaderOptions} from './evidence-reader.js';
 import {RuntimeCompetitionToolCatalog} from './tool-catalog.js';
 import type {CompetitionAvailableTool, CompetitionToolAvailability} from './tool-catalog.js';
 import {isDeepStrictEqual} from 'node:util';
+import {createCompetitionFactHost} from './competition-fact-host.js';
+import type {CompetitionFactHost, CompetitionFactHostOptions} from './competition-fact-host.js';
 type SuccessfulResponse = Extract<Response, {outcome: 'ok'}>;
 
 export interface RevokeHostAuthorizationRequest {
@@ -269,6 +271,11 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   }
 
   readEvents(afterSequence = 0): Event[] { return this.runtime.readEvents(afterSequence); }
+
+  /** Trusted host only: binds an independently verified public source to durable Fact/Graph projection. */
+  createCompetitionFactHost(options: CompetitionFactHostOptions): CompetitionFactHost {
+    return createCompetitionFactHost(this, options);
+  }
 
   /** Trusted host only: session ownership must be checked on every metadata read. */
   createEvidenceReader(options: Omit<EvidenceReaderOptions, 'runtime'>): ScopedEvidenceReader {
