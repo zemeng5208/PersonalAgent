@@ -1,6 +1,34 @@
 # 编程工具：可信工作区能力（MOD-18）
 
-## 当前增量：授权后的文本补丁候选文件
+## 当前增量：独占句柄内应用文本补丁
+
+`createWorkspacePatchApplyTool(options)` / `registerWorkspacePatchApply(host, options)`
+显式提供 `workspace.apply_text_patch@1.0.0`。它复用现有只读 preview 的严格
+相对路径、原 SHA-256、唯一精确编辑和有界 UTF-8 候选字节；额外要求
+`workspace:apply`，不能把 stage 的 `workspace:write` 授权升级为源文件应用。
+可信宿主提供工作区根、工作区外且已限权的恢复目录、受信 PowerShell 可执行文件；
+helper 脚本和可执行文件也必须位于授权工作区外，模型和工具输入都不能改变
+这些位置。当前仅支持 Windows，默认不注册到产品。
+
+固定的 `scripts/locked-apply.ps1` 不使用 `ExecutionPolicy Bypass`，通过 stdin
+接收本次 preview 生成、SHA 绑定的候选字节，不信任可由其他进程修改的 stage
+文件。它用 .NET `FileStream` 的 `FileShare.None` 在同一独占句柄内核对源 SHA、
+最终路径和单硬链接身份；首写前在受信恢复目录排他创建备份并 `Flush(true)`、
+读回备份，之后才原位写入、截断、`Flush(true)` 并在仍持锁时读回目标 SHA。
+打开文件时已有其他句柄或原 SHA 不符时不写。成功结果只证明独占读回的那个
+时刻，锁释放后的用户编辑仍可继续。写入开始后故障、超时或进程终止可能留下
+部分文件与备份，必须以任务/运行标识查找备份并重新核对当前源文件及授权，
+不自动重试或盲目回滚。原位写入不是断电/崩溃时始终原子旧或新的替换。
+
+此工具仍不构成任意路径的 OS 沙箱；Node 先拒绝链接、硬链接和越界路径，
+helper 再对已打开句柄核对最终路径和链接数，无法证明时不写。恢复目录必须由
+可信宿主预先创建并限制访问；本包不把备份当作 Artifact，也不允许其内容自动
+送往云端。现有 ToolGateway 对所有 `local_write` 异常保守映射
+`RESULT_UNKNOWN`，包括可以证明首写前安全拒绝的冲突，需由公共 owner 后续
+明确分阶段错误；本包不越界修改 Gateway。真实用户工作区验收须与命令工具
+共用编程链的一次联合回执。
+
+## 既有增量：授权后的文本补丁候选文件
 
 `createWorkspacePatchStageTool(options)` 提供显式注册的
 `workspace.stage_text_patch@1.0.0`。可信宿主提供工作区根，工具仅在现有
@@ -15,8 +43,8 @@ ToolGateway/Policy 以 task、工具、参数和 `workspace:read` + `workspace:w
 候选文件创建属于 `local_write`，声明不支持自动幂等重试与恢复；失败时尝试
 删除本次创建的候选，无法确认清理则返回 `RESULT_UNKNOWN`。外部编辑器即使
 在最后一次原文件复核后修改原文件，也不会被此工具覆盖。候选文件并非已应用
-补丁，不能把它呈现为源文件完成写入或最终 Artifact。真正的条件替换仍需
-可信宿主提供跨进程原子 CAS/独占文件能力和写后读回，并另行验收。
+补丁，不能把它呈现为源文件完成写入或最终 Artifact。上述 apply 是独立的
+独占句柄原位应用路径，不把 stage 的哈希检查或 rename 冒充原子 CAS。
 
 以下保留最初两个本地只读能力的边界：可信宿主绑定工作区根目录，并按需把 `workspace.read_text@1.0.0`、`workspace.list_entries@1.0.0` 注册到现有 `ToolHost`。只读工具不执行命令或修改 Git 状态，也不提供 Artifact/Evidence 服务。
 
@@ -56,7 +84,7 @@ ToolGateway/Policy 以 task、工具、参数和 `workspace:read` + `workspace:w
 
 本包消费 `@personal-agent/contracts@0.1.0-alpha.1` 的 provisional `RegisteredTool`、`ToolContext` 与 `ToolHost`，并按现有 Gateway/Policy scope 机制工作。它没有私设仍为 unavailable 的 `ToolExecutionPort`、ArtifactPort 或 EvidencePort。
 
-这段只读工具的历史验收不证明上面的候选文件工具已经进入 Runtime 或真实 AgentArts。根 `package.json` build 编排与 `package-lock.json` workspace 记录随 PR #83 直接从 `main@1e3b56b6` 重建；旧 Draft #63 已关闭。`workspace.list_entries` 和候选文件工具均不会自动进入生产 composition。
+这段只读工具的历史验收不证明上面的候选或 apply 工具已经进入 Runtime 或真实 AgentArts。根 `package.json` build 编排与 `package-lock.json` workspace 记录随 PR #83 直接从 `main@1e3b56b6` 重建；旧 Draft #63 已关闭。`workspace.list_entries`、候选文件和 apply 工具均不会自动进入生产 composition。
 
 ## 定向验证
 
