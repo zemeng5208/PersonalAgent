@@ -14,7 +14,22 @@ import type {LocalRepairHostOptions, SubmitLocalRepairRequest} from './local-rep
 import {isDeepStrictEqual} from 'node:util';
 import {RuntimeCompetitionToolCatalog} from './tool-catalog.js';
 import type {CompetitionAvailableTool, CompetitionToolAvailability} from './tool-catalog.js';
+import {ScopedEvidenceReader} from './evidence-reader.js';
+import type {EvidenceReaderOptions} from './evidence-reader.js';
 type SuccessfulResponse = Extract<Response, {outcome: 'ok'}>;
+
+export interface RevokeHostAuthorizationRequest {
+  subjectRef: string;
+  conversationId: string;
+  taskId: string;
+  authorizationRef: string;
+  expectedApprovalRevision: number;
+  /** Trusted host checks current session ownership and permission on each call. */
+  authorize: (scope: Readonly<{subjectRef: string; conversationId: string; taskId: string;
+    authorizationRef: string}>) => boolean | Promise<boolean>;
+}
+
+export interface RevokeHostAuthorizationResult {revoked: boolean; grantPresent: false; approvalRevision: number;}
 
 const CONVERSATION_HISTORY_LIMIT = 20;
 const MODEL_METADATA = /\s*\[model=[^;\]]+;\s*verification=[^;\]]+;\s*tokens=[^\]]+\]\s*$/;
@@ -253,6 +268,49 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   }
 
   readEvents(afterSequence = 0): Event[] { return this.runtime.readEvents(afterSequence); }
+
+  /** Trusted host only: session ownership must be checked on every metadata read. */
+  createEvidenceReader(options: Omit<EvidenceReaderOptions, 'runtime'>): ScopedEvidenceReader {
+    return new ScopedEvidenceReader({...options, runtime: this.runtime});
+  }
+
+  /** Trusted host only. Stops future grant consumption; it cannot undo an execution already started. */
+  async revokeHostAuthorization(input: RevokeHostAuthorizationRequest): Promise<RevokeHostAuthorizationResult> {
+    const bounded = (value: unknown): value is string => typeof value === 'string'
+      && value.length > 0 && value.length <= 256 && value.trim() === value;
+    if (!bounded(input.subjectRef) || !bounded(input.conversationId) || !bounded(input.taskId)
+      || !bounded(input.authorizationRef) || !Number.isInteger(input.expectedApprovalRevision)
+      || input.expectedApprovalRevision < 1 || typeof input.authorize !== 'function') {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Invalid host authorization revocation request');
+    }
+    const scope = Object.freeze({subjectRef: input.subjectRef, conversationId: input.conversationId,
+      taskId: input.taskId, authorizationRef: input.authorizationRef});
+    let allowed = false;
+    try { allowed = await input.authorize(scope) === true; } catch { /* host details stay private */ }
+    if (!allowed) throw new ProtocolError('UNAUTHORIZED', 'Authorization revocation denied');
+    let task: TaskSnapshot;
+    let approval: ReturnType<TaskRuntime['getApproval']>;
+    try {
+      task = this.runtime.getTask(input.taskId);
+      approval = this.runtime.getApproval(input.authorizationRef);
+    } catch {
+      throw new ProtocolError('UNAUTHORIZED', 'Authorization revocation denied');
+    }
+    if (task.conversationId !== input.conversationId || approval.taskId !== input.taskId
+      || approval.state !== 'allowed' || approval.revision !== input.expectedApprovalRevision) {
+      throw new ProtocolError('UNAUTHORIZED', 'Authorization revocation scope changed');
+    }
+    const grant = this.runtime.policy.get(input.authorizationRef);
+    if (grant && (grant.taskId !== input.taskId || grant.toolName !== approval.toolName
+      || grant.argumentsDigest !== approval.argumentsDigest)) {
+      throw new ProtocolError('UNAUTHORIZED', 'Authorization grant binding changed');
+    }
+    const revoked = this.runtime.policy.revoke(input.authorizationRef);
+    if (this.runtime.policy.get(input.authorizationRef)) {
+      throw new ProtocolError('EXTERNAL_FAILURE', 'Authorization revocation readback failed');
+    }
+    return {revoked, grantPresent: false, approvalRevision: approval.revision};
+  }
 
   /** Explicit host preview only; neither this read nor a cloud candidate grants a write. */
   readRepairCandidate(taskId: string): CoordinationRepairCandidateResult | undefined {
