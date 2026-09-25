@@ -34,6 +34,9 @@ interface HostToolIntent extends SubmitHostToolTaskRequest {
 }
 
 export interface HostToolTaskReadback {
+  commandId: string;
+  toolName: string;
+  toolVersion: string;
   task: TaskSnapshot;
   approval?: {approvalId: string; revision: number; state: 'pending' | 'allowed' | 'denied'};
   confirmed?: {runId: string; result: unknown; evidenceRefs: string[]};
@@ -204,7 +207,8 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
         if (!(error instanceof Error && 'code' in error && error.code === 'NOT_FOUND')) throw error;
       }
     }
-    return {task, ...(approval ? {approval} : {}),
+    return {commandId: intent.commandId, toolName: intent.toolName, toolVersion: intent.toolVersion,
+      task, ...(approval ? {approval} : {}),
       ...(task.state === 'succeeded' && result ? {confirmed: {runId, result: result.result, evidenceRefs: [runId]}} : {})};
   }
 

@@ -52,6 +52,8 @@ test('trusted host tool task persists approval and resumes once after restart', 
     taskId = first.task.taskId;
     await waitFor(app, taskId, 'waiting_approval');
     const pending = app.readHostToolTask(taskId);
+    assert.deepEqual([pending.commandId, pending.toolName, pending.toolVersion],
+      [input.commandId, descriptor.name, descriptor.version]);
     assert.equal(pending.approval.state, 'pending');
     assert.equal(writes, 0);
     assert.throws(() => app.submitHostToolTask({...input, arguments: {title: 'Changed'}}),
@@ -63,6 +65,8 @@ test('trusted host tool task persists approval and resumes once after restart', 
       hostUserNamespace: 'user-1', tools: [tool]});
     const duplicate = app.submitHostToolTask(input);
     assert.equal(duplicate.task.taskId, taskId);
+    assert.deepEqual([duplicate.commandId, duplicate.toolName, duplicate.toolVersion],
+      [input.commandId, descriptor.name, descriptor.version]);
     const client = new Client(app, Date.now);
     await client.connect();
     await assert.rejects(client.call('authorization.respond', {approvalId: pending.approval.approvalId,
