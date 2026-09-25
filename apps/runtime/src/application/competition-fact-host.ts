@@ -1,6 +1,7 @@
 import {ProtocolError} from '@personal-agent/contracts';
 import type {FactVersion, MemoryReadContext} from '@personal-agent/memory';
 import {openSqliteMemoryHost} from '@personal-agent/memory/sqlite';
+import {isAbsolute} from 'node:path';
 import type {RuntimeApplication} from './runtime-application.js';
 import {createSqliteFactProjectionHost} from './sqlite-fact-projection.js';
 import type {SqliteFactProjectionHost} from './sqlite-fact-projection.js';
@@ -50,7 +51,8 @@ export function createCompetitionFactHost(
   application: RuntimeApplication, options: CompetitionFactHostOptions
 ): CompetitionFactHost {
   if (application.profile !== 'huawei_ict_agentarts'
-    || !options.memoryPath || !options.memoryNamespace || !options.graphNamespace || !options.consumerKey) {
+    || !isAbsolute(options.memoryPath)
+    || !options.memoryNamespace?.trim() || !options.graphNamespace?.trim() || !options.consumerKey?.trim()) {
     throw new ProtocolError('INVALID_ARGUMENT', 'Invalid Competition Fact host configuration');
   }
   const memory = openSqliteMemoryHost(options.memoryPath);

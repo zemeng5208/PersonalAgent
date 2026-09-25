@@ -18,6 +18,7 @@ import {ScopedEvidenceReader} from './evidence-reader.js';
 import type {EvidenceReaderOptions} from './evidence-reader.js';
 import {createCompetitionFactHost} from './competition-fact-host.js';
 import type {CompetitionFactHost, CompetitionFactHostOptions} from './competition-fact-host.js';
+import {resolve} from 'node:path';
 type SuccessfulResponse = Extract<Response, {outcome: 'ok'}>;
 
 export interface RevokeHostAuthorizationRequest {
@@ -81,8 +82,10 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   private readonly hostUserNamespace: string | undefined;
   private readonly now: () => Date;
   private readonly competitionToolCatalog?: RuntimeCompetitionToolCatalog;
+  private readonly storagePath: string;
 
   constructor(options: RuntimeApplicationOptions) {
+    this.storagePath = resolve(options.path);
     this.profile = options.profile ?? 'local';
     if (!['local', 'huawei_ict_agentarts'].includes(this.profile)
       || (this.profile === 'local' && (options.coordination !== undefined || options.competitionToolExports !== undefined || options.competitionToolAvailability !== undefined || options.repairCandidateVersion !== undefined || options.hostUserNamespace !== undefined))
@@ -273,6 +276,11 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
 
   /** Trusted host only: binds an independently verified public source to durable Fact/Graph projection. */
   createCompetitionFactHost(options: CompetitionFactHostOptions): CompetitionFactHost {
+    const memoryPath = resolve(options.memoryPath);
+    if ((process.platform === 'win32' ? memoryPath.toLowerCase() : memoryPath)
+      === (process.platform === 'win32' ? this.storagePath.toLowerCase() : this.storagePath)) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Competition Memory requires a separate SQLite file');
+    }
     return createCompetitionFactHost(this, options);
   }
 
