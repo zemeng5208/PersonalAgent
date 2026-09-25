@@ -4,6 +4,7 @@ import {GraphError} from './index.js';
 import type {NodeRef, NodeVersion} from './index.js';
 import {createGoal, reviseGoal} from './commands.js';
 import type {GoalInput} from './commands.js';
+import {CoordinationStoreError} from './store.js';
 import type {CoordinationStorePort} from './store.js';
 
 export const GOAL_CREATE_TOOL = 'goals.create';
@@ -88,14 +89,29 @@ function execute(
   }
 }
 
-/** The trusted host injects one user-bound store and registers both tools. */
-export function createGoalTools(store: CoordinationStorePort): readonly [RegisteredTool, RegisteredTool] {
-  if (!store || typeof store.read !== 'function' || typeof store.append !== 'function') {
-    throw new GraphError('INVALID_ARGUMENT', 'Bound goal store required');
+/** Accept a bound store or resolve it lazily after Runtime construction. */
+export function createGoalTools(
+  boundStoreOrResolver: CoordinationStorePort | (() => CoordinationStorePort)
+): readonly [RegisteredTool, RegisteredTool] {
+  if (typeof boundStoreOrResolver !== 'function' && (!boundStoreOrResolver
+    || typeof boundStoreOrResolver.read !== 'function' || typeof boundStoreOrResolver.append !== 'function')) {
+    throw new GraphError('INVALID_ARGUMENT', 'Bound goal store or resolver required');
   }
+  const resolveStore = typeof boundStoreOrResolver === 'function'
+    ? boundStoreOrResolver : () => boundStoreOrResolver;
+  let bound: CoordinationStorePort | undefined;
+  const store = (): CoordinationStorePort => {
+    let selected: CoordinationStorePort;
+    try { selected = resolveStore(); }
+    catch { throw new CoordinationStoreError('STORAGE_UNAVAILABLE'); }
+    if (!selected || typeof selected.read !== 'function' || typeof selected.append !== 'function'
+      || (bound && selected !== bound)) throw new CoordinationStoreError('STORAGE_UNAVAILABLE');
+    bound = selected;
+    return selected;
+  };
   const create: RegisteredTool = {descriptor: descriptor(GOAL_CREATE_TOOL, false),
-    async execute(input, context) { return execute(store, input as GoalToolCreateInput, context, false); }};
+    async execute(input, context) { return execute(store(), input as GoalToolCreateInput, context, false); }};
   const revise: RegisteredTool = {descriptor: descriptor(GOAL_REVISE_TOOL, true),
-    async execute(input, context) { return execute(store, input as GoalToolReviseInput, context, true); }};
+    async execute(input, context) { return execute(store(), input as GoalToolReviseInput, context, true); }};
   return [create, revise];
 }

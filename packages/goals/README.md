@@ -80,10 +80,13 @@ Desktop user command/query path remains a separate integration task.
 
 ## Goal write tools (provisional)
 
-`@personal-agent/goals/tool` exports `createGoalTools(boundStore)`, returning
+`@personal-agent/goals/tool` exports `createGoalTools(boundStoreOrResolver)`, returning
 `goals.create` and `goals.revise` `RegisteredTool` values (version `1.0.0`,
-scope `goals:write`, `local_write`). The trusted host binds the same user graph
-store used by its `hostUserNamespace`, generates or verifies `goal.sourceRef`,
+scope `goals:write`, `local_write`). The trusted host can pass an already bound
+store or a callback that returns one stable, user-bound store after Runtime
+construction. Registration does not call the callback; a missing or changed
+store fails closed at execution. The host
+binds the same graph used by its `hostUserNamespace`, generates or verifies `goal.sourceRef`,
 and passes complete arguments through Runtime's host tool task and Policy.
 Tool arguments contain no namespace. Renderer must not construct a store or
 choose a namespace/source reference.
@@ -100,3 +103,6 @@ Runtime for reconciliation. The tool does not retry an uncertain write.
 This package does not expose a host task or approval entrypoint itself.
 Runtime's host tool task is currently a separate Draft integration, and real
 Desktop user writes need its review, composition, and one target-chain readback.
+The current RuntimeApplication constructor registers descriptors without executing
+host tools; Desktop must bind the store before exposing host commands or resuming
+an approved task.
