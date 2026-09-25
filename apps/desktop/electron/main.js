@@ -101,6 +101,7 @@ let voiceDisposed = false;
 let voiceDisposal;
 let voiceDisposalFailed = false;
 let goalHost;
+let competitionCatalog;
 
 function snapshot(surface) {
   return {
@@ -549,12 +550,21 @@ async function initializeRuntime() {
         throw Error('PA_AGENTARTS_AUTHORIZATION 未配置；Competition Runtime 不会启动');
       }
       const {createGoalHost} = await import('./goal-host.js');
+      const {createWorkspaceReadTool} = await import('@personal-agent/coding-tools');
+      const {createDesktopCompetitionToolCatalog} = await import('./competition-tool-catalog.js');
       const namespace = desktopHost.userNamespace;
       goalHost = createGoalHost(namespace);
+      competitionCatalog = createDesktopCompetitionToolCatalog({
+        rootPath: path.resolve(dir, '../fixtures/agentarts'), createWorkspaceReadTool,
+      });
       runtimeApplication = runtimeModule.createAgentArtsRuntimeApplication({
         path: dbPath,
         hostUserNamespace: namespace,
-        tools: goalHost.tools,
+        tools: [...goalHost.tools, competitionCatalog.tool],
+        responseMode: 'tool-proposal-json',
+        initialRequestMode: 'goal-with-tools-json',
+        competitionToolAvailability: [competitionCatalog.availability],
+        competitionToolExports: [competitionCatalog.export],
         gatewayUrl: process.env.PA_AGENTARTS_GATEWAY_URL ?? '',
         runtimeName: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
         invokeMode: agentArtsInvokeMode,
@@ -873,6 +883,7 @@ app.whenReady().then(async () => {
     try {
       if (runtimeApplication) runtimeApplication.close();
       else runtime?.close?.();
+      competitionCatalog?.close();
     } catch (error) {
       event.preventDefault();
       runtimeError = error instanceof Error ? error.message : 'Runtime 仍有活动任务，无法安全退出';
