@@ -3,9 +3,11 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
 using System.Security.Principal;
+using System.Text;
 using System.Windows.Automation;
 
 [assembly: InternalsVisibleTo("WindowsHost.Timing")]
+[assembly: InternalsVisibleTo("ManualNotepadProbe")]
 
 namespace PersonalAgent.WindowsHost;
 
@@ -60,6 +62,8 @@ public static class NotepadAction
             var root = AutomationElement.FromHandle(target.WindowHandle);
             if (root.Current.ProcessId != target.ProcessId)
                 return new(ActionState.Rejected, "Window identity changed");
+            if (!HasSingleTab(root, target.ProcessId))
+                return new(ActionState.Rejected, "Exactly one Notepad tab is required");
             var edits = root.FindAll(TreeScope.Descendants,
                 new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
             if (edits.Count != 1 || !edits[0].TryGetCurrentPattern(ValuePattern.Pattern, out var pattern))
@@ -84,6 +88,8 @@ public static class NotepadAction
 
             // Read the target again. A successful UIA call alone is never proof of the result.
             var reread = AutomationElement.FromHandle(target.WindowHandle);
+            if (reread.Current.ProcessId != target.ProcessId || !HasSingleTab(reread, target.ProcessId))
+                return new(ActionState.ResultUnknown, "Target tab changed during readback");
             var currentEdits = reread.FindAll(TreeScope.Descendants,
                 new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
             if (currentEdits.Count != 1 ||
@@ -127,15 +133,61 @@ public static class NotepadAction
         try
         {
             using var process = Process.GetProcessById(target.ProcessId);
-            var trustedPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
-                "System32", "notepad.exe");
-            return string.Equals(process.ProcessName, "notepad", StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(process.MainModule?.FileName, trustedPath, StringComparison.OrdinalIgnoreCase) &&
-                process.StartTime.ToUniversalTime() == target.ProcessStartUtc;
+            return IsTrustedNotepadProcess(process) && process.StartTime.ToUniversalTime() == target.ProcessStartUtc;
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or
                                    System.ComponentModel.Win32Exception)
         { return false; }
+    }
+
+    internal static bool IsTrustedNotepadProcess(Process process)
+    {
+        if (!string.Equals(process.ProcessName, "notepad", StringComparison.OrdinalIgnoreCase)) return false;
+        var packageResult = ReadPackageFamily(process, out var family);
+        if (packageResult == 0)
+            return string.Equals(family, "Microsoft.WindowsNotepad_8wekyb3d8bbwe",
+                StringComparison.OrdinalIgnoreCase);
+        if (packageResult != 15700) return false; // APPMODEL_ERROR_NO_PACKAGE
+        var trustedPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+            "System32", "notepad.exe");
+        return string.Equals(process.MainModule?.FileName, trustedPath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int ReadPackageFamily(Process process, out string? family)
+    {
+        family = null;
+        var handle = OpenProcess(0x1000, false, process.Id); // PROCESS_QUERY_LIMITED_INFORMATION
+        if (handle == 0) return -1;
+        try
+        {
+            var familyLength = 0u;
+            var packageResult = GetPackageFamilyName(handle, ref familyLength, null);
+            if (packageResult == 122 && familyLength is > 1 and <= 256)
+            {
+                var buffer = new StringBuilder((int)familyLength);
+                packageResult = GetPackageFamilyName(handle, ref familyLength, buffer);
+                if (packageResult == 0) family = buffer.ToString();
+            }
+            return packageResult;
+        }
+        finally { CloseHandle(handle); }
+    }
+
+    private static bool HasSingleTab(AutomationElement root, int pid)
+    {
+        var tabs = root.FindAll(TreeScope.Descendants,
+            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Tab));
+        if (tabs.Count == 0)
+        {
+            using var process = Process.GetProcessById(pid);
+            return ReadPackageFamily(process, out _) == 15700; // Only classic Notepad may lack tabs.
+        }
+        if (tabs.Count != 1) return false;
+        var items = tabs[0].FindAll(TreeScope.Children,
+            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TabItem));
+        return items.Count == 1 &&
+            items[0].TryGetCurrentPattern(SelectionItemPattern.Pattern, out var selected) &&
+            ((SelectionItemPattern)selected).Current.IsSelected;
     }
 
     private static uint LastInputTick()
@@ -151,4 +203,8 @@ public static class NotepadAction
     [DllImport("user32.dll")] private static extern nint GetForegroundWindow();
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(nint window, out int processId);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool GetLastInputInfo(ref LastInputInfo info);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetPackageFamilyName(nint process, ref uint length, StringBuilder? familyName);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern nint OpenProcess(uint access, bool inherit, int pid);
+    [DllImport("kernel32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool CloseHandle(nint handle);
 }
