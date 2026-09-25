@@ -1,5 +1,5 @@
 import {Orb} from '../features/orb/orb.js';
-import {orbState,stateNames,isTerminal} from '../features/conversation/state.js';
+import {orbState,stateNames,isTerminal,currentTask} from '../features/conversation/state.js';
 import {mountAdmin} from '../features/admin/view.js';
 import {mountWorkspace} from '../features/workspace/view.js';
 import {applyPreferences} from '../ui/preferences.js';
@@ -33,7 +33,7 @@ if(mode==='orb') {
   button.addEventListener('pointerup',finish);button.addEventListener('pointercancel',()=>{if(drag)invoke('orb.dragEnd');start=null;drag=false;});
   button.addEventListener('lostpointercapture',()=>{if(drag)invoke('orb.dragEnd');start=null;drag=false;});
   button.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();invoke('orb.open');}});
-  render=data=>{orb.setLevel(data.audioLevel??0);orb.setState(data.orbStateOverride??orbState(data.tasks.at(-1)));button.setAttribute('aria-label',`PersonalAgent · ${stateNames[data.tasks.at(-1)?.state]??'待机'}`);};
+  render=data=>{const task=currentTask(data.tasks);orb.setLevel(data.audioLevel??0);orb.setState(data.orbStateOverride??orbState(task));button.setAttribute('aria-label',`PersonalAgent · ${stateNames[task?.state]??'待机'}`);};
 } else if(mode==='admin') render=mountAdmin(root,invoke,escape);
 else if(mode==='workspace') render=mountWorkspace(root,invoke,escape);
 else {
@@ -77,7 +77,7 @@ else {
   // voice provider, so it reports unavailable instead of claiming that speech stopped.
   stopButton.onclick=async()=>{window.speechSynthesis?.cancel();try{const result=await invoke('voice.stop');if(!result?.stopped)report(result?.reason??'语音供应商尚未连接');}catch(err){report(err);}};
   root.querySelector('#tasks').onclick=async e=>{const b=e.target.closest('[data-action],[data-ui-action]');if(!b)return;const uiAction=b.dataset.uiAction;if(uiAction==='like'){const on=!likedTasks.has(b.dataset.id);if(on)likedTasks.add(b.dataset.id);else likedTasks.delete(b.dataset.id);b.classList.toggle('active',on);b.setAttribute('aria-pressed',String(on));return;}if(uiAction==='copy'||uiAction==='share'){const task=current?.tasks.find(item=>item.taskId===b.dataset.id);const text=resultText(task?.resultSummary);if(!text)return;try{if(uiAction==='share'&&navigator.share){await navigator.share({text});}else{await invoke('clipboard.writeText',text);b.title=uiAction==='copy'?'已复制':'已复制分享文本';b.setAttribute('aria-label',b.title);setTimeout(()=>{b.title=uiAction==='copy'?'复制':'分享';b.setAttribute('aria-label',`${b.title}回答`);},1600);}}catch(err){if(err?.name!=='AbortError')report(err);}return;}b.disabled=true;try{await invoke(b.dataset.action,b.dataset.id);}catch(err){report(err);}finally{b.disabled=false;}};
-  render=data=>{current=data;const task=data.tasks.at(-1);const connectionNode=root.querySelector('#connection');connectionNode.textContent=data.fakeModel?data.connection+' · Fake Model':data.connection;root.querySelector('#state').textContent=task?stateNames[task.state]:'待机';
+  render=data=>{current=data;const task=currentTask(data.tasks);const connectionNode=root.querySelector('#connection');connectionNode.textContent=data.fakeModel?data.connection+' · Fake Model':data.connection;root.querySelector('#state').textContent=task?stateNames[task.state]:'待机';
     root.querySelector('#error').textContent=data.connectionError??'';
     const modelReady=data.model?.status==='ready';
     // Thinking controls are a local test surface.  They must remain draggable
