@@ -42,6 +42,20 @@ const tone = state => ['ready', 'connected'].includes(state) ? 'ready' : ['unava
 const badge = (label, state) => `<span class="badge" data-tone="${tone(state)}"><span class="badge-dot"></span>${label}</span>`;
 const healthLabels = {ready: 'Runtime 报告就绪', connecting: '连接中', degraded: '降级', reauth_required: '需要重新授权', disconnected: '未连接', unavailable: '不可用'};
 
+export function taskTable(data, escape) {
+  const rows = data.tasks.map(task => {
+    const steps = Array.isArray(task.steps) ? task.steps : [];
+    const evidenceCount = Array.isArray(task.evidenceRefs) ? task.evidenceRefs.length : 0;
+    const summary = task.resultSummary ?? (task.error?.code
+      ? `错误码：${task.error.code}` : 'Runtime 未提供结果摘要');
+    const stepList = steps.length
+      ? `<ol>${steps.map(step => `<li>${escape(step.label)} · ${escape(step.state)}</li>`).join('')}</ol>`
+      : '<p>Runtime 未提供步骤记录。</p>';
+    return `<tr><td>${escape(task.taskId)}</td><td>${stateNames[task.state] ?? escape(task.state)}</td><td>${task.revision}</td><td>${escape(summary)}</td><td><details><summary>步骤 ${steps.length} 项 · Evidence 引用 ${evidenceCount} 条</summary>${stepList}</details></td></tr>`;
+  }).join('');
+  return `<div class="sheet"><h2>任务记录</h2><p class="muted">只展示 Runtime 任务快照；Evidence 引用数量不代表目标系统已核实。此接口未提供任务来源或云端 trace。</p><div class="table-scroll"><table><thead><tr><th>任务</th><th>状态</th><th>版本</th><th>结果摘要</th><th>步骤与证据</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="empty">还没有任务<br>从悬浮面板开始新的对话</td></tr>'}</tbody></table></div></div>`;
+}
+
 export function mountAdmin(root, invoke, escape) {
   let section = 'settings';
   let navigationRevision = -1;
@@ -63,11 +77,6 @@ export function mountAdmin(root, invoke, escape) {
   localSettingsButton.textContent = '桌面设置与恢复';
   localSettingsButton.addEventListener('click', () => window.desktop.openSettings().catch(error => { root.querySelector('#error').textContent = error.message; }));
   root.querySelector('.admin-bar').insertBefore(localSettingsButton, root.querySelector('#admin-close'));
-
-  function taskTable(data) {
-    const rows = data.tasks.map(task => `<tr><td>${escape(task.taskId)}</td><td>${stateNames[task.state] ?? escape(task.state)}</td><td>${task.revision}</td><td>${escape(task.resultSummary ?? '—')}</td></tr>`).join('');
-    return `<div class="sheet"><h2>任务记录</h2><div class="table-scroll"><table><thead><tr><th>任务</th><th>状态</th><th>版本</th><th>结果</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="empty">还没有任务<br>从悬浮面板开始新的对话</td></tr>'}</tbody></table></div></div>`;
-  }
 
   function capabilityTable(data) {
     const status = data.capabilityDirectory ?? {state: 'unavailable', reason: '可信宿主尚未报告能力目录状态'};
@@ -209,7 +218,7 @@ export function mountAdmin(root, invoke, escape) {
     const approvalNow = Date.now();
     let content = '';
     if (section === 'overview') {
-      content = `<p class="muted">把注意力留给重要的事。</p><div class="cards"><div class="card"><span>本次会话任务</span><b>${data.tasks.length}</b></div><div class="card"><span>盘古大模型 2.0</span><b>${modelLabel}</b><span>${escape(modelReason)}</span></div><div class="card"><span>麦克风</span><b>未连接</b><span>语音供应商尚未接入</span></div></div>${taskTable(data)}`;
+      content = `<p class="muted">把注意力留给重要的事。</p><div class="cards"><div class="card"><span>本次会话任务</span><b>${data.tasks.length}</b></div><div class="card"><span>盘古大模型 2.0</span><b>${modelLabel}</b><span>${escape(modelReason)}</span></div><div class="card"><span>麦克风</span><b>未连接</b><span>语音供应商尚未接入</span></div></div>${taskTable(data, escape)}`;
     } else if (section === 'capabilities') {
       content = capabilityTable(data);
     } else if (section === 'models') {
@@ -217,7 +226,7 @@ export function mountAdmin(root, invoke, escape) {
     } else if (section === 'connections') {
       content = healthTable(data);
     } else if (section === 'tasks') {
-      content = taskTable(data);
+      content = taskTable(data, escape);
     } else if (section === 'authorizations') {
       content = authorizationListHtml(data.approvals, escape, approvalNow);
     } else if (directSettings[section]) {
