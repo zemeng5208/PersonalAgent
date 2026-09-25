@@ -145,3 +145,24 @@ caused by the projected Fact versions. `previewProjectedRepair(boundStore, at,
 to that subset on one isolated snapshot. It does not poll the feed, ask
 AgentArts, acknowledge a batch, approve or commit changes. See
 [`MOD-28-PROJECTED-REPAIR-01`](../../docs/modules/MOD-28-PROJECTED-REPAIR-01.md).
+
+`decideCompletedFactProjection(boundStore, decision, input)` is the local
+cognition handoff after a public Fact batch has been durably projected and its
+impact processed. The trusted Runtime caller supplies the projection receipt
+and the completed impact report correlated by the same `batchToken`; an
+unscoped impact array cannot establish that this batch completed. This entry
+checks the current graph revision and recomputes the impact report from the
+bound store before selecting only the projected Facts' RECHECK scope and asking
+for bounded Laya advice. The returned scope can be passed to the existing
+explicit `previewProjectedRepair` path. It does not poll or confirm a feed,
+write the graph, perform a repair, or execute any suggested action. DEP02's
+`readCompletedImpact(batchToken)` exposes the required shape for its fixed
+consumer, but the production composition and joint acceptance are still
+pending. The current module verification uses synthetic data only.
+
+`decideDurableFactProjection(boundStore, decision, scopedHost, input)` first
+calls that exact scoped durable read. A pending batch gives `NOT_APPLICABLE`;
+another consumer's batch remains the host's `NOT_FOUND`. The trusted caller
+must retain the original projection receipt and batch token across restart;
+`drain()` only reports a batch count and watermark and cannot recover those
+identities by itself.
