@@ -16,8 +16,11 @@ const MULTI_EVENTS = Object.freeze([
   'safety:start', 'safety:end',
 ]);
 const SINGLE_EVENTS = Object.freeze(['baseline:start', 'baseline:end']);
+const ERRORS = Object.freeze([
+  'NONE', 'TRANSPORT_ERROR', 'TIMEOUT', 'PLATFORM_ERROR', 'INVALID_OUTPUT',
+]);
 const RECORD_KEYS = Object.freeze([
-  'caseId', 'variant', 'runIndex', 'decision', 'events',
+  'caseId', 'variant', 'runIndex', 'decision', 'errorCode', 'events',
   'traceId', 'durationMs', 'totalTokens',
 ]);
 const CASE_BY_ID = new Map(CASES.map(item => [item.id, item]));
@@ -40,6 +43,8 @@ function validateRecord(item) {
     || !Number.isInteger(item.runIndex)
     || item.runIndex < 1 || item.runIndex > RUNS_PER_CASE
     || (item.decision !== null && !['KEEP', 'RECHECK', 'REJECT'].includes(item.decision))
+    || !ERRORS.includes(item.errorCode)
+    || (item.errorCode === 'NONE') !== (item.decision !== null)
     || !Array.isArray(item.events) || item.events.length > 24
     || item.events.some(event => typeof event !== 'string'
       || ![...MULTI_EVENTS, ...SINGLE_EVENTS].includes(event))
@@ -80,11 +85,13 @@ function summarize(records, variant) {
   const withTrace = selected.filter(item => item.traceId !== null).length;
   const durations = selected.map(item => item.durationMs).filter(value => value !== null);
   const tokens = selected.map(item => item.totalTokens).filter(value => value !== null);
+  const errorCounts = Object.fromEntries(ERRORS.map(code => [code, 0]));
+  for (const item of selected) errorCounts[item.errorCode]++;
   return {
     observed: selected.length,
     expected: expectedCount,
     correct,
-    invalidOutputs: selected.filter(item => item.decision === null).length,
+    errorCounts,
     accuracy: selected.length ? correct / selected.length : null,
     routed,
     routeConformance: selected.length ? routed / selected.length : null,

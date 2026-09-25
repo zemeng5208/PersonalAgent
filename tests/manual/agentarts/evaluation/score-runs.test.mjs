@@ -13,7 +13,7 @@ const route = ['impact:start', 'impact:end', 'repair:start', 'repair:end',
 function records() {
   return ['multi_agent', 'single_workflow'].flatMap(variant => labels.flatMap(
     ([caseId, decision]) => [1, 2, 3].map(runIndex => ({
-      caseId, variant, runIndex, decision,
+      caseId, variant, runIndex, decision, errorCode: 'NONE',
       events: variant === 'multi_agent' ? [...route] : ['baseline:start', 'baseline:end'],
       traceId: `synthetic-${variant}-${caseId}-${runIndex}`,
       durationMs: 10, totalTokens: 20,
@@ -51,4 +51,16 @@ test('rejects duplicate run identity and unredacted record fields', () => {
   const reusedTrace = records();
   reusedTrace[1].traceId = reusedTrace[0].traceId;
   assert.throws(() => scoreAgentArtsRuns(reusedTrace), TypeError);
+});
+
+test('classifies failed calls separately from incorrect decisions', () => {
+  const input = records();
+  input[0].decision = null;
+  input[0].errorCode = 'TIMEOUT';
+  input[0].traceId = null;
+  const report = scoreAgentArtsRuns(input);
+  assert.equal(report.multiAgent.errorCounts.TIMEOUT, 1);
+  assert.equal(report.multiAgent.correct, 8);
+  assert.equal(report.comparisonReady, false);
+  assert.throws(() => scoreAgentArtsRuns([{...input[0], errorCode: 'NONE'}]), TypeError);
 });

@@ -30,14 +30,17 @@ deployment/version；它不能是 Local Profile，也不能用现有 Fake 结果
 ## 脱敏评分输入
 
 `scoreAgentArtsRuns(records)` 接收每次 trace 经独立人工核验后的摘要，严格字段为
-`caseId`、`variant`、`runIndex`、`decision`、`events`、`traceId`、`durationMs`、`totalTokens`。
+`caseId`、`variant`、`runIndex`、`decision`、`errorCode`、`events`、`traceId`、
+`durationMs`、`totalTokens`。
 `variant` 为 `multi_agent` 或 `single_workflow`，`runIndex` 为 1～3。无法从最终输出提取
-限定决策时填 `decision:null`；没有平台 trace/耗时/token 读回时相应字段填 `null`，不要
+限定决策时填 `decision:null` 并选固定 `errorCode`：`TRANSPORT_ERROR`、`TIMEOUT`、
+`PLATFORM_ERROR` 或 `INVALID_OUTPUT`；有可评分决策时只能填 `NONE`。错误码由独立记录者按
+原始回执分类，不能把模型给出的错误文本当作权威。没有平台 trace/耗时/token 读回时相应字段填 `null`，不要
 猜测。耗时以整次调用的毫秒数记录，token 使用该次调用的总量，不重复累加各 span。
 `traceId` 只允许各次运行唯一的脱敏标识符，报告不会回显它。不得把 prompt、响应正文、私人图谱、
 凭据、原始 trace、绝对路径或未审查的云端 JSON 放入该记录。
 
-评分输出包括准确率、无效输出数、角色顺序符合率、交接次数、trace 覆盖率、未验证写入
+评分输出包括准确率、固定错误码计数、角色顺序符合率、交接次数、trace 覆盖率、未验证写入
 场景未给出 `REJECT` 的次数，以及有完整数据时的耗时中位数和 token 总量。只有 18 个槽位均有记录且
 均有 trace 标识时才计算对照差值；报告固定为 `verification:unverified`，因为评分函数
 不能验证标识符真实性、模型配置一致性、人工标签或平台计费。完成声称还需要保存脱敏的
