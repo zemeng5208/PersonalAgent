@@ -12,9 +12,9 @@ export type {GoalRevisionSelectionRequest, GoalRevisionImpact,
 export {selectProjectedRepairScope, previewProjectedRepair} from './projected-repair.js';
 export type {ProjectedRepairInput, ProjectedRepairScope,
   ProjectedRepairRequest, ProjectedRepairPreview} from './projected-repair.js';
-export {decideCompletedFactProjection, decideDurableFactProjection} from './committed-fact-consumer.js';
-export type {CompletedFactProjectionInput,
-  CompletedFactProjectionDecision, CompletedFactImpactReader} from './committed-fact-consumer.js';
+export {decideDurableFactProjection} from './committed-fact-consumer.js';
+export type {DurableFactProjectionInput, CompletedFactProjectionDecision,
+  CompletedFactImpactReader} from './committed-fact-consumer.js';
 export {ProactiveDecisionService, DecisionError, INTERVENTIONS} from './proactive-decision.js';
 export type {DecisionPort, DecisionRequest, DecisionEvent, DecisionSuggestion, DecisionRef,
   BoundedDecisionModel, ModelChoice, Intervention} from './proactive-decision.js';

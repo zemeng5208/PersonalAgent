@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {FakeCoordinationStoreHost} from '@personal-agent/goals/store';
-import {analyzeImpact, decideCompletedFactProjection,
-  decideDurableFactProjection} from '../dist/index.js';
+import {analyzeImpact, decideDurableFactProjection} from '../dist/index.js';
 
 const at = '2026-09-25T09:00:00.000Z';
 const ref = (id, revision = 1) => ({id, revision});
@@ -35,11 +34,13 @@ const decision = {async decide({events}) { return events.map(event => ({
   confidence: null, reason: 'model_unavailable', facts: event.facts,
   authorizationRevision: event.authorization.revision
 })); }};
+const reader = processed => ({readCompletedImpact: () => processed});
 
 test('completed batch reaches only its affected scope and bounded advice', async () => {
   const {store, input} = fixture();
   const before = store.read().revision;
-  const result = await decideCompletedFactProjection(store, decision, input);
+  const {processed, ...request} = input;
+  const result = await decideDurableFactProjection(store, decision, reader(processed), request);
   assert.deepEqual(result.scope.items.map(item => item.node.id), ['goal', 'plan']);
   assert.deepEqual(result.suggestions.map(item => item.intervention), ['ESCALATE_AGENTARTS']);
   assert.equal(store.read().revision, before, 'consumer must not write');
@@ -49,16 +50,15 @@ test('unrelated completion and changed graph cannot be treated as this batch', a
   const {store, input} = fixture();
   let calls = 0;
   const forbidden = {decide() { calls++; throw new Error('must not run'); }};
-  await assert.rejects(() => decideCompletedFactProjection(store, forbidden, {
-    ...input, processed: {...input.processed, batchToken: 'another-batch'}
-  }), {code: 'INVALID_ARGUMENT'});
+  const {processed, ...request} = input;
+  await assert.rejects(() => decideDurableFactProjection(store, forbidden,
+    reader({...processed, batchToken: 'another-batch'}), request), {code: 'INVALID_ARGUMENT'});
   const forged = structuredClone(input.processed.report);
   forged.items[0].action = 'KEEP';
-  await assert.rejects(() => decideCompletedFactProjection(store, forbidden, {
-    ...input, processed: {...input.processed, report: forged}
-  }), {code: 'INVALID_ARGUMENT'});
+  await assert.rejects(() => decideDurableFactProjection(store, forbidden,
+    reader({...processed, report: forged}), request), {code: 'INVALID_ARGUMENT'});
   store.append(store.read().revision, node('later', 'fact'));
-  await assert.rejects(() => decideCompletedFactProjection(store, forbidden, input),
+  await assert.rejects(() => decideDurableFactProjection(store, forbidden, reader(processed), request),
     {code: 'REVISION_CONFLICT'});
   assert.equal(calls, 0);
 });

@@ -12,7 +12,7 @@
 
 ## 已处理批次的认知侧交接
 
-`decideCompletedFactProjection` 接收已持久投影的回执，以及可信 Runtime 宿主按同一 `batchToken` 关联的已处理影响报告。它从绑定图谱重算报告，检查 graph revision 与报告一致，再沿用局部 RECHECK 范围和有界 Laya 建议入口。其返回值只有局部范围与建议；显式修复候选仍走 `previewProjectedRepair`，不能自动提交或执行。
+`decideDurableFactProjection` 接收已持久投影的回执，通过可信 Runtime 宿主按同一 `batchToken` 读回已处理影响报告。它从绑定图谱重算报告，检查 graph revision 与报告一致，再沿用局部 RECHECK 范围和有界 Laya 建议入口。其返回值只有局部范围与建议；显式修复候选仍走 `previewProjectedRepair`，不能自动提交或执行。
 
 目前测试只覆盖合成公共 Fact 更正、批次不匹配、伪造报告和过期图谱。DEP02 #162 已在 `readCompletedImpact(batchToken)` 提供固定消费方作用域的持久完成回执；生产组合、真实来源撤回证明和一次联合验收不在本工作包内。单纯搜索不到来源不能触发撤回。
 

@@ -9,10 +9,13 @@ import {selectProjectedRepairScope} from './projected-repair.js';
 import type {ProjectedRepairInput, ProjectedRepairScope} from './projected-repair.js';
 
 /** Local host handoff after its batch-scoped durable impact completion. */
-export interface CompletedFactProjectionInput extends ProjectedRepairInput {
-  processed: {batchToken: string; report: ImpactReport};
+export interface DurableFactProjectionInput extends ProjectedRepairInput {
   deadline: string;
   signal: AbortSignal;
+}
+
+interface CompletedFactProjectionInput extends DurableFactProjectionInput {
+  processed: {batchToken: string; report: ImpactReport};
 }
 
 export interface CompletedFactProjectionDecision {
@@ -30,7 +33,7 @@ export async function decideDurableFactProjection(
   store: CoordinationStorePort,
   decision: DecisionPort,
   completion: CompletedFactImpactReader,
-  input: Omit<CompletedFactProjectionInput, 'processed'>
+  input: DurableFactProjectionInput
 ): Promise<CompletedFactProjectionDecision> {
   if (!completion || typeof completion.readCompletedImpact !== 'function'
     || !input?.projection || typeof input.projection.batchToken !== 'string'
@@ -45,7 +48,7 @@ export async function decideDurableFactProjection(
  * supply the report with its original batch token; an unscoped report array is
  * not evidence that this batch completed. No feed ack, write or cloud action.
  */
-export async function decideCompletedFactProjection(
+async function decideCompletedFactProjection(
   store: CoordinationStorePort,
   decision: DecisionPort,
   input: CompletedFactProjectionInput
