@@ -208,6 +208,31 @@ test('never-settling permission returns at deadline and allows a later enable', 
   assert.equal(source.subscribeCount, 1);
 });
 
+test('a delayed deadline timer cannot strand a pending authorization after resume', async () => {
+  let currentMs = 0;
+  const clock = {
+    now: () => currentMs,
+    setTimeout: () => ({cancel() {}}),
+  };
+  const source = new FakeWakeSource();
+  let checks = 0;
+  const authorization = {
+    check: () => {
+      checks++;
+      if (checks === 1) return new Promise(() => {});
+      return Promise.resolve({kind: 'allowed', expiresAtMs: 200, revocationSignal: new AbortController().signal});
+    },
+  };
+  const controller = new WakeLifecycleController({authorization, source, clock, onWake: () => {}});
+  const pending = controller.enable({deadlineAtMs: 100});
+  currentMs = 100;
+  assert.deepEqual(await controller.enable({deadlineAtMs: 200}), {kind: 'not_listening', reason: 'expired'});
+  assert.deepEqual(await pending, {kind: 'not_listening', reason: 'expired'});
+  assert.equal(source.subscribeCount, 0);
+  assert.equal((await controller.enable({deadlineAtMs: 200})).kind, 'listening');
+  controller.dispose();
+});
+
 test('dispose returns while permission is pending and consumes a late rejection', async () => {
   const clock = new FakeWakeClock(0);
   const source = new FakeWakeSource();

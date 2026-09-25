@@ -12,7 +12,7 @@ MOD-15 的 provisional 唤醒会话生命周期控制器，目标 Profile 为
 
 `disable()`、`stop()`、宿主撤销、设备不可用、截止时间和 `dispose()` 都会取消当前
 订阅并使旧 epoch 回调失效；宿主休眠后若定时回调延迟，下一次 `enable()` 也会先核对
-旧会话期限并释放过期订阅。播放状态由 MOD-14 调用方通过 `setPlaybackActive()`
+旧会话或待处理授权的期限，释放过期订阅或终止等待。播放状态由 MOD-14 调用方通过 `setPlaybackActive()`
 提供；冷却窗口由构造参数 `cooldownMs` 显式决定，不代表或测量误触率。
 
 MOD-14 等本地宿主可通过 `subscribeLifecycle(listener)` 只读观察固定三字段

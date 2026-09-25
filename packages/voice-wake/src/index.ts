@@ -275,6 +275,10 @@ export class WakeLifecycleController {
     // Never report that the old audio subscription is still authorized.
     if (this.active && now >= this.active.expiresAtMs) this.expire(this.active.epoch);
     if (this.active) return Promise.resolve({kind: 'listening', sessionId: this.active.sessionId, expiresAtMs: this.active.expiresAtMs});
+    if (this.pending && now >= this.pending.deadlineAtMs) {
+      this.pending.deadlineReached.value = true;
+      this.pending.controller.abort();
+    }
     if (this.pending?.promise) return this.pending.promise;
     if (input.deadlineAtMs <= now) {
       this.report('EXPIRED');
