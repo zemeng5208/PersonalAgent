@@ -134,7 +134,9 @@ MOD-04B 的同一份本机脱敏回执
 与本机请求一致；调用树有三段 `UserInput`／模型跨度，末段输出含
 `repair_candidate`。这支持按时间和输入语义关联该次调用，但平台页面未回显调用方
 `X-Request-Id`，本地 HTTP/SSE 也没有服务端 trace ID，因此不是精确 ID join。
-三个跨度没有各自的设计角色或交接标识，不能据此宣称角色路由已验收。根 span
+三个 `UserInput` 是同一 Agent 下的同级跨度；逐段模型元数据的
+`gen_ai.resource.id` 均为主协调器 `32d4…9e79`，未显示三个源工作流 ID、
+各自的设计角色或跨段交接标识，不能据此宣称角色路由已验收。根 span
 元数据的 `resource_version: "draft"` 也不是该请求的运行实例部署版本；未见
 请求级 runtime/deployment/version 字段，不能把 `Latest v8` 或已发布应用版本
 冒充精确绑定。tokens 是平台用量，不是单次账单费用。
