@@ -116,9 +116,11 @@ function fixture(t, overrides = {}) {
       await client.connect();
       const {taskId} = await client.call('task.submit', {goal: 'Read meeting and request repair',
         conversationId: 'synthetic-repair'}, {idempotencyKey: 'source'});
-      assert.equal((await settle(app, taskId, ['waiting_approval', 'failed'])).state, 'waiting_approval');
+      const waiting = await settle(app, taskId, ['waiting_approval', 'failed']);
+      assert.equal(waiting.state, 'waiting_approval', JSON.stringify(waiting.error));
       const originalApproval = await approve(client, taskId);
-      assert.equal((await settle(app, taskId, ['succeeded', 'failed'])).state, 'succeeded');
+      const finished = await settle(app, taskId, ['succeeded', 'failed']);
+      assert.equal(finished.state, 'succeeded', JSON.stringify(finished.error));
       assert.ok(app.readRepairCandidate(taskId));
       assert.equal(app.runtime.bindCoordinationStore(host.graphNamespace).read().revision, 4);
       return {client, taskId, evidenceId: originalApproval.approvalId};
