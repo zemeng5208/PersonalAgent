@@ -3,7 +3,7 @@ import {EventEmitter} from 'node:events';
 import {PassThrough} from 'node:stream';
 import {test} from 'node:test';
 
-import {VOICE_AUDIO_FORMAT} from '../dist/index.js';
+import {VOICE_AUDIO_FORMAT, VoiceSessionError} from '../dist/index.js';
 import {createWindowsSystemSpeechPortsForTesting} from '../dist/windows-system-speech.js';
 
 const deadline = (offsetMs = 2_000) => new Date(Date.now() + offsetMs).toISOString();
@@ -151,7 +151,84 @@ test('invalid requests and malformed or oversized host responses fail locally wi
       && error.message === 'Windows System.Speech is unavailable',
   );
   assert.equal(policyBlocked.calls.length, 1);
+
+  const speechBlocked = factory(process => process.respond('', 1));
+  await assert.rejects(
+    speechBlocked.ports.output.speak(speechRequest()).result,
+    error => error.code === 'UNSUPPORTED_CAPABILITY'
+      && error.message === 'Windows System.Speech is unavailable',
+  );
+  assert.equal(speechBlocked.calls.length, 1);
+
   await ports.dispose();
   await oversized.ports.dispose();
   await policyBlocked.ports.dispose();
+  await speechBlocked.ports.dispose();
+});
+
+test('unavailable host spawner failure reports unsupported capability for speech and recognition', async () => {
+  const ports = createWindowsSystemSpeechPortsForTesting(() => {
+    throw new VoiceSessionError('UNSUPPORTED_CAPABILITY', 'Windows System.Speech is unavailable');
+  });
+  await assert.rejects(
+    ports.output.speak(speechRequest()).result,
+    error => error.code === 'UNSUPPORTED_CAPABILITY'
+      && error.message === 'Windows System.Speech is unavailable',
+  );
+  await assert.rejects(
+    ports.recognition.recognize(recognitionRequest()).result,
+    error => error.code === 'UNSUPPORTED_CAPABILITY'
+      && error.message === 'Windows System.Speech is unavailable',
+  );
+  await ports.dispose();
+});
+
+test('host process spawn error terminates with fixed failure without leaking details', async () => {
+  const {ports, calls} = factory(process => {
+    process.emit('error', new Error('spawn failure'));
+  });
+  await assert.rejects(
+    ports.output.speak(speechRequest()).result,
+    error => error.code === 'EXTERNAL_FAILURE'
+      && error.message === 'Windows speech operation failed',
+  );
+  assert.equal(calls.length, 1);
+  await ports.dispose();
+});
+
+test('host unsupported capability envelope reports unavailable capability without retry', async () => {
+  const speakUnsupported = factory(process => {
+    process.respond({ok: false, code: 'UNSUPPORTED_CAPABILITY'}, 2);
+  });
+  await assert.rejects(
+    speakUnsupported.ports.output.speak(speechRequest()).result,
+    error => error.code === 'UNSUPPORTED_CAPABILITY'
+      && error.message === 'Windows System.Speech is unavailable',
+  );
+  assert.equal(speakUnsupported.calls.length, 1);
+  await speakUnsupported.ports.dispose();
+
+  const recUnsupported = factory(process => {
+    process.respond({ok: false, code: 'UNSUPPORTED_CAPABILITY'}, 2);
+  });
+  await assert.rejects(
+    recUnsupported.ports.recognition.recognize(recognitionRequest()).result,
+    error => error.code === 'UNSUPPORTED_CAPABILITY'
+      && error.message === 'Windows System.Speech is unavailable',
+  );
+  assert.equal(recUnsupported.calls.length, 1);
+  await recUnsupported.ports.dispose();
+});
+
+test('host external failure envelope reports operation failed without leaking text', async () => {
+  const {ports, calls} = factory(process => {
+    process.respond({ok: false, code: 'EXTERNAL_FAILURE'}, 1);
+  });
+  await assert.rejects(
+    ports.output.speak(speechRequest()).result,
+    error => error.code === 'EXTERNAL_FAILURE'
+      && error.message === 'Windows speech operation failed',
+  );
+  assert.equal(calls.length, 1);
+  await ports.dispose();
 });
