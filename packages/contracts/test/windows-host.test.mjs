@@ -89,6 +89,9 @@ test('observation can refuse an absent or ambiguous target without a transport f
   assert.throws(() => validateWindowsHostObservation(observe, {...refusal, requestId: 'other'}));
   assert.throws(() => parseWindowsHostFrame({...refusal, errorCode: 'SUCCESS'}));
   assert.throws(() => parseWindowsHostFrame({...refusal, hwnd: 123}));
+  assert.throws(() => validateWindowsHostObservation(observe,
+    {kind: 'status_reply', ...base, sessionId: ack.sessionId,
+      taskId: 'task-1', runId: 'run-1', state: 'not_found'}));
 });
 
 test('malformed and capability-forged frames fail closed', () => {

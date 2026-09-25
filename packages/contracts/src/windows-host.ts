@@ -71,7 +71,8 @@ export function encodeWindowsHostFrame(value: WindowsHostFrame): Uint8Array {
 /** Call only after verifying the pipe peer belongs to the expected current-user process. */
 export function validateWindowsHostHandshake(hello: WindowsHostHello, ack: WindowsHostHelloAck, bind: WindowsHostBind): void {
   parseWindowsHostFrame(hello); parseWindowsHostFrame(ack); parseWindowsHostFrame(bind);
-  if (hello.requestId !== ack.requestId || hello.clientNonce !== ack.clientNonce
+  if (hello.kind !== 'hello' || ack.kind !== 'hello_ack' || bind.kind !== 'bind'
+    || hello.requestId !== ack.requestId || hello.clientNonce !== ack.clientNonce
     || ack.sessionId !== bind.sessionId || ack.hostNonce !== bind.hostNonce
     || hello.protocolVersion !== ack.protocolVersion || ack.protocolVersion !== bind.protocolVersion) {
     invalid('Windows Host handshake correlation mismatch');
@@ -81,14 +82,16 @@ export function validateWindowsHostHandshake(hello: WindowsHostHello, ack: Windo
 export function validateWindowsHostObservation(request: WindowsHostObserve,
   reply: WindowsHostObserved | WindowsHostObservationRefused): void {
   parseWindowsHostFrame(request); parseWindowsHostFrame(reply);
-  if (request.requestId !== reply.requestId || request.sessionId !== reply.sessionId
+  if (request.kind !== 'observe' || !['observed', 'observation_refused'].includes(reply.kind)
+    || request.requestId !== reply.requestId || request.sessionId !== reply.sessionId
     || request.protocolVersion !== reply.protocolVersion) invalid('Windows Host observation correlation mismatch');
 }
 
 /** A status poll may use a new requestId; pass it explicitly while retaining the original execute frame. */
 export function validateWindowsHostResult(request: WindowsHostExecute, reply: WindowsHostResult, responseRequestId = request.requestId): void {
   parseWindowsHostFrame(request); parseWindowsHostFrame(reply);
-  if (reply.requestId !== responseRequestId || reply.sessionId !== request.sessionId
+  if (request.kind !== 'execute' || reply.kind !== 'result'
+    || reply.requestId !== responseRequestId || reply.sessionId !== request.sessionId
     || reply.protocolVersion !== request.protocolVersion || reply.taskId !== request.taskId
     || reply.runId !== request.runId || reply.toolName !== request.toolName
     || reply.toolVersion !== request.toolVersion || reply.argumentsDigest !== request.argumentsDigest
@@ -99,7 +102,8 @@ export function validateWindowsHostResult(request: WindowsHostExecute, reply: Wi
 
 export function validateWindowsHostStatus(request: WindowsHostStatus, reply: WindowsHostStatusReply | WindowsHostResult): void {
   parseWindowsHostFrame(request); parseWindowsHostFrame(reply);
-  if (reply.requestId !== request.requestId || reply.sessionId !== request.sessionId
+  if (request.kind !== 'status' || !['status_reply', 'result'].includes(reply.kind)
+    || reply.requestId !== request.requestId || reply.sessionId !== request.sessionId
     || reply.protocolVersion !== request.protocolVersion || reply.taskId !== request.taskId
     || reply.runId !== request.runId || (reply.kind === 'result' && (
       reply.toolName !== request.toolName || reply.toolVersion !== request.toolVersion
