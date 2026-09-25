@@ -88,11 +88,18 @@ MOD-04B 在其忽略目录保存了 `mod04b-nonmeeting-2026-09-25T11-30-13.198Z.
 | 可观察项 | 本次值 | 评估边界 |
 | --- | --- | --- |
 | 云请求与协议 | 1 次、HTTP 200、完整 SSE、strict parser accepted、`repair_candidate` 契约匹配 | 只证明该次云输出可被本地适配器接受 |
-| Workflow 事件 | start 3、end 3、error 0、任务终结事件齐全 | 仅为数量配平；没有角色名称、身份和顺序读回，不能计角色路由或交接正确率 |
-| 完成与成本 | result 324 字符；usage、请求级 trace 关联和部署版本缺失 | 不能计决策准确率、耗时/token 对照或协作提升 |
+| Workflow 事件 | start 3、end 3、error 0、任务终结事件齐全 | 仅为数量配平；平台 span 未给设计角色名称或交接标识，不能计角色路由或交接正确率 |
+| 平台观测 | MOD-29 按时间和合成输入关联一条 trace，38,937 ms、3,365 input + 2,288 output = 5,653 tokens | 平台未回显 caller request ID，本地响应无 server trace ID；这是条件关联，不是请求级精确匹配或计费证明 |
+| 输出质量 | result 324 字符；本地 `repair_candidate` 契约匹配 | 无独立固定案例标签、角色交接或对照，不能计决策准确率或协作提升 |
 | 本地动作 | `localToolExecuted=false`、`graphWritten=false`、`localFallback=false` | 不构成授权执行、目标读回或修复完成证据 |
 
+MOD-29 的唯一平台记录只读关联者读回 trace `668cded1dd4cb0de4a38bae90cf9736d`，时间
+为 19:30:13 CST；其中合成 factChange/draft-review 输入及末段 `repair_candidate` 与本地
+回执语义相符。三个 UserInput/模型 span 均未给出各设计角色名称或交接标识。根 span 的
+`resource_version:"draft"` 不能当作该请求的运行时 deployment version；平台也未提供
+请求级费用。本包未自行访问平台或再次调用。
+
 该回执没有固定案例 ID 和可独立复核的 `KEEP/RECHECK/REJECT` 判读，也没有可输入评分器的
-逐角色事件与 trace 标识。因此不创建伪造的 `scoreAgentArtsRuns` 记录；此处仅报告协议和
-事件数量的观察结果。后续复用 MOD-29 的平台 trace 读回补充真实角色字段；只有字段实际
-存在时才记路由/交接，仍不从三个 Workflow 数量推断三角色协作有效。
+逐角色事件；平台 trace 与本地请求仅条件关联。因此不创建伪造的 `scoreAgentArtsRuns` 记录。
+此处仅报告协议、事件数量及条件关联的平台耗时/token，不从三个 Workflow 数量推断三角色
+协作有效。
