@@ -2,7 +2,7 @@ import type {MemoryReadContext} from '@personal-agent/memory';
 import type {SqliteMemoryHost} from '@personal-agent/memory/sqlite';
 import type {TaskRuntime} from '../index.js';
 import {FactProjectionError} from '../fact-projection-store.js';
-import type {CompletedFactImpact} from '../fact-projection-store.js';
+import type {CompletedFactImpact, FactImpactReceipt} from '../fact-projection-store.js';
 import {createMemoryProjectionApplication, createPendingImpactApplication} from './memory.js';
 import type {MemoryProjectionResult} from './memory.js';
 
@@ -27,6 +27,8 @@ export interface SqliteFactProjectionHost {
   processImpacts(request: MemoryReadContext & {readonly at: string; readonly limit: number}): readonly CompletedFactImpact[];
   /** Exact durable receipt for a batch this consumer owns; undefined while pending. */
   readCompletedImpact(batchToken: string): CompletedFactImpact | undefined;
+  /** Stable scoped cursor for recovery after project or complete commits before returning. */
+  listImpactReceipts(request: {readonly afterGraphRevision: number; readonly limit: number}): readonly FactImpactReceipt[];
 }
 
 /**
@@ -71,5 +73,7 @@ export function createSqliteFactProjectionHost(options: SqliteFactProjectionHost
     readCompletedImpact: (batchToken: string) => projection.readCompletedImpact({
       consumerKey, memoryNamespace, batchToken,
     }),
+    listImpactReceipts: (request: {readonly afterGraphRevision: number; readonly limit: number}) =>
+      projection.listImpactReceipts({consumerKey, memoryNamespace, ...request}),
   });
 }

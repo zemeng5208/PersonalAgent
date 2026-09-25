@@ -35,10 +35,14 @@ test('trusted SQLite feed binding confirms public source corrections across rest
       {batches: 1, atWatermark: true});
     assert.equal(runtime.bindCoordinationStore(graph).read().history.length, 1);
     assert.equal(runtime.bindFactProjectionStore(graph).readPending().length, 1);
+    const firstReceipt = app.listImpactReceipts({afterGraphRevision: 0, limit: 10});
+    assert.equal(firstReceipt.length, 1);
+    assert.equal(firstReceipt[0].completed, undefined);
 
     memory.close(); runtime.close();
     memory = openSqliteMemoryHost(memoryPath);
     runtime = new TaskRuntime(runtimePath);
+    assert.deepEqual(bind().listImpactReceipts({afterGraphRevision: 0, limit: 10}), firstReceipt);
     const second = memory.appendPublicSource(namespace, {...source,
       sourceRevision: 'b'.repeat(64), line: 3, summary: 'Synthetic public meeting at 18:00',
       observedAt: '2026-09-25T01:00:00.000Z', validFrom: '2026-09-25T00:00:00.000Z',
@@ -64,11 +68,21 @@ test('trusted SQLite feed binding confirms public source corrections across rest
       {batches: 1, atWatermark: true});
     assert.equal(runtime.bindCoordinationStore(graph).read().history.length, 3);
     assert.equal(runtime.bindFactProjectionStore(graph).readPending().length, 3);
+    const recoverable = bind().listImpactReceipts({afterGraphRevision: firstReceipt[0].projection.graphRevision, limit: 10});
+    assert.equal(recoverable.length, 2);
+    assert.ok(recoverable.every(item => item.completed === undefined));
     assert.deepEqual((await memory.bind(namespace, {allowedSensitivities: ['public']})
       .listCurrent({at: '2026-09-25T03:00:00.000Z', limit: 10, ...context()})).facts, []);
     assert.deepEqual(await bind().drain({limit: 1, maxBatches: 3, ...context()}),
       {batches: 1, atWatermark: true});
     assert.equal(runtime.bindCoordinationStore(graph).read().history.length, 3);
+    const completed = bind().processImpacts({at: '2026-09-25T03:00:00.000Z', limit: 3, ...context()});
+    assert.equal(completed.length, 3);
+    const completedReceipts = bind().listImpactReceipts({afterGraphRevision: 0, limit: 10});
+    assert.deepEqual(new Map(completedReceipts.map(item => [item.projection.batchToken, item.completed])),
+      new Map(completed.map(item => [item.batchToken, item])));
+    assert.deepEqual(bind().listImpactReceipts({afterGraphRevision: completedReceipts.at(-1).projection.graphRevision,
+      limit: 10}), []);
   } finally {
     memory.close(); runtime.close();
     await rm(directory, {recursive: true, force: true});
@@ -99,9 +113,16 @@ test('shared graph keeps pending impact receipts within each fixed consumer scop
       memoryNamespace: 'memory-a', graphNamespace, consumerKey: 'consumer-a'});
     const batchA = await hostA.consume({limit: 10, ...context()});
     assert.equal(runtime.bindFactProjectionStore(graphNamespace).readPending().length, 2);
+    assert.deepEqual(hostA.listImpactReceipts({afterGraphRevision: 0, limit: 1})
+      .map(item => item.projection.batchToken), [batchA.batch.batchToken]);
+    assert.deepEqual(hostB.listImpactReceipts({afterGraphRevision: 0, limit: 1})
+      .map(item => item.projection.batchToken), [batchB.batch.batchToken]);
+    assert.throws(() => hostA.listImpactReceipts({afterGraphRevision: 0, limit: 101}),
+      {code: 'INVALID_ARGUMENT'});
     const processedA = hostA.processImpacts({at: '2026-09-25T03:00:00.000Z', limit: 1, ...context()});
     assert.deepEqual(processedA.map(item => item.batchToken), [batchA.batch.batchToken]);
     assert.deepEqual(hostA.readCompletedImpact(batchA.batch.batchToken), processedA[0]);
+    assert.deepEqual(hostA.listImpactReceipts({afterGraphRevision: 0, limit: 1})[0].completed, processedA[0]);
     assert.throws(() => hostA.readCompletedImpact(batchB.batch.batchToken), {code: 'NOT_FOUND'});
     assert.equal(hostB.readCompletedImpact(batchB.batch.batchToken), undefined);
     assert.equal(runtime.bindFactProjectionStore(graphNamespace).readPending().length, 1);

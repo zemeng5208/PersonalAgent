@@ -63,8 +63,13 @@ for the precise offline boundary and the unresolved real cloud/MCP lifecycle.
   batch; `drain` catches up within an explicit batch limit and reports whether it
   reached the watermark. `processImpacts` filters pending items by the fixed
   consumer/Memory namespace before applying its limit and returns batch-tokened
-  completed reports; `readCompletedImpact` reads that exact durable receipt after
-  restart. A trusted host must trigger it after verified source
+  completed reports; `readCompletedImpact` reads one known token. For a crash after
+  projection or completion commits but before the token is returned,
+  `listImpactReceipts({afterGraphRevision, limit})` pages pending and completed
+  receipts by increasing graph revision within that fixed consumer scope. The
+  consumer persists its last fully handled graph revision only after processing
+  the page. Batches without new Fact nodes need no cognition impact receipt.
+  A trusted host must trigger it after verified source
   changes and on startup recovery; it does not poll private sources or publish to
   AgentArts. Source correction and withdrawal remain append-only Fact revisions.
 - Explicit task transition rules and immutable terminal states.
