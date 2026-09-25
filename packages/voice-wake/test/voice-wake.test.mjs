@@ -82,6 +82,23 @@ test('expiry cancels the source and cannot be bypassed by a late event', async (
   assert.equal(controller.snapshot().state, 'disabled');
 });
 
+test('enable releases an expired source when a suspended host has not fired its timer', async () => {
+  let currentMs = 0;
+  const clock = {
+    now: () => currentMs,
+    setTimeout: () => ({cancel() {}}),
+  };
+  const {controller, source, errors} = setup({clock});
+  assert.equal((await enable(controller)).kind, 'listening');
+  assert.equal(source.activeSubscriptions, 1);
+
+  currentMs = 100;
+  assert.deepEqual(await enable(controller), {kind: 'not_listening', reason: 'expired'});
+  assert.equal(source.activeSubscriptions, 0);
+  assert.equal(controller.snapshot().state, 'disabled');
+  assert.equal(errors[0]?.code, 'EXPIRED');
+});
+
 test('device loss stops listening without exposing source details', async () => {
   const {controller, source, errors} = setup();
   await enable(controller);

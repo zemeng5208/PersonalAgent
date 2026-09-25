@@ -269,10 +269,13 @@ export class WakeLifecycleController {
       throw new WakeLifecycleError('INVALID_ARGUMENT');
     }
     if (this.disposed) return Promise.resolve({kind: 'not_listening', reason: 'disposed'});
-    if (this.active) return Promise.resolve({kind: 'listening', sessionId: this.active.sessionId, expiresAtMs: this.active.expiresAtMs});
-    if (this.pending?.promise) return this.pending.promise;
     const now = this.clock.now();
     if (!finiteTime(now)) throw new WakeLifecycleError('INVALID_ARGUMENT');
+    // A suspended host may resume after the expiry before its timer callback runs.
+    // Never report that the old audio subscription is still authorized.
+    if (this.active && now >= this.active.expiresAtMs) this.expire(this.active.epoch);
+    if (this.active) return Promise.resolve({kind: 'listening', sessionId: this.active.sessionId, expiresAtMs: this.active.expiresAtMs});
+    if (this.pending?.promise) return this.pending.promise;
     if (input.deadlineAtMs <= now) {
       this.report('EXPIRED');
       return Promise.resolve({kind: 'not_listening', reason: 'expired'});
