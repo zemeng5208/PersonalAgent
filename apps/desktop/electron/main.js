@@ -849,20 +849,23 @@ app.whenReady().then(async () => {
       publish();
       return;
     }
+    try {
+      if (runtimeApplication) runtimeApplication.close();
+      else runtime?.close?.();
+    } catch (error) {
+      event.preventDefault();
+      app.isQuitting = false;
+      runtimeError = error instanceof Error ? error.message : 'Runtime 仍有活动任务，无法安全退出';
+      publish();
+      return;
+    }
+    try { syntheticRepairHost?.close(); }
+    catch { console.error('Synthetic repair host failed to close'); }
     app.isQuitting = true;
     clearInterval(poll);
     clearInterval(eventPoll);
     tray?.destroy();
     runtimeConnection?.dispose?.();
-    try {
-      syntheticRepairHost?.close();
-      if (runtimeApplication) runtimeApplication.close();
-      else runtime?.close?.();
-    } catch (error) {
-      event.preventDefault();
-      runtimeError = error instanceof Error ? error.message : 'Runtime 仍有活动任务，无法安全退出';
-      publish();
-    }
   });
   app.on('window-all-closed', event => event.preventDefault());
 }).catch(error => { console.error(error); app.exit(1); });
