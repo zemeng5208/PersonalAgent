@@ -123,11 +123,14 @@ export function mountAdmin(root, invoke, escape) {
     : data.capabilityDirectory?.reason ?? '能力目录状态未报告';
 
   function settingsPane(data, selected = 'general') {
-    const modelStatus = data.model?.status === 'ready' ? '已测试并连接' : data.model?.configured ? '已配置，等待测试' : '未配置';
+    const agentArts = data.model?.provider === 'agentarts';
+    const modelStatus = agentArts
+      ? data.model?.configured && data.model?.status !== 'error' ? '由可信主进程配置；任务仍需读回验证' : '不可用'
+      : data.model?.status === 'ready' ? '已测试并连接' : data.model?.configured ? '已配置，等待测试' : '未配置';
     const panes = {
       general: ['常规', '管理应用的基础行为与入口',
         settingRow('界面语言', '当前版本提供简体中文', '<span class="value-pill">简体中文</span>') +
-        settingRow('模型与 API', '模型、Endpoint 和密钥在独立页面管理', '<button class="btn btn-sm" data-jump="models">打开模型</button>') +
+        settingRow('模型与 API', agentArts ? 'AgentArts 配置由可信主进程提供；本页只查看状态' : '模型、Endpoint 和密钥在独立页面管理', '<button class="btn btn-sm" data-jump="models">打开模型</button>') +
         settingRow('开机启动', '宿主能力尚未接入', '<span class="status-note">待接入</span>', 'is-unavailable') +
         settingRow('后台驻留', '关闭面板后托盘仍保持运行', '<span class="value-pill">已启用</span>')],
       appearance: ['外观', '延续 ORB-02 冷光青与标准毛玻璃设计',
@@ -149,8 +152,10 @@ export function mountAdmin(root, invoke, escape) {
         settingRow('系统通知', 'Windows 通知宿主尚未接入', '<span class="status-note">待接入</span>', 'is-unavailable') +
         settingRow('授权提醒', '待处理授权会出现在“授权”页面', '<button class="btn btn-sm" data-jump="authorizations">查看授权</button>')],
       privacy: ['隐私与数据', '敏感数据与本地运行边界',
-        settingRow('API Key', data.model?.persisted ? '由 Windows 安全存储加密' : '尚未持久化到本机安全存储', `<span class="value-pill">${data.model?.persisted ? '已加密' : '未保存'}</span>`) +
-        settingRow('模型状态', modelStatus, '<button class="btn btn-sm" data-jump="models">管理</button>') +
+        (agentArts
+          ? settingRow('AgentArts 凭据', '由可信主进程管理；后台不读取凭据或保存状态', '<span class="status-note">只读</span>')
+          : settingRow('API Key', data.model?.persisted ? '由 Windows 安全存储加密' : '尚未持久化到本机安全存储', `<span class="value-pill">${data.model?.persisted ? '已加密' : '未保存'}</span>`)) +
+        settingRow('模型状态', modelStatus, `<button class="btn btn-sm" data-jump="models">${agentArts ? '查看状态' : '管理'}</button>`) +
         settingRow('任务数据', '本地 Runtime 按公共契约保存；界面不绕过 Runtime', '<span class="value-pill">本地</span>') +
         settingRow('数据导出与清除', '对应模块尚未接入，避免提供无效操作', '<span class="status-note">待接入</span>', 'is-unavailable')],
       permissions: ['权限', '所有副作用操作都由 Runtime 校验',
@@ -212,13 +217,19 @@ export function mountAdmin(root, invoke, escape) {
     const connection = data.connectionError ? `${data.connection} · ${data.connectionError}` : data.connection;
     root.querySelector('#connection').textContent = `${connection}。未连接的能力会保持明确的不可用状态。`;
     root.querySelectorAll('[data-page]').forEach(button => button.setAttribute('aria-current', button.dataset.page === section ? 'page' : 'false'));
-    const modelLabel = data.model?.status === 'ready' ? '已连接' : '未连接';
+    const agentArts = data.model?.provider === 'agentarts';
+    const modelTitle = agentArts ? 'AgentArts · Competition Profile'
+      : data.model?.provider === 'fake' ? 'Fake Model · 离线测试' : '盘古大模型 2.0';
+    const modelLabel = agentArts
+      ? data.model?.configured && data.model?.status !== 'error' ? '已配置' : '不可用'
+      : data.model?.provider === 'fake' ? '离线联调'
+        : data.model?.status === 'ready' ? '已连接' : '未连接';
     const modelReason = data.model?.reason ?? '模型 Provider 状态未知';
     // The HTML and expiry selection must describe the same instant.
     const approvalNow = Date.now();
     let content = '';
     if (section === 'overview') {
-      content = `<p class="muted">把注意力留给重要的事。</p><div class="cards"><div class="card"><span>本次会话任务</span><b>${data.tasks.length}</b></div><div class="card"><span>盘古大模型 2.0</span><b>${modelLabel}</b><span>${escape(modelReason)}</span></div><div class="card"><span>麦克风</span><b>未连接</b><span>语音供应商尚未接入</span></div></div>${taskTable(data, escape)}`;
+      content = `<p class="muted">把注意力留给重要的事。</p><div class="cards"><div class="card"><span>本次会话任务</span><b>${data.tasks.length}</b></div><div class="card"><span>${modelTitle}</span><b>${modelLabel}</b><span>${escape(modelReason)}</span></div><div class="card"><span>麦克风</span><b>未连接</b><span>语音供应商尚未接入</span></div></div>${taskTable(data, escape)}`;
     } else if (section === 'capabilities') {
       content = capabilityTable(data);
     } else if (section === 'models') {
