@@ -184,6 +184,21 @@ duration; capacity overflow fails without truncation.
 the deadline timer remains active while the buffer is idle and all terminal paths detach
 the timer and abort listener. This helper owns no session or Runtime state, emits no audio
 logs, and cannot translate cancellation into `task.cancel`.
+## Explicit Runtime transcript consumption
+
+`RuntimeClientTranscriptConsumer` is a trusted-host `TranscriptConsumerPort` adapter for
+an already connected public `@personal-agent/client`. It remains idle until the caller
+explicitly invokes `consumeTranscript`. That call submits the transcript as the
+`task.submit` goal with the configured `conversationId` and a stable bounded idempotency
+key, then reads `task.get` until Runtime reports a terminal state. Submission acceptance,
+`waiting_approval`, and every other non-terminal state are not treated as a reply.
+
+Only a successful task's bounded `resultSummary` becomes reply text. Runtime and transport
+failures use fixed local errors without external messages. Deadline, parent abort, and
+`VoiceOperation.stop()` bound submit, polling, and non-cooperative Client promises, but
+they stop only this adapter's local wait: the adapter never calls `task.cancel`, retries a
+submission, starts Runtime directly, or invents terminal state. Real local Runtime
+composition remains a separate host-level acceptance step.
 
 ## Fake use and verification
 
