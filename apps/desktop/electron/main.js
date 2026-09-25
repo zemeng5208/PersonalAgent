@@ -10,6 +10,7 @@ import {Conversations} from './conversations.js';
 import {createDesktopHost} from './desktop-host.js';
 import {desktopDataPaths} from './data-paths.js';
 import {restoreSyntheticRepairSubmission} from './competition-repair-submission.js';
+import {readCapabilityDirectory} from './capability-directory.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -66,6 +67,8 @@ let connectionLabel = '未连接 Runtime';
 let runtimeError = '';
 let capabilities = [];
 let health = [];
+let capabilityDirectory = {state: 'loading', reason: '正在读取 Runtime 能力目录'};
+let capabilityReadRevision = 0;
 const modelConfig = {
   baseUrl: process.env.PANGU_BASE_URL ?? '',
   model: process.env.PANGU_MODEL ?? 'pangu-nlp-n1-32k',
@@ -116,6 +119,7 @@ function snapshot(surface) {
     conversation: surface ?? 'all',
     capabilities: structuredClone(capabilities),
     health: structuredClone(health),
+    capabilityDirectory: {...capabilityDirectory},
     approvals: [...approvals.values()],
     notifications: [...notifications.values()],
     model: structuredClone(model),
@@ -500,15 +504,16 @@ async function pumpEvents() {
 }
 
 async function syncCapabilities() {
-  try {
-    const result = await client.call('capability.list', {});
-    capabilities = result.manifests ?? [];
-    health = result.health ?? [];
-  } catch (error) {
-    capabilities = [];
-    health = [];
-    if (error?.code !== 'UNSUPPORTED_CAPABILITY') runtimeError = error instanceof Error ? error.message : '能力目录读取失败';
-  }
+  const revision = ++capabilityReadRevision;
+  capabilityDirectory = {state: 'loading', reason: '正在读取 Runtime 能力目录'};
+  capabilities = [];
+  health = [];
+  publish();
+  const result = await readCapabilityDirectory(client);
+  if (revision !== capabilityReadRevision) return;
+  capabilities = result.manifests;
+  health = result.health;
+  capabilityDirectory = result.status;
 }
 
 async function syncRuntimeSnapshots() {
