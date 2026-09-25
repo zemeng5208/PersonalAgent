@@ -58,22 +58,33 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
     if (releaseError) throw releaseError;
   }
 
-  async function beginCapture(senderId) {
+  function startCaptureRecord(senderId, reuseAuthorizedCapture = false) {
     if (!enabled || disposed) throw Error('语音试用当前不可用');
     if (!Number.isSafeInteger(senderId) || senderId <= 0) throw Error('语音操作来源不受信任');
     if (active) throw Error('请先结束当前语音会话');
-    microphoneHost.authorize();
     const controller = new AbortController();
     const captureDeadline = new Date(now() + CAPTURE_MS).toISOString();
     const sessionDeadline = new Date(now() + SESSION_MS).toISOString();
+    const buffer = createBuffer({signal: controller.signal, deadline: sessionDeadline, maxDurationMs: CAPTURE_MS});
+    try {
+      if (!reuseAuthorizedCapture) microphoneHost.authorize();
+    } catch (error) {
+      buffer.dispose();
+      throw error;
+    }
     const record = {senderId, controller, captureDeadline, sessionDeadline, phase: 'acquiring', subscription: undefined,
-      buffer: createBuffer({signal: controller.signal, deadline: sessionDeadline, maxDurationMs: CAPTURE_MS}),
+      buffer,
       sessionId: undefined, replyId: undefined};
     active = record;
     lastError = '';
     publish();
+    return record;
+  }
+
+  async function runCapture(record) {
+    const {senderId} = record;
     try {
-      record.subscription = source.subscribe({signal: controller.signal, deadline: captureDeadline,
+      record.subscription = source.subscribe({signal: record.controller.signal, deadline: record.captureDeadline,
         onFrame: frame => {
           if (active !== record || record.phase !== 'acquiring' && record.phase !== 'listening') return;
           try { record.buffer.append(frame.data); }
@@ -91,8 +102,8 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
         },
       });
       await record.subscription.ready;
-      if (active !== record || controller.signal.aborted) throw Error('语音采集已取消');
-      const session = await manager.start({deadline: sessionDeadline, signal: controller.signal, locale: 'zh-CN'});
+      if (active !== record || record.controller.signal.aborted) throw Error('语音采集已取消');
+      const session = await manager.start({deadline: record.sessionDeadline, signal: record.controller.signal, locale: 'zh-CN'});
       record.sessionId = session.sessionId;
       record.phase = 'listening';
       publish();
@@ -102,6 +113,26 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
       try { await cleanup(record); } catch { lastError = '麦克风释放未确认'; }
       throw Error(lastError);
     }
+  }
+
+  async function beginCapture(senderId) {
+    const record = startCaptureRecord(senderId);
+    return runCapture(record);
+  }
+
+  /**
+   * Trusted host internal entry for wake-triggered capture handoff.
+   * Reuses the current active wake-authorized capture (authorized + active + subscriberCount > 0)
+   * without calling microphoneHost.authorize() again. Rejects if capture is not in the expected
+   * wake-active state.
+   */
+  async function beginWakeCapture(senderId) {
+    const cap = microphoneHost.snapshot();
+    if (!cap.authorized || !cap.active || !cap.subscriberCount || cap.subscriberCount <= 0) {
+      throw Error('语音唤醒采集未就绪：需要有效的授权采集会话');
+    }
+    const record = startCaptureRecord(senderId, true);
+    return runCapture(record);
   }
 
   async function finishCapture(senderId) {
@@ -188,6 +219,6 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
     if (failure) throw failure;
   }
 
-  return {snapshot, beginCapture, finishCapture, playReply, stopSpeaking, cancelCapture, dispose,
+  return {snapshot, beginCapture, beginWakeCapture, finishCapture, playReply, stopSpeaking, cancelCapture, dispose,
     hasActive: () => Boolean(active)};
 }
