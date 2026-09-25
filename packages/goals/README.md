@@ -77,3 +77,26 @@ changing current state. Commands preserve each source and all prior versions;
 they do not establish that a source is authentic, authorize a user, delete
 private history, or automatically repair dependent decisions. The Runtime and
 Desktop user command/query path remains a separate integration task.
+
+## Goal write tools (provisional)
+
+`@personal-agent/goals/tool` exports `createGoalTools(boundStore)`, returning
+`goals.create` and `goals.revise` `RegisteredTool` values (version `1.0.0`,
+scope `goals:write`, `local_write`). The trusted host binds the same user graph
+store used by its `hostUserNamespace`, generates or verifies `goal.sourceRef`,
+and passes complete arguments through Runtime's host tool task and Policy.
+Tool arguments contain no namespace. Renderer must not construct a store or
+choose a namespace/source reference.
+
+Inputs are `{expectedGraphRevision, goal}` for create and
+`{expectedGraphRevision, expectedGoalRevision, goal}` for revise, where `goal`
+is a complete `GoalInput`. An applied result contains `graphRevision`,
+`previousGoal` (null on create), and `currentGoal`, after reading the committed
+historical version back from storage. A stale write returns `kind: 'conflict'`
+and the current graph revision; an invalid, confirmed no-write input returns
+`kind: 'rejected'`. Unexpected write or readback failures remain unknown to
+Runtime for reconciliation. The tool does not retry an uncertain write.
+
+This package does not expose a host task or approval entrypoint itself.
+Runtime's host tool task is currently a separate Draft integration, and real
+Desktop user writes need its review, composition, and one target-chain readback.
