@@ -76,11 +76,12 @@ export function createMicrophoneCaptureHost({permissionGate, getPanel, now = Dat
         void stop(session, 'device_unavailable');
       }
     }
-    session.sinks.add(sink);
+    const subscription = {sink};
+    session.sinks.add(subscription);
     try { await session.ready.promise; }
-    catch (error) { session.sinks.delete(sink); await session.stopPromise?.catch(() => {}); throw error; }
+    catch (error) { session.sinks.delete(subscription); await session.stopPromise?.catch(() => {}); throw error; }
     if (session.stopPromise) {
-      session.sinks.delete(sink);
+      session.sinks.delete(subscription);
       await session.stopPromise.catch(() => {});
       throw Error('麦克风采集已经停止');
     }
@@ -88,7 +89,7 @@ export function createMicrophoneCaptureHost({permissionGate, getPanel, now = Dat
     return {release: async () => {
       if (released) return session.stopPromise;
       released = true;
-      session.sinks.delete(sink);
+      session.sinks.delete(subscription);
       if (session.sinks.size === 0) await stop(session, 'released');
       else if (session.stopPromise) await session.stopPromise;
     }};
@@ -100,7 +101,7 @@ export function createMicrophoneCaptureHost({permissionGate, getPanel, now = Dat
     if (session.readyState === 'starting') session.ready.reject(Error('麦克风在启动时被停止'));
     session.readyState = 'stopping';
     if (reason === 'revoked' || reason === 'device_unavailable') {
-      for (const sink of session.sinks) {
+      for (const {sink} of session.sinks) {
         try { (reason === 'revoked' ? sink.onRevoked : sink.onDeviceUnavailable)?.(); } catch {}
       }
     }
@@ -146,7 +147,7 @@ export function createMicrophoneCaptureHost({permissionGate, getPanel, now = Dat
       const data = message.data;
       if (!(data instanceof Uint8Array) || !data.byteLength || data.byteLength % 2
         || data.byteLength > MAX_FRAME_BYTES) { void stop(session, 'device_unavailable'); return false; }
-      for (const sink of session.sinks) {
+      for (const {sink} of session.sinks) {
         try { sink.onFrame(data); } catch { void stop(session, 'device_unavailable'); }
       }
       data.fill(0);

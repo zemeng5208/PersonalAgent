@@ -67,3 +67,24 @@ test('permission revoke stops active capture and cannot claim release without st
   await assert.rejects(sub.release(), /track 未全部停止/);
   assert.equal(host.snapshot().lastRelease.verified, false);
 });
+
+test('two subscriptions using the same sink keep capture until both handles release', async () => {
+  const {host, commands, event} = fixture();
+  const sink = {onFrame: () => {}};
+  host.authorize();
+  const first = host.binding.start(sink);
+  const second = host.binding.start(sink);
+  const token = commands[0].token;
+  host.receive(event, {type: 'ready', token, trackLive: true, sampleRate: 16000});
+  const [a, b] = await Promise.all([first, second]);
+  assert.equal(host.snapshot().subscriberCount, 2);
+  await a.release();
+  assert.equal(host.snapshot().subscriberCount, 1);
+  assert.equal(commands.filter(command => command.type === 'stop').length, 0);
+  const closing = b.release();
+  await tick();
+  assert.equal(commands.filter(command => command.type === 'stop').length, 1);
+  host.receive(event, {type: 'stopped', token, tracksStopped: true});
+  await closing;
+  assert.equal(host.snapshot().lastRelease.verified, true);
+});
