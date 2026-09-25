@@ -56,6 +56,17 @@ synchronous receipt/scope check after credential reads, immediately before the a
 to the cloud adapter. See [export work package](../../docs/modules/MOD-30-COMPETITION-EXPORT-01.md)
 for the precise offline boundary and the unresolved real cloud/MCP lifecycle.
 
+Optional `competitionToolAvailability` requires a trusted, task-specific readiness check for
+each advertised read-only tool. Runtime selects only registered descriptors with an explicit
+result export binding and a ready provider, stores that selection with task revision/deadline,
+and exposes `prepareCompetitionToolCatalog` as `{name,version,inputSchema}`. The input Schema
+projection removes descriptions, examples, enums and patterns so private paths and hints do
+not leave the host through catalog metadata. An unverified proposal is checked against the
+persisted selection, the original local Schema and current readiness before local approval.
+The cloud adapter must call `assertCompetitionToolCatalogAllowed` after credential reads and
+immediately before sending an initial request with the directory. Catalog selection does not
+grant tool execution or authorize sending tool results.
+
 - SQLite-backed tasks, checkpoints, events and one-shot schedules.
 - Explicit task transition rules and immutable terminal states.
 - Submission idempotency: the same key and input returns the original task; different input is rejected.

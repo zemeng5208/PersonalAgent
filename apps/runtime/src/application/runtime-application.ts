@@ -165,6 +165,13 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     return this.competitionToolCatalog.prepare(input);
   }
 
+  /** The cloud adapter calls this after credential reads, immediately before its initial fetch. */
+  async assertCompetitionToolCatalogAllowed(input: {taskId: string; revision: number; deadline: string; signal: AbortSignal;
+    availableTools: readonly CompetitionAvailableTool[]}): Promise<void> {
+    if (!this.competitionToolCatalog) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition tool catalog is unavailable');
+    await this.competitionToolCatalog.assertSelectionCurrent(input);
+  }
+
   configureText(options: TextApplicationOptions): TextApplication['deployment'] {
     this.requireLocalText();
     if (this.activeTextTasks.size) throw new Error('Cannot reconfigure text model while tasks are active');

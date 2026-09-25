@@ -2,6 +2,7 @@ import {ProtocolError, validateToolValue} from '@personal-agent/contracts';
 import type {ToolDescriptor} from '@personal-agent/contracts';
 import type {AgentToolPort} from '@personal-agent/agents';
 import {Buffer} from 'node:buffer';
+import {isDeepStrictEqual} from 'node:util';
 import type {TaskRuntime} from '../index.js';
 import type {CompetitionToolExport} from './coordination.js';
 
@@ -14,13 +15,19 @@ export interface CompetitionToolAvailability {
   toolName: string;
   toolVersion: string;
   /** Trusted host health and scope check; registration alone never means ready. */
-  available(input: {taskId: string; deadline: string; signal: AbortSignal}): boolean | Promise<boolean>;
+  available(input: {taskId: string; revision: number; deadline: string; signal: AbortSignal}): boolean | Promise<boolean>;
 }
 
 export interface CompetitionAvailableTool {
   name: string;
   version: string;
   inputSchema: Record<string, unknown>;
+}
+
+interface CatalogCheckpoint {
+  revision: number;
+  deadline: string;
+  entries: CompetitionAvailableTool[];
 }
 
 function safeSchema(value: unknown, depth = 0): Record<string, unknown> {
@@ -78,7 +85,7 @@ export class RuntimeCompetitionToolCatalog {
     }
   }
 
-  private async ready(binding: CompetitionToolAvailability, input: {taskId: string; deadline: string; signal: AbortSignal}): Promise<boolean> {
+  private async ready(binding: CompetitionToolAvailability, input: {taskId: string; revision: number; deadline: string; signal: AbortSignal}): Promise<boolean> {
     if (input.signal.aborted) throw new ProtocolError('CANCELLED', 'Tool catalog selection cancelled');
     const remaining = Date.parse(input.deadline) - Date.now();
     if (!Number.isFinite(remaining) || remaining <= 0) throw new ProtocolError('TIMEOUT', 'Tool catalog selection expired');
@@ -106,33 +113,63 @@ export class RuntimeCompetitionToolCatalog {
       || this.runtime.loadCheckpoint(input.taskId, 'application-deadline') !== input.deadline) {
       throw new ProtocolError('UNAUTHORIZED', 'Tool catalog is not bound to the running Competition task');
     }
-    const saved = this.runtime.loadCheckpoint(input.taskId, CHECKPOINT) as CompetitionAvailableTool[] | undefined;
-    if (saved) return structuredClone(saved);
+    const saved = this.runtime.loadCheckpoint(input.taskId, CHECKPOINT) as CatalogCheckpoint | undefined;
+    if (saved) {
+      if (saved.deadline !== input.deadline) throw new ProtocolError('UNAUTHORIZED', 'Competition tool catalog deadline changed');
+      return structuredClone(saved.entries);
+    }
+    const revision = this.runtime.getTask(input.taskId).revision;
     const descriptors = this.tools.list();
     const selected: CompetitionAvailableTool[] = [];
     for (const binding of this.availability) {
       const descriptor = descriptors.find(item => item.name === binding.toolName && item.version === binding.toolVersion);
       if (!descriptor || descriptor.sideEffect !== 'read'
         || !this.exports.some(item => item.toolName === binding.toolName && item.toolVersion === binding.toolVersion)) continue;
-      if (!await this.ready(binding, input)) continue;
+      if (!await this.ready(binding, {...input, revision})) continue;
       selected.push({name: descriptor.name, version: descriptor.version, inputSchema: safeSchema(descriptor.inputSchema)});
       if (selected.length > MAX_ENTRIES || Buffer.byteLength(JSON.stringify(selected), 'utf8') > MAX_CATALOG_BYTES) {
         throw new ProtocolError('INVALID_ARGUMENT', 'Competition tool catalog exceeds its limit');
       }
     }
-    this.runtime.saveCheckpoint(input.taskId, CHECKPOINT, selected);
+    this.runtime.saveCheckpoint(input.taskId, CHECKPOINT, {revision, deadline: input.deadline, entries: selected});
     return structuredClone(selected);
   }
 
   /** A cloud proposal must match the persisted selection and the original local Schema. */
   async assertProposal(input: {taskId: string; toolName: string; toolVersion: string;
     arguments: Record<string, unknown>; deadline: string; signal: AbortSignal}): Promise<void> {
-    const selected = this.runtime.loadCheckpoint(input.taskId, CHECKPOINT) as CompetitionAvailableTool[] | undefined;
-    const entry = selected?.find(item => item.name === input.toolName && item.version === input.toolVersion);
+    const saved = this.runtime.loadCheckpoint(input.taskId, CHECKPOINT) as CatalogCheckpoint | undefined;
+    const entry = saved?.entries.find(item => item.name === input.toolName && item.version === input.toolVersion);
     const binding = this.availability.find(item => item.toolName === input.toolName && item.toolVersion === input.toolVersion);
     const descriptor: ToolDescriptor | undefined = this.tools.list().find(item => item.name === input.toolName && item.version === input.toolVersion);
-    if (!entry || !binding || !descriptor || descriptor.sideEffect !== 'read'
-      || !await this.ready(binding, input)) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition tool is unavailable for this task');
+    if (!entry || !binding || !descriptor || descriptor.sideEffect !== 'read' || saved?.deadline !== input.deadline
+      || !await this.ready(binding, {...input, revision: this.runtime.getTask(input.taskId).revision})) {
+      throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition tool is unavailable for this task');
+    }
     validateToolValue(descriptor.inputSchema, input.arguments);
+  }
+
+  /** Final check immediately before sending the selected directory to a cloud adapter. */
+  async assertSelectionCurrent(input: {taskId: string; revision: number; deadline: string; signal: AbortSignal;
+    availableTools: readonly CompetitionAvailableTool[]}): Promise<void> {
+    if (this.runtime.getTask(input.taskId).state !== 'running'
+      || this.runtime.loadCheckpoint(input.taskId, 'application-profile') !== 'huawei_ict_agentarts'
+      || this.runtime.loadCheckpoint(input.taskId, 'application-deadline') !== input.deadline) {
+      throw new ProtocolError('UNAUTHORIZED', 'Competition catalog is not bound to this task');
+    }
+    const saved = this.runtime.loadCheckpoint(input.taskId, CHECKPOINT) as CatalogCheckpoint | undefined;
+    if (!saved || saved.revision !== input.revision || saved.deadline !== input.deadline
+      || !isDeepStrictEqual(saved.entries, input.availableTools)) {
+      throw new ProtocolError('UNAUTHORIZED', 'Competition tool catalog changed before export');
+    }
+    for (const item of saved.entries) {
+      const binding = this.availability.find(entry => entry.toolName === item.name && entry.toolVersion === item.version);
+      const descriptor = this.tools.list().find(entry => entry.name === item.name && entry.version === item.version);
+      if (!binding || !descriptor || descriptor.sideEffect !== 'read'
+        || !isDeepStrictEqual(safeSchema(descriptor.inputSchema), item.inputSchema)
+        || !await this.ready(binding, input)) {
+        throw new ProtocolError('UNAUTHORIZED', 'Competition tool became unavailable before export');
+      }
+    }
   }
 }

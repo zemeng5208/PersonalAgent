@@ -5,7 +5,7 @@ import {parseCoordinationResult, parseCoordinationContinuation, type Coordinatio
 import type {AgentToolPort, ToolInvocationResult} from '@personal-agent/agents';
 import type {TaskRuntime} from '../index.js';
 import {isDeepStrictEqual} from 'node:util';
-import type {RuntimeCompetitionToolCatalog} from './tool-catalog.js';
+import type {CompetitionAvailableTool, RuntimeCompetitionToolCatalog} from './tool-catalog.js';
 
 const MAX_COMPETITION_STEPS = 4;
 
@@ -104,6 +104,7 @@ async function exchange(
   context: {deadline: string; signal: AbortSignal},
   continuation?: CoordinationContinuation,
   beforeInvoke?: () => void,
+  availableTools?: readonly CompetitionAvailableTool[],
 ): Promise<CoordinationResult> {
   let onAbort: () => void = () => {};
   const cancelled = new Promise<never>((_resolve, reject) => {
@@ -126,6 +127,7 @@ async function exchange(
           deadline: context.deadline,
           signal: context.signal,
           ...(continuation === undefined ? {} : {continuation}),
+          ...(availableTools === undefined ? {} : {availableTools: structuredClone(availableTools)}),
           }));
         } catch {
           // Adapter errors may contain credentials or private response bodies.
@@ -164,7 +166,11 @@ export function startCoordinationTask(
         completedUnits: step - 1,
         totalUnits: MAX_COMPETITION_STEPS,
       });
-      if (!pending && options.toolCatalog) await options.toolCatalog.prepare({taskId, deadline: context.deadline, signal: context.signal});
+      const availableTools = !pending && continuation === undefined && options.toolCatalog
+        ? await options.toolCatalog.prepare({taskId, deadline: context.deadline, signal: context.signal}) : undefined;
+      if (availableTools && availableTools.length === 0) {
+        throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'No Competition tools are available for this task');
+      }
       const result = pending ?? await exchange(runtime, port, taskId, goal, context, continuation, () => {
         const prior = receipts.find(item => item.proposal.proposalId === continuation?.proposalId);
         if (prior) {
@@ -175,7 +181,7 @@ export function startCoordinationTask(
           if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Competition result export cancelled');
           if (Date.now() >= Date.parse(context.deadline)) throw new ProtocolError('TIMEOUT', 'Competition result export expired');
         }
-      });
+      }, availableTools);
       if (result.kind === 'text') {
         return {resultSummary: summary(result.text, result.verification), evidenceRefs};
       }
