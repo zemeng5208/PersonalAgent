@@ -6,7 +6,7 @@
 
 ## 官方入口
 
-- [第十一届华为 ICT 大赛中国区创新赛规则](https://e.huawei.com/cn/talent/#/ict/innovation-details?zoneCode=027425&zoneId=98269700&compId=85132021&divisionName=%E4%B8%AD%E5%9B%BD%E5%8C%BA&type=C002&isCollectGender=N&enrollmentDeadline=2026-11-30%2023%3A59%3A59&compTotalApplicantCount=201)：在华为人才在线页面直接读回赛题 2、各阶段材料、评分与参赛须知。仓库原先引用的 2025—2026 全球总决赛页面属于上一届，不能充当本届提交规则。
+- [第十一届华为 ICT 大赛中国区创新赛规则](https://e.huawei.com/cn/talent/#/ict/innovation-details?zoneCode=027425&zoneId=98269700&compId=85132021&divisionName=%E4%B8%AD%E5%9B%BD%E5%8C%BA&type=C002&isCollectGender=N&enrollmentDeadline=2026-11-30%2023%3A59%3A59&compTotalApplicantCount=1113)：在华为人才在线页面直接读回赛题 2、各阶段材料、评分与参赛须知。仓库原先引用的 2025—2026 全球总决赛页面属于上一届，不能充当本届提交规则。
 - [2026 年 iCAN AI 应用创新挑战赛通知（id=138）](https://www.g-ican.com/competition/details?id=138)：iCAN 大赛组委会发布的独立赛事通知。
 
 ## 两项赛事的必要差异
