@@ -98,7 +98,7 @@ ToolGateway/Policy 以 task、工具、参数和 `workspace:read` + `workspace:w
 
 本包消费 `@personal-agent/contracts@0.1.0-alpha.1` 的 provisional `RegisteredTool`、`ToolContext` 与 `ToolHost`，并按现有 Gateway/Policy scope 机制工作。它没有私设仍为 unavailable 的 `ToolExecutionPort`、ArtifactPort 或 EvidencePort。
 
-AgentArts 工具提案、Runtime composition、目标系统读回、Evidence 和最终回答尚未接通；这些离线可验证的本地工具不构成完整编程执行能力。根 `package.json` build 编排与 `package-lock.json` workspace 记录随 PR #83 直接从 `main@1e3b56b6` 重建；旧 Draft #63 已关闭。`workspace.list_entries`、候选文件、apply 和固定命令均不会自动进入生产 composition。
+Runtime 已将固定合成 `workspace.read_text` 接入 Competition 工具循环，Evidence 只提供带 `conditional` 验证等级的受限元数据。完整 stage/apply/command 编程链、目标系统独立读回、Artifact 和真实 AgentArts 最终回答尚未接通；这些离线可验证的包内增量不构成完整编程执行能力。根 `package.json` build 编排与 `package-lock.json` workspace 记录随 PR #83 直接从 `main@1e3b56b6` 重建；旧 Draft #63 已关闭。`workspace.list_entries`、候选文件、apply 和固定命令均不会自动进入生产 composition。
 
 ## 定向验证
 
@@ -111,6 +111,9 @@ npm.cmd run typecheck --workspace=@personal-agent/coding-tools
 npm.cmd test --workspace=@personal-agent/coding-tools
 node --test --test-isolation=none packages/coding-tools/test/workspace-read-wire-boundary.test.mjs
 node --test --test-isolation=none packages/coding-tools/test/workspace-list.test.mjs
+node --test --test-isolation=none packages/coding-tools/test/workspace-patch-stage.test.mjs
+node --test --test-isolation=none packages/coding-tools/test/workspace-patch-apply.test.mjs
+node --test --test-isolation=none packages/coding-tools/test/workspace-command.test.mjs
 git diff --check
 ```
 
