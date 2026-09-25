@@ -5,6 +5,7 @@ import {mountWorkspace} from '../features/workspace/view.js';
 import {applyPreferences} from '../ui/preferences.js';
 import {mountConversationRail} from '../features/conversation/rail.js';
 import {resultText} from '../features/conversation/result-text.js';
+import {createGoalControl} from '../features/conversation/goal-view.js';
 import {mountDesktopShell} from '../ui/desktop-shell.js';
 
 applyPreferences();
@@ -47,6 +48,9 @@ else {
   let current,pending=false,lastTaskSignature='';const likedTasks=new Set();
   const report=e=>root.querySelector('#error').textContent=e.message;
   const form=root.querySelector('form'),input=root.querySelector('textarea'),thread=root.querySelector('.thread'),tasksNode=root.querySelector('#tasks');
+  const goalControl=createGoalControl(invoke,()=>input.value);
+  root.querySelector('.composer-bar .spacer').before(goalControl.button);
+  root.querySelector('.panel').append(goalControl.dialog);
   const updateRail=mountConversationRail(root.querySelector('.panel'),thread);
   const sendBtn=root.querySelector('#send'),modelBtn=root.querySelector('#model'),modelMenu=root.querySelector('#model-menu');
   const bellBtn=root.querySelector('#bell'),bellMenu=root.querySelector('#bell-menu');
