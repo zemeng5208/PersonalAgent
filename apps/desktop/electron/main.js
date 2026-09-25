@@ -96,6 +96,10 @@ let runtimeApplication;
 let microphonePermissionGate;
 let microphoneCaptureHost;
 let voicePcmSource;
+let voiceInput;
+let voiceDisposed = false;
+let voiceDisposal;
+let voiceDisposalFailed = false;
 
 function snapshot(surface) {
   return {
@@ -115,7 +119,7 @@ function snapshot(surface) {
     notifications: [...notifications.values()],
     model: structuredClone(model),
     thinking: structuredClone(thinking),
-    voice: {available: false, status: 'unavailable', reason: '语音供应商尚未连接',
+    voice: voiceInput?.snapshot() ?? {available: false, status: 'unavailable', reason: '语音供应商尚未连接',
       capture: microphoneCaptureHost?.snapshot() ?? {authorized: false, active: false, busy: false,
         subscriberCount: 0, lastRelease: {stopped: true, verified: false, reason: 'never_started'}}},
   };
@@ -624,7 +628,17 @@ async function action(event, name, payload) {
   if (name === 'app.quit') { app.quit(); return; }
   if (name === 'voice.stop') {
     if (sender !== panel) throw Error('语音操作只能从面板调用');
-    return {available: false, stopped: false, reason: '语音供应商尚未连接'};
+    return voiceInput ? voiceInput.stopSpeaking(sender.webContents.id)
+      : {available: false, stopped: false, reason: '语音供应商尚未连接'};
+  }
+  if (name.startsWith('voice.record.') || name === 'voice.play') {
+    if (sender !== panel || !voiceInput) throw Error('语音试用只允许从 Competition 可信面板调用');
+    const senderId = sender.webContents.id;
+    if (name === 'voice.record.start') return voiceInput.beginCapture(senderId);
+    if (name === 'voice.record.finish') return voiceInput.finishCapture(senderId);
+    if (name === 'voice.record.cancel') return voiceInput.cancelCapture(senderId);
+    if (name === 'voice.play') return voiceInput.playReply(senderId);
+    throw Error('Unsupported voice action');
   }
   if (name === 'voice.capture.authorize') {
     if (sender !== panel || !competitionMode) throw Error('麦克风只允许 Competition 可信面板启用');
@@ -742,6 +756,16 @@ app.whenReady().then(async () => {
     if (competitionMode) {
       const {createVoicePcmFrameSourcePort} = await import('@personal-agent/voice');
       voicePcmSource = createVoicePcmFrameSourcePort(microphoneCaptureHost.binding);
+      if (process.env.PA_DESKTOP_VOICE_EXPERIMENTAL === '1') {
+        try {
+          const {createDesktopVoiceInput} = await import('./voice-input.js');
+          voiceInput = createDesktopVoiceInput({source: voicePcmSource,
+            microphoneHost: microphoneCaptureHost, client, onUpdate: publish, enabled: true});
+        } catch {
+          // A failed voice adapter must not take down an otherwise connected text Runtime.
+          voiceInput = undefined;
+        }
+      }
     }
   } catch (error) {
     runtimeError = error instanceof Error ? error.message : 'Runtime 初始化失败';
@@ -787,6 +811,20 @@ app.whenReady().then(async () => {
     else if (panel.isVisible()) { if (!away) away = Date.now(); else if (Date.now() - away > 520) { panel.hide(); away = 0; } }
   }, 80);
   app.on('before-quit', event => {
+    if (voiceInput && !voiceDisposed) {
+      event.preventDefault();
+      if (!voiceDisposal && !voiceDisposalFailed) {
+        voiceDisposal = voiceInput.dispose().then(() => {
+          voiceDisposed = true;
+          app.quit();
+        }).catch(error => {
+          voiceDisposalFailed = true;
+          runtimeError = '语音资源释放未确认';
+          publish();
+        });
+      }
+      return;
+    }
     if (microphoneCaptureHost?.snapshot().busy) {
       event.preventDefault();
       void microphoneCaptureHost.revoke().then(() => app.quit()).catch(error => {
