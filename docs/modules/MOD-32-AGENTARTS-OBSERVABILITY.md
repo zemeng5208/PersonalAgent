@@ -63,9 +63,19 @@ query 级候选格式，不证明工具提案、本地审批/执行、真实 con
 或目标系统读回；不能与上方会议链拼成新的端到端通过。
 
 该回执报告主控版本 `v20260925192219`、证据审查版本 `v20260925191806`，
-但 `requestDeploymentVersion=unavailable`，且无可精确关联的服务端 trace/usage。
-这两个报告版本不是本请求的实际部署绑定证明。MOD-29 只读核对平台记录，
-MOD-31 复用同一请求观察角色与评估；在读回前相关格仍为未知。
+但 `requestDeploymentVersion=unavailable`。MOD-29 对同一时间窗作平台只读核对：
+一条成功 trace `668c…736d` 于 19:30:13 CST 开始，耗时 38,937 ms，
+平台显示 3,365 input + 2,288 output = 5,653 tokens；可见输入与本次合成
+`draft-review`/`delivery-deadline` 语义相符，末段模型输出有候选。它与本地
+请求按时间和输入语义**候选关联**；平台未回显调用方 `X-Request-Id`，本地响应
+也没有 server trace ID，因此不是精确 ID join，不能将 5,653 tokens 标为本请求
+已核实的 usage 或换算为费用。
+
+MOD-30 调用前读回原运行时正常、`Latest=v8` 及上述应用版本/两个引用；这证明
+预调用平台状态，不证明该请求命中的部署版本。trace 根 span 的
+`resource_version:"draft"` 也不是运行时版本。MOD-31 可复用该 trace 的三个
+`UserInput`/模型 span，但它们没有各设计角色名称或交接标识，不能宣称角色交接
+已证；固定评估和基线对照仍缺。
 MOD-04B 的 [PR #128](https://github.com/zemeng5208/PersonalAgent/pull/128)
 涉及 continuation prompt，但本次只有首次 query；PR 存在不能替代其真实续接验收。
 
@@ -75,6 +85,8 @@ MOD-04B 的 [PR #128](https://github.com/zemeng5208/PersonalAgent/pull/128)
 配置、API 状态与解析结果、平台部署版本、平台 trace ID、平台 input/output tokens、
 账单费用及各字段的来源/读回时间。实现展示时，本地回执只能支撑本地请求、
 目标配置、API 状态及解析结果；未取得的平台字段须显示“未读回”。
+按时间/输入找到的平台 trace 可另列为“候选关联”，附匹配依据与观察时间，
+不能放进精确请求级 trace/usage 栏。
 `runtimeVersion=to-be-read-back` 必须显示为“未读回”，不能
 作为真实版本。合并多个请求的 token 会掩盖失败重试或多次 invocation 成本。
 
@@ -109,7 +121,7 @@ Runtime 名称、API 200、模型正文和控制台当前 `Latest` 都不能代�
 | --- | --- | --- |
 | 代码 | `origin/main@ec43a55` 有 provisional AgentArts 适配；请求级平台版本/trace/usage 仍无可验证读取。MOD-32 本包只新增证据文档，不能算功能实现完成 | MOD-04B/29 根据真实脱敏结构交付请求关联和可信展示所需数据；保留 unknown 与失败路径 |
 | PR | 本包 [#134](https://github.com/zemeng5208/PersonalAgent/pull/134) 为 draft；较早证据 [#108](https://github.com/zemeng5208/PersonalAgent/pull/108) 和集成 [#104](https://github.com/zemeng5208/PersonalAgent/pull/104) 仍各有独立依赖与评审。创建 PR、CI 或作者自查均不等于合并 | 各 owner 解决自己的冲突/依赖，取得已登记非作者评审，再以最新 Git/PR 状态核实合并 |
-| MOD-32 真实验收 | 合成会议链的两次云 API 与本地执行/重启已通过；另一次非会议 query 级候选匹配但未执行工具。请求级部署版本、trace、usage、费用、失败及回退仍未读回，MOD-32 保持 `in_progress` | 复用 AgentArts 链同批回执逐请求读回版本/trace/usage 与账单依据，另行验证失败核实和发布回退；每项保存脱敏证据 |
+| MOD-32 真实验收 | 合成会议链的两次云 API 与本地执行/重启已通过；另一次非会议 query 级候选匹配但未执行工具，其平台 trace/token 仅能按时间与输入语义候选关联。请求级部署版本、精确 trace join、usage、费用、失败及回退仍未读回，MOD-32 保持 `in_progress` | 复用 AgentArts 链同批回执逐请求读回版本/trace/usage 与账单依据，另行验证失败核实和发布回退；每项保存脱敏证据 |
 | 整体 MVP | 单个合成 Golden Path 不能证明除 Windows 打包安装外的全部约定功能；本 MOD 也不能代表其他 zemeng 模块或 goo122/Potatos 模块完成 | 主控汇总各模块的代码、非作者评审/集成、真实场景读回后逐项判定；未满足的项继续列缺口，不用本记录代替全项验收 |
 
 MOD-32 剩余验收：新版本与请求级部署绑定、精确 trace/usage/费用读回、平台失败
