@@ -95,6 +95,7 @@ const notifications = new Map();
 let runtimeApplication;
 let microphonePermissionGate;
 let microphoneCaptureHost;
+let voicePcmSource;
 
 function snapshot(surface) {
   return {
@@ -628,6 +629,7 @@ async function action(event, name, payload) {
   if (name === 'voice.capture.authorize') {
     if (sender !== panel || !competitionMode) throw Error('麦克风只允许 Competition 可信面板启用');
     if (!client) throw Error('Runtime 未连接，麦克风采集尚不可用');
+    if (!voicePcmSource) throw Error('Voice PCM 来源尚未接入');
     const result = microphoneCaptureHost.authorize();
     publish();
     return result;
@@ -737,6 +739,10 @@ app.whenReady().then(async () => {
     if (!competitionMode) restoreModelConfig();
     await initializeRuntime();
     await initializeModelFromEnvironment();
+    if (competitionMode) {
+      const {createVoicePcmFrameSourcePort} = await import('@personal-agent/voice');
+      voicePcmSource = createVoicePcmFrameSourcePort(microphoneCaptureHost.binding);
+    }
   } catch (error) {
     runtimeError = error instanceof Error ? error.message : 'Runtime 初始化失败';
     connectionLabel = 'Runtime 未连接';
