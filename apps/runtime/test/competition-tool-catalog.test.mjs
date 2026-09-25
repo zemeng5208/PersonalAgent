@@ -223,3 +223,38 @@ test('a write missing from the task selection cannot reach approval or execution
     assert.deepEqual((await client.call('approval.list', {taskId})).items, []);
   } finally {app.close();}
 });
+
+test('catalog binding rejects versions beyond the cloud adapter limit', () => {
+  assert.throws(() => createRuntimeApplication({path: ':memory:', profile: 'huawei_ict_agentarts',
+    coordination: {execute: async () => { throw Error('unexpected'); }},
+    tools: [{descriptor, execute: async () => ({value: 'unused'})}],
+    competitionToolAvailability: [{toolName: descriptor.name, toolVersion: '1'.repeat(65),
+      available: () => true}],
+  }), {code: 'INVALID_ARGUMENT'});
+});
+
+test('catalog exceeding the cloud adapter byte limit fails before export', async () => {
+  const largeDescriptor = {...descriptor, inputSchema: {type: 'object', required: [],
+    additionalProperties: false,
+    properties: Object.fromEntries(Array.from({length: 70}, (_, index) => [
+      `a${'x'.repeat(115)}${index}`, {type: 'string'},
+    ]))}};
+  let cloudCalls = 0;
+  const app = createRuntimeApplication({path: ':memory:', profile: 'huawei_ict_agentarts',
+    coordination: {execute: async () => {cloudCalls++; throw Error('unexpected');}},
+    tools: [{descriptor: largeDescriptor, execute: async () => ({value: 'unused'})}],
+    competitionToolExports: [toolExport],
+    competitionToolAvailability: [{toolName: descriptor.name, toolVersion: descriptor.version,
+      available: () => true}],
+  });
+  try {
+    const client = new Client(app, Date.now);
+    await client.connect();
+    const {taskId} = await client.call('task.submit', {goal: 'Synthetic oversized catalog',
+      conversationId: 'catalog'}, {idempotencyKey: 'catalog-oversized'});
+    const task = await waitFor(app, taskId, ['failed', 'succeeded']);
+    assert.equal(task.state, 'failed');
+    assert.equal(task.error.code, 'INVALID_ARGUMENT');
+    assert.equal(cloudCalls, 0);
+  } finally {app.close();}
+});

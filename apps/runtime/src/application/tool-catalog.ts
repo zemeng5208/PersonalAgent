@@ -8,9 +8,9 @@ import type {CompetitionToolExport} from './coordination.js';
 
 const CHECKPOINT = 'competition-tool-catalog';
 const NAME = /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/;
-const VERSION = /^[0-9A-Za-z][0-9A-Za-z_.-]{0,127}$/;
+const VERSION = /^[0-9A-Za-z][0-9A-Za-z_.-]{0,63}$/;
 const MAX_ENTRIES = 16;
-const MAX_CATALOG_BYTES = 12_288;
+const MAX_CATALOG_BYTES = 8_192;
 
 export interface CompetitionToolAvailability {
   toolName: string;
