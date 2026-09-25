@@ -1,5 +1,8 @@
 import {mkdirSync, readFileSync, writeFileSync, renameSync} from 'node:fs';
+import {randomUUID} from 'node:crypto';
 import path from 'node:path';
+
+const HOST_USER_NAMESPACE = /^desktop-user-v1:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 export const defaults = {theme: 'system', language: 'system', fontScale: 1, calm: false, alwaysOnTop: true, snap: true, hover: true, shortcut: false};
 export function normalizeSettings(value = {}) {
@@ -28,19 +31,47 @@ export class DesktopState {
   constructor(file) {
     this.file = file;
     this.value = {settings: {...defaults}, windows: {}};
+    this.identityUnavailable = false;
     try {
       const saved = JSON.parse(readFileSync(file, 'utf8'));
+      if (!saved || typeof saved !== 'object' || Array.isArray(saved)) throw Error('Invalid desktop state');
       this.value.settings = normalizeSettings(saved.settings);
+      if (Object.hasOwn(saved, 'hostUserNamespace')) {
+        if (typeof saved.hostUserNamespace !== 'string' || !HOST_USER_NAMESPACE.test(saved.hostUserNamespace)) {
+          this.identityUnavailable = true;
+        } else this.value.hostUserNamespace = saved.hostUserNamespace;
+      }
       for (const [key, bounds] of Object.entries(saved.windows ?? {})) {
         if (['orb', 'admin', 'workspace', 'desktop-settings'].includes(key) && bounds && ['x', 'y', 'width', 'height'].every(field => Number.isFinite(bounds[field])) && bounds.width > 0 && bounds.height > 0) this.value.windows[key] = bounds;
       }
-    } catch { /* Missing or damaged preferences use safe defaults. */ }
+    } catch (error) {
+      // Missing preferences are a first run. A damaged existing file may hold an
+      // established Goal identity, so never replace it with a new namespace.
+      if (error?.code !== 'ENOENT') this.identityUnavailable = true;
+    }
   }
   save() {
+    if (this.identityUnavailable) throw Error('Desktop identity settings need recovery before saving');
     mkdirSync(path.dirname(this.file), {recursive: true});
     writeFileSync(this.file + '.tmp', JSON.stringify(this.value), 'utf8');
     renameSync(this.file + '.tmp', this.file);
   }
-  update(patch) { this.value.settings = normalizeSettings({...this.value.settings, ...patch}); this.save(); return {...this.value.settings}; }
-  remember(key, bounds) { this.value.windows[key] = bounds; this.save(); }
+  ensureHostUserNamespace() {
+    if (this.identityUnavailable) throw Error('Desktop user namespace needs recovery');
+    if (this.value.hostUserNamespace) return this.value.hostUserNamespace;
+    const previous = this.value;
+    const namespace = `desktop-user-v1:${randomUUID()}`;
+    this.value = {...previous, hostUserNamespace: namespace};
+    try { this.save(); }
+    catch (error) { this.value = previous; throw error; }
+    return namespace;
+  }
+  update(patch) {
+    if (this.identityUnavailable) throw Error('Desktop identity settings need recovery before saving');
+    this.value.settings = normalizeSettings({...this.value.settings, ...patch}); this.save(); return {...this.value.settings};
+  }
+  remember(key, bounds) {
+    if (this.identityUnavailable) throw Error('Desktop identity settings need recovery before saving');
+    this.value.windows[key] = bounds; this.save();
+  }
 }
