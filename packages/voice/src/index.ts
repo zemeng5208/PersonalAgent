@@ -3,6 +3,9 @@ export type {VoiceErrorCode} from './errors.js';
 export {
   MAX_AUDIO_BYTES,
   MAX_AUDIO_DURATION_MS,
+  MAX_FRAME_BYTES,
+  MAX_QUEUE_BYTES,
+  MAX_QUEUE_FRAMES,
   MAX_SPEECH_CHARACTERS,
   MAX_TRANSCRIPT_CHARACTERS,
   VOICE_AUDIO_FORMAT,
@@ -20,7 +23,16 @@ export type {
   VoiceAudioFormat,
   VoiceOperation,
   VoiceOperationStopReason,
+  VoicePcmCaptureBinding,
+  VoicePcmCaptureSink,
+  VoicePcmCaptureSubscription,
+  VoicePcmFrame,
+  VoicePcmFrameSourcePort,
+  VoicePcmFrameSubscribeOptions,
+  VoicePcmFrameSubscription,
+  VoicePcmTerminalReason,
 } from './ports.js';
+export {createVoicePcmFrameSourcePort} from './pcm-frame-source.js';
 export {
   UnavailableSpeechOutputPort,
   UnavailableSpeechRecognitionPort,

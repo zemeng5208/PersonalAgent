@@ -95,3 +95,68 @@ export interface SpeechOutputRequest {
 export interface SpeechOutputPort {
   speak(request: SpeechOutputRequest): VoiceOperation<void>;
 }
+
+export const MAX_FRAME_BYTES = 3_200;
+export const MAX_QUEUE_FRAMES = 4;
+export const MAX_QUEUE_BYTES = 12_800;
+
+export interface VoicePcmFrame {
+  readonly sequence: number;
+  readonly data: Uint8Array;
+  readonly format: VoiceAudioFormat;
+}
+
+export type VoicePcmTerminalReason =
+  | 'cancelled'
+  | 'deadline'
+  | 'revoked'
+  | 'device_unavailable'
+  | 'overflow'
+  | 'disposed';
+
+export interface VoicePcmFrameSubscribeOptions {
+  readonly signal: AbortSignal;
+  readonly deadline: string;
+  readonly onFrame: (frame: VoicePcmFrame) => void | Promise<void>;
+  /**
+   * Terminal callback indicating delivery has stopped. The host must not
+   * infer physical capture track release from onEnd alone; await closed for physical release.
+   */
+  readonly onEnd: (reason: VoicePcmTerminalReason) => void;
+}
+
+export interface VoicePcmFrameSubscription {
+  unsubscribe(): void;
+  /**
+   * Resolves only after successful host release of physical capture resources and rejects
+   * with EXTERNAL_FAILURE if host release fails or start failure prevents release proof.
+   * The host must not infer track release from an onEnd callback alone.
+   */
+  readonly closed: Promise<void>;
+}
+
+export interface VoicePcmFrameSourcePort {
+  subscribe(options: VoicePcmFrameSubscribeOptions): VoicePcmFrameSubscription;
+  dispose?(): Promise<void> | void;
+}
+
+export interface VoicePcmCaptureSink {
+  onFrame(frame: Uint8Array | { data: Uint8Array }): void;
+  onRevoked?(): void;
+  onDeviceUnavailable?(): void;
+}
+
+export interface VoicePcmCaptureSubscription {
+  release(): Promise<void> | void;
+}
+
+export interface VoicePcmCaptureBinding {
+  /**
+   * Starts capture on trusted host hardware and returns a release handle.
+   * If start throws, rejects, or returns an invalid handle without a release function,
+   * delivery ends with device_unavailable and closed rejects with EXTERNAL_FAILURE
+   * because physical track release cannot be proven. The host must clean up its own
+   * partial capture resources on start failure.
+   */
+  start(sink: VoicePcmCaptureSink): Promise<VoicePcmCaptureSubscription> | VoicePcmCaptureSubscription;
+}

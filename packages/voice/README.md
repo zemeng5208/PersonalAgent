@@ -117,6 +117,49 @@ relative to `WindowsSystemSpeechHost.cs`:
    or audio routing devices.
 
 
+## Authorized PCM streaming port (`VoicePcmFrameSourcePort`)
+
+`createVoicePcmFrameSourcePort(binding)` creates a module-local streaming port bound to a
+concrete authorized host capture binding.
+
+### Trust boundary
+
+The voice package never opens a microphone, queries OS device permissions, or issues capture
+authorization. No audio capture starts by default. The trusted host (MOD-11 Desktop main process)
+must perform its own explicit permission checks, manage physical media device lifecycles, and
+pass an already-authorized capture binding. The Renderer cannot grant authorization or sign tokens.
+
+### Handoff for MOD-11 physical track release
+
+Subscribing to the port (`port.subscribe({signal, deadline, onFrame, onEnd})`) returns
+`{unsubscribe(): void, closed: Promise<void>}`.
+When a subscription terminates (via caller `unsubscribe()`, parent `signal` abort, ISO UTC
+`deadline` timeout, queue overflow, capture revocation, device unavailability, or port disposal):
+1. Callback delivery halts immediately with no late `onFrame` callbacks.
+2. All buffered/queued PCM frames are immediately zeroed in memory (`.fill(0)`) and discarded.
+3. The port invokes the host binding's upstream `release()` handle.
+4. The `closed` promise awaits the host release receipt, guaranteeing physical audio tracks and
+   capture hardware resources are released before `closed` resolves. `closed` resolves only after
+   successful host release and rejects with `EXTERNAL_FAILURE` if host release fails. If `binding.start()`
+   throws, rejects, or omits a release function, delivery ends with `onEnd('device_unavailable')` and
+   `closed` rejects with `EXTERNAL_FAILURE` because physical track release cannot be proven. The trusted
+   host binding must clean up its own partial capture resources on start failure; the host must not
+   infer physical track release from an `onEnd` callback alone.
+
+### Frame and queue guarantees
+
+- **Format and sequence**: Frames use `VOICE_AUDIO_FORMAT` (16 kHz mono PCM S16LE) with monotonic
+  sequence numbers starting from 0.
+- **Frame bounds**: Non-empty, even byte length, maximum 3,200 bytes (100 ms).
+- **Isolation**: Each subscriber receives an independent private copy; buffer modifications or
+  zeroization do not affect other subscribers.
+- **Queue limits**: Bounded at 4 frames / 12,800 bytes. Overflow terminates the subscription
+  immediately with terminal reason `'overflow'` (no silent drop or truncation).
+- **Terminal reasons**: Exactly one terminal callback (`onEnd`) with reason `'cancelled'`,
+  `'deadline'`, `'revoked'`, `'device_unavailable'`, `'overflow'`, or `'disposed'`.
+- **Privacy and wire boundary**: No audio or text logs. The public wire capabilities `voice.start`
+  and `voice.stop` remain separate and unpublished.
+
 ## Fake use and verification
 
 `@personal-agent/voice/testing` exports Fake recognition, explicit transcript consumer
