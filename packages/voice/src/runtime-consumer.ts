@@ -256,6 +256,9 @@ export class RuntimeClientTranscriptConsumer implements TranscriptConsumerPort {
         control,
         deadlineMs,
       );
+      // A fulfilled call can win the race after same-turn cancellation or expiry.
+      // Recheck before accepting the snapshot or publishing any reply.
+      this.assertActive(control, deadlineMs);
       if (!snapshot || snapshot.taskId !== submitted.taskId) throw fixedExternalFailure();
       if (snapshot.state === 'succeeded') {
         if (typeof snapshot.resultSummary !== 'string' || snapshot.resultSummary.trim().length === 0) {
