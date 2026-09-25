@@ -1,5 +1,5 @@
 import {app, BrowserWindow, clipboard, ipcMain, Menu, nativeImage, safeStorage, screen, session, Tray} from 'electron';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath, pathToFileURL} from 'node:url';
 import path from 'node:path';
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
 import {EventCursor} from '@personal-agent/client';
@@ -8,6 +8,7 @@ import {panelBounds, clampOrb, draggedGroupBounds} from './placement.js';
 import {Conversations} from './conversations.js';
 import {createDesktopHost} from './desktop-host.js';
 import {desktopDataPaths} from './data-paths.js';
+import {createMicrophonePermissionGate} from './microphone-permission.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -91,6 +92,7 @@ const terminalTaskStates = new Set(['succeeded', 'failed', 'cancelled']);
 const approvals = new Map();
 const notifications = new Map();
 let runtimeApplication;
+let microphonePermissionGate;
 
 function snapshot(surface) {
   return {
@@ -702,8 +704,12 @@ app.on('second-instance', () => {
 app.whenReady().then(async () => {
   if (!ownsDesktopInstance) return;
   desktopHost = createDesktopHost();
-  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
-  session.defaultSession.setPermissionCheckHandler(() => false);
+  microphonePermissionGate = createMicrophonePermissionGate({
+    expectedPageUrl: pathToFileURL(entry).href,
+    isTrustedWindow: contents => contents === panel?.webContents,
+  });
+  session.defaultSession.setPermissionRequestHandler(microphonePermissionGate.request);
+  session.defaultSession.setPermissionCheckHandler(microphonePermissionGate.check);
   try {
     conversations = new Conversations(dataPaths.conversations);
     if (!competitionMode) restoreModelConfig();
@@ -757,6 +763,7 @@ app.whenReady().then(async () => {
       return;
     }
     app.isQuitting = true;
+    microphonePermissionGate?.revoke();
     clearInterval(poll);
     clearInterval(eventPoll);
     tray?.destroy();
