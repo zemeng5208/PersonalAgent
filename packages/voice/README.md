@@ -169,6 +169,49 @@ Subscribing to the port (`port.subscribe({signal, deadline, onFrame, onEnd})`) r
 - **Privacy and wire boundary**: No audio or text logs. The public wire capabilities `voice.start`
   and `voice.stop` remain separate and unpublished.
 
+## Windows System.Speech keyword detection (`createWindowsSystemSpeechKeywordDetector`)
+
+`createWindowsSystemSpeechKeywordDetector({keyword: string})` returns a provider-specific
+streaming keyword detection port (`SpeechKeywordDetectorPort`) for the installed Windows
+`.NET Framework` `System.Speech` engine. It recognizes a trusted-host configured short keyword
+phrase from incoming PCM frames without opening a microphone or running general ASR.
+
+### Trust boundary and keyword validation
+
+1. **Keyword source**: Accepted only from the trusted host (e.g. Desktop main process).
+   No brand strings or default keywords are hardcoded in the package; the product default
+   phrase (such as "你好小派") is passed by the host and remains disabled until the user
+   explicitly enables it in trusted settings.
+2. **Phrase constraints**: One bounded, control-free Chinese (`zh-CN`) short phrase (maximum
+   32 characters). Injection characters (`<`, `>`, `&`, `"`, `'`, backslashes, semicolons,
+   control characters, newlines) are strictly rejected with `INVALID_ARGUMENT`.
+3. **Grammar as DATA**: In the native host child, the phrase is constructed directly via
+   `GrammarBuilder`/`Choices` as data. No arbitrary grammar XML, disk files, paths, or CLI
+   commands are permitted.
+
+### Session lifecycle and streaming
+
+- `port.start({signal, deadline, onDetected})`: Starts an active keyword session (`SpeechKeywordSession`).
+  - `ready: Promise<void>`: Resolves only after the native child verifies installed `zh-CN`
+    speech recognition components, loads the single-phrase grammar, establishes
+    `SetInputToAudioStream`, and starts `RecognizeAsync(RecognizeMode.Multiple)`. If `zh-CN`
+    components are missing, `ready` rejects with `VoiceSessionError` (`UNSUPPORTED_CAPABILITY`)
+    and `closed` resolves with reason `'unavailable'`. On process crash or malformed envelope,
+    `ready` rejects with `EXTERNAL_FAILURE` and `closed` resolves with `'external_failure'`.
+  - `accept(frame: VoicePcmFrame)`: Accepts 16 kHz mono S16LE PCM frames. Enforces sequence
+    numbers strictly monotonic from 0, `VOICE_AUDIO_FORMAT`, even non-empty byte lengths up to
+    3,200 bytes (100 ms).
+  - **Queue limits and overflow**: The session queue is strictly bounded at 4 frames / 12,800 bytes.
+    Exceeding this bound terminates the session immediately with terminal reason `'overflow'`,
+    killing the child process and zeroing all queued data in memory.
+  - `onDetected: () => void`: Empty callback invoked on each keyword match. Under no circumstance
+    is recognized raw text, audio samples, or transcripts logged or forwarded to Node.js.
+  - `closed: Promise<{reason, detections}>`: Resolves with terminal reason (`'stopped'`,
+    `'cancelled'`, `'deadline'`, `'unavailable'`, `'overflow'`, `'external_failure'`, or
+    `'disposed'`) and the total detection count.
+  - `stop(): Promise<void>`: Idempotent operation that stops recognition, terminates the exact
+    native child process, awaits its exit, and zeroes all pending buffers.
+
 ## Fake use and verification
 
 `@personal-agent/voice/testing` exports Fake recognition, explicit transcript consumer
