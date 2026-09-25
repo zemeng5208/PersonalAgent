@@ -168,6 +168,22 @@ Subscribing to the port (`port.subscribe({signal, deadline, onFrame, onEnd})`) r
   `'deadline'`, `'revoked'`, `'device_unavailable'`, `'overflow'`, or `'disposed'`.
 - **Privacy and wire boundary**: No audio or text logs. The public wire capabilities `voice.start`
   and `voice.stop` remain separate and unpublished.
+## Bounded PCM accumulation
+
+`createVoicePcmBuffer()` is a synchronous trusted-host helper for the bytes collected by
+an external push-to-talk source. It never opens a microphone or file and accepts only
+non-empty, even-length PCM S16LE chunks for the package's fixed 16 kHz mono format.
+Every append is copied immediately into one lazily allocated, capacity-bounded contiguous
+buffer, so arbitrarily small chunks cannot create unbounded retained-object overhead.
+Total bytes are bounded by both the public 60-second limit and an optional smaller
+duration; capacity overflow fails without truncation.
+
+`finish()` returns one independent `VoiceAudioClip`, derives its duration from the fixed
+32 bytes per millisecond rate, and then zeroes and releases the retained buffer.
+`dispose()`, parent abort, and the required deadline also zero and release retained audio;
+the deadline timer remains active while the buffer is idle and all terminal paths detach
+the timer and abort listener. This helper owns no session or Runtime state, emits no audio
+logs, and cannot translate cancellation into `task.cancel`.
 
 ## Fake use and verification
 

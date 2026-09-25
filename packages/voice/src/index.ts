@@ -33,6 +33,8 @@ export type {
   VoicePcmTerminalReason,
 } from './ports.js';
 export {createVoicePcmFrameSourcePort} from './pcm-frame-source.js';
+export {createVoicePcmBuffer} from './pcm-buffer.js';
+export type {VoicePcmBuffer, VoicePcmBufferOptions} from './pcm-buffer.js';
 export {
   UnavailableSpeechOutputPort,
   UnavailableSpeechRecognitionPort,
