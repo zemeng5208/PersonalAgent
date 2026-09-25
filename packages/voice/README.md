@@ -128,23 +128,32 @@ The voice package never opens a microphone, queries OS device permissions, or is
 authorization. No audio capture starts by default. The trusted host (MOD-11 Desktop main process)
 must perform its own explicit permission checks, manage physical media device lifecycles, and
 pass an already-authorized capture binding. The Renderer cannot grant authorization or sign tokens.
+The host capture binding must attach to ONE physical `getUserMedia` capture source as a
+refcount/fanout attachment, supporting concurrent subscribers (e.g. wake word detection and speech
+recognition) rather than opening a new microphone per subscriber.
 
 ### Handoff for MOD-11 physical track release
 
 Subscribing to the port (`port.subscribe({signal, deadline, onFrame, onEnd})`) returns
-`{unsubscribe(): void, closed: Promise<void>}`.
-When a subscription terminates (via caller `unsubscribe()`, parent `signal` abort, ISO UTC
-`deadline` timeout, queue overflow, capture revocation, device unavailability, or port disposal):
-1. Callback delivery halts immediately with no late `onFrame` callbacks.
-2. All buffered/queued PCM frames are immediately zeroed in memory (`.fill(0)`) and discarded.
-3. The port invokes the host binding's upstream `release()` handle.
-4. The `closed` promise awaits the host release receipt, guaranteeing physical audio tracks and
-   capture hardware resources are released before `closed` resolves. `closed` resolves only after
-   successful host release and rejects with `EXTERNAL_FAILURE` if host release fails. If `binding.start()`
-   throws, rejects, or omits a release function, delivery ends with `onEnd('device_unavailable')` and
-   `closed` rejects with `EXTERNAL_FAILURE` because physical track release cannot be proven. The trusted
-   host binding must clean up its own partial capture resources on start failure; the host must not
-   infer physical track release from an `onEnd` callback alone.
+`{ready: Promise<void>, unsubscribe(): void, closed: Promise<void>}`.
+1. `ready` resolves only after the host capture binding has successfully returned a valid release
+   handle and confirmed capture availability. If start throws, rejects, returns an invalid handle,
+   or if the subscription terminates before ready, `ready` rejects with a fixed `VoiceSessionError`.
+2. When a subscription terminates (via caller `unsubscribe()`, parent `signal` abort, ISO UTC
+   `deadline` timeout, queue overflow, capture revocation, device unavailability, or port disposal):
+   - Callback delivery halts immediately with no late `onFrame` callbacks.
+   - All buffered/queued PCM frames are immediately zeroed in memory (`.fill(0)`) and discarded.
+   - The port invokes the subscription's upstream `release()` handle (including any late-returned
+     handle from an in-flight async start).
+   - The `closed` promise awaits the release of that subscription's attachment. `closed` resolves
+     only after successful release and rejects with `EXTERNAL_FAILURE` if release fails or start
+     failure prevents release proof. Proves only that this attachment was detached; physical capture
+     continues if other subscribers remain active.
+   - `port.dispose()` awaits all attachments and serves as the whole-source release receipt under the
+     host contract. If any release failed, `dispose()` rejects with `EXTERNAL_FAILURE` and remembers
+     this failure for subsequent calls.
+   - The trusted host binding must clean up its own partial capture resources on start failure; the
+     host must not infer physical track release from an `onEnd` callback alone.
 
 ### Frame and queue guarantees
 

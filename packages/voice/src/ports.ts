@@ -126,11 +126,18 @@ export interface VoicePcmFrameSubscribeOptions {
 }
 
 export interface VoicePcmFrameSubscription {
+  /**
+   * Resolves only after the host capture binding has successfully returned a valid release
+   * handle and confirmed capture availability. Rejects with VoiceSessionError if start fails,
+   * an invalid handle is returned, or the subscription terminates before ready.
+   */
+  readonly ready: Promise<void>;
   unsubscribe(): void;
   /**
-   * Resolves only after successful host release of physical capture resources and rejects
-   * with EXTERNAL_FAILURE if host release fails or start failure prevents release proof.
-   * The host must not infer track release from an onEnd callback alone.
+   * Resolves only after successful host release of this subscription's attachment and rejects
+   * with EXTERNAL_FAILURE if release fails or start failure prevents release proof.
+   * The host must not infer track release from an onEnd callback alone. Proves only that this
+   * attachment was detached; physical capture continues if other subscribers remain active.
    */
   readonly closed: Promise<void>;
 }
@@ -152,7 +159,19 @@ export interface VoicePcmCaptureSubscription {
 
 export interface VoicePcmCaptureBinding {
   /**
-   * Starts capture on trusted host hardware and returns a release handle.
+   * Attaches a capture sink to the trusted host's authorized audio hardware.
+   *
+   * The host implementation must maintain ONE physical getUserMedia capture source
+   * and implement start(sink) as a refcount/fanout attachment to that single physical source,
+   * not create a new microphone per call. Multiple subscribers must be supported concurrently
+   * (e.g. concurrent wake word detection and speech recognition).
+   *
+   * Each returned release handle detaches that subscription's attachment and, when the last
+   * reference is detached, awaits actual physical track stop. A single subscription.closed
+   * proves only its attachment was released; it must not claim the whole microphone is stopped
+   * if other subscribers remain active. port.dispose() awaits all attachments and serves as
+   * the whole-source release receipt under the host contract.
+   *
    * If start throws, rejects, or returns an invalid handle without a release function,
    * delivery ends with device_unavailable and closed rejects with EXTERNAL_FAILURE
    * because physical track release cannot be proven. The host must clean up its own

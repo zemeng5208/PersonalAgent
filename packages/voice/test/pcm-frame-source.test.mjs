@@ -103,6 +103,8 @@ test('unsubscribe and cancel invalidate immediately with no late callbacks and a
     },
   });
 
+  await subA.ready;
+
   fakeBinding.emitFrame(new Uint8Array(640).fill(1));
   assert.equal(receivedA.length, 1);
   assert.equal(receivedA[0].sequence, 0);
@@ -434,6 +436,15 @@ test('multi-subscription release failure waits for all pending releases and sync
 
   assert.equal(syncEndReason, 'device_unavailable');
   await assert.rejects(
+    failSub.ready,
+    error => {
+      assert.equal(error instanceof VoiceSessionError, true);
+      assert.equal(error.code, 'EXTERNAL_FAILURE');
+      assert.equal(error.message, 'Voice PCM capture start failed');
+      return true;
+    },
+  );
+  await assert.rejects(
     failSub.closed,
     error => {
       assert.equal(error instanceof VoiceSessionError, true);
@@ -442,4 +453,135 @@ test('multi-subscription release failure waits for all pending releases and sync
       return true;
     },
   );
+});
+
+test('concurrent subscriptions coexist on shared binding and closing one does not stop the other', async () => {
+  const fakeBinding = new FakeVoicePcmCaptureBinding({releaseDelayMs: 20});
+  const port = createVoicePcmFrameSourcePort(fakeBinding);
+
+  const framesA = [];
+  const framesB = [];
+  let endCountA = 0;
+  let endCountB = 0;
+
+  const subA = port.subscribe({
+    signal: new AbortController().signal,
+    deadline: futureDeadline(),
+    onFrame: frame => {
+      framesA.push(frame);
+    },
+    onEnd: () => {
+      endCountA += 1;
+    },
+  });
+
+  const subB = port.subscribe({
+    signal: new AbortController().signal,
+    deadline: futureDeadline(),
+    onFrame: frame => {
+      framesB.push(frame);
+    },
+    onEnd: () => {
+      endCountB += 1;
+    },
+  });
+
+  await subA.ready;
+  await subB.ready;
+
+  assert.equal(fakeBinding.startCount, 2);
+  assert.equal(fakeBinding.activeSubscriptions, 2);
+
+  // Both receive frame 1
+  fakeBinding.emitFrame(new Uint8Array(640).fill(1));
+  assert.equal(framesA.length, 1);
+  assert.equal(framesB.length, 1);
+
+  // Close subA
+  subA.unsubscribe();
+  await subA.closed;
+
+  assert.equal(endCountA, 1);
+  assert.equal(endCountB, 0);
+  assert.equal(fakeBinding.activeSubscriptions, 1);
+  assert.equal(fakeBinding.releaseCount, 1);
+
+  // subB continues receiving frame 2 while subA receives nothing
+  fakeBinding.emitFrame(new Uint8Array(640).fill(2));
+  assert.equal(framesA.length, 1);
+  assert.equal(framesB.length, 2);
+
+  // Port disposal cleans up subB and awaits its release
+  await port.dispose();
+  assert.equal(endCountB, 1);
+  assert.equal(fakeBinding.activeSubscriptions, 0);
+  assert.equal(fakeBinding.releaseCount, 2);
+});
+
+test('async start with stop before ready rejects ready and releases late handle exactly once', async () => {
+  let releaseCalls = 0;
+  let releaseCompleted = false;
+  let resolveStart;
+  const startGate = new Promise(resolve => {
+    resolveStart = resolve;
+  });
+
+  const binding = {
+    async start() {
+      await startGate;
+      return {
+        async release() {
+          releaseCalls += 1;
+          await new Promise(resolve => setTimeout(resolve, 20));
+          releaseCompleted = true;
+        },
+      };
+    },
+  };
+
+  const port = createVoicePcmFrameSourcePort(binding);
+  let endReason;
+
+  const sub = port.subscribe({
+    signal: new AbortController().signal,
+    deadline: futureDeadline(),
+    onFrame: () => {},
+    onEnd: reason => {
+      endReason = reason;
+    },
+  });
+
+  // Stop the subscription BEFORE startGate resolves (while binding.start() is still pending)
+  sub.unsubscribe();
+  assert.equal(endReason, 'disposed');
+
+  // ready must reject with INVALID_STATE because session was disposed before ready
+  await assert.rejects(
+    sub.ready,
+    error => {
+      assert.equal(error instanceof VoiceSessionError, true);
+      assert.equal(error.code, 'INVALID_STATE');
+      assert.equal(error.message, 'Voice PCM subscription disposed before capture ready');
+      return true;
+    },
+  );
+
+  // closed must not have settled yet because the start promise has not resolved and handle hasn't been released
+  let closedSettled = false;
+  const closedPromise = sub.closed.then(() => {
+    closedSettled = true;
+  });
+
+  assert.equal(closedSettled, false);
+  assert.equal(releaseCalls, 0);
+
+  // Now resolve the delayed start
+  resolveStart();
+
+  // closed should await release completion
+  await closedPromise;
+
+  assert.equal(closedSettled, true);
+  assert.equal(releaseCalls, 1);
+  assert.equal(releaseCompleted, true);
 });

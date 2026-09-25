@@ -71,6 +71,24 @@ function extractChunkData(chunk: unknown): Uint8Array {
   invalid('Invalid voice PCM frame');
 }
 
+function readyErrorForReason(reason: VoicePcmTerminalReason): VoiceSessionError {
+  switch (reason) {
+    case 'cancelled':
+      return new VoiceSessionError('CANCELLED', 'Voice PCM subscription cancelled before capture ready');
+    case 'deadline':
+      return new VoiceSessionError('TIMEOUT', 'Voice PCM subscription deadline expired before capture ready');
+    case 'disposed':
+      return new VoiceSessionError('INVALID_STATE', 'Voice PCM subscription disposed before capture ready');
+    case 'revoked':
+      return new VoiceSessionError('EXTERNAL_FAILURE', 'Voice PCM capture revoked before capture ready');
+    case 'overflow':
+      return new VoiceSessionError('EXTERNAL_FAILURE', 'Voice PCM buffer overflow before capture ready');
+    case 'device_unavailable':
+    default:
+      return new VoiceSessionError('EXTERNAL_FAILURE', 'Voice PCM capture start failed');
+  }
+}
+
 class SubscriptionSession {
   private state: 'active' | 'closed' = 'active';
   private endCalled = false;
@@ -87,12 +105,22 @@ class SubscriptionSession {
   private rejectUpstreamSub!: (reason: unknown) => void;
   private readonly upstreamSubPromise: Promise<VoicePcmCaptureSubscription | undefined>;
   private upstreamReleasePromise: Promise<void> | undefined;
+  private resolveReady!: () => void;
+  private rejectReady!: (reason: unknown) => void;
+  private readySettled = false;
+  /**
+   * Resolves only after the host capture binding has successfully returned a valid release
+   * handle and confirmed capture availability. Rejects with VoiceSessionError if start fails,
+   * an invalid handle is returned, or the subscription terminates before ready.
+   */
+  readonly ready: Promise<void>;
   private resolveClosed!: () => void;
   private rejectClosed!: (reason: unknown) => void;
   /**
-   * Resolves only after successful host release of physical capture resources and rejects
+   * Resolves only after successful host release of this subscription's attachment and rejects
    * with EXTERNAL_FAILURE if host release fails or start failure prevents release proof.
-   * The host must not infer track release from an onEnd callback alone.
+   * The host must not infer track release from an onEnd callback alone. Proves only that this
+   * attachment was detached; physical capture continues if other subscribers remain active.
    */
   readonly closed: Promise<void>;
 
@@ -107,6 +135,12 @@ class SubscriptionSession {
       sink: VoicePcmCaptureSink,
     ) => Promise<VoicePcmCaptureSubscription> | VoicePcmCaptureSubscription,
   ) {
+    this.ready = new Promise<void>((resolve, reject) => {
+      this.resolveReady = resolve;
+      this.rejectReady = reject;
+    });
+    this.ready.catch(() => {});
+
     this.closed = new Promise<void>((resolve, reject) => {
       this.resolveClosed = resolve;
       this.rejectClosed = reject;
@@ -179,6 +213,10 @@ class SubscriptionSession {
     const handleSub = (sub: unknown): void => {
       if (sub !== null && typeof sub === 'object' && typeof (sub as VoicePcmCaptureSubscription).release === 'function') {
         this.resolveUpstreamSub(sub as VoicePcmCaptureSubscription);
+        if (this.state === 'active' && !this.readySettled) {
+          this.readySettled = true;
+          this.resolveReady();
+        }
       } else {
         this.rejectUpstreamSub(
           new VoiceSessionError('EXTERNAL_FAILURE', 'Voice PCM capture release failed'),
@@ -273,6 +311,11 @@ class SubscriptionSession {
     if (this.state === 'closed') return;
     this.state = 'closed';
 
+    if (!this.readySettled) {
+      this.readySettled = true;
+      this.rejectReady(readyErrorForReason(reason));
+    }
+
     if (this.deadlineTimer !== undefined) {
       clearTimeout(this.deadlineTimer);
       this.deadlineTimer = undefined;
@@ -333,10 +376,14 @@ class SubscriptionSession {
  * The voice package never opens a microphone, checks OS permission, or issues capture authorization.
  * The host must verify user consent and hardware capture beforehand and pass its authorized binding here.
  *
- * Each subscription's `closed` promise resolves only after successful host release of physical
- * capture resources and rejects with EXTERNAL_FAILURE if host release fails or start failure
- * prevents release proof. The host must clean up its own partial capture resources on start failure;
- * the host must not infer track release from an onEnd callback alone.
+ * The host capture binding represents a single authorized physical capture source; multiple
+ * subscribers attach concurrently via refcount/fanout. Each subscription exposes `ready`, which
+ * resolves only after the host binding returns a valid release handle and confirms capture availability.
+ * Each subscription's `closed` promise resolves only after successful host release of that
+ * subscription's attachment (and rejects with EXTERNAL_FAILURE if release fails or start failure
+ * prevents release proof). The host must clean up its own partial capture resources on start failure;
+ * the host must not infer physical track release from an onEnd callback alone.
+ * `port.dispose()` awaits all attachments and serves as the whole-source release receipt under the host contract.
  */
 export function createVoicePcmFrameSourcePort(
   binding: VoicePcmCaptureBinding,
@@ -387,6 +434,7 @@ export function createVoicePcmFrameSourcePort(
         .catch(() => {});
 
       return {
+        ready: session.ready,
         unsubscribe(): void {
           session.close('disposed');
         },
