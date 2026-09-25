@@ -29,9 +29,10 @@ Fake 结果替代。当前尚无可配对的对照读回，不能填入臆造结
 部署主要输出结构化提案，评估前须先核对其输出是否足以覆盖这三条语义，不能修改主链回执
 来填评分表。独立评估版本或对照部署需要实际版本读回后才能比较。
 
-多 Agent 角色必须从真实 trace 顺序核对为：世界状态影响分析 `impact` → 计划最小修复
-`repair` → 证据安全审查 `safety`。每个角色有一对 start/end；两次交接由前一角色 end 后紧接
-下一角色 start 计数。单 Workflow 对照记为 `baseline:start/end`。有具体稳定性疑点时才重复，
+现有离线评分器中的 `impact` → `repair` → `safety` 六事件序列只适用于**事先确定应经过
+全部三角色**的合成对照；每个角色一对 start/end，两次交接由前一角色 end 后紧接下一角色
+start 计数。它不能评分按输入分支选择的简单路径。单 Workflow 对照记为
+`baseline:start/end`。有具体稳定性疑点时才重复，
 重复次数只描述观察稳定性，少量样本不构成统计显著性。已有 2026-09-25 完整主链回执只证明一个合成会议场景通过，
 不是本任务集的重复评估或对照结果，不再为本包重跑该主链。
 
@@ -107,3 +108,28 @@ MOD-29 的唯一平台记录只读关联者读回 trace `668cded1dd4cb0de4a38bae
 此处仅报告协议、事件数量及条件关联的平台耗时/token，不从三个 Workflow 数量推断三角色
 协作有效。若比赛效果陈述需要角色交接证据，应由 MOD-30 核对云配置和平台可观测字段，
 取得能关联到源工作流身份的同链回执；MOD-31 才按实际字段评分。
+
+## 分支编排的最小角色证据约定
+
+MOD-30 已在 AgentArts 管理界面确认新的单组合入口设计：Start → Python Code 严格解析分类
+→ Judge；复杂 continuation/repairContext 走 World LLM → Plan → Review，普通真实目录请求走
+Review 一次，非法或缺目录输入给严格文本。主多 Agent 仍保留三个独立源角色，避免外层
+重复模型调用。这是**配置设计与界面读回**，不是各分支运行时已验收。
+
+| 实际选中分支 | 预期角色证据 | 评分口径 |
+| --- | --- | --- |
+| 复杂 continuation/repairContext | World、Plan、Review 各自稳定的源身份与版本、实际 span 开始/结束、World→Plan 与 Plan→Review 的父子或关联边，以及脱敏输入输出字段 | 只有真实 trace 能连接三角色和两次交接时，才计多 Agent 路由/交接；失败、超时和降级单独记录 |
+| 普通真实目录请求 | 受信分类与路由原因、Review 的实际源身份/span、最终输出 | World/Plan 若确实未被选中，记 `skipped_by_route`，预期交接为 0；Review-only 不作为三角色协作成功案例 |
+| 非法或缺目录 | 受信分类与严格文本分支、实际到达的节点与终结输出 | 未进入的角色按证据记 `skipped_by_route`；不凭文本自行推断任何角色运行 |
+
+每次观察至少关联同一请求、已发布主版本与源角色版本、平台 trace、受信分支决定和原因；
+嵌套角色 span 应有稳定角色/工作流 ID、时间顺序、父子或 links、交接源/目标及必要的脱敏
+输入输出键/类型，并记录 error、fallback、调用次数与 usage。`skipped_by_route` 必须同时有
+受信分支决定及完整 trace 中该角色未运行；缺角色字段仅记 `unobserved`，已调用后失败记
+`failed`。三次模型调用、节点命名、设计画布或模型自报均不能代替运行时身份与交接。
+
+当前 main 的冻结契约仅为 Core Runtime Profile 1；`CoordinationPort`/`CloudAgentPort` 仍是
+provisional。现有 `CoordinationResult` 只提供最终 text/tool proposal/repair candidate 与
+验证等级，SSE 的可选 `workflow_id`/`workflow_name` 仅用于事件配对，不向结果暴露嵌套
+角色映射。因此本包不从现有最终结果构造角色记录；在看到真实平台嵌套 trace 字段之前，
+不修改评分器去猜新格式，也不把旧六事件假设用于这些新分支。
