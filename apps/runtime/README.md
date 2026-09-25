@@ -61,7 +61,10 @@ for the precise offline boundary and the unresolved real cloud/MCP lifecycle.
   to one fixed consumer, the SQLite feed/query, durable Runtime graph projection,
   host-only confirmation and pending impact processor. `consume` advances one exact
   batch; `drain` catches up within an explicit batch limit and reports whether it
-  reached the watermark. A trusted host must trigger it after verified source
+  reached the watermark. `processImpacts` filters pending items by the fixed
+  consumer/Memory namespace before applying its limit and returns batch-tokened
+  completed reports; `readCompletedImpact` reads that exact durable receipt after
+  restart. A trusted host must trigger it after verified source
   changes and on startup recovery; it does not poll private sources or publish to
   AgentArts. Source correction and withdrawal remain append-only Fact revisions.
 - Explicit task transition rules and immutable terminal states.

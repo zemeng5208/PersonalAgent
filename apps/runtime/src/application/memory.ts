@@ -16,6 +16,7 @@ import type {ImpactReport} from '@personal-agent/cognition';
 import type {CoordinationStorePort} from '@personal-agent/goals/store';
 import {FactProjectionError} from '../fact-projection-store.js';
 import type {
+  CompletedFactImpact,
   FactProjectionReceipt,
   FactProjectionStore
 } from '../fact-projection-store.js';
@@ -45,11 +46,13 @@ export interface MemoryProjectionApplicationOptions {
 
 export interface PendingImpactApplication {
   process(request: MemoryReadContext & {readonly at: string; readonly limit: number}): readonly ImpactReport[];
+  processReceipts(request: MemoryReadContext & {readonly at: string; readonly limit: number}): readonly CompletedFactImpact[];
 }
 
 export interface PendingImpactApplicationOptions {
   readonly coordination: CoordinationStorePort;
   readonly projection: FactProjectionStore;
+  readonly scope?: {readonly consumerKey: string; readonly memoryNamespace: string};
 }
 
 function text(value: unknown): string {
@@ -130,26 +133,32 @@ export function createMemoryProjectionApplication(
 export function createPendingImpactApplication(
   options: PendingImpactApplicationOptions
 ): PendingImpactApplication {
-  return Object.freeze({
-    process: (request: MemoryReadContext & {readonly at: string; readonly limit: number}): readonly ImpactReport[] => {
+  const scope = options.scope === undefined ? undefined : {
+    consumerKey: text(options.scope.consumerKey), memoryNamespace: text(options.scope.memoryNamespace),
+  };
+  const processReceipts = (request: MemoryReadContext & {readonly at: string; readonly limit: number}): readonly CompletedFactImpact[] => {
+    active(request);
+    const pending = options.projection.readPending(request.limit, scope);
+    const receipts: CompletedFactImpact[] = [];
+    for (const item of pending) {
       active(request);
-      const pending = options.projection.readPending(request.limit);
-      const reports: ImpactReport[] = [];
-      for (const item of pending) {
-        active(request);
-        const report = analyzeImpact(options.coordination.read(item.graphRevision), request.at);
-        options.projection.completeImpact({
-          consumerKey: item.consumerKey,
-          memoryNamespace: item.memoryNamespace,
-          batchToken: item.batchToken,
-          expectedGraphRevision: item.graphRevision,
-          report,
-          deadline: request.deadline,
-          signal: request.signal
-        });
-        reports.push(report);
-      }
-      return reports;
+      const report = analyzeImpact(options.coordination.read(item.graphRevision), request.at);
+      options.projection.completeImpact({
+        consumerKey: item.consumerKey,
+        memoryNamespace: item.memoryNamespace,
+        batchToken: item.batchToken,
+        expectedGraphRevision: item.graphRevision,
+        report,
+        deadline: request.deadline,
+        signal: request.signal
+      });
+      receipts.push({batchToken: item.batchToken, report});
     }
+    return receipts;
+  };
+  return Object.freeze({
+    process: (request: MemoryReadContext & {readonly at: string; readonly limit: number}): readonly ImpactReport[] =>
+      processReceipts(request).map(item => item.report),
+    processReceipts,
   });
 }

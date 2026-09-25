@@ -1,8 +1,8 @@
 import type {MemoryReadContext} from '@personal-agent/memory';
 import type {SqliteMemoryHost} from '@personal-agent/memory/sqlite';
-import type {ImpactReport} from '@personal-agent/cognition';
 import type {TaskRuntime} from '../index.js';
 import {FactProjectionError} from '../fact-projection-store.js';
+import type {CompletedFactImpact} from '../fact-projection-store.js';
 import {createMemoryProjectionApplication, createPendingImpactApplication} from './memory.js';
 import type {MemoryProjectionResult} from './memory.js';
 
@@ -24,7 +24,9 @@ export interface SqliteFactProjectionHost {
     readonly atWatermark: boolean;
   }>;
   /** Analysis remains a separate local phase; it never grants write or cloud access. */
-  processImpacts(request: MemoryReadContext & {readonly at: string; readonly limit: number}): readonly ImpactReport[];
+  processImpacts(request: MemoryReadContext & {readonly at: string; readonly limit: number}): readonly CompletedFactImpact[];
+  /** Exact durable receipt for a batch this consumer owns; undefined while pending. */
+  readCompletedImpact(batchToken: string): CompletedFactImpact | undefined;
 }
 
 /**
@@ -50,6 +52,7 @@ export function createSqliteFactProjectionHost(options: SqliteFactProjectionHost
   });
   const impacts = createPendingImpactApplication({
     coordination: runtime.bindCoordinationStore(graphNamespace), projection,
+    scope: {consumerKey, memoryNamespace},
   });
   return Object.freeze({
     consume: (request: MemoryReadContext & {readonly limit: number}) => app.consume(request),
@@ -64,6 +67,9 @@ export function createSqliteFactProjectionHost(options: SqliteFactProjectionHost
       return {batches: request.maxBatches, atWatermark: false};
     },
     processImpacts: (request: MemoryReadContext & {readonly at: string; readonly limit: number}) =>
-      impacts.process(request),
+      impacts.processReceipts(request),
+    readCompletedImpact: (batchToken: string) => projection.readCompletedImpact({
+      consumerKey, memoryNamespace, batchToken,
+    }),
   });
 }

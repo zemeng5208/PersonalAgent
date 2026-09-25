@@ -74,3 +74,43 @@ test('trusted SQLite feed binding confirms public source corrections across rest
     await rm(directory, {recursive: true, force: true});
   }
 });
+
+test('shared graph keeps pending impact receipts within each fixed consumer scope', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'personal-agent-fact-scope-'));
+  const memory = openSqliteMemoryHost(join(directory, 'memory.sqlite'));
+  const runtime = new TaskRuntime(join(directory, 'runtime.sqlite'));
+  try {
+    const graphNamespace = 'shared-synthetic-graph';
+    const append = (memoryNamespace, factId, revision) => {
+      memory.provision(memoryNamespace);
+      return memory.appendPublicSource(memoryNamespace, {
+        vaultId: 'public-demo', path: `${factId}.md`, factId,
+        sourceRevision: revision.repeat(64), line: 1, summary: `Synthetic ${factId}`,
+        observedAt: '2026-09-25T00:00:00.000Z', validFrom: '2026-09-25T00:00:00.000Z',
+        validUntil: '2027-01-01T00:00:00.000Z', expectedFactRevision: null, ...context(),
+      });
+    };
+    append('memory-b', 'fact-b', 'b');
+    const hostB = createSqliteFactProjectionHost({memory, runtime,
+      memoryNamespace: 'memory-b', graphNamespace, consumerKey: 'consumer-b'});
+    const batchB = await hostB.consume({limit: 10, ...context()});
+    append('memory-a', 'fact-a', 'a');
+    const hostA = createSqliteFactProjectionHost({memory, runtime,
+      memoryNamespace: 'memory-a', graphNamespace, consumerKey: 'consumer-a'});
+    const batchA = await hostA.consume({limit: 10, ...context()});
+    assert.equal(runtime.bindFactProjectionStore(graphNamespace).readPending().length, 2);
+    const processedA = hostA.processImpacts({at: '2026-09-25T03:00:00.000Z', limit: 1, ...context()});
+    assert.deepEqual(processedA.map(item => item.batchToken), [batchA.batch.batchToken]);
+    assert.deepEqual(hostA.readCompletedImpact(batchA.batch.batchToken), processedA[0]);
+    assert.throws(() => hostA.readCompletedImpact(batchB.batch.batchToken), {code: 'NOT_FOUND'});
+    assert.equal(hostB.readCompletedImpact(batchB.batch.batchToken), undefined);
+    assert.equal(runtime.bindFactProjectionStore(graphNamespace).readPending().length, 1);
+    const processedB = hostB.processImpacts({at: '2026-09-25T03:00:00.000Z', limit: 1, ...context()});
+    assert.deepEqual(processedB.map(item => item.batchToken), [batchB.batch.batchToken]);
+    assert.deepEqual(hostB.readCompletedImpact(batchB.batch.batchToken), processedB[0]);
+    assert.deepEqual(runtime.bindFactProjectionStore(graphNamespace).readPending(), []);
+  } finally {
+    memory.close(); runtime.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});

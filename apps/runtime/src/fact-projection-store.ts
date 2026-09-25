@@ -31,6 +31,11 @@ export interface PendingFactImpact extends FactProjectionReceipt {
   readonly memoryNamespace: string;
 }
 
+export interface CompletedFactImpact {
+  readonly batchToken: string;
+  readonly report: ImpactReport;
+}
+
 export type StagedFactProjection = Pick<FactProjectionRequest,
   'consumerKey' | 'memoryNamespace' | 'batch' | 'facts'>;
 
@@ -39,7 +44,9 @@ export interface FactProjectionStore {
   readStaged(consumerKey: string, memoryNamespace: string): StagedFactProjection | undefined;
   discardStaged(consumerKey: string, memoryNamespace: string, batchToken: string): void;
   project(request: FactProjectionRequest, providerReceipt: FactChangeReceipt): FactProjectionReceipt;
-  readPending(limit?: number): readonly PendingFactImpact[];
+  readPending(limit?: number, scope?: {readonly consumerKey: string; readonly memoryNamespace: string}): readonly PendingFactImpact[];
+  readCompletedImpact(scope: {readonly consumerKey: string; readonly memoryNamespace: string;
+    readonly batchToken: string}): CompletedFactImpact | undefined;
   completeImpact(request: CompleteFactImpactRequest): void;
 }
 
@@ -437,15 +444,18 @@ export function bindFactProjectionStore(db: DatabaseSync, graphNamespace: string
         }
       });
     },
-    readPending: (limit = 100): readonly PendingFactImpact[] => storage(() => {
+    readPending: (limit = 100, scope?: {readonly consumerKey: string; readonly memoryNamespace: string}): readonly PendingFactImpact[] => storage(() => {
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new FactProjectionError('INVALID_ARGUMENT');
+      const consumer = scope === undefined ? undefined : text(scope.consumerKey);
+      const memory = scope === undefined ? undefined : text(scope.memoryNamespace);
       loadGraph(db, namespace);
       const rows = db.prepare([
         'SELECT memory_namespace, consumer_key, batch_token, graph_revision, links_json',
         'FROM coordination_pending_impacts',
         'WHERE graph_namespace = ? AND handled_at IS NULL',
+        ...(scope === undefined ? [] : ['AND consumer_key = ? AND memory_namespace = ?']),
         'ORDER BY created_at, batch_token LIMIT ?'
-      ].join(' ')).all(namespace, limit) as Record<string, unknown>[];
+      ].join(' ')).all(...(scope === undefined ? [namespace, limit] : [namespace, consumer!, memory!, limit])) as Record<string, unknown>[];
       return rows.map(row => ({
         memoryNamespace: row.memory_namespace as string,
         consumerKey: row.consumer_key as string,
@@ -453,6 +463,22 @@ export function bindFactProjectionStore(db: DatabaseSync, graphNamespace: string
         graphRevision: row.graph_revision as number,
         links: parseLinks(JSON.parse(row.links_json as string))
       }));
+    }),
+    readCompletedImpact: (scope: {readonly consumerKey: string; readonly memoryNamespace: string;
+      readonly batchToken: string}): CompletedFactImpact | undefined => storage(() => {
+      const consumer = text(scope.consumerKey);
+      const memory = text(scope.memoryNamespace);
+      const batchToken = text(scope.batchToken);
+      const row = db.prepare([
+        'SELECT graph_revision, handled_at, report_json FROM coordination_pending_impacts',
+        'WHERE graph_namespace = ? AND memory_namespace = ? AND consumer_key = ? AND batch_token = ?'
+      ].join(' ')).get(namespace, memory, consumer, batchToken) as Record<string, unknown> | undefined;
+      if (!row) throw new FactProjectionError('NOT_FOUND');
+      if (row.handled_at === null) return undefined;
+      const report = JSON.parse(row.report_json as string) as ImpactReport;
+      if (report.namespace !== namespace || report.graphRevision !== row.graph_revision
+        || !Array.isArray(report.items)) throw new FactProjectionError('STORAGE_UNAVAILABLE');
+      return {batchToken, report: structuredClone(report)};
     }),
     completeImpact: (request: CompleteFactImpactRequest): void => storage(() => {
       const context = {deadline: text(request.deadline), signal: request.signal};
