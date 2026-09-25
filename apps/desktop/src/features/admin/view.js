@@ -40,6 +40,7 @@ const icon = id => `<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke
 
 const tone = state => ['ready', 'connected'].includes(state) ? 'ready' : ['unavailable', 'disconnected', 'disabled', '未连接'].includes(state) ? 'off' : 'warn';
 const badge = (label, state) => `<span class="badge" data-tone="${tone(state)}"><span class="badge-dot"></span>${label}</span>`;
+const healthLabels = {ready: 'Runtime 报告就绪', connecting: '连接中', degraded: '降级', reauth_required: '需要重新授权', disconnected: '未连接', unavailable: '不可用'};
 
 export function mountAdmin(root, invoke, escape) {
   let section = 'settings';
@@ -69,13 +70,23 @@ export function mountAdmin(root, invoke, escape) {
   }
 
   function capabilityTable(data) {
-    const rows = data.capabilities.map(item => `<tr><td>${escape(item.name ?? item.id ?? '—')}</td><td>${escape(item.version ?? '—')}</td><td>${escape(item.sideEffect ?? item.kind ?? '—')}</td><td>${escape((item.requiredScopes ?? item.capabilities ?? []).join(', ') || '—')}</td></tr>`).join('');
-    return `<div class="sheet"><div class="row"><h2>已注册能力</h2><span class="spacer"></span><button class="btn btn-sm" id="refresh-capabilities">刷新</button></div><div class="table-scroll"><table><thead><tr><th>名称</th><th>版本</th><th>副作用</th><th>范围</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="empty">Runtime 当前没有公开能力目录。</td></tr>'}</tbody></table></div></div>`;
+    const status = data.capabilityDirectory ?? {state: 'unavailable', reason: '可信宿主尚未报告能力目录状态'};
+    const health = new Map(data.health.map(item => [item.id, item]));
+    const rows = data.capabilities.map(item => {
+      const state = health.get(item.name);
+      const label = state ? healthLabels[state.state] ?? '状态未知' : '状态未报告';
+      const scopes = Array.isArray(item.requiredScopes) ? item.requiredScopes.join(', ') : '—';
+      return `<tr><td>${escape(item.name ?? '—')}</td><td>${escape(item.version ?? '—')}</td><td>${escape(item.sideEffect ?? '—')}</td><td>${escape(scopes || '—')}</td><td>${badge(escape(label), state?.state)}${state?.reason ? `<br><small>${escape(state.reason)}</small>` : ''}</td></tr>`;
+    }).join('');
+    const empty = status.state === 'loaded' ? 'Runtime 已确认返回空能力目录。' : escape(status.reason);
+    return `<div class="sheet"><div class="row"><h2>已公布能力</h2><span class="spacer"></span><button class="btn btn-sm" id="refresh-capabilities">刷新</button></div><p class="muted" role="${status.state === 'error' ? 'alert' : 'status'}">${escape(status.reason)}</p><p class="muted">健康状态来自 Runtime 能力目录，不代表外部服务已经验收。</p><div class="row"><button class="btn btn-sm" data-jump="models">模型状态</button><button class="btn btn-sm" data-jump="connections">连接健康</button><button class="btn btn-sm" data-jump="authorizations">授权</button></div><div class="table-scroll"><table><thead><tr><th>名称</th><th>版本</th><th>副作用</th><th>范围</th><th>健康</th></tr></thead><tbody>${rows || `<tr><td colspan="5" class="empty">${empty}</td></tr>`}</tbody></table></div></div>`;
   }
 
   function healthTable(data) {
-    const rows = data.health.map(item => `<tr><td>${escape(item.id)}</td><td>${badge(escape(item.state), item.state)}</td><td>${escape(item.reason ?? '—')}</td></tr>`).join('');
-    return `<div class="sheet"><h2>连接健康</h2><div class="table-scroll"><table><thead><tr><th>能力</th><th>状态</th><th>说明</th></tr></thead><tbody>${rows || '<tr><td colspan="3" class="empty">暂无连接器健康信息。</td></tr>'}</tbody></table></div></div>`;
+    const rows = data.health.map(item => `<tr><td>${escape(item.id)}</td><td>${badge(escape(healthLabels[item.state] ?? '状态未知'), item.state)}</td><td>${escape(item.reason ?? '—')}</td></tr>`).join('');
+    const status = data.capabilityDirectory ?? {state: 'unavailable', reason: '可信宿主尚未报告能力目录状态'};
+    const empty = status.state === 'loaded' ? 'Runtime 未报告连接健康项。' : escape(status.reason);
+    return `<div class="sheet"><div class="row"><h2>连接健康</h2><span class="spacer"></span><button class="btn btn-sm" data-jump="capabilities">查看能力目录</button></div><p class="muted" role="${status.state === 'error' ? 'alert' : 'status'}">${escape(status.reason)}</p><p class="muted">仅列出 Runtime 能力目录报告的健康项；未公布的外部连接不会出现在这里。</p><div class="table-scroll"><table><thead><tr><th>能力</th><th>状态</th><th>说明</th></tr></thead><tbody>${rows || `<tr><td colspan="3" class="empty">${empty}</td></tr>`}</tbody></table></div></div>`;
   }
 
   function modelEditor(data) {
@@ -98,6 +109,9 @@ export function mountAdmin(root, invoke, escape) {
   }
 
   const settingRow = (title, detail, control, extra = '') => `<div class="setting-row ${extra}" data-setting-text="${escape(`${title} ${detail}`.toLowerCase())}"><span><b>${escape(title)}</b><small>${escape(detail)}</small></span><span class="setting-control">${control}</span></div>`;
+  const capabilitySummary = (data, key = 'capabilities') => data.capabilityDirectory?.state === 'loaded'
+    ? `${data[key]?.length ?? 0} ${key === 'health' ? '项状态' : '项已公布'}`
+    : data.capabilityDirectory?.reason ?? '能力目录状态未报告';
 
   function settingsPane(data, selected = 'general') {
     const modelStatus = data.model?.status === 'ready' ? '已测试并连接' : data.model?.configured ? '已配置，等待测试' : '未配置';
@@ -141,7 +155,7 @@ export function mountAdmin(root, invoke, escape) {
         settingRow('全局快捷键', 'Windows 全局注册能力尚未接入', '<span class="status-note">待接入</span>', 'is-unavailable')],
       diagnostics: ['诊断与关于', '运行状态、版本边界与应用操作',
         settingRow('Runtime', data.connectionError ? `${data.connection} · ${data.connectionError}` : data.connection, '<button class="btn btn-sm" data-jump="connections">连接状态</button>') +
-        settingRow('能力目录', `${data.capabilities?.length ?? 0} 项已公开`, '<button class="btn btn-sm" data-jump="capabilities">查看目录</button>') +
+        settingRow('能力目录', capabilitySummary(data), '<button class="btn btn-sm" data-jump="capabilities">查看目录</button>') +
         settingRow('PersonalAgent Desktop', 'MOD-11 / MOD-12 / MOD-13 开发版本', '<span class="value-pill">Windows</span>') +
         settingRow('退出应用', '结束托盘、ORB 与所有桌面窗口', '<button class="btn btn-danger btn-sm" id="quit">退出</button>')],
     };
@@ -153,11 +167,11 @@ export function mountAdmin(root, invoke, escape) {
     const features = {
       import: ['导入', '从受支持的数据源迁移个人资料、偏好和记忆。', [['数据文件', '导入协议尚未接入', '待接入'], ['ChatGPT 数据', '当前不会读取第三方账户数据', '不可用'], ['导入记录', '完成真实导入后在此显示', '0 项']]],
       profile: ['个人资料', '管理 PersonalAgent 在本机使用的身份信息。', [['显示名称', '个人资料模块尚未接入', '待设置'], ['头像', '使用本地资源，不会自动上传', '待设置'], ['时区', '跟随 Windows 系统', 'Asia/Shanghai']]],
-      configuration: ['配置', '集中查看模型、Runtime 与能力配置。', [['模型网关', data.model?.reason ?? '状态未知', 'models'], ['Runtime', data.connection, 'connections'], ['已注册能力', `${data.capabilities?.length ?? 0} 项`, 'capabilities']]],
+      configuration: ['配置', '集中查看模型、Runtime 与能力配置。', [['模型网关', data.model?.reason ?? '状态未知', 'models'], ['Runtime', data.connection, 'connections'], ['已公布能力', capabilitySummary(data), 'capabilities']]],
       personalization: ['个性化', '管理回答偏好、工作方式和长期习惯。', [['回答风格', '个性化模块尚未接入 Runtime', '待接入'], ['主动建议', '只在有依据且无需额外授权时提出', '受控'], ['长期偏好', '由记忆模块确认后保存', 'memory']]],
       pets: ['桌面宠物', '管理 ORB-02 与未来可选桌面伙伴。', [['当前伙伴', 'ORB-02 · 黑核与白色规则点阵', '已启用'], ['靠近响应', '进入 90px 范围展开对话', '90px'], ['宠物库', '额外角色资源尚未接入', '待接入']]],
       usage: ['使用情况和计费', '查看本地任务使用情况与模型供应商计费边界。', [['本次会话任务', `${data.tasks?.length ?? 0} 个`, 'tasks'], ['模型费用', '由模型供应商账户结算，本应用尚未读取账单', '不可用'], ['额度限制', 'Runtime 尚未公开统一用量接口', '待接入']]],
-      analytics: ['分析', '查看任务成功率、耗时和能力调用趋势。', [['任务分析', '分析模块尚未接入真实聚合数据', '待接入'], ['模型延迟', data.model?.latencyMs == null ? '尚无真实连接测试结果' : `${data.model.latencyMs} ms`, 'models'], ['连接健康', `${data.health?.length ?? 0} 项状态`, 'connections']]],
+      analytics: ['分析', '查看任务成功率、耗时和能力调用趋势。', [['任务分析', '分析模块尚未接入真实聚合数据', '待接入'], ['模型延迟', data.model?.latencyMs == null ? '尚无真实连接测试结果' : `${data.model.latencyMs} ms`, 'models'], ['连接健康', capabilitySummary(data, 'health'), 'connections']]],
       account: ['账户', '管理本地身份与外部服务连接。', [['PersonalAgent 账户', '当前版本使用本地桌面身份', '本地'], ['外部账户', '通过连接器单独授权，不共享密钥', 'connections'], ['订阅', 'PersonalAgent 尚未提供订阅系统', '不可用']]],
       computer: ['电脑操控', '管理 Windows 桌面操作能力与安全边界。', [['电脑操作', 'Windows Host 模块尚未完成真实接入', '待接入'], ['执行策略', '串行操作，同一资源写入加锁', '受控'], ['授权', '副作用操作必须经过 Runtime 校验', 'authorizations']]],
       browser: ['浏览器', '管理网页读取、导航与浏览器自动化连接。', [['浏览器后端', '浏览器连接器尚未接入桌面 Runtime', '未连接'], ['站点权限', '按连接器和任务单独授权', 'authorizations'], ['下载', '不会在未授权时创建文件', '受控']]],

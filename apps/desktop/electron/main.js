@@ -1,5 +1,6 @@
-import {app, BrowserWindow, clipboard, ipcMain, Menu, nativeImage, safeStorage, screen, session, Tray} from 'electron';
+import {app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, safeStorage, screen, session, Tray} from 'electron';
 import {fileURLToPath, pathToFileURL} from 'node:url';
+import {createHash} from 'node:crypto';
 import path from 'node:path';
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
 import {EventCursor} from '@personal-agent/client';
@@ -8,6 +9,8 @@ import {panelBounds, clampOrb, draggedGroupBounds} from './placement.js';
 import {Conversations} from './conversations.js';
 import {createDesktopHost} from './desktop-host.js';
 import {desktopDataPaths} from './data-paths.js';
+import {restoreSyntheticRepairSubmission} from './competition-repair-submission.js';
+import {readCapabilityDirectory} from './capability-directory.js';
 import {createMicrophonePermissionGate} from './microphone-permission.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
@@ -19,6 +22,12 @@ const agentArtsInvokeMode = process.env.PA_AGENTARTS_INVOKE_MODE === undefined
   ? 'published'
   : process.env.PA_AGENTARTS_INVOKE_MODE;
 const competitionMode = !fakeMode && runtimeProfile === 'huawei_ict_agentarts';
+const syntheticMvp = process.env.PA_DESKTOP_SYNTHETIC_MVP === '1';
+const agentArtsResponseMode = process.env.PA_AGENTARTS_RESPONSE_MODE;
+const repairCandidateVersion = process.env.PA_AGENTARTS_REPAIR_CANDIDATE_VERSION;
+const layaPort = process.env.PA_DESKTOP_LAYA_PORT;
+const layaKey = process.env.PA_DESKTOP_LAYA_API_KEY;
+const taskSubmitOptions = competitionMode ? {timeoutMs: 180_000} : {};
 if (fakeMode || fakeModelMode) app.setPath('userData', app.isPackaged
   ? path.join(app.getPath('temp'), `personal-agent-fake-${process.pid}`)
   : path.resolve(dir, '../.cache/user-data'));
@@ -59,6 +68,8 @@ let connectionLabel = '未连接 Runtime';
 let runtimeError = '';
 let capabilities = [];
 let health = [];
+let capabilityDirectory = {state: 'loading', reason: '正在读取 Runtime 能力目录'};
+let capabilityReadRevision = 0;
 const modelConfig = {
   baseUrl: process.env.PANGU_BASE_URL ?? '',
   model: process.env.PANGU_MODEL ?? 'pangu-nlp-n1-32k',
@@ -92,6 +103,8 @@ const terminalTaskStates = new Set(['succeeded', 'failed', 'cancelled']);
 const approvals = new Map();
 const notifications = new Map();
 let runtimeApplication;
+let syntheticRepairHost;
+const repairPrompts = new Set();
 let microphonePermissionGate;
 
 function snapshot(surface) {
@@ -108,6 +121,7 @@ function snapshot(surface) {
     conversation: surface ?? 'all',
     capabilities: structuredClone(capabilities),
     health: structuredClone(health),
+    capabilityDirectory: {...capabilityDirectory},
     approvals: [...approvals.values()],
     notifications: [...notifications.values()],
     model: structuredClone(model),
@@ -472,6 +486,11 @@ async function pumpEvents() {
     const accepted = eventCursor.accept(events);
     for (const event of accepted) {
       applyEvent(event);
+      if (event.type === 'task.completed' && syntheticRepairHost && repairCandidateVersion === '1.0') {
+        void promptSyntheticRepairCandidate(event.taskId).catch(() => {
+          runtimeError = '本地修复预览未能显示；计划未被自动修改'; publish();
+        });
+      }
       if (event.type === 'approval.requested') {
         const result = await client.call('approval.list', {approvalId: event.payload.approvalId, limit: 1});
         if (result.items[0]) approvals.set(event.payload.approvalId, structuredClone(result.items[0]));
@@ -487,15 +506,16 @@ async function pumpEvents() {
 }
 
 async function syncCapabilities() {
-  try {
-    const result = await client.call('capability.list', {});
-    capabilities = result.manifests ?? [];
-    health = result.health ?? [];
-  } catch (error) {
-    capabilities = [];
-    health = [];
-    if (error?.code !== 'UNSUPPORTED_CAPABILITY') runtimeError = error instanceof Error ? error.message : '能力目录读取失败';
-  }
+  const revision = ++capabilityReadRevision;
+  capabilityDirectory = {state: 'loading', reason: '正在读取 Runtime 能力目录'};
+  capabilities = [];
+  health = [];
+  publish();
+  const result = await readCapabilityDirectory(client);
+  if (revision !== capabilityReadRevision) return;
+  capabilities = result.manifests;
+  health = result.health;
+  capabilityDirectory = result.status;
 }
 
 async function syncRuntimeSnapshots() {
@@ -513,6 +533,42 @@ async function syncRuntimeSnapshots() {
   eventCursor.reset(snapshotSequence ?? 0);
 }
 
+async function promptSyntheticRepairCandidate(taskId) {
+  if (!syntheticRepairHost || !runtimeApplication || repairPrompts.has(taskId)) return;
+  repairPrompts.add(taskId);
+  try {
+    if (runtimeApplication.runtime.loadCheckpoint(taskId, 'mvp-repair-submitted')) return;
+    const candidate = runtimeApplication.readRepairCandidate(taskId);
+    if (!candidate) return;
+    const source = syntheticRepairHost.readBinding(taskId);
+    if (!source || source.binding.graphRevision !== candidate.candidate.expectedGraphRevision) return;
+    const idempotencyKey = createHash('sha256').update(taskId + ':' + source.evidenceId).digest('hex');
+    const prior = restoreSyntheticRepairSubmission(runtimeApplication, syntheticRepairHost,
+      taskId, source, candidate, idempotencyKey);
+    if (prior) { await refresh(prior.taskId); return; }
+    const lines = candidate.candidate.changes.map(item =>
+      `${item.node.id}#${item.node.revision} → ${item.summary}\n原因：${item.reason}\n依赖：${item.dependencies.map(dep => `${dep.id}#${dep.revision}`).join(', ')}`);
+    const options = {
+      type: 'question', title: '合成会议计划修复预览',
+      message: 'AgentArts 提供了未验证的计划修复候选',
+      detail: `当前图版本 ${source.binding.graphRevision}；候选涉及：\n${lines.join('\n')}\n\n确认后仅创建独立的本地审批任务，写入仍需通过 Policy 的一次性批准。`,
+      buttons: ['创建本地审批任务', '暂不执行'], defaultId: 1, cancelId: 1, noLink: true,
+    };
+    const answer = panel && !panel.isDestroyed()
+      ? await dialog.showMessageBox(panel, options) : await dialog.showMessageBox(options);
+    if (answer.response !== 0) return;
+    if (runtimeApplication.runtime.loadCheckpoint(taskId, 'mvp-repair-submitted')) return;
+    const concurrent = restoreSyntheticRepairSubmission(runtimeApplication, syntheticRepairHost,
+      taskId, source, candidate, idempotencyKey);
+    if (concurrent) { await refresh(concurrent.taskId); return; }
+    const repair = runtimeApplication.submitLocalRepair({sourceTaskId: taskId,
+      evidenceId: source.evidenceId, idempotencyKey,
+      deadline: new Date(Date.now() + 10 * 60_000).toISOString()});
+    runtimeApplication.runtime.saveCheckpoint(taskId, 'mvp-repair-submitted', {taskId: repair.taskId});
+    await refresh(repair.taskId);
+  } finally { repairPrompts.delete(taskId); }
+}
+
 async function initializeRuntime() {
   const runtimeModule = await import('@personal-agent/runtime/application');
   const {createRuntimeApplication} = runtimeModule;
@@ -522,6 +578,20 @@ async function initializeRuntime() {
   }
   if (!fakeMode && fakeModelMode && runtimeProfile === 'huawei_ict_agentarts') {
     throw Error('Competition Profile 不能与 fake-model 同时启用；不会静默切换到 Local 或真实云端');
+  }
+  if (syntheticMvp && (!competitionMode || app.isPackaged)) {
+    throw Error('合成 MVP 工具只允许显式 Competition 开发验收，不适用于 Local/Fake 或安装包');
+  }
+  if (agentArtsResponseMode !== undefined && !['text', 'tool-proposal-json'].includes(agentArtsResponseMode)) {
+    throw Error('PA_AGENTARTS_RESPONSE_MODE 只允许 text 或 tool-proposal-json');
+  }
+  if (repairCandidateVersion !== undefined && (repairCandidateVersion !== '1.0'
+    || !syntheticMvp || agentArtsResponseMode !== 'tool-proposal-json')) {
+    throw Error('版本化修复候选只允许合成 Competition JSON 模式显式启用');
+  }
+  if ((layaPort !== undefined || layaKey !== undefined)
+    && (!syntheticMvp || !layaPort || !layaKey || !/^\d+$/.test(layaPort))) {
+    throw Error('本地 Laya 判断只允许显式合成 MVP 配置并要求回环端口及密钥');
   }
   if (fakeMode) {
     const {FakeRuntime} = await import('@personal-agent/testkit');
@@ -538,11 +608,33 @@ async function initializeRuntime() {
       if (!process.env.PA_AGENTARTS_AUTHORIZATION) {
         throw Error('PA_AGENTARTS_AUTHORIZATION 未配置；Competition Runtime 不会启动');
       }
+      const syntheticTools = syntheticMvp
+        ? (await import('./competition-synthetic-workspace.js')).createSyntheticMeetingToolset(
+          path.resolve(dir, '../../../tests/manual/agentarts/fixtures/mvp-meeting'),
+          (...args) => syntheticRepairHost.projectConfirmed(...args))
+        : {};
+      if (syntheticMvp) {
+        const cognitionModule = layaPort ? await import('@personal-agent/cognition') : undefined;
+        const decision = layaPort ? (() => {
+          const {ProactiveDecisionService, LayaDecisionModel, LocalLayaHttpTransport} = cognitionModule;
+          return new ProactiveDecisionService(new LayaDecisionModel(
+            new LocalLayaHttpTransport(Number(layaPort), () => layaKey)));
+        })() : undefined;
+        syntheticRepairHost = (await import('./competition-repair-host.js')).createSyntheticRepairHost(
+          path.join(path.dirname(dbPath), 'mvp-synthetic-memory.sqlite'), {decision});
+      }
       runtimeApplication = runtimeModule.createAgentArtsRuntimeApplication({
         path: dbPath,
+        ...syntheticTools,
+        ...(syntheticMvp ? {localRepair: syntheticRepairHost.localRepair} : {}),
+        ...(agentArtsResponseMode === undefined ? {} : {responseMode: agentArtsResponseMode}),
+        ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
         gatewayUrl: process.env.PA_AGENTARTS_GATEWAY_URL ?? '',
         runtimeName: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
         invokeMode: agentArtsInvokeMode,
+        ...(process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT === undefined ? {} : {
+          workflowGoalInput: process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT,
+        }),
         authorizationProvider: {
           read: async () => {
             const authorization = process.env.PA_AGENTARTS_AUTHORIZATION;
@@ -551,6 +643,7 @@ async function initializeRuntime() {
           },
         },
       });
+      if (syntheticRepairHost) await syntheticRepairHost.initialize(runtimeApplication.runtime);
     } else {
       const createApplication = process.argv.includes('--weather-tools')
         ? (await import('@personal-agent/runtime/weather')).createOpenMeteoApplication
@@ -577,6 +670,11 @@ async function initializeRuntime() {
   await syncCapabilities();
   await syncRuntimeSnapshots();
   await pumpEvents();
+  if (syntheticRepairHost && repairCandidateVersion === '1.0') {
+    for (const task of tasks.values()) {
+      if (task.state === 'succeeded') void promptSyntheticRepairCandidate(task.taskId).catch(() => {});
+    }
+  }
   eventPoll = setInterval(() => void pumpEvents(), 120);
 }
 
@@ -653,7 +751,7 @@ async function action(event, name, payload) {
     submitting.add(surface);
     try {
     const goal = payload.trim();
-    const result = await client.call('task.submit', {goal, conversationId: `desktop-${surface}`}, {idempotencyKey: crypto.randomUUID()});
+    const result = await client.call('task.submit', {goal, conversationId: `desktop-${surface}`}, {...taskSubmitOptions, idempotencyKey: crypto.randomUUID()});
     conversations.add(result.taskId, surface, goal);
     taskGoals.set(result.taskId, goal);
     if (sender === panel) pinned = true;
@@ -762,20 +860,24 @@ app.whenReady().then(async () => {
       publish();
       return;
     }
-    app.isQuitting = true;
-    microphonePermissionGate?.revoke();
-    clearInterval(poll);
-    clearInterval(eventPoll);
-    tray?.destroy();
-    runtimeConnection?.dispose?.();
     try {
       if (runtimeApplication) runtimeApplication.close();
       else runtime?.close?.();
     } catch (error) {
       event.preventDefault();
+      app.isQuitting = false;
       runtimeError = error instanceof Error ? error.message : 'Runtime 仍有活动任务，无法安全退出';
       publish();
+      return;
     }
+    try { syntheticRepairHost?.close(); }
+    catch { console.error('Synthetic repair host failed to close'); }
+    microphonePermissionGate?.revoke();
+    app.isQuitting = true;
+    clearInterval(poll);
+    clearInterval(eventPoll);
+    tray?.destroy();
+    runtimeConnection?.dispose?.();
   });
   app.on('window-all-closed', event => event.preventDefault());
 }).catch(error => { console.error(error); app.exit(1); });
