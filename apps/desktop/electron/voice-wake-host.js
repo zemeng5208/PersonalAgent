@@ -18,8 +18,8 @@
  *   5. Release verification: disable(), revoke(), and dispose() await confirmation of both PCM subscription
  *      detachment and native detector child termination; unconfirmed release rejects rather than claiming success.
  *   6. No second state machine: delegates lifecycle to the injected wake lifecycle controller.
- *   7. onWake callback is fire-and-forget from the helper's perspective; the helper does not await the
- *      callback result. If the callback throws synchronously, the helper reports error and continues.
+ *   7. onWake returns when the trusted ASR capture is ready. The helper then releases its wake
+ *      reference; revoke and dispose never wait for the callback itself.
  *
  * Production wiring (main.js, not done here):
  *   main passes onWake: (event) => voiceInput.beginWakeCapture(senderId)
@@ -93,6 +93,7 @@ export function createDesktopVoiceWakeHost({
   // Track attachments for release verification without clearing on .finally (preserve rejection evidence)
   let lastPcmSub = null;
   let lastDetectorSession = null;
+  let releaseFailure = null;
 
   const wrappedPcmSource = pcmSource ? {
     subscribe(opts) {
@@ -133,22 +134,28 @@ export function createDesktopVoiceWakeHost({
       } catch (startErr) {
         // Startup failed. Actively stop any partially-created resources, then await closure.
         const pending = [];
+        let releaseCallFailed = false;
         if (lastDetectorSession) {
           try { const r = lastDetectorSession.stop?.(); if (r && typeof r.then === 'function') pending.push(r); }
-          catch {}
+          catch { releaseCallFailed = true; }
           if (lastDetectorSession.closed) pending.push(Promise.resolve(lastDetectorSession.closed));
         }
         if (lastPcmSub) {
-          try { lastPcmSub.unsubscribe?.(); } catch {}
+          try { lastPcmSub.unsubscribe?.(); } catch { releaseCallFailed = true; }
           if (lastPcmSub.closed) pending.push(Promise.resolve(lastPcmSub.closed));
         }
-        if (pending.length > 0) await Promise.allSettled(pending);
+        const results = await Promise.allSettled(pending);
+        if (releaseCallFailed || results.some(result => result.status === 'rejected')) {
+          releaseFailure = new Error('语音唤醒资源释放未确认');
+          throw releaseFailure;
+        }
         throw startErr;
       }
     },
   } : null;
 
   async function awaitResourceClosure() {
+    if (releaseFailure) throw releaseFailure;
     const pending = [];
     if (currentWakeSubscription?.closed) pending.push(Promise.resolve(currentWakeSubscription.closed));
     if (lastPcmSub?.closed) pending.push(Promise.resolve(lastPcmSub.closed));
@@ -177,13 +184,34 @@ export function createDesktopVoiceWakeHost({
     },
   };
 
+  let handoffPending = null;
+
   function handleWakeEvent(event) {
     if (disposed || !isListening() || playbackActive) return;
     if (currentLease && now() >= currentLease.expiresAtMs) return;
-    if (!onWake) return;
-    // Fire-and-forget: do not await the callback. Synchronous throws are caught.
-    try { onWake(event); }
-    catch { handleControllerError({code: 'CALLBACK_FAILED'}); }
+    if (!onWake || handoffPending?.sessionId === event.sessionId) return;
+    const handoff = {sessionId: event.sessionId};
+    handoffPending = handoff;
+    let captureReady;
+    try { captureReady = onWake(event); }
+    catch (error) { captureReady = Promise.reject(error); }
+    // The trusted callback resolves when the ASR subscription is ready. Keep
+    // wake's microphone reference until then, then detach only that reference.
+    // Teardown never waits for this callback, so a stalled callback cannot block revoke.
+    const finishHandoff = async (failed) => {
+      if (handoffPending !== handoff) return;
+      if (failed) handleControllerError({code: 'CALLBACK_FAILED'});
+      // A late callback from an old session must not stop a newly enabled wake.
+      if (controller?.snapshot?.()?.sessionId === handoff.sessionId) {
+        try { await disable(); }
+        catch { handleControllerError({code: 'SOURCE_ERROR'}); }
+      }
+      if (handoffPending === handoff) handoffPending = null;
+    };
+    void Promise.resolve(captureReady).then(
+      () => finishHandoff(false),
+      () => finishHandoff(true),
+    ).catch(() => handleControllerError({code: 'CALLBACK_FAILED'}));
   }
 
   function handleControllerError(err) {
@@ -264,6 +292,7 @@ export function createDesktopVoiceWakeHost({
 
     try {
       const result = await controller.enable({deadlineAtMs: deadline, signal});
+      if (releaseFailure) throw releaseFailure;
       if (result.kind === 'not_listening') {
         lastError = safeFailure({code: result.reason?.toUpperCase()});
         publish();
@@ -287,10 +316,15 @@ export function createDesktopVoiceWakeHost({
 
   async function revoke() {
     currentLease = null;
-    controller?.disable?.();
-    await awaitResourceClosure();
-    if (microphoneHost?.revoke) await microphoneHost.revoke();
+    currentAuthPort = null;
+    let failure;
+    try { controller?.disable?.(); } catch (error) { failure = error; }
+    try { await awaitResourceClosure(); } catch (error) { failure ??= error; }
+    // User revoke is global: still stop the physical capture when wake cleanup
+    // cannot be confirmed, including any concurrent ASR subscriber.
+    try { await microphoneHost?.revoke?.(); } catch (error) { failure ??= error; }
     publish();
+    if (failure) throw failure;
     return snapshot();
   }
 

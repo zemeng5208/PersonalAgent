@@ -8,7 +8,7 @@ function deferred() {
   return {promise, resolve, reject};
 }
 
-function fixture() {
+function fixture({authorizeError} = {}) {
   const calls = [];
   const fixedNow = Date.parse('2026-09-25T00:00:00.000Z');
   const ready = deferred();
@@ -18,7 +18,7 @@ function fixture() {
     unsubscribe: () => { calls.push('unsubscribe'); }};
   const source = {subscribe: value => { calls.push('subscribe'); options = value; return subscription; },
     dispose: async () => { calls.push('dispose-source'); }};
-  const microphoneHost = {authorize: () => { calls.push('authorize'); },
+  const microphoneHost = {authorize: () => { calls.push('authorize'); if (authorizeError) throw authorizeError; },
     snapshot: () => ({subscriberCount: 0}), revoke: async () => { calls.push('revoke'); }};
   class Manager {
     async start(options) { calls.push(['session-start', options.deadline]); return {sessionId: 'session-1'}; }
@@ -43,6 +43,15 @@ function fixture() {
     enabled: true, now: () => fixedNow});
   return {input, calls, ready, closed, get options() { return options; }};
 }
+
+test('failed explicit authorization leaves no active capture or buffer', async () => {
+  const f = fixture({authorizeError: Error('authorization denied')});
+  await assert.rejects(() => f.input.beginCapture(3), /authorization denied/);
+  assert.equal(f.input.hasActive(), false);
+  assert.equal(f.calls.includes('dispose-buffer'), true);
+  assert.equal(f.calls.includes('subscribe'), false);
+  await assert.rejects(() => f.input.beginCapture(3), /authorization denied/);
+});
 
 test('explicit voice path waits for physical ready and release before ASR; playback stays explicit', async () => {
   const f = fixture();
@@ -97,10 +106,6 @@ test('capture deadline finalizes audio while the session keeps time for ASR and 
 });
 
 test('beginWakeCapture reuses active authorized capture without re-authorizing', async () => {
-  const f = fixture();
-  // Override microphoneHost to simulate wake-active capture (authorized, active, subscriberCount > 0)
-  f.input._microphoneHost = undefined; // no direct access needed; the fixture already has it
-  const wakeFixture = fixture();
   // Create a new fixture with microphoneHost that reports authorized+active+subscriberCount>0
   const calls2 = [];
   const fixedNow2 = Date.parse('2026-09-25T00:00:00.000Z');
@@ -109,10 +114,11 @@ test('beginWakeCapture reuses active authorized capture without re-authorizing',
   let options2;
   const subscription2 = {ready: ready2.promise, closed: closed2.promise,
     unsubscribe: () => { calls2.push('unsubscribe'); }};
-  const source2 = {subscribe: value => { calls2.push('subscribe'); options2 = value; return subscription2; },
+  let subscriberCount = 1; // Wake already holds the physical microphone.
+  const source2 = {subscribe: value => { calls2.push('subscribe'); options2 = value; subscriberCount++; return subscription2; },
     dispose: async () => { calls2.push('dispose-source'); }};
   const microphoneHost2 = {authorize: () => { calls2.push('authorize'); },
-    snapshot: () => ({authorized: true, active: true, subscriberCount: 1}),
+    snapshot: () => ({authorized: true, active: true, subscriberCount}),
     revoke: async () => { calls2.push('revoke'); }};
   class Manager2 {
     async start(options) { calls2.push(['session-start', options.deadline]); return {sessionId: 'session-w1'}; }
@@ -137,9 +143,13 @@ test('beginWakeCapture reuses active authorized capture without re-authorizing',
   ready2.resolve();
   await pending;
   assert.equal(input2.snapshot().status, 'listening');
-
-  // Cleanup: subscriberCount=1 means this is the wake subscriber, so revoke should not be called
-  // (existing cleanup checks subscriberCount === 0 before revoking)
+  assert.equal(subscriberCount, 2);
+  const stopping = input2.cancelCapture(7);
+  subscriberCount--;
+  closed2.resolve();
+  await stopping;
+  assert.equal(subscriberCount, 1);
+  assert.equal(calls2.includes('revoke'), false, 'stopping ASR keeps the wake lease');
 });
 
 test('beginWakeCapture rejects when capture is not wake-authorized', async () => {

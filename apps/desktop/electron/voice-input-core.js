@@ -58,15 +58,22 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
     if (releaseError) throw releaseError;
   }
 
-  function startCaptureRecord(senderId) {
+  function startCaptureRecord(senderId, reuseAuthorizedCapture = false) {
     if (!enabled || disposed) throw Error('语音试用当前不可用');
     if (!Number.isSafeInteger(senderId) || senderId <= 0) throw Error('语音操作来源不受信任');
     if (active) throw Error('请先结束当前语音会话');
     const controller = new AbortController();
     const captureDeadline = new Date(now() + CAPTURE_MS).toISOString();
     const sessionDeadline = new Date(now() + SESSION_MS).toISOString();
+    const buffer = createBuffer({signal: controller.signal, deadline: sessionDeadline, maxDurationMs: CAPTURE_MS});
+    try {
+      if (!reuseAuthorizedCapture) microphoneHost.authorize();
+    } catch (error) {
+      buffer.dispose();
+      throw error;
+    }
     const record = {senderId, controller, captureDeadline, sessionDeadline, phase: 'acquiring', subscription: undefined,
-      buffer: createBuffer({signal: controller.signal, deadline: sessionDeadline, maxDurationMs: CAPTURE_MS}),
+      buffer,
       sessionId: undefined, replyId: undefined};
     active = record;
     lastError = '';
@@ -110,7 +117,6 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
 
   async function beginCapture(senderId) {
     const record = startCaptureRecord(senderId);
-    microphoneHost.authorize();
     return runCapture(record);
   }
 
@@ -125,7 +131,7 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
     if (!cap.authorized || !cap.active || !cap.subscriberCount || cap.subscriberCount <= 0) {
       throw Error('语音唤醒采集未就绪：需要有效的授权采集会话');
     }
-    const record = startCaptureRecord(senderId);
+    const record = startCaptureRecord(senderId, true);
     return runCapture(record);
   }
 

@@ -8,15 +8,20 @@ function deferred() {
   return {promise, resolve, reject};
 }
 
-function createFixture({enabled = true, onWake} = {}) {
+function createFixture({enabled = true, onWake, microphoneHost, pcmReleaseError} = {}) {
   const calls = [];
+  const errors = [];
   const fixedNow = Date.parse('2026-09-25T00:00:00.000Z');
 
   const pcmReady = deferred();
   const pcmClosed = deferred();
   const pcmSubscription = {
     ready: pcmReady.promise, closed: pcmClosed.promise,
-    unsubscribe: () => { calls.push('pcm:unsubscribe'); pcmClosed.resolve(); },
+    unsubscribe: () => {
+      calls.push('pcm:unsubscribe');
+      if (pcmReleaseError) pcmClosed.reject(pcmReleaseError);
+      else pcmClosed.resolve();
+    },
   };
   const pcmSource = {
     subscribe: opts => { calls.push('pcm:subscribe'); return pcmSubscription; },
@@ -54,8 +59,9 @@ function createFixture({enabled = true, onWake} = {}) {
 
   let ctrlState = 'disabled';
   let ctrlSub;
+  let ctrlSessionId = 0;
   const makeWakeController = options => ({
-    snapshot: () => ({state: ctrlState, sessionId: ctrlState === 'listening' ? 1 : null, expiresAtMs: ctrlState === 'listening' ? fixedNow + 600_000 : null}),
+    snapshot: () => ({state: ctrlState, sessionId: ctrlState === 'listening' ? ctrlSessionId : null, expiresAtMs: ctrlState === 'listening' ? fixedNow + 600_000 : null}),
     setPlaybackActive: active => { calls.push(['ctrl:setPlaybackActive', active]); },
     async enable(opts) {
       calls.push('ctrl:enable');
@@ -63,10 +69,11 @@ function createFixture({enabled = true, onWake} = {}) {
       if (decision.kind !== 'allowed') return {kind: 'not_listening', reason: decision.reason || 'permission_denied'};
       try {
         ctrlSub = await options.source.subscribe(
-          event => { if (ctrlState === 'listening' && event.kind === 'wake') options.onWake({kind: 'wake', sessionId: 1, occurredAtMs: fixedNow}); },
+          event => { if (ctrlState === 'listening' && event.kind === 'wake') options.onWake({kind: 'wake', sessionId: ctrlSessionId, occurredAtMs: fixedNow}); },
           {signal: new AbortController().signal, deadlineAtMs: opts.deadlineAtMs});
+        ctrlSessionId++;
         ctrlState = 'listening';
-        return {kind: 'listening', sessionId: 1, expiresAtMs: decision.expiresAtMs};
+        return {kind: 'listening', sessionId: ctrlSessionId, expiresAtMs: decision.expiresAtMs};
       } catch { return {kind: 'not_listening', reason: 'source_unavailable'}; }
     },
     disable() { calls.push('ctrl:disable'); ctrlState = 'disabled'; ctrlSub?.unsubscribe(); ctrlSub = null; },
@@ -74,15 +81,16 @@ function createFixture({enabled = true, onWake} = {}) {
   });
 
   const host = createDesktopVoiceWakeHost({
-    source: pcmSource, detector, onWake,
+    source: pcmSource, detector, onWake, microphoneHost,
     createPcmKeywordWakeSignalSource: makeWakeSignalSource,
     createWakeLifecycleController: makeWakeController,
+    onError: error => { errors.push(error.code); },
     enabled, now: () => fixedNow,
   });
 
   const lease = {expiresAtMs: fixedNow + 600_000, revocationSignal: new AbortController().signal};
 
-  return {host, calls, pcmReady, pcmClosed, detectorReady, detectorClosed, lease,
+  return {host, calls, errors, pcmReady, pcmClosed, detectorReady, detectorClosed, lease,
     emitDetected: () => detectorOpts?.onDetected?.()};
 }
 
@@ -142,6 +150,48 @@ test('playback suppresses wake without stopping mic or cancelling tasks', async 
   assert.equal(wakes.length, 1, 'wake fires after playback ends');
 });
 
+test('wake handoff retains wake capture until ASR is ready, then releases KWS', async () => {
+  const captureReady = deferred();
+  const f = createFixture({onWake: () => captureReady.promise});
+  f.detectorReady.resolve();
+  f.pcmReady.resolve();
+  await f.host.enable({deadlineAtMs: Date.parse('2026-09-25T00:05:00.000Z'), lease: f.lease});
+  f.emitDetected();
+  assert.equal(f.calls.includes('pcm:unsubscribe'), false);
+  captureReady.resolve();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.calls.includes('pcm:unsubscribe'), true);
+  assert.equal(f.calls.includes('detector:stop'), true);
+  assert.equal(f.host.isListening(), false);
+});
+
+test('rejected ASR handoff reports failure and releases KWS', async () => {
+  const f = createFixture({onWake: () => Promise.reject(Error('ASR failed'))});
+  f.detectorReady.resolve();
+  f.pcmReady.resolve();
+  await f.host.enable({deadlineAtMs: Date.parse('2026-09-25T00:05:00.000Z'), lease: f.lease});
+  f.emitDetected();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.calls.includes('pcm:unsubscribe'), true);
+  assert.equal(f.errors.includes('CALLBACK_FAILED'), true);
+});
+
+test('late ASR handoff cannot disable a newer wake session', async () => {
+  const oldCapture = deferred();
+  const f = createFixture({onWake: () => oldCapture.promise});
+  f.detectorReady.resolve();
+  f.pcmReady.resolve();
+  await f.host.enable({deadlineAtMs: Date.parse('2026-09-25T00:05:00.000Z'), lease: f.lease});
+  f.emitDetected();
+  await f.host.disable();
+  await f.host.enable({deadlineAtMs: Date.parse('2026-09-25T00:05:00.000Z'), lease: f.lease});
+  const disablesBeforeLateCallback = f.calls.filter(call => call === 'ctrl:disable').length;
+  oldCapture.resolve();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.host.isListening(), true);
+  assert.equal(f.calls.filter(call => call === 'ctrl:disable').length, disablesBeforeLateCallback);
+});
+
 test('revoke calls microphoneHost.revoke', async () => {
   const calls = [];
   const fixedNow = Date.parse('2026-09-25T00:00:00.000Z');
@@ -151,4 +201,15 @@ test('revoke calls microphoneHost.revoke', async () => {
   });
   await host.revoke();
   assert.equal(calls.includes('mic:revoke'), true);
+});
+
+test('explicit revoke stops the microphone even when wake release fails', async () => {
+  const calls = [];
+  const f = createFixture({onWake: () => {}, pcmReleaseError: Error('release unknown'),
+    microphoneHost: {snapshot: () => ({}), revoke: async () => { calls.push('mic:revoke'); }}});
+  f.detectorReady.resolve();
+  f.pcmReady.resolve();
+  await f.host.enable({deadlineAtMs: Date.parse('2026-09-25T00:05:00.000Z'), lease: f.lease});
+  await assert.rejects(() => f.host.revoke(), /release unknown/);
+  assert.deepEqual(calls, ['mic:revoke']);
 });
