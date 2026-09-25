@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../WindowsHost.csproj" />
+    <Compile Remove="test/**/*.cs" />
+    <Content Include="../../../packages/contracts/schema/windows-host.json"
+             Condition="Exists('../../../packages/contracts/schema/windows-host.json')"
+             Link="windows-host.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

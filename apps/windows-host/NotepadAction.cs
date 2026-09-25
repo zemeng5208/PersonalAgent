@@ -8,6 +8,7 @@ using System.Windows.Automation;
 
 [assembly: InternalsVisibleTo("WindowsHost.Timing")]
 [assembly: InternalsVisibleTo("ManualNotepadProbe")]
+[assembly: InternalsVisibleTo("WindowsHost.Host")]
 
 namespace PersonalAgent.WindowsHost;
 

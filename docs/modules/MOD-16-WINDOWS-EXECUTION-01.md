@@ -3,7 +3,7 @@
 - Profile：`huawei_ict_agentarts`；MOD-16、PA-016；负责人 zemeng；非作者评审 goo122。
 - 原核心基线：`main@4efa7f60feaaa007d73c80e7d90091e0caab3bc7`；本次诊断分支 `codex/zemeng/mod16-windows-manual-probe`（`#120`，起点 `f962e4d`，已含 `#117` 的写前时序修复）。
 - 文件边界：`apps/windows-host/**` 与本文；MOD-17 的 `packages/windows-client/**` 和历史 `MOD-16-SYSTEM-OBSERVATION-01.md` 均不改。
-- 当前状态：受限核心待 Windows 构建/实机验收；生产能力 `unavailable`。共享接口及 Desktop 接线阻塞见 [#114](https://github.com/zemeng5208/PersonalAgent/issues/114)。
+- 当前状态：受限核心的合成探针仍未取得正向实机读回；Host 进程增量需 Windows 构建、Pipe/身份与授权链验收。生产能力 `unavailable`。共享接口及 Desktop 接线见 [#114](https://github.com/zemeng5208/PersonalAgent/issues/114)，provisional Host 帧 Schema 见 [#168](https://github.com/zemeng5208/PersonalAgent/pull/168)。
 
 ## 设计与边界
 
@@ -11,7 +11,7 @@
 
 输入 tick 基线在 UIA 查找及首次读取预期文本前建立；执行前再次核对同一 tick、目标身份与当前预期文本。紧贴 `SetValue` 前重新发现已确认窗口的唯一选中标签与同一编辑控件，并复核文本、输入 tick 和前台；标签或控件已换则写前拒绝，不读取其他标签的文本。定向回归注入“首次读取后用户输入”及“不改变 tick 的程序改值”，两者均须在写前拒绝。UIA 读值与 `SetValue` 并非原子 CAS，用户输入 tick 也不是完整接管事件流；剩余窗口须在 Windows 实机验收并交 Runtime 的受信协调和恢复处理。
 
-源码未提供 pipe 服务、可执行入口或 ToolHost 包装；`ConfirmedNotepadTarget` 是 public DTO，调用者可以构造，因此它本身不构成授权安全边界。未来仅由受信 Runtime adapter 在消费授权后调用，并防止未经许可的模块引用；目前不能把该类库暴露为生产调用入口。此 PR 没有操作公共 Schema、Runtime/Policy/ToolGateway、Desktop 或根配置/锁文件。`DesktopActionPort`、1 MiB JSONL Named Pipe、当前用户 ACL/握手、跨进程资源锁、授权-目标绑定、runId 恢复及 Desktop 受信确认仍是 #114 的共享任务，未经发布不能注册 capability。没有凭据适配；MOD-05 的 SecretStore 与 Windows 安全存储另需边界契约，不能把机器本地凭据当作授权。
+本增量在 `apps/windows-host/host/` 增加独立 Host 进程：读取 #168 的同源 Schema、当前用户 Pipe/对端身份和 nonce 会话绑定、短期 opaque 目标、写前持久 run 记录、断连取消及跨会话只读状态核实。Host 仅是执行端；`ConfirmedNotepadTarget` 仍可构造，Pipe 帧里的 `authorizationRef` 也不是授权凭证。Runtime/Policy/ToolGateway 的授权消费、跨进程调用仲裁、Desktop 受信确认与产品 Evidence 仍按 #114 由原负责人正式组合。未完成这些接线和真实验收时不能注册 capability。此包不改公共 Schema、Runtime/Policy/ToolGateway、Desktop 或根配置/锁文件。没有凭据适配；MOD-05 的 SecretStore 与 Windows 安全存储另需边界契约，不能把机器本地凭据当作授权。
 
 ## Windows 实机验收步骤与证据
 
