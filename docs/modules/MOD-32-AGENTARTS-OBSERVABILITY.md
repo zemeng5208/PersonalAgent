@@ -74,8 +74,12 @@ query 级候选格式，不证明工具提案、本地审批/执行、真实 con
 MOD-30 调用前读回原运行时正常、`Latest=v8` 及上述应用版本/两个引用；这证明
 预调用平台状态，不证明该请求命中的部署版本。trace 根 span 的
 `resource_version:"draft"` 也不是运行时版本。MOD-31 可复用该 trace 的三个
-`UserInput`/模型 span，但它们没有各设计角色名称或交接标识，不能宣称角色交接
-已证；固定评估和基线对照仍缺。
+`UserInput`/模型 span。MOD-29 限定复查确认：三段为同级节点，各自有
+开始→大模型→结束；逐段 `gen_ai.resource.id` 和 `gen_ai.agent.name` 都只指向
+主协调器，`resource_version` 均为 `draft`。可见元数据没有三个源工作流 ID、
+子角色名、`agentId`/`workflowId` 或跨段 parent/links 映射。因此只证明一次
+成功的多智能体入口调用及三段模型处理，不证明 World/Plan/Review 实际路由与
+交接。MOD-31 的固定评估和基线对照仍缺。
 MOD-04B 的 [PR #128](https://github.com/zemeng5208/PersonalAgent/pull/128)
 涉及 continuation prompt，但本次只有首次 query；PR 存在不能替代其真实续接验收。
 
