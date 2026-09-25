@@ -102,6 +102,23 @@ const MIGRATIONS: readonly Migration[] = [{
       receipt_checkpoint TEXT
     ) STRICT;
   `,
+}, {
+  version: 2,
+  sql: `
+    CREATE TABLE memory_public_sources (
+      namespace TEXT NOT NULL,
+      vault_id TEXT NOT NULL,
+      source_path TEXT NOT NULL,
+      fact_id TEXT NOT NULL,
+      source_revision TEXT NOT NULL,
+      fact_revision INTEGER NOT NULL CHECK (fact_revision >= 1),
+      fingerprint TEXT NOT NULL,
+      PRIMARY KEY (namespace, vault_id, source_path, fact_id),
+      UNIQUE (namespace, fact_id),
+      FOREIGN KEY (namespace, fact_id, fact_revision)
+        REFERENCES memory_facts(namespace, fact_id, revision)
+    ) STRICT;
+  `,
 }];
 
 type Row = Record<string, unknown>;
@@ -166,6 +183,17 @@ function fact(value: unknown): FactVersion {
   };
   if (record.corrects !== undefined) parsed.corrects = ref(record.corrects);
   return parsed;
+}
+
+function publicSourceKey(value: Record<string, unknown>): {
+  vaultId: string; path: string; factId: string;
+} {
+  const vaultId = text(value.vaultId);
+  const path = text(value.path, MAX_SOURCE);
+  const factId = text(value.factId);
+  if (!/^[a-z0-9-]+$/.test(vaultId) || path.includes('\\') || path.includes(':')
+    || path.split('/').some(part => part === '' || part === '.' || part === '..')) throw new Error();
+  return {vaultId, path, factId};
 }
 
 function context(record: Record<string, unknown>, fail: typeof queryFail | typeof feedFail): Context {
@@ -298,44 +326,143 @@ export class SqliteMemoryHost {
       const namespace = text(namespaceValue);
       const next = fact(value);
       return transaction(this.db, () => {
-        const namespaceRow = this.db.prepare('SELECT sequence FROM memory_namespaces WHERE namespace = ?')
-          .get(namespace) as Row | undefined;
-        if (namespaceRow === undefined) return queryFail('NOT_FOUND');
-        const previousRow = this.db.prepare(
-          'SELECT payload FROM memory_facts WHERE namespace = ? AND fact_id = ? ORDER BY revision DESC LIMIT 1',
-        ).get(namespace, next.ref.id) as Row | undefined;
-        const previous = previousRow === undefined ? undefined : fact(parseJson(rowText(previousRow, 'payload')));
-        if (next.ref.revision !== (previous?.ref.revision ?? 0) + 1) return queryFail();
-        if (previous === undefined) {
-          if (next.corrects !== undefined || next.state === 'withdrawn') return queryFail();
-        } else if (next.corrects === undefined
-          || next.corrects.id !== previous.ref.id
-          || next.corrects.revision !== previous.ref.revision) return queryFail();
-
-        const sequence = rowNumber(namespaceRow, 'sequence') + 1;
-        this.db.prepare(`INSERT INTO memory_facts(
-          namespace, sequence, event_id, fact_id, revision, sensitivity, state,
-          source_ref, valid_from_ms, valid_until_ms, payload
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-          namespace, sequence, token('memory-feed-event'), next.ref.id, next.ref.revision,
-          next.sensitivity, next.state, next.sourceRef, Date.parse(next.validFrom),
-          Date.parse(next.validUntil), JSON.stringify(next),
-        );
-        this.db.prepare('UPDATE memory_namespaces SET sequence = ? WHERE namespace = ?').run(sequence, namespace);
-        if (previous !== undefined && previous.sensitivity !== next.sensitivity) {
-          const bindings = this.db.prepare(
-            'SELECT consumer_id, allowed_json FROM memory_feed_bindings WHERE namespace = ? AND valid = 1',
-          ).all(namespace) as Row[];
-          for (const binding of bindings) {
-            const allowed = new Set(parseJson<FactSensitivity[]>(rowText(binding, 'allowed_json')));
-            if (allowed.has(previous.sensitivity) && !allowed.has(next.sensitivity)) {
-              this.db.prepare('UPDATE memory_feed_bindings SET valid = 0 WHERE namespace = ? AND consumer_id = ?')
-                .run(namespace, rowText(binding, 'consumer_id'));
-            }
-          }
-        }
-        return structuredClone(next);
+        if (this.db.prepare(`SELECT 1 FROM memory_public_sources
+          WHERE namespace = ? AND fact_id = ?`).get(namespace, next.ref.id) !== undefined) return queryFail();
+        return this.appendFact(namespace, next);
       });
+    } catch (error) {
+      if (error instanceof MemoryQueryError) throw error;
+      return queryFail();
+    }
+  }
+
+  private appendFact(namespace: string, next: FactVersion): FactVersion {
+    const namespaceRow = this.db.prepare('SELECT sequence FROM memory_namespaces WHERE namespace = ?')
+      .get(namespace) as Row | undefined;
+    if (namespaceRow === undefined) return queryFail('NOT_FOUND');
+    const previousRow = this.db.prepare(
+      'SELECT payload FROM memory_facts WHERE namespace = ? AND fact_id = ? ORDER BY revision DESC LIMIT 1',
+    ).get(namespace, next.ref.id) as Row | undefined;
+    const previous = previousRow === undefined ? undefined : fact(parseJson(rowText(previousRow, 'payload')));
+    if (next.ref.revision !== (previous?.ref.revision ?? 0) + 1) return queryFail();
+    if (previous === undefined) {
+      if (next.corrects !== undefined || next.state === 'withdrawn') return queryFail();
+    } else if (next.corrects === undefined
+      || next.corrects.id !== previous.ref.id
+      || next.corrects.revision !== previous.ref.revision) return queryFail();
+
+    const sequence = rowNumber(namespaceRow, 'sequence') + 1;
+    this.db.prepare(`INSERT INTO memory_facts(
+      namespace, sequence, event_id, fact_id, revision, sensitivity, state,
+      source_ref, valid_from_ms, valid_until_ms, payload
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      namespace, sequence, token('memory-feed-event'), next.ref.id, next.ref.revision,
+      next.sensitivity, next.state, next.sourceRef, Date.parse(next.validFrom),
+      Date.parse(next.validUntil), JSON.stringify(next),
+    );
+    this.db.prepare('UPDATE memory_namespaces SET sequence = ? WHERE namespace = ?').run(sequence, namespace);
+    if (previous !== undefined && previous.sensitivity !== next.sensitivity) {
+      const bindings = this.db.prepare(
+        'SELECT consumer_id, allowed_json FROM memory_feed_bindings WHERE namespace = ? AND valid = 1',
+      ).all(namespace) as Row[];
+      for (const binding of bindings) {
+        const allowed = new Set(parseJson<FactSensitivity[]>(rowText(binding, 'allowed_json')));
+        if (allowed.has(previous.sensitivity) && !allowed.has(next.sensitivity)) {
+          this.db.prepare('UPDATE memory_feed_bindings SET valid = 0 WHERE namespace = ? AND consumer_id = ?')
+            .run(namespace, rowText(binding, 'consumer_id'));
+        }
+      }
+    }
+    return structuredClone(next);
+  }
+
+  readPublicSourceHead(namespaceValue: unknown, keyValue: unknown): number | null {
+    try {
+      const namespace = text(namespaceValue);
+      const key = publicSourceKey(exact(keyValue, ['vaultId', 'path', 'factId']));
+      if (this.db.prepare('SELECT 1 FROM memory_namespaces WHERE namespace = ?').get(namespace) === undefined) {
+        return queryFail('NOT_FOUND');
+      }
+      const row = this.db.prepare(`SELECT fact_revision FROM memory_public_sources
+        WHERE namespace = ? AND vault_id = ? AND source_path = ? AND fact_id = ?`)
+        .get(namespace, key.vaultId, key.path, key.factId) as Row | undefined;
+      return row === undefined ? null : rowNumber(row, 'fact_revision');
+    } catch (error) {
+      if (error instanceof MemoryQueryError) throw error;
+      return queryFail();
+    }
+  }
+
+  appendPublicSource(namespaceValue: unknown, value: unknown): {
+    readonly fact: FactVersion;
+    readonly appended: boolean;
+  } {
+    try {
+      const namespace = text(namespaceValue);
+      const record = exact(value, ['vaultId', 'path', 'factId', 'sourceRevision', 'line',
+        'summary', 'observedAt', 'validFrom', 'validUntil', 'expectedFactRevision',
+        'deadline', 'signal']);
+      const operation = context(record, queryFail);
+      const key = publicSourceKey(record);
+      const sourceRevision = text(record.sourceRevision, 64);
+      if (!/^[0-9a-f]{64}$/.test(sourceRevision)
+        || typeof record.line !== 'number' || !Number.isSafeInteger(record.line)
+        || record.line < 1) return queryFail();
+      const expected = record.expectedFactRevision;
+      if (expected !== null && (typeof expected !== 'number'
+        || !Number.isSafeInteger(expected) || expected < 1)) return queryFail();
+      const sourceRef = `${key.vaultId}/${key.path}#L${record.line}@${sourceRevision}`;
+      const fields = {
+        summary: record.summary, sourceRef, observedAt: record.observedAt,
+        validFrom: record.validFrom, validUntil: record.validUntil,
+        sensitivity: 'public', state: 'active', confirmation: 'external_observation',
+      };
+      const verified = fact({ref: {id: key.factId, revision: 1}, ...fields});
+      const fingerprint = JSON.stringify([verified.summary, verified.sourceRef,
+        verified.validFrom, verified.validUntil, verified.sensitivity,
+        verified.state, verified.confirmation]);
+      return transaction(this.db, () => {
+        if (this.db.prepare('SELECT 1 FROM memory_namespaces WHERE namespace = ?').get(namespace) === undefined) {
+          return queryFail('NOT_FOUND');
+        }
+        const row = this.db.prepare(`SELECT source_revision, fact_revision, fingerprint
+          FROM memory_public_sources WHERE namespace = ? AND vault_id = ?
+          AND source_path = ? AND fact_id = ?`)
+          .get(namespace, key.vaultId, key.path, key.factId) as Row | undefined;
+        if (row !== undefined && rowText(row, 'source_revision') === sourceRevision) {
+          if (rowText(row, 'fingerprint') !== fingerprint) return queryFail();
+          const saved = this.db.prepare(`SELECT payload FROM memory_facts
+            WHERE namespace = ? AND fact_id = ? AND revision = ?`)
+            .get(namespace, key.factId, rowNumber(row, 'fact_revision')) as Row | undefined;
+          if (saved === undefined) return queryFail();
+          return {fact: fact(parseJson(rowText(saved, 'payload'))), appended: false};
+        }
+        if ((row === undefined ? null : rowNumber(row, 'fact_revision')) !== expected) {
+          return queryFail('REVISION_CONFLICT');
+        }
+        if (row === undefined && this.db.prepare(`SELECT 1 FROM memory_facts
+          WHERE namespace = ? AND fact_id = ? LIMIT 1`).get(namespace, key.factId) !== undefined) {
+          return queryFail();
+        }
+        const previousRevision = row === undefined ? 0 : rowNumber(row, 'fact_revision');
+        const next = fact({
+          ...fields,
+          ref: {id: key.factId, revision: previousRevision + 1},
+          ...(previousRevision === 0 ? {} : {
+            corrects: {id: key.factId, revision: previousRevision},
+          }),
+        });
+        const saved = this.appendFact(namespace, next);
+        this.db.prepare(`INSERT INTO memory_public_sources(
+          namespace, vault_id, source_path, fact_id, source_revision, fact_revision, fingerprint
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(namespace, vault_id, source_path, fact_id) DO UPDATE SET
+          source_revision = excluded.source_revision,
+          fact_revision = excluded.fact_revision, fingerprint = excluded.fingerprint`)
+          .run(namespace, key.vaultId, key.path, key.factId, sourceRevision,
+            next.ref.revision, fingerprint);
+        return {fact: saved, appended: true};
+      }, () => active(operation, queryFail));
     } catch (error) {
       if (error instanceof MemoryQueryError) throw error;
       return queryFail();

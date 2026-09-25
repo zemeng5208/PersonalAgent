@@ -1,8 +1,7 @@
 # 显式版本化候选：云适配消费
 
 负责人 zemeng（A，MOD-04B/29/30/32）；目标 huawei_ict_agentarts；状态 review，
-合成 Desktop 闭环已读回，比赛全项验收未完成。公共类型和严格 parser 归 B，依赖提交
-`6d3234315057292971959f3fbafac4bda12c486e`。
+真实验收未完成。公共类型和严格 parser 归 B，依赖提交 `6d3234315057292971959f3fbafac4bda12c486e`。
 字段定义与预算的唯一依据为 [MOD-30-REPAIR-CANDIDATE-01](../../../docs/modules/MOD-30-REPAIR-CANDIDATE-01.md)，
 适配器不另建 DTO、Schema、校验规则或本地写入入口。
 
@@ -24,10 +23,8 @@ candidateVersion的JSON适配也明确拒绝它，不允许公共parser扩展静
 候选版本的续接query会在原受限DTO外附一段适配器固定的候选输出契约；
 `beforeSend`仍验证原DTO，不读回原goal或完整工具结果，不改变8192字节DTO预算。
 缺合法图谱上下文时指令要求输出`kind:'text'`说明不足，不准猜NodeRef。
-独立的真实候选探针是首次调用，不能充当第二次云调用或 Desktop 闭环证据。之后
-D2 在包含本修复 `edae887` 的 `02f7273` 基线上，以同一本地 source task 完成两次
-published 云请求：第二次返回严格 `repair_candidate` v1.0，source task 读回成功。
-请求及后续独立 local repair 的脱敏读回见 [TOOL-INVOCATIONS-MVP.md](TOOL-INVOCATIONS-MVP.md)。
+此续接查询修复目前仅通过离线合成测试；独立的真实候选探针是首次调用，不能充当
+第二次云调用或Desktop闭环的成功证据，须等D2真实E2E读回。
 
 云端对象只允许 `kind:'repair_candidate'`、`candidateVersion:'1.0'` 和 B定义的
 candidate。适配先拒绝任意云verification，再补host固定unverified并交公共parser；
@@ -63,8 +60,7 @@ Fact/Evidence与允许目标的映射属于宿主，云JSON不得携带这些权
 
 在A工作树合入上述精确B依赖后，Node24.15编译通过；公共parser4项、adapter候选4项、
 提案/续接/最终门禁13项，共21/21通过，git diff --check通过。
-没有改动B公共parser/Runtime实现；上述21项仅是当时的离线验收，后来的真实
-Desktop/本地写图证据单独记录如下，不倒填为这些测试的结果。
+没有改动B公共parser/Runtime实现；上述离线验收时尚未运行云端、Desktop、本地写图或整个产品验收。
 此记录不替代B/D组合验证、CI和goo122等已登记非作者批准；接口仍provisional。
 
 2026-09-24后续真实云候选验证：在用户批准的仅合成投影范围内，A从D2本地可信
@@ -75,11 +71,5 @@ SQLite/Graph快照生成的忽略文件读取graphRevision、FactRef、三个目
 `repair_candidate`，本地主机补`verification:'unverified'`。候选图版本、三个目标、
 精确摘要和各唯一新依赖引用与本地投影逐项匹配。无自动重试、Local回退、审批或写图；
 没有保存原始云响应和凭据。脱敏结构报告保留在本工作树忽略目录
-`.cache/agentarts-candidate/`。这一次独立探针只验证云候选格式与引用；后续 D2
-同本地 task 的第二次云 invocation、可信 preview、本地 Policy/ToolGateway CAS、
-Evidence 及重启读回均有单独收据，见上方链接。平台 trace 已按同会话、输入语义
-和时间读回两条成功记录，分别对应工具提案与修复候选；
-平台未显示调用方 `X-Request-Id`，所以不能宣称精确 ID join。已发布应用版本、
-运行时 `v6`、trace token 拆分与未取得的费用/评估证据见
-[TOOL-INVOCATIONS-MVP.md](TOOL-INVOCATIONS-MVP.md)。服务端原生同 run 恢复与
-AgentArts 评估仍未验证。
+`.cache/agentarts-candidate/`。这验证云候选格式与引用，不代替Desktop可信preview、
+用户批准后Policy/ToolGateway的CAS写入、Evidence及同库重启验收。
