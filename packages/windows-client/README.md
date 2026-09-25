@@ -22,7 +22,8 @@
 开发机数据。使用注入 probe 时结果固定标记 `source=injected`，不构成真实本机观测证据；仅默认
 适配器标记 `source=node:os`。
 
-当前只交付 provider slice；ToolHost 必须显式注册才能在生产能力发现中公布工具。
+当前只交付 provider slice；`register(host)` 将工具显式交给现有 `ToolHost` 并返回注销函数，
+可信宿主仍须实际调用它，才能在生产能力发现中公布工具。
 Competition Profile 已有离线工具循环，生产 Desktop / Runtime / AgentArts 接线尚未完成；因此本包
 不代表 Desktop、AgentArts、MOD-16 或 PA-011 已完整验收。
 

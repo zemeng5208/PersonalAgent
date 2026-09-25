@@ -12,7 +12,7 @@
 
 ## 装配交接
 
-本包的描述函数仅是提供者元信息。生产工具发现须由可信 Runtime/ToolHost 在实际注册时公布，未经注册仍应返回 `UNSUPPORTED_CAPABILITY`。需要 goo122 定义或确认 Competition Profile 真实工具注册入口，将 `createSystemObservationTool()` 显式注入，保留 Policy/ToolGateway 对 `computer:system:read` 的检查、取消和 deadline；不改变公共 wire Schema、根装配、锁文件或接口目录。Desktop 负责人须在现有安全 Client/Preload/IPC 路径消费 Runtime 的结果，显示来源、时间、不支持项和失败，不由 Renderer 直读 `node:os`。AgentArts 真实工具提案与回传证据另行验收。
+本包的描述函数仅是提供者元信息；`register(host)` 复用现有 `ToolHost` 契约并返回注销函数。生产工具发现须由可信 Runtime/ToolHost 在实际注册时公布，未经注册仍应返回 `UNSUPPORTED_CAPABILITY`。需要 goo122 定义或确认 Competition Profile 真实工具注册入口，显式调用本包的 `register(host)`，保留 Policy/ToolGateway 对 `computer:system:read` 的检查、取消和 deadline；不改变公共 wire Schema、根装配、锁文件或接口目录。Desktop 负责人须在现有安全 Client/Preload/IPC 路径消费 Runtime 的结果，显示来源、时间、不支持项和失败，不由 Renderer 直读 `node:os`。AgentArts 真实工具提案与回传证据另行验收。
 
 ## 实机验收（Windows 普通用户权限）
 
