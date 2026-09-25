@@ -15,7 +15,7 @@
 
 ## Windows 实机验收步骤与证据
 
-在普通用户 Windows 会话中，从仓库根目录运行 `dotnet build apps/windows-host/manual/ManualNotepadProbe.csproj`，再运行 `dotnet run --no-build --project apps/windows-host/manual/ManualNotepadProbe.csproj` **一次**。探针创建随机合成文件并启动 System32 入口；若窗口由新 MSIX 进程承担，只在启动后新建的 Notepad PID 中寻找唯一可见顶层 HWND，核对包身份、PID、进程启动时间。没有新窗口、复用既有进程/旧标签、多新窗口或身份不可读时拒绝；不读取既有私人标签、窗口标题和内容，不切换标签。操作者必须目视核对完整随机文本，输入 `CONFIRM`，五秒内手动激活原窗口。核心仅读取该已确认前台 HWND 的单个编辑控件，精确核对随机全文后才可能写入；标记不符、多标签或无法识别单标签均写前拒绝。同时出现其他新进程时不能把它当合成目标。探针不代表产品授权链。记录一次结果、退出码、脱敏目标身份与是否目视确认；不要记录私人内容或合成全文。随后按下列步骤补足负向和集成验收：
+在普通用户 Windows 会话中，从仓库根目录运行 `dotnet build apps/windows-host/manual/ManualNotepadProbe.csproj`，再运行 `dotnet run --no-build --project apps/windows-host/manual/ManualNotepadProbe.csproj` **一次**。探针创建随机合成文件并启动 System32 入口；若窗口由新 MSIX 进程承担，只在启动后新建的 Notepad PID 中寻找唯一可见顶层 HWND，核对包身份、PID、进程启动时间。没有新窗口、复用既有进程/旧标签、多新窗口或身份不可读时拒绝；不读取既有私人标签、窗口标题和内容，不切换标签。显示随机文本和 `CONFIRM` 提示前先复用核心的 `TryGetOnlyTab` 检查同一 HWND 的目标身份与唯一选中标签，多标签或结构不明直接拒绝。通过该检查后，操作者仍须目视核对完整随机文本，输入 `CONFIRM`，五秒内手动激活原窗口。核心仅读取该已确认前台 HWND 的单个编辑控件，精确核对随机全文后才可能写入；标记不符、多标签或无法识别单标签均写前拒绝。同时出现其他新进程时不能把它当合成目标。探针不代表产品授权链。记录一次结果、退出码、脱敏目标身份与是否目视确认；不要记录私人内容或合成全文。随后按下列步骤补足负向和集成验收：
 
 1. 记录 Windows/.NET/记事本版本、实际启动入口路径、完整 `dotnet build` 退出码；若 MSIX 身份、UIA 单标签或 ValuePattern 无法识别，记录拒绝并重新评审，不能将拒绝当成功。
 2. 人工确认 HWND、PID、进程启动时间、预期文本和替换文本；测试缺确认、另一 PID、重启后的同 PID、背景窗口、第二编辑控件、只读控件、超过长度及预期文本变化均不发生替换。
@@ -23,4 +23,4 @@
 4. 成功操作后独立从记事本 UIA 控件读回精确文本；失败、目标退出和取消后另行读回实际内容，明确 verified/unknown，而非仅看 `SetValue` 返回。关闭并重启应用后只应通过可信恢复流程核实，不重做不确定的写入。
 5. 待 #114 的真实接口到位，走 AgentArts 提案→受信目标确认→Runtime/Policy/ToolGateway 一次性授权→Host→目标读回→任务持久化/重启恢复，另测撤销、过期、参数置换、无 capability、防 Local 静默回退。保存脱敏任务 ID、目标身份摘要、授权消费记录、读回结果、失败分支和重启状态；不保存实际文本、私人窗口名或凭据。
 
-此前 Windows 设备上 `#120` build 为零警告零错误，但旧探针的 System32 启动 PID 未暴露窗口，退出码 2；MSIX Notepad 11.2607.14.0 显示合成文件窗口，未输入 `CONFIRM`，未执行 `SetValue` 或读回。本次修改尚未经过 Windows 编译或 UIA 实测。若系统只复用既有进程/旧标签，或 UIA 不暴露可信的单标签与单个 ValuePattern，则本轮只能验收安全拒绝，无法实测成功读回；不能用合成结果宣称 PA-016 或整个 MVP 完成。历史 `MOD-16-SYSTEM-OBSERVATION-01` 是只读系统观测，不是本操作证据。
+Windows 回执：旧探针的 System32 启动 PID 未暴露窗口，退出码 2，MSIX Notepad 11.2607.14.0 显示合成文件，未确认或写入。后续 `#120@e74d3efd` 使用 SDK 8.0.424 构建 exit 0、零警告零错误；一次探针发现 PID 41348 的合成随机全文，但同一窗口同时有多个既有私人标签，程序仍显示 `CONFIRM`，操作者输入 `NO` 后输出 `REFUSED: no manual confirmation`，shell exit 1。**该拒绝由操作者触发，旧代码并未在提示前自动拒绝多标签**；未执行 `SetValue` 或读回，未触碰旧标签。本次提示前单标签修复尚未 Windows 编译或 UIA 实测。若系统只复用既有进程/旧标签，或 UIA 不暴露可信的单标签与单个 ValuePattern，则本轮只能验收拒绝，无法实测成功读回；不能用合成结果宣称 PA-016 或整个 MVP 完成。历史 `MOD-16-SYSTEM-OBSERVATION-01` 是只读系统观测，不是本操作证据。

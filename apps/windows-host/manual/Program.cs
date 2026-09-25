@@ -73,6 +73,11 @@ try
         Console.WriteLine("REFUSED: no unique new Notepad window; existing windows and tabs were not inspected");
         return 2;
     }
+    if (!NotepadAction.HasSingleTabForManualProbe(window, targetPid, targetStartUtc))
+    {
+        Console.WriteLine("REFUSED: target does not expose exactly one selected Notepad tab");
+        return 2;
+    }
 
     Console.WriteLine($"Only the new temporary Notepad window (PID {targetPid}) may be used.");
     Console.WriteLine($"Confirm that its entire visible test text is: {expected}");

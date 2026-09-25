@@ -193,6 +193,17 @@ public static class NotepadAction
     private static bool SameElement(AutomationElement? first, AutomationElement? second) =>
         first is null ? second is null : first.Equals(second);
 
+    // Manual probe checks only target identity and tab structure before asking for consent.
+    // No window title, tab label or editor value is read here.
+    internal static bool HasSingleTabForManualProbe(nint window, int pid, DateTime startUtc)
+    {
+        if (GetWindowThreadProcessId(window, out var owner) == 0 || owner != pid) return false;
+        using var process = Process.GetProcessById(pid);
+        if (process.StartTime.ToUniversalTime() != startUtc || !IsTrustedNotepadProcess(process)) return false;
+        var root = AutomationElement.FromHandle(window);
+        return root.Current.ProcessId == pid && TryGetOnlyTab(root, pid, out _);
+    }
+
     private static bool TryGetOnlyTab(AutomationElement root, int pid, out AutomationElement? selectedTab)
     {
         selectedTab = null;
