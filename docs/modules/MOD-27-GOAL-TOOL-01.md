@@ -4,8 +4,10 @@
 - 所有权：`packages/goals/**` 与本文；Runtime、Policy、Desktop 和根 lock 保留原分工。
 - 前置：Goal 命令 PR #136 head `0cb6e97`；DEP01 Draft PR #152 head `4930d43` 提供可信宿主发起的持久单工具任务、审批恢复和读回。本包依赖该 Draft 的接口形态，不把它当作已合并能力。
 
-`createGoalTools(boundStore)` 复用现有 `createGoal`、`reviseGoal`、图版本 CAS 和
+`createGoalTools(resolveStore)` 复用现有 `createGoal`、`reviseGoal`、图版本 CAS 和
 `CoordinationStorePort`，提供 `goals.create` / `goals.revise` 两个 `RegisteredTool`。
+受信宿主先构造工具，Application 建成后绑定单个稳定 store；注册时不解析，执行时
+缺失或换绑一律拒绝。该时序兼容 DEP01 在 RuntimeApplication 构造中注册工具。
 输入包含精确图版本、完整 Goal 字段，修订再包含精确旧 Goal 版本；不包含 namespace。
 可信 Desktop 主进程负责固定并持久化不透明用户 namespace、绑定 store，以及由稳定
 commandId 生成/校验 sourceRef；Renderer 不能指定这两者。ToolGateway/Policy 仍负责
@@ -23,7 +25,9 @@ commandId 生成/校验 sourceRef；Renderer 不能指定这两者。ToolGateway
 MOD-11/12 Desktop 接线及 MOD-28 影响入口可用后，目标链只集中运行一次代表路径。
 
 本工作树用现有已安装 TypeScript 5.9.3 工具链编译 goals，通过；
-`node --test packages/goals/test/tool.test.mjs` 3/3 通过，`npm run check:architecture`
+`node --test packages/goals/test/tool.test.mjs` 初版 3/3；延迟绑定修订后
+TypeScript 编译与该文件定向测试 4/4 通过，未重复架构检查。
+初版 `npm run check:architecture`
 3/3 通过，`git diff --check` 通过。没有安装新依赖、运行
 全仓检查或 Electron。新增包内 `@personal-agent/contracts` 声明，根 lock 登记
 归公共接口任务，须在 CI `npm ci` 前完成；本包未修改根 lock。
