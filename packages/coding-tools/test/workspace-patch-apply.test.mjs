@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {existsSync} from 'node:fs';
+import {existsSync, realpathSync} from 'node:fs';
 import {link, mkdir, mkdtemp, open, readFile, readdir, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -131,4 +131,15 @@ test('Policy and ToolGateway require a parameter-bound one-use apply grant', {sk
   dispose();
   await assert.rejects(gateway.invoke(invocation), {code: 'UNSUPPORTED_CAPABILITY'});
   assert.equal(await readFile(source, 'utf8'), 'after\n');
+});
+
+test('an unresolved helper marker prevents another apply to the same source', {skip: unavailable}, async t => {
+  const {root, recoveryRootPath, source} = await fixture(t);
+  const tool = createWorkspacePatchApplyTool({rootPath: root, recoveryRootPath, powerShellPath});
+  const sourceKey = sha(`${realpathSync.native(root)}\nsrc/note.txt`).slice(0, 32);
+  const marker = join(recoveryRootPath, `${sourceKey}.inflight`);
+  await writeFile(marker, 'unresolved synthetic helper');
+  await assert.rejects(tool.execute(request(sha('before\n')), context()), {code: 'RESULT_UNKNOWN'});
+  assert.equal(await readFile(source, 'utf8'), 'before\n');
+  assert.equal(await readFile(marker, 'utf8'), 'unresolved synthetic helper');
 });

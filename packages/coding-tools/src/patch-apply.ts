@@ -1,6 +1,7 @@
 import {spawn} from 'node:child_process';
 import {createHash, randomUUID} from 'node:crypto';
-import {realpathSync, statSync} from 'node:fs';
+import {closeSync, fsyncSync, openSync, realpathSync, statSync, writeSync} from 'node:fs';
+import {unlink} from 'node:fs/promises';
 import {isAbsolute, relative, resolve, sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {ProtocolError} from '@personal-agent/contracts';
@@ -80,6 +81,7 @@ async function invokeHelper(
   executable: string,
   script: string,
   request: HelperRequest,
+  inflightPath: string,
   context: ToolContext,
   now: () => number,
 ): Promise<HelperResponse> {
@@ -100,6 +102,30 @@ async function invokeHelper(
       });
     } catch {
       reject(new ProtocolError('RESULT_UNKNOWN', 'Workspace patch helper could not start'));
+      return;
+    }
+    // Persist this marker before supplying any candidate bytes. A timeout may
+    // settle the Gateway early, but reconciliation must wait until close removes it.
+    let markerFd: number | undefined;
+    try {
+      markerFd = openSync(inflightPath, 'wx', 0o600);
+      writeSync(markerFd, JSON.stringify({
+        pid: child.pid ?? null,
+        beforeSha256: request.beforeSha256,
+        afterSha256: request.afterSha256,
+      }));
+      fsyncSync(markerFd);
+      closeSync(markerFd);
+      markerFd = undefined;
+    } catch {
+      if (markerFd !== undefined) {
+        try { closeSync(markerFd); } catch { /* a durable marker may remain */ }
+      }
+      child.once('error', () => {});
+      child.stdin?.on('error', () => {});
+      try { child.kill('SIGKILL'); } catch { /* no request was sent */ }
+      child.stdin?.destroy();
+      reject(new ProtocolError('RESULT_UNKNOWN', 'Workspace patch in-flight record could not be persisted'));
       return;
     }
     let finished = false;
@@ -139,7 +165,12 @@ async function invokeHelper(
     });
     child.stdin?.on('error', () => stop(new ProtocolError('RESULT_UNKNOWN', 'Workspace patch helper input failed')));
     child.once('error', () => finish(new ProtocolError('RESULT_UNKNOWN', 'Workspace patch helper could not start')));
-    child.once('close', (code: number | null) => {
+    child.once('close', async (code: number | null) => {
+      try {
+        await unlink(inflightPath);
+      } catch {
+        return finish(new ProtocolError('RESULT_UNKNOWN', 'Workspace patch helper exited but in-flight record remains'));
+      }
       if (stopReason) return finish(stopReason);
       if (code !== 0) return finish(new ProtocolError('RESULT_UNKNOWN', 'Workspace patch helper did not complete'));
       try {
@@ -219,14 +250,18 @@ export function createWorkspacePatchApplyToolFromPreview(options: ApplyOptions):
       };
       if (!preview.changed) return result;
       const recoveryId = `${digest(Buffer.from(`${context.taskId}\n${context.runId}`)).slice(0, 32)}-${randomUUID()}.bak`;
+      const sourcePath = resolve(root, ...preview.path.split('/'));
+      // One durable marker per source, not per attempt: an unknown prior helper
+      // blocks a second apply until a trusted reconciler confirms its process exited.
+      const sourceKey = digest(Buffer.from(`${root}\n${preview.path}`)).slice(0, 32);
       const response = await invokeHelper(powerShell, script, {
         rootPath: root,
-        sourcePath: resolve(root, ...preview.path.split('/')),
+        sourcePath,
         backupPath: resolve(recoveryRoot, recoveryId),
         beforeSha256: preview.beforeSha256,
         afterSha256: preview.afterSha256,
         afterBase64: after.toString('base64'),
-      }, context, options.now);
+      }, resolve(recoveryRoot, `${sourceKey}.inflight`), context, options.now);
       if (response.state === 'conflict') throw new ProtocolError('REVISION_CONFLICT', 'Workspace source changed or is busy');
       if (response.state !== 'applied') throw new ProtocolError('RESULT_UNKNOWN', 'Workspace patch apply requires reconciliation');
       result.applied = true;
