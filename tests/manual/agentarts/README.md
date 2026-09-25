@@ -107,6 +107,13 @@
 合成闭环收据在本机被忽略的 `.cache/full-chain-acceptance-20260924.md`；它记录了
 真实调用与重启结果，但不能替代恢复后新请求的版本和 trace 读回。
 
+9 月 25 日对已发布 `PA-证据安全审查` `v20260924224413` 的版本预览又读回一项范围限制：
+末端系统提示的 `tool_proposal` 分支限定合成 `meeting-update.json` 读取，
+`repair_candidate` 分支要求已确认的“会议变更”和 `repairContext`，其他情况返回
+`kind:text`。因此上述成功证据只覆盖会议合成场景；即使本地候选续接改为通用描述，
+也不能据此推断当前云端版本支持非会议事实变化。非会议场景须先由对应工作包修正并
+发布受限提示，再按新版本单独验收。
+
 ## 固定合成分类 runner
 
 [`support/fixed-synthetic-batch.mjs`](support/fixed-synthetic-batch.mjs) 提供 MOD-31 的离线
