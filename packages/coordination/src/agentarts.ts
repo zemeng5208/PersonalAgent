@@ -1,11 +1,12 @@
 import {ProtocolError} from '@personal-agent/contracts';
 import {createHash, randomUUID} from 'node:crypto';
-import {parseCoordinationContinuation, parseCoordinationResult, parseCoordinationTextResult} from './index.js';
-import type {CloudAgentPort, CoordinationContinuation, CoordinationRequest, CoordinationResult} from './index.js';
+import {parseCoordinationAvailableTools, parseCoordinationContinuation, parseCoordinationResult, parseCoordinationTextResult} from './index.js';
+import type {CloudAgentPort, CoordinationAvailableTool, CoordinationContinuation, CoordinationRequest, CoordinationResult} from './index.js';
 
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_TEXT_CHARS = 16_000;
 const MAX_CONTINUATION_BYTES = 8_192;
+const MAX_INITIAL_QUERY_BYTES = 32_768;
 const MAX_AUTHORIZATION_CHARS = 4_096;
 const MAX_REQUEST_ID_CHARS = 64;
 const MAX_TIMER_DELAY = 2_147_483_647;
@@ -26,6 +27,8 @@ export interface AgentArtsRuntimeConfig {
   workflowGoalInput?: string;
   /** Explicit application protocol; separate invocations, never native run resume. */
   responseMode?: 'text' | 'tool-proposal-json';
+  /** Opt in to a trusted, per-task tool directory in the initial query. */
+  initialRequestMode?: 'goal' | 'goal-with-tools-json';
   /** Opt in only after composition supports the versioned, untrusted candidate. */
   repairCandidateVersion?: '1.0';
 }
@@ -95,8 +98,11 @@ function asPlainObject(value: unknown): Record<string, unknown> | undefined {
   }
 }
 
-function validateRequest(request: CoordinationRequest, responseMode: 'text' | 'tool-proposal-json'): {
+function validateRequest(request: CoordinationRequest, responseMode: 'text' | 'tool-proposal-json',
+  initialRequestMode: 'goal' | 'goal-with-tools-json'): {
+  taskId: string; revision: number; goal: string; deadline: string;
   deadlineMs: number; signal: AbortSignal; continuation?: CoordinationContinuation;
+  availableTools?: readonly CoordinationAvailableTool[];
 } {
   const input = asPlainObject(request);
   if (!input) invalid('Invalid AgentArts coordination request');
@@ -108,6 +114,18 @@ function validateRequest(request: CoordinationRequest, responseMode: 'text' | 't
     if (new TextEncoder().encode(JSON.stringify(continuation)).byteLength > MAX_CONTINUATION_BYTES) {
       invalid('AgentArts continuation projection exceeds the byte limit');
     }
+  }
+  if (input.availableTools !== undefined && continuation !== undefined) {
+    invalid('AgentArts continuation cannot include an initial tool directory');
+  }
+  if (input.availableTools !== undefined && initialRequestMode !== 'goal-with-tools-json') {
+    invalid('AgentArts initial tool directory is unavailable');
+  }
+  const availableTools = input.availableTools === undefined ? undefined
+    : parseCoordinationAvailableTools(input.availableTools);
+  if (continuation === undefined && initialRequestMode === 'goal-with-tools-json'
+    && (availableTools === undefined || availableTools.length === 0)) {
+    throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'AgentArts initial tool directory is unavailable');
   }
 
   const taskId = input.taskId;
@@ -137,7 +155,9 @@ function validateRequest(request: CoordinationRequest, responseMode: 'text' | 't
   const signal = candidateSignal as AbortSignal;
   if (signal.aborted) throw abortError('cancelled');
   if (deadlineMs <= Date.now()) throw abortError('deadline');
-  return {deadlineMs, signal, ...(continuation === undefined ? {} : {continuation})};
+  return {taskId, revision, goal, deadline, deadlineMs, signal,
+    ...(continuation === undefined ? {} : {continuation}),
+    ...(availableTools === undefined ? {} : {availableTools})};
 }
 
 function validateGatewayUrl(gatewayUrl: string): string {
@@ -169,6 +189,7 @@ function validateRuntimeConfig(config: AgentArtsRuntimeConfig): {
   invokeMode: 'debug' | 'published';
   workflowGoalInput?: string;
   responseMode: 'text' | 'tool-proposal-json';
+  initialRequestMode: 'goal' | 'goal-with-tools-json';
   repairCandidateVersion?: '1.0';
 } {
   const value = asPlainObject(config);
@@ -182,6 +203,13 @@ function validateRuntimeConfig(config: AgentArtsRuntimeConfig): {
   if (invokeMode !== 'debug' && invokeMode !== 'published') invalid('AgentArts invokeMode is invalid');
   const responseMode = value.responseMode === undefined ? 'text' : value.responseMode;
   if (responseMode !== 'text' && responseMode !== 'tool-proposal-json') invalid('AgentArts responseMode is invalid');
+  const initialRequestMode = value.initialRequestMode === undefined ? 'goal' : value.initialRequestMode;
+  if (initialRequestMode !== 'goal' && initialRequestMode !== 'goal-with-tools-json') {
+    invalid('AgentArts initial request mode is invalid');
+  }
+  if (initialRequestMode === 'goal-with-tools-json' && responseMode !== 'tool-proposal-json') {
+    invalid('AgentArts initial tool directory requires tool proposal mode');
+  }
   const repairCandidateVersion = value.repairCandidateVersion;
   if (repairCandidateVersion !== undefined && (repairCandidateVersion !== '1.0' || responseMode !== 'tool-proposal-json')) {
     invalid('AgentArts repair candidate version is invalid');
@@ -191,7 +219,7 @@ function validateRuntimeConfig(config: AgentArtsRuntimeConfig): {
     || !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(workflowGoalInput))) {
     invalid('AgentArts workflow goal input is invalid');
   }
-  return {gatewayOrigin, runtimeName, invokeMode, responseMode,
+  return {gatewayOrigin, runtimeName, invokeMode, responseMode, initialRequestMode,
     ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
     ...(workflowGoalInput === undefined ? {} : {workflowGoalInput})};
 }
@@ -711,16 +739,19 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
   private readonly invokeMode: 'debug' | 'published';
   private readonly workflowGoalInput: string | undefined;
   private readonly responseMode: 'text' | 'tool-proposal-json';
+  private readonly initialRequestMode: 'goal' | 'goal-with-tools-json';
   private readonly repairCandidateVersion: '1.0' | undefined;
   private readonly authorizationProvider: AgentArtsAuthorizationProvider;
   private readonly fetchImpl: AgentArtsFetch;
   private readonly beforeSend: ((request: CoordinationRequest) => void) | undefined;
+  private readonly beforeInitialToolCatalogSend: ((request: CoordinationRequest) => Promise<void>) | undefined;
 
   constructor(
     config: AgentArtsRuntimeConfig,
     authorizationProvider: AgentArtsAuthorizationProvider,
     fetchImpl?: AgentArtsFetch,
     beforeSend?: (request: CoordinationRequest) => void,
+    beforeInitialToolCatalogSend?: (request: CoordinationRequest) => Promise<void>,
   ) {
     const validated = validateRuntimeConfig(config);
     if (!authorizationProvider || typeof authorizationProvider.read !== 'function') {
@@ -728,31 +759,45 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
     }
     if (fetchImpl !== undefined && typeof fetchImpl !== 'function') invalid('AgentArts fetch implementation is invalid');
     if (beforeSend !== undefined && typeof beforeSend !== 'function') invalid('AgentArts beforeSend guard is invalid');
+    if (beforeInitialToolCatalogSend !== undefined && typeof beforeInitialToolCatalogSend !== 'function') {
+      invalid('AgentArts initial tool catalog guard is invalid');
+    }
     this.gatewayOrigin = validated.gatewayOrigin;
     this.runtimeName = validated.runtimeName;
     this.invokeMode = validated.invokeMode;
     this.workflowGoalInput = validated.workflowGoalInput;
     this.responseMode = validated.responseMode;
+    this.initialRequestMode = validated.initialRequestMode;
     this.repairCandidateVersion = validated.repairCandidateVersion;
     this.authorizationProvider = authorizationProvider;
     this.fetchImpl = fetchImpl ?? defaultFetch;
     this.beforeSend = beforeSend;
+    this.beforeInitialToolCatalogSend = beforeInitialToolCatalogSend;
   }
 
   async invoke(request: CoordinationRequest): Promise<CoordinationResult> {
-    const {deadlineMs, signal, continuation} = validateRequest(request, this.responseMode);
+    const {taskId, revision, goal, deadline, deadlineMs, signal, continuation, availableTools} =
+      validateRequest(request, this.responseMode, this.initialRequestMode);
     if (continuation !== undefined && this.beforeSend === undefined) {
       throw new ProtocolError('UNAUTHORIZED', 'AgentArts continuation export guard is unavailable');
     }
-    const query = continuation === undefined ? request.goal
+    if (availableTools !== undefined && this.beforeInitialToolCatalogSend === undefined) {
+      throw new ProtocolError('UNAUTHORIZED', 'AgentArts initial tool catalog guard is unavailable');
+    }
+    const query = continuation === undefined
+      ? availableTools === undefined ? goal : JSON.stringify({goal, availableTools})
       : this.repairCandidateVersion === '1.0'
         ? candidateContinuationQuery(continuation)
         : JSON.stringify({continuation});
+    if (continuation === undefined && availableTools !== undefined
+      && new TextEncoder().encode(query).byteLength > MAX_INITIAL_QUERY_BYTES) {
+      invalid('AgentArts initial tool query exceeds the byte limit');
+    }
     const combined = makeCombinedSignal(signal, deadlineMs);
     const sendRequest: CoordinationRequest = Object.freeze({
-      taskId: request.taskId, revision: request.revision, goal: request.goal,
-      deadline: request.deadline, signal: combined.signal,
+      taskId, revision, goal, deadline, signal: combined.signal,
       ...(continuation === undefined ? {} : {continuation}),
+      ...(availableTools === undefined ? {} : {availableTools}),
     });
     try {
       const initialAbort = currentAbortError(combined);
@@ -790,9 +835,17 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
         redirect: 'error',
       };
 
-      // The host must revalidate dynamic export permission AFTER any asynchronous
-      // credential read. This callback is synchronous; no await may split the
-      // final permission check from the actual fetch invocation below.
+      // The host resolves dynamic availability after the credential read and
+      // immediately before transport. A pending guard still obeys cancellation.
+      if (availableTools !== undefined) {
+        try {
+          await callWithAbort(() => this.beforeInitialToolCatalogSend!(sendRequest), combined);
+        } catch {
+          throw currentAbortError(combined) ?? new ProtocolError('UNAUTHORIZED', 'AgentArts tool catalog export denied');
+        }
+      }
+      // The existing synchronous guard remains the final continuation check.
+      // No await separates it from the fetch invocation below.
       if (this.beforeSend !== undefined) {
         try {
           const guardResult: unknown = this.beforeSend(sendRequest);
