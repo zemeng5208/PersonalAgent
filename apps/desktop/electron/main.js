@@ -11,6 +11,7 @@ import {desktopDataPaths} from './data-paths.js';
 import {createMicrophonePermissionGate} from './microphone-permission.js';
 import {createMicrophoneCaptureHost} from './microphone-capture-host.js';
 import {createDesktopEvidenceHost} from './evidence-host.js';
+import {createDesktopCompetitionCodingHost} from './competition-coding-host.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -103,6 +104,7 @@ let voiceDisposal;
 let voiceDisposalFailed = false;
 let goalHost;
 let competitionCatalog;
+let competitionCodingHost;
 
 function snapshot(surface) {
   return {
@@ -551,17 +553,30 @@ async function initializeRuntime() {
         throw Error('PA_AGENTARTS_AUTHORIZATION 未配置；Competition Runtime 不会启动');
       }
       const {createGoalHost} = await import('./goal-host.js');
-      const {createWorkspaceReadTool} = await import('@personal-agent/coding-tools');
+      const codingTools = await import('@personal-agent/coding-tools');
+      const {createWorkspaceReadTool} = codingTools;
       const {createDesktopCompetitionToolCatalog} = await import('./competition-tool-catalog.js');
       const namespace = desktopHost.userNamespace;
       goalHost = createGoalHost(namespace);
       competitionCatalog = createDesktopCompetitionToolCatalog({
         rootPath: path.resolve(dir, '../fixtures/agentarts'), createWorkspaceReadTool,
       });
+      const codingPaths = [process.env.PA_COMPETITION_WORKSPACE_ROOT,
+        process.env.PA_COMPETITION_RECOVERY_ROOT, process.env.PA_COMPETITION_PWSH_PATH];
+      if (codingPaths.some(value => value !== undefined)) {
+        if (codingPaths.some(value => !value)) throw Error('Competition coding host paths are incomplete');
+        competitionCodingHost = createDesktopCompetitionCodingHost({
+          workspaceRoot: codingPaths[0], recoveryRootPath: codingPaths[1],
+          powerShellPath: codingPaths[2],
+          createWorkspacePatchStageTool: codingTools.createWorkspacePatchStageTool,
+          createWorkspacePatchApplyTool: codingTools.createWorkspacePatchApplyTool,
+          createWorkspaceCommandTool: codingTools.createWorkspaceCommandTool,
+        });
+      }
       runtimeApplication = runtimeModule.createAgentArtsRuntimeApplication({
         path: dbPath,
         hostUserNamespace: namespace,
-        tools: [...goalHost.tools, competitionCatalog.tool],
+        tools: [...goalHost.tools, competitionCatalog.tool, ...(competitionCodingHost?.tools ?? [])],
         responseMode: 'tool-proposal-json',
         initialRequestMode: 'goal-with-tools-json',
         competitionToolAvailability: [competitionCatalog.availability],
@@ -579,6 +594,7 @@ async function initializeRuntime() {
       });
       goalHost.bind(runtimeApplication);
       goalHost.resumeApproved();
+      competitionCodingHost?.bind(runtimeApplication);
     } else {
       const createApplication = process.argv.includes('--weather-tools')
         ? (await import('@personal-agent/runtime/weather')).createOpenMeteoApplication
@@ -733,6 +749,13 @@ async function action(event, name, payload) {
       return {...result, task: goalHost.readTask(payload)};
     }
     throw Error('Unsupported Goal action');
+  }
+  if (name.startsWith('coding.')) {
+    if (sender !== panel && sender !== workspace) throw Error('Coding 操作只能从面板或工作区调用');
+    if (!competitionCodingHost) throw Error('Competition Coding 工具尚未由可信宿主配置');
+    if (name === 'coding.submit') return competitionCodingHost.submit(payload?.operation, payload?.input);
+    if (name === 'coding.readTask') return competitionCodingHost.readTask(payload);
+    throw Error('Unsupported Coding action');
   }
   if (name === 'task.submit') {
     if (sender !== panel && sender !== workspace) throw Error('请在对话工作区发送消息');
@@ -904,6 +927,7 @@ app.whenReady().then(async () => {
     tray?.destroy();
     runtimeConnection?.dispose?.();
     try {
+      competitionCodingHost?.close();
       if (runtimeApplication) runtimeApplication.close();
       else runtime?.close?.();
       competitionCatalog?.close();
