@@ -15,5 +15,13 @@ contextBridge.exposeInMainWorld('desktop', Object.freeze({
     const receive = (_event, value) => listener(value);
     ipcRenderer.on('desktop:update', receive);
     return () => ipcRenderer.removeListener('desktop:update', receive);
-  }
+  },
+  microphone: Object.freeze({
+    onCommand: listener => {
+      const receive = (_event, command) => listener(command);
+      ipcRenderer.on('desktop:microphone-command', receive);
+      return () => ipcRenderer.removeListener('desktop:microphone-command', receive);
+    },
+    report: message => ipcRenderer.send('desktop:microphone-event', message),
+  }),
 }));

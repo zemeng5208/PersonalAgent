@@ -9,6 +9,7 @@ import {Conversations} from './conversations.js';
 import {createDesktopHost} from './desktop-host.js';
 import {desktopDataPaths} from './data-paths.js';
 import {createMicrophonePermissionGate} from './microphone-permission.js';
+import {createMicrophoneCaptureHost} from './microphone-capture-host.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -93,6 +94,7 @@ const approvals = new Map();
 const notifications = new Map();
 let runtimeApplication;
 let microphonePermissionGate;
+let microphoneCaptureHost;
 
 function snapshot(surface) {
   return {
@@ -112,7 +114,9 @@ function snapshot(surface) {
     notifications: [...notifications.values()],
     model: structuredClone(model),
     thinking: structuredClone(thinking),
-    voice: {available: false, status: 'unavailable', reason: '语音供应商尚未连接'},
+    voice: {available: false, status: 'unavailable', reason: '语音供应商尚未连接',
+      capture: microphoneCaptureHost?.snapshot() ?? {authorized: false, active: false, busy: false,
+        subscriberCount: 0, lastRelease: {stopped: true, verified: false, reason: 'never_started'}}},
   };
 }
 
@@ -621,6 +625,19 @@ async function action(event, name, payload) {
     if (sender !== panel) throw Error('语音操作只能从面板调用');
     return {available: false, stopped: false, reason: '语音供应商尚未连接'};
   }
+  if (name === 'voice.capture.authorize') {
+    if (sender !== panel || !competitionMode) throw Error('麦克风只允许 Competition 可信面板启用');
+    if (!client) throw Error('Runtime 未连接，麦克风采集尚不可用');
+    const result = microphoneCaptureHost.authorize();
+    publish();
+    return result;
+  }
+  if (name === 'voice.capture.revoke') {
+    if (sender !== panel) throw Error('麦克风只能从可信面板关闭');
+    await microphoneCaptureHost.revoke();
+    publish();
+    return microphoneCaptureHost.snapshot();
+  }
   if (name === 'clipboard.writeText') {
     if ((sender !== panel && sender !== workspace) || typeof payload !== 'string' || payload.length > 50000) throw Error('剪贴板内容无效');
     clipboard.writeText(payload);
@@ -710,6 +727,11 @@ app.whenReady().then(async () => {
   });
   session.defaultSession.setPermissionRequestHandler(microphonePermissionGate.request);
   session.defaultSession.setPermissionCheckHandler(microphonePermissionGate.check);
+  microphoneCaptureHost = createMicrophoneCaptureHost({permissionGate: microphonePermissionGate,
+    getPanel: () => panel});
+  ipcMain.on('desktop:microphone-event', (event, message) => {
+    if (microphoneCaptureHost.receive(event, message)) publish();
+  });
   try {
     conversations = new Conversations(dataPaths.conversations);
     if (!competitionMode) restoreModelConfig();
@@ -726,6 +748,10 @@ app.whenReady().then(async () => {
   panel = windowFor('panel', panelBounds(orb.getBounds(), area),
     {frame: false, transparent: true, alwaysOnTop: true, skipTaskbar: true, resizable: false, hasShadow: false, backgroundMaterial: 'none', roundedCorners: true});
   panel.on('close', event => { if (!app.isQuitting) { event.preventDefault(); pinned = false; panel.hide(); publish(); } });
+  panel.on('hide', () => { void microphoneCaptureHost.revoke().catch(error => {
+    runtimeError = error instanceof Error ? error.message : '麦克风释放未确认';
+    publish();
+  }); publish(); });
   createTray();
 
   ipcMain.handle('desktop:action', async (...args) => {
@@ -755,6 +781,14 @@ app.whenReady().then(async () => {
     else if (panel.isVisible()) { if (!away) away = Date.now(); else if (Date.now() - away > 520) { panel.hide(); away = 0; } }
   }, 80);
   app.on('before-quit', event => {
+    if (microphoneCaptureHost?.snapshot().busy) {
+      event.preventDefault();
+      void microphoneCaptureHost.revoke().then(() => app.quit()).catch(error => {
+        runtimeError = error instanceof Error ? error.message : '麦克风释放未确认';
+        publish();
+      });
+      return;
+    }
     if ((runtimeApplication?.activeTaskCount ?? 0) > 0) {
       event.preventDefault();
       app.isQuitting = false;
