@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdtempSync, mkdirSync, rmSync, writeFileSync} from 'node:fs';
+import {mkdtempSync, mkdirSync, renameSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -60,3 +60,31 @@ test('host refuses an unverified ACL and unexpected public tool', {skip: process
     createWorkspacePatchApplyTool: () => ({descriptor: {name: 'other'}})}),
   /Unexpected coding patch tool/);
 });
+
+test('ACL drift and replacement of pinned recovery or PowerShell paths stop invocation',
+  {skip: process.platform !== 'win32'}, t => {
+    const paths = fixture(t);
+    let aclSecure = true;
+    const host = createDesktopCodingToolHost({...options(paths),
+      inspectAcl: () => { if (!aclSecure) throw Error('ACL changed'); }});
+    aclSecure = false;
+    assert.equal(host.available(), false);
+    assert.throws(() => host.tools[0].execute(), /reconciliation/);
+    aclSecure = true;
+    renameSync(paths.recoveryRootPath, `${paths.recoveryRootPath}-old`);
+    mkdirSync(paths.recoveryRootPath);
+    assert.equal(host.available(), false);
+
+    const next = fixture(t);
+    const second = createDesktopCodingToolHost(options(next));
+    renameSync(next.powerShellPath, `${next.powerShellPath}.old`);
+    writeFileSync(next.powerShellPath, 'replacement');
+    assert.equal(second.available(), false);
+    assert.throws(() => second.tools[0].execute(), /reconciliation/);
+
+    const thirdPaths = fixture(t);
+    const third = createDesktopCodingToolHost(options(thirdPaths));
+    renameSync(thirdPaths.workspaceRoot, `${thirdPaths.workspaceRoot}-old`);
+    mkdirSync(thirdPaths.workspaceRoot);
+    assert.equal(third.available(), false);
+  });

@@ -10,6 +10,7 @@ import {createDesktopHost} from './desktop-host.js';
 import {desktopDataPaths} from './data-paths.js';
 import {createMicrophonePermissionGate} from './microphone-permission.js';
 import {createMicrophoneCaptureHost} from './microphone-capture-host.js';
+import {createDesktopEvidenceHost} from './evidence-host.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -695,6 +696,28 @@ async function action(event, name, payload) {
   }
   if (sender === orb) throw Error('Action unavailable from orb');
   if (!client) throw Error('Runtime 未连接，此操作尚不可用');
+  if (['evidence.list', 'evidence.get', 'authorization.revoke'].includes(name)) {
+    if (sender !== admin) throw Error('Evidence 操作仅允许可信后台窗口');
+    const namespace = desktopHost.userNamespace;
+    const evidenceHost = createDesktopEvidenceHost({
+      application: runtimeApplication,
+      subjectRef: namespace,
+      isAdminSession: () => admin === sender && !sender.isDestroyed()
+        && sender.webContents === event.sender && !sender.webContents.isDestroyed(),
+      ownsTask: task => {
+        const turn = conversations?.turns.get(task.taskId);
+        if (turn && ['panel', 'workspace'].includes(turn.surface)
+          && task.conversationId === `desktop-${turn.surface}`) return true;
+        if (goalHost && task.conversationId === `host-tool:${namespace}`) {
+          try { goalHost.readTask(task.taskId); return true; } catch { return false; }
+        }
+        return false;
+      },
+    });
+    if (name === 'evidence.list') return evidenceHost.list(payload);
+    if (name === 'evidence.get') return evidenceHost.get(payload);
+    return evidenceHost.revoke(payload);
+  }
   if (name.startsWith('goal.')) {
     if (sender !== panel && sender !== workspace) throw Error('Goal 操作只能从面板或工作区调用');
     if (!goalHost) throw Error('Goal 写入仅在 Competition Profile 的可信宿主中可用');
