@@ -33,6 +33,8 @@ export type {
   VoicePcmTerminalReason,
 } from './ports.js';
 export {createVoicePcmFrameSourcePort} from './pcm-frame-source.js';
+export {createVoicePcmBuffer} from './pcm-buffer.js';
+export type {VoicePcmBuffer, VoicePcmBufferOptions} from './pcm-buffer.js';
 export {
   UnavailableSpeechOutputPort,
   UnavailableSpeechRecognitionPort,
@@ -40,6 +42,11 @@ export {
 } from './unavailable.js';
 export {createWindowsSystemSpeechPorts} from './windows-system-speech.js';
 export type {WindowsSystemSpeechPorts} from './windows-system-speech.js';
+export {
+  RuntimeClientTranscriptConsumer,
+  createRuntimeClientTranscriptConsumer,
+} from './runtime-consumer.js';
+export type {RuntimeClientTranscriptConsumerOptions} from './runtime-consumer.js';
 export {VoiceSessionManager} from './voice-session.js';
 export type {
   ReplyReceipt,
