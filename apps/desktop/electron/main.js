@@ -538,6 +538,7 @@ async function initializeRuntime() {
       }
       runtimeApplication = runtimeModule.createAgentArtsRuntimeApplication({
         path: dbPath,
+        hostUserNamespace: desktopHost.userNamespace,
         gatewayUrl: process.env.PA_AGENTARTS_GATEWAY_URL ?? '',
         runtimeName: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
         invokeMode: agentArtsInvokeMode,
