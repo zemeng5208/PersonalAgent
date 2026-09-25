@@ -68,6 +68,15 @@ Runtime 名称、API 200、模型正文和控制台当前 `Latest` 都不能代�
    修正本地结果，应通过新的版本化修复、独立预览、Policy 批准、CAS 与读回；
    不能删除历史或重放旧审批。
 
+## 四层完成状态（2026-09-25）
+
+| 层级 | 当前证据与状态 | 进入下一状态的最小条件 |
+| --- | --- | --- |
+| 代码 | `origin/main@ec43a55` 有 provisional AgentArts 适配；请求级平台版本/trace/usage 仍无可验证读取。MOD-32 本包只新增证据文档，不能算功能实现完成 | MOD-04B/29 根据真实脱敏结构交付请求关联和可信展示所需数据；保留 unknown 与失败路径 |
+| PR | 本包 [#134](https://github.com/zemeng5208/PersonalAgent/pull/134) 为 draft；较早证据 [#108](https://github.com/zemeng5208/PersonalAgent/pull/108) 和集成 [#104](https://github.com/zemeng5208/PersonalAgent/pull/104) 仍各有独立依赖与评审。创建 PR、CI 或作者自查均不等于合并 | 各 owner 解决自己的冲突/依赖，取得已登记非作者评审，再以最新 Git/PR 状态核实合并 |
+| MOD-32 真实验收 | 合成会议链的两次云 API 与本地执行/重启已通过；新请求的部署版本、trace、usage、费用、失败及回退仍未读回，MOD-32 保持 `in_progress` | 在主控分配的云资源时段，逐请求读回版本/trace/usage 与账单依据，另行验证失败核实和发布回退；每项保存脱敏证据 |
+| 整体 MVP | 单个合成 Golden Path 不能证明除 Windows 打包安装外的全部约定功能；本 MOD 也不能代表其他 zemeng 模块或 goo122/Potatos 模块完成 | 主控汇总各模块的代码、非作者评审/集成、真实场景读回后逐项判定；未满足的项继续列缺口，不用本记录代替全项验收 |
+
 MOD-32 剩余验收：新版本与请求级部署绑定、精确 trace/usage/费用读回、平台失败
 及回退演练、角色交接与评估、无静默 Local 回退。真实云调用和发布变更需由主控
 协调单槽资源；本文没有运行它们。
