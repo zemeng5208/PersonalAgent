@@ -50,28 +50,32 @@ export class DesktopState {
       if (error?.code !== 'ENOENT') this.identityUnavailable = true;
     }
   }
-  save() {
+  save(value = this.value) {
     if (this.identityUnavailable) throw Error('Desktop identity settings need recovery before saving');
     mkdirSync(path.dirname(this.file), {recursive: true});
-    writeFileSync(this.file + '.tmp', JSON.stringify(this.value), 'utf8');
+    writeFileSync(this.file + '.tmp', JSON.stringify(value), 'utf8');
     renameSync(this.file + '.tmp', this.file);
   }
   ensureHostUserNamespace() {
     if (this.identityUnavailable) throw Error('Desktop user namespace needs recovery');
     if (this.value.hostUserNamespace) return this.value.hostUserNamespace;
-    const previous = this.value;
     const namespace = `desktop-user-v1:${randomUUID()}`;
-    this.value = {...previous, hostUserNamespace: namespace};
-    try { this.save(); }
-    catch (error) { this.value = previous; throw error; }
+    const next = {...this.value, hostUserNamespace: namespace};
+    this.save(next);
+    this.value = next;
     return namespace;
   }
   update(patch) {
     if (this.identityUnavailable) throw Error('Desktop identity settings need recovery before saving');
-    this.value.settings = normalizeSettings({...this.value.settings, ...patch}); this.save(); return {...this.value.settings};
+    const next = {...this.value, settings: normalizeSettings({...this.value.settings, ...patch})};
+    this.save(next);
+    this.value = next;
+    return {...next.settings};
   }
   remember(key, bounds) {
     if (this.identityUnavailable) throw Error('Desktop identity settings need recovery before saving');
-    this.value.windows[key] = bounds; this.save();
+    const next = {...this.value, windows: {...this.value.windows, [key]: bounds}};
+    this.save(next);
+    this.value = next;
   }
 }
