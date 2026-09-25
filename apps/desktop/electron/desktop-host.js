@@ -135,6 +135,7 @@ export function createDesktopHost() {
   screen.on('display-metrics-changed', reposition);
   try { shortcut(state.value.settings.shortcut); } catch { state.update({shortcut:false}); log('shortcut-unavailable','desktop-settings'); }
   return {attach, restore, openSettings, get settings() { return state.value.settings; },
+    get userNamespace() { return state.ensureHostUserNamespace(); },
     snap(win) { if (state.value.settings.snap) { const bounds = snapBounds(win.getBounds(), area(win.getBounds())); win.setPosition(bounds.x, bounds.y); } },
   };
 }

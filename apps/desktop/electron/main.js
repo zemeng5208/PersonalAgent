@@ -91,6 +91,7 @@ const terminalTaskStates = new Set(['succeeded', 'failed', 'cancelled']);
 const approvals = new Map();
 const notifications = new Map();
 let runtimeApplication;
+let goalHost;
 
 function snapshot(surface) {
   return {
@@ -536,8 +537,13 @@ async function initializeRuntime() {
       if (!process.env.PA_AGENTARTS_AUTHORIZATION) {
         throw Error('PA_AGENTARTS_AUTHORIZATION 未配置；Competition Runtime 不会启动');
       }
+      const {createGoalHost} = await import('./goal-host.js');
+      const namespace = desktopHost.userNamespace;
+      goalHost = createGoalHost(namespace);
       runtimeApplication = runtimeModule.createAgentArtsRuntimeApplication({
         path: dbPath,
+        hostUserNamespace: namespace,
+        tools: goalHost.tools,
         gatewayUrl: process.env.PA_AGENTARTS_GATEWAY_URL ?? '',
         runtimeName: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
         invokeMode: agentArtsInvokeMode,
@@ -549,6 +555,8 @@ async function initializeRuntime() {
           },
         },
       });
+      goalHost.bind(runtimeApplication);
+      goalHost.resumeApproved();
     } else {
       const createApplication = process.argv.includes('--weather-tools')
         ? (await import('@personal-agent/runtime/weather')).createOpenMeteoApplication
@@ -642,6 +650,22 @@ async function action(event, name, payload) {
   }
   if (sender === orb) throw Error('Action unavailable from orb');
   if (!client) throw Error('Runtime 未连接，此操作尚不可用');
+  if (name.startsWith('goal.')) {
+    if (sender !== panel && sender !== workspace) throw Error('Goal 操作只能从面板或工作区调用');
+    if (!goalHost) throw Error('Goal 写入仅在 Competition Profile 的可信宿主中可用');
+    if (name === 'goal.list') return goalHost.list();
+    if (name === 'goal.get') return goalHost.get(payload);
+    if (name === 'goal.create') return goalHost.create(payload);
+    if (name === 'goal.revise') return goalHost.revise(payload);
+    if (name === 'goal.readTask') return goalHost.readTask(payload);
+    if (name === 'goal.listTasks') return goalHost.listTasks();
+    if (name === 'goal.cancel') {
+      goalHost.readTask(payload);
+      const result = await client.call('task.cancel', {taskId: payload, reason: '用户取消 Goal 任务'});
+      return {...result, task: goalHost.readTask(payload)};
+    }
+    throw Error('Unsupported Goal action');
+  }
   if (name === 'task.submit') {
     if (sender !== panel && sender !== workspace) throw Error('请在对话工作区发送消息');
     if (typeof payload !== 'string' || !payload.trim()) throw Error('请输入有效任务');
