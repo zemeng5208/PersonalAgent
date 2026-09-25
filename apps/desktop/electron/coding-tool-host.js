@@ -43,6 +43,16 @@ function atOrWithin(parent, candidate) {
   return relative === '' || relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
+function identity(value, executable = false) {
+  const file = statSync(value, {bigint: true});
+  return {dev: file.dev, ino: file.ino, birthtimeNs: file.birthtimeNs,
+    ...(executable ? {size: file.size, mtimeNs: file.mtimeNs} : {})};
+}
+
+function sameIdentity(left, right) {
+  return Object.keys(left).every(key => left[key] === right[key]);
+}
+
 /** The recovery directory must be pre-created with a protected, current-user ACL. */
 export function verifyWindowsRecoveryAcl(recoveryRootPath, powerShellPath) {
   if (process.platform !== 'win32') throw Error('Windows recovery ACL inspection is unavailable');
@@ -74,6 +84,11 @@ export function createDesktopCodingToolHost({workspaceRoot, authorizedWorkspaceR
     throw Error('Coding host paths must be separate from the workspace and recovery root');
   }
   inspectAcl(recovery, powerShell);
+  const pinned = [
+    {source: workspaceRoot, canonical: root, directory: true, id: identity(root)},
+    {source: recoveryRootPath, canonical: recovery, directory: true, id: identity(recovery)},
+    {source: powerShellPath, canonical: powerShell, directory: false, id: identity(powerShell, true)},
+  ];
   const pendingHelpers = listPendingCodingHelpers(recovery);
   if (pendingHelpers.length) throw Error('Unresolved coding helper requires trusted reconciliation');
   if (typeof createWorkspacePatchApplyTool !== 'function') throw Error('Public patch apply factory is unavailable');
@@ -86,7 +101,20 @@ export function createDesktopCodingToolHost({workspaceRoot, authorizedWorkspaceR
     throw Error('Unexpected coding patch tool descriptor');
   }
   let active = true;
-  const available = () => active && listPendingCodingHelpers(recovery).length === 0;
+  const available = () => {
+    if (!active) return false;
+    try {
+      for (const entry of pinned) {
+        const current = entry.directory
+          ? canonicalDirectory(entry.source, 'Pinned coding directory')
+          : canonicalFile(entry.source, 'Pinned PowerShell executable');
+        if (current !== entry.canonical
+          || !sameIdentity(entry.id, identity(current, !entry.directory))) return false;
+      }
+      inspectAcl(recovery, powerShell);
+      return listPendingCodingHelpers(recovery).length === 0;
+    } catch { return false; }
+  };
   const tool = {descriptor: implementation.descriptor, execute: (input, context) => {
     if (!available()) throw Error('Coding patch host is closed or requires helper reconciliation');
     return implementation.execute(input, context);
