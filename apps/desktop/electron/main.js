@@ -11,6 +11,7 @@ import {desktopDataPaths} from './data-paths.js';
 import {createMicrophonePermissionGate} from './microphone-permission.js';
 import {createMicrophoneCaptureHost} from './microphone-capture-host.js';
 import {createDesktopEvidenceHost} from './evidence-host.js';
+import {createDesktopCompetitionFactBridge} from './competition-fact-bridge.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -103,6 +104,7 @@ let voiceDisposal;
 let voiceDisposalFailed = false;
 let goalHost;
 let competitionCatalog;
+let competitionFactBridge;
 
 function snapshot(surface) {
   return {
@@ -579,6 +581,11 @@ async function initializeRuntime() {
       });
       goalHost.bind(runtimeApplication);
       goalHost.resumeApproved();
+      competitionFactBridge = createDesktopCompetitionFactBridge({
+        application: runtimeApplication, catalog: competitionCatalog,
+        runtimePath: dbPath, userNamespace: namespace,
+      });
+      await competitionFactBridge.recover();
     } else {
       const createApplication = process.argv.includes('--weather-tools')
         ? (await import('@personal-agent/runtime/weather')).createOpenMeteoApplication
@@ -904,6 +911,7 @@ app.whenReady().then(async () => {
     tray?.destroy();
     runtimeConnection?.dispose?.();
     try {
+      competitionFactBridge?.close();
       if (runtimeApplication) runtimeApplication.close();
       else runtime?.close?.();
       competitionCatalog?.close();
