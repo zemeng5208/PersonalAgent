@@ -1,5 +1,5 @@
 import {app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, safeStorage, screen, session, Tray} from 'electron';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath, pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
 import path from 'node:path';
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
@@ -11,6 +11,7 @@ import {createDesktopHost} from './desktop-host.js';
 import {desktopDataPaths} from './data-paths.js';
 import {restoreSyntheticRepairSubmission} from './competition-repair-submission.js';
 import {readCapabilityDirectory} from './capability-directory.js';
+import {createMicrophonePermissionGate} from './microphone-permission.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -104,6 +105,7 @@ const notifications = new Map();
 let runtimeApplication;
 let syntheticRepairHost;
 const repairPrompts = new Set();
+let microphonePermissionGate;
 
 function snapshot(surface) {
   return {
@@ -800,8 +802,12 @@ app.on('second-instance', () => {
 app.whenReady().then(async () => {
   if (!ownsDesktopInstance) return;
   desktopHost = createDesktopHost();
-  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
-  session.defaultSession.setPermissionCheckHandler(() => false);
+  microphonePermissionGate = createMicrophonePermissionGate({
+    expectedPageUrl: pathToFileURL(entry).href,
+    isTrustedWindow: contents => contents === panel?.webContents,
+  });
+  session.defaultSession.setPermissionRequestHandler(microphonePermissionGate.request);
+  session.defaultSession.setPermissionCheckHandler(microphonePermissionGate.check);
   try {
     conversations = new Conversations(dataPaths.conversations);
     if (!competitionMode) restoreModelConfig();
@@ -866,6 +872,7 @@ app.whenReady().then(async () => {
     }
     try { syntheticRepairHost?.close(); }
     catch { console.error('Synthetic repair host failed to close'); }
+    microphonePermissionGate?.revoke();
     app.isQuitting = true;
     clearInterval(poll);
     clearInterval(eventPoll);
