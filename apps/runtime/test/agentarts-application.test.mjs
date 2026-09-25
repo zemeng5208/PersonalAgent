@@ -314,3 +314,11 @@ test('opt-in factory sends only the selected public tool catalog and rechecks ho
     } finally {app.close();}
   });
 });
+
+test('factory rejects a catalog without explicit initial request mode', () => {
+  assert.throws(() => createAgentArtsRuntimeApplication({path: ':memory:',
+    gatewayUrl: 'https://agentarts.example.test', runtimeName: 'workflow',
+    responseMode: 'tool-proposal-json', authorizationProvider: {read: async () => 'Bearer synthetic'},
+    competitionToolAvailability: [],
+  }), /explicit initial request mode/);
+});

@@ -68,6 +68,8 @@ function safeSchema(value: unknown, depth = 0): Record<string, unknown> {
 }
 
 export class RuntimeCompetitionToolCatalog {
+  readonly sideEffect: ToolDescriptor['sideEffect'];
+
   constructor(
     private readonly runtime: TaskRuntime,
     private readonly tools: AgentToolPort,
@@ -83,6 +85,11 @@ export class RuntimeCompetitionToolCatalog {
       }
       names.add(key);
     }
+    const selectable = this.tools.list().filter(descriptor => !descriptor.requiresPresence
+      && availability.some(entry => entry.toolName === descriptor.name && entry.toolVersion === descriptor.version)
+      && exports.some(entry => entry.toolName === descriptor.name && entry.toolVersion === descriptor.version));
+    this.sideEffect = selectable.some(descriptor => descriptor.sideEffect === 'external_write') ? 'external_write'
+      : selectable.some(descriptor => descriptor.sideEffect === 'local_write') ? 'local_write' : 'read';
   }
 
   private async ready(binding: CompetitionToolAvailability, input: {taskId: string; revision: number; deadline: string; signal: AbortSignal}): Promise<boolean> {
@@ -123,7 +130,7 @@ export class RuntimeCompetitionToolCatalog {
     const selected: CompetitionAvailableTool[] = [];
     for (const binding of this.availability) {
       const descriptor = descriptors.find(item => item.name === binding.toolName && item.version === binding.toolVersion);
-      if (!descriptor || descriptor.sideEffect !== 'read'
+      if (!descriptor || descriptor.requiresPresence
         || !this.exports.some(item => item.toolName === binding.toolName && item.toolVersion === binding.toolVersion)) continue;
       if (!await this.ready(binding, {...input, revision})) continue;
       selected.push({name: descriptor.name, version: descriptor.version, inputSchema: safeSchema(descriptor.inputSchema)});
@@ -142,7 +149,10 @@ export class RuntimeCompetitionToolCatalog {
     const entry = saved?.entries.find(item => item.name === input.toolName && item.version === input.toolVersion);
     const binding = this.availability.find(item => item.toolName === input.toolName && item.toolVersion === input.toolVersion);
     const descriptor: ToolDescriptor | undefined = this.tools.list().find(item => item.name === input.toolName && item.version === input.toolVersion);
-    if (!entry || !binding || !descriptor || descriptor.sideEffect !== 'read' || saved?.deadline !== input.deadline
+    if (!entry || !binding || !descriptor || descriptor.requiresPresence || saved?.deadline !== input.deadline
+      || this.runtime.getTask(input.taskId).state !== 'running'
+      || this.runtime.loadCheckpoint(input.taskId, 'application-profile') !== 'huawei_ict_agentarts'
+      || !isDeepStrictEqual(safeSchema(descriptor.inputSchema), entry.inputSchema)
       || !await this.ready(binding, {...input, revision: this.runtime.getTask(input.taskId).revision})) {
       throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition tool is unavailable for this task');
     }
@@ -165,7 +175,7 @@ export class RuntimeCompetitionToolCatalog {
     for (const item of saved.entries) {
       const binding = this.availability.find(entry => entry.toolName === item.name && entry.toolVersion === item.version);
       const descriptor = this.tools.list().find(entry => entry.name === item.name && entry.version === item.version);
-      if (!binding || !descriptor || descriptor.sideEffect !== 'read'
+      if (!binding || !descriptor || descriptor.requiresPresence
         || !isDeepStrictEqual(safeSchema(descriptor.inputSchema), item.inputSchema)
         || !await this.ready(binding, input)) {
         throw new ProtocolError('UNAUTHORIZED', 'Competition tool became unavailable before export');

@@ -156,7 +156,8 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
 
   /** Host-only real-adapter guard; never exposed as a wire or Renderer operation. */
   assertCompetitionExportAllowed(request: CoordinationRequest): void {
-    assertCompetitionExportAllowed(this.runtime, this.tools, this.competitionToolExports, request);
+    assertCompetitionExportAllowed(this.runtime, this.tools, this.competitionToolExports, request,
+      this.competitionToolCatalog !== undefined);
   }
 
   /** Trusted host obtains only the task-selected public tool shape for cloud input construction. */
@@ -203,7 +204,8 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       if (competitionApproval.state !== 'allowed') throw new ProtocolError('UNAUTHORIZED', 'Task approval has not been allowed');
       const execution = startCoordinationTask(
         this.runtime, this.coordination, this.tools, taskId, goal, deadline,
-        {resume: true, toolExports: this.competitionToolExports, toolCatalog: this.competitionToolCatalog,
+        {resume: true, toolExports: this.competitionToolExports,
+          ...(this.competitionToolCatalog ? {toolCatalog: this.competitionToolCatalog} : {}),
           ...(this.repairCandidateVersion ? {repairCandidateVersion: this.repairCandidateVersion} : {})},
       ).finally(() => this.activeTextTasks.delete(taskId));
       this.activeTextTasks.set(taskId, execution);
@@ -236,7 +238,8 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       this.runtime.saveCheckpoint(taskId, 'application-deadline', request.deadline);
       const execution = Promise.resolve().then(() => startCoordinationTask(
         this.runtime, this.coordination, this.tools, taskId, goal, request.deadline,
-        {toolExports: this.competitionToolExports, toolCatalog: this.competitionToolCatalog,
+        {toolExports: this.competitionToolExports,
+          ...(this.competitionToolCatalog ? {toolCatalog: this.competitionToolCatalog} : {}),
           ...(this.repairCandidateVersion ? {repairCandidateVersion: this.repairCandidateVersion} : {})},
       )).finally(() => this.activeTextTasks.delete(taskId));
       this.activeTextTasks.set(taskId, execution);

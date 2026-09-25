@@ -47,6 +47,10 @@ export function createAgentArtsRuntimeApplication(
       || !runtimeOptions.competitionToolExports?.length)) {
     throw new ProtocolError('INVALID_ARGUMENT', 'Competition tool catalog needs proposal mode and explicit local bindings');
   }
+  if (initialRequestMode !== 'goal-with-tools-json'
+    && runtimeOptions.competitionToolAvailability !== undefined) {
+    throw new ProtocolError('INVALID_ARGUMENT', 'Competition tool catalog requires explicit initial request mode');
+  }
   let application: RuntimeApplication;
   const cloud = new AgentArtsCloudAgentPort(
     {

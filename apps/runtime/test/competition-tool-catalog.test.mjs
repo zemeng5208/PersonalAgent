@@ -128,3 +128,98 @@ test('stale host availability rejects an unverified cloud proposal before approv
     await rm(directory, {recursive: true, force: true});
   }
 });
+
+test('selected read and local write proposals each require local approval before continuation', async () => {
+  const read = {...descriptor, name: 'fixture.read', requiredScopes: ['fixture:read']};
+  const write = {...descriptor, name: 'fixture.write', sideEffect: 'local_write',
+    requiredScopes: ['fixture:write']};
+  const executions = [];
+  const requests = [];
+  const app = createRuntimeApplication({path: ':memory:', profile: 'huawei_ict_agentarts',
+    tools: [read, write].map(item => ({descriptor: item, execute: async () => {
+      executions.push(item.name);
+      return {value: item.name};
+    }})),
+    competitionToolExports: [read, write].map(item => ({
+      toolName: item.name, toolVersion: item.version, exportPolicyVersion: 'fixture-v1',
+      accepts: () => true, project: ({result}) => ({value: result.value}),
+    })),
+    competitionToolAvailability: [read, write].map(item => ({
+      toolName: item.name, toolVersion: item.version, available: () => true,
+    })),
+    coordination: {execute: async request => {
+      requests.push(request);
+      if (requests.length === 1) {
+        assert.deepEqual(request.availableTools.map(item => item.name), ['fixture.read', 'fixture.write']);
+        return {kind: 'tool_proposal', proposalId: 'read-1', toolName: read.name,
+          toolVersion: read.version, arguments: {path: 'secret-path'}, verification: 'unverified'};
+      }
+      assert.equal(request.availableTools, undefined);
+      if (requests.length === 2) {
+        assert.deepEqual(request.continuation, {proposalId: 'read-1', state: 'confirmed',
+          result: {value: read.name}});
+        return {kind: 'tool_proposal', proposalId: 'write-1', toolName: write.name,
+          toolVersion: write.version, arguments: {path: 'secret-path'}, verification: 'unverified'};
+      }
+      assert.deepEqual(request.continuation, {proposalId: 'write-1', state: 'confirmed',
+        result: {value: write.name}});
+      return {kind: 'text', text: 'Synthetic read and write confirmed', verification: 'unverified'};
+    }},
+  });
+  try {
+    const client = new Client(app, Date.now);
+    await client.connect();
+    const {taskId} = await client.call('task.submit', {goal: 'Synthetic read then write',
+      conversationId: 'catalog'}, {idempotencyKey: 'catalog-read-write'});
+    assert.equal((await waitFor(app, taskId, ['waiting_approval', 'failed'])).state, 'waiting_approval');
+    assert.deepEqual(executions, []);
+    const first = (await client.call('approval.list', {taskId})).items[0];
+    assert.equal(first.action, read.name);
+    await client.call('authorization.respond', {approvalId: first.approvalId,
+      expectedRevision: first.revision, decision: 'allow_once'});
+    let second;
+    for (let attempt = 0; attempt < 200; attempt++) {
+      second = (await client.call('approval.list', {taskId})).items.find(item => item.action === write.name);
+      if (second) break;
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.ok(second);
+    assert.deepEqual(executions, [read.name]);
+    await client.call('authorization.respond', {approvalId: second.approvalId,
+      expectedRevision: second.revision, decision: 'allow_once'});
+    const task = await waitFor(app, taskId, ['succeeded', 'failed']);
+    assert.equal(task.state, 'succeeded');
+    assert.deepEqual(executions, [read.name, write.name]);
+    assert.equal(requests.length, 3);
+  } finally {app.close();}
+});
+
+test('a write missing from the task selection cannot reach approval or execution', async () => {
+  const write = {...descriptor, name: 'fixture.write', sideEffect: 'local_write',
+    requiredScopes: ['fixture:write']};
+  let writes = 0;
+  const app = createRuntimeApplication({path: ':memory:', profile: 'huawei_ict_agentarts',
+    tools: [{descriptor, execute: async () => ({value: 'read'})},
+      {descriptor: write, execute: async () => {writes++; return {value: 'write'};}}],
+    competitionToolExports: [descriptor, write].map(item => ({
+      toolName: item.name, toolVersion: item.version, exportPolicyVersion: 'fixture-v1',
+      accepts: () => true, project: ({result}) => ({value: result.value}),
+    })),
+    competitionToolAvailability: [{toolName: descriptor.name, toolVersion: descriptor.version,
+      available: () => true}],
+    coordination: {execute: async request => {
+      assert.deepEqual(request.availableTools.map(item => item.name), [descriptor.name]);
+      return {kind: 'tool_proposal', proposalId: 'unselected-write', toolName: write.name,
+        toolVersion: write.version, arguments: {path: 'secret-path'}, verification: 'unverified'};
+    }},
+  });
+  try {
+    const client = new Client(app, Date.now);
+    await client.connect();
+    const {taskId} = await client.call('task.submit', {goal: 'Synthetic unselected write',
+      conversationId: 'catalog'}, {idempotencyKey: 'catalog-unselected-write'});
+    assert.equal((await waitFor(app, taskId, ['failed', 'waiting_approval'])).state, 'failed');
+    assert.equal(writes, 0);
+    assert.deepEqual((await client.call('approval.list', {taskId})).items, []);
+  } finally {app.close();}
+});

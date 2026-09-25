@@ -131,7 +131,7 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | `RuntimeApplicationTransport.send`、`activeTaskCount`、`close`、模型配置入口 | 进程内 Runtime Application 与 Desktop smoke | Host 健康/关闭/升级/未结束等待任务语义不完整 | `provisional` |
 | `authorization.respond` | SQLite 审批、revision、一次性授权、恢复测试 | 真实模型提出工具请求的闭环未验证；持续授权未实现 | `provisional` |
 | `capability.list`、`tool.invoke` | ToolGateway、Policy、Runtime、Fake 工具闭环 | 真实盘古工具提案与真实工具读回未执行；核实入口不完整 | `provisional` |
-| `RuntimeApplication.prepareCompetitionToolCatalog`、`assertCompetitionToolCatalogAllowed` | DEP05 按任务选择已注册只读 ToolDescriptor、显式结果出口和宿主动态可用性，持久绑定精简 Schema 并在提案前复核 | AgentArts 初始目录载荷由 MOD-04B/30 另行接线与真实发布验收；目录本身不授予执行或外发结果权限 | `provisional` |
+| `RuntimeApplication.prepareCompetitionToolCatalog`、`assertCompetitionToolCatalogAllowed` | DEP05 按任务选择已注册 ToolDescriptor、显式结果出口和宿主动态可用性，持久绑定精简 Schema 并在提案前复核；写工具仍走本地 Policy 审批与结果核实 | AgentArts 初始目录载荷由 MOD-04B/30 另行接线与真实发布验收；目录本身不授予执行或外发结果权限 | `provisional` |
 | `ToolDescriptor`、`RegisteredTool`、`ToolContext`、`ToolHost` | contracts 类型、FakeToolHost、生产 ToolGateway | Windows/MCP/Skill/第三方写工具尚未作为独立消费者验证 | `provisional` |
 | `PolicyPort`、`AuthorizationPolicy` | 参数摘要、任务/工具/scope/期限/次数绑定及 SQLite 事务测试 | 跨任务持续授权、撤销管理面和真实宿主消费未完成 | `provisional` |
 | `ModelProvider`、`ModelGateway`、Agent 执行循环 | Fake Provider、Mock fetch、离线 Agent/工具测试 | Agent 依赖具体 `ModelGateway`；真实盘古工具调用未通过 | `provisional` |
