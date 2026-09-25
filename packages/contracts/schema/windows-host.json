@@ -70,31 +70,40 @@
     },
     "cancel": {
       "type": "object", "additionalProperties": false,
-      "required": ["kind", "protocolVersion", "requestId", "sessionId", "runId"],
+      "required": ["kind", "protocolVersion", "requestId", "sessionId", "taskId", "runId", "toolName", "toolVersion", "argumentsDigest", "targetRef"],
       "properties": {"kind": {"const": "cancel"}, "protocolVersion": {"$ref": "#/$defs/version"},
         "requestId": {"$ref": "#/$defs/id"}, "sessionId": {"$ref": "#/$defs/id"},
-        "runId": {"$ref": "#/$defs/id"}}
+        "taskId": {"$ref": "#/$defs/id"}, "runId": {"$ref": "#/$defs/id"},
+        "toolName": {"const": "computer.notepad.replace_text"}, "toolVersion": {"const": "1.0.0"},
+        "argumentsDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "targetRef": {"$ref": "#/$defs/targetRef"}}
     },
     "status": {
       "type": "object", "additionalProperties": false,
-      "required": ["kind", "protocolVersion", "requestId", "sessionId", "runId"],
+      "required": ["kind", "protocolVersion", "requestId", "sessionId", "taskId", "runId", "toolName", "toolVersion", "argumentsDigest", "targetRef"],
       "properties": {"kind": {"const": "status"}, "protocolVersion": {"$ref": "#/$defs/version"},
         "requestId": {"$ref": "#/$defs/id"}, "sessionId": {"$ref": "#/$defs/id"},
-        "runId": {"$ref": "#/$defs/id"}}
+        "taskId": {"$ref": "#/$defs/id"}, "runId": {"$ref": "#/$defs/id"},
+        "toolName": {"const": "computer.notepad.replace_text"}, "toolVersion": {"const": "1.0.0"},
+        "argumentsDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "targetRef": {"$ref": "#/$defs/targetRef"}}
     },
     "statusReply": {
       "type": "object", "additionalProperties": false,
-      "required": ["kind", "protocolVersion", "requestId", "sessionId", "runId", "state"],
+      "required": ["kind", "protocolVersion", "requestId", "sessionId", "taskId", "runId", "state"],
       "properties": {"kind": {"const": "status_reply"}, "protocolVersion": {"$ref": "#/$defs/version"},
         "requestId": {"$ref": "#/$defs/id"}, "sessionId": {"$ref": "#/$defs/id"},
-        "runId": {"$ref": "#/$defs/id"}, "state": {"enum": ["in_progress", "not_found"]}}
+        "taskId": {"$ref": "#/$defs/id"}, "runId": {"$ref": "#/$defs/id"},
+        "state": {"enum": ["in_progress", "not_found"]}}
     },
     "result": {
       "type": "object", "additionalProperties": false,
-      "required": ["kind", "protocolVersion", "requestId", "sessionId", "taskId", "runId", "targetRef", "state", "startedAt", "finishedAt"],
+      "required": ["kind", "protocolVersion", "requestId", "sessionId", "taskId", "runId", "toolName", "toolVersion", "argumentsDigest", "targetRef", "state", "startedAt", "finishedAt"],
       "properties": {"kind": {"const": "result"}, "protocolVersion": {"$ref": "#/$defs/version"},
         "requestId": {"$ref": "#/$defs/id"}, "sessionId": {"$ref": "#/$defs/id"},
         "taskId": {"$ref": "#/$defs/id"}, "runId": {"$ref": "#/$defs/id"},
+        "toolName": {"const": "computer.notepad.replace_text"}, "toolVersion": {"const": "1.0.0"},
+        "argumentsDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "targetRef": {"$ref": "#/$defs/targetRef"},
         "state": {"enum": ["verified", "refused", "cancelled", "result_unknown"]},
         "startedAt": {"$ref": "#/$defs/utc"}, "finishedAt": {"$ref": "#/$defs/utc"},

@@ -17,11 +17,15 @@ export type WindowsHostExecute = Session & {
   toolVersion: '1.0.0'; authorizationRef: string; argumentsDigest: string;
   targetRef: string; deadline: string; expectedText: string; replacementText: string;
 };
-export type WindowsHostCancel = Session & {kind: 'cancel'; runId: string};
-export type WindowsHostStatus = Session & {kind: 'status'; runId: string};
-export type WindowsHostStatusReply = Session & {kind: 'status_reply'; runId: string; state: 'in_progress' | 'not_found'};
+type RunIdentity = {taskId: string; runId: string; toolName: typeof WINDOWS_HOST_TOOL_NAME;
+  toolVersion: '1.0.0'; argumentsDigest: string; targetRef: string};
+export type WindowsHostCancel = Session & RunIdentity & {kind: 'cancel'};
+export type WindowsHostStatus = Session & RunIdentity & {kind: 'status'};
+export type WindowsHostStatusReply = Session & {kind: 'status_reply'; taskId: string; runId: string;
+  state: 'in_progress' | 'not_found'};
 export type WindowsHostResult = Session & {
-  kind: 'result'; taskId: string; runId: string; targetRef: string;
+  kind: 'result'; taskId: string; runId: string; toolName: typeof WINDOWS_HOST_TOOL_NAME;
+  toolVersion: '1.0.0'; argumentsDigest: string; targetRef: string;
   state: 'verified' | 'refused' | 'cancelled' | 'result_unknown';
   startedAt: string; finishedAt: string; evidenceRef?: string; errorCode?: string;
 };
@@ -83,7 +87,9 @@ export function validateWindowsHostResult(request: WindowsHostExecute, reply: Wi
   parseWindowsHostFrame(request); parseWindowsHostFrame(reply);
   if (reply.requestId !== responseRequestId || reply.sessionId !== request.sessionId
     || reply.protocolVersion !== request.protocolVersion || reply.taskId !== request.taskId
-    || reply.runId !== request.runId || reply.targetRef !== request.targetRef) {
+    || reply.runId !== request.runId || reply.toolName !== request.toolName
+    || reply.toolVersion !== request.toolVersion || reply.argumentsDigest !== request.argumentsDigest
+    || reply.targetRef !== request.targetRef) {
     invalid('Windows Host result correlation mismatch');
   }
 }
@@ -91,7 +97,23 @@ export function validateWindowsHostResult(request: WindowsHostExecute, reply: Wi
 export function validateWindowsHostStatus(request: WindowsHostStatus, reply: WindowsHostStatusReply | WindowsHostResult): void {
   parseWindowsHostFrame(request); parseWindowsHostFrame(reply);
   if (reply.requestId !== request.requestId || reply.sessionId !== request.sessionId
-    || reply.protocolVersion !== request.protocolVersion || reply.runId !== request.runId) {
+    || reply.protocolVersion !== request.protocolVersion || reply.taskId !== request.taskId
+    || reply.runId !== request.runId || (reply.kind === 'result' && (
+      reply.toolName !== request.toolName || reply.toolVersion !== request.toolVersion
+      || reply.argumentsDigest !== request.argumentsDigest || reply.targetRef !== request.targetRef))) {
     invalid('Windows Host status correlation mismatch');
+  }
+}
+
+/** Reconnected polling uses a new session; the original targetRef is only a historical run identity. */
+export function validateWindowsHostRecoveredResult(original: WindowsHostExecute,
+  poll: WindowsHostStatus, reply: WindowsHostResult): void {
+  parseWindowsHostFrame(original);
+  validateWindowsHostStatus(poll, reply);
+  if (poll.sessionId === original.sessionId || poll.taskId !== original.taskId
+    || poll.runId !== original.runId || poll.toolName !== original.toolName
+    || poll.toolVersion !== original.toolVersion || poll.argumentsDigest !== original.argumentsDigest
+    || poll.targetRef !== original.targetRef) {
+    invalid('Windows Host recovered run identity mismatch');
   }
 }

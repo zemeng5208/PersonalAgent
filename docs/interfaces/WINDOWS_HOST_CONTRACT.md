@@ -12,7 +12,8 @@
 连接前须由宿主验证当前用户 SID、Pipe ACL、对端进程身份和会话归属；Schema 的
 `clientNonce`/`hostNonce` 仅提供关联，不代替 OS 身份认证。每次连接 `hello` →
 `hello_ack` → `bind` 后才允许操作。`requestId` 只关联单次响应，`sessionId` 绑定连接；
-断连后旧 session、targetRef 和未完成请求失效。未知版本、字段、能力和关联 ID 均拒绝。
+断连后旧 session 和 targetRef 的**执行效力**失效；已开始写入的持久 run 记录仍保存原
+targetRef 作为历史身份，绝不能用它再次执行。未知版本、字段、能力和关联 ID 均拒绝。
 `FrameDecoder` 与 `encodeWindowsHostFrame` 使用 UTF-8 JSONL、LF、最多 1 MiB；解码后
 必须调用 `parseWindowsHostFrame`，并用握手/观察/结果关联校验。每帧时间采用精确 UTC
 毫秒格式；接收方按本机时钟检查 deadline 和目标有效期。
@@ -43,9 +44,12 @@ Policy 的 scope、次数、过期、撤销与参数绑定仍由可信 Runtime/T
 转入 `waiting_reconciliation`，不得重试写入。非 `verified` 结果必须带 `errorCode`。
 `result` 只回传状态、时间、runId、目标引用和证据/错误引用，不能回传 HWND/PID 或正文。
 
-`status` 按原 `runId` 查询：终态回 `result`；仍运行或没有可确认记录时分别回
+`status` 通过新会话携带原 `taskId/runId/toolName/toolVersion/argumentsDigest/targetRef`
+查询持久 run 记录：终态回 `result`，其中 `sessionId` 是**新**会话、`requestId` 是本次
+轮询 ID，`targetRef` 是原执行的历史身份；仍运行或没有可确认记录时分别回
 `status_reply: in_progress` / `not_found`。`not_found` 不证明写入未发生，调用方应
-保持结果未知。轮询结果仍须与原执行请求核对 `taskId`、`targetRef` 和 session。
+保持结果未知。宿主使用 `validateWindowsHostRecoveredResult` 核对原执行、轮询及终态的
+持久身份，同时核对轮询和结果的新 session；不能把新会话状态查询当作重试执行。
 Runtime 的公开工具结果另按现有 TaskRuntime、ToolGateway、Evidence 规则投影，
 不能把 Host 自报的 `verified` 直接作为任务成功。
 

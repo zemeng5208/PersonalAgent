@@ -3,7 +3,8 @@ import {test} from 'node:test';
 import {readFileSync} from 'node:fs';
 import {FrameDecoder, MAX_FRAME_BYTES} from '../dist/index.js';
 import {encodeWindowsHostFrame, parseWindowsHostFrame, validateWindowsHostHandshake,
-  validateWindowsHostObservation, validateWindowsHostResult, validateWindowsHostStatus} from '../dist/windows-host.js';
+  validateWindowsHostObservation, validateWindowsHostRecoveredResult, validateWindowsHostResult,
+  validateWindowsHostStatus} from '../dist/windows-host.js';
 
 const t0 = '2026-09-25T12:00:00.000Z';
 const t1 = '2026-09-25T12:01:00.000Z';
@@ -21,7 +22,9 @@ const execute = {kind: 'execute', ...base, sessionId: ack.sessionId,
   toolVersion: '1.0.0', authorizationRef: 'grant-1', argumentsDigest: 'a'.repeat(64),
   targetRef: observed.targetRef, deadline: t1, expectedText: 'before', replacementText: 'after'};
 const result = {kind: 'result', ...base, sessionId: ack.sessionId,
-  taskId: execute.taskId, runId: execute.runId, targetRef: execute.targetRef,
+  taskId: execute.taskId, runId: execute.runId, toolName: execute.toolName,
+  toolVersion: execute.toolVersion, argumentsDigest: execute.argumentsDigest,
+  targetRef: execute.targetRef,
   state: 'verified', startedAt: t0, finishedAt: t1, evidenceRef: 'evidence-1'};
 
 test('portable C# wire fixtures match the parser', () => {
@@ -40,7 +43,28 @@ test('handshake, observation, action and JSONL frame retain their correlation', 
   const poll = {...result, requestId: 'poll-1'};
   validateWindowsHostResult(execute, poll, 'poll-1');
   validateWindowsHostStatus({kind: 'status', ...base, requestId: 'poll-1', sessionId: ack.sessionId,
-    runId: execute.runId}, poll);
+    taskId: execute.taskId, runId: execute.runId, toolName: execute.toolName,
+    toolVersion: execute.toolVersion, argumentsDigest: execute.argumentsDigest,
+    targetRef: execute.targetRef}, poll);
+});
+
+test('reconnected status binds the durable run to a fresh session and historical target', () => {
+  const poll = {kind: 'status', ...base, requestId: 'recovery-1', sessionId: 'new-session',
+    taskId: execute.taskId, runId: execute.runId, toolName: execute.toolName,
+    toolVersion: execute.toolVersion, argumentsDigest: execute.argumentsDigest,
+    targetRef: execute.targetRef};
+  const recovered = {...result, requestId: poll.requestId, sessionId: poll.sessionId};
+  validateWindowsHostRecoveredResult(execute, poll, recovered);
+  assert.throws(() => validateWindowsHostResult(execute, recovered, poll.requestId));
+  for (const changed of [{taskId: 'other'}, {runId: 'other'},
+    {argumentsDigest: 'b'.repeat(64)}, {targetRef: 'opaque-notepad-2'}]) {
+    assert.throws(() => validateWindowsHostRecoveredResult(execute, {...poll, ...changed}, recovered));
+    assert.throws(() => validateWindowsHostRecoveredResult(execute, poll, {...recovered, ...changed}));
+  }
+  assert.throws(() => validateWindowsHostRecoveredResult(execute, poll,
+    {...recovered, sessionId: execute.sessionId}));
+  assert.throws(() => validateWindowsHostRecoveredResult(execute,
+    {...poll, sessionId: execute.sessionId}, {...recovered, sessionId: execute.sessionId}));
 });
 
 test('cross-session, nonce, run, target and request substitution is refused', () => {
@@ -48,8 +72,10 @@ test('cross-session, nonce, run, target and request substitution is refused', ()
   assert.throws(() => validateWindowsHostHandshake(hello, ack, {...bind, hostNonce: '3'.repeat(32)}));
   assert.throws(() => validateWindowsHostObservation(observe, {...observed, sessionId: 'other'}));
   assert.throws(() => validateWindowsHostStatus({kind: 'status', ...base, sessionId: ack.sessionId,
-    runId: execute.runId}, {kind: 'status_reply', ...base, sessionId: ack.sessionId,
-    runId: 'another-run', state: 'not_found'}));
+    taskId: execute.taskId, runId: execute.runId, toolName: execute.toolName,
+    toolVersion: execute.toolVersion, argumentsDigest: execute.argumentsDigest,
+    targetRef: execute.targetRef}, {kind: 'status_reply', ...base, sessionId: ack.sessionId,
+    taskId: execute.taskId, runId: 'another-run', state: 'not_found'}));
   for (const changed of [{requestId: 'other'}, {sessionId: 'other'}, {taskId: 'other'},
     {runId: 'other'}, {targetRef: 'opaque-notepad-2'}]) {
     assert.throws(() => validateWindowsHostResult(execute, {...result, ...changed}));
