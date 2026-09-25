@@ -68,6 +68,9 @@ async function decideCompletedFactProjection(
   if (!Number.isSafeInteger(input.projection.graphRevision)
     || input.projection.graphRevision < 0) throw new CognitionError('INVALID_ARGUMENT');
   const historical = structuredClone(store.read(input.projection.graphRevision));
+  if (historical.revision !== input.projection.graphRevision) {
+    throw new CognitionError('REVISION_CONFLICT');
+  }
   const completedReport = analyzeImpact(historical, input.processed.report?.evaluatedAt);
   if (!isDeepStrictEqual(completedReport, input.processed.report)) {
     throw new CognitionError('INVALID_ARGUMENT');
