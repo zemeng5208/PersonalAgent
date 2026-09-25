@@ -325,7 +325,13 @@ namespace PersonalAgent.VoiceHost {
                             payloadRead += r;
                         }
 
-                        audioStream.WriteChunk(chunk, 0, payloadLen);
+                        bool written = audioStream.WriteChunk(chunk, 0, payloadLen);
+                        Array.Clear(chunk, 0, payloadLen);
+                        if (!written) {
+                            Console.Out.WriteLine("{\"ok\":false,\"code\":\"OVERFLOW\"}");
+                            Console.Out.Flush();
+                            return 3;
+                        }
                     }
                 }
 
@@ -361,10 +367,14 @@ namespace PersonalAgent.VoiceHost {
     }
 
     internal sealed class PipedAudioStream : Stream {
+        private const int MaxQueueFrames = 4;
+        private const int MaxQueueBytes = 12800;
+
         private readonly Queue<byte[]> _queue = new Queue<byte[]>();
         private readonly object _lock = new object();
         private byte[] _currentChunk;
         private int _chunkOffset;
+        private int _queuedBytes;
         private bool _ended;
         private bool _disposed;
 
@@ -380,13 +390,18 @@ namespace PersonalAgent.VoiceHost {
         public override long Seek(long offset, SeekOrigin origin) { throw new NotSupportedException(); }
         public override void SetLength(long value) { throw new NotSupportedException(); }
 
-        public void WriteChunk(byte[] data, int offset, int count) {
+        public bool WriteChunk(byte[] data, int offset, int count) {
             lock (_lock) {
-                if (_ended || _disposed) return;
+                if (_ended || _disposed) return false;
+                if (_queue.Count >= MaxQueueFrames || _queuedBytes + count > MaxQueueBytes) {
+                    return false;
+                }
                 byte[] copy = new byte[count];
                 Buffer.BlockCopy(data, offset, copy, 0, count);
                 _queue.Enqueue(copy);
+                _queuedBytes += count;
                 Monitor.PulseAll(_lock);
+                return true;
             }
         }
 
@@ -398,6 +413,7 @@ namespace PersonalAgent.VoiceHost {
         }
 
         public override int Read(byte[] buffer, int offset, int count) {
+            if (count == 0) return 0;
             lock (_lock) {
                 while (!_disposed) {
                     if (_currentChunk != null) {
@@ -414,6 +430,7 @@ namespace PersonalAgent.VoiceHost {
                     }
                     if (_queue.Count > 0) {
                         _currentChunk = _queue.Dequeue();
+                        _queuedBytes -= _currentChunk.Length;
                         _chunkOffset = 0;
                         continue;
                     }
@@ -438,6 +455,7 @@ namespace PersonalAgent.VoiceHost {
                     byte[] chunk = _queue.Dequeue();
                     Array.Clear(chunk, 0, chunk.Length);
                 }
+                _queuedBytes = 0;
                 Monitor.PulseAll(_lock);
             }
             base.Dispose(disposing);

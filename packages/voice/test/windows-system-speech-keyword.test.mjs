@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
-import {PassThrough} from 'node:stream';
+import {PassThrough, Writable} from 'node:stream';
 import {test} from 'node:test';
 
 import {VOICE_AUDIO_FORMAT, VoiceSessionError} from '../dist/index.js';
@@ -66,6 +66,97 @@ class FakeKeywordProcess extends EventEmitter {
     this.killed = true;
     setTimeout(() => this.close(null, 'SIGTERM'), 5);
     return true;
+  }
+}
+
+class BackpressureProcess extends EventEmitter {
+  stdin;
+  stdout = new PassThrough();
+  stderr = new PassThrough();
+  writtenPackets = [];
+  pendingCallbacks = [];
+  killed = false;
+  closed = false;
+
+  constructor() {
+    super();
+    const self = this;
+    this.stdin = new Writable({
+      highWaterMark: 1,
+      write(chunk, encoding, callback) {
+        self.writtenPackets.push(Buffer.from(chunk));
+        self.pendingCallbacks.push(callback);
+      },
+    });
+  }
+
+  releaseOne() {
+    const cb = this.pendingCallbacks.shift();
+    if (cb) cb();
+  }
+
+  emitReady() {
+    this.stdout.write(JSON.stringify({event: 'ready'}) + '\n');
+  }
+
+  emitEnvelope(obj) {
+    this.stdout.write(JSON.stringify(obj) + '\n');
+  }
+
+  kill() {
+    if (this.closed) return false;
+    this.killed = true;
+    setTimeout(() => this.close(null, 'SIGTERM'), 5);
+    return true;
+  }
+
+  close(code = 0, signal = null) {
+    if (this.closed) return;
+    this.closed = true;
+    this.stdout.end();
+    this.stderr.end();
+    setImmediate(() => this.emit('close', code, signal));
+  }
+}
+
+class SyncFalseProcess extends EventEmitter {
+  stdin = new EventEmitter();
+  stdout = new PassThrough();
+  stderr = new PassThrough();
+  writtenPackets = [];
+  killed = false;
+  closed = false;
+
+  constructor() {
+    super();
+    const self = this;
+    this.stdin.write = function (chunk, cb) {
+      self.writtenPackets.push(Buffer.from(chunk));
+      if (typeof cb === 'function') {
+        cb();
+      }
+      return false;
+    };
+    this.stdin.destroy = function () {};
+  }
+
+  emitReady() {
+    this.stdout.write(JSON.stringify({event: 'ready'}) + '\n');
+  }
+
+  kill() {
+    if (this.closed) return false;
+    this.killed = true;
+    setTimeout(() => this.close(null, 'SIGTERM'), 5);
+    return true;
+  }
+
+  close(code = 0, signal = null) {
+    if (this.closed) return;
+    this.closed = true;
+    this.stdout.end();
+    this.stderr.end();
+    setImmediate(() => this.emit('close', code, signal));
   }
 }
 
@@ -358,4 +449,259 @@ test('stop idempotency and disposal', async () => {
     () => detector.start({signal: new AbortController().signal, deadline: deadline(), onDetected: () => {}}),
     err => err instanceof VoiceSessionError && err.code === 'INVALID_STATE',
   );
+});
+
+test('backpressure: pauses queue drain on write backpressure, resumes on drain, cleanly stops', async () => {
+  const fakeChild = new BackpressureProcess();
+  const detector = createTestDetector('你好小派', fakeChild);
+  const session = detector.start({
+    signal: new AbortController().signal,
+    deadline: deadline(),
+    onDetected: () => {},
+  });
+  fakeChild.emitReady();
+  await session.ready;
+
+  // 1st frame is written, but its callback is held -> Writable backpressured
+  session.accept(sampleFrame(0, 3200));
+  assert.equal(fakeChild.writtenPackets.length, 1);
+
+  // Burst 4 frames while 1st write is in-flight -> all 4 accepted into queue (total 4 queued, 1 in-flight)
+  session.accept(sampleFrame(1, 3200));
+  session.accept(sampleFrame(2, 3200));
+  session.accept(sampleFrame(3, 3200));
+  session.accept(sampleFrame(4, 3200));
+  // No additional writes have happened because stream is paused waiting for drain
+  assert.equal(fakeChild.writtenPackets.length, 1);
+
+  // Release 1st write callback -> triggers drain and pumps 2nd frame
+  fakeChild.releaseOne();
+  assert.equal(fakeChild.writtenPackets.length, 2);
+
+  // Release remaining in-flight frames one by one
+  fakeChild.releaseOne();
+  assert.equal(fakeChild.writtenPackets.length, 3);
+  fakeChild.releaseOne();
+  assert.equal(fakeChild.writtenPackets.length, 4);
+  fakeChild.releaseOne();
+  assert.equal(fakeChild.writtenPackets.length, 5);
+
+  await session.stop();
+  const result = await session.closed;
+  assert.deepEqual(result, {reason: 'stopped', detections: 0});
+  await detector.dispose();
+});
+
+test('backpressure overflow: 5th queued frame while 1 in-flight causes overflow', async () => {
+  const fakeChild = new BackpressureProcess();
+  const detector = createTestDetector('你好小派', fakeChild);
+  const session = detector.start({
+    signal: new AbortController().signal,
+    deadline: deadline(),
+    onDetected: () => {},
+  });
+  fakeChild.emitReady();
+  await session.ready;
+
+  // 1st frame in flight
+  session.accept(sampleFrame(0, 3200));
+  assert.equal(fakeChild.writtenPackets.length, 1);
+
+  // 4 frames queued
+  session.accept(sampleFrame(1, 3200));
+  session.accept(sampleFrame(2, 3200));
+  session.accept(sampleFrame(3, 3200));
+  session.accept(sampleFrame(4, 3200));
+
+  // 5th queued frame (6th total frame) triggers overflow!
+  session.accept(sampleFrame(5, 3200));
+
+  const result = await session.closed;
+  assert.deepEqual(result, {reason: 'overflow', detections: 0});
+  await detector.dispose();
+});
+
+test('host stdout protocol parsing: rejects extra fields, duplicate ready, and detection before ready', async () => {
+  // Test extra field on ready event
+  {
+    const fakeChild = new FakeKeywordProcess();
+    const detector = createTestDetector('你好小派', fakeChild);
+    const session = detector.start({
+      signal: new AbortController().signal,
+      deadline: deadline(),
+      onDetected: () => {},
+    });
+    fakeChild.emitEnvelope({event: 'ready', extra: 1});
+    fakeChild.close(1);
+    await assert.rejects(session.ready, err => err instanceof VoiceSessionError && err.code === 'EXTERNAL_FAILURE');
+    const result = await session.closed;
+    assert.deepEqual(result, {reason: 'external_failure', detections: 0});
+    await detector.dispose();
+  }
+
+  // Test extra field on failure envelope
+  {
+    const fakeChild = new FakeKeywordProcess();
+    const detector = createTestDetector('你好小派', fakeChild);
+    const session = detector.start({
+      signal: new AbortController().signal,
+      deadline: deadline(),
+      onDetected: () => {},
+    });
+    fakeChild.emitEnvelope({ok: false, code: 'OVERFLOW', extra: true});
+    fakeChild.close(1);
+    await assert.rejects(session.ready, err => err instanceof VoiceSessionError && err.code === 'EXTERNAL_FAILURE');
+    const result = await session.closed;
+    assert.deepEqual(result, {reason: 'external_failure', detections: 0});
+    await detector.dispose();
+  }
+
+  // Test duplicate ready
+  {
+    const fakeChild = new FakeKeywordProcess();
+    const detector = createTestDetector('你好小派', fakeChild);
+    const session = detector.start({
+      signal: new AbortController().signal,
+      deadline: deadline(),
+      onDetected: () => {},
+    });
+    fakeChild.emitReady();
+    await session.ready;
+    fakeChild.emitReady();
+    const result = await session.closed;
+    assert.deepEqual(result, {reason: 'external_failure', detections: 0});
+    await detector.dispose();
+  }
+
+  // Test detection before ready
+  {
+    const fakeChild = new FakeKeywordProcess();
+    const detector = createTestDetector('你好小派', fakeChild);
+    const session = detector.start({
+      signal: new AbortController().signal,
+      deadline: deadline(),
+      onDetected: () => {},
+    });
+    fakeChild.emitDetected();
+    await assert.rejects(session.ready, err => err instanceof VoiceSessionError && err.code === 'EXTERNAL_FAILURE');
+    const result = await session.closed;
+    assert.deepEqual(result, {reason: 'external_failure', detections: 0});
+    await detector.dispose();
+  }
+});
+
+test('pre-aborted signal and spawn failure lifecycle without TDZ', async () => {
+  // Pre-aborted signal
+  {
+    const fakeChild = new FakeKeywordProcess();
+    const detector = createTestDetector('你好小派', fakeChild);
+    const controller = new AbortController();
+    controller.abort();
+
+    const session = detector.start({
+      signal: controller.signal,
+      deadline: deadline(),
+      onDetected: () => {},
+    });
+
+    await assert.rejects(session.ready, err => err instanceof VoiceSessionError && err.code === 'CANCELLED');
+    const result = await session.closed;
+    assert.deepEqual(result, {reason: 'cancelled', detections: 0});
+    await detector.dispose();
+  }
+
+  // Spawn failure
+  {
+    const failingDetector = createWindowsSystemSpeechKeywordDetectorForTesting(
+      {keyword: '你好小派'},
+      () => {
+        throw new Error('Host process spawn failed');
+      },
+    );
+
+    const session = failingDetector.start({
+      signal: new AbortController().signal,
+      deadline: deadline(),
+      onDetected: () => {},
+    });
+
+    await assert.rejects(session.ready, err => err instanceof VoiceSessionError && err.code === 'EXTERNAL_FAILURE');
+    const result = await session.closed;
+    assert.deepEqual(result, {reason: 'external_failure', detections: 0});
+    await failingDetector.dispose();
+  }
+});
+
+test('native host OVERFLOW envelope maps to closed reason overflow', async () => {
+  const fakeChild = new FakeKeywordProcess();
+  const detector = createTestDetector('你好小派', fakeChild);
+  const session = detector.start({
+    signal: new AbortController().signal,
+    deadline: deadline(),
+    onDetected: () => {},
+  });
+
+  fakeChild.emitReady();
+  await session.ready;
+
+  fakeChild.emitEnvelope({ok: false, code: 'OVERFLOW'});
+  fakeChild.close(3);
+
+  const result = await session.closed;
+  assert.deepEqual(result, {reason: 'overflow', detections: 0});
+  await detector.dispose();
+});
+
+test('unsolicited child exit 0 after ready is classified as external_failure', async () => {
+  const fakeChild = new FakeKeywordProcess();
+  const detector = createTestDetector('你好小派', fakeChild);
+  const session = detector.start({
+    signal: new AbortController().signal,
+    deadline: deadline(),
+    onDetected: () => {},
+  });
+
+  fakeChild.emitReady();
+  await session.ready;
+
+  // Unsolicited exit 0 without explicit stop()
+  fakeChild.close(0);
+
+  const result = await session.closed;
+  assert.deepEqual(result, {reason: 'external_failure', detections: 0});
+  await detector.dispose();
+});
+
+test('pumpQueue handles synchronous-false write seam without breaking one-in-flight invariant', async () => {
+  const fakeChild = new SyncFalseProcess();
+  const detector = createTestDetector('你好小派', fakeChild);
+  const session = detector.start({
+    signal: new AbortController().signal,
+    deadline: deadline(),
+    onDetected: () => {},
+  });
+
+  fakeChild.emitReady();
+  await session.ready;
+
+  // Accept 1st frame (written synchronously and returns false) and burst 2nd frame
+  session.accept(sampleFrame(0, 3200));
+  session.accept(sampleFrame(1, 3200));
+
+  // Wait a microtask tick for write callback microtask to settle
+  await new Promise(resolve => queueMicrotask(resolve));
+
+  // Only 1 packet in flight: 2nd frame is held in queue because write() returned false
+  assert.equal(fakeChild.writtenPackets.length, 1);
+
+  // Normal drain event resumes queue and pumps 2nd frame
+  fakeChild.stdin.emit('drain');
+  await new Promise(resolve => queueMicrotask(resolve));
+
+  assert.equal(fakeChild.writtenPackets.length, 2);
+
+  await session.stop();
+  const result = await session.closed;
+  assert.deepEqual(result, {reason: 'stopped', detections: 0});
+  await detector.dispose();
 });

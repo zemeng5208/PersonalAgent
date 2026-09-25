@@ -153,6 +153,56 @@ function createFixedKeywordHostSpawner(keyword: string): WindowsSpeechKeywordHos
   };
 }
 
+type ParsedHostStdout =
+  | { type: 'ready' }
+  | { type: 'detected' }
+  | { type: 'failure'; code: 'UNSUPPORTED_CAPABILITY' | 'EXTERNAL_FAILURE' | 'OVERFLOW' }
+  | { type: 'invalid' };
+
+function parseHostStdoutEnvelope(line: string): ParsedHostStdout {
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { type: 'invalid' };
+    }
+    const prototype = Object.getPrototypeOf(parsed);
+    if (prototype !== Object.prototype && prototype !== null) {
+      return { type: 'invalid' };
+    }
+    const ownKeys = Reflect.ownKeys(parsed);
+    if (ownKeys.some(key => typeof key !== 'string')) {
+      return { type: 'invalid' };
+    }
+
+    if (ownKeys.length === 1 && ownKeys[0] === 'event') {
+      const descriptor = Object.getOwnPropertyDescriptor(parsed, 'event');
+      if (!descriptor || !descriptor.enumerable) return { type: 'invalid' };
+      const eventVal = descriptor.value;
+      if (eventVal === 'ready') return { type: 'ready' };
+      if (eventVal === 'detected') return { type: 'detected' };
+      return { type: 'invalid' };
+    }
+
+    if (ownKeys.length === 2 && ownKeys.includes('ok') && ownKeys.includes('code')) {
+      const okDesc = Object.getOwnPropertyDescriptor(parsed, 'ok');
+      const codeDesc = Object.getOwnPropertyDescriptor(parsed, 'code');
+      if (!okDesc || !okDesc.enumerable || !codeDesc || !codeDesc.enumerable) {
+        return { type: 'invalid' };
+      }
+      if (okDesc.value !== false) return { type: 'invalid' };
+      const codeVal = codeDesc.value;
+      if (codeVal === 'UNSUPPORTED_CAPABILITY' || codeVal === 'EXTERNAL_FAILURE' || codeVal === 'OVERFLOW') {
+        return { type: 'failure', code: codeVal };
+      }
+      return { type: 'invalid' };
+    }
+
+    return { type: 'invalid' };
+  } catch {
+    return { type: 'invalid' };
+  }
+}
+
 class KeywordSessionImpl implements SpeechKeywordSession {
   private settled = false;
   private isReady = false;
@@ -162,7 +212,9 @@ class KeywordSessionImpl implements SpeechKeywordSession {
   private expectedSequence = 0;
   private queuedBytes = 0;
   private readonly queue: Uint8Array[] = [];
-  private isPumping = false;
+  private isWriting = false;
+  private isPausedForDrain = false;
+  private currentInFlightPacket: Buffer | undefined;
   private deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   private child: SpeechHostProcess | undefined;
 
@@ -179,7 +231,6 @@ class KeywordSessionImpl implements SpeechKeywordSession {
     private readonly options: SpeechKeywordStartOptions,
     private readonly deadlineMs: number,
     private readonly spawnHost: WindowsSpeechKeywordHostSpawner,
-    private readonly onSessionClosed: () => void,
   ) {
     this.ready = new Promise<void>((resolve, reject) => {
       this.resolveReady = resolve;
@@ -210,7 +261,6 @@ class KeywordSessionImpl implements SpeechKeywordSession {
     this.readySettled = true;
     this.rejectReady(readyError);
     this.resolveClosed(Object.freeze({reason, detections: 0}));
-    this.onSessionClosed();
   }
 
   private initProcess(): void {
@@ -235,6 +285,15 @@ class KeywordSessionImpl implements SpeechKeywordSession {
       this.terminate('external_failure');
       return;
     }
+
+    child.stdin.on('error', () => {
+      this.terminate('external_failure');
+    });
+
+    child.stdin.on('drain', () => {
+      this.isPausedForDrain = false;
+      this.pumpQueue();
+    });
 
     const scheduleDeadline = (): void => {
       const remaining = this.deadlineMs - Date.now();
@@ -292,8 +351,12 @@ class KeywordSessionImpl implements SpeechKeywordSession {
             this.readySettled = true;
             this.rejectReady(fixedUnavailable());
           }
-        } else if (code === 0 && this.isReady) {
-          this.terminalReason = 'stopped';
+        } else if (code === 3) {
+          this.terminalReason = 'overflow';
+          if (!this.readySettled) {
+            this.readySettled = true;
+            this.rejectReady(fixedFailure());
+          }
         } else {
           this.terminalReason = 'external_failure';
           if (!this.readySettled) {
@@ -303,7 +366,6 @@ class KeywordSessionImpl implements SpeechKeywordSession {
         }
       }
 
-      this.onSessionClosed();
       this.resolveClosed(Object.freeze({
         reason: this.terminalReason,
         detections: this.detections,
@@ -313,51 +375,48 @@ class KeywordSessionImpl implements SpeechKeywordSession {
 
   private handleChildLine(line: string): void {
     if (this.settled) return;
-    try {
-      const envelope = JSON.parse(line) as unknown;
-      if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) {
+    const parsed = parseHostStdoutEnvelope(line);
+    if (parsed.type === 'invalid') {
+      this.terminate('external_failure');
+      return;
+    }
+    if (parsed.type === 'failure') {
+      if (parsed.code === 'UNSUPPORTED_CAPABILITY') {
+        this.terminate('unavailable');
+      } else if (parsed.code === 'OVERFLOW') {
+        this.terminate('overflow');
+      } else {
+        this.terminate('external_failure');
+      }
+      return;
+    }
+    if (parsed.type === 'ready') {
+      if (!this.isReady && !this.readySettled) {
+        this.isReady = true;
+        this.readySettled = true;
+        this.resolveReady();
+        this.pumpQueue();
+      } else {
+        this.terminate('external_failure');
+      }
+      return;
+    }
+    if (parsed.type === 'detected') {
+      if (!this.isReady) {
         this.terminate('external_failure');
         return;
       }
-      const record = envelope as Record<string, unknown>;
-      if (record.ok === false) {
-        if (record.code === 'UNSUPPORTED_CAPABILITY') {
-          this.terminate('unavailable');
-        } else {
-          this.terminate('external_failure');
+      if (this.terminalReason === undefined && !this.settled) {
+        this.detections += 1;
+        try {
+          this.options.onDetected();
+        } catch {
+          // Callback errors contained; never log or propagate raw speech
         }
-        return;
       }
-      if (record.event === 'ready') {
-        if (!this.isReady && !this.readySettled) {
-          this.isReady = true;
-          this.readySettled = true;
-          this.resolveReady();
-          this.pumpQueue();
-        } else {
-          this.terminate('external_failure');
-        }
-        return;
-      }
-      if (record.event === 'detected') {
-        if (!this.isReady) {
-          this.terminate('external_failure');
-          return;
-        }
-        if (this.terminalReason === undefined && !this.settled) {
-          this.detections += 1;
-          try {
-            this.options.onDetected();
-          } catch {
-            // Callback errors contained; never log or propagate raw speech
-          }
-        }
-        return;
-      }
-      this.terminate('external_failure');
-    } catch {
-      this.terminate('external_failure');
+      return;
     }
+    this.terminate('external_failure');
   }
 
   terminate(reason: SpeechKeywordCloseReason): void {
@@ -377,6 +436,11 @@ class KeywordSessionImpl implements SpeechKeywordSession {
       }
     }
 
+    if (this.currentInFlightPacket !== undefined) {
+      this.currentInFlightPacket.fill(0);
+      this.currentInFlightPacket = undefined;
+    }
+
     for (const chunk of this.queue) {
       chunk.fill(0);
     }
@@ -384,6 +448,11 @@ class KeywordSessionImpl implements SpeechKeywordSession {
     this.queuedBytes = 0;
 
     if (this.child !== undefined) {
+      try {
+        this.child.stdin.destroy();
+      } catch {
+        // Best-effort destroy
+      }
       try {
         this.child.kill();
       } catch {
@@ -401,6 +470,10 @@ class KeywordSessionImpl implements SpeechKeywordSession {
       this.options.signal.removeEventListener('abort', onParentAbort);
     } catch {
       // Best-effort detach
+    }
+    if (this.currentInFlightPacket !== undefined) {
+      this.currentInFlightPacket.fill(0);
+      this.currentInFlightPacket = undefined;
     }
     for (const chunk of this.queue) {
       chunk.fill(0);
@@ -457,29 +530,69 @@ class KeywordSessionImpl implements SpeechKeywordSession {
   }
 
   private pumpQueue(): void {
-    if (this.isPumping || this.terminalReason !== undefined || this.settled) return;
+    if (this.isWriting || this.isPausedForDrain) return;
+    if (this.terminalReason !== undefined || this.settled) return;
     if (!this.isReady || this.child === undefined) return;
-    this.isPumping = true;
+    if (this.queue.length === 0) return;
+
+    const chunk = this.queue.shift()!;
+    this.queuedBytes -= chunk.byteLength;
+
+    let packet: Buffer;
     try {
-      while (this.queue.length > 0 && this.terminalReason === undefined && !this.settled) {
-        const chunk = this.queue.shift()!;
-        this.queuedBytes -= chunk.byteLength;
-        try {
-          const packet = Buffer.allocUnsafe(4 + chunk.byteLength);
-          packet[0] = 1; // PCM frame
-          packet[1] = 0; // reserved
-          packet.writeUInt16LE(chunk.byteLength, 2);
-          packet.set(chunk, 4);
-          this.child.stdin.write(packet);
-        } catch {
-          this.terminate('external_failure');
-          break;
-        } finally {
-          chunk.fill(0);
-        }
-      }
+      packet = Buffer.allocUnsafe(4 + chunk.byteLength);
+      packet[0] = 1; // PCM frame
+      packet[1] = 0; // reserved
+      packet.writeUInt16LE(chunk.byteLength, 2);
+      packet.set(chunk, 4);
     } finally {
-      this.isPumping = false;
+      chunk.fill(0);
+    }
+
+    this.isWriting = true;
+    this.currentInFlightPacket = packet;
+
+    let isCallingWrite = true;
+    let canContinue = true;
+    try {
+      canContinue = this.child.stdin.write(packet, error => {
+        if (this.currentInFlightPacket === packet) {
+          packet.fill(0);
+          this.currentInFlightPacket = undefined;
+        }
+        if (error) {
+          this.isWriting = false;
+          this.terminate('external_failure');
+          return;
+        }
+        this.isWriting = false;
+        if (isCallingWrite) {
+          queueMicrotask(() => {
+            if (this.terminalReason !== undefined || this.settled) return;
+            if (!this.isPausedForDrain) {
+              this.pumpQueue();
+            }
+          });
+        } else {
+          if (!this.isPausedForDrain) {
+            this.pumpQueue();
+          }
+        }
+      });
+    } catch {
+      if (this.currentInFlightPacket === packet) {
+        packet.fill(0);
+        this.currentInFlightPacket = undefined;
+      }
+      this.isWriting = false;
+      this.terminate('external_failure');
+      return;
+    } finally {
+      isCallingWrite = false;
+    }
+
+    if (!canContinue) {
+      this.isPausedForDrain = true;
     }
   }
 
@@ -521,12 +634,15 @@ class WindowsSystemSpeechKeywordDetector implements SpeechKeywordDetectorPort {
       },
       deadlineMs,
       this.spawnHost,
-      () => {
-        this.activeSessions.delete(session);
-      },
     );
 
     this.activeSessions.add(session);
+    session.closed
+      .finally(() => {
+        this.activeSessions.delete(session);
+      })
+      .catch(() => {});
+
     return session;
   }
 
