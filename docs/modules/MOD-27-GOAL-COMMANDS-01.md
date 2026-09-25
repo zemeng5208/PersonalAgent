@@ -14,6 +14,9 @@ CAS，不添加 wire 操作、数据库、迁移或任务状态。Goal 命令需
 图版本，也可读取历史图版本；撤回记录仍可见。写入回执包含旧 Goal 精确引用（新建为
 null）、新版本与提交后的 graph revision，供 MOD-28 在同一持久快照上分析影响；
 它不是独立、可重放的事件流。`getGoal` 只向调用者返回目标节点，避免暴露无关图节点。
+对 MOD-28 PR #135 的 provisional 选择入口，修订回执的 `graphRevision`、`previous`、
+`goal.id/revision` 分别映射 `expectedGraphRevision`、`previousGoal`、`currentGoal`；
+新建目标无旧版本，不触发该修订筛选。真正消费前仍须从绑定存储重读同一图版本。
 
 通用图节点仍允许内部可信消费者按现有接口写入；此入口只为用户目标接线提供额外的
 创建/修订语义和冲突检查。MOD-28 可继续从同一存储快照读取精确 Goal 版本和依赖，

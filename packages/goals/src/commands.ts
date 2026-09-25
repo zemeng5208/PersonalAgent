@@ -5,7 +5,11 @@ import type {CoordinationStorePort} from './store.js';
 /** Provisional host-side commands. The host binds the store and authorizes the user. */
 export type GoalInput = Omit<NodeInput, 'kind'>;
 /** Exact old/new refs for an impact consumer; no independent event stream. */
-export interface GoalResult { graphRevision: number; previous: NodeRef | null; goal: NodeVersion; }
+export interface GoalResult<TPrevious extends NodeRef | null = NodeRef | null> {
+  graphRevision: number;
+  previous: TPrevious;
+  goal: NodeVersion;
+}
 export interface GoalList { graphRevision: number; goals: NodeVersion[]; }
 export interface GoalRead { graphRevision: number; goal: NodeVersion | null; }
 const goalKeys = ['id', 'summary', 'sourceRef', 'validFrom', 'validUntil',
@@ -40,10 +44,10 @@ function candidate(store: CoordinationStorePort, expectedGraphRevision: number, 
   return snapshot;
 }
 
-function receipt(
+function receipt<TPrevious extends NodeRef | null>(
   store: CoordinationStorePort, expectedGraphRevision: number,
-  previous: NodeRef | null, input: GoalInput
-): GoalResult {
+  previous: TPrevious, input: GoalInput
+): GoalResult<TPrevious> {
   const committed = parseGraph(store.append(expectedGraphRevision, {...input, kind: 'goal'}));
   const goal = committed.history.at(-1);
   if (!goal || goal.kind !== 'goal' || goal.id !== input.id
@@ -55,7 +59,7 @@ function receipt(
 }
 
 /** New IDs only; a withdrawn ID remains reserved by its history. */
-export function createGoal(store: CoordinationStorePort, expectedGraphRevision: number, input: GoalInput): GoalResult {
+export function createGoal(store: CoordinationStorePort, expectedGraphRevision: number, input: GoalInput): GoalResult<null> {
   const snapshot = candidate(store, expectedGraphRevision, input);
   if (snapshot.history.some(node => node.id === input.id)) {
     throw new GraphError('REVISION_CONFLICT', 'Goal ID already exists');
@@ -67,7 +71,7 @@ export function createGoal(store: CoordinationStorePort, expectedGraphRevision: 
 export function reviseGoal(
   store: CoordinationStorePort, expectedGraphRevision: number,
   expectedGoalRevision: number, input: GoalInput
-): GoalResult {
+): GoalResult<NodeRef> {
   const snapshot = candidate(store, expectedGraphRevision, input);
   const current = snapshot.history.findLast(node => node.id === input.id);
   if (!current || current.kind !== 'goal') throw new GraphError('INVALID_ARGUMENT', 'Goal does not exist');

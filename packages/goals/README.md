@@ -64,6 +64,11 @@ Goal reference (or null on creation), the committed Goal version, and graph
 revision so MOD-28 can analyze the persisted change. This is not a durable
 event stream. A conflict is returned as `GraphError`
 with `REVISION_CONFLICT`; the caller must reread and seek a fresh edit.
+For MOD-28's provisional `selectGoalRevisionImpact`, a successful `reviseGoal`
+receipt maps to `expectedGraphRevision: graphRevision`,
+`previousGoal: previous`, and `currentGoal: {id: goal.id, revision: goal.revision}`.
+The `previous` field is typed as non-null on revision. Goal creation has no
+previous version and does not use that revision-impact selector.
 
 `getGoal` returns one Goal or null without exposing unrelated graph nodes to
 the caller. `listGoals` returns the latest version of each goal, including withdrawn
