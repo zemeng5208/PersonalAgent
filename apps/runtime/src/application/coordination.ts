@@ -5,6 +5,7 @@ import {parseCoordinationResult, parseCoordinationContinuation, type Coordinatio
 import type {AgentToolPort, ToolInvocationResult} from '@personal-agent/agents';
 import type {TaskRuntime} from '../index.js';
 import {isDeepStrictEqual} from 'node:util';
+import type {RuntimeCompetitionToolCatalog} from './tool-catalog.js';
 
 const MAX_COMPETITION_STEPS = 4;
 
@@ -146,7 +147,7 @@ export function startCoordinationTask(
   taskId: string,
   goal: string,
   deadline: string,
-  options: {resume?: boolean; toolExports?: readonly CompetitionToolExport[]; repairCandidateVersion?: '1.0'} = {},
+  options: {resume?: boolean; toolExports?: readonly CompetitionToolExport[]; toolCatalog?: RuntimeCompetitionToolCatalog; repairCandidateVersion?: '1.0'} = {},
 ): Promise<TaskSnapshot> {
   return runtime.runTask(taskId, async context => {
     if (!port) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition coordination is unavailable');
@@ -163,6 +164,7 @@ export function startCoordinationTask(
         completedUnits: step - 1,
         totalUnits: MAX_COMPETITION_STEPS,
       });
+      if (!pending && options.toolCatalog) await options.toolCatalog.prepare({taskId, deadline: context.deadline, signal: context.signal});
       const result = pending ?? await exchange(runtime, port, taskId, goal, context, continuation, () => {
         const prior = receipts.find(item => item.proposal.proposalId === continuation?.proposalId);
         if (prior) {
@@ -185,6 +187,11 @@ export function startCoordinationTask(
         return {resultSummary: summary('Plan repair candidate is ready for local preview; no plan changes committed', 'unverified'), evidenceRefs};
       }
       const exportBinding = requireExportBinding(result, taskId, tools, options.toolExports);
+      if (result.verification !== 'mock' && options.toolCatalog) {
+        await options.toolCatalog.assertProposal({taskId, toolName: result.toolName,
+          toolVersion: result.toolVersion, arguments: result.arguments,
+          deadline: context.deadline, signal: context.signal});
+      }
       if (!tools) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition tool execution is unavailable');
 
       const receipt = receipts.find(item => item.proposal.proposalId === result.proposalId);

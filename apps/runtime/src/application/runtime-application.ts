@@ -11,6 +11,8 @@ import type {CoordinationPort, CoordinationRequest, CoordinationRepairCandidateR
 import {startCoordinationTask, assertCompetitionExportAllowed, type CompetitionToolExport} from './coordination.js';
 import {createLocalRepairTool, prepareLocalRepair, startLocalRepairTask, LOCAL_REPAIR_CHECKPOINT} from './local-repair.js';
 import type {LocalRepairHostOptions, SubmitLocalRepairRequest} from './local-repair.js';
+import {RuntimeCompetitionToolCatalog} from './tool-catalog.js';
+import type {CompetitionAvailableTool, CompetitionToolAvailability} from './tool-catalog.js';
 type SuccessfulResponse = Extract<Response, {outcome: 'ok'}>;
 
 const CONVERSATION_HISTORY_LIMIT = 20;
@@ -20,7 +22,7 @@ function assistantText(resultSummary: string): string {
   return resultSummary.replace(MODEL_METADATA, '').trim();
 }
 
-export interface RuntimeApplicationOptions { path: string; now?: () => Date; idFactory?: () => string; text?: TextApplicationOptions; tools?: readonly RegisteredTool[]; profile?: 'local' | 'huawei_ict_agentarts'; coordination?: CoordinationPort; competitionToolExports?: readonly CompetitionToolExport[]; repairCandidateVersion?: '1.0'; localRepair?: LocalRepairHostOptions; }
+export interface RuntimeApplicationOptions { path: string; now?: () => Date; idFactory?: () => string; text?: TextApplicationOptions; tools?: readonly RegisteredTool[]; profile?: 'local' | 'huawei_ict_agentarts'; coordination?: CoordinationPort; competitionToolExports?: readonly CompetitionToolExport[]; competitionToolAvailability?: readonly CompetitionToolAvailability[]; repairCandidateVersion?: '1.0'; localRepair?: LocalRepairHostOptions; }
 export interface RuntimeApplicationTransport { send(request: Request, signal: AbortSignal): Promise<Response>; }
 
 export class RuntimeApplication implements RuntimeApplicationTransport {
@@ -33,11 +35,12 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   private readonly competitionToolExports: readonly CompetitionToolExport[];
   private readonly repairCandidateVersion: '1.0' | undefined;
   private readonly localRepair: LocalRepairHostOptions | undefined;
+  private readonly competitionToolCatalog: RuntimeCompetitionToolCatalog | undefined;
 
   constructor(options: RuntimeApplicationOptions) {
     this.profile = options.profile ?? 'local';
     if (!['local', 'huawei_ict_agentarts'].includes(this.profile)
-      || (this.profile === 'local' && (options.coordination !== undefined || options.competitionToolExports !== undefined || options.repairCandidateVersion !== undefined))
+      || (this.profile === 'local' && (options.coordination !== undefined || options.competitionToolExports !== undefined || options.competitionToolAvailability !== undefined || options.repairCandidateVersion !== undefined))
       || (options.repairCandidateVersion !== undefined && options.repairCandidateVersion !== '1.0')
       || (options.localRepair !== undefined && options.repairCandidateVersion !== '1.0')
       || (this.profile === 'huawei_ict_agentarts' && options.text !== undefined)) {
@@ -92,6 +95,11 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
         }
         return invoker.invoke({...invocation, authorizationRef: ref});
       }};
+    }
+    if (options.competitionToolAvailability !== undefined) {
+      if (!this.tools) throw new ProtocolError('INVALID_ARGUMENT', 'Competition tool catalog needs registered tools');
+      this.competitionToolCatalog = new RuntimeCompetitionToolCatalog(
+        this.runtime, this.tools, this.competitionToolExports, options.competitionToolAvailability);
     }
     this.textApplication = createTextApplication({...options.text, ...(this.tools ? {tools: this.tools} : {})});
   }
@@ -151,6 +159,12 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     assertCompetitionExportAllowed(this.runtime, this.tools, this.competitionToolExports, request);
   }
 
+  /** Trusted host obtains only the task-selected public tool shape for cloud input construction. */
+  async prepareCompetitionToolCatalog(input: {taskId: string; deadline: string; signal: AbortSignal}): Promise<CompetitionAvailableTool[]> {
+    if (!this.competitionToolCatalog) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition tool catalog is unavailable');
+    return this.competitionToolCatalog.prepare(input);
+  }
+
   configureText(options: TextApplicationOptions): TextApplication['deployment'] {
     this.requireLocalText();
     if (this.activeTextTasks.size) throw new Error('Cannot reconfigure text model while tasks are active');
@@ -182,7 +196,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       if (competitionApproval.state !== 'allowed') throw new ProtocolError('UNAUTHORIZED', 'Task approval has not been allowed');
       const execution = startCoordinationTask(
         this.runtime, this.coordination, this.tools, taskId, goal, deadline,
-        {resume: true, toolExports: this.competitionToolExports,
+        {resume: true, toolExports: this.competitionToolExports, toolCatalog: this.competitionToolCatalog,
           ...(this.repairCandidateVersion ? {repairCandidateVersion: this.repairCandidateVersion} : {})},
       ).finally(() => this.activeTextTasks.delete(taskId));
       this.activeTextTasks.set(taskId, execution);
@@ -215,7 +229,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       this.runtime.saveCheckpoint(taskId, 'application-deadline', request.deadline);
       const execution = Promise.resolve().then(() => startCoordinationTask(
         this.runtime, this.coordination, this.tools, taskId, goal, request.deadline,
-        {toolExports: this.competitionToolExports,
+        {toolExports: this.competitionToolExports, toolCatalog: this.competitionToolCatalog,
           ...(this.repairCandidateVersion ? {repairCandidateVersion: this.repairCandidateVersion} : {})},
       )).finally(() => this.activeTextTasks.delete(taskId));
       this.activeTextTasks.set(taskId, execution);
