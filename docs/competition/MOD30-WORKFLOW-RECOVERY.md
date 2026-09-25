@@ -1,6 +1,6 @@
 # MOD-30：三 PA 工作流恢复与普通目标参数化方案
 
-- Profile：`huawei_ict_agentarts`；负责人：zemeng；状态：方案待评审，未改云配置。
+- Profile：`huawei_ict_agentarts`；负责人：zemeng；状态：云提示与原实例部署已完成，非会议实调及评审待完成。
 - 范围：现有三个 PA 工作流及控制器的配置恢复、输入输出约束与验收顺序。
 - 依赖：MOD-29 的同一已发布 AgentArts 应用与部署读回，MOD-04B 的
   `CloudAgentPort` 适配器，MOD-05 的本地 Policy/ToolGateway；知识、MCP/Skill
@@ -79,5 +79,7 @@ trace／usage（如发生续接）、最终严格输出、本地批准、目标�
 多 Agent 的路由／交接、知识、MCP/Skill 和效果评估须各自形成证据，不能由会议
 主链一次成功推导为全部 MOD-30 或 Competition MVP 完成。
 
-本方案无公共接口、迁移、依赖或云端副作用。云配置修改和付费调用要由同一
-实例持有者协调排期；仓库文档评审不能代替平台读回或非作者代码评审。
+本工作包无公共接口、迁移或依赖修改。2026-09-25 的实际云配置、版本发布、
+原运行实例读回见
+[`MOD30-PA-WORKFLOW-DEPLOY-20260925.md`](MOD30-PA-WORKFLOW-DEPLOY-20260925.md)。
+仓库文档评审不能代替请求级 trace 或非作者评审。

@@ -17,7 +17,7 @@ MOD-04B 现有适配器／Runtime 消费端对齐。它是**待接线约定**，
 首次目标只要求读取该合成文件并报告已确认数量：
 
 ```text
-合成验收：请读取当前已授权工作区的 demo-inventory.json，核实 demo-part 的数量和 revision，然后简短报告。只提出本地只读工具请求；不要猜测文件内容，不要声称云端或本地已经执行。
+合成验收：请提出 workspace.read_text@1.0.0 的本地只读提案，路径为已授权合成工作区内的 demo-inventory.json；经本地确认后核实 demo-part 的数量和 revision，再简短报告。不要猜测文件内容，不要声称云端或本地已经执行。
 ```
 
 该样本不含真实库存、账号或私人资料。路径只是本次目标参数，不是产品内置
@@ -64,6 +64,27 @@ MOD-04B 现有适配器／Runtime 消费端对齐。它是**待接线约定**，
 必须由 `parseCoordinationResult` 及 Runtime 再校验；云不能设置 `verification`，
 本机补入 `unverified`，可信工具 Evidence 与云结果分开记录。现有 `8192` UTF-8
 字节的完整 continuation 限额和本地批准／出机许可不因样本变更而放宽。
+
+### 修复候选泛化的第二个合成样本
+
+上面的库存样本没有图上下文，只能验证 `tool_proposal → text`。为核对 MOD-04B
+去掉固定“会议变更”后的候选输出，另用**合成交付截止时间变化**；以下对象仅是
+由 MOD-04B 提供的最小协议样本，数值不是现有数据库读回，不能直接用于真实提交：
+
+```json
+{"continuation":{"proposalId":"synthetic-deadline-read-1","state":"confirmed","result":{"deliverableId":"synthetic-deliverable","newDeadline":"2026-10-02T17:00:00+08:00","repairContext":{"expectedGraphRevision":7,"targets":[{"node":{"id":"synthetic-review-step","revision":1},"requestedSummary":"Review deliverable before 2026-10-02 17:00","requestedDependencies":[{"id":"synthetic-deadline-fact","revision":2}]}],"allowedDependencies":[{"id":"synthetic-deadline-fact","revision":2}]}}}}
+```
+
+若且仅若受信宿主真实绑定了该 graph revision、目标和依赖，云端才可建议：
+
+```json
+{"kind":"repair_candidate","candidateVersion":"1.0","candidate":{"expectedGraphRevision":7,"changes":[{"node":{"id":"synthetic-review-step","revision":1},"summary":"Review deliverable before 2026-10-02 17:00","reason":"Confirmed synthetic deadline is 2026-10-02 17:00 (+08:00).","dependencies":[{"id":"synthetic-deadline-fact","revision":2}]}]}}
+```
+
+`expectedGraphRevision`、原 `node`、`requestedSummary` 和
+`requestedDependencies` 都逐项来自本次受信投影；`reason` 只解释已确认数据。
+本样本缺少真实 Fact/Evidence 与本地绑定，故目前只能静态对照协议，不能
+跳过本地严格 parser、预览、批准与 CAS，也不能据此宣称候选真实验收。
 
 ## 云草稿的最小提示词修改点
 
