@@ -26,6 +26,8 @@ export {
   UnavailableSpeechRecognitionPort,
   UnavailableTranscriptConsumerPort,
 } from './unavailable.js';
+export {createWindowsSystemSpeechPorts} from './windows-system-speech.js';
+export type {WindowsSystemSpeechPorts} from './windows-system-speech.js';
 export {VoiceSessionManager} from './voice-session.js';
 export type {
   ReplyReceipt,

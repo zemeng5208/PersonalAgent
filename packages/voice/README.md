@@ -39,6 +39,52 @@ text. Public failures use fixed messages and do not expose provider or listener 
 Adapters own provider configuration, credentials, upload consent and transport. No
 provider is the default: recognition and output return `UNSUPPORTED_CAPABILITY`.
 
+## Windows System.Speech adapters
+
+`createWindowsSystemSpeechPorts()` returns provider-specific recognition and output ports
+for the installed Windows `.NET Framework` `System.Speech` engine. The implementation
+starts one hidden native Windows child per explicit operation using a fixed in-module host
+executable (`packages/voice/host/windows-system-speech-host.exe`), fixed `zh-CN` culture and
+fixed `--mode recognize` / `--mode speak` mode. Callers cannot provide a command, path,
+executable, device or execution policy. Executing a native executable directly avoids
+PowerShell script execution policy restrictions (such as `Restricted`) without employing
+any policy modification, execution-policy bypass, or `-Command`/`IEX` workarounds. PCM or
+UTF-8 text uses bounded stdio; stdout is one bounded JSON result; stderr is drained without
+logging. There is no file, network, credential or automatic retry path.
+
+Deadline, parent abort, `stop()` and adapter disposal terminate the exact child and wait
+for its close. The adapter copies and later zeroes its audio input. Recognition responses
+are restricted to 8,000 characters and all process/provider failures use fixed local
+errors. The helper uses open dictation for recognition and the installed `zh-CN` default
+audio voice for speech.
+
+Source availability is not runtime availability. This adapter implementation does not
+verify dictation accuracy, microphone capture, speaker playback, or audio devices. Binaries
+are not committed to the repository. If the fixed native host executable is not built and
+deployed, or if installed Chinese speech components are missing, the ports explicitly return
+unavailable (`UNSUPPORTED_CAPABILITY`). Desktop and Runtime must keep their Unavailable
+ports and UI state until authorized production setup and real-device acceptance pass.
+
+### Building the native host
+
+The minimal reproducible native host is defined by single source file
+`packages/voice/host/WindowsSystemSpeechHost.cs`. It requires no external package
+dependencies and can be built into `packages/voice/host/windows-system-speech-host.exe` using
+the Windows `.NET Framework` C# compiler (`csc.exe`) referencing the system `System.Speech.dll`:
+
+```cmd
+C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:exe /r:C:\Windows\Microsoft.NET\assembly\GAC_MSIL\System.Speech\v4.0_4.0.0.0__31bf3856ad364e35\System.Speech.dll /out:packages\voice\host\windows-system-speech-host.exe packages\voice\host\WindowsSystemSpeechHost.cs
+```
+
+Availability of `csc.exe` and specific GAC assembly locations depends on host environment
+configuration and installed .NET Framework components; the presence of these tools or paths
+is not guaranteed across all Windows installations. If the compiler or assembly is absent, or
+if the executable has not been built at the fixed in-module path, the adapter detects this
+missing executable via `existsSync()` and explicitly returns `UNSUPPORTED_CAPABILITY` without
+attempting script execution or policy modification. Likewise, if the host launches on a system
+lacking `zh-CN` speech recognition or synthesis voice components, it exits with code 2 and
+surfaces `UNSUPPORTED_CAPABILITY`.
+
 ## Fake use and verification
 
 `@personal-agent/voice/testing` exports Fake recognition, explicit transcript consumer
