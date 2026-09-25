@@ -101,7 +101,7 @@ and the current graph revision; an invalid, confirmed no-write input returns
 Runtime for reconciliation. The tool does not retry an uncertain write.
 
 This package does not expose a host task or approval entrypoint itself.
-Runtime's host tool task is currently a separate Draft integration, and real
+Runtime's host tool task is currently a separate integration PR, and real
 Desktop user writes need its review, composition, and one target-chain readback.
 The current RuntimeApplication constructor registers descriptors without executing
 host tools; Desktop must bind the store before exposing host commands or resuming
