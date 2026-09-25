@@ -47,7 +47,9 @@ Renderer 指定任意词表。检测器须在 `ready` 前真正完成限定语�
 结束；生命周期控制器不向 UI 暴露该句柄。共享物理麦克风的完全关闭仍需 MOD-11 宿主
 核对最后引用、track 停止和设备读回。
 
-截至本次接线，#156 的现有 PCM 源尚未导出 `ready`，限定词检测器的实际导出也未交付；
+已对照 #156 head `197415f` 的 `VoicePcmFrameSourcePort`：`subscribe({signal,deadline,onFrame,onEnd})`
+返回的 `{ready,closed,unsubscribe}` 与本适配器的结构类型一致；其中 `ready` 由可信宿主
+`binding.start` 返回有效释放句柄后解决，提前终止会拒绝。限定词检测器的实际导出仍未交付；
 本适配器只证明结构接口和失败路径，不能声称已经连接真实麦克风或识别“你好小派”。
 
 ## 明确排除
