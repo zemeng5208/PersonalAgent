@@ -9,7 +9,7 @@
 
 只对用户先行确认的前台记事本窗口做一次精确文本替换。普通用户权限；PID、进程启动时间、HWND 与 System32 可执行路径或精确 MSIX 包家族名共同绑定目标，预期文本不一致则拒绝。MSIX 还须 UIA 中恰好一个可识别且选中的标签；只接受单一 UIA ValuePattern 可编辑控件，并在替换后从当前目标控件重新读取。静态锁串行当前 Host 进程的输入。取消或用户改变前台/输入时让出控制；调用 `SetValue` 开始后任何异常或不符均为结果不确定，由受信路径再次读回，不能自动重试。结果不回显任何文本/路径/窗口名。
 
-输入 tick 基线在 UIA 查找及首次读取预期文本前建立；执行前再次核对同一 tick、目标身份与当前预期文本。定向回归注入“首次读取后用户输入”及“不改变 tick 的程序改值”，两者均须在写前拒绝。UIA 读值与 `SetValue` 并非原子 CAS，用户输入 tick 也不是完整接管事件流；剩余窗口须在 Windows 实机验收并交 Runtime 的受信协调和恢复处理。
+输入 tick 基线在 UIA 查找及首次读取预期文本前建立；执行前再次核对同一 tick、目标身份与当前预期文本。紧贴 `SetValue` 前重新发现已确认窗口的唯一选中标签与同一编辑控件，并复核文本、输入 tick 和前台；标签或控件已换则写前拒绝，不读取其他标签的文本。定向回归注入“首次读取后用户输入”及“不改变 tick 的程序改值”，两者均须在写前拒绝。UIA 读值与 `SetValue` 并非原子 CAS，用户输入 tick 也不是完整接管事件流；剩余窗口须在 Windows 实机验收并交 Runtime 的受信协调和恢复处理。
 
 源码未提供 pipe 服务、可执行入口或 ToolHost 包装；`ConfirmedNotepadTarget` 是 public DTO，调用者可以构造，因此它本身不构成授权安全边界。未来仅由受信 Runtime adapter 在消费授权后调用，并防止未经许可的模块引用；目前不能把该类库暴露为生产调用入口。此 PR 没有操作公共 Schema、Runtime/Policy/ToolGateway、Desktop 或根配置/锁文件。`DesktopActionPort`、1 MiB JSONL Named Pipe、当前用户 ACL/握手、跨进程资源锁、授权-目标绑定、runId 恢复及 Desktop 受信确认仍是 #114 的共享任务，未经发布不能注册 capability。没有凭据适配；MOD-05 的 SecretStore 与 Windows 安全存储另需边界契约，不能把机器本地凭据当作授权。
 

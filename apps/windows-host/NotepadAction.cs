@@ -62,7 +62,7 @@ public static class NotepadAction
             var root = AutomationElement.FromHandle(target.WindowHandle);
             if (root.Current.ProcessId != target.ProcessId)
                 return new(ActionState.Rejected, "Window identity changed");
-            if (!HasSingleTab(root, target.ProcessId))
+            if (!TryGetOnlyTab(root, target.ProcessId, out var selectedTab))
                 return new(ActionState.Rejected, "Exactly one Notepad tab is required");
             var edits = root.FindAll(TreeScope.Descendants,
                 new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
@@ -78,6 +78,21 @@ public static class NotepadAction
                     LastInputTick, () => IsSameForegroundTarget(target)))
                 return new(ActionState.Rejected, "User input or target text changed before execution");
             cancellationToken.ThrowIfCancellationRequested();
+            // Rebind the selected tab and edit immediately before SetValue. UIA has
+            // no atomic compare-and-set; this only narrows the remaining race.
+            var prewriteRoot = AutomationElement.FromHandle(target.WindowHandle);
+            if (prewriteRoot.Current.ProcessId != target.ProcessId ||
+                !TryGetOnlyTab(prewriteRoot, target.ProcessId, out var prewriteTab) ||
+                !SameElement(selectedTab, prewriteTab))
+                return new(ActionState.Rejected, "Target tab changed before execution");
+            var prewriteEdits = prewriteRoot.FindAll(TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
+            if (prewriteEdits.Count != 1 || !prewriteEdits[0].Equals(edit) ||
+                !edit.Current.IsEnabled || value.Current.IsReadOnly ||
+                !PrewriteStable(inputTick, target.ExpectedText, () => value.Current.Value,
+                    LastInputTick, () => IsSameForegroundTarget(target)))
+                return new(ActionState.Rejected, "Target editor changed before execution");
+            cancellationToken.ThrowIfCancellationRequested();
 
             // SetValue can mutate before returning or throwing. Any subsequent failure is unknown.
             mutationStarted = true;
@@ -88,11 +103,13 @@ public static class NotepadAction
 
             // Read the target again. A successful UIA call alone is never proof of the result.
             var reread = AutomationElement.FromHandle(target.WindowHandle);
-            if (reread.Current.ProcessId != target.ProcessId || !HasSingleTab(reread, target.ProcessId))
+            if (reread.Current.ProcessId != target.ProcessId ||
+                !TryGetOnlyTab(reread, target.ProcessId, out var readbackTab) ||
+                !SameElement(selectedTab, readbackTab))
                 return new(ActionState.ResultUnknown, "Target tab changed during readback");
             var currentEdits = reread.FindAll(TreeScope.Descendants,
                 new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
-            if (currentEdits.Count != 1 ||
+            if (currentEdits.Count != 1 || !currentEdits[0].Equals(edit) ||
                 !currentEdits[0].TryGetCurrentPattern(ValuePattern.Pattern, out var currentPattern) ||
                 ((ValuePattern)currentPattern).Current.Value != target.ReplacementText)
                 return new(ActionState.ResultUnknown, "Target readback did not confirm replacement");
@@ -173,8 +190,12 @@ public static class NotepadAction
         finally { CloseHandle(handle); }
     }
 
-    private static bool HasSingleTab(AutomationElement root, int pid)
+    private static bool SameElement(AutomationElement? first, AutomationElement? second) =>
+        first is null ? second is null : first.Equals(second);
+
+    private static bool TryGetOnlyTab(AutomationElement root, int pid, out AutomationElement? selectedTab)
     {
+        selectedTab = null;
         var tabs = root.FindAll(TreeScope.Descendants,
             new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Tab));
         if (tabs.Count == 0)
@@ -185,9 +206,11 @@ public static class NotepadAction
         if (tabs.Count != 1) return false;
         var items = tabs[0].FindAll(TreeScope.Children,
             new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TabItem));
-        return items.Count == 1 &&
-            items[0].TryGetCurrentPattern(SelectionItemPattern.Pattern, out var selected) &&
-            ((SelectionItemPattern)selected).Current.IsSelected;
+        if (items.Count != 1 ||
+            !items[0].TryGetCurrentPattern(SelectionItemPattern.Pattern, out var selected) ||
+            !((SelectionItemPattern)selected).Current.IsSelected) return false;
+        selectedTab = items[0];
+        return true;
     }
 
     private static uint LastInputTick()

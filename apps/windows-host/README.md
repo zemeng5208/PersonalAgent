@@ -10,4 +10,4 @@
 
 普通用户可从仓库根目录执行 `dotnet run --project apps/windows-host/manual/ManualNotepadProbe.csproj` 进行一次手工探测。程序创建随机合成临时文本文件，启动 System32 `notepad.exe`，只枚举启动后新建且身份可信的 Notepad 进程的可见顶层窗口；不读取既有私人标签、窗口标题或文本。唯一新窗口仍须亲眼确认完整随机合成文本，输入 `CONFIRM` 后在五秒内手动切回。结果为 `Verified` 时还须目视确认，再关闭记事本且不保存。若新标签页落入既有进程、出现多个新窗口、MSIX 未暴露唯一标签或不提供单一 ValuePattern，本探测拒绝，不能切到私人窗口重试。此程序不经过产品授权链，仅供测试，不能作为生产入口；探测并非 PA-016 的端到端验收。
 
-定向时序回归：Windows 上运行 `dotnet run --project apps/windows-host/test/WindowsHost.Timing.csproj`，受控交错在预期文本读取后改变输入 tick，以及不改变 tick 的程序改值，两者均必须在写前拒绝。UIA 读取和 `SetValue` 之间没有原子 compare-and-swap；tick 与前台检查仍不能捕获所有接管，不能用此回归代替真实交互验收。
+定向时序回归：Windows 上运行 `dotnet run --project apps/windows-host/test/WindowsHost.Timing.csproj`，受控交错在预期文本读取后改变输入 tick，以及不改变 tick 的程序改值，两者均必须在写前拒绝。写入前还会重新查找已确认窗口中唯一选中的标签及同一编辑控件，再检查精确文本、输入 tick 和前台身份。UIA 读取和 `SetValue` 之间没有原子 compare-and-swap；这些复核仍不能捕获所有接管，不能用此回归代替真实交互验收。
