@@ -35,7 +35,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   private readonly competitionToolExports: readonly CompetitionToolExport[];
   private readonly repairCandidateVersion: '1.0' | undefined;
   private readonly localRepair: LocalRepairHostOptions | undefined;
-  private readonly competitionToolCatalog: RuntimeCompetitionToolCatalog | undefined;
+  private readonly competitionToolCatalog?: RuntimeCompetitionToolCatalog;
 
   constructor(options: RuntimeApplicationOptions) {
     this.profile = options.profile ?? 'local';
