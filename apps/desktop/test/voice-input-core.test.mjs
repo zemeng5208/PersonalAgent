@@ -95,3 +95,64 @@ test('capture deadline finalizes audio while the session keeps time for ASR and 
   assert.equal(f.calls.some(call => Array.isArray(call) && call[0] === 'recognize'), true);
   assert.equal(f.input.snapshot().status, 'awaiting_speech');
 });
+
+test('beginWakeCapture reuses active authorized capture without re-authorizing', async () => {
+  const f = fixture();
+  // Override microphoneHost to simulate wake-active capture (authorized, active, subscriberCount > 0)
+  f.input._microphoneHost = undefined; // no direct access needed; the fixture already has it
+  const wakeFixture = fixture();
+  // Create a new fixture with microphoneHost that reports authorized+active+subscriberCount>0
+  const calls2 = [];
+  const fixedNow2 = Date.parse('2026-09-25T00:00:00.000Z');
+  const ready2 = deferred();
+  const closed2 = deferred();
+  let options2;
+  const subscription2 = {ready: ready2.promise, closed: closed2.promise,
+    unsubscribe: () => { calls2.push('unsubscribe'); }};
+  const source2 = {subscribe: value => { calls2.push('subscribe'); options2 = value; return subscription2; },
+    dispose: async () => { calls2.push('dispose-source'); }};
+  const microphoneHost2 = {authorize: () => { calls2.push('authorize'); },
+    snapshot: () => ({authorized: true, active: true, subscriberCount: 1}),
+    revoke: async () => { calls2.push('revoke'); }};
+  class Manager2 {
+    async start(options) { calls2.push(['session-start', options.deadline]); return {sessionId: 'session-w1'}; }
+    current() { return {sessionId: 'session-w1', state: 'listening', revision: 1}; }
+    async stop() { calls2.push('session-stop'); }
+  }
+  const input2 = createDesktopVoiceInputCore({source: source2, microphoneHost: microphoneHost2, client: {call: () => {}},
+    createBuffer: opts => {
+      const data = [];
+      return {append: chunk => data.push(...chunk),
+        finish: () => ({data: Uint8Array.from(data), format: {encoding: 'pcm_s16le', sampleRateHz: 16000, channels: 1}, durationMs: 0}),
+        dispose: () => {}};
+    },
+    VoiceSessionManager: Manager2, createConsumer: () => ({}),
+    createSpeechPorts: () => ({recognition: {}, output: {}, dispose: async () => {}}),
+    enabled: true, now: () => fixedNow2});
+
+  const pending = input2.beginWakeCapture(7);
+  // authorize must NOT be called — wake capture reuses existing authorization
+  assert.equal(calls2.includes('authorize'), false, 'authorize must not be called for wake capture');
+  assert.equal(calls2.includes('subscribe'), true, 'source.subscribe must be called');
+  ready2.resolve();
+  await pending;
+  assert.equal(input2.snapshot().status, 'listening');
+
+  // Cleanup: subscriberCount=1 means this is the wake subscriber, so revoke should not be called
+  // (existing cleanup checks subscriberCount === 0 before revoking)
+});
+
+test('beginWakeCapture rejects when capture is not wake-authorized', async () => {
+  const calls3 = [];
+  const fixedNow3 = Date.parse('2026-09-25T00:00:00.000Z');
+  const source3 = {subscribe: () => ({}), dispose: async () => {}};
+  const microphoneHost3 = {authorize: () => {}, snapshot: () => ({authorized: false, active: false, subscriberCount: 0}),
+    revoke: async () => {}};
+  class Manager3 { async start() { return {}; } current() {} async stop() {} }
+  const input3 = createDesktopVoiceInputCore({source: source3, microphoneHost: microphoneHost3, client: {call: () => {}},
+    createBuffer: () => ({append: () => {}, finish: () => ({}), dispose: () => {}}),
+    VoiceSessionManager: Manager3, createConsumer: () => ({}),
+    createSpeechPorts: () => ({recognition: {}, output: {}, dispose: async () => {}}),
+    enabled: true, now: () => fixedNow3});
+  await assert.rejects(() => input3.beginWakeCapture(8), /语音唤醒采集未就绪/);
+});
