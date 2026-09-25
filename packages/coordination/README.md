@@ -31,11 +31,13 @@ A non-cooperative provider may continue its own internal work after cancellation
 its late result is discarded. The coordinator is an in-process boundary, not a sandbox
 or a data-export authorizer.
 
-Input is the submitted goal, task ID/revision, deadline and AbortSignal. It excludes
-conversation history, attachments, credentials, authorization and Runtime methods.
+Input is the submitted goal, task ID/revision, deadline and AbortSignal. An explicitly
+enabled initial request may also carry a trusted, per-task directory containing only
+`name`, `version` and `inputSchema` for selected tools. It excludes conversation
+history, attachments, credentials, authorization and Runtime methods.
 After a locally confirmed tool execution, Runtime may add a bounded continuation with
 the proposal ID and a host-selected JSON result. Real cloud export requires an explicit
-read-only tool binding, a bounded projection, and a synchronous final permission check
+read-only tool binding, a bounded projection, and a final host permission check
 before transport dispatch. An available port is not consent. Results may be bounded
 text, a strict tool proposal (`mock` or `unverified`), or an explicitly enabled
 versioned repair candidate. Proposals cannot contain authorization, Evidence or task
@@ -86,6 +88,19 @@ events are rejected. This adapter uses the existing contract error names: `CANCE
 for cancellation, `TIMEOUT` for a deadline (the contract has no
 `DEADLINE_EXCEEDED`), and `EXTERNAL_FAILURE` for authorization, transport, HTTP, or
 malformed-response failures (the contract has no `EXTERNAL_SERVICE_ERROR`).
+
+For a cloud deployment whose prompt accepts tool selection, trusted composition may
+set `responseMode: 'tool-proposal-json'` and `initialRequestMode: 'goal-with-tools-json'`.
+The initial `query` then contains exactly `{"goal": string, "availableTools":
+[{"name": string, "version": string, "inputSchema": object}]}`. The host selects
+and minimizes the directory for that task; it is capped at 16 entries and 8 KiB.
+Missing or empty directories fail locally with `UNSUPPORTED_CAPABILITY`, before
+credentials or network. The host must provide `beforeInitialToolCatalogSend` as the
+fifth constructor argument to recheck its current task binding after credential read;
+absence or rejection prevents transport. The fourth `beforeSend` argument remains the
+existing synchronous continuation guard. A confirmed-result continuation keeps its
+existing separate query and does not resend the tool directory. Without the opt-in,
+the adapter sends the raw goal and rejects a supplied directory.
 
 The adapter alone does not establish AgentArts availability. Deployment, API,
 trace/usage and local tool read-back require their own operational evidence. Without
