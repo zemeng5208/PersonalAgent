@@ -111,8 +111,33 @@
 末端系统提示的 `tool_proposal` 分支限定合成 `meeting-update.json` 读取，
 `repair_candidate` 分支要求已确认的“会议变更”和 `repairContext`，其他情况返回
 `kind:text`。因此上述成功证据只覆盖会议合成场景；即使本地候选续接改为通用描述，
-也不能据此推断当前云端版本支持非会议事实变化。非会议场景须先由对应工作包修正并
-发布受限提示，再按新版本单独验收。
+也不能据此推断当时云端版本支持非会议事实变化；后续新版本与实调须单独记录。
+
+### 2026-09-25 非会议单次调用的部署关联粒度
+
+MOD-30 在同一原运行实例上读回：主协调器已发布 `v20260925192219`，证据审查
+`v20260925191806`（ID `1790335103598`）被两个引用使用；运行实例
+`agent-arts-d5ae1174bc7d4cb8ab3dbbc6fae654e4` 状态“正常”，`Latest v8`
+更新于 19:22:49 CST。这是调用前的配置与实例读回，不是请求级版本字段。
+
+MOD-04B 的同一份本机脱敏回执
+`C:/Users/24035/.codex/worktrees/cdc9/PersonalAgent/.cache/mod04b-nonmeeting-2026-09-25T11-30-13.198Z.json`
+记录：一次请求发送到上述 runtime 名称的 `/invocations` 端点，调用方
+`X-Request-Id` 为 `11ba…6c2e`，时间 19:30:13–19:30:53 CST，HTTP 200、
+17,089 字节完整 SSE、零 error event；严格解析接受一个 `repair_candidate` v1.0。
+这是合成交付截止时间变化的 **query-level 候选协议探针**；没有本地工具执行、审批、
+图写入、重试或 Local 回退，`verification` 仍为 `unverified`。
+
+平台“观测 → 调用链分析”在同一时间只读回成功 trace `668c…736d`：开始于
+19:30:13 CST、耗时 38,937 ms、会话 `pa-49c8…98d8`，输入 3,365 + 输出
+2,288 = 5,653 tokens。可见输入中的合成 `factChange`、`draft-review` 和截止时间
+与本机请求一致；调用树有三段 `UserInput`／模型跨度，末段输出含
+`repair_candidate`。这支持按时间和输入语义关联该次调用，但平台页面未回显调用方
+`X-Request-Id`，本地 HTTP/SSE 也没有服务端 trace ID，因此不是精确 ID join。
+三个跨度没有各自的设计角色或交接标识，不能据此宣称角色路由已验收。根 span
+元数据的 `resource_version: "draft"` 也不是该请求的运行实例部署版本；未见
+请求级 runtime/deployment/version 字段，不能把 `Latest v8` 或已发布应用版本
+冒充精确绑定。tokens 是平台用量，不是单次账单费用。
 
 ## 固定合成分类 runner
 
