@@ -728,7 +728,9 @@ app.whenReady().then(async () => {
   });
 
   function reposition() {
-    orb.setBounds(clampOrb(orb.getBounds(), screen.getDisplayMatching(orb.getBounds()).workArea));
+    const bounds = orb.getBounds();
+    const next = clampOrb(bounds, screen.getDisplayMatching(bounds).workArea);
+    orb.setPosition(next.x, next.y);
     if (panel.isVisible()) openPanel();
   }
   screen.on('display-removed', reposition);
@@ -738,7 +740,8 @@ app.whenReady().then(async () => {
     const point = screen.getCursorScreenPoint();
     const bounds = orb.getBounds();
     if (dragging === true) {
-      orb.setBounds(clampOrb({...bounds, x: point.x - dragOffset.x, y: point.y - dragOffset.y}, screen.getDisplayNearestPoint(point).workArea));
+      const next = clampOrb({...bounds, x: point.x - dragOffset.x, y: point.y - dragOffset.y}, screen.getDisplayNearestPoint(point).workArea);
+      orb.setPosition(next.x, next.y);
       return;
     }
     if (away > Date.now()) return;
