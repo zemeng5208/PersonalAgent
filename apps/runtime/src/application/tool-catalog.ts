@@ -8,6 +8,7 @@ import type {CompetitionToolExport} from './coordination.js';
 
 const CHECKPOINT = 'competition-tool-catalog';
 const NAME = /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/;
+const VERSION = /^[0-9A-Za-z][0-9A-Za-z_.-]{0,127}$/;
 const MAX_ENTRIES = 16;
 const MAX_CATALOG_BYTES = 12_288;
 
@@ -79,7 +80,7 @@ export class RuntimeCompetitionToolCatalog {
     const names = new Set<string>();
     for (const entry of availability) {
       const key = JSON.stringify([entry.toolName, entry.toolVersion]);
-      if (!NAME.test(entry.toolName) || !NAME.test(entry.toolVersion)
+      if (!NAME.test(entry.toolName) || !VERSION.test(entry.toolVersion)
         || typeof entry.available !== 'function' || names.has(key)) {
         throw new ProtocolError('INVALID_ARGUMENT', 'Invalid Competition tool availability binding');
       }
