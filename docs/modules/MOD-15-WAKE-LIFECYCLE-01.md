@@ -64,3 +64,28 @@ npm.cmd test --workspace=@personal-agent/voice-wake
 MOD-14 旧组合 PR #70 曾提供只读 `subscribeLifecycle` / `VoiceSessionManager.subscribe`
 绑定及播放状态抑制，但其代码已从当前 #61 净差异移出；当前包不包含生产音频源、
 授权提供者或算法。供应商选择、实际麦克风释放、误触率、回声与打断仍需独立真实验收。
+
+## 中文唤醒的条件路径（2026-09-25，只读选型，未接入）
+
+优先复用 MOD-14 的 Windows System.Speech 宿主，条件是目标机
+`InstalledRecognizers()` 读回可用的 zh-CN 引擎，并在同一授权音频流上完成中文限定词表
+识别、释放与误触/回声实测。微软提供限定 `Grammar`、连续
+`RecognizeAsync(RecognizeMode.Multiple)` 和 `SetInputToAudioStream` API；当前 #124
+宿主仅用 `DictationGrammar` 对完整片段调用 `Recognize()`，不能把它称为持续唤醒源。
+API 依据：[已安装识别器](https://learn.microsoft.com/en-us/dotnet/api/system.speech.recognition.speechrecognitionengine.installedrecognizers?view=netframework-4.8.1)、
+[异步识别](https://learn.microsoft.com/en-us/dotnet/api/system.speech.recognition.speechrecognitionengine.recognizeasync?view=netframework-4.8.1)。
+
+若目标机没有可用 zh-CN 引擎，下一候选是 `sherpa-onnx-node` 与
+`sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20`。官方提供 Windows x64/Node 包、中文英文
+KWS 模型和从同一路 16 kHz 单声道 PCM 转为 `Float32Array` 后输入 KeywordSpotter 的示例；
+本项目 Node 24/Windows 的实际二进制兼容、模型权重与词表再分发许可尚未验证。新增依赖
+也须由根锁文件负责人处理，因此此候选尚未获准安装或发布。依据：
+[安装说明](https://k2-fsa.github.io/sherpa/onnx/javascript-api/install.html)、
+[KWS 模型](https://k2-fsa.github.io/sherpa/onnx/kws/pretrained_models/index.html)、
+[Node 示例](https://github.com/k2-fsa/sherpa-onnx/blob/master/nodejs-addon-examples/test_keyword_spotter_transducer.js)。
+
+两条路径均依赖 MOD-11/14 的**同一个**显式授权、有限期限的实时 PCM 帧源；当前 #122
+只提供片段缓冲，#124 只提供整段识别/播报，尚无可供本包订阅的公开连续帧入口。
+撤销、期限、设备失效和关闭时需停源并读回实际麦克风释放；本包的同步
+`unsubscribe()` 只能证明已请求退订和旧事件失效，不能证明物理设备已关闭。
+此项随 MOD-14 语音链集中实机验收，不单独重复跑整链。
