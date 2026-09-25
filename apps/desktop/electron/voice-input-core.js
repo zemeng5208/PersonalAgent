@@ -1,4 +1,5 @@
 const CAPTURE_MS = 60_000;
+const SESSION_MS = 10 * 60_000;
 const TERMINAL = new Set(['stopped', 'cancelled', 'expired']);
 
 function safeFailure(error) {
@@ -63,15 +64,16 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
     if (active) throw Error('请先结束当前语音会话');
     microphoneHost.authorize();
     const controller = new AbortController();
-    const deadline = new Date(now() + CAPTURE_MS).toISOString();
-    const record = {senderId, controller, deadline, phase: 'acquiring', subscription: undefined,
-      buffer: createBuffer({signal: controller.signal, deadline, maxDurationMs: CAPTURE_MS}),
+    const captureDeadline = new Date(now() + CAPTURE_MS).toISOString();
+    const sessionDeadline = new Date(now() + SESSION_MS).toISOString();
+    const record = {senderId, controller, captureDeadline, sessionDeadline, phase: 'acquiring', subscription: undefined,
+      buffer: createBuffer({signal: controller.signal, deadline: sessionDeadline, maxDurationMs: CAPTURE_MS}),
       sessionId: undefined, replyId: undefined};
     active = record;
     lastError = '';
     publish();
     try {
-      record.subscription = source.subscribe({signal: controller.signal, deadline,
+      record.subscription = source.subscribe({signal: controller.signal, deadline: captureDeadline,
         onFrame: frame => {
           if (active !== record || record.phase !== 'acquiring' && record.phase !== 'listening') return;
           try { record.buffer.append(frame.data); }
@@ -80,7 +82,9 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
           }); }); }
         },
         onEnd: reason => {
-          if (active === record && ['acquiring', 'listening'].includes(record.phase)
+          if (active === record && record.phase === 'listening' && reason === 'deadline') {
+            queueMicrotask(() => { if (active === record) void finishCapture(senderId).catch(() => {}); });
+          } else if (active === record && ['acquiring', 'listening'].includes(record.phase)
             && reason !== 'cancelled') queueMicrotask(() => { if (active === record) void cancelCapture(senderId).catch(() => {
               lastError = '麦克风释放未确认'; publish();
             }); });
@@ -88,7 +92,7 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
       });
       await record.subscription.ready;
       if (active !== record || controller.signal.aborted) throw Error('语音采集已取消');
-      const session = await manager.start({deadline, signal: controller.signal, locale: 'zh-CN'});
+      const session = await manager.start({deadline: sessionDeadline, signal: controller.signal, locale: 'zh-CN'});
       record.sessionId = session.sessionId;
       record.phase = 'listening';
       publish();
