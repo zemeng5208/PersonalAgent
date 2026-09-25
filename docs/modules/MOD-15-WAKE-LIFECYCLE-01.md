@@ -8,7 +8,7 @@
 
 ## 交付边界
 
-本首片提供默认关闭的 `WakeLifecycleController`，消费两个注入端口：
+本包提供默认关闭的 `WakeLifecycleController`，消费两个注入端口：
 
 1. 可信宿主 `WakeAuthorizationPort.check()` 返回允许、有限 `expiresAtMs` 和宿主持有的
    `revocationSignal`；控制器不能签发、延长或重新绑定授权。
@@ -30,12 +30,32 @@ epoch；迟到的旧回调被丢弃，重复 stop/dispose 幂等。播放期间�
 `subscribe()` 内同步失败时不会产生伪 `listening`，监听器重入触发终态时也不会向后续
 监听器倒灌旧状态。该订阅不携带文本、音频、外部错误、授权对象或 Runtime 权限。
 
+## 共享 PCM 与限定唤醒词适配器
+
+`createPcmKeywordWakeSignalSource(pcm, detector)` 在本包内以结构接口组合可信宿主的单路
+授权 PCM 帧订阅与固定词检测器，不导入 `@personal-agent/voice`，不打开麦克风，也不接受
+Renderer 指定任意词表。检测器须在 `ready` 前真正完成限定语法的启动；PCM 源须在
+`ready` 前证明宿主捕获已启动。适配器先等待检测器就绪，再订阅同一授权 PCM 流，继续
+等待音源就绪；只有两者都成功且授权未取消，才完成 `WakeSignalSource.subscribe()` 并允许
+生命周期发布 `listening`。缺失任一 `ready` 均失败关闭，不能用第一帧代替就绪证明。
+
+帧输入只接受顺序递增、非空且不超过 3200 字节的 16 kHz 单声道 `pcm_s16le`；检测器
+同步消费帧并须自行在返回前复制需要保留的数据。适配器向生命周期仅转换固定 `wake`、
+`device_unavailable` 或 `error`，不转发原始音频、转写、置信度或异常文字。取消、撤销、
+期限、源/检测器结束和显式退订会抑制旧回调并释放两个句柄；即使取消发生在音源
+`subscribe()` 内，迟到句柄也会退订。适配器返回订阅的 `closed` 表示本订阅及检测器
+结束；生命周期控制器不向 UI 暴露该句柄。共享物理麦克风的完全关闭仍需 MOD-11 宿主
+核对最后引用、track 停止和设备读回。
+
+截至本次接线，#156 的现有 PCM 源尚未导出 `ready`，限定词检测器的实际导出也未交付；
+本适配器只证明结构接口和失败路径，不能声称已经连接真实麦克风或识别“你好小派”。
+
 ## 明确排除
 
 - 不打开麦克风、不录音、不实现 ASR/唤醒算法、不访问云端。
 - 不复制 MOD-14 的 `voice.start/stop`、播放/停止播报或 `task.cancel` 语义。
 - 不自动获取授权、不自动 `task.submit`，不把 Fake 事件描述为识别成功。
-- 本首片不包含 MOD-14 装配、真实硬件、真实误触/回声测试、供应商选择或发布接线。
+- 本包不包含 MOD-14 装配、真实硬件、真实误触/回声测试或发布接线。
 
 `@personal-agent/voice-wake/testing` 的 Fake 时钟、授权和事件源只证明生命周期分支。
 真实 VoicePort、录音设备、唤醒算法和宿主接线仍按接口目录保持 `unavailable`，须由后续
@@ -52,6 +72,9 @@ npm.cmd test --workspace=@personal-agent/voice-wake
 对 `packages/voice-wake/tsconfig.json` 运行定向编译，通过；随后以
 `node --test --test-isolation=none packages/voice-wake/test/voice-wake.test.mjs` 验证同一测试文件，
 23/23 通过。当前工作树没有独立 `node_modules`，因此没有运行普通 workspace 脚本或 `npm ci`。
+PCM 适配器增量复用同一编译入口，并定向运行
+`node --test --test-isolation=none packages/voice-wake/test/pcm-keyword-source.test.mjs`：
+5/5 通过，覆盖双重就绪、缺失音源 `ready`、等待中取消、订阅内重入撤销和释放失败。
 
 测试覆盖默认零订阅、显式启用单订阅、重复启用、撤销/过期/断设备/关闭/销毁、旧 epoch
 迟到回调、异步源就绪/撤销时迟到订阅释放、休眠后到期回调延迟、播放/冷却抑制、deadline/cancel、非合作授权、固定错误脱敏，以及生命周期

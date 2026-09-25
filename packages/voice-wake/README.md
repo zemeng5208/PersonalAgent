@@ -25,3 +25,11 @@ MOD-14 等本地宿主可通过 `subscribeLifecycle(listener)` 只读观察固�
 `@personal-agent/voice-wake/testing` 公开导出 Fake 时钟、授权端口和事件源，仅用于离线
 生命周期测试，不能冒充真实麦克风、识别成功或实机误触/回声指标。模块仍需 MOD-14
 装配、真实硬件验收及非作者评审后，才可评估后续接口状态。
+
+`createPcmKeywordWakeSignalSource(pcm, detector)` 是结构化接线入口：由可信宿主注入同一路
+授权 PCM 帧源和已经配置固定中文唤醒词的检测器，本包不导入 MOD-14，也不打开第二个
+麦克风。检测器的限定词表 `ready` 和音源的真实捕获 `ready` 都成功后，异步订阅才完成，
+随后生命周期才可发布 `listening`。缺少任一 `ready`、源结束、取消或过期均失败关闭；
+迟到回调无效，句柄释放可等待返回订阅的 `closed`。音源 `closed` 只证明本订阅引用释放，
+若 ASR 仍在使用同一物理麦克风，须由宿主检查最终引用和设备 track 才能证明完全关闭。
+当前 MOD-14 的 #156 PCM 草案尚无 `ready`，因此不能据此声明生产接线已可用。

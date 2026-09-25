@@ -681,3 +681,12 @@ export function createWakeLifecycleController(options: WakeLifecycleOptions): Wa
 }
 
 export {FakeWakeAuthorization, FakeWakeClock, FakeWakeSource} from './testing.js';
+export {
+  createPcmKeywordWakeSignalSource,
+  type WakeKeywordDetectorPort,
+  type WakeKeywordDetectorSession,
+  type WakePcmFrame,
+  type WakePcmFrameSourcePort,
+  type WakePcmFrameSubscription,
+  type WakePcmKeywordSubscription,
+} from './pcm-keyword-source.js';
