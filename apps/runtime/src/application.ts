@@ -4,6 +4,7 @@ export type {LocalRepairHostOptions, LocalRepairBinding, SubmitLocalRepairReques
 export {createAgentArtsRuntimeApplication} from './application/agentarts.js';
 export type {AgentArtsRuntimeApplicationOptions} from './application/agentarts.js';
 export {createMemoryProjectionApplication, createPendingImpactApplication} from './application/memory.js';
+export {ingestPublicSource} from './application/public-source.js';
 export type {
   FactChangeConfirmationPort,
   MemoryProjectionApplication,
