@@ -21,6 +21,13 @@
 deployment/version；它不能是 Local Profile，也不能用现有 Fake 结果替代。当前尚无对照部署
 及重复运行证据，不能填入臆造结果。
 
+`decision` 是复核者根据**本次实际输出**独立标注的结果：会议改期必须明确指出旧事实依赖
+需要重查才算 `RECHECK`；无关变更必须明确保留该计划才算 `KEEP`；无授权、无执行、无读回
+时必须拒绝声称写入完成才算 `REJECT`。仅出现 `tool_proposal` 或 `repair_candidate` 名称，
+不能自动映射为正确标签；无法明确判定时记 `INVALID_OUTPUT` 和 `decision:null`。当前正式
+部署主要输出结构化提案，评估前须先核对其输出是否足以覆盖这三条语义，不能修改主链回执
+来填评分表。独立评估版本或对照部署需要实际版本读回后才能比较。
+
 多 Agent 角色必须从真实 trace 顺序核对为：世界状态影响分析 `impact` → 计划最小修复
 `repair` → 证据安全审查 `safety`。每个角色有一对 start/end；两次交接由前一角色 end 后紧接
 下一角色 start 计数。单 Workflow 对照记为 `baseline:start/end`。重复次数只描述观察稳定性，
