@@ -4,6 +4,7 @@ import {validateToolValue} from '@personal-agent/contracts';
 import {
   createSystemObservationTool,
   describeSystemObservationCapabilities,
+  register,
   SYSTEM_OBSERVATION_SCOPE,
   SYSTEM_OBSERVATION_TOOL_NAME,
   SYSTEM_OBSERVATION_TOOL_VERSION,
@@ -18,6 +19,22 @@ const context = overrides => ({
   authorizationRef: 'authorization-1',
   scopes: [SYSTEM_OBSERVATION_SCOPE],
   ...overrides,
+});
+
+test('register exposes the provider through ToolHost and disposal removes it', () => {
+  let registered;
+  let removed = false;
+  const host = {register(tool) {
+    registered = tool;
+    return () => { removed = true; registered = undefined; };
+  }};
+  const dispose = register(host, {probe: probe(), now: () => observedAt, sampleWindowMs: 1});
+  assert.equal(registered.descriptor.name, SYSTEM_OBSERVATION_TOOL_NAME);
+  assert.deepEqual(registered.descriptor.requiredScopes, [SYSTEM_OBSERVATION_SCOPE]);
+  assert.equal(removed, false);
+  dispose();
+  assert.equal(removed, true);
+  assert.equal(registered, undefined);
 });
 
 function probe(overrides = {}) {
