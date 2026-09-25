@@ -82,6 +82,15 @@ test('cross-session, nonce, run, target and request substitution is refused', ()
   }
 });
 
+test('observation can refuse an absent or ambiguous target without a transport failure', () => {
+  const refusal = {kind: 'observation_refused', ...base, sessionId: ack.sessionId,
+    errorCode: 'TARGET_AMBIGUOUS'};
+  validateWindowsHostObservation(observe, refusal);
+  assert.throws(() => validateWindowsHostObservation(observe, {...refusal, requestId: 'other'}));
+  assert.throws(() => parseWindowsHostFrame({...refusal, errorCode: 'SUCCESS'}));
+  assert.throws(() => parseWindowsHostFrame({...refusal, hwnd: 123}));
+});
+
 test('malformed and capability-forged frames fail closed', () => {
   for (const frame of [
     {...hello, hwnd: 1}, {...observe, capability: 'computer.shell'},

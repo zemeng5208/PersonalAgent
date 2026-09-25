@@ -26,6 +26,11 @@ targetRef 作为历史身份，绝不能用它再次执行。未知版本、字�
 必需的内容前置条件，`replacementText` 是待写正文。二者只走受限本地 Pipe，不进
 Renderer、公开 Evidence、日志或模型回显。
 
+观察没有唯一可信的记事本目标时，Host 回 `observation_refused`，携带原 `requestId`、
+当前 `sessionId` 和有限 `errorCode`（如 `NOT_FOUND`、`TARGET_AMBIGUOUS`、
+`UNAUTHORIZED`）。拒绝不返回 HWND/PID、标题、路径或候选列表；断连仍按传输故障处理，
+不能由它推断写前安全拒绝。
+
 `execute` 只能由已通过 Runtime/Policy/ToolGateway 检查的可信组合入口发送。其
 `authorizationRef`、`taskId`、`runId`、`toolName`/`toolVersion`、`targetRef`、
 `argumentsDigest`、deadline 必须与授权记录和实际 ToolGateway 调用一致。

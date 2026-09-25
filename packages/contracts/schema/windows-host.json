@@ -8,6 +8,7 @@
     {"$ref": "#/$defs/bind"},
     {"$ref": "#/$defs/observe"},
     {"$ref": "#/$defs/observed"},
+    {"$ref": "#/$defs/observationRefused"},
     {"$ref": "#/$defs/execute"},
     {"$ref": "#/$defs/cancel"},
     {"$ref": "#/$defs/status"},
@@ -54,6 +55,13 @@
         "requestId": {"$ref": "#/$defs/id"}, "sessionId": {"$ref": "#/$defs/id"},
         "targetRef": {"$ref": "#/$defs/targetRef"}, "expiresAt": {"$ref": "#/$defs/utc"},
         "source": {"const": "windows-uia"}}
+    },
+    "observationRefused": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "protocolVersion", "requestId", "sessionId", "errorCode"],
+      "properties": {"kind": {"const": "observation_refused"}, "protocolVersion": {"$ref": "#/$defs/version"},
+        "requestId": {"$ref": "#/$defs/id"}, "sessionId": {"$ref": "#/$defs/id"},
+        "errorCode": {"enum": ["NOT_FOUND", "TARGET_AMBIGUOUS", "TARGET_STALE", "UNAUTHORIZED", "CANCELLED", "TIMEOUT", "EXTERNAL_FAILURE"]}}
     },
     "execute": {
       "type": "object", "additionalProperties": false,

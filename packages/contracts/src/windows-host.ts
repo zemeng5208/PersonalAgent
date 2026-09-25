@@ -12,6 +12,8 @@ export type WindowsHostHelloAck = Base & {kind: 'hello_ack'; clientNonce: string
 export type WindowsHostBind = Session & {kind: 'bind'; hostNonce: string};
 export type WindowsHostObserve = Session & {kind: 'observe'; deadline: string; capability: 'notepad.replace_text'};
 export type WindowsHostObserved = Session & {kind: 'observed'; targetRef: string; expiresAt: string; source: 'windows-uia'};
+export type WindowsHostObservationRefused = Session & {kind: 'observation_refused';
+  errorCode: 'NOT_FOUND' | 'TARGET_AMBIGUOUS' | 'TARGET_STALE' | 'UNAUTHORIZED' | 'CANCELLED' | 'TIMEOUT' | 'EXTERNAL_FAILURE'};
 export type WindowsHostExecute = Session & {
   kind: 'execute'; taskId: string; runId: string; toolName: typeof WINDOWS_HOST_TOOL_NAME;
   toolVersion: '1.0.0'; authorizationRef: string; argumentsDigest: string;
@@ -30,7 +32,7 @@ export type WindowsHostResult = Session & {
   startedAt: string; finishedAt: string; evidenceRef?: string; errorCode?: string;
 };
 export type WindowsHostFrame = WindowsHostHello | WindowsHostHelloAck | WindowsHostBind
-  | WindowsHostObserve | WindowsHostObserved | WindowsHostExecute | WindowsHostCancel
+  | WindowsHostObserve | WindowsHostObserved | WindowsHostObservationRefused | WindowsHostExecute | WindowsHostCancel
   | WindowsHostStatus | WindowsHostStatusReply | WindowsHostResult;
 
 const ajv = new Ajv2020({allErrors: true, strict: false});
@@ -76,7 +78,8 @@ export function validateWindowsHostHandshake(hello: WindowsHostHello, ack: Windo
   }
 }
 
-export function validateWindowsHostObservation(request: WindowsHostObserve, reply: WindowsHostObserved): void {
+export function validateWindowsHostObservation(request: WindowsHostObserve,
+  reply: WindowsHostObserved | WindowsHostObservationRefused): void {
   parseWindowsHostFrame(request); parseWindowsHostFrame(reply);
   if (request.requestId !== reply.requestId || request.sessionId !== reply.sessionId
     || request.protocolVersion !== reply.protocolVersion) invalid('Windows Host observation correlation mismatch');
