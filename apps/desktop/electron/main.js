@@ -11,6 +11,7 @@ import {createDesktopHost} from './desktop-host.js';
 import {desktopDataPaths} from './data-paths.js';
 import {restoreSyntheticRepairSubmission} from './competition-repair-submission.js';
 import {readCapabilityDirectory} from './capability-directory.js';
+import {readApprovalPage} from './approval-history.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -768,6 +769,10 @@ async function action(event, name, payload) {
     return refresh(payload);
   }
   if (name === 'capability.list') { await syncCapabilities(); publish(); return {manifests: capabilities, health}; }
+  if (name === 'approval.history') {
+    if (sender !== admin) throw Error('授权历史只能从管理后台读取');
+    return readApprovalPage(client, payload);
+  }
   if (name === 'settings.get') return client.call('settings.get', {namespace: String(payload ?? 'desktop')});
   if (name === 'settings.update') return client.call('settings.update', payload);
   if (name === 'authorization.respond') {

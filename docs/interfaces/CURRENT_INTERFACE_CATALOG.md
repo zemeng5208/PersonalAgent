@@ -28,10 +28,9 @@
 
 ### 事实变化消费开发增量
 
-分支 `codex/mod-09b-memory-ports-rebuild` 在最新 main 上重建 provisional 的进程内
-`MemoryQueryPort`、`FactChangeFeedPort`、批次解析与可信宿主 Fake。它区分 query snapshot、
-feed 水位、消费 checkpoint 和 graphRevision；读者不能任意 ack 序号。Fake 消费状态机不证明
-生产持久投影或原子确认。真实 FactChangeFeed 提供者与跨重启 MOD-27/28 投影仍 unavailable，
+PR #89～#91 已合入 provisional 的 `MemoryQueryPort`、`FactChangeFeedPort`、批次解析、
+Fake、SQLite 提供者与可恢复投影。它区分 query snapshot、feed 水位、消费 checkpoint
+和 graphRevision；读者不能任意 ack 序号。离线持久实现不证明真实事实来源或生产自动消费，
 不得新增 wire capability 或宣称 frozen。详见
 [MOD-28-FACT-CHANGE-FEED-01](../modules/MOD-28-FACT-CHANGE-FEED-01.md)。
 
@@ -163,7 +162,7 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | 凭据 | SecretStore save/replace/delete/status 与迁移 | 只有 ConnectorHost 私有 read 端口；无公共管理面或 Windows 适配 | MOD-05 `goo122`、MOD-16 `zemeng` |
 | 通知 | Runtime 列表/恢复、已读/隐藏、策略配置与 Desktop 展示 | NotificationService 已集成但尚未接 wire 或 Desktop；`notification.created` 仍无生产发布链 | MOD-23 `Potatos498`、MOD-13 `zemeng` |
 | 语音 | `voice.start` / `voice.stop`、ASR/TTS 流和设备适配 | session/wake/transcript consumer 仍在冲突的堆叠分支，main 无生产提供者；真实供应商、流协议和设备验收未提供 | MOD-14/15 `zemeng` |
-| 知识 | `KnowledgePort`、Obsidian/LLM Wiki | PR #93～#97 已合并：provisional `KnowledgePort`、脱机只读适配器、显式 `knowledge.search` ToolGateway/Policy 接线及 Obsidian 插件侧只读适配器均有合成数据测试。MOD-08E 的 Fake Competition 提案/本地审批离线测试已通过，待评审；真实 Vault 授权/验收、生产 Runtime 注册、可安装插件、私人结果云端发送控制和 LLM Wiki 仍 unavailable | MOD-08 `goo122` |
+| 知识 | `KnowledgePort`、Obsidian/LLM Wiki | PR #93～#95、#97、#98 已合并：provisional `KnowledgePort`、脱机及 Obsidian 只读适配器、显式 `knowledge.search` ToolGateway/Policy 接线、公开演示资料的 Fake Competition 审批链已完成离线验收。真实 Vault 授权/验收、生产 Runtime 注册、可安装插件、私人结果云端发送控制和 LLM Wiki 仍 unavailable | MOD-08 `goo122` |
 | 记忆 | 生产 `MemoryQueryPort` / `FactChangeFeed` 提供者、确认消费、修正/删除 | PR #89、#90、#91 已合并 provisional 端口、Fake、SQLite 恢复与确认后原子激活投影；生产 Runtime capability、真实来源和删除验收仍未提供 | MOD-09 `goo122` |
 | MCP | 本地 MCP Host/Client 端口 | 对应 package、注册适配和真实调用未提供 | MOD-06 `goo122` |
 | Skills | 本地 Skill 加载/版本/执行端口 | 对应 package 和闭环未提供 | MOD-07 `goo122` |
@@ -186,7 +185,7 @@ PR #36、#49 已进入 main，提供文字 Coordination/CloudAgent 与 Runtime �
 
 ### 6.2 世界状态与认知面（provisional）
 
-main 已包含版本化 CoordinationStore、SQLite/Fake `AtomicCoordinationStorePort.appendBatch`、事务 revision 校验与 rollback，以及通过该原子端口执行的显式修复预览/提交；PR #89 已合并 provisional `MemoryQueryPort`、`FactChangeFeedPort` 与进程内 Fake，PR #90 已合并 SQLite 事实、查询快照及 delivery checkpoint 跨重启恢复。自动事实投影、Goal 侧事务 Inbox、真实事实来源、删除和 AgentArts/Evidence 闭环仍未交付。
+main 已包含版本化 CoordinationStore、SQLite/Fake `AtomicCoordinationStorePort.appendBatch`、事务 revision 校验与 rollback，以及通过该原子端口执行的显式修复预览/提交；PR #89～#91 已合并 provisional Memory 端口/Fake、SQLite 查询与 delivery checkpoint、Goal 侧未生效暂存及确认后原子激活投影。生产自动消费、真实事实来源、删除和 AgentArts/Evidence 闭环仍未交付。
 
 ### 6.3 桌面、语音、工具与通知增量（provisional）
 
@@ -231,11 +230,11 @@ PR #90 已由非作者批准并合并为 `f56059a`。`@personal-agent/memory/sql
 
 ### MOD-09D-MEMORY-GOAL-PROJECTION-01 开发登记（2026-09-22）
 
-分支 `codex/mod-09d-memory-goal-projection` 在评审修复中采用未生效暂存 → Memory provider
+PR #91 已经非作者评审、Foundation CI 通过并合并；采用未生效暂存 → Memory provider
 确认 → 本地原子激活：事实节点、精确 FactRef → NodeRef 映射、event/batch 去重、待重检
 记录和本地回执同事务提交。确认拒绝不暴露旧 scope 事实；确认后、激活前中断从暂存恢复。
 它不宣称跨数据库原子。修复后的 Runtime 68/68、架构门禁 3/3 与根 `npm run check`
-已通过；新 head 仍需 CI 和非作者复审。
+已通过；本记录只覆盖离线与合成数据。
 该入口仍为 provisional，未注册生产 composition、自动调度或 capability；详见
 [MOD-09D 工作包](../modules/MOD-09D-MEMORY-GOAL-PROJECTION-01.md)。
 
@@ -257,6 +256,6 @@ PR #90 已由非作者批准并合并为 `f56059a`。`@personal-agent/memory/sql
 Competition 工具提案/Runtime Application/Desktop 装配仍未由此项交付，运行能力保持 unavailable。
 本包接口保持 provisional，非作者评审前不冻结。
 
-截至 2026-09-22，**冻结范围仍只有 Core Runtime Profile 1 的消息、任务、会话与审批只读查询子集；不冻结整套协议、外部模型工具调用或 AgentArts 编排。** main 中已有 Competition 的离线 Coordination/审批工具循环、版本图、原子存储、显式修复预览/提交、受限工作区读取，以及 provisional 的 SQLite 事实查询/变化流；自动事实投影、Runtime Memory capability 和语音消费仍未进入 main。
+截至 2026-09-24，**冻结范围仍只有 Core Runtime Profile 1 的消息、任务、会话与审批只读查询子集；不冻结整套协议、外部模型工具调用或 AgentArts 编排。** main 中已有 Competition 的离线 Coordination/审批工具循环、版本图、原子存储、显式修复预览/提交、受限工作区读取、公开演示知识检索，以及 provisional 的 SQLite 事实查询/变化流与可恢复投影；生产自动消费、Runtime Memory capability 和语音消费仍未进入 main。
 
 真实 AgentArts deployment/API/trace、目标系统工具读回、完整 Evidence、真实语音设备和外部事实提供者仍 `unavailable`。Fake、合成评估、HTTP 200、配置成功或平台截图都不能提升这些状态；正式比赛路径不得静默回退 Local。

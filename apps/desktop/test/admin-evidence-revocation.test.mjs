@@ -91,6 +91,7 @@ test('revocation receipt requires absent grant readback; failure stays unconfirm
   let result = {revoked: true, grantPresent: true, approvalRevision: 2};
   const calls = [];
   const ui = await harness(t, async (action, payload) => {
+    if (action === 'approval.history') return {items: []};
     calls.push([action, payload]);
     return result;
   });
@@ -105,6 +106,29 @@ test('revocation receipt requires absent grant readback; failure stays unconfirm
   assert.doesNotMatch(ui.html(), /已撤销（授权存储读回）/);
   result = {revoked: true, grantPresent: false, approvalRevision: 2};
   await ui.buttons()[0].listeners.get('click')();
+  assert.match(ui.html(), /已撤销（授权存储读回）/);
+  assert.doesNotMatch(ui.html(), /data-revoke=/);
+});
+
+test('allowed approval history reaches revoke and shows only persisted readback', async t => {
+  const calls = [];
+  const allowed = {approvalId: 'history-1', taskId: 'task-1', revision: 2,
+    state: 'allowed', action: 'fixture.write', scopes: ['fixture:write'],
+    argumentSummary: 'redacted', expiresAt: '2026-09-25T12:00:00.000Z'};
+  const ui = await harness(t, async (action, payload) => {
+    calls.push([action, payload]);
+    if (action === 'approval.history') return {items: [allowed]};
+    if (action === 'authorization.revoke') return {revoked: true,
+      grantPresent: false, approvalRevision: 2};
+    throw Error('unexpected action');
+  });
+  ui.render({...ui.base, adminNavigation: {page: 'authorizations', revision: 1}});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(ui.html(), /history-1/);
+  assert.match(ui.html(), /data-revoke="history-1"/);
+  await ui.buttons()[0].listeners.get('click')();
+  assert.deepEqual(calls.at(-1), ['authorization.revoke', {taskId: 'task-1',
+    authorizationRef: 'history-1', expectedApprovalRevision: 2}]);
   assert.match(ui.html(), /已撤销（授权存储读回）/);
   assert.doesNotMatch(ui.html(), /data-revoke=/);
 });
