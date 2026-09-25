@@ -55,7 +55,7 @@ export function taskTable(data, escape, evidenceStates = new Map()) {
     const evidence = evidenceCount
       ? `<button class="btn btn-sm" data-evidence-task="${escape(task.taskId)}">读取执行元数据</button><div data-evidence-panel="${escape(task.taskId)}">${evidencePanelHtml(evidenceStates.get(task.taskId), escape)}</div>`
       : '<span class="muted">尚无 Evidence 引用。</span>';
-    return `<tr><td>${escape(task.taskId)}</td><td>${stateNames[task.state] ?? escape(task.state)}</td><td>${task.revision}</td><td>${escape(summary)}</td><td><details><summary>步骤 ${steps.length} 项 · Evidence 引用 ${evidenceCount} 条</summary>${stepList}${evidence}</details></td></tr>`;
+    return `<tr><td>${escape(task.taskId)}</td><td>${stateNames[task.state] ?? escape(task.state)}</td><td>${task.revision}</td><td>${escape(summary)}</td><td><details ${evidenceStates.has(task.taskId) ? 'open' : ''}><summary>步骤 ${steps.length} 项 · Evidence 引用 ${evidenceCount} 条</summary>${stepList}${evidence}</details></td></tr>`;
   }).join('');
   return `<div class="sheet"><h2>任务记录</h2><p class="muted">只展示 Runtime 任务快照；Evidence 引用数量不代表目标系统已核实。此接口未提供任务来源或云端 trace。</p><div class="table-scroll"><table><thead><tr><th>任务</th><th>状态</th><th>版本</th><th>结果摘要</th><th>步骤与证据</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="empty">还没有任务<br>从悬浮面板开始新的对话</td></tr>'}</tbody></table></div></div>`;
 }
