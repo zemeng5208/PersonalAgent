@@ -1,11 +1,13 @@
 import {appendVersion, currentNodes, GraphError, parseGraph} from './index.js';
-import type {NodeInput, NodeVersion} from './index.js';
+import type {NodeInput, NodeRef, NodeVersion} from './index.js';
 import type {CoordinationStorePort} from './store.js';
 
 /** Provisional host-side commands. The host binds the store and authorizes the user. */
 export type GoalInput = Omit<NodeInput, 'kind'>;
-export interface GoalResult { graphRevision: number; goal: NodeVersion; }
+/** Exact old/new refs for an impact consumer; no independent event stream. */
+export interface GoalResult { graphRevision: number; previous: NodeRef | null; goal: NodeVersion; }
 export interface GoalList { graphRevision: number; goals: NodeVersion[]; }
+export interface GoalRead { graphRevision: number; goal: NodeVersion | null; }
 const goalKeys = ['id', 'summary', 'sourceRef', 'validFrom', 'validUntil',
   'sensitivity', 'state', 'reason', 'dependencies'];
 
@@ -14,6 +16,15 @@ export function listGoals(store: CoordinationStorePort, revision?: number): Goal
   const snapshot = parseGraph(store.read(revision));
   return {graphRevision: snapshot.revision,
     goals: currentNodes(snapshot).filter(node => node.kind === 'goal')};
+}
+
+/** Read one goal without returning unrelated graph nodes to the caller. */
+export function getGoal(store: CoordinationStorePort, id: string, revision?: number): GoalRead {
+  if (typeof id !== 'string' || !id.trim()) {
+    throw new GraphError('INVALID_ARGUMENT', 'Invalid goal ID');
+  }
+  const list = listGoals(store, revision);
+  return {graphRevision: list.graphRevision, goal: list.goals.find(goal => goal.id === id) ?? null};
 }
 
 function candidate(store: CoordinationStorePort, expectedGraphRevision: number, input: GoalInput) {
@@ -29,10 +40,18 @@ function candidate(store: CoordinationStorePort, expectedGraphRevision: number, 
   return snapshot;
 }
 
-function receipt(store: CoordinationStorePort, expectedGraphRevision: number, input: GoalInput): GoalResult {
+function receipt(
+  store: CoordinationStorePort, expectedGraphRevision: number,
+  previous: NodeRef | null, input: GoalInput
+): GoalResult {
   const committed = parseGraph(store.append(expectedGraphRevision, {...input, kind: 'goal'}));
-  const goal = committed.history.at(-1)!;
-  return {graphRevision: committed.revision, goal};
+  const goal = committed.history.at(-1);
+  if (!goal || goal.kind !== 'goal' || goal.id !== input.id
+    || committed.revision !== expectedGraphRevision + 1
+    || goal.revision !== (previous?.revision ?? 0) + 1) {
+    throw new GraphError('INVALID_ARGUMENT', 'Goal store returned an invalid commit');
+  }
+  return {graphRevision: committed.revision, previous, goal};
 }
 
 /** New IDs only; a withdrawn ID remains reserved by its history. */
@@ -41,7 +60,7 @@ export function createGoal(store: CoordinationStorePort, expectedGraphRevision: 
   if (snapshot.history.some(node => node.id === input.id)) {
     throw new GraphError('REVISION_CONFLICT', 'Goal ID already exists');
   }
-  return receipt(store, expectedGraphRevision, input);
+  return receipt(store, expectedGraphRevision, null, input);
 }
 
 /** Explicit full replacement, including source and reason, against two exact revisions. */
@@ -58,5 +77,5 @@ export function reviseGoal(
   if (current.revision !== expectedGoalRevision) {
     throw new GraphError('REVISION_CONFLICT', 'Goal revision changed');
   }
-  return receipt(store, expectedGraphRevision, input);
+  return receipt(store, expectedGraphRevision, {id: current.id, revision: current.revision}, input);
 }

@@ -7,11 +7,13 @@
 ## 增量语义
 
 `@personal-agent/goals/commands` 在已由可信宿主绑定的 `CoordinationStorePort` 上提供
-`createGoal`、`reviseGoal` 和 `listGoals`。写入复用已有 `NodeInput`、版本历史与存储提交时
+`createGoal`、`reviseGoal`、`getGoal` 和 `listGoals`。写入复用已有 `NodeInput`、版本历史与存储提交时
 CAS，不添加 wire 操作、数据库、迁移或任务状态。Goal 命令需要明确的 `sourceRef`、原因、
 有效期、敏感级别、依赖引用和预期图版本。修订另需当前 Goal 节点版本。完整替换输入使
 来源或依赖变化显式可见；撤回追加版本，ID 不复用。查询返回当前各 Goal 的精确版本与
-图版本，也可读取历史图版本；撤回记录仍可见。
+图版本，也可读取历史图版本；撤回记录仍可见。写入回执包含旧 Goal 精确引用（新建为
+null）、新版本与提交后的 graph revision，供 MOD-28 在同一持久快照上分析影响；
+它不是独立、可重放的事件流。`getGoal` 只向调用者返回目标节点，避免暴露无关图节点。
 
 通用图节点仍允许内部可信消费者按现有接口写入；此入口只为用户目标接线提供额外的
 创建/修订语义和冲突检查。MOD-28 可继续从同一存储快照读取精确 Goal 版本和依赖，
@@ -25,6 +27,8 @@ CAS，不添加 wire 操作、数据库、迁移或任务状态。Goal 命令需
 - 本工作树验证：使用已安装的 TypeScript 5.9.3 工具链和 `@types/node` 路径编译
   goals；`node --test packages/goals/test/*.test.mjs` 14/14 通过；
   `npm run check:architecture` 3/3 通过；`git diff --check` 通过。
+  后续补单目标查询和精确变更回执后，仅重跑受影响的 commands 定向用例 5/5，
+  TypeScript 编译通过；未重复其他已通过检查。
   当前工作树未安装 `node_modules`，因此没有运行 `npm ci` 或全仓 `check`。
 - 宿主接线待整合者在 Runtime/Desktop 的既有安全路径完成：绑定当前用户的 store，
   由宿主产生/验证 `sourceRef` 并授权目标写入；UI 展示写后持久读回及冲突刷新。

@@ -53,16 +53,20 @@ API or evidence that the proposed repair is semantically correct.
 
 ## Host-bound goal commands (provisional)
 
-`@personal-agent/goals/commands` offers `createGoal`, `reviseGoal`, and
-`listGoals` for a host that already provisioned and authorized a bound
+`@personal-agent/goals/commands` offers `createGoal`, `reviseGoal`, `getGoal`,
+and `listGoals` for a host that already provisioned and authorized a bound
 `CoordinationStorePort`. The host supplies a stable goal ID, `sourceRef`,
 explicit validity, sensitivity, reason, and exact dependencies. Creation
 rejects any reused ID, including a withdrawn one. Revision requires both
 the graph revision and the current goal revision; the store's commit-time CAS
-still decides a concurrent write. A conflict is returned as `GraphError`
+still decides a concurrent write. The write receipt contains the exact prior
+Goal reference (or null on creation), the committed Goal version, and graph
+revision so MOD-28 can analyze the persisted change. This is not a durable
+event stream. A conflict is returned as `GraphError`
 with `REVISION_CONFLICT`; the caller must reread and seek a fresh edit.
 
-`listGoals` returns the latest version of each goal, including withdrawn
+`getGoal` returns one Goal or null without exposing unrelated graph nodes to
+the caller. `listGoals` returns the latest version of each goal, including withdrawn
 goals, with the graph revision. It can read an earlier graph revision without
 changing current state. Commands preserve each source and all prior versions;
 they do not establish that a source is authentic, authorize a user, delete

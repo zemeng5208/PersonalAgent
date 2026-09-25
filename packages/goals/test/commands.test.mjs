@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {createGoal, listGoals, reviseGoal} from '../dist/commands.js';
+import {createGoal, getGoal, listGoals, reviseGoal} from '../dist/commands.js';
 import {FakeCoordinationStoreHost} from '../dist/store.js';
 
 const goal = (id, summary = '准备会议', sourceRef = 'user:request-1') => ({
@@ -15,15 +15,20 @@ test('host-bound goal commands preserve source and exact versions for consumer q
   assert.equal(created.graphRevision, 1);
   assert.deepEqual([created.goal.kind, created.goal.revision, created.goal.sourceRef],
     ['goal', 1, 'user:request-1']);
+  assert.equal(created.previous, null);
   const revised = reviseGoal(store, 1, 1,
     {...goal('meeting', '准备线上会议', 'user:request-2'), reason: 'user correction'});
   assert.deepEqual([revised.graphRevision, revised.goal.revision, revised.goal.sourceRef],
     [2, 2, 'user:request-2']);
+  assert.deepEqual(revised.previous, {id: 'meeting', revision: 1});
   assert.equal(listGoals(store, 1).goals[0].summary, '准备会议');
+  assert.equal(getGoal(store, 'meeting', 1).goal.revision, 1);
+  assert.equal(getGoal(store, 'missing').goal, null);
   const current = listGoals(store);
   assert.deepEqual([current.graphRevision, current.goals[0].summary], [2, '准备线上会议']);
   current.goals[0].summary = 'mutated by caller';
   assert.equal(listGoals(store).goals[0].summary, '准备线上会议');
+  assert.equal(getGoal(store, 'meeting').goal.revision, 2);
 });
 
 test('goal ID and both revisions reject stale writes without changing the bound store', () => {
@@ -62,6 +67,7 @@ test('withdrawal stays queryable and IDs cannot be reused; malformed input is re
   assert.throws(() => reviseGoal(store, 2, 1, goal('meeting')), {code: 'REVISION_CONFLICT'});
   assert.throws(() => createGoal(store, 2, {...goal('new'), kind: 'fact'}),
     {code: 'INVALID_ARGUMENT'});
+  assert.throws(() => getGoal(store, ''), {code: 'INVALID_ARGUMENT'});
   assert.equal(store.read().revision, 2);
 });
 
