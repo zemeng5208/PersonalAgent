@@ -95,11 +95,15 @@ MOD-04B 在其忽略目录保存了 `mod04b-nonmeeting-2026-09-25T11-30-13.198Z.
 
 MOD-29 的唯一平台记录只读关联者读回 trace `668cded1dd4cb0de4a38bae90cf9736d`，时间
 为 19:30:13 CST；其中合成 factChange/draft-review 输入及末段 `repair_candidate` 与本地
-回执语义相符。三个 UserInput/模型 span 均未给出各设计角色名称或交接标识。根 span 的
-`resource_version:"draft"` 不能当作该请求的运行时 deployment version；平台也未提供
-请求级费用。本包未自行访问平台或再次调用。
+回执语义相符。MOD-29 对同一 trace 做限定结构复查：三段 UserInput 是同级节点，各自
+包含开始→大模型→结束；逐段 `gen_ai.resource.id` 和 `gen_ai.agent.name` 仅标主协调器
+`32d4d44c-eade-4f3f-8f76-209c74609e79`。可见元数据没有三个源工作流 ID、子角色名、
+跨段 parent/links 或交接映射。因此它证明三段模型处理，**不能证明三设计角色的实际路由
+和交接，也不能据此断言它们没有执行**。根 span 的 `resource_version:"draft"` 不能当作
+该请求的运行时 deployment version；平台也未提供请求级费用。本包未自行访问平台或再次调用。
 
 该回执没有固定案例 ID 和可独立复核的 `KEEP/RECHECK/REJECT` 判读，也没有可输入评分器的
 逐角色事件；平台 trace 与本地请求仅条件关联。因此不创建伪造的 `scoreAgentArtsRuns` 记录。
 此处仅报告协议、事件数量及条件关联的平台耗时/token，不从三个 Workflow 数量推断三角色
-协作有效。
+协作有效。若比赛效果陈述需要角色交接证据，应由 MOD-30 核对云配置和平台可观测字段，
+取得能关联到源工作流身份的同链回执；MOD-31 才按实际字段评分。
