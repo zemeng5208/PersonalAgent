@@ -15,6 +15,15 @@ Competition 文字接线由可信 Desktop 主进程显式选择，不由 Rendere
 初始化或调用明确失败；Competition 模式不会回退到盘古、Local Agent 或 Fake。
 管理后台原有盘古配置、测试和启停动作在 Competition 模式下会明确拒绝，避免把
 Local 配置误写成 AgentArts 状态。
+
+Competition 工具目录由主进程从实际注册的工具生成。当前只选择
+`workspace.read_text@1.0.0`，根目录固定在随 Desktop 提供的合成夹具目录，
+且 `meeting-update.json` 必须仍是预期内容、可读取、未过期且任务未取消。
+云端只收到受限输入 Schema；只有提案精确请求这一个文件，并经本地 Policy、
+ToolGateway 与结果校验后，才会投影合成正文。原始工具结果、Evidence、绝对路径、
+凭据和其他文件内容不外发。Goal 工具仍在受信宿主目标操作入口执行，本片不列入
+云端可选目录；普通目标读写闭环等待各自已登记的公共接口和审批验收。
+目录选中只证明本地合成读取条件，AgentArts 部署与真实调用仍须独立读回验证。
 显式空 `PA_RUNTIME_PROFILE`、空/非法 `PA_AGENTARTS_INVOKE_MODE` 以及
 Competition 与 `--fake-model`/`PA_DESKTOP_MODEL_MODE=fake` 的组合都会拒绝启动；
 只有完全未提供 profile 时才保留既有 Local 默认，`--fake-runtime` 仍是显式离线入口。

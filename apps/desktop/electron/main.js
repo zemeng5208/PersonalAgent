@@ -10,6 +10,7 @@ import {createDesktopHost} from './desktop-host.js';
 import {desktopDataPaths} from './data-paths.js';
 import {createMicrophonePermissionGate} from './microphone-permission.js';
 import {createMicrophoneCaptureHost} from './microphone-capture-host.js';
+import {createDesktopEvidenceHost} from './evidence-host.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -100,6 +101,8 @@ let voiceInput;
 let voiceDisposed = false;
 let voiceDisposal;
 let voiceDisposalFailed = false;
+let goalHost;
+let competitionCatalog;
 
 function snapshot(surface) {
   return {
@@ -547,8 +550,22 @@ async function initializeRuntime() {
       if (!process.env.PA_AGENTARTS_AUTHORIZATION) {
         throw Error('PA_AGENTARTS_AUTHORIZATION 未配置；Competition Runtime 不会启动');
       }
+      const {createGoalHost} = await import('./goal-host.js');
+      const {createWorkspaceReadTool} = await import('@personal-agent/coding-tools');
+      const {createDesktopCompetitionToolCatalog} = await import('./competition-tool-catalog.js');
+      const namespace = desktopHost.userNamespace;
+      goalHost = createGoalHost(namespace);
+      competitionCatalog = createDesktopCompetitionToolCatalog({
+        rootPath: path.resolve(dir, '../fixtures/agentarts'), createWorkspaceReadTool,
+      });
       runtimeApplication = runtimeModule.createAgentArtsRuntimeApplication({
         path: dbPath,
+        hostUserNamespace: namespace,
+        tools: [...goalHost.tools, competitionCatalog.tool],
+        responseMode: 'tool-proposal-json',
+        initialRequestMode: 'goal-with-tools-json',
+        competitionToolAvailability: [competitionCatalog.availability],
+        competitionToolExports: [competitionCatalog.export],
         gatewayUrl: process.env.PA_AGENTARTS_GATEWAY_URL ?? '',
         runtimeName: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
         invokeMode: agentArtsInvokeMode,
@@ -560,6 +577,8 @@ async function initializeRuntime() {
           },
         },
       });
+      goalHost.bind(runtimeApplication);
+      goalHost.resumeApproved();
     } else {
       const createApplication = process.argv.includes('--weather-tools')
         ? (await import('@personal-agent/runtime/weather')).createOpenMeteoApplication
@@ -677,6 +696,44 @@ async function action(event, name, payload) {
   }
   if (sender === orb) throw Error('Action unavailable from orb');
   if (!client) throw Error('Runtime 未连接，此操作尚不可用');
+  if (['evidence.list', 'evidence.get', 'authorization.revoke'].includes(name)) {
+    if (sender !== admin) throw Error('Evidence 操作仅允许可信后台窗口');
+    const namespace = desktopHost.userNamespace;
+    const evidenceHost = createDesktopEvidenceHost({
+      application: runtimeApplication,
+      subjectRef: namespace,
+      isAdminSession: () => admin === sender && !sender.isDestroyed()
+        && sender.webContents === event.sender && !sender.webContents.isDestroyed(),
+      ownsTask: task => {
+        const turn = conversations?.turns.get(task.taskId);
+        if (turn && ['panel', 'workspace'].includes(turn.surface)
+          && task.conversationId === `desktop-${turn.surface}`) return true;
+        if (goalHost && task.conversationId === `host-tool:${namespace}`) {
+          try { goalHost.readTask(task.taskId); return true; } catch { return false; }
+        }
+        return false;
+      },
+    });
+    if (name === 'evidence.list') return evidenceHost.list(payload);
+    if (name === 'evidence.get') return evidenceHost.get(payload);
+    return evidenceHost.revoke(payload);
+  }
+  if (name.startsWith('goal.')) {
+    if (sender !== panel && sender !== workspace) throw Error('Goal 操作只能从面板或工作区调用');
+    if (!goalHost) throw Error('Goal 写入仅在 Competition Profile 的可信宿主中可用');
+    if (name === 'goal.list') return goalHost.list();
+    if (name === 'goal.get') return goalHost.get(payload);
+    if (name === 'goal.create') return goalHost.create(payload);
+    if (name === 'goal.revise') return goalHost.revise(payload);
+    if (name === 'goal.readTask') return goalHost.readTask(payload);
+    if (name === 'goal.listTasks') return goalHost.listTasks();
+    if (name === 'goal.cancel') {
+      goalHost.readTask(payload);
+      const result = await client.call('task.cancel', {taskId: payload, reason: '用户取消 Goal 任务'});
+      return {...result, task: goalHost.readTask(payload)};
+    }
+    throw Error('Unsupported Goal action');
+  }
   if (name === 'task.submit') {
     if (sender !== panel && sender !== workspace) throw Error('请在对话工作区发送消息');
     if (typeof payload !== 'string' || !payload.trim()) throw Error('请输入有效任务');
@@ -849,6 +906,7 @@ app.whenReady().then(async () => {
     try {
       if (runtimeApplication) runtimeApplication.close();
       else runtime?.close?.();
+      competitionCatalog?.close();
     } catch (error) {
       event.preventDefault();
       runtimeError = error instanceof Error ? error.message : 'Runtime 仍有活动任务，无法安全退出';

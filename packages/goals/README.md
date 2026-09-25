@@ -19,7 +19,9 @@ The pure expectedRevision check alone is not a concurrency lock. The provisional
 `@personal-agent/goals/store` port and Fake now allow a host-bound namespace;
 Runtime supplies atomic SQLite persistence using its existing database. Only the
 trusted host can provision/bind stores. Namespaces alone are not user authorization.
-MemoryQueryPort and FactChangeFeed remain unavailable. See
+MemoryQueryPort and FactChangeFeed now have provisional offline providers and a
+recoverable projection; production automatic consumption and real fact sources
+remain unavailable. See
 [COORDINATION-STORE-01](../../docs/modules/COORDINATION-STORE-01.md) for semantics,
 migration, synchronous-call limitations and acceptance.
 MOD-28 will consume the explicit dependencies to analyze impact and repair plans.
@@ -48,3 +50,59 @@ atomic repair must require the new interface and must not emulate it with sequen
 writes. No wire operation, authorization, database migration or cloud access is added.
 This is synchronous small-graph storage, not an asynchronous cancellable execution
 API or evidence that the proposed repair is semantically correct.
+
+## Host-bound goal commands (provisional)
+
+`@personal-agent/goals/commands` offers `createGoal`, `reviseGoal`, `getGoal`,
+and `listGoals` for a host that already provisioned and authorized a bound
+`CoordinationStorePort`. The host supplies a stable goal ID, `sourceRef`,
+explicit validity, sensitivity, reason, and exact dependencies. Creation
+rejects any reused ID, including a withdrawn one. Revision requires both
+the graph revision and the current goal revision; the store's commit-time CAS
+still decides a concurrent write. The write receipt contains the exact prior
+Goal reference (or null on creation), the committed Goal version, and graph
+revision so MOD-28 can analyze the persisted change. This is not a durable
+event stream. A conflict is returned as `GraphError`
+with `REVISION_CONFLICT`; the caller must reread and seek a fresh edit.
+For MOD-28's provisional `selectGoalRevisionImpact`, a successful `reviseGoal`
+receipt maps to `expectedGraphRevision: graphRevision`,
+`previousGoal: previous`, and `currentGoal: {id: goal.id, revision: goal.revision}`.
+The `previous` field is typed as non-null on revision. Goal creation has no
+previous version and does not use that revision-impact selector.
+
+`getGoal` returns one Goal or null without exposing unrelated graph nodes to
+the caller. `listGoals` returns the latest version of each goal, including withdrawn
+goals, with the graph revision. It can read an earlier graph revision without
+changing current state. Commands preserve each source and all prior versions;
+they do not establish that a source is authentic, authorize a user, delete
+private history, or automatically repair dependent decisions. The Runtime and
+Desktop user command/query path remains a separate integration task.
+
+## Goal write tools (provisional)
+
+`@personal-agent/goals/tool` exports `createGoalTools(boundStoreOrResolver)`, returning
+`goals.create` and `goals.revise` `RegisteredTool` values (version `1.0.0`,
+scope `goals:write`, `local_write`). The trusted host can pass an already bound
+store or a callback that returns one stable, user-bound store after Runtime
+construction. Registration does not call the callback; a missing or changed
+store fails closed at execution. The host
+binds the same graph used by its `hostUserNamespace`, generates or verifies `goal.sourceRef`,
+and passes complete arguments through Runtime's host tool task and Policy.
+Tool arguments contain no namespace. Renderer must not construct a store or
+choose a namespace/source reference.
+
+Inputs are `{expectedGraphRevision, goal}` for create and
+`{expectedGraphRevision, expectedGoalRevision, goal}` for revise, where `goal`
+is a complete `GoalInput`. An applied result contains `graphRevision`,
+`previousGoal` (null on create), and `currentGoal`, after reading the committed
+historical version back from storage. A stale write returns `kind: 'conflict'`
+and the current graph revision; an invalid, confirmed no-write input returns
+`kind: 'rejected'`. Unexpected write or readback failures remain unknown to
+Runtime for reconciliation. The tool does not retry an uncertain write.
+
+This package does not expose a host task or approval entrypoint itself.
+Runtime's host tool task is currently a separate Draft integration, and real
+Desktop user writes need its review, composition, and one target-chain readback.
+The current RuntimeApplication constructor registers descriptors without executing
+host tools; Desktop must bind the store before exposing host commands or resuming
+an approved task.
