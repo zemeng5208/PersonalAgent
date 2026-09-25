@@ -7,6 +7,7 @@ import {
   createWorkspacePatchPreviewToolFromReader,
   MAX_WORKSPACE_PATCH_PREVIEW_BYTES,
 } from './patch-preview.js';
+import {createWorkspacePatchWriteToolFromReader} from './patch-write.js';
 export {
   MAX_SERIALIZED_WORKSPACE_PATCH_INPUT_BYTES,
   MAX_WORKSPACE_PATCH_EDITS,
@@ -15,6 +16,12 @@ export {
   WORKSPACE_PATCH_PREVIEW_TOOL_VERSION,
 } from './patch-preview.js';
 export type {WorkspacePatchPreviewEdit, WorkspacePatchPreviewResult} from './patch-preview.js';
+export {
+  WORKSPACE_PATCH_WRITE_SCOPE,
+  WORKSPACE_PATCH_WRITE_TOOL_NAME,
+  WORKSPACE_PATCH_WRITE_TOOL_VERSION,
+} from './patch-write.js';
+export type {WorkspacePatchWriteResult} from './patch-write.js';
 
 export const WORKSPACE_READ_TOOL_NAME = 'workspace.read_text';
 export const WORKSPACE_READ_TOOL_VERSION = '1.0.0';
@@ -504,6 +511,17 @@ export function createWorkspacePatchPreviewTool(options: WorkspacePatchPreviewOp
   });
 }
 
+export function createWorkspacePatchWriteTool(options: WorkspacePatchPreviewOptions): RegisteredTool {
+  const preview = createWorkspacePatchPreviewTool(options);
+  const reader = createWorkspaceReadTool(options);
+  return createWorkspacePatchWriteToolFromReader({
+    rootPath: options.rootPath,
+    preview,
+    reader,
+    now: options.now ?? Date.now,
+  });
+}
+
 export function createWorkspaceListTool(options: WorkspaceListOptions): RegisteredTool {
   const root = canonicalRoot(options?.rootPath);
   const maxEntries = boundedInteger(
@@ -629,4 +647,8 @@ export function registerWorkspacePatchPreview(
   options: WorkspacePatchPreviewOptions,
 ): () => void {
   return host.register(createWorkspacePatchPreviewTool(options));
+}
+
+export function registerWorkspacePatchWrite(host: ToolHost, options: WorkspacePatchPreviewOptions): () => void {
+  return host.register(createWorkspacePatchWriteTool(options));
 }
