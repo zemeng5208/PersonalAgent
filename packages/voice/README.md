@@ -117,6 +117,58 @@ relative to `WindowsSystemSpeechHost.cs`:
    or audio routing devices.
 
 
+## Authorized PCM streaming port (`VoicePcmFrameSourcePort`)
+
+`createVoicePcmFrameSourcePort(binding)` creates a module-local streaming port bound to a
+concrete authorized host capture binding.
+
+### Trust boundary
+
+The voice package never opens a microphone, queries OS device permissions, or issues capture
+authorization. No audio capture starts by default. The trusted host (MOD-11 Desktop main process)
+must perform its own explicit permission checks, manage physical media device lifecycles, and
+pass an already-authorized capture binding. The Renderer cannot grant authorization or sign tokens.
+The host capture binding must attach to ONE physical `getUserMedia` capture source as a
+refcount/fanout attachment, supporting concurrent subscribers (e.g. wake word detection and speech
+recognition) rather than opening a new microphone per subscriber.
+
+### Handoff for MOD-11 physical track release
+
+Subscribing to the port (`port.subscribe({signal, deadline, onFrame, onEnd})`) returns
+`{ready: Promise<void>, unsubscribe(): void, closed: Promise<void>}`.
+1. `ready` resolves only after the host capture binding has successfully returned a valid release
+   handle and confirmed capture availability. If start throws, rejects, returns an invalid handle,
+   or if the subscription terminates before ready, `ready` rejects with a fixed `VoiceSessionError`.
+2. When a subscription terminates (via caller `unsubscribe()`, parent `signal` abort, ISO UTC
+   `deadline` timeout, queue overflow, capture revocation, device unavailability, or port disposal):
+   - Callback delivery halts immediately with no late `onFrame` callbacks.
+   - All buffered/queued PCM frames are immediately zeroed in memory (`.fill(0)`) and discarded.
+   - The port invokes the subscription's upstream `release()` handle (including any late-returned
+     handle from an in-flight async start).
+   - The `closed` promise awaits the release of that subscription's attachment. `closed` resolves
+     only after successful release and rejects with `EXTERNAL_FAILURE` if release fails or start
+     failure prevents release proof. Proves only that this attachment was detached; physical capture
+     continues if other subscribers remain active.
+   - `port.dispose()` awaits all attachments and serves as the whole-source release receipt under the
+     host contract. If any release failed, `dispose()` rejects with `EXTERNAL_FAILURE` and remembers
+     this failure for subsequent calls.
+   - The trusted host binding must clean up its own partial capture resources on start failure; the
+     host must not infer physical track release from an `onEnd` callback alone.
+
+### Frame and queue guarantees
+
+- **Format and sequence**: Frames use `VOICE_AUDIO_FORMAT` (16 kHz mono PCM S16LE) with monotonic
+  sequence numbers starting from 0.
+- **Frame bounds**: Non-empty, even byte length, maximum 3,200 bytes (100 ms).
+- **Isolation**: Each subscriber receives an independent private copy; buffer modifications or
+  zeroization do not affect other subscribers.
+- **Queue limits**: Bounded at 4 frames / 12,800 bytes. Overflow terminates the subscription
+  immediately with terminal reason `'overflow'` (no silent drop or truncation).
+- **Terminal reasons**: Exactly one terminal callback (`onEnd`) with reason `'cancelled'`,
+  `'deadline'`, `'revoked'`, `'device_unavailable'`, `'overflow'`, or `'disposed'`.
+- **Privacy and wire boundary**: No audio or text logs. The public wire capabilities `voice.start`
+  and `voice.stop` remain separate and unpublished.
+
 ## Fake use and verification
 
 `@personal-agent/voice/testing` exports Fake recognition, explicit transcript consumer
