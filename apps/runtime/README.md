@@ -15,6 +15,17 @@ Interface status is tracked per operation in the [current interface catalog](../
 
 ## Implemented
 
+### Provisional trusted-host Evidence metadata
+
+`RuntimeApplication.createEvidenceReader({subjectRef, conversationId, taskId, authorize})`
+returns a fixed-scope, read-only metadata reader. The trusted host must derive the
+scope from its authenticated session and check `authorize` on every `list` or `get`.
+The reader also compares the task's persisted conversation ID. It returns bounded
+execution metadata with `conditional` verification, never tool arguments, results,
+credentials or raw checkpoint content. Runtime does not store a subject ACL, so this
+is not a Renderer/Client wire `EvidencePort` and cannot be enabled without a real
+host authorization source. No Evidence capability is announced.
+
 ### Provisional graph storage
 
 Trusted hosts may call `provisionCoordinationStore(namespace)` or

@@ -11,6 +11,8 @@ import type {CoordinationPort, CoordinationRequest, CoordinationRepairCandidateR
 import {startCoordinationTask, assertCompetitionExportAllowed, type CompetitionToolExport} from './coordination.js';
 import {createLocalRepairTool, prepareLocalRepair, startLocalRepairTask, LOCAL_REPAIR_CHECKPOINT} from './local-repair.js';
 import type {LocalRepairHostOptions, SubmitLocalRepairRequest} from './local-repair.js';
+import {ScopedEvidenceReader} from './evidence-reader.js';
+import type {EvidenceReaderOptions} from './evidence-reader.js';
 type SuccessfulResponse = Extract<Response, {outcome: 'ok'}>;
 
 const CONVERSATION_HISTORY_LIMIT = 20;
@@ -115,6 +117,11 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   }
 
   readEvents(afterSequence = 0): Event[] { return this.runtime.readEvents(afterSequence); }
+
+  /** Trusted host only: session ownership must be checked on every metadata read. */
+  createEvidenceReader(options: Omit<EvidenceReaderOptions, 'runtime'>): ScopedEvidenceReader {
+    return new ScopedEvidenceReader({...options, runtime: this.runtime});
+  }
 
   /** Explicit host preview only; neither this read nor a cloud candidate grants a write. */
   readRepairCandidate(taskId: string): CoordinationRepairCandidateResult | undefined {

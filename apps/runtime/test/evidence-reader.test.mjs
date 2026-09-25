@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url';
 import test from 'node:test';
 import {ToolGateway} from '@personal-agent/tool-gateway';
 import {TaskRuntime} from '../dist/index.js';
-import {ScopedEvidenceReader} from '../dist/application/evidence-reader.js';
+import {ScopedEvidenceReader, createRuntimeApplication} from '../dist/application.js';
 
 const root = fileURLToPath(new URL('../../../.cache/evidence-reader-tests/', import.meta.url));
 mkdirSync(root, {recursive: true});
@@ -92,4 +92,21 @@ test('confirmed tool results stay private while metadata pages remain stable', a
   assert.equal(second.nextBeforeEvidenceId, undefined);
   assert.doesNotMatch(JSON.stringify([first, second, await reader.get('run-1')]), /Bearer|secret-key|credential|private goal/);
   runtime.close();
+});
+
+test('Runtime Application exposes only a trusted-host reader with per-read authorization', async () => {
+  const app = createRuntimeApplication({path: database()});
+  const taskId = deniedEvidence(app.runtime, 'conversation-a', 'host-task', 'host-approval');
+  let allowed = false;
+  let checks = 0;
+  try {
+    const reader = app.createEvidenceReader({subjectRef: 'user-a', conversationId: 'conversation-a', taskId,
+      authorize: () => {checks++; return allowed;}});
+    await assert.rejects(reader.list(), {code: 'UNAUTHORIZED'});
+    allowed = true;
+    assert.equal((await reader.list()).items[0].evidenceId, 'host-approval-decision');
+    assert.equal(checks, 2);
+  } finally {
+    app.close();
+  }
 });
