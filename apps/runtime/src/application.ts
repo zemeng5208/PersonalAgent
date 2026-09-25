@@ -3,6 +3,7 @@ export type {RuntimeApplicationOptions, RuntimeApplicationTransport} from './app
 export {createAgentArtsRuntimeApplication} from './application/agentarts.js';
 export type {AgentArtsRuntimeApplicationOptions} from './application/agentarts.js';
 export {createMemoryProjectionApplication, createPendingImpactApplication} from './application/memory.js';
+export {ingestPublicSource} from './application/public-source.js';
 export type {
   FactChangeConfirmationPort,
   MemoryProjectionApplication,
