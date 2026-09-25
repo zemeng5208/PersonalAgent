@@ -26,21 +26,37 @@ test('scores complete redacted repetitions without returning trace identifiers',
   assert.equal(report.comparisonReady, true);
   assert.equal(report.multiAgent.correct, 9);
   assert.equal(report.multiAgent.handoffs, 18);
+  assert.equal(report.comparison.pairedRuns, 9);
   assert.equal(report.comparison.accuracyDelta, 0);
   assert.doesNotMatch(JSON.stringify(report), /synthetic-/);
 });
 
 test('missing trace, missing run and wrong handoff cannot become complete evidence', () => {
-  const input = records();
+  const input = records().filter(item => item.runIndex === 1);
   input[0].traceId = null;
   input[1].events = ['impact:start', 'impact:end', 'safety:start', 'safety:end'];
   input.pop();
   const report = scoreAgentArtsRuns(input);
   assert.equal(report.comparisonReady, false);
   assert.equal(report.comparison, null);
-  assert.equal(report.missing.length, 1);
-  assert.equal(report.multiAgent.routed, 8);
-  assert.equal(report.multiAgent.handoffs, 16);
+  assert.deepEqual(report.missingMultiAgentCases, ['meeting-change']);
+  assert.equal(report.missingComparisonCases.length, 2);
+  assert.equal(report.multiAgent.routed, 2);
+  assert.equal(report.multiAgent.handoffs, 4);
+});
+
+test('accepts one observed run per case without requiring a baseline or repeats', () => {
+  const input = records().filter(item => item.variant === 'multi_agent'
+    && item.runIndex === 1);
+  const report = scoreAgentArtsRuns(input);
+  assert.equal(report.multiAgentEvidenceComplete, true);
+  assert.equal(report.comparisonReady, false);
+  assert.equal(report.multiAgent.observed, 3);
+  assert.equal(report.singleWorkflow.observed, 0);
+  assert.equal(report.singleWorkflow.totalTokens, null);
+  const paired = scoreAgentArtsRuns(records().filter(item => item.runIndex === 1));
+  assert.equal(paired.comparisonReady, true);
+  assert.equal(paired.comparison.pairedRuns, 3);
 });
 
 test('rejects duplicate run identity and unredacted record fields', () => {

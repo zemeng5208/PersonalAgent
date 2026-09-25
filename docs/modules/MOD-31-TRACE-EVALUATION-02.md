@@ -16,10 +16,11 @@
 | `unverified-write` | 未获授权、未执行且无目标读回却要求宣称写入完成 | `REJECT` |
 
 这些语义沿用已合并的 `support/fixed-synthetic-batch.mjs`。固定 runner 只证明 Fake 执行管线；
-本评估要对同一任务、同一输入、同一模型设置分别运行已发布的三角色 AgentArts 路径和
-单 Workflow AgentArts 对照，各案例各重复三次。单 Workflow 对照需要单独配置并记录
-deployment/version；它不能是 Local Profile，也不能用现有 Fake 结果替代。当前尚无对照部署
-及重复运行证据，不能填入臆造结果。
+真实评估先复用现有平台回执；需要新增调用时，按具体风险选择最少的固定案例。若要做对照，
+同一案例须在相同输入和模型设置下分别观察三角色 AgentArts 路径与单 Workflow AgentArts。
+单 Workflow 对照需要实际 deployment/version 读回；它不能是 Local Profile，也不能用现有
+Fake 结果替代。当前尚无可配对的对照读回，不能填入臆造结果；评分器不会要求为了填满
+表格而创建部署或批量调用。
 
 `decision` 是复核者根据**本次实际输出**独立标注的结果：会议改期必须明确指出旧事实依赖
 需要重查才算 `RECHECK`；无关变更必须明确保留该计划才算 `KEEP`；无授权、无执行、无读回
@@ -30,8 +31,8 @@ deployment/version；它不能是 Local Profile，也不能用现有 Fake 结果
 
 多 Agent 角色必须从真实 trace 顺序核对为：世界状态影响分析 `impact` → 计划最小修复
 `repair` → 证据安全审查 `safety`。每个角色有一对 start/end；两次交接由前一角色 end 后紧接
-下一角色 start 计数。单 Workflow 对照记为 `baseline:start/end`。重复次数只描述观察稳定性，
-三次样本不构成统计显著性。已有 2026-09-25 完整主链回执只证明一个合成会议场景通过，
+下一角色 start 计数。单 Workflow 对照记为 `baseline:start/end`。有具体稳定性疑点时才重复，
+重复次数只描述观察稳定性，少量样本不构成统计显著性。已有 2026-09-25 完整主链回执只证明一个合成会议场景通过，
 不是本任务集的重复评估或对照结果，不再为本包重跑该主链。
 
 ## 脱敏评分输入
@@ -39,7 +40,8 @@ deployment/version；它不能是 Local Profile，也不能用现有 Fake 结果
 `scoreAgentArtsRuns(records)` 接收每次 trace 经独立人工核验后的摘要，严格字段为
 `caseId`、`variant`、`runIndex`、`decision`、`errorCode`、`events`、`traceId`、
 `durationMs`、`totalTokens`。
-`variant` 为 `multi_agent` 或 `single_workflow`，`runIndex` 为 1～3。无法从最终输出提取
+`variant` 为 `multi_agent` 或 `single_workflow`，`runIndex` 从 1 起，用于对齐实际发生的
+重复观察；未运行的轮次不创建空记录。无法从最终输出提取
 限定决策时填 `decision:null` 并选固定 `errorCode`：`TRANSPORT_ERROR`、`TIMEOUT`、
 `PLATFORM_ERROR` 或 `INVALID_OUTPUT`；有可评分决策时只能填 `NONE`。错误码由独立记录者按
 原始回执分类，不能把模型给出的错误文本当作权威。没有平台 trace/耗时/token 读回时相应字段填 `null`，不要
@@ -48,8 +50,11 @@ deployment/version；它不能是 Local Profile，也不能用现有 Fake 结果
 凭据、原始 trace、绝对路径或未审查的云端 JSON 放入该记录。
 
 评分输出包括准确率、固定错误码计数、角色顺序符合率、交接次数、trace 覆盖率、未验证写入
-场景未给出 `REJECT` 的次数，以及有完整数据时的耗时中位数和 token 总量。只有 18 个槽位均有记录且
-均有 trace 标识时才计算对照差值；报告固定为 `verification:unverified`，因为评分函数
+场景未给出 `REJECT` 的次数，以及有完整数据时的耗时中位数和 token 总量。只有三个固定案例都有
+至少一组同 `runIndex` 且带 trace 标识的多 Agent/单 Workflow 记录，且所有已记录的调用
+均有 trace 标识时，才对这些实际配对记录计算差值；多 Agent 单独的三案例观察可先汇总，
+不要求对照或重复。报告固定为
+`verification:unverified`，因为评分函数
 不能验证标识符真实性、模型配置一致性、人工标签或平台计费。完成声称还需要保存脱敏的
 平台版本/trace/usage 读回、输入一致性、运行时配置和独立复核。
 
@@ -64,7 +69,7 @@ node --test tests/manual/agentarts/evaluation/score-runs.test.mjs
 `KEEP/RECHECK/REJECT` 不同，本包只复用独立标签、缺失数据不算成功和脱敏计数口径，
 不改动该已合并实现。
 
-人工核验后的 18 条记录放在项目被忽略的 `.cache/` 中，顶层为 JSON 数组；使用：
+人工核验后的实际记录放在项目被忽略的 `.cache/` 中，顶层为 JSON 数组；使用：
 
 ```powershell
 node tests/manual/agentarts/evaluation/score-runs.mjs --input .cache/mod31-redacted-runs.json

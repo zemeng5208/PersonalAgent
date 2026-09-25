@@ -9,7 +9,6 @@ const CASES = Object.freeze([
   Object.freeze({id: 'unverified-write', expected: 'REJECT'}),
 ]);
 const VARIANTS = Object.freeze(['multi_agent', 'single_workflow']);
-const RUNS_PER_CASE = 3;
 const MULTI_EVENTS = Object.freeze([
   'impact:start', 'impact:end',
   'repair:start', 'repair:end',
@@ -41,7 +40,7 @@ function validateRecord(item) {
   if (!isExactRecord(item) || !CASE_BY_ID.has(item.caseId)
     || !VARIANTS.includes(item.variant)
     || !Number.isInteger(item.runIndex)
-    || item.runIndex < 1 || item.runIndex > RUNS_PER_CASE
+    || item.runIndex < 1 || item.runIndex > 1000
     || (item.decision !== null && !['KEEP', 'RECHECK', 'REJECT'].includes(item.decision))
     || !ERRORS.includes(item.errorCode)
     || (item.errorCode === 'NONE') !== (item.decision !== null)
@@ -78,7 +77,6 @@ function countMultiHandoffs(events) {
 
 function summarize(records, variant) {
   const selected = records.filter(item => item.variant === variant);
-  const expectedCount = CASES.length * RUNS_PER_CASE;
   const expectedEvents = variant === 'multi_agent' ? MULTI_EVENTS : SINGLE_EVENTS;
   const correct = selected.filter(item => item.decision === CASE_BY_ID.get(item.caseId).expected).length;
   const routed = selected.filter(item => exactEvents(item.events, expectedEvents)).length;
@@ -89,7 +87,7 @@ function summarize(records, variant) {
   for (const item of selected) errorCounts[item.errorCode]++;
   return {
     observed: selected.length,
-    expected: expectedCount,
+    casesObserved: new Set(selected.map(item => item.caseId)).size,
     correct,
     errorCounts,
     accuracy: selected.length ? correct / selected.length : null,
@@ -113,7 +111,7 @@ function summarize(records, variant) {
  * The scorer cannot authenticate trace IDs or infer a decision from raw model text.
  */
 export function scoreAgentArtsRuns(records) {
-  if (!Array.isArray(records) || records.length > CASES.length * VARIANTS.length * RUNS_PER_CASE) {
+  if (!Array.isArray(records) || records.length > 1000) {
     invalid();
   }
   const seen = new Set();
@@ -126,37 +124,52 @@ export function scoreAgentArtsRuns(records) {
     seen.add(key);
     if (item.traceId !== null) traceIds.add(item.traceId);
   }
-  const missing = [];
-  for (const variant of VARIANTS) {
-    for (const testCase of CASES) {
-      for (let runIndex = 1; runIndex <= RUNS_PER_CASE; runIndex++) {
-        if (!seen.has(JSON.stringify([testCase.id, variant, runIndex]))) {
-          missing.push({caseId: testCase.id, variant, runIndex});
-        }
-      }
+  const paired = [];
+  const missingMultiAgentCases = [];
+  const missingComparisonCases = [];
+  for (const testCase of CASES) {
+    const multiRuns = records.filter(item => item.caseId === testCase.id
+      && item.variant === 'multi_agent' && item.traceId !== null);
+    const singleRuns = records.filter(item => item.caseId === testCase.id
+      && item.variant === 'single_workflow' && item.traceId !== null);
+    if (multiRuns.length === 0) missingMultiAgentCases.push(testCase.id);
+    const singleByRun = new Map(singleRuns.map(item => [item.runIndex, item]));
+    let pairsForCase = 0;
+    for (const multi of multiRuns) {
+      const single = singleByRun.get(multi.runIndex);
+      if (!single) continue;
+      paired.push(multi, single);
+      pairsForCase++;
     }
+    if (pairsForCase === 0) missingComparisonCases.push(testCase.id);
   }
   const multiAgent = summarize(records, 'multi_agent');
   const singleWorkflow = summarize(records, 'single_workflow');
-  const comparisonReady = missing.length === 0
-    && multiAgent.traceCoverage === 1 && singleWorkflow.traceCoverage === 1;
+  const comparisonReady = missingComparisonCases.length === 0
+    && records.every(item => item.traceId !== null);
+  const pairedMulti = summarize(paired, 'multi_agent');
+  const pairedSingle = summarize(paired, 'single_workflow');
   return {
     schemaVersion: 1,
     profile: 'huawei_ict_agentarts',
     verification: 'unverified',
     fixedCases: CASES.map(({id, expected}) => ({id, expected})),
-    runsPerCase: RUNS_PER_CASE,
-    missing,
+    missingMultiAgentCases,
+    missingComparisonCases,
+    multiAgentEvidenceComplete: missingMultiAgentCases.length === 0
+      && records.filter(item => item.variant === 'multi_agent')
+        .every(item => item.traceId !== null),
     comparisonReady,
     multiAgent,
     singleWorkflow,
     comparison: comparisonReady ? {
-      accuracyDelta: multiAgent.accuracy - singleWorkflow.accuracy,
-      medianDurationDeltaMs: multiAgent.medianDurationMs === null
-        || singleWorkflow.medianDurationMs === null ? null
-        : multiAgent.medianDurationMs - singleWorkflow.medianDurationMs,
-      totalTokenDelta: multiAgent.totalTokens === null || singleWorkflow.totalTokens === null
-        ? null : multiAgent.totalTokens - singleWorkflow.totalTokens,
+      pairedRuns: paired.length / 2,
+      accuracyDelta: pairedMulti.accuracy - pairedSingle.accuracy,
+      medianDurationDeltaMs: pairedMulti.medianDurationMs === null
+        || pairedSingle.medianDurationMs === null ? null
+        : pairedMulti.medianDurationMs - pairedSingle.medianDurationMs,
+      totalTokenDelta: pairedMulti.totalTokens === null || pairedSingle.totalTokens === null
+        ? null : pairedMulti.totalTokens - pairedSingle.totalTokens,
     } : null,
   };
 }
