@@ -38,7 +38,8 @@ test('host-fixed recipe uses the bound cwd and cannot be replaced by tool input 
   assert.throws(() => createWorkspaceCommandTool({
     rootPath: root, recipes: [{id: 'mutable', executable: mutableExecutable, args: []}],
   }), {code: 'INVALID_ARGUMENT'});
-  const args = ['-e', 'console.log(process.cwd() === process.argv[1] ? "root-ok" : "wrong-root")', root];
+  await writeFile(join(root, 'cwd-marker.txt'), 'root');
+  const args = ['-e', 'console.log(require("node:fs").readFileSync("cwd-marker.txt", "utf8") === "root" ? "root-ok" : "wrong-root")'];
   const tool = createWorkspaceCommandTool({rootPath: root, recipes: [{id: 'check-root', executable: process.execPath, args}]});
   args[1] = 'console.log("mutated")';
   assert.deepEqual(await tool.execute({recipeId: 'check-root'}, context()), {
