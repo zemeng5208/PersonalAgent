@@ -129,6 +129,41 @@ test('stale host availability rejects an unverified cloud proposal before approv
   }
 });
 
+test('async availability cannot export a catalog after the running task revision changes', async () => {
+  let app;
+  let availabilityCalls = 0;
+  let cloudFetches = 0;
+  const port = {execute: async request => {
+    const selected = await app.prepareCompetitionToolCatalog(request);
+    await app.assertCompetitionToolCatalogAllowed({...request, availableTools: selected});
+    cloudFetches++;
+    return {kind: 'text', text: 'unexpected cloud result', verification: 'mock'};
+  }};
+  app = createRuntimeApplication({path: ':memory:', profile: 'huawei_ict_agentarts', coordination: port,
+    tools: [{descriptor, execute: async () => ({value: 'local-only'})}],
+    competitionToolExports: [toolExport],
+    competitionToolAvailability: [{toolName: descriptor.name, toolVersion: descriptor.version,
+      available: async input => {
+        availabilityCalls++;
+        if (availabilityCalls === 2) app.runtime.recordProgress(input.taskId,
+          {stepId: 'catalog-race', label: 'new task revision'});
+        return true;
+      }}],
+  });
+  try {
+    const client = new Client(app, Date.now);
+    await client.connect();
+    const {taskId} = await client.call('task.submit', {goal: 'Check current task revision', conversationId: 'catalog'},
+      {idempotencyKey: 'catalog-revision-race'});
+    assert.equal((await waitFor(app, taskId, ['failed', 'succeeded'])).state, 'failed');
+    assert.equal(availabilityCalls, 2);
+    assert.equal(cloudFetches, 0);
+  } finally {
+    for (let i = 0; i < 200 && app.activeTaskCount; i++) await new Promise(resolve => setTimeout(resolve, 5));
+    app.close();
+  }
+});
+
 test('selected read and local write proposals each require local approval before continuation', async () => {
   const read = {...descriptor, name: 'fixture.read', requiredScopes: ['fixture:read']};
   const write = {...descriptor, name: 'fixture.write', sideEffect: 'local_write',
