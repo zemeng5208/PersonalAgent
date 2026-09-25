@@ -39,6 +39,22 @@ text. Public failures use fixed messages and do not expose provider or listener 
 Adapters own provider configuration, credentials, upload consent and transport. No
 provider is the default: recognition and output return `UNSUPPORTED_CAPABILITY`.
 
+## Explicit Runtime transcript consumption
+
+`RuntimeClientTranscriptConsumer` is a trusted-host `TranscriptConsumerPort` adapter for
+an already connected public `@personal-agent/client`. It remains idle until the caller
+explicitly invokes `consumeTranscript`. That call submits the transcript as the
+`task.submit` goal with the configured `conversationId` and a stable bounded idempotency
+key, then reads `task.get` until Runtime reports a terminal state. Submission acceptance,
+`waiting_approval`, and every other non-terminal state are not treated as a reply.
+
+Only a successful task's bounded `resultSummary` becomes reply text. Runtime and transport
+failures use fixed local errors without external messages. Deadline, parent abort, and
+`VoiceOperation.stop()` bound submit, polling, and non-cooperative Client promises, but
+they stop only this adapter's local wait: the adapter never calls `task.cancel`, retries a
+submission, starts Runtime directly, or invents terminal state. Real local Runtime
+composition remains a separate host-level acceptance step.
+
 ## Fake use and verification
 
 `@personal-agent/voice/testing` exports Fake recognition, explicit transcript consumer
