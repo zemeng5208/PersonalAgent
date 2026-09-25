@@ -16,6 +16,7 @@ function deferred() {
 export function createMicrophoneCaptureHost({permissionGate, getPanel, now = Date.now}) {
   let authorization;
   let capture;
+  let releaseUnknown = false;
   let lastRelease = {stopped: true, verified: false, reason: 'never_started'};
 
   function validPanel() {
@@ -25,6 +26,7 @@ export function createMicrophoneCaptureHost({permissionGate, getPanel, now = Dat
   }
 
   function authorize() {
+    if (releaseUnknown) throw Error('上次麦克风释放未确认，不能重新开启');
     if (capture || authorization) throw Error('麦克风会话已存在');
     const panel = validPanel();
     if (!panel) throw Error('请先显示可信面板');
@@ -117,6 +119,7 @@ export function createMicrophoneCaptureHost({permissionGate, getPanel, now = Dat
         lastRelease = {stopped: true, verified: true, reason};
       } catch (error) {
         lastRelease = {stopped: false, verified: false, reason};
+        releaseUnknown = true;
         throw error;
       } finally {
         clearTimeout(timer);

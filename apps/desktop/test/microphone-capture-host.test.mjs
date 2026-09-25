@@ -66,6 +66,7 @@ test('permission revoke stops active capture and cannot claim release without st
   host.receive(event, {type: 'stopped', token, tracksStopped: false});
   await assert.rejects(sub.release(), /track 未全部停止/);
   assert.equal(host.snapshot().lastRelease.verified, false);
+  assert.throws(() => host.authorize(), /释放未确认/);
 });
 
 test('two subscriptions using the same sink keep capture until both handles release', async () => {
