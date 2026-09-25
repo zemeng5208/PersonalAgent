@@ -926,10 +926,11 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     } catch (error) {
       const current = this.getTask(taskId);
       if (terminal.has(current.state)) return current;
+      if (current.state === 'waiting_reconciliation') return current;
       if (timedOut) {
-        if (options.sideEffect === 'external_write') {
+        if (options.sideEffect !== 'read') {
           return this.transitionTask(taskId, 'waiting_reconciliation', {
-            error: {code: 'RESULT_UNKNOWN', message: 'External write exceeded its deadline; verify before retrying', retryable: false}
+            error: {code: 'RESULT_UNKNOWN', message: `${options.sideEffect === 'local_write' ? 'Local' : 'External'} write exceeded its deadline; verify before retrying`, retryable: false}
           });
         }
         return this.transitionTask(taskId, 'failed', {
@@ -937,7 +938,6 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
         });
       }
       if (controller.signal.aborted && current.state === 'cancelling') return this.confirmCancellation(taskId);
-      if (current.state === 'waiting_reconciliation') return current;
       return this.transitionTask(taskId, 'failed', {
         error: {
           code: error instanceof RuntimeError || error instanceof ProtocolError ? error.code as TaskError['code'] : 'EXTERNAL_FAILURE',
