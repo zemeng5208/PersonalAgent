@@ -20,6 +20,8 @@ test('Competition application owns a public Fact source and resumes its graph pr
   const memoryPath = join(directory, 'memory.sqlite');
   const options = {memoryPath, memoryNamespace: namespace, graphNamespace: graph, consumerKey};
   let app = createRuntimeApplication({path, profile: 'huawei_ict_agentarts'});
+  assert.throws(() => app.createCompetitionFactHost({...options, memoryPath: path}),
+    {code: 'INVALID_ARGUMENT'});
   let host = app.createCompetitionFactHost(options);
   try {
     const key = {...source};
