@@ -15,7 +15,8 @@
 2. `WakeSignalSource.subscribe()` 仅在显式 `enable({deadlineAtMs})` 且宿主允许后调用；调用方
    必须提供有限的绝对 deadline，授权检查和源订阅共享这个有效期上界。源收到固定的
    `wake`、`device_unavailable` 或 `error` 分类。控制器向调用方只发固定的
-   `{kind, sessionId, occurredAtMs}`，不自动提交任务、不携带文本或音频。
+   `{kind, sessionId, occurredAtMs}`，不自动提交任务、不携带文本或音频。同步源继续可用；
+   异步源必须在 detector/授权帧源就绪后才 resolve，控制器届时才发布 `listening`。
 
 `disable()`/`stop()`、授权撤销、期限、设备不可用和 `dispose()` 会立即取消订阅并递增
 epoch；迟到的旧回调被丢弃，重复 stop/dispose 幂等。播放期间由调用方设置
@@ -50,10 +51,10 @@ npm.cmd test --workspace=@personal-agent/voice-wake
 本次恢复验证（2026-09-25）：使用主工作树已安装的 TypeScript 与 Node 类型，
 对 `packages/voice-wake/tsconfig.json` 运行定向编译，通过；随后以
 `node --test --test-isolation=none packages/voice-wake/test/voice-wake.test.mjs` 验证同一测试文件，
-21/21 通过。当前工作树没有独立 `node_modules`，因此没有运行普通 workspace 脚本或 `npm ci`。
+23/23 通过。当前工作树没有独立 `node_modules`，因此没有运行普通 workspace 脚本或 `npm ci`。
 
 测试覆盖默认零订阅、显式启用单订阅、重复启用、撤销/过期/断设备/关闭/销毁、旧 epoch
-迟到回调、休眠后到期回调延迟、播放/冷却抑制、deadline/cancel、非合作授权、固定错误脱敏，以及生命周期
+迟到回调、异步源就绪/撤销时迟到订阅释放、休眠后到期回调延迟、播放/冷却抑制、deadline/cancel、非合作授权、固定错误脱敏，以及生命周期
 初始/终态、冻结、去重、退订、异常隔离和同步源失败。测试不是实机误触、回声或 ASR
 准确率证据；本次未运行真实音频、云服务、Electron 或 MOD-14 装配。当前主线的根
 `build` 尚未加入本包，`package-lock.json` 也没有本 workspace 的登记；这两处须由共享根

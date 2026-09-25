@@ -3,7 +3,9 @@
 MOD-15 的 provisional 唤醒会话生命周期控制器，目标 Profile 为
 `huawei_ict_agentarts`。本包只消费可信宿主的录音授权结果和撤销信号，默认关闭，
 只有调用方显式 `enable({deadlineAtMs})` 后才订阅注入的 `WakeSignalSource`；调用方必须
-提供有限的绝对 deadline，授权检查和源订阅都会收到同一个有效期上界。
+提供有限的绝对 deadline，授权检查和源订阅都会收到同一个有效期上界。源可以同步
+或异步完成订阅；只有真实 detector 与授权源就绪后才发布 `listening`，等待期间撤销或
+到期会结束 `enable()`，迟到订阅会立即释放。
 
 本包不打开麦克风、不保存音频、不做 ASR 或唤醒算法、不访问云端、不签发授权、
 不提交任务，也不复制 MOD-14 的 `voice.start/stop`、播放或 `task.cancel` 语义。源事件

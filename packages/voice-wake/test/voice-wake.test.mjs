@@ -298,6 +298,66 @@ test('permission and source failures expose fixed codes only', async () => {
   assert.deepEqual(await enable(sourceController), {kind: 'not_listening', reason: 'source_unavailable'});
   assert.deepEqual(sourceErrors, [{code: 'SOURCE_UNAVAILABLE'}]);
   assert.equal(JSON.stringify(sourceErrors).includes('raw source URL'), false);
+
+  const asyncErrors = [];
+  const asyncController = new WakeLifecycleController({
+    source: {subscribe: () => Promise.reject(new Error('private model detail'))},
+    authorization: new FakeWakeAuthorization({expiresAtMs: 100}),
+    clock: new FakeWakeClock(0),
+    onWake: () => {},
+    onError: error => asyncErrors.push(error),
+  });
+  assert.deepEqual(await enable(asyncController), {kind: 'not_listening', reason: 'source_unavailable'});
+  assert.deepEqual(asyncErrors, [{code: 'SOURCE_UNAVAILABLE'}]);
+});
+
+test('async source readiness does not publish listening or wake early', async () => {
+  let sourceListener;
+  let resolveSource;
+  const source = {
+    subscribe(listener) {
+      sourceListener = listener;
+      return new Promise(resolve => { resolveSource = resolve; });
+    },
+  };
+  const {controller, wakes} = setup({source});
+  const states = [];
+  controller.subscribeLifecycle(snapshot => states.push(snapshot.state));
+  const pending = enable(controller);
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.deepEqual(states, ['disabled']);
+  assert.equal(controller.snapshot().state, 'disabled');
+  sourceListener({kind: 'wake'});
+  assert.deepEqual(wakes, []);
+
+  resolveSource({unsubscribe() {}});
+  assert.equal((await pending).kind, 'listening');
+  assert.deepEqual(states, ['disabled', 'listening']);
+  sourceListener({kind: 'wake'});
+  assert.equal(wakes.length, 1);
+  controller.disable();
+});
+
+test('revocation and deadline settle pending source readiness and release a late subscription once', async () => {
+  for (const stop of ['revoke', 'expire']) {
+    let resolveSource;
+    let releases = 0;
+    const source = {subscribe: () => new Promise(resolve => { resolveSource = resolve; })};
+    const context = setup({source});
+    const pending = enable(context.controller);
+    await new Promise(resolve => setImmediate(resolve));
+
+    if (stop === 'revoke') context.authorization.revoke();
+    else context.clock.advance(100);
+    assert.deepEqual(await pending, {
+      kind: 'not_listening', reason: stop === 'revoke' ? 'cancelled' : 'expired',
+    });
+    resolveSource({unsubscribe: () => { releases++; }});
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(releases, 1, stop);
+    assert.equal(context.controller.snapshot().state, 'disabled');
+  }
 });
 
 test('lifecycle subscription reports stable terminal states for every stop path', async () => {

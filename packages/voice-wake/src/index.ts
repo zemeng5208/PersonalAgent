@@ -53,7 +53,8 @@ export interface WakeSubscription {
 }
 
 export interface WakeSignalSource {
-  subscribe(listener: (event: WakeSourceEvent) => void, context: WakeSourceContext): WakeSubscription;
+  /** Resolve only after the detector and authorized source are ready to listen. */
+  subscribe(listener: (event: WakeSourceEvent) => void, context: WakeSourceContext): WakeSubscription | Promise<WakeSubscription>;
 }
 
 export interface WakeAuthorizationCheck {
@@ -154,7 +155,7 @@ interface ActiveSession {
   subscription?: WakeSubscription;
 }
 
-type AuthorizationWaitResult =
+type ExternalWaitResult =
   | {readonly kind: 'decision'; readonly value: unknown}
   | {readonly kind: 'rejected'}
   | {readonly kind: 'aborted'};
@@ -274,7 +275,7 @@ export class WakeLifecycleController {
     // A suspended host may resume after the expiry before its timer callback runs.
     // Never report that the old audio subscription is still authorized.
     if (this.active && now >= this.active.expiresAtMs) this.expire(this.active.epoch);
-    if (this.active) return Promise.resolve({kind: 'listening', sessionId: this.active.sessionId, expiresAtMs: this.active.expiresAtMs});
+    if (this.active?.subscription) return Promise.resolve({kind: 'listening', sessionId: this.active.sessionId, expiresAtMs: this.active.expiresAtMs});
     if (this.pending && now >= this.pending.deadlineAtMs) {
       this.pending.deadlineReached.value = true;
       this.pending.controller.abort();
@@ -384,9 +385,9 @@ export class WakeLifecycleController {
     if (this.cooldownUntilMs !== null && this.clock.now() >= this.cooldownUntilMs) this.cooldownUntilMs = null;
     const active = this.active;
     return {
-      state: this.disposed ? 'disposed' : active ? 'listening' : 'disabled',
-      sessionId: active?.sessionId ?? null,
-      expiresAtMs: active?.expiresAtMs ?? null,
+      state: this.disposed ? 'disposed' : active?.subscription ? 'listening' : 'disabled',
+      sessionId: active?.subscription ? active.sessionId : null,
+      expiresAtMs: active?.subscription ? active.expiresAtMs : null,
       playbackActive: this.playbackActive,
       cooldownUntilMs: this.cooldownUntilMs,
     };
@@ -401,7 +402,7 @@ export class WakeLifecycleController {
       signal: pending.controller.signal,
       deadlineAtMs: pending.deadlineAtMs,
     };
-    const authorizationResult = await this.awaitAuthorization(pending, request);
+    const authorizationResult = await this.awaitExternal(pending, () => this.options.authorization.check(request));
     if (authorizationResult.kind === 'aborted') {
       return {kind: 'not_listening', reason: this.abortReason(pending)};
     }
@@ -453,15 +454,35 @@ export class WakeLifecycleController {
     this.active = active;
     decision.revocationSignal.addEventListener('abort', revocationListener, {once: true});
     try {
-      const subscription = this.options.source.subscribe(
-        event => this.handleSourceEvent(event, pending.epoch),
-        {signal: pending.controller.signal, deadlineAtMs: expiresAtMs},
+      let released = false;
+      const release = (value: unknown): void => {
+        if (released || !validSubscription(value)) return;
+        released = true;
+        this.safeUnsubscribe(value);
+      };
+      const sourceResult = await this.awaitExternal(
+        pending,
+        () => this.options.source.subscribe(
+          event => this.handleSourceEvent(event, pending.epoch),
+          {signal: pending.controller.signal, deadlineAtMs: expiresAtMs},
+        ),
+        value => {
+          if (!this.isActive(pending.epoch)) release(value);
+        },
       );
-      if (!validSubscription(subscription)) throw new Error('invalid subscription');
-      if (!this.isActive(pending.epoch)) {
-        try { subscription.unsubscribe(); } catch { this.report('SOURCE_ERROR'); }
-        return {kind: 'not_listening', reason: this.disposed ? 'disposed' : 'cancelled'};
+      if (sourceResult.kind === 'aborted') {
+        return {kind: 'not_listening', reason: this.abortReason(pending)};
       }
+      if (!this.isActive(pending.epoch)) {
+        if (sourceResult.kind === 'decision') release(sourceResult.value);
+        return {kind: 'not_listening', reason: this.abortReason(pending)};
+      }
+      if (sourceResult.kind === 'rejected' || !validSubscription(sourceResult.value)) {
+        this.deactivateActive(pending.epoch);
+        this.report('SOURCE_UNAVAILABLE');
+        return {kind: 'not_listening', reason: 'source_unavailable'};
+      }
+      const subscription = sourceResult.value;
       active.subscription = subscription;
       this.publishLifecycleIfChanged();
       if (!this.isActive(pending.epoch)) {
@@ -476,25 +497,29 @@ export class WakeLifecycleController {
   }
 
   /**
-   * Authorization is an external async boundary. The internal signal must
-   * win even when a host check never settles; the check's eventual result or
-   * rejection is normalized and consumed without being exposed.
+   * Authorization and source readiness are external async boundaries. The
+   * internal signal wins even when either never settles. Late results and
+   * rejections are consumed; late source subscriptions are released.
    */
-  private async awaitAuthorization(
+  private async awaitExternal(
     pending: PendingEnable,
-    request: WakeAuthorizationCheck,
-  ): Promise<AuthorizationWaitResult> {
-    let check: Promise<AuthorizationWaitResult>;
+    invoke: () => unknown,
+    onResult?: (value: unknown) => void,
+  ): Promise<ExternalWaitResult> {
+    let check: Promise<ExternalWaitResult>;
     try {
-      check = Promise.resolve(this.options.authorization.check(request)).then(
-        value => ({kind: 'decision', value} as const),
+      check = Promise.resolve(invoke()).then(
+        value => {
+          try { onResult?.(value); } catch { this.report('SOURCE_ERROR'); }
+          return {kind: 'decision', value} as const;
+        },
         () => ({kind: 'rejected'} as const),
       );
     } catch {
       check = Promise.resolve({kind: 'rejected'} as const);
     }
     let detach = (): void => {};
-    const aborted = new Promise<AuthorizationWaitResult>(resolve => {
+    const aborted = new Promise<ExternalWaitResult>(resolve => {
       const onAbort = (): void => resolve({kind: 'aborted'});
       if (pending.controller.signal.aborted) {
         resolve({kind: 'aborted'});
@@ -523,7 +548,7 @@ export class WakeLifecycleController {
     }
     if (kind !== 'wake') return;
     const active = this.active;
-    if (!active) return;
+    if (!active?.subscription) return;
     const now = this.clock.now();
     if (now >= active.expiresAtMs) {
       this.expire(epoch);
@@ -541,6 +566,7 @@ export class WakeLifecycleController {
     const active = this.active;
     if (!active || active.epoch !== epoch) return;
     if (this.clock.now() < active.expiresAtMs) return;
+    if (this.pending?.epoch === epoch) this.pending.deadlineReached.value = true;
     this.deactivateActive(epoch, 'EXPIRED');
   }
 
@@ -553,7 +579,7 @@ export class WakeLifecycleController {
     active.expiryTimer.cancel();
     active.revocationSignal.removeEventListener('abort', active.revocationListener);
     if (active.callerSignal && active.callerListener) active.callerSignal.removeEventListener('abort', active.callerListener);
-    try { active.subscription?.unsubscribe(); } catch { this.report('SOURCE_ERROR'); }
+    if (active.subscription) this.safeUnsubscribe(active.subscription);
     active.controller.abort();
     if (error) this.report(error);
     this.publishLifecycleIfChanged();
@@ -562,9 +588,9 @@ export class WakeLifecycleController {
   private createLifecycleSnapshot(): WakeLifecycleStateSnapshot {
     const active = this.active;
     return Object.freeze({
-      state: this.disposed ? 'disposed' : active ? 'listening' : 'disabled',
-      sessionId: active?.sessionId ?? null,
-      expiresAtMs: active?.expiresAtMs ?? null,
+      state: this.disposed ? 'disposed' : active?.subscription ? 'listening' : 'disabled',
+      sessionId: active?.subscription ? active.sessionId : null,
+      expiresAtMs: active?.subscription ? active.expiresAtMs : null,
     });
   }
 
@@ -619,6 +645,10 @@ export class WakeLifecycleController {
   private cleanupPending(pending: PendingEnable): void {
     pending.deadlineTimer?.cancel();
     if (pending.callerSignal && pending.callerListener) pending.callerSignal.removeEventListener('abort', pending.callerListener);
+  }
+
+  private safeUnsubscribe(subscription: WakeSubscription): void {
+    try { subscription.unsubscribe(); } catch { this.report('SOURCE_ERROR'); }
   }
 
   private scheduleAt(whenMs: number, callback: () => void): WakeTimer {
