@@ -12,6 +12,7 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
   title.textContent = '持续目标';
   const status = document.createElement('p');
   status.setAttribute('role', 'status');
+  status.setAttribute('aria-live', 'polite');
   const list = document.createElement('div');
   list.setAttribute('aria-label', '已保存的目标');
   const form = document.createElement('form');
@@ -44,12 +45,18 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
 
   let graphRevision = null;
   let selected = null;
+  let initialized = false;
+  const setStatus = (kind, message) => {
+    status.dataset.state = kind;
+    status.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+    status.textContent = message;
+  };
   const setAvailable = available => {
     button.textContent = available ? '持续目标' : '持续目标（未接通）';
     form.hidden = !available;
     list.hidden = !available;
     newGoal.hidden = !available;
-    status.textContent = available ? '' : '持续目标尚未接通。';
+    setStatus(available ? 'ready' : 'unavailable', available ? '' : '持续目标尚未接通。');
   };
   setAvailable(false);
 
@@ -80,7 +87,7 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
       return true;
     } catch (error) {
       setAvailable(false);
-      status.textContent = `持续目标尚未接通：${error.message || String(error)}`;
+      setStatus('unavailable', `持续目标尚未接通：${error.message || String(error)}`);
       return false;
     }
   }
@@ -98,24 +105,24 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
       state.control.value = selected.state;
       state.label.hidden = false;
       save.textContent = '保存修订';
-      status.textContent = `正在修订版本 ${selected.revision}`;
+      setStatus('editing', `正在修订版本 ${selected.revision}`);
     } catch (error) {
-      status.textContent = error.message || String(error);
+      setStatus('error', error.message || String(error));
     }
   }
 
   newGoal.onclick = () => {
     selected = null;
     form.reset();
-    summary.control.value = getDraftSummary().trim();
+    summary.control.value = String(getDraftSummary() ?? '').trim();
     validFrom.control.value = toLocalTime(new Date().toISOString());
     state.label.hidden = true;
     save.textContent = '保存目标';
-    status.textContent = '';
+    setStatus('editing', '正在创建新目标，保存前不会写入。');
   };
   reload.onclick = () => void refresh();
   button.onclick = async () => {
-    newGoal.click();
+    if (!initialized) { newGoal.click(); initialized = true; }
     dialog.showModal();
     await refresh();
   };
@@ -127,7 +134,7 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
     const end = Date.parse(validUntil.control.value);
     if (!summary.control.value.trim() || !reason.control.value.trim()
       || !Number.isFinite(start) || !Number.isFinite(end) || start >= end) {
-      status.textContent = '请填写目标、原因和有效的起止时间。';
+      setStatus('error', '请填写目标、原因和有效的起止时间。');
       return;
     }
     const payload = {
@@ -139,15 +146,18 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
       ...(selected ? {id: selected.id, expectedGoalRevision: selected.revision, state: state.control.value} : {}),
     };
     save.disabled = true;
+    setStatus('saving', '正在提交目标；等待可信宿主返回。');
     try {
       const result = await invoke(selected ? 'goal.revise' : 'goal.create', payload);
       if (!result?.goal || !Number.isSafeInteger(result.graphRevision)) throw new Error('未收到目标持久读回');
       selected = result.goal;
-      status.textContent = `已保存并读回目标版本 ${selected.revision}`;
-      await refresh();
-      status.textContent = `已保存并读回目标版本 ${selected.revision}`;
+      state.control.value = selected.state;
+      state.label.hidden = false;
+      save.textContent = '保存修订';
+      const readbackMessage = `已保存并读回目标版本 ${selected.revision}`;
+      if (await refresh()) setStatus('saved', readbackMessage);
     } catch (error) {
-      status.textContent = `保存失败：${error.message || String(error)}。请刷新列表核对版本后重试。`;
+      setStatus('error', `保存失败：${error.message || String(error)}。草稿已保留，请核对版本后重试。`);
     } finally {
       save.disabled = false;
     }
