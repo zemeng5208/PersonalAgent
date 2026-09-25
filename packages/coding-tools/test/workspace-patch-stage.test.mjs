@@ -7,10 +7,10 @@ import test from 'node:test';
 import {InMemoryAuthorizationPolicy} from '@personal-agent/policy';
 import {ToolGateway, toolArgumentsDigest} from '@personal-agent/tool-gateway';
 import {
-  WORKSPACE_PATCH_WRITE_SCOPE,
+  WORKSPACE_PATCH_STAGE_SCOPE,
   WORKSPACE_READ_SCOPE,
-  createWorkspacePatchWriteTool,
-  registerWorkspacePatchWrite,
+  createWorkspacePatchStageTool,
+  registerWorkspacePatchStage,
 } from '../dist/index.js';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -18,7 +18,7 @@ const context = (overrides = {}) => ({
   taskId: 'task-synthetic',
   runId: 'run-synthetic',
   authorizationRef: 'authorization-synthetic',
-  scopes: [WORKSPACE_READ_SCOPE, WORKSPACE_PATCH_WRITE_SCOPE],
+  scopes: [WORKSPACE_READ_SCOPE, WORKSPACE_PATCH_STAGE_SCOPE],
   signal: new AbortController().signal,
   deadline: new Date(Date.now() + 60_000).toISOString(),
   ...overrides,
@@ -34,13 +34,13 @@ async function fixture(t) {
   return {root, outside};
 }
 
-test('writes one approved candidate and confirms the new file bytes', async t => {
+test('stages an approved candidate through Policy and leaves the original untouched', async t => {
   const {root} = await fixture(t);
   const file = join(root, 'src', 'note.txt');
   await writeFile(file, '你好 before\n');
-  const tool = createWorkspacePatchWriteTool({rootPath: root});
+  const tool = createWorkspacePatchStageTool({rootPath: root});
   assert.equal(tool.descriptor.sideEffect, 'local_write');
-  assert.deepEqual(tool.descriptor.requiredScopes, [WORKSPACE_READ_SCOPE, WORKSPACE_PATCH_WRITE_SCOPE]);
+  assert.deepEqual(tool.descriptor.requiredScopes, [WORKSPACE_READ_SCOPE, WORKSPACE_PATCH_STAGE_SCOPE]);
   assert.equal(tool.descriptor.recoverySupport, false);
   const input = {
     path: 'src/note.txt',
@@ -66,20 +66,23 @@ test('writes one approved candidate and confirms the new file bytes', async t =>
     authorizationRef: invocation.authorizationRef,
     taskId: invocation.taskId,
     toolName: invocation.toolName,
-    scopes: [WORKSPACE_READ_SCOPE, WORKSPACE_PATCH_WRITE_SCOPE],
+    scopes: [WORKSPACE_READ_SCOPE, WORKSPACE_PATCH_STAGE_SCOPE],
     argumentsDigest: toolArgumentsDigest(input),
     expiresAt: invocation.deadline,
     maxUses: 1,
   });
   const result = await gateway.invoke(invocation);
-  assert.deepEqual(result, {
+  assert.match(result.stagedPath, /^\.pa-stage-[\da-f-]+\.patch$/u);
+  assert.deepEqual({...result, stagedPath: undefined}, {
     path: 'src/note.txt',
+    stagedPath: undefined,
     beforeSha256: hash('你好 before\n'),
     afterSha256: hash('你好 after\n'),
     byteLength: Buffer.byteLength('你好 after\n'),
     changed: true,
   });
-  assert.equal(await readFile(file, 'utf8'), '你好 after\n');
+  assert.equal(await readFile(join(root, result.stagedPath), 'utf8'), '你好 after\n');
+  assert.equal(await readFile(file, 'utf8'), '你好 before\n');
   assert.equal(policy.get(invocation.authorizationRef).usesRemaining, 0);
   assert.deepEqual(await readdir(join(root, 'src')), ['note.txt']);
 });
@@ -89,7 +92,7 @@ test('stale hashes, missing write scope, cancellation and traversal preserve ori
   const file = join(root, 'src', 'note.txt');
   await writeFile(file, 'user edited\n');
   await writeFile(join(outside, 'note.txt'), 'outside\n');
-  const tool = createWorkspacePatchWriteTool({rootPath: root});
+  const tool = createWorkspacePatchStageTool({rootPath: root});
   const input = {
     path: 'src/note.txt',
     expectedSha256: hash('old version\n'),
@@ -115,8 +118,8 @@ test('rejects linked write targets and uses the existing ToolHost registration l
     tools.set(tool.descriptor.name, tool);
     return () => tools.delete(tool.descriptor.name);
   }};
-  const dispose = registerWorkspacePatchWrite(host, {rootPath: root});
-  const tool = tools.get('workspace.apply_text_patch');
+  const dispose = registerWorkspacePatchStage(host, {rootPath: root});
+  const tool = tools.get('workspace.stage_text_patch');
   assert.ok(tool);
   const linked = join(root, 'src', 'linked.txt');
   try {

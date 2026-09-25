@@ -7,7 +7,7 @@ import {
   createWorkspacePatchPreviewToolFromReader,
   MAX_WORKSPACE_PATCH_PREVIEW_BYTES,
 } from './patch-preview.js';
-import {createWorkspacePatchWriteToolFromReader} from './patch-write.js';
+import {createWorkspacePatchStageToolFromReader} from './patch-stage.js';
 export {
   MAX_SERIALIZED_WORKSPACE_PATCH_INPUT_BYTES,
   MAX_WORKSPACE_PATCH_EDITS,
@@ -17,11 +17,11 @@ export {
 } from './patch-preview.js';
 export type {WorkspacePatchPreviewEdit, WorkspacePatchPreviewResult} from './patch-preview.js';
 export {
-  WORKSPACE_PATCH_WRITE_SCOPE,
-  WORKSPACE_PATCH_WRITE_TOOL_NAME,
-  WORKSPACE_PATCH_WRITE_TOOL_VERSION,
-} from './patch-write.js';
-export type {WorkspacePatchWriteResult} from './patch-write.js';
+  WORKSPACE_PATCH_STAGE_SCOPE,
+  WORKSPACE_PATCH_STAGE_TOOL_NAME,
+  WORKSPACE_PATCH_STAGE_TOOL_VERSION,
+} from './patch-stage.js';
+export type {WorkspacePatchStageResult} from './patch-stage.js';
 
 export const WORKSPACE_READ_TOOL_NAME = 'workspace.read_text';
 export const WORKSPACE_READ_TOOL_VERSION = '1.0.0';
@@ -511,10 +511,10 @@ export function createWorkspacePatchPreviewTool(options: WorkspacePatchPreviewOp
   });
 }
 
-export function createWorkspacePatchWriteTool(options: WorkspacePatchPreviewOptions): RegisteredTool {
+export function createWorkspacePatchStageTool(options: WorkspacePatchPreviewOptions): RegisteredTool {
   const preview = createWorkspacePatchPreviewTool(options);
   const reader = createWorkspaceReadTool(options);
-  return createWorkspacePatchWriteToolFromReader({
+  return createWorkspacePatchStageToolFromReader({
     rootPath: options.rootPath,
     preview,
     reader,
@@ -649,6 +649,6 @@ export function registerWorkspacePatchPreview(
   return host.register(createWorkspacePatchPreviewTool(options));
 }
 
-export function registerWorkspacePatchWrite(host: ToolHost, options: WorkspacePatchPreviewOptions): () => void {
-  return host.register(createWorkspacePatchWriteTool(options));
+export function registerWorkspacePatchStage(host: ToolHost, options: WorkspacePatchPreviewOptions): () => void {
+  return host.register(createWorkspacePatchStageTool(options));
 }
