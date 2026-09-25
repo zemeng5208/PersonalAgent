@@ -1,10 +1,10 @@
 # 开发计划与进度
 
-更新：2026-09-21 · 当前阶段：Competition Profile 的离线审批工具循环及受限工作区列表/正文读取已进入 main，堆叠分支中的语音、记忆和认知增量仍待重建集成 · 通用 Local Profile 仅保留现有实现 · Core Runtime Profile 1 已冻结；真实 AgentArts 部署、trace、工具读回和完整比赛闭环仍未验收
+更新：2026-09-24 · 当前阶段：Competition Profile 的离线审批工具循环、公开演示资料知识检索、SQLite Memory 与可恢复事实投影已进入 main；语音仍待重建集成 · 通用 Local Profile 仅保留现有实现 · Core Runtime Profile 1 已冻结；真实知识工具读回和完整比赛闭环仍未验收
 
 本文维护工作状态，需求以 PRD 为准，当前交付顺序以[华为 ICT AgentArts Competition Profile](competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)为先。模块负责人和独占目录唯一登记在 [模块分工](MODULE_ASSIGNMENTS.md)，契约见[公共开发协议](DEVELOPMENT_PROTOCOL.md)，逐接口冻结和可用性见[当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md)。`goo122` 负责共享底座、公共协议、Runtime、工具、知识与记忆；`zemeng` 负责 Competition Profile、AgentArts、核心认知和桌面执行；`Potatos498` 负责 MOD-20～26 业务连接器。Local Profile 只作为可选保留，不进入当前比赛退出条件。阶段不代表承诺日期；正式排期需根据比赛时间、团队人数和接口验证结果确定。
 
-### 2026-09-20 主分支状态更新
+### 2026-09-20 主分支状态更新（历史快照）
 
 - PR #49 已合并为 `7f57f46b`：Competition Runtime 的离线 `tool_proposal → waiting_approval → allow_once → ToolGateway → continuation` 循环已集成；原始任务 deadline、审批过期、取消、幂等和载荷上限由测试覆盖。该证据仅为 Fake/离线，不代表真实 AgentArts 工具闭环。
 - PR #54、#77 已集成 Desktop 取消受理语义和过期审批 fail-closed 展示；Desktop 仍没有完整真实比赛链验收。
@@ -86,8 +86,8 @@
 | MOD-05 | M1/M2 | review | goo122 / PR #7、#26、#49 已合并；任务级 SQLite 授权、参数绑定、审批恢复、工具 Evidence、幂等重放和 Competition 离线工具循环已验证；跨任务持续授权、真实 SecretStore 和真实写入恢复尚未完成 |
 | MOD-06 | M2 | todo | 未启动 |
 | MOD-07 | M2 | todo | 未启动 |
-| MOD-08 | M2 | in_progress | `goo122` / PR #93～#97 已合并：provisional 只读端口、脱机文件适配器、显式 Policy 检索工具及 Obsidian 插件侧只读适配器已有合成数据测试；MOD-08E 的 Competition Fake 提案/本地审批离线测试已通过，待非作者评审。真实私人 Vault 授权/验收、生产 Runtime 注册、可安装 Obsidian 插件、私人结果云端发送控制和 LLM Wiki 未完成 |
-| MOD-09 | M1.6/M4 | review | `goo122` / PR #89、#90、#91 已合并 provisional 端口、Fake、SQLite 重启恢复和确认后原子激活投影；生产 capability、真实来源和删除仍 unavailable |
+| MOD-08 | M2 | in_progress | `goo122` / PR #93～#95、#97、#98 已经非作者评审并合并；只读端口、脱机及 Obsidian 只读适配器、Policy 检索工具和公开演示资料的 Competition Fake 审批链均完成离线验收。真实私人 Vault 授权/验收、生产注册、可安装插件、私人结果出机控制和 LLM Wiki 未完成 |
+| MOD-09 | M1.6/M4 | in_progress | `goo122` / PR #89～#91 已合并 provisional 端口、Fake、SQLite 重启恢复和确认后原子激活投影；09D 离线工作片已完成，生产 capability、真实来源和删除仍 unavailable |
 | MOD-10 | M4 后研究，无交付日期承诺 | todo | 未启动 |
 | MOD-11 | M1 | in_progress | `zemeng` / PR #54 已进入 main 并修复取消受理；转写任务消费 #75 仅合并到语音堆叠分支，DPI/透明命中及比赛实机验收仍未完成 |
 | MOD-12 | M1 | in_progress | `zemeng` / 文字交互、会话恢复、状态展示、取消和大工作区可用；真实 AgentArts 对话、工具回传与语音组合尚未完成端到端验收 |
@@ -216,7 +216,7 @@
 - 端口 provisional，真实 AgentArts 仍 unavailable；完整范围与验证见 [工作包](modules/COMPETITION-PORTS-01.md)。
 - 下一步为 zemeng 消费评审，然后补云适配与工具提案/执行结果契约；不能将文字 Fake 视为 Golden Path 完成。
 
-当前继续入口以[接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md)和模块台账为准。Core Runtime Profile 1 可稳定消费；PR #89 已把 MemoryQueryPort 与 FactChangeFeed 的 provisional 端口/Fake 合入 main，PR #90 已合并 SQLite 事实、查询快照和 delivery checkpoint 重启恢复。PR #91 的 MOD-09D 分支采用未生效暂存、provider 确认后原子激活和持久 `KEEP/RECHECK`，正在修复评审阻断，待新 head 验证及非作者复审；生产 capability、自动调度与真实数据仍 unavailable。其余公共接口仍按 Model/Coordination/ToolExecution/Evidence/Artifact 的最小端口与 Fake 推进。MOD-05 已具备任务级持久授权、审批恢复和本地 Evidence，但跨任务持续授权、真实 SecretStore、公开 Evidence 内容和真实写入恢复仍未完成。
+当前继续入口以[接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md)和模块台账为准。Core Runtime Profile 1 可稳定消费；PR #89～#91 已将 provisional Memory 端口/Fake、SQLite 事实与 delivery checkpoint 重启恢复，以及未生效暂存 → provider 确认 → 原子激活的持久 `KEEP/RECHECK` 投影合入 main。PR #98 已完成公开演示资料知识检索的 Fake Competition 审批链离线验收；真实知识工具提案、私人 Vault、生产 Memory capability、自动调度与真实数据仍未验收。MOD-05 已具备任务级持久授权、审批恢复和本地 Evidence，但跨任务持续授权、真实 SecretStore、公开 Evidence 内容和真实写入恢复仍未完成。
 
 ### MOD-25 地理编码修复工作包（PR #12，历史验收）
 

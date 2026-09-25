@@ -41,7 +41,7 @@ AgentArts 云端编排
 本地可信执行与 Evidence
 ```
 
-当前 main 已集成离线版本图、SQLite/Fake 原子 appendBatch、显式修复预览/提交、Competition Runtime 适配、Fake 工具循环及受限工作区列表/正文读取；事实查询/变化流、自动事实投影和语音仍未进入 main。上述认知与工作区能力仍为本地 provisional 实现，尚未形成统一生产世界状态、持续 Goal、真实 AgentArts 部署/API/trace 或比赛 Golden Path。
+当前 main 已集成离线版本图、SQLite/Fake 原子 appendBatch、显式修复预览/提交、Competition Runtime 适配、工具循环、受限工作区列表/正文读取，以及 provisional 的 SQLite 事实查询/变化流和可恢复投影；语音与事实流的生产自动消费仍未进入 main。上述认知与工具能力尚未形成统一生产世界状态、持续 Goal 或完整比赛 Golden Path。
 
 ## 3. Competition Profile 架构
 
@@ -126,13 +126,13 @@ Profile 是受信组合入口的部署选择，不作为模型输出字段，也
 
 ## 6. 目标端口与当前状态
 
-以下端口是目标消费面。main 已包含 Coordination、CloudAgent、CoordinationStore 和 ToolExecution 的部分离线子集；Memory/FactChangeFeed 仍在堆叠分支。未进入 main 的端口和真实外部语义保持 `unavailable`：
+以下端口是目标消费面。main 已包含 Coordination、CloudAgent、CoordinationStore、ToolExecution 和 provisional Memory/FactChangeFeed 的部分实现；未提供生产装配或完整真实验收的外部语义保持 `unavailable`：
 
 | 端口 | 用途 | 当前状态 | 最小要求 |
 | --- | --- | --- | --- |
 | `CoordinationPort` | Runtime 调用选定编排后端 | `provisional`；Fake/离线工具循环已集成 | deadline、取消、task/world-state revision、结构化结果 |
 | `CloudAgentPort` | 隔离 AgentArts DTO 与身份配置 | `provisional`；基础 adapter 已有，Workflow 输入仍在堆叠分支，真实 deployment/API/trace 未验证 | deployment/version 引用、trace、提案、错误和 usage |
-| `MemoryQueryPort` / `FactChangeFeed` | 提供最小事实快照与变化 | `unavailable` 于 main；公开端口和 Fake 仍在 #62/#71 堆叠分支 | 来源、有效期、敏感范围、revision、撤回和游标 |
+| `MemoryQueryPort` / `FactChangeFeed` | 提供最小事实快照与变化 | `provisional`；PR #89～#91 已合入公开端口、Fake、SQLite 与可恢复投影；生产自动消费及 capability 仍 `unavailable` | 来源、有效期、敏感范围、revision、撤回和游标 |
 | `CoordinationStorePort` | 保存 Goal/Decision/Plan 图谱 | `provisional`；main 有 SQLite/Fake 原子 `appendBatch`、revision 校验、事务和 rollback | expectedRevision、事务、冲突和命名空间隔离 |
 | `ToolExecutionPort` | 执行 AgentArts 工具提案 | `provisional`；审批/continuation 离线链已集成 | Policy、Approval、pending/confirmed/unknown、读回 |
 | `EvidencePort` / `ArtifactPort` | 保存和读取可信证据 | `unavailable`；仅有内部 Evidence 片段 | 访问控制、过期、容量、脱敏和引用稳定性 |
@@ -161,10 +161,10 @@ Profile 是受信组合入口的部署选择，不作为模型输出字段，也
 | AgentArts 部署 | 已部署版本、API 调用、健康/错误读回 | `unavailable` |
 | 可视化 Demo | Desktop 展示真实 profile、任务、审批、工具、证据和失败 | Desktop/审批基础已集成；完整比赛链未接入 |
 | 工具编排 | AgentArts 产生提案，本地授权执行，目标系统读回 | Fake 提案/审批/continuation 已集成；真实云端和目标读回 `unavailable` |
-| 知识接入 | 来源、检索结果、引用、敏感范围和失败测试 | `unavailable` |
+| 知识接入 | 来源、检索结果、引用、敏感范围和失败测试 | PR #98 已完成公开资料 Fake 审批检索；真实 Vault 与 AgentArts 知识闭环仍 `unavailable` |
 | 多 Agent | 角色必要性、交接、预算、降级和完整 trace | `unavailable` |
 | 效果评估 | 固定任务集、基线、指标、重复运行和结果 | 固定合成 runner 已集成；真实平台评估 `unavailable` |
-| 创新机制 | 世界状态 revision、影响边、最小 PlanPatch 回放 | main 有版本图、原子存储和显式修复预览/提交；事实流、自动投影和真实回放仍 `unavailable` |
+| 创新机制 | 世界状态 revision、影响边、最小 PlanPatch 回放 | main 有版本图、原子存储、显式修复预览/提交及离线可恢复事实投影；生产自动消费和真实回放仍 `unavailable` |
 
 文档、架构图、Fake、配置成功、云端页面截图或单次模型回答都不能单独把某项提升为完成。
 

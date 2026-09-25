@@ -56,6 +56,14 @@ query snapshots/cursors, pending feed batches, checkpoints and idempotent receip
 in a dedicated SQLite database. It uses `@personal-agent/storage` migrations and
 must not share a database file with another independent migration sequence.
 
+Migration 2 adds a trusted-host mapping for explicitly imported public-demo sources.
+`readPublicSourceHead` and `appendPublicSource` bind a stable source identity to the
+current exact FactRef. The append, feed event, sequence and mapping share one SQLite
+transaction; repeated current revisions return the stored fact without a new event.
+Stale proposals fail with `REVISION_CONFLICT`. Source-owned facts cannot be changed
+through ordinary `append`. These host methods do not register a Runtime capability
+or authorize private data or cloud transfer.
+
 This adapter is not registered as a Runtime capability and does not make the ports
 `frozen`. Its confirmation transaction covers only the memory-owned delivery journal;
 Goal/cognition projection and feed confirmation are not yet one atomic host

@@ -3,6 +3,18 @@ import { lstat, open, opendir, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep, win32 } from 'node:path';
 import { MAX_FRAME_BYTES, ProtocolError, validateToolValue } from '@personal-agent/contracts';
 import type { RegisteredTool, ToolContext, ToolDescriptor, ToolHost } from '@personal-agent/contracts';
+import {
+  createWorkspacePatchPreviewToolFromReader,
+  MAX_WORKSPACE_PATCH_PREVIEW_BYTES,
+} from './patch-preview.js';
+export {
+  MAX_SERIALIZED_WORKSPACE_PATCH_INPUT_BYTES,
+  MAX_WORKSPACE_PATCH_EDITS,
+  MAX_WORKSPACE_PATCH_PREVIEW_BYTES,
+  WORKSPACE_PATCH_PREVIEW_TOOL_NAME,
+  WORKSPACE_PATCH_PREVIEW_TOOL_VERSION,
+} from './patch-preview.js';
+export type {WorkspacePatchPreviewEdit, WorkspacePatchPreviewResult} from './patch-preview.js';
 
 export const WORKSPACE_READ_TOOL_NAME = 'workspace.read_text';
 export const WORKSPACE_READ_TOOL_VERSION = '1.0.0';
@@ -111,6 +123,11 @@ export interface WorkspaceListResult {
   path: string;
   entries: WorkspaceListEntry[];
   truncated: boolean;
+}
+
+export interface WorkspacePatchPreviewOptions extends WorkspaceReadOptions {
+  /** Maximum UTF-8 bytes in each intermediate and returned preview candidate. */
+  maxPreviewBytes?: number;
 }
 
 const utf8Encoder = new TextEncoder();
@@ -468,6 +485,25 @@ export function createWorkspaceReadTool(options: WorkspaceReadOptions): Register
   };
 }
 
+export function createWorkspacePatchPreviewTool(options: WorkspacePatchPreviewOptions): RegisteredTool {
+  const maxReadBytes = boundedInteger(options.maxReadBytes, DEFAULT_MAX_READ_BYTES, 'maxReadBytes', MAX_SCHEMA_BYTES);
+  const maxPreviewBytes = boundedInteger(
+    options.maxPreviewBytes,
+    maxReadBytes,
+    'maxPreviewBytes',
+    MAX_WORKSPACE_PATCH_PREVIEW_BYTES,
+  );
+  const reader = createWorkspaceReadTool({...options, maxReadBytes});
+  return createWorkspacePatchPreviewToolFromReader({
+    reader,
+    requiredScope: WORKSPACE_READ_SCOPE,
+    maxReadBytes,
+    maxPreviewBytes,
+    maxSerializedResultBytes: MAX_SERIALIZED_WORKSPACE_TOOL_RESULT_BYTES,
+    now: options.now ?? Date.now,
+  });
+}
+
 export function createWorkspaceListTool(options: WorkspaceListOptions): RegisteredTool {
   const root = canonicalRoot(options?.rootPath);
   const maxEntries = boundedInteger(
@@ -586,4 +622,11 @@ export function register(host: ToolHost, options: WorkspaceReadOptions): () => v
 
 export function registerWorkspaceList(host: ToolHost, options: WorkspaceListOptions): () => void {
   return host.register(createWorkspaceListTool(options));
+}
+
+export function registerWorkspacePatchPreview(
+  host: ToolHost,
+  options: WorkspacePatchPreviewOptions,
+): () => void {
+  return host.register(createWorkspacePatchPreviewTool(options));
 }
