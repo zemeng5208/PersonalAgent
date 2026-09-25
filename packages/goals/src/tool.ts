@@ -89,9 +89,16 @@ function execute(
   }
 }
 
-/** Resolve the stable host-bound store only when an approved tool executes. */
-export function createGoalTools(resolveStore: () => CoordinationStorePort): readonly [RegisteredTool, RegisteredTool] {
-  if (typeof resolveStore !== 'function') throw new GraphError('INVALID_ARGUMENT', 'Goal store resolver required');
+/** Accept a bound store or resolve it lazily after Runtime construction. */
+export function createGoalTools(
+  boundStoreOrResolver: CoordinationStorePort | (() => CoordinationStorePort)
+): readonly [RegisteredTool, RegisteredTool] {
+  if (typeof boundStoreOrResolver !== 'function' && (!boundStoreOrResolver
+    || typeof boundStoreOrResolver.read !== 'function' || typeof boundStoreOrResolver.append !== 'function')) {
+    throw new GraphError('INVALID_ARGUMENT', 'Bound goal store or resolver required');
+  }
+  const resolveStore = typeof boundStoreOrResolver === 'function'
+    ? boundStoreOrResolver : () => boundStoreOrResolver;
   let bound: CoordinationStorePort | undefined;
   const store = (): CoordinationStorePort => {
     let selected: CoordinationStorePort;

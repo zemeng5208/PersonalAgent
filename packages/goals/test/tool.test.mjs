@@ -14,7 +14,7 @@ const context = () => ({taskId: 'task-1', runId: 'run-1', signal: new AbortContr
 
 test('registered Goal tools validate arguments and return durable old/new revision refs', async () => {
   const store = new FakeCoordinationStoreHost().provision('desktop-user-v1:abc');
-  const [create, revise] = createGoalTools(() => store);
+  const [create, revise] = createGoalTools(store);
   assert.deepEqual([create.descriptor.name, revise.descriptor.name], [GOAL_CREATE_TOOL, GOAL_REVISE_TOOL]);
   assert.deepEqual(create.descriptor.requiredScopes, [GOAL_WRITE_SCOPE]);
   assert.equal(create.descriptor.sideEffect, 'local_write');

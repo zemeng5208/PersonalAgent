@@ -4,10 +4,12 @@
 - 所有权：`packages/goals/**` 与本文；Runtime、Policy、Desktop 和根 lock 保留原分工。
 - 前置：Goal 命令 PR #136 head `0cb6e97`；DEP01 Draft PR #152 head `4930d43` 提供可信宿主发起的持久单工具任务、审批恢复和读回。本包依赖该 Draft 的接口形态，不把它当作已合并能力。
 
-`createGoalTools(resolveStore)` 复用现有 `createGoal`、`reviseGoal`、图版本 CAS 和
+`createGoalTools(boundStoreOrResolver)` 复用现有 `createGoal`、`reviseGoal`、图版本 CAS 和
 `CoordinationStorePort`，提供 `goals.create` / `goals.revise` 两个 `RegisteredTool`。
-受信宿主先构造工具，Application 建成后绑定单个稳定 store；注册时不解析，执行时
-缺失或换绑一律拒绝。该时序兼容 DEP01 在 RuntimeApplication 构造中注册工具。
+已有 boundStore 可直接传；Desktop 可先构造工具并传受信 callback，Application 建成后
+绑定单个稳定 store。注册时不解析 callback，执行时缺失或换绑一律拒绝。当前
+RuntimeApplication 构造仅注册 descriptor，不执行 host 工具；Desktop 必须先绑定 store，
+再开放 IPC 或恢复已批准的任务。该时序兼容 DEP01 在构造中注册工具。
 输入包含精确图版本、完整 Goal 字段，修订再包含精确旧 Goal 版本；不包含 namespace。
 可信 Desktop 主进程负责固定并持久化不透明用户 namespace、绑定 store，以及由稳定
 commandId 生成/校验 sourceRef；Renderer 不能指定这两者。ToolGateway/Policy 仍负责
