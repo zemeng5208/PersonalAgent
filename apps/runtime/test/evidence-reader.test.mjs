@@ -110,3 +110,42 @@ test('Runtime Application exposes only a trusted-host reader with per-read autho
     app.close();
   }
 });
+
+test('trusted host revocation stays durable and cannot be replayed into a grant', async () => {
+  const path = database();
+  let app = createRuntimeApplication({path});
+  const task = app.runtime.submitTask({goal: 'synthetic', conversationId: 'conversation-a',
+    idempotencyKey: 'revoke-task'});
+  app.runtime.transitionTask(task.taskId, 'planning');
+  app.runtime.transitionTask(task.taskId, 'running');
+  app.runtime.requestToolApproval('revoke-approval', task.taskId, descriptor,
+    new Date(Date.now() + 60_000).toISOString(), 'private-input-digest');
+  app.runtime.respondApproval('revoke-approval', 'allow_once', 1);
+  const revision = app.runtime.getApproval('revoke-approval').revision;
+  assert.ok(app.runtime.policy.get('revoke-approval'));
+  const scope = {subjectRef: 'user-a', conversationId: 'conversation-a', taskId: task.taskId,
+    authorizationRef: 'revoke-approval', expectedApprovalRevision: revision};
+  let checks = 0;
+  await assert.rejects(app.revokeHostAuthorization({...scope, authorize: () => {checks++; return false;}}),
+    {code: 'UNAUTHORIZED'});
+  assert.ok(app.runtime.policy.get('revoke-approval'));
+  await assert.rejects(app.revokeHostAuthorization({...scope, conversationId: 'conversation-b',
+    authorize: () => {checks++; return true;}}), {code: 'UNAUTHORIZED'});
+  assert.ok(app.runtime.policy.get('revoke-approval'));
+  assert.deepEqual(await app.revokeHostAuthorization({...scope, authorize: () => {checks++; return true;}}),
+    {revoked: true, grantPresent: false, approvalRevision: revision});
+  assert.equal(checks, 3);
+  assert.equal(app.runtime.policy.get('revoke-approval'), undefined);
+  app.close();
+  app = createRuntimeApplication({path});
+  try {
+    assert.equal(app.runtime.policy.get('revoke-approval'), undefined);
+    assert.deepEqual(await app.revokeHostAuthorization({...scope, authorize: () => true}),
+      {revoked: false, grantPresent: false, approvalRevision: revision});
+    assert.deepEqual(app.runtime.respondApproval('revoke-approval', 'allow_once', 1),
+      {accepted: true, approvalState: 'allowed'});
+    assert.equal(app.runtime.policy.get('revoke-approval'), undefined);
+  } finally {
+    app.close();
+  }
+});

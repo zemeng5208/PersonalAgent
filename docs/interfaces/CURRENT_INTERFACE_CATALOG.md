@@ -155,7 +155,7 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | 结果 | 结构化 `TaskResult` | 当前仅 `resultSummary` 字符串；需正文、模型、usage、verification、plan/evidence 分离 | MOD-02/03 `goo122` |
 | 会话 | 显式创建、重命名、归档、删除、重试关联 | 当前只有 `task.submit` 携带 conversationId 和只读列表 | MOD-02/03 `goo122` |
 | 调度 | 循环规则、唤醒计时器、睡眠恢复公共 API | Runtime 只有内部一次性调度，没有 wire operation | MOD-03 `goo122` |
-| Evidence | 公开 list/get/content 与提交端口 | 新增 provisional 宿主 `ScopedEvidenceReader` 元数据 list/get，逐次要求宿主鉴权；Runtime 仍无主体 ACL、wire operation、内容读取或提交端口，生产宿主鉴权来源未接入 | MOD-03/05 `goo122` |
+| Evidence / 授权撤销 | 公开 list/get/content、提交与 revoke 端口 | 新增 provisional 宿主 `ScopedEvidenceReader` 元数据 list/get 与 `revokeHostAuthorization`，逐次要求宿主鉴权、核对持久审批并读回 grant 删除；Runtime 仍无主体 ACL、wire operation、内容读取或提交端口，生产宿主鉴权来源未接入 | MOD-03/05 `goo122` |
 | Artifact | 创建、读取、过期、释放、分片和背压 | 仅有 attachment/artifact 引用原则，没有服务和 Fake | MOD-01/02/05 `goo122` |
 | 设置 | 生产 `settings.get` / `settings.update` | Schema 和 Fake 存在；生产 Runtime 不公布也不处理 | MOD-02/03 `goo122` |
 | 连接器 | 生产 `connector.connect` / `connector.disconnect` wire 路由 | Schema 与 ConnectorHost 存在，但 Runtime 未公布/分派，账号语义不一致 | MOD-05 `goo122` |

@@ -26,6 +26,15 @@ credentials or raw checkpoint content. Runtime does not store a subject ACL, so 
 is not a Renderer/Client wire `EvidencePort` and cannot be enabled without a real
 host authorization source. No Evidence capability is announced.
 
+`RuntimeApplication.revokeHostAuthorization` is a separate trusted-host call.
+It checks the authenticated subject through a caller-supplied callback, the
+persisted task/conversation and approval revision, then removes the matching
+SQLite-backed Policy grant and reads back its absence. Repeated calls return
+`revoked: false`; an idempotent approval response cannot recreate the grant.
+Revocation prevents later grant consumption. It does not roll back a tool that
+has already started, so the task's cancellation and result reconciliation stay
+separate. There is no public revoke wire operation or persisted subject ACL yet.
+
 ### Provisional graph storage
 
 Trusted hosts may call `provisionCoordinationStore(namespace)` or
