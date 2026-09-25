@@ -136,3 +136,53 @@ test('denied or unknown writes never replay, and other host namespaces cannot re
     await rm(directory, {recursive: true, force: true});
   }
 });
+
+test('approval persisted before dispatch resumes after restart without a second grant', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'personal-agent-host-tool-'));
+  const databasePath = path.join(directory, 'runtime.sqlite');
+  let writes = 0;
+  const tool = {descriptor, execute: async () => { writes++; return {revision: 3}; }};
+  const input = request('crash-gap');
+  let app = createRuntimeApplication({path: databasePath, profile: 'huawei_ict_agentarts',
+    hostUserNamespace: 'user-1', tools: [tool]});
+  try {
+    const submitted = app.submitHostToolTask(input);
+    await waitFor(app, submitted.task.taskId, 'waiting_approval');
+    await waitForIdle(app);
+    const approval = app.readHostToolTask(submitted.task.taskId).approval;
+    // Simulate the process stopping after the durable approval transaction and
+    // before RuntimeApplication.send can dispatch the resumed worker.
+    app.runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
+    app.close();
+    app = createRuntimeApplication({path: databasePath, profile: 'huawei_ict_agentarts',
+      hostUserNamespace: 'user-1', tools: [tool]});
+    assert.equal(app.readHostToolTask(submitted.task.taskId).approval.state, 'allowed');
+    app.resumeHostToolTask(submitted.task.taskId);
+    await waitFor(app, submitted.task.taskId, 'succeeded');
+    assert.equal(writes, 1);
+    assert.deepEqual(app.readHostToolTask(submitted.task.taskId).confirmed.result, {revision: 3});
+  } finally {
+    await waitForIdle(app);
+    app.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('host task rejects numbers that JSON persistence would silently change', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'personal-agent-host-tool-'));
+  const nullable = {...descriptor, name: 'fixture.nullable', inputSchema: {type: 'object',
+    required: ['value'], additionalProperties: false,
+    properties: {value: {type: ['number', 'null']}}}};
+  const app = createRuntimeApplication({path: path.join(directory, 'runtime.sqlite'),
+    profile: 'huawei_ict_agentarts', hostUserNamespace: 'user-1',
+    tools: [{descriptor: nullable, execute: async () => ({revision: 1})}]});
+  try {
+    assert.throws(() => app.submitHostToolTask({commandId: 'lossy', toolName: nullable.name,
+      toolVersion: nullable.version, arguments: {value: Number.NaN},
+      deadline: new Date(Date.now() + 60_000).toISOString()}), {code: 'INVALID_ARGUMENT'});
+    assert.equal(app.runtime.listTasks({conversationId: 'host-tool:user-1'}).items.length, 0);
+  } finally {
+    app.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});

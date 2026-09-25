@@ -11,6 +11,7 @@ import type {CoordinationPort, CoordinationRequest, CoordinationRepairCandidateR
 import {startCoordinationTask, assertCompetitionExportAllowed, type CompetitionToolExport} from './coordination.js';
 import {createLocalRepairTool, prepareLocalRepair, startLocalRepairTask, LOCAL_REPAIR_CHECKPOINT} from './local-repair.js';
 import type {LocalRepairHostOptions, SubmitLocalRepairRequest} from './local-repair.js';
+import {isDeepStrictEqual} from 'node:util';
 type SuccessfulResponse = Extract<Response, {outcome: 'ok'}>;
 
 const CONVERSATION_HISTORY_LIMIT = 20;
@@ -153,7 +154,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     catch { throw new ProtocolError('INVALID_ARGUMENT', 'Host tool arguments must be cloneable'); }
     try {
       const persisted = JSON.parse(JSON.stringify(args)) as Record<string, unknown>;
-      if (toolArgumentsDigest(persisted) !== toolArgumentsDigest(args)) throw Error();
+      if (!isDeepStrictEqual(persisted, args)) throw Error();
       args = persisted;
     } catch { throw new ProtocolError('INVALID_ARGUMENT', 'Host tool arguments must retain their JSON value'); }
     validateToolValue(descriptor.inputSchema, args);
@@ -172,7 +173,17 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
         error: {code: 'RESULT_UNKNOWN', message: 'Host tool was interrupted; reconcile its result before retrying', retryable: false},
       });
     }
+    else if (task.state === 'waiting_approval') this.resumeHostToolTask(task.taskId);
     return this.readHostToolTask(task.taskId);
+  }
+
+  /** Call after restart for a persisted allowed approval that predated dispatch. */
+  resumeHostToolTask(taskId: string): HostToolTaskReadback {
+    const readback = this.readHostToolTask(taskId);
+    if (readback.task.state === 'waiting_approval' && readback.approval?.state === 'allowed') {
+      this.resumeTask(taskId);
+    }
+    return this.readHostToolTask(taskId);
   }
 
   /** Trusted-host readback; raw tool results never enter the public task snapshot. */
