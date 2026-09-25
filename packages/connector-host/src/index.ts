@@ -84,6 +84,7 @@ export class ConnectorHost {
           if (!registration.secretRefs.has(ref)) throw new ProtocolError('SCOPE_DENIED', 'Connector requested an undeclared secret');
           if (signal.aborted) throw new ProtocolError('CANCELLED', 'Connector connection was cancelled');
           const value = await this.secretStore.read(ref, signal);
+          if (signal.aborted) throw new ProtocolError('CANCELLED', 'Connector connection was cancelled');
           if (value === undefined) throw new ProtocolError('UNAUTHORIZED', 'Required connector credential is unavailable');
           return value;
         },
