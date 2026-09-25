@@ -389,6 +389,7 @@ namespace PersonalAgent.VoiceHost {
         public override void Flush() { }
         public override long Seek(long offset, SeekOrigin origin) { throw new NotSupportedException(); }
         public override void SetLength(long value) { throw new NotSupportedException(); }
+        public override void Write(byte[] buffer, int offset, int count) { throw new NotSupportedException(); }
 
         public bool WriteChunk(byte[] data, int offset, int count) {
             lock (_lock) {
