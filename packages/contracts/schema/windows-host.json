@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://personal-agent.local/schema/windows-host-0.1.0",
+  "title": "PersonalAgent Windows Host internal pipe frames (provisional)",
+  "oneOf": [
+    {"$ref": "#/$defs/hello"},
+    {"$ref": "#/$defs/helloAck"},
+    {"$ref": "#/$defs/bind"},
+    {"$ref": "#/$defs/observe"},
+    {"$ref": "#/$defs/observed"},
+    {"$ref": "#/$defs/execute"},
+    {"$ref": "#/$defs/cancel"},
+    {"$ref": "#/$defs/status"},
+    {"$ref": "#/$defs/statusReply"},
+    {"$ref": "#/$defs/result"}
+  ],
+  "$defs": {
+    "version": {"const": "0.1.0"},
+    "id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_-]+$"},
+    "nonce": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "targetRef": {"type": "string", "minLength": 16, "maxLength": 128, "pattern": "^[A-Za-z0-9_-]+$"},
+    "utc": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"},
+    "hello": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "protocolVersion", "requestId", "clientNonce"],
+      "properties": {"kind": {"const": "hello"}, "protocolVersion": {"$ref": "#/$defs/version"},
+        "requestId": {"$ref": "#/$defs/id"}, "clientNonce": {"$ref": "#/$defs/nonce"}}
+    },
+    "helloAck": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "protocolVersion", "requestId", "clientNonce", "hostNonce", "sessionId"],
+      "properties": {"kind": {"const": "hello_ack"}, "protocolVersion": {"$ref": "#/$defs/version"},
+        "requestId": {"$ref": "#/$defs/id"}, "clientNonce": {"$ref": "#/$defs/nonce"},
+        "hostNonce": {"$ref": "#/$defs/nonce"}, "sessionId": {"$ref": "#/$defs/id"}}
+    },
+    "bind": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "protocolVersion", "requestId", "sessionId", "hostNonce"],
+      "properties": {"kind": {"const": "bind"}, "protocolVersion": {"$ref": "#/$defs/version"},
+        "requestId": {"$ref": "#/$defs/id"}, "sessionId": {"$ref": "#/$defs/id"},
+        "hostNonce": {"$ref": "#/$defs/nonce"}}
+    },
+    "observe": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "protocolVersion", "requestId", "sessionId", "deadline", "capability"],
+      "properties": {"kind": {"const": "observe"}, "protocolVersion": {"$ref": "#/$defs/version"},
+        "requestId": {"$ref": "#/$defs/id"}, "sessionId": {"$ref": "#/$defs/id"},
+        "deadline": {"$ref": "#/$defs/utc"}, "capability": {"const": "notepad.replace_text"}}
+    },
+    "observed": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "protocolVersion", "requestId", "sessionId", "targetRef", "expiresAt", "source"],
+      "properties": {"kind": {"const": "observed"}, "protocolVersion": {"$ref": "#/$defs/version"},
+        "requestId": {"$ref": "#/$defs/id"}, "sessionId": {"$ref": "#/$defs/id"},
+        "targetRef": {"$ref": "#/$defs/targetRef"}, "expiresAt": {"$ref": "#/$defs/utc"},
+        "source": {"const": "windows-uia"}}
+    },
+    "execute": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "protocolVersion", "requestId", "sessionId", "taskId", "runId", "toolName", "toolVersion", "authorizationRef", "argumentsDigest", "targetRef", "deadline", "expectedText", "replacementText"],
+      "properties": {"kind": {"const": "execute"}, "protocolVersion": {"$ref": "#/$defs/version"},
+        "requestId": {"$ref": "#/$defs/id"}, "sessionId": {"$ref": "#/$defs/id"},
+        "taskId": {"$ref": "#/$defs/id"}, "runId": {"$ref": "#/$defs/id"},
+        "toolName": {"const": "computer.notepad.replace_text"}, "toolVersion": {"const": "1.0.0"},
+        "authorizationRef": {"$ref": "#/$defs/id"},
+        "argumentsDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "targetRef": {"$ref": "#/$defs/targetRef"}, "deadline": {"$ref": "#/$defs/utc"},
+        "expectedText": {"type": "string", "maxLength": 4096},
+        "replacementText": {"type": "string", "maxLength": 4096}}
+    },
+    "cancel": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "protocolVersion", "requestId", "sessionId", "runId"],
+      "properties": {"kind": {"const": "cancel"}, "protocolVersion": {"$ref": "#/$defs/version"},
+        "requestId": {"$ref": "#/$defs/id"}, "sessionId": {"$ref": "#/$defs/id"},
+        "runId": {"$ref": "#/$defs/id"}}
+    },
+    "status": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "protocolVersion", "requestId", "sessionId", "runId"],
+      "properties": {"kind": {"const": "status"}, "protocolVersion": {"$ref": "#/$defs/version"},
+        "requestId": {"$ref": "#/$defs/id"}, "sessionId": {"$ref": "#/$defs/id"},
+        "runId": {"$ref": "#/$defs/id"}}
+    },
+    "statusReply": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "protocolVersion", "requestId", "sessionId", "runId", "state"],
+      "properties": {"kind": {"const": "status_reply"}, "protocolVersion": {"$ref": "#/$defs/version"},
+        "requestId": {"$ref": "#/$defs/id"}, "sessionId": {"$ref": "#/$defs/id"},
+        "runId": {"$ref": "#/$defs/id"}, "state": {"enum": ["in_progress", "not_found"]}}
+    },
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "protocolVersion", "requestId", "sessionId", "taskId", "runId", "targetRef", "state", "startedAt", "finishedAt"],
+      "properties": {"kind": {"const": "result"}, "protocolVersion": {"$ref": "#/$defs/version"},
+        "requestId": {"$ref": "#/$defs/id"}, "sessionId": {"$ref": "#/$defs/id"},
+        "taskId": {"$ref": "#/$defs/id"}, "runId": {"$ref": "#/$defs/id"},
+        "targetRef": {"$ref": "#/$defs/targetRef"},
+        "state": {"enum": ["verified", "refused", "cancelled", "result_unknown"]},
+        "startedAt": {"$ref": "#/$defs/utc"}, "finishedAt": {"$ref": "#/$defs/utc"},
+        "evidenceRef": {"$ref": "#/$defs/id"},
+        "errorCode": {"enum": ["INVALID_ARGUMENT", "UNAUTHORIZED", "UNSUPPORTED_CAPABILITY", "TARGET_STALE", "USER_TAKEOVER", "CANCELLED", "TIMEOUT", "RESULT_UNKNOWN", "EXTERNAL_FAILURE"]}}
+    }
+  }
+}

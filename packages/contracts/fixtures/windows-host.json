@@ -1,0 +1,15 @@
+{
+  "valid": [
+    {"kind":"hello","protocolVersion":"0.1.0","requestId":"r1","clientNonce":"11111111111111111111111111111111"},
+    {"kind":"hello_ack","protocolVersion":"0.1.0","requestId":"r1","clientNonce":"11111111111111111111111111111111","hostNonce":"22222222222222222222222222222222","sessionId":"s1"},
+    {"kind":"bind","protocolVersion":"0.1.0","requestId":"r1","sessionId":"s1","hostNonce":"22222222222222222222222222222222"},
+    {"kind":"observe","protocolVersion":"0.1.0","requestId":"r2","sessionId":"s1","deadline":"2026-09-25T12:01:00.000Z","capability":"notepad.replace_text"},
+    {"kind":"observed","protocolVersion":"0.1.0","requestId":"r2","sessionId":"s1","targetRef":"opaque-notepad-1","expiresAt":"2026-09-25T12:01:00.000Z","source":"windows-uia"},
+    {"kind":"execute","protocolVersion":"0.1.0","requestId":"r3","sessionId":"s1","taskId":"t1","runId":"run1","toolName":"computer.notepad.replace_text","toolVersion":"1.0.0","authorizationRef":"grant1","argumentsDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","targetRef":"opaque-notepad-1","deadline":"2026-09-25T12:01:00.000Z","expectedText":"before","replacementText":"after"},
+    {"kind":"result","protocolVersion":"0.1.0","requestId":"r3","sessionId":"s1","taskId":"t1","runId":"run1","targetRef":"opaque-notepad-1","state":"verified","startedAt":"2026-09-25T12:00:00.000Z","finishedAt":"2026-09-25T12:01:00.000Z","evidenceRef":"e1"}
+  ],
+  "invalid": [
+    {"kind":"observe","protocolVersion":"0.1.0","requestId":"r2","sessionId":"s1","deadline":"2026-09-25T12:01:00.000Z","capability":"computer.shell"},
+    {"kind":"result","protocolVersion":"0.1.0","requestId":"r3","sessionId":"s1","taskId":"t1","runId":"run1","targetRef":"opaque-notepad-1","state":"verified","startedAt":"2026-09-25T12:00:00.000Z","finishedAt":"2026-09-25T12:01:00.000Z"}
+  ]
+}
