@@ -162,6 +162,10 @@ pending. The current module verification uses synthetic data only.
 
 The entry first calls that exact scoped durable read. A pending batch gives `NOT_APPLICABLE`;
 another consumer's batch remains the host's `NOT_FOUND`. The trusted caller
-must retain the original projection receipt and batch token across restart;
-`drain()` only reports a batch count and watermark and cannot recover those
-identities by itself.
+must recover the original projection receipt and batch token across restart.
+DEP02 currently has no fixed-scope enumeration of completed impact receipts:
+if a durable projection or impact completion commits before its call returns,
+the caller can lose the token even with a later task checkpoint. `drain()` only
+reports a batch count and watermark. Production composition needs a scoped
+recovery read from the existing projection records before it can claim this
+handoff is restart complete.

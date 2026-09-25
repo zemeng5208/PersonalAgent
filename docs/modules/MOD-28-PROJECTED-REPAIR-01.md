@@ -16,4 +16,4 @@
 
 目前测试只覆盖合成公共 Fact 更正、批次不匹配、伪造报告和过期图谱。DEP02 #162 已在 `readCompletedImpact(batchToken)` 提供固定消费方作用域的持久完成回执；生产组合、真实来源撤回证明和一次联合验收不在本工作包内。单纯搜索不到来源不能触发撤回。
 
-`decideDurableFactProjection` 直接调用上述固定作用域的持久读回；未处理批次不给建议，其他消费方批次保留宿主 `NOT_FOUND`。调用方必须在重启后仍知道原投影回执及 token；`drain()` 的批数和水位不足以恢复这些身份。当前 cognition 包不另建状态库或事实流。
+`decideDurableFactProjection` 直接调用上述固定作用域的持久读回；未处理批次不给建议，其他消费方批次保留宿主 `NOT_FOUND`。调用方必须在重启后找回原投影回执及 token。若投影或影响处理在返回前已提交，随后才写的 task checkpoint 无法覆盖这一崩溃窗口；`drain()` 的批数和水位也不足以恢复身份。DEP02 还需从现有持久投影记录按固定作用域列出已处理和未处理批次。当前 cognition 包不另建状态库或事实流。
