@@ -5,9 +5,14 @@ import {link, mkdir, mkdtemp, open, readFile, readdir, rm, writeFile} from 'node
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import test from 'node:test';
+import {InMemoryAuthorizationPolicy} from '@personal-agent/policy';
+import {ToolGateway, toolArgumentsDigest} from '@personal-agent/tool-gateway';
 import {
   createWorkspacePatchApplyTool,
+  registerWorkspacePatchApply,
   WORKSPACE_PATCH_APPLY_SCOPE,
+  WORKSPACE_PATCH_APPLY_TOOL_NAME,
+  WORKSPACE_PATCH_APPLY_TOOL_VERSION,
 } from '../dist/index.js';
 
 const sha = text => createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex');
@@ -92,4 +97,38 @@ test('failed durable backup creation cannot reach the first source write', {skip
   await rm(recoveryRootPath, {recursive: true});
   await assert.rejects(tool.execute(request(sha('before\n')), context()), {code: 'RESULT_UNKNOWN'});
   assert.equal(await readFile(source, 'utf8'), 'before\n');
+});
+
+test('Policy and ToolGateway require a parameter-bound one-use apply grant', {skip: unavailable}, async t => {
+  const {root, recoveryRootPath, source} = await fixture(t);
+  const policy = new InMemoryAuthorizationPolicy();
+  const gateway = new ToolGateway({policy});
+  const dispose = registerWorkspacePatchApply(gateway, {rootPath: root, recoveryRootPath, powerShellPath});
+  const argumentsValue = request(sha('before\n'));
+  const invocation = {
+    toolName: WORKSPACE_PATCH_APPLY_TOOL_NAME,
+    toolVersion: WORKSPACE_PATCH_APPLY_TOOL_VERSION,
+    arguments: argumentsValue,
+    taskId: 'task-apply-synthetic', runId: 'run-apply-gateway',
+    authorizationRef: 'authorization-apply-gateway',
+    deadline: new Date(Date.now() + 60_000).toISOString(),
+    signal: new AbortController().signal,
+  };
+  await assert.rejects(gateway.invoke(invocation), {code: 'UNAUTHORIZED'});
+  assert.equal(await readFile(source, 'utf8'), 'before\n');
+  policy.grant({
+    authorizationRef: invocation.authorizationRef,
+    taskId: invocation.taskId,
+    toolName: invocation.toolName,
+    scopes: ['workspace:read', 'workspace:write', WORKSPACE_PATCH_APPLY_SCOPE],
+    argumentsDigest: toolArgumentsDigest(argumentsValue),
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    maxUses: 1,
+  });
+  await assert.rejects(gateway.invoke({...invocation, arguments: {...argumentsValue, path: 'src/other.txt'}}), {code: 'SCOPE_DENIED'});
+  assert.equal((await gateway.invoke(invocation)).applied, true);
+  await assert.rejects(gateway.invoke(invocation), {code: 'UNAUTHORIZED'});
+  dispose();
+  await assert.rejects(gateway.invoke(invocation), {code: 'UNSUPPORTED_CAPABILITY'});
+  assert.equal(await readFile(source, 'utf8'), 'after\n');
 });

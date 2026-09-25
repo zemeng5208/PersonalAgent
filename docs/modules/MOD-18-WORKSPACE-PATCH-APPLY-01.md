@@ -9,4 +9,4 @@ helper 用 .NET `FileStream(FileShare.None)` 独占打开源文件，校验已�
 
 系统 Windows PowerShell 5.1 在本机为 `Restricted`，固定 `.ps1` 被策略拒绝；实现不使用 `ExecutionPolicy Bypass`。定向测试改用本机已有 PowerShell 7（`RemoteSigned`），因此受信宿主需要提供允许执行此本地脚本的 PowerShell 路径，正式安装/运行环境尚未验收。恢复目录访问控制由受信宿主创建和管理，备份可能包含源码，不是 Artifact，也不自动出机。
 
-最小验证：coding-tools build 通过；在系统临时目录合成工作区、声明 Node 24.15.0 与 PowerShell 7 下 apply 定向测试 4/4 通过：成功应用/同锁读回且无残留备份、旧 SHA 与已占用源文件不覆盖、缺独立 scope/取消/硬链接拒绝、首写前备份创建失败时原文件不变。未运行全仓 check、真实用户工作区、AgentArts 或编程链联合验收。`ToolGateway` 当前把所有 `local_write` 异常保守映射 `RESULT_UNKNOWN`，包括 helper 首写前冲突；分阶段错误保留属于公共 owner 的后续接口工作。
+最小验证：coding-tools build 通过；在系统临时目录合成工作区、声明 Node 24.15.0 与 PowerShell 7 下 apply 定向测试 5/5 通过：成功应用/同锁读回且无残留备份、旧 SHA 与已占用源文件不覆盖、缺独立 scope/取消/硬链接拒绝、首写前备份创建失败时原文件不变，以及经现有 Policy/ToolGateway 精确参数绑定的一次性授权、重复拒绝与注册释放。未运行全仓 check、真实用户工作区、AgentArts 或编程链联合验收。`ToolGateway` 当前把所有 `local_write` 异常保守映射 `RESULT_UNKNOWN`，包括 helper 首写前冲突；分阶段错误保留属于公共 owner 的后续接口工作。
