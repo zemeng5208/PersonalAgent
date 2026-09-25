@@ -40,7 +40,7 @@ const icon = id => `<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke
 
 const tone = state => ['ready', 'connected'].includes(state) ? 'ready' : ['unavailable', 'disconnected', 'disabled', '未连接'].includes(state) ? 'off' : 'warn';
 const badge = (label, state) => `<span class="badge" data-tone="${tone(state)}"><span class="badge-dot"></span>${label}</span>`;
-const healthLabels = {ready: '可用', connecting: '连接中', degraded: '降级', reauth_required: '需要重新授权', disconnected: '未连接', unavailable: '不可用'};
+const healthLabels = {ready: 'Runtime 报告就绪', connecting: '连接中', degraded: '降级', reauth_required: '需要重新授权', disconnected: '未连接', unavailable: '不可用'};
 
 export function mountAdmin(root, invoke, escape) {
   let section = 'settings';
@@ -79,14 +79,14 @@ export function mountAdmin(root, invoke, escape) {
       return `<tr><td>${escape(item.name ?? '—')}</td><td>${escape(item.version ?? '—')}</td><td>${escape(item.sideEffect ?? '—')}</td><td>${escape(scopes || '—')}</td><td>${badge(escape(label), state?.state)}${state?.reason ? `<br><small>${escape(state.reason)}</small>` : ''}</td></tr>`;
     }).join('');
     const empty = status.state === 'loaded' ? 'Runtime 已确认返回空能力目录。' : escape(status.reason);
-    return `<div class="sheet"><div class="row"><h2>已公布能力</h2><span class="spacer"></span><button class="btn btn-sm" id="refresh-capabilities">刷新</button></div><p class="muted" role="${status.state === 'error' ? 'alert' : 'status'}">${escape(status.reason)}</p><div class="row"><button class="btn btn-sm" data-jump="models">模型状态</button><button class="btn btn-sm" data-jump="connections">连接健康</button><button class="btn btn-sm" data-jump="authorizations">授权</button></div><div class="table-scroll"><table><thead><tr><th>名称</th><th>版本</th><th>副作用</th><th>范围</th><th>健康</th></tr></thead><tbody>${rows || `<tr><td colspan="5" class="empty">${empty}</td></tr>`}</tbody></table></div></div>`;
+    return `<div class="sheet"><div class="row"><h2>已公布能力</h2><span class="spacer"></span><button class="btn btn-sm" id="refresh-capabilities">刷新</button></div><p class="muted" role="${status.state === 'error' ? 'alert' : 'status'}">${escape(status.reason)}</p><p class="muted">健康状态来自 Runtime 能力目录，不代表外部服务已经验收。</p><div class="row"><button class="btn btn-sm" data-jump="models">模型状态</button><button class="btn btn-sm" data-jump="connections">连接健康</button><button class="btn btn-sm" data-jump="authorizations">授权</button></div><div class="table-scroll"><table><thead><tr><th>名称</th><th>版本</th><th>副作用</th><th>范围</th><th>健康</th></tr></thead><tbody>${rows || `<tr><td colspan="5" class="empty">${empty}</td></tr>`}</tbody></table></div></div>`;
   }
 
   function healthTable(data) {
     const rows = data.health.map(item => `<tr><td>${escape(item.id)}</td><td>${badge(escape(healthLabels[item.state] ?? '状态未知'), item.state)}</td><td>${escape(item.reason ?? '—')}</td></tr>`).join('');
     const status = data.capabilityDirectory ?? {state: 'unavailable', reason: '可信宿主尚未报告能力目录状态'};
     const empty = status.state === 'loaded' ? 'Runtime 未报告连接健康项。' : escape(status.reason);
-    return `<div class="sheet"><div class="row"><h2>连接健康</h2><span class="spacer"></span><button class="btn btn-sm" data-jump="capabilities">查看能力目录</button></div><p class="muted" role="${status.state === 'error' ? 'alert' : 'status'}">${escape(status.reason)}</p><div class="table-scroll"><table><thead><tr><th>能力</th><th>状态</th><th>说明</th></tr></thead><tbody>${rows || `<tr><td colspan="3" class="empty">${empty}</td></tr>`}</tbody></table></div></div>`;
+    return `<div class="sheet"><div class="row"><h2>连接健康</h2><span class="spacer"></span><button class="btn btn-sm" data-jump="capabilities">查看能力目录</button></div><p class="muted" role="${status.state === 'error' ? 'alert' : 'status'}">${escape(status.reason)}</p><p class="muted">仅列出 Runtime 能力目录报告的健康项；未公布的外部连接不会出现在这里。</p><div class="table-scroll"><table><thead><tr><th>能力</th><th>状态</th><th>说明</th></tr></thead><tbody>${rows || `<tr><td colspan="3" class="empty">${empty}</td></tr>`}</tbody></table></div></div>`;
   }
 
   function modelEditor(data) {

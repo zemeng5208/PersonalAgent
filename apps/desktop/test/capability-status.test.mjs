@@ -64,8 +64,15 @@ test('admin shows only reported capability health and preserves unavailable and 
   assert.match(html(), /&lt;not-ready&gt;/);
   assert.doesNotMatch(html(), /data-tone="ready"/);
 
+  render({...base, capabilities: [{name: 'fixture.read', version: '1'}],
+    health: [{id: 'fixture.read', state: 'ready'}],
+    capabilityDirectory: {state: 'loaded', reason: '已公布 1 项'},
+    adminNavigation: {page: 'capabilities', revision: 4}});
+  assert.match(html(), /Runtime 报告就绪/);
+  assert.match(html(), /不代表外部服务已经验收/);
+
   render({...base, capabilityDirectory: {state: 'error', reason: '能力目录读取失败（TIMEOUT）'},
-    adminNavigation: {page: 'connections', revision: 4}});
+    adminNavigation: {page: 'connections', revision: 5}});
   assert.match(html(), /role="alert"/);
   assert.match(html(), /能力目录读取失败/);
   assert.doesNotMatch(html(), /Runtime 未报告连接健康项/);
