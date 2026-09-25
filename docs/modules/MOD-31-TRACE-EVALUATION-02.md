@@ -77,3 +77,22 @@ node tests/manual/agentarts/evaluation/score-runs.mjs --input .cache/mod31-redac
 
 命令只读取指定文件并向标准输出写聚合报告，不上传、不保存原始 trace，也不从环境自动选择
 云端账号。报告中的 `comparisonReady` 仅表示记录和 trace 标识齐全，真实证据仍须人工复核。
+
+## 2026-09-25 AgentArts 链共享非会议回执
+
+MOD-04B 在其忽略目录保存了 `mod04b-nonmeeting-2026-09-25T11-30-13.198Z.json`；本包
+只读复用了同一脱敏回执，没有再发云请求。它记录单次合成 query 级调用，报告控制器版本
+`v20260925192219`、证据审查版本 `v20260925191806`；请求级 deployment version 为
+`unavailable`，不能据版本名称推定该请求绑定的运行实例版本。
+
+| 可观察项 | 本次值 | 评估边界 |
+| --- | --- | --- |
+| 云请求与协议 | 1 次、HTTP 200、完整 SSE、strict parser accepted、`repair_candidate` 契约匹配 | 只证明该次云输出可被本地适配器接受 |
+| Workflow 事件 | start 3、end 3、error 0、任务终结事件齐全 | 仅为数量配平；没有角色名称、身份和顺序读回，不能计角色路由或交接正确率 |
+| 完成与成本 | result 324 字符；usage、请求级 trace 关联和部署版本缺失 | 不能计决策准确率、耗时/token 对照或协作提升 |
+| 本地动作 | `localToolExecuted=false`、`graphWritten=false`、`localFallback=false` | 不构成授权执行、目标读回或修复完成证据 |
+
+该回执没有固定案例 ID 和可独立复核的 `KEEP/RECHECK/REJECT` 判读，也没有可输入评分器的
+逐角色事件与 trace 标识。因此不创建伪造的 `scoreAgentArtsRuns` 记录；此处仅报告协议和
+事件数量的观察结果。后续复用 MOD-29 的平台 trace 读回补充真实角色字段；只有字段实际
+存在时才记路由/交接，仍不从三个 Workflow 数量推断三角色协作有效。
