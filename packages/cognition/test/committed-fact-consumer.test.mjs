@@ -26,6 +26,7 @@ function fixture() {
       links: [{eventId: 'confirmed-event', fact: ref('meeting', 2),
         node: ref('memory-fact:meeting', 2)}]},
     processed: {batchToken: 'confirmed-batch', report},
+    at,
     deadline: new Date(Date.now() + 5_000).toISOString(), signal: new AbortController().signal
   }};
 }
@@ -46,7 +47,7 @@ test('completed batch reaches only its affected scope and bounded advice', async
   assert.equal(store.read().revision, before, 'consumer must not write');
 });
 
-test('unrelated completion and changed graph cannot be treated as this batch', async () => {
+test('unrelated completion and forged report cannot be treated as this batch', async () => {
   const {store, input} = fixture();
   let calls = 0;
   const forbidden = {decide() { calls++; throw new Error('must not run'); }};
@@ -57,10 +58,46 @@ test('unrelated completion and changed graph cannot be treated as this batch', a
   forged.items[0].action = 'KEEP';
   await assert.rejects(() => decideDurableFactProjection(store, forbidden,
     reader({...processed, report: forged}), request), {code: 'INVALID_ARGUMENT'});
-  store.append(store.read().revision, node('later', 'fact'));
-  await assert.rejects(() => decideDurableFactProjection(store, forbidden, reader(processed), request),
-    {code: 'REVISION_CONFLICT'});
   assert.equal(calls, 0);
+});
+
+test('completed historical batch rechecks the current graph after later unrelated projection', async () => {
+  const {store, input} = fixture();
+  const {processed, ...request} = input;
+  store.append(store.read().revision, node('later', 'fact'));
+  const actual = await decideDurableFactProjection(store, decision, reader(processed), request);
+  assert.equal(actual.scope.graphRevision, store.read().revision);
+  assert.deepEqual(actual.scope.items.map(item => item.node.id), ['goal', 'plan']);
+});
+
+test('graph advance during advice invalidates the returned current scope', async () => {
+  const {store, input} = fixture();
+  const {processed, ...request} = input;
+  await assert.rejects(() => decideDurableFactProjection(store, {
+    async decide({events}) {
+      store.append(store.read().revision, node('concurrent', 'fact'));
+      return decision.decide({events});
+    }
+  }, reader(processed), request), {code: 'REVISION_CONFLICT'});
+});
+
+test('a superseded projected Fact cannot advise from its old node revision', async () => {
+  const {store, input} = fixture();
+  const {processed, ...request} = input;
+  store.append(store.read().revision, node('memory-fact:meeting', 'fact', [], 'newer correction'));
+  const forbidden = {decide() { throw new Error('must not run'); }};
+  const actual = await decideDurableFactProjection(store, forbidden, reader(processed), request);
+  assert.deepEqual(actual.scope.items, []);
+  assert.deepEqual(actual.suggestions, []);
+});
+
+test('current evaluation cannot precede the durable impact time', async () => {
+  const {store, input} = fixture();
+  const {processed, ...request} = input;
+  const forbidden = {decide() { throw new Error('must not run'); }};
+  await assert.rejects(() => decideDurableFactProjection(store, forbidden, reader(processed), {
+    ...request, at: '2026-09-25T08:59:59.000Z'
+  }), {code: 'INVALID_ARGUMENT'});
 });
 
 test('durable reader gates pending and foreign batches before advice', async () => {

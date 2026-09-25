@@ -151,21 +151,25 @@ cognition handoff after a public Fact batch has been durably projected and its
 impact processed. The trusted Runtime caller supplies the projection receipt;
 the fixed-scope host reads the completed impact report for the same `batchToken`.
 An unscoped impact array cannot establish that this batch completed. This entry
-checks the current graph revision and recomputes the impact report from the
+checks the original and current graph revisions and recomputes impact from the
 bound store before selecting only the projected Facts' RECHECK scope and asking
 for bounded Laya advice. The returned scope can be passed to the existing
 explicit `previewProjectedRepair` path. It does not poll or confirm a feed,
 write the graph, perform a repair, or execute any suggested action. DEP02's
 `readCompletedImpact(batchToken)` exposes the required shape for its fixed
-consumer, but the production composition and joint acceptance are still
-pending. The current module verification uses synthetic data only.
+consumer. For a recovered older batch, the entry verifies the persisted report
+against the graph at its original revision, then computes the current impact at
+the caller's explicit `at`. A superseded Fact version cannot trigger advice;
+another graph append during advice causes a revision conflict. Production
+composition and joint acceptance are still pending. Module tests use synthetic
+data only.
 
 The entry first calls that exact scoped durable read. A pending batch gives `NOT_APPLICABLE`;
 another consumer's batch remains the host's `NOT_FOUND`. The trusted caller
 must recover the original projection receipt and batch token across restart.
-DEP02 currently has no fixed-scope enumeration of completed impact receipts:
-if a durable projection or impact completion commits before its call returns,
-the caller can lose the token even with a later task checkpoint. `drain()` only
-reports a batch count and watermark. Production composition needs a scoped
-recovery read from the existing projection records before it can claim this
-handoff is restart complete.
+DEP02's `listImpactReceipts({afterGraphRevision,limit})` now pages pending and
+completed receipts for the fixed consumer from the existing projection records.
+Production composition must replay them before advancing the feed and only
+advance its existing task checkpoint after accounting for each handoff.
+`drain()` alone reports only a batch count and watermark. The module has not
+been connected to a real source trigger or restart flow yet.

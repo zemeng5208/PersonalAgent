@@ -10,6 +10,8 @@ import type {ProjectedRepairInput, ProjectedRepairScope} from './projected-repai
 
 /** Local host handoff after its batch-scoped durable impact completion. */
 export interface DurableFactProjectionInput extends ProjectedRepairInput {
+  /** Trusted host evaluation time for the current graph, not the old report. */
+  at: string;
   deadline: string;
   signal: AbortSignal;
 }
@@ -63,21 +65,31 @@ async function decideCompletedFactProjection(
     || !input.processed.batchToken || input.processed.batchToken !== input.projection?.batchToken) {
     throw new CognitionError('INVALID_ARGUMENT');
   }
-  const snapshot = structuredClone(store.read());
-  if (snapshot.revision !== input.projection.graphRevision) {
-    throw new CognitionError('REVISION_CONFLICT');
+  if (!Number.isSafeInteger(input.projection.graphRevision)
+    || input.projection.graphRevision < 0) throw new CognitionError('INVALID_ARGUMENT');
+  const historical = structuredClone(store.read(input.projection.graphRevision));
+  const completedReport = analyzeImpact(historical, input.processed.report?.evaluatedAt);
+  if (!isDeepStrictEqual(completedReport, input.processed.report)) {
+    throw new CognitionError('INVALID_ARGUMENT');
   }
-  const report = analyzeImpact(snapshot, input.processed.report?.evaluatedAt);
-  if (!isDeepStrictEqual(report, input.processed.report)) throw new CognitionError('INVALID_ARGUMENT');
+  const snapshot = structuredClone(store.read());
+  if (snapshot.revision < input.projection.graphRevision) throw new CognitionError('REVISION_CONFLICT');
+  const report = analyzeImpact(snapshot, input.at);
+  if (Date.parse(input.at) < Date.parse(completedReport.evaluatedAt)) {
+    throw new CognitionError('INVALID_ARGUMENT');
+  }
+  // A local current-graph view of the original links; it is not a new receipt.
+  const currentProjection = {...input.projection, graphRevision: snapshot.revision};
   const scope = selectProjectedRepairScope(snapshot, report.evaluatedAt, {
-    graphNamespace: input.graphNamespace, projection: input.projection
+    graphNamespace: input.graphNamespace, projection: currentProjection
   });
   const suggestions = await decideProjectedFactImpact(decision, {
     graphNamespace: input.graphNamespace,
-    projection: input.projection,
+    projection: currentProjection,
     impact: report,
     deadline: input.deadline,
     signal: input.signal
   });
+  if (store.read().revision !== snapshot.revision) throw new CognitionError('REVISION_CONFLICT');
   return {scope, suggestions};
 }

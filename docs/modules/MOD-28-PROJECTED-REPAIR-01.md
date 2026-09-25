@@ -14,6 +14,6 @@
 
 `decideDurableFactProjection` 接收已持久投影的回执，通过可信 Runtime 宿主按同一 `batchToken` 读回已处理影响报告。它从绑定图谱重算报告，检查 graph revision 与报告一致，再沿用局部 RECHECK 范围和有界 Laya 建议入口。其返回值只有局部范围与建议；显式修复候选仍走 `previewProjectedRepair`，不能自动提交或执行。
 
-目前测试只覆盖合成公共 Fact 更正、批次不匹配、伪造报告和过期图谱。DEP02 #162 已在 `readCompletedImpact(batchToken)` 提供固定消费方作用域的持久完成回执；生产组合、真实来源撤回证明和一次联合验收不在本工作包内。单纯搜索不到来源不能触发撤回。
+目前测试只覆盖合成公共 Fact 更正、批次不匹配、伪造报告、积压批次重算和建议期间图谱变化。DEP02 #162 已在 `readCompletedImpact(batchToken)` 提供固定消费方作用域的持久完成回执；生产组合、真实来源撤回证明和一次联合验收不在本工作包内。单纯搜索不到来源不能触发撤回。
 
-`decideDurableFactProjection` 直接调用上述固定作用域的持久读回；未处理批次不给建议，其他消费方批次保留宿主 `NOT_FOUND`。调用方必须在重启后找回原投影回执及 token。若投影或影响处理在返回前已提交，随后才写的 task checkpoint 无法覆盖这一崩溃窗口；`drain()` 的批数和水位也不足以恢复身份。DEP02 还需从现有持久投影记录按固定作用域列出已处理和未处理批次。当前 cognition 包不另建状态库或事实流。
+`decideDurableFactProjection` 直接调用上述固定作用域的持久读回；未处理批次不给建议，其他消费方批次保留宿主 `NOT_FOUND`。积压批次先按原图谱 revision 校验持久报告，再用调用方显式 `at` 重算当前图谱的局部 RECHECK；若关联 Fact 已被后续版本取代则不给旧版本建议，建议期间图谱再变化则拒绝返回。DEP02 的 `listImpactReceipts({afterGraphRevision,limit})` 现在可从现有持久记录按固定作用域列出待处理和已完成批次。生产组合须先恢复这些批次，再推进 feed 和现有 task checkpoint；本包不另建状态库或事实流。
