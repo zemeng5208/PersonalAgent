@@ -30,6 +30,14 @@ async function waitFor(application, taskId, state) {
   throw new Error(`Task did not reach ${state}`);
 }
 
+async function waitForIdle(application) {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    if (application.activeTaskCount === 0) return;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  throw new Error('Runtime Application did not finish active task cleanup');
+}
+
 test('trusted host tool task persists approval and resumes once after restart', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'personal-agent-host-tool-'));
   const databasePath = path.join(directory, 'runtime.sqlite');
@@ -48,6 +56,7 @@ test('trusted host tool task persists approval and resumes once after restart', 
     assert.equal(writes, 0);
     assert.throws(() => app.submitHostToolTask({...input, arguments: {title: 'Changed'}}),
       {code: 'REVISION_CONFLICT'});
+    await waitForIdle(app);
     app.close();
 
     app = createRuntimeApplication({path: databasePath, profile: 'huawei_ict_agentarts',
@@ -69,6 +78,7 @@ test('trusted host tool task persists approval and resumes once after restart', 
     assert.equal(app.submitHostToolTask(input).task.taskId, taskId);
     assert.equal(writes, 1);
   } finally {
+    await waitForIdle(app);
     app.close();
     await rm(directory, {recursive: true, force: true});
   }
@@ -110,6 +120,7 @@ test('denied or unknown writes never replay, and other host namespaces cannot re
       expectedRevision: approval.revision, decision: 'allow_once'});
     await waitFor(app, submitted.task.taskId, 'waiting_reconciliation');
     assert.equal(writes, 1);
+    await waitForIdle(app);
     app.close();
     app = createRuntimeApplication({path: databasePath, profile: 'huawei_ict_agentarts',
       hostUserNamespace: 'user-1', tools: [tool]});
@@ -120,6 +131,7 @@ test('denied or unknown writes never replay, and other host namespaces cannot re
       hostUserNamespace: 'user-2', tools: [tool]});
     assert.throws(() => app.readHostToolTask(submitted.task.taskId), {code: 'NOT_FOUND'});
   } finally {
+    await waitForIdle(app);
     app.close();
     await rm(directory, {recursive: true, force: true});
   }
