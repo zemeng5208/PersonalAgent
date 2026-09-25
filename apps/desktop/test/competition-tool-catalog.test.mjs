@@ -7,6 +7,7 @@ import {createDesktopCompetitionToolCatalog} from '../electron/competition-tool-
 
 const source = fileURLToPath(new URL('../fixtures/agentarts/meeting-update.json', import.meta.url));
 const content = readFileSync(source, 'utf8');
+const canonicalContent = content.replace(/\r\n/g, '\n');
 const cache = fileURLToPath(new URL('../.cache/', import.meta.url));
 mkdirSync(cache, {recursive: true});
 const createWorkspaceReadTool = options => ({
@@ -28,8 +29,13 @@ test('Competition catalog selects only the readable fixed synthetic fixture and 
       assert.equal(catalog.export.accepts({arguments: args}), false);
     }
     const result = {path: 'meeting-update.json', encoding: 'utf-8', byteLength: Buffer.byteLength(content), content};
-    assert.deepEqual(await catalog.export.project({result, signal}), {content});
+    assert.deepEqual(await catalog.export.project({result, signal}), {content: canonicalContent});
     await assert.rejects(catalog.export.project({result: {...result, content: 'private'}, signal}), /unavailable/);
+    const alternate = content === canonicalContent ? canonicalContent.replace(/\n/g, '\r\n') : canonicalContent;
+    writeFileSync(path.join(rootPath, 'meeting-update.json'), alternate);
+    assert.equal(await catalog.availability.available(selection), true);
+    assert.deepEqual(await catalog.export.project({result: {...result, content: alternate,
+      byteLength: Buffer.byteLength(alternate)}, signal}), {content: canonicalContent});
     writeFileSync(path.join(rootPath, 'meeting-update.json'), 'changed');
     assert.equal(await catalog.availability.available(selection), false);
     await assert.rejects(catalog.export.project({result, signal}), /unavailable/);

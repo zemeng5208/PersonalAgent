@@ -7,6 +7,10 @@ const FIXTURE_NAME = 'meeting-update.json';
 const FIXTURE_CONTENT = '{"kind":"synthetic-meeting-update","revision":1,"meeting":"Competition MVP fixture","update":"The synthetic review is scheduled for Friday.","owner":"Example Team"}\n';
 const MAX_READ_BYTES = 4096;
 
+function expectedFixture(content) {
+  return content === FIXTURE_CONTENT || content === FIXTURE_CONTENT.replace(/\n/g, '\r\n');
+}
+
 /** Only the bundled synthetic file may be selected or exported to AgentArts. */
 export function createDesktopCompetitionToolCatalog({rootPath, createWorkspaceReadTool, now = Date.now}) {
   const fixturePath = path.join(rootPath, FIXTURE_NAME);
@@ -18,8 +22,9 @@ export function createDesktopCompetitionToolCatalog({rootPath, createWorkspaceRe
     if (!active) return false;
     try {
       const file = await lstat(fixturePath);
-      if (!file.isFile() || file.size !== Buffer.byteLength(FIXTURE_CONTENT, 'utf8')) return false;
-      return await readFile(fixturePath, 'utf8') === FIXTURE_CONTENT;
+      if (!file.isFile() || file.size > MAX_READ_BYTES) return false;
+      const content = await readFile(fixturePath, 'utf8');
+      return file.size === Buffer.byteLength(content, 'utf8') && expectedFixture(content);
     } catch { return false; }
   };
   return {
@@ -43,8 +48,8 @@ export function createDesktopCompetitionToolCatalog({rootPath, createWorkspaceRe
       project: async ({result, signal}) => {
         if (signal.aborted || !await fixtureReady() || !result || typeof result !== 'object'
           || result.path !== FIXTURE_NAME || result.encoding !== 'utf-8'
-          || result.content !== FIXTURE_CONTENT
-          || result.byteLength !== Buffer.byteLength(FIXTURE_CONTENT, 'utf8')) {
+          || !expectedFixture(result.content)
+          || result.byteLength !== Buffer.byteLength(result.content, 'utf8')) {
           throw Error('Synthetic Competition result is unavailable');
         }
         return {content: FIXTURE_CONTENT};
