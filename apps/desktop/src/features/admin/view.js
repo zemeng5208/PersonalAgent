@@ -1,8 +1,9 @@
 import {stateNames} from '../conversation/state.js';
 import {themePreference, saveTheme, saveCalm} from '../../ui/preferences.js';
 import {profilePage, bindProfile} from './profile.js';
-import {approvalPresentation, authorizationListHtml, nextApprovalExpiry} from './approval-status.js';
+import {approvalPresentation, authorizationHistoryHtml, authorizationListHtml, nextApprovalExpiry} from './approval-status.js';
 import {agentArtsModelPage} from './agentarts-model.js';
+import {evidencePanelHtml} from './evidence-view.js';
 
 export const sections = {
   settings: '常规', import: '导入', profile: '个人资料', appearance: '外观', voice: '语音', configuration: '配置',
@@ -42,7 +43,7 @@ const tone = state => ['ready', 'connected'].includes(state) ? 'ready' : ['unava
 const badge = (label, state) => `<span class="badge" data-tone="${tone(state)}"><span class="badge-dot"></span>${label}</span>`;
 const healthLabels = {ready: 'Runtime 报告就绪', connecting: '连接中', degraded: '降级', reauth_required: '需要重新授权', disconnected: '未连接', unavailable: '不可用'};
 
-export function taskTable(data, escape) {
+export function taskTable(data, escape, evidenceStates = new Map()) {
   const rows = data.tasks.map(task => {
     const steps = Array.isArray(task.steps) ? task.steps : [];
     const evidenceCount = Array.isArray(task.evidenceRefs) ? task.evidenceRefs.length : 0;
@@ -51,7 +52,10 @@ export function taskTable(data, escape) {
     const stepList = steps.length
       ? `<ol>${steps.map(step => `<li>${escape(step.label)} · ${escape(step.state)}</li>`).join('')}</ol>`
       : '<p>Runtime 未提供步骤记录。</p>';
-    return `<tr><td>${escape(task.taskId)}</td><td>${stateNames[task.state] ?? escape(task.state)}</td><td>${task.revision}</td><td>${escape(summary)}</td><td><details><summary>步骤 ${steps.length} 项 · Evidence 引用 ${evidenceCount} 条</summary>${stepList}</details></td></tr>`;
+    const evidence = evidenceCount
+      ? `<button class="btn btn-sm" data-evidence-task="${escape(task.taskId)}">读取执行元数据</button><div data-evidence-panel="${escape(task.taskId)}">${evidencePanelHtml(evidenceStates.get(task.taskId), escape)}</div>`
+      : '<span class="muted">尚无 Evidence 引用。</span>';
+    return `<tr><td>${escape(task.taskId)}</td><td>${stateNames[task.state] ?? escape(task.state)}</td><td>${task.revision}</td><td>${escape(summary)}</td><td><details ${evidenceStates.has(task.taskId) ? 'open' : ''}><summary>步骤 ${steps.length} 项 · Evidence 引用 ${evidenceCount} 条</summary>${stepList}${evidence}</details></td></tr>`;
   }).join('');
   return `<div class="sheet"><h2>任务记录</h2><p class="muted">只展示 Runtime 任务快照；Evidence 引用数量不代表目标系统已核实。此接口未提供任务来源或云端 trace。</p><div class="table-scroll"><table><thead><tr><th>任务</th><th>状态</th><th>版本</th><th>结果摘要</th><th>步骤与证据</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="empty">还没有任务<br>从悬浮面板开始新的对话</td></tr>'}</tbody></table></div></div>`;
 }
@@ -62,6 +66,36 @@ export function mountAdmin(root, invoke, escape) {
   let modelEditorOpen = false;
   let approvalExpiryTimer;
   let current = {tasks: [], capabilities: [], health: [], approvals: []};
+  const evidenceStates = new Map();
+  const revocations = new Map();
+  let history = {items: [], nextBeforeRowId: undefined, loading: false, loaded: false, error: false};
+  let historyGeneration = 0;
+  async function loadHistory(reset = false) {
+    if (history.loading && !reset) return;
+    const generation = reset ? ++historyGeneration : historyGeneration;
+    const beforeRowId = reset ? undefined : history.nextBeforeRowId;
+    if (reset) history = {items: [], nextBeforeRowId: undefined, loading: false, loaded: false, error: false};
+    history.loading = true;
+    queueMicrotask(() => {
+      if (generation === historyGeneration && section === 'authorizations') render(current);
+    });
+    try {
+      const page = await invoke('approval.history',
+        beforeRowId === undefined ? {} : {beforeRowId});
+      if (generation !== historyGeneration) return;
+      const next = page.nextBeforeRowId;
+      if (next !== undefined && (!Number.isSafeInteger(next) || next < 1
+        || (beforeRowId !== undefined && next >= beforeRowId))) throw Error('Invalid approval history cursor');
+      const items = new Map(history.items.map(item => [item.approvalId, item]));
+      for (const item of page.items) items.set(item.approvalId, item);
+      history = {items: [...items.values()], nextBeforeRowId: next,
+        loading: false, loaded: true, error: false};
+    } catch {
+      if (generation !== historyGeneration) return;
+      history = {...history, loading: false, error: true};
+    }
+    if (section === 'authorizations') render(current);
+  }
   const clearApprovalExpiryTimer = () => {
     if (approvalExpiryTimer === undefined) return;
     clearTimeout(approvalExpiryTimer);
@@ -229,7 +263,7 @@ export function mountAdmin(root, invoke, escape) {
     const approvalNow = Date.now();
     let content = '';
     if (section === 'overview') {
-      content = `<p class="muted">把注意力留给重要的事。</p><div class="cards"><div class="card"><span>本次会话任务</span><b>${data.tasks.length}</b></div><div class="card"><span>${modelTitle}</span><b>${modelLabel}</b><span>${escape(modelReason)}</span></div><div class="card"><span>麦克风</span><b>未连接</b><span>语音供应商尚未接入</span></div></div>${taskTable(data, escape)}`;
+      content = `<p class="muted">把注意力留给重要的事。</p><div class="cards"><div class="card"><span>本次会话任务</span><b>${data.tasks.length}</b></div><div class="card"><span>${modelTitle}</span><b>${modelLabel}</b><span>${escape(modelReason)}</span></div><div class="card"><span>麦克风</span><b>未连接</b><span>语音供应商尚未接入</span></div></div>${taskTable(data, escape, evidenceStates)}`;
     } else if (section === 'capabilities') {
       content = capabilityTable(data);
     } else if (section === 'models') {
@@ -237,9 +271,10 @@ export function mountAdmin(root, invoke, escape) {
     } else if (section === 'connections') {
       content = healthTable(data);
     } else if (section === 'tasks') {
-      content = taskTable(data, escape);
+      content = taskTable(data, escape, evidenceStates);
     } else if (section === 'authorizations') {
-      content = authorizationListHtml(data.approvals, escape, approvalNow);
+      content = authorizationListHtml(data.approvals, escape, approvalNow, {canRevoke: true, revocations})
+        + authorizationHistoryHtml(history.items, escape, history, approvalNow, {canRevoke: true, revocations});
     } else if (directSettings[section]) {
       content = settingsPane(data, directSettings[section]);
     } else if (section === 'profile') {
@@ -329,14 +364,80 @@ export function mountAdmin(root, invoke, escape) {
       button.disabled = true;
       try {
         await invoke('authorization.respond', {approvalId: button.dataset.id, taskId: button.dataset.task, decision: button.dataset.approval, expectedRevision: Number(button.dataset.revision)});
+        void loadHistory(true);
       } catch (error) {
         render(current);
         root.querySelector('#error').textContent = error.message;
       }
     }));
+    root.querySelectorAll('[data-revoke]').forEach(button => button.addEventListener('click', async () => {
+      const authorizationRef = button.dataset.revoke;
+      const taskId = button.dataset.task;
+      const expectedApprovalRevision = Number(button.dataset.revision);
+      const approval = [...(current.approvals ?? []), ...history.items].find(item => item.approvalId === authorizationRef
+        && item.taskId === taskId && item.revision === expectedApprovalRevision && item.state === 'allowed');
+      if (!approval) { render(current); return; }
+      const key = `${authorizationRef}:${expectedApprovalRevision}`;
+      revocations.set(key, {state: 'checking'});
+      render(current);
+      try {
+        const result = await invoke('authorization.revoke', {taskId, authorizationRef, expectedApprovalRevision});
+        if (result?.grantPresent !== false || result.approvalRevision !== expectedApprovalRevision
+          || typeof result.revoked !== 'boolean') throw Error('Authorization readback mismatch');
+        revocations.set(key, {state: 'confirmed', revoked: result.revoked});
+      } catch {
+        revocations.set(key, {state: 'error'});
+      }
+      render(current);
+    }));
+    root.querySelector('#approval-history-more')?.addEventListener('click', () => { void loadHistory(); });
+    root.querySelector('#approval-history-refresh')?.addEventListener('click', () => { void loadHistory(true); });
+    root.querySelector('#approval-history-retry')?.addEventListener('click', () => {
+      void loadHistory(!history.loaded);
+    });
+    if (section === 'authorizations' && !history.loaded && !history.loading && !history.error) {
+      void loadHistory();
+    }
   }
 
   root.querySelector('#admin-close').addEventListener('click', () => invoke('admin.close').catch(error => { root.querySelector('#error').textContent = error.message; }));
+  root.querySelector('#content').addEventListener('click', async event => {
+    const button = event.target.closest('[data-evidence-task], [data-evidence-id], [data-evidence-more], [data-evidence-retry]');
+    if (!button) return;
+    const panel = button.closest('[data-evidence-panel]');
+    const taskId = button.dataset.evidenceTask ?? panel?.dataset.evidencePanel;
+    if (!current.tasks.some(task => task.taskId === taskId)) return;
+    if (button.dataset.evidenceId) {
+      const state = evidenceStates.get(taskId);
+      const evidenceId = button.dataset.evidenceId;
+      if (state?.status !== 'loaded' || !state.items.some(item => item.evidenceId === evidenceId)) return;
+      evidenceStates.set(taskId, {...state, detail: undefined, detailStatus: 'loading'});
+      render(current);
+      try {
+        const detail = await invoke('evidence.get', {taskId, evidenceId});
+        if (detail?.evidenceId !== evidenceId) throw Error('Evidence identity mismatch');
+        evidenceStates.set(taskId, {...state, detail, detailStatus: 'loaded'});
+      } catch {
+        evidenceStates.set(taskId, {...state, detail: undefined, detailStatus: 'error'});
+      }
+    } else {
+      const beforeEvidenceId = button.hasAttribute('data-evidence-more')
+        ? evidenceStates.get(taskId)?.nextBeforeEvidenceId : undefined;
+      evidenceStates.set(taskId, {status: 'loading'});
+      render(current);
+      try {
+        const page = await invoke('evidence.list', {taskId, limit: 10, ...(beforeEvidenceId ? {beforeEvidenceId} : {})});
+        if (!Array.isArray(page?.items) || page.items.some(item => typeof item?.evidenceId !== 'string')) {
+          throw Error('Invalid Evidence page');
+        }
+        evidenceStates.set(taskId, {status: 'loaded', items: page.items,
+          nextBeforeEvidenceId: page.nextBeforeEvidenceId});
+      } catch {
+        evidenceStates.set(taskId, {status: 'error'});
+      }
+    }
+    render(current);
+  });
   root.querySelector('nav').addEventListener('click', event => {
     const button = event.target.closest('[data-page]');
     if (button) { section = button.dataset.page; render(current); }
