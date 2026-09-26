@@ -129,6 +129,36 @@ test('stale host availability rejects an unverified cloud proposal before approv
   }
 });
 
+test('cloud proposal rejects a catalog from an earlier running task revision', async () => {
+  let app;
+  let executions = 0;
+  const port = {execute: async request => {
+    app.runtime.recordProgress(request.taskId,
+      {stepId: 'catalog-proposal-race', label: 'task changed while cloud was running'});
+    return {kind: 'tool_proposal', proposalId: 'proposal-stale', toolName: descriptor.name,
+      toolVersion: descriptor.version, arguments: {path: 'secret-path'}, verification: 'unverified'};
+  }};
+  app = createRuntimeApplication({path: ':memory:', profile: 'huawei_ict_agentarts',
+    coordination: port,
+    tools: [{descriptor, execute: async () => { executions++; return {value: 'local-only'}; }}],
+    competitionToolExports: [toolExport],
+    competitionToolAvailability: [{toolName: descriptor.name, toolVersion: descriptor.version,
+      available: () => true}],
+  });
+  try {
+    const client = new Client(app, Date.now);
+    await client.connect();
+    const {taskId} = await client.call('task.submit', {goal: 'Reject stale catalog proposal',
+      conversationId: 'catalog'}, {idempotencyKey: 'catalog-proposal-revision-race'});
+    const task = await waitFor(app, taskId, ['failed', 'waiting_approval']);
+    assert.equal(task.state, 'failed');
+    assert.equal(executions, 0);
+    assert.deepEqual((await client.call('approval.list', {taskId})).items, []);
+  } finally {
+    for (let i = 0; i < 200 && app.activeTaskCount; i++) await new Promise(resolve => setTimeout(resolve, 5));
+    app.close();
+  }
+});
 test('async availability cannot export a catalog after the running task revision changes', async () => {
   let app;
   let availabilityCalls = 0;

@@ -108,6 +108,7 @@ async function exchange(
   continuation?: CoordinationContinuation,
   beforeInvoke?: () => void,
   availableTools?: readonly CompetitionAvailableTool[],
+  onInvokeRevision?: (revision: number) => void,
 ): Promise<CoordinationResult> {
   let onAbort: () => void = () => {};
   const cancelled = new Promise<never>((_resolve, reject) => {
@@ -122,11 +123,13 @@ async function exchange(
         // Recheck dynamic export scope at the actual adapter handoff, after
         // tool execution/projection and on every replay of a saved result.
         beforeInvoke?.();
+        const revision = runtime.getTask(taskId).revision;
+        onInvokeRevision?.(revision);
         try {
           return await port.execute(Object.freeze({
           taskId,
           goal,
-          revision: runtime.getTask(taskId).revision,
+          revision,
           deadline: context.deadline,
           signal: context.signal,
           ...(continuation === undefined ? {} : {continuation}),
@@ -174,6 +177,7 @@ export function startCoordinationTask(
       if (availableTools && availableTools.length === 0) {
         throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'No Competition tools are available for this task');
       }
+      let proposalRevision = runtime.getTask(taskId).revision;
       const result = pending ?? await exchange(runtime, port, taskId, goal, context, continuation, () => {
         const prior = receipts.find(item => item.proposal.proposalId === continuation?.proposalId);
         if (prior) {
@@ -185,7 +189,7 @@ export function startCoordinationTask(
           if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Competition result export cancelled');
           if (Date.now() >= Date.parse(context.deadline)) throw new ProtocolError('TIMEOUT', 'Competition result export expired');
         }
-      }, availableTools);
+      }, availableTools, revision => { proposalRevision = revision; });
       if (result.kind === 'text') {
         return {resultSummary: summary(result.text, result.verification), evidenceRefs};
       }
@@ -201,7 +205,8 @@ export function startCoordinationTask(
       if (result.verification !== 'mock' && options.toolCatalog) {
         await options.toolCatalog.assertProposal({taskId, toolName: result.toolName,
           toolVersion: result.toolVersion, arguments: result.arguments,
-          deadline: context.deadline, signal: context.signal});
+          deadline: context.deadline, signal: context.signal, revision: proposalRevision,
+          firstCloudRequest: pending === undefined && continuation === undefined});
       }
       if (!tools) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition tool execution is unavailable');
 

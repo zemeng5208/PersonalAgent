@@ -155,14 +155,17 @@ export class RuntimeCompetitionToolCatalog {
 
   /** A cloud proposal must match the persisted selection and the original local Schema. */
   async assertProposal(input: {taskId: string; toolName: string; toolVersion: string;
-    arguments: Record<string, unknown>; deadline: string; signal: AbortSignal}): Promise<void> {
-    const revision = this.runtime.getTask(input.taskId).revision;
-    this.assertCurrent({...input, revision});
+    arguments: Record<string, unknown>; deadline: string; signal: AbortSignal;
+    revision: number; firstCloudRequest: boolean}): Promise<void> {
+    const revision = input.revision;
+    this.assertCurrent(input);
     const saved = this.runtime.loadCheckpoint(input.taskId, CHECKPOINT) as CatalogCheckpoint | undefined;
     const entry = saved?.entries.find(item => item.name === input.toolName && item.version === input.toolVersion);
     const binding = this.availability.find(item => item.toolName === input.toolName && item.toolVersion === input.toolVersion);
     const descriptor: ToolDescriptor | undefined = this.tools.list().find(item => item.name === input.toolName && item.version === input.toolVersion);
-    if (!entry || !binding || !descriptor || descriptor.requiresPresence || saved?.deadline !== input.deadline
+    if (!entry || !binding || !descriptor || descriptor.requiresPresence
+      || (input.firstCloudRequest && saved?.revision !== revision)
+      || (saved !== undefined && saved.revision > revision) || saved?.deadline !== input.deadline
       || !isDeepStrictEqual(safeSchema(descriptor.inputSchema), entry.inputSchema)
       || !await this.ready(binding, {...input, revision})) {
       throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition tool is unavailable for this task');

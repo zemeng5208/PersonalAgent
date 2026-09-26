@@ -1,0 +1,24 @@
+# MOD-17-COMPUTER-STATUS-01：电脑状态只读提供者
+
+- Profile：`huawei_ict_agentarts`；负责人 `zemeng`；本地主控审查与 GitHub 非作者评审分别记录；需求 PA-011。
+- 基线：`4efa7f60feaaa007d73c80e7d90091e0caab3bc7`；状态：review 前的实现切片。
+- 复用已合并 PR #59 的 `computer.system.observe@1.0.0` 与 `computer:system:read`。旧 `MOD-16-SYSTEM-OBSERVATION-01` 记录保留为历史；当前 MOD-16 的 Windows 执行另行开发。
+
+## 可观测边界
+
+默认 `node:os` 实际读取两次 CPU tick、逻辑核数、内存总量与空闲量、uptime。输出保留 `source=node:os`，并增加两次 CPU 读取的 UTC 墙钟边界与单调时钟测得的实际采样窗口；请求的等待间隔独立报告。注入 probe 仅标记 `source=injected`，属于合成测试。
+
+提供者能力描述列明支持 CPU、内存和 uptime；不宣称每次探测都能成功。单次读取失败完整拒绝且仅返回脱敏 `EXTERNAL_FAILURE`；取消、超时分别为 `CANCELLED`、`TIMEOUT`，不使用虚构零值。进程归因、磁盘 I/O、温度、网络活动明确不可用。不读取用户名、主机名、进程、文件、网络地址或凭据；不得凭资源压力推断故障原因、温度或优化效果。
+
+## 装配交接
+
+本包的描述函数仅是提供者元信息；`register(host)` 复用现有 `ToolHost` 契约并返回注销函数。生产工具发现须由可信 Runtime/ToolGateway 在实际注册时公布，未经注册仍应返回 `UNSUPPORTED_CAPABILITY`。需要 goo122 确认 Competition Profile 真实工具装配，可信宿主可采用现有公开入口，不规定使用 `register(host)` 或 `RuntimeApplicationOptions.tools` 数组；须保留 Policy/ToolGateway 对 `computer:system:read` 的检查、取消和 deadline。不改变公共 wire Schema、根装配、锁文件或接口目录。Desktop 负责人须在现有安全 Client/Preload/IPC 路径消费 Runtime 的结果，显示来源、时间、不支持项和失败，不由 Renderer 直读 `node:os`。AgentArts 真实工具提案与回传证据另行验收。
+
+## 实机验收（Windows 普通用户权限）
+
+1. 在 Node 24、Windows 普通用户会话，授权 `computer:system:read` 后通过受信 ToolHost 调用一次，记录脱敏的 `source`、UTC 时间区间、实际/请求采样窗口及输出 Schema 校验结果；敏感原始观测值不进入 PR。
+2. 交叉核对 OS CPU tick、内存和 uptime 的读取路径，另在受限机器上演练 probe 失败，证明返回脱敏 `EXTERNAL_FAILURE`，无零值替代；取消/过期均不能继续第二次读取。
+3. 复核未注册与未授权时无 probe 读取，分别记录 `UNSUPPORTED_CAPABILITY` 与策略拒绝。检查 UI 明示不支持的指标和来源，不凭 CPU/内存作因果诊断。
+4. 如需宣称 Competition 端到端可用，另记录真实 AgentArts deployment/API/trace、工具提案、Runtime 授权/执行及 Desktop 展示的一次关联读回。离线 Fake 与 Linux 运行结果不能替代该证据。
+
+本环境没有 Windows 设备，实机步骤未执行。此切片不宣称 MOD-17、PA-011 或整体 MVP 完成。
