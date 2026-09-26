@@ -145,3 +145,31 @@ caused by the projected Fact versions. `previewProjectedRepair(boundStore, at,
 to that subset on one isolated snapshot. It does not poll the feed, ask
 AgentArts, acknowledge a batch, approve or commit changes. See
 [`MOD-28-PROJECTED-REPAIR-01`](../../docs/modules/MOD-28-PROJECTED-REPAIR-01.md).
+
+`decideDurableFactProjection(boundStore, decision, scopedHost, input)` is the local
+cognition handoff after a public Fact batch has been durably projected and its
+impact processed. The trusted Runtime caller supplies the projection receipt;
+the fixed-scope host reads the completed impact report for the same `batchToken`.
+An unscoped impact array cannot establish that this batch completed. This entry
+checks the original and current graph revisions and recomputes impact from the
+bound store before selecting only the projected Facts' RECHECK scope and asking
+for bounded Laya advice. The returned scope can be passed to the existing
+explicit `previewProjectedRepair` path. It does not poll or confirm a feed,
+write the graph, perform a repair, or execute any suggested action. DEP02's
+`readCompletedImpact(batchToken)` exposes the required shape for its fixed
+consumer. For a recovered older batch, the entry verifies the persisted report
+against the graph at its original revision, then computes the current impact at
+the caller's explicit `at`. A superseded Fact version cannot trigger advice;
+another graph append during advice causes a revision conflict. Production
+composition and joint acceptance are still pending. Module tests use synthetic
+data only.
+
+The entry first calls that exact scoped durable read. A pending batch gives `NOT_APPLICABLE`;
+another consumer's batch remains the host's `NOT_FOUND`. The trusted caller
+must recover the original projection receipt and batch token across restart.
+DEP02's `listImpactReceipts({afterGraphRevision,limit})` now pages pending and
+completed receipts for the fixed consumer from the existing projection records.
+Production composition must replay them before advancing the feed and only
+advance its existing task checkpoint after accounting for each handoff.
+`drain()` alone reports only a batch count and watermark. The module has not
+been connected to a real source trigger or restart flow yet.
