@@ -49,7 +49,7 @@ function sameFile(left: Awaited<ReturnType<typeof lstat>>, right: Awaited<Return
     && left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
 }
 
-async function checkedSource(root: string, relativePath: string): Promise<Awaited<ReturnType<typeof lstat>>> {
+export async function checkedSource(root: string, relativePath: string): Promise<Awaited<ReturnType<typeof lstat>>> {
   const target = resolve(root, ...relativePath.split('/'));
   if (!within(root, target) || await realpath(root) !== root) {
     throw new ProtocolError('SCOPE_DENIED', 'Workspace patch source escapes the authorized root');
