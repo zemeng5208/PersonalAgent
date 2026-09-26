@@ -1,4 +1,5 @@
 import {ProtocolError} from '@personal-agent/contracts';
+import type {ToolDescriptor} from '@personal-agent/contracts';
 import {Buffer} from 'node:buffer';
 import {parseCoordinationRepairCandidate, type CoordinationRepairCandidateResult} from './repair-candidate.js';
 export {parseCoordinationRepairCandidate};
@@ -7,8 +8,10 @@ export type {CoordinationRepairCandidateResult};
 const textResultFields = ['kind', 'text', 'verification'] as const;
 const proposalResultFields = ['kind', 'proposalId', 'toolName', 'toolVersion', 'arguments', 'verification'] as const;
 const continuationFields = ['proposalId', 'state', 'result'] as const;
+const availableToolFields = ['name', 'version', 'inputSchema'] as const;
 // Total UTF-8 JSON budget, including the continuation envelope. Not a wire limit.
 const MAX_CONTINUATION_JSON_BYTES = 1_048_576;
+const MAX_AVAILABLE_TOOLS_JSON_BYTES = 8_192;
 interface JsonBudget { remaining: number; }
 
 function hasExactEnumerableKeys(value: object, fields: readonly string[]): boolean {
@@ -22,7 +25,10 @@ function hasExactEnumerableKeys(value: object, fields: readonly string[]): boole
   }
 }
 
-/** In-process, provisional text-only boundary. No Runtime, credentials or history. */
+/** Only the trusted host selects and minimizes these existing descriptor fields. */
+export type CoordinationAvailableTool = Pick<ToolDescriptor, 'name' | 'version' | 'inputSchema'>;
+
+/** In-process, provisional boundary. No Runtime, credentials or history. */
 export interface CoordinationRequest {
   readonly taskId: string;
   readonly revision: number;
@@ -30,6 +36,7 @@ export interface CoordinationRequest {
   readonly deadline: string;
   readonly signal: AbortSignal;
   readonly continuation?: CoordinationContinuation;
+  readonly availableTools?: readonly CoordinationAvailableTool[];
 }
 
 export interface CoordinationTextResult {
@@ -229,6 +236,36 @@ export function parseCoordinationContinuation(value: unknown): CoordinationConti
   } catch {
     return invalidResult();
   }
+}
+
+/** Defensive JSON snapshot of a trusted, already filtered tool directory. */
+export function parseCoordinationAvailableTools(value: unknown): readonly CoordinationAvailableTool[] {
+  let copy: unknown;
+  try {
+    copy = cloneJsonValue(value, new Set<object>(), 0, {remaining: MAX_AVAILABLE_TOOLS_JSON_BYTES});
+  } catch {
+    return invalidResult();
+  }
+  if (!Array.isArray(copy) || copy.length > 16
+    || Buffer.byteLength(JSON.stringify(copy), 'utf8') > MAX_AVAILABLE_TOOLS_JSON_BYTES) invalidResult();
+  const names = new Set<string>();
+  for (const tool of copy) {
+    if (tool === null || typeof tool !== 'object' || Array.isArray(tool)
+      || !hasExactEnumerableKeys(tool, availableToolFields)) invalidResult();
+    const entry = tool as Record<string, unknown>;
+    if (!boundedIdentifier(entry.name, 128) || !boundedIdentifier(entry.version, 64)
+      || names.has(entry.name) || entry.inputSchema === null
+      || typeof entry.inputSchema !== 'object' || Array.isArray(entry.inputSchema)) invalidResult();
+    names.add(entry.name);
+  }
+  const freeze = (item: unknown): void => {
+    if (item !== null && typeof item === 'object') {
+      for (const value of Object.values(item)) freeze(value);
+      Object.freeze(item);
+    }
+  };
+  freeze(copy);
+  return copy as CoordinationAvailableTool[];
 }
 
 function parseContinuation(value: unknown): CoordinationContinuation {

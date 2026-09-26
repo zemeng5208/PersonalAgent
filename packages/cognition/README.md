@@ -12,6 +12,18 @@ visible; unrelated new facts do not invalidate every plan. Time is explicit UTC
 so expiry and JSON replay are deterministic. Withdrawn plans KEEP their inactive
 state; KEEP is not an assertion of truth, task success or authorization.
 
+`selectGoalRevisionImpact(snapshot, evaluatedAt, {expectedGraphRevision,
+previousGoal, currentGoal})` takes two consecutive Goal references already
+present in one trusted graph snapshot. It reuses `analyzeImpact` and returns
+only current RECHECK items causally pinned to the superseded Goal version;
+unrelated Fact changes and old historical items stay outside this subset.
+`previewGoalRevisionRepair(boundStore, evaluatedAt, {...selection, changes})`
+applies caller-authored changes only to that subset on an isolated copy via
+the existing repair preflight. It neither chooses new plan text nor writes.
+The complete impact report can still contain other RECHECK items, and a partial
+preview does not imply complete repair. See
+[`MOD-28-GOAL-REVISION-01`](../../docs/modules/MOD-28-GOAL-REVISION-01.md).
+
 `proposePlanRevision(graph, evaluatedAt, {expectedGraphRevision, plan: {id,
 revision}, summary, reason})` validates an explicit candidate for an affected
 active plan. It returns REVISE with one before/after summary change. It rejects
