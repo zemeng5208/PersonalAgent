@@ -136,3 +136,12 @@ feed nor starts the Laya process. The synthetic local probe is
 server plus `LAYA_PORT` and `LAYA_API_KEY` in its process environment. The
 Desktop production Fact consumer has not been connected yet. See
 [`MOD-28-LAYA-DECISION-01`](../../docs/modules/MOD-28-LAYA-DECISION-01.md).
+
+`selectProjectedRepairScope(snapshot, at, {graphNamespace, projection})`
+accepts the existing committed Runtime Fact projection receipt and recomputes
+impact for its exact graph revision. It returns only current RECHECK nodes
+caused by the projected Fact versions. `previewProjectedRepair(boundStore, at,
+{graphNamespace, projection, changes})` restricts an explicit repair candidate
+to that subset on one isolated snapshot. It does not poll the feed, ask
+AgentArts, acknowledge a batch, approve or commit changes. See
+[`MOD-28-PROJECTED-REPAIR-01`](../../docs/modules/MOD-28-PROJECTED-REPAIR-01.md).
