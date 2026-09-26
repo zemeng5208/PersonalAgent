@@ -1,7 +1,7 @@
 import {stateNames} from '../conversation/state.js';
 import {themePreference, saveTheme, saveCalm} from '../../ui/preferences.js';
 import {profilePage, bindProfile} from './profile.js';
-import {approvalPresentation, authorizationListHtml, nextApprovalExpiry} from './approval-status.js';
+import {approvalPresentation, authorizationHistoryHtml, authorizationListHtml, nextApprovalExpiry} from './approval-status.js';
 import {agentArtsModelPage} from './agentarts-model.js';
 
 export const sections = {
@@ -62,6 +62,34 @@ export function mountAdmin(root, invoke, escape) {
   let modelEditorOpen = false;
   let approvalExpiryTimer;
   let current = {tasks: [], capabilities: [], health: [], approvals: []};
+  let history = {items: [], nextBeforeRowId: undefined, loading: false, loaded: false, error: false};
+  let historyGeneration = 0;
+  async function loadHistory(reset = false) {
+    if (history.loading && !reset) return;
+    const generation = reset ? ++historyGeneration : historyGeneration;
+    const beforeRowId = reset ? undefined : history.nextBeforeRowId;
+    if (reset) history = {items: [], nextBeforeRowId: undefined, loading: false, loaded: false, error: false};
+    history.loading = true;
+    queueMicrotask(() => {
+      if (generation === historyGeneration && section === 'authorizations') render(current);
+    });
+    try {
+      const page = await invoke('approval.history',
+        beforeRowId === undefined ? {} : {beforeRowId});
+      if (generation !== historyGeneration) return;
+      const next = page.nextBeforeRowId;
+      if (next !== undefined && (!Number.isSafeInteger(next) || next < 1
+        || (beforeRowId !== undefined && next >= beforeRowId))) throw Error('Invalid approval history cursor');
+      const items = new Map(history.items.map(item => [item.approvalId, item]));
+      for (const item of page.items) items.set(item.approvalId, item);
+      history = {items: [...items.values()], nextBeforeRowId: next,
+        loading: false, loaded: true, error: false};
+    } catch {
+      if (generation !== historyGeneration) return;
+      history = {...history, loading: false, error: true};
+    }
+    if (section === 'authorizations') render(current);
+  }
   const clearApprovalExpiryTimer = () => {
     if (approvalExpiryTimer === undefined) return;
     clearTimeout(approvalExpiryTimer);
@@ -239,7 +267,8 @@ export function mountAdmin(root, invoke, escape) {
     } else if (section === 'tasks') {
       content = taskTable(data, escape);
     } else if (section === 'authorizations') {
-      content = authorizationListHtml(data.approvals, escape, approvalNow);
+      content = authorizationListHtml(data.approvals, escape, approvalNow)
+        + authorizationHistoryHtml(history.items, escape, history, approvalNow);
     } else if (directSettings[section]) {
       content = settingsPane(data, directSettings[section]);
     } else if (section === 'profile') {
@@ -329,11 +358,20 @@ export function mountAdmin(root, invoke, escape) {
       button.disabled = true;
       try {
         await invoke('authorization.respond', {approvalId: button.dataset.id, taskId: button.dataset.task, decision: button.dataset.approval, expectedRevision: Number(button.dataset.revision)});
+        void loadHistory(true);
       } catch (error) {
         render(current);
         root.querySelector('#error').textContent = error.message;
       }
     }));
+    root.querySelector('#approval-history-more')?.addEventListener('click', () => { void loadHistory(); });
+    root.querySelector('#approval-history-refresh')?.addEventListener('click', () => { void loadHistory(true); });
+    root.querySelector('#approval-history-retry')?.addEventListener('click', () => {
+      void loadHistory(!history.loaded);
+    });
+    if (section === 'authorizations' && !history.loaded && !history.loading && !history.error) {
+      void loadHistory();
+    }
   }
 
   root.querySelector('#admin-close').addEventListener('click', () => invoke('admin.close').catch(error => { root.querySelector('#error').textContent = error.message; }));
