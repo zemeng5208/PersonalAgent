@@ -15,6 +15,26 @@ Interface status is tracked per operation in the [current interface catalog](../
 
 ## Implemented
 
+### Provisional trusted-host Evidence metadata
+
+`RuntimeApplication.createEvidenceReader({subjectRef, conversationId, taskId, authorize})`
+returns a fixed-scope, read-only metadata reader. The trusted host must derive the
+scope from its authenticated session and check `authorize` on every `list` or `get`.
+The reader also compares the task's persisted conversation ID. It returns bounded
+execution metadata with `conditional` verification, never tool arguments, results,
+credentials or raw checkpoint content. Runtime does not store a subject ACL, so this
+is not a Renderer/Client wire `EvidencePort` and cannot be enabled without a real
+host authorization source. No Evidence capability is announced.
+
+`RuntimeApplication.revokeHostAuthorization` is a separate trusted-host call.
+It checks the authenticated subject through a caller-supplied callback, the
+persisted task/conversation and approval revision, then removes the matching
+SQLite-backed Policy grant and reads back its absence. Repeated calls return
+`revoked: false`; an idempotent approval response cannot recreate the grant.
+Revocation prevents later grant consumption. It does not roll back a tool that
+has already started, so the task's cancellation and result reconciliation stay
+separate. There is no public revoke wire operation or persisted subject ACL yet.
+
 ### Provisional graph storage
 
 Trusted hosts may call `provisionCoordinationStore(namespace)` or
@@ -41,8 +61,8 @@ results remain in reconciliation. The real AgentArts HTTP adapter is still text-
 deployment trace, usage and real cloud recovery remain unavailable. See
 [work package](../../docs/modules/COMPETITION-TOOL-LOOP-01.md).
 
-Trusted composition can explicitly configure `competitionToolExports` for selected synthetic
-read-only tools. Each binding fixes a tool name/version and an `exportPolicyVersion`, checks task/proposal/arguments with
+Trusted composition can explicitly configure `competitionToolExports` for selected tools with
+bounded result projections. Each binding fixes a tool name/version and an `exportPolicyVersion`, checks task/proposal/arguments with
 `accepts`, and projects the confirmed result with `project`. This export permission does not
 grant tool execution: local approval, deadline and Policy still apply. Only the bounded JSON
 projection reaches continuation; raw results and Evidence remain local. Repeated confirmed
@@ -56,7 +76,37 @@ synchronous receipt/scope check after credential reads, immediately before the a
 to the cloud adapter. See [export work package](../../docs/modules/MOD-30-COMPETITION-EXPORT-01.md)
 for the precise offline boundary and the unresolved real cloud/MCP lifecycle.
 
+Optional `competitionToolAvailability` requires a trusted, task-specific readiness check for
+each advertised tool. Runtime selects only registered descriptors with an explicit
+result export binding and a ready provider, stores that selection with task revision/deadline,
+and exposes `prepareCompetitionToolCatalog` as `{name,version,inputSchema}`. The input Schema
+projection removes descriptions, examples, enums and patterns so private paths and hints do
+not leave the host through catalog metadata. An unverified proposal is checked against the
+persisted selection, the original local Schema and current readiness before local approval.
+The cloud adapter must call `assertCompetitionToolCatalogAllowed` after credential reads and
+immediately before sending an initial request with the directory. Catalog selection does not
+grant tool execution or authorize sending tool results. Local and external writes can be
+advertised only through these explicit bindings; each proposal still needs Policy approval,
+and an unknown write result waits for reconciliation. Tools requiring a live presence signal
+are omitted until the Runtime invocation carries that signal. The trusted AgentArts factory
+requires `initialRequestMode: 'goal-with-tools-json'` whenever a catalog is configured.
+
 - SQLite-backed tasks, checkpoints, events and one-shot schedules.
+- `createSqliteFactProjectionHost` binds a pre-provisioned public Memory namespace
+  to one fixed consumer, the SQLite feed/query, durable Runtime graph projection,
+  host-only confirmation and pending impact processor. `consume` advances one exact
+  batch; `drain` catches up within an explicit batch limit and reports whether it
+  reached the watermark. `processImpacts` filters pending items by the fixed
+  consumer/Memory namespace before applying its limit and returns batch-tokened
+  completed reports; `readCompletedImpact` reads one known token. For a crash after
+  projection or completion commits but before the token is returned,
+  `listImpactReceipts({afterGraphRevision, limit})` pages pending and completed
+  receipts by increasing graph revision within that fixed consumer scope. The
+  consumer persists its last fully handled graph revision only after processing
+  the page. Batches without new Fact nodes need no cognition impact receipt.
+  A trusted host must trigger it after verified source
+  changes and on startup recovery; it does not poll private sources or publish to
+  AgentArts. Source correction and withdrawal remain append-only Fact revisions.
 - Explicit task transition rules and immutable terminal states.
 - Submission idempotency: the same key and input returns the original task; different input is rejected.
 - Ordered event replay after a persisted sequence.
@@ -79,6 +129,8 @@ The test suite uses local fixtures and temporary SQLite files under the ignored 
 Consumers create one TaskRuntime for a SQLite file, submit a task with an idempotency key, and call runTask with an injected worker. Workers receive an AbortSignal, deadline, checkpoint methods and progress reporting. MOD-04 and MOD-05 provide model and policy-checked tool workers; they must not bypass this Runtime with a second task store.
 
 The Runtime Application text entrypoint is exported as `@personal-agent/runtime/text`. The higher-level `@personal-agent/runtime/application` entrypoint owns `TaskRuntime`, model composition and active executions. A successful `task.submit` dispatches automatically; optional trusted `tools` enable the approval-checked Agent loop. Desktop supplies configuration, submits tasks and subscribes to events. Duplicate submissions never start a second execution, cancellation is delegated to Runtime, and close rejects active work.
+
+For an explicitly configured Competition host, `RuntimeApplicationOptions.hostUserNamespace` enables the host-only `submitHostToolTask({commandId, toolName, toolVersion, arguments, deadline})` entrypoint. The namespace is fixed by trusted composition, and the stable command ID identifies one task within it. Runtime commits the tool intent with task idempotency, validates the registered tool version and input Schema, requests the existing Policy approval, and resumes the same intent after `authorization.respond`. The caller can use `readHostToolTask(taskId)` to distinguish a pending approval, a confirmed tool result, and `waiting_reconciliation`; readback also includes the persisted command ID and tool name/version so the trusted host can choose a safe UI projection. `task.cancel` remains the cancellation path. After restart, the trusted host calls `resumeHostToolTask(taskId)` for a persisted allowed approval that was not yet dispatched. Repeating the original `submitHostToolTask` command also resumes that state. Neither path repeats a confirmed or unknown write. Tool output stays in the trusted host readback, not in the public task snapshot. Interrupted or unknown writes require reconciliation and are never automatically replayed. This host API does not publish a new wire capability or make any particular Goal/Windows tool available without explicit registration.
 
 Text tasks now build multi-turn context in Runtime Application from the same conversation's preceding successful tasks. The default window is the latest 20 turns; failed, cancelled and other-conversation tasks are excluded, and stored model metadata is stripped before messages are sent back to the model. The context is persisted as an application checkpoint so approval resume and Runtime Application restart retain the same input, while an `agent-loop` checkpoint remains authoritative for an already-started tool execution.
 

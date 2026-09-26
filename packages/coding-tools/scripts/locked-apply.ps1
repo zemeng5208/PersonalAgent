@@ -149,6 +149,7 @@ function Invoke-LockedApply($Request) {
 }
 
 try {
+  [Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
   $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
   $result = Invoke-LockedApply $request
   [Console]::Out.WriteLine(($result | ConvertTo-Json -Compress))

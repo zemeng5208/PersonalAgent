@@ -23,7 +23,7 @@ const unavailable = process.platform !== 'win32' || !existsSync(powerShellPath)
 
 async function fixture(t) {
   const base = await mkdtemp(join(tmpdir(), 'personal-agent-apply-'));
-  const root = join(base, 'workspace');
+  const root = join(base, '工作区');
   const recoveryRootPath = join(base, 'trusted-recovery');
   await mkdir(join(root, 'src'), {recursive: true});
   await mkdir(recoveryRootPath);
