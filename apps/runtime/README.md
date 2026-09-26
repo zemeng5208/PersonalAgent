@@ -41,8 +41,8 @@ results remain in reconciliation. The real AgentArts HTTP adapter is still text-
 deployment trace, usage and real cloud recovery remain unavailable. See
 [work package](../../docs/modules/COMPETITION-TOOL-LOOP-01.md).
 
-Trusted composition can explicitly configure `competitionToolExports` for selected synthetic
-read-only tools. Each binding fixes a tool name/version and an `exportPolicyVersion`, checks task/proposal/arguments with
+Trusted composition can explicitly configure `competitionToolExports` for selected tools with
+bounded result projections. Each binding fixes a tool name/version and an `exportPolicyVersion`, checks task/proposal/arguments with
 `accepts`, and projects the confirmed result with `project`. This export permission does not
 grant tool execution: local approval, deadline and Policy still apply. Only the bounded JSON
 projection reaches continuation; raw results and Evidence remain local. Repeated confirmed
@@ -55,6 +55,21 @@ and explicit `responseMode: 'tool-proposal-json'` (default `text`), and supplies
 synchronous receipt/scope check after credential reads, immediately before the adapter fetch
 to the cloud adapter. See [export work package](../../docs/modules/MOD-30-COMPETITION-EXPORT-01.md)
 for the precise offline boundary and the unresolved real cloud/MCP lifecycle.
+
+Optional `competitionToolAvailability` requires a trusted, task-specific readiness check for
+each advertised tool. Runtime selects only registered descriptors with an explicit
+result export binding and a ready provider, stores that selection with task revision/deadline,
+and exposes `prepareCompetitionToolCatalog` as `{name,version,inputSchema}`. The input Schema
+projection removes descriptions, examples, enums and patterns so private paths and hints do
+not leave the host through catalog metadata. An unverified proposal is checked against the
+persisted selection, the original local Schema and current readiness before local approval.
+The cloud adapter must call `assertCompetitionToolCatalogAllowed` after credential reads and
+immediately before sending an initial request with the directory. Catalog selection does not
+grant tool execution or authorize sending tool results. Local and external writes can be
+advertised only through these explicit bindings; each proposal still needs Policy approval,
+and an unknown write result waits for reconciliation. Tools requiring a live presence signal
+are omitted until the Runtime invocation carries that signal. The trusted AgentArts factory
+requires `initialRequestMode: 'goal-with-tools-json'` whenever a catalog is configured.
 
 - SQLite-backed tasks, checkpoints, events and one-shot schedules.
 - Explicit task transition rules and immutable terminal states.
