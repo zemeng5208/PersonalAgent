@@ -114,11 +114,15 @@ function fixture(t, overrides = {}) {
     async source() {
       const client = new Client(app);
       await client.connect();
+      // The submit deadline covers approval and the second coordination exchange,
+      // not only Client.call; use the same explicit budget as the repair task.
       const {taskId} = await client.call('task.submit', {goal: 'Read meeting and request repair',
-        conversationId: 'synthetic-repair'}, {idempotencyKey: 'source'});
-      assert.equal((await settle(app, taskId, ['waiting_approval', 'failed'])).state, 'waiting_approval');
+        conversationId: 'synthetic-repair'}, {idempotencyKey: 'source', timeoutMs: 30_000});
+      const waiting = await settle(app, taskId, ['waiting_approval', 'failed']);
+      assert.equal(waiting.state, 'waiting_approval', JSON.stringify(waiting.error));
       const originalApproval = await approve(client, taskId);
-      assert.equal((await settle(app, taskId, ['succeeded', 'failed'])).state, 'succeeded');
+      const finished = await settle(app, taskId, ['succeeded', 'failed']);
+      assert.equal(finished.state, 'succeeded', JSON.stringify(finished.error));
       assert.ok(app.readRepairCandidate(taskId));
       assert.equal(app.runtime.bindCoordinationStore(host.graphNamespace).read().revision, 4);
       return {client, taskId, evidenceId: originalApproval.approvalId};
