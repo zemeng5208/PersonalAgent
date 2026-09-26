@@ -10,9 +10,11 @@
 | --- | --- |
 | goo122 | 工程与存储底座、公共协议、TaskRuntime、ModelGateway/Provider、本地 Policy/工具/MCP/Skills、知识与记忆 |
 | zemeng | 主 Agent 与核心认知架构、桌面/语音/Windows/TraceGuard/编程/分发、目标决策图谱、持续认知、AgentArts |
-| Potatos498 | 待办、日历、邮件、订阅、通知、搜索、天气、微信与社交连接器；MOD-20～26 保持原分工 |
+| Potatos498 | 待办、日历、邮件、订阅、通知、搜索、天气、微信与社交连接器；保留 MOD-20～26 的长期目录所有权，当前工作顺序见 §5 |
 
 产品负责人决定当前只实施华为 ICT AgentArts Competition Profile，通用 Local Profile 仅留存现有代码。核心认知、Goal/Decision/Plan 语义、Competition Profile 及 AgentArts 本地—云边界由 zemeng 负责；公共 Schema、根配置、迁移、锁文件和根装配由 goo122 维护。历史 PR 的作者、评审者和 Evidence 按事实保留，不能因新分工改写。
+
+第一版 MVP 的完成口径以产品负责人当前要求为准：除 Windows 安装包与安装流程外，已约定的功能须实现并取得对应真实验收；AgentArts 单链和合成会议演示只是阶段证据。该口径不改变模块所有权，也不自动把 PRD 明确排除的 PA-018 或尚未选定的 P2 扩展全部升为首版承诺。goo122 负责公共 Runtime、SecretStore、StoragePort 和根装配；zemeng 的 AgentArts、认知、Desktop 等仍由既有负责人推进；Potatos498 负责 §5 业务能力的独立工作包与业务侧验收。
 
 ## 2. 共同所有权规则
 
@@ -64,7 +66,7 @@ goo122 必须让上述模块在没有真实 Desktop、AgentArts 或 zemeng 私�
 
 zemeng 必须优先交付 MOD-29/30/32 的 Competition Golden Path，并让模块在没有 goo122 的真实数据库或未合并实现时使用 Fake Memory/Tool/Runtime 独立开发。AgentArts 成功不能直接把本地任务标为完成；Local Agent 新能力当前不作为必交项。
 
-## 5. Potatos498：业务连接器（保持不变）
+## 5. Potatos498：业务连接器与当前工作顺序
 
 | ID | 模块 / 需求 | 独占目录 | 依赖 | 独立交付与验收 |
 | --- | --- | --- | --- | --- |
@@ -76,7 +78,22 @@ zemeng 必须优先交付 MOD-29/30/32 的 Competition Golden Path，并让模�
 | MOD-25 | 天气 / PA-010 | packages/connectors/weather | MOD-02、05 | 地点不静默猜测；缓存状态和真实提供商证据分开 |
 | MOD-26 | 微信与社交扩展 / PA-019 | packages/connectors/social/platform | MOD-02、05；交互模式另依赖 MOD-16 | 每个平台单独子任务；账号类型、能力和不支持项明确 |
 
-MOD-20～26 的负责人和业务范围不因 AgentArts 调整而改变。AgentArts 只消费这些连接器经 MOD-05 公布的工具能力，不接管连接器实现。
+MOD-20～26 的长期负责人和目录所有权保持不变。AgentArts 只消费经 MOD-05 实际公布的能力。业务模块源码、历史单包 live 读回、生产 Runtime 注册和用户旅程真实验收是不同证据层；`register`、Fake/CI 或设计 PR 均不能替代首版验收。以下是 2026-09-24 的缺口盘点，具体证据见各包 README、模块记录、PR #4/#8/#22/#23/#27/#28/#47/#81 与当前接口目录：
+
+| 能力 | 已有证据 | 第一版仍需读回的结果 |
+| --- | --- | --- |
+| 待办与提醒（PA-009，P0） | `@personal-agent/productivity` 已有 CRUD、时区与 ReminderTrigger 的离线验证；PR #22 已合并 | 真实持久化的创建/修改/取消读回，Runtime 到点及休眠恢复、去重和 Desktop 通知闭环 |
+| 日历（PA-013，P1） | `calendar.events`、事件时区与邀请动作仅 Fake；PR #22 已合并 | 先确定一个账号/提供商，经用户授权做真实同步读回、时区与所声明动作的结果核实 |
+| 邮件（PA-014，P1） | QQ IMAP/SMTP 提供商与多账号入口已合并；包 README 记录 2026-09-13 的一次真实读回/自发自收 | 宿主可信凭据接入后，至少一个邮箱的应用内同步、分类、摘要、草稿读回；发送仅在对应授权后验证，结果未知先查已发送记录 |
+| 订阅（PA-015，P1） | RSS/Atom 增量与去重已合并；包 README 记录两个公开源的真实两轮取数及 304 | 宿主配置的真实源经持久游标轮询，更新去重并进入通知汇总；真实更新时点与界面读回 |
+| 通知（PA-015，P1） | 安静时段、暂停、聚合、去重为离线策略证据；PR #27/#81 已合并 | 真实源进入宿主调度，安静结束/暂停恢复自动裁定，Desktop 展示与确认读回 |
+| 研究（PA-010，P0） | `research.search` 的 OpenAlex 单次 5 条真实读回与失败/过期离线语义；PR #47 已合并 | Competition 应用内请求、来源/时间/过期展示与失败读回；是否需要非学术来源由具体首版场景确认 |
+| 天气（PA-010，P0） | `weather.forecast` 已在 Runtime 显式装配；Open-Meteo/可选 GeoNames 有历史真实读回，PR #4/#12/#23 已合并 | 当前环境下地点确认、观测/覆盖时间和缓存状态的应用内读回，以及 AgentArts/Policy 工具链证据 |
+| 微信与社交（PA-019，P2） | PRD 列为扩展；当前无已选平台的模块提供者或真实验收 | 先由产品负责人确认首版具体平台、账号类型与合法能力；每个被纳入的平台再按动作单独验收，不承诺全部平台读写 |
+
+Potatos498 先在现有 #88 单文件设计 PR 收敛九工具清单、Competition 工具注入事实与共享边界，取得 goo122 对最终 head 的裁定；这一步不代表五包已经接入。之后按能力串行交付，一个能力一个小 PR，不把五包同时塞进根装配：PA-009 待办存取与提醒触发、PA-015 订阅采集与通知裁定分别形成可审查的业务工作包；PA-013 日历在选定一个真实提供商后单列，PA-014 邮件复用已有 QQ 提供商，只补连接器侧实际缺口；PA-010 研究/天气优先复用已实现提供者，不重复造同类工具。现有实现已足够的部分直接进入跨模块验收，不为凑 PR 另写源码。每包固定公开端口、已声明 scope、无配置时 `UNSUPPORTED_CAPABILITY`、对应失败/取消/读回证据；有副作用的操作另按动作授权。公共 Runtime/Policy、SecretStore、StoragePort、根 composition 与 capability 公布由 goo122 的独立 PR 交付并评审，Desktop 展示由 zemeng 负责，邮件分类/摘要/草稿由 MOD-04 负责；业务 PR 不越界修改这些共享文件。
+
+Windows 安装包与安装流程继续暂停。PA-019 及其他 PRD P2 项是否进入首版，先核实具体约定；未选择平台或账号时不得以空实现、Fake 或未经授权的真实账号写入冒充完成。
 
 ## 6. 跨负责人冻结边界
 
