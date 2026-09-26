@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {test} from 'node:test';
 import {openSqliteMemoryHost} from '@personal-agent/memory/sqlite';
 import {TaskRuntime} from '../dist/index.js';
-import {createSqliteFactProjectionHost} from '../dist/application.js';
+import {createRuntimeApplication, createSqliteFactProjectionHost} from '../dist/application.js';
 
 const namespace = 'synthetic-public';
 const graph = 'synthetic-graph';
@@ -13,6 +13,47 @@ const consumerKey = 'synthetic-cognition';
 const source = {vaultId: 'public-demo', path: 'meeting.md', factId: 'meeting/update'};
 const context = () => ({deadline: new Date(Date.now() + 60_000).toISOString(),
   signal: new AbortController().signal});
+
+test('Competition application owns a public Fact source and resumes its graph projection after restart', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'personal-agent-competition-fact-'));
+  const path = join(directory, 'runtime.sqlite');
+  const memoryPath = join(directory, 'memory.sqlite');
+  const options = {memoryPath, memoryNamespace: namespace, graphNamespace: graph, consumerKey};
+  let app = createRuntimeApplication({path, profile: 'huawei_ict_agentarts'});
+  assert.throws(() => app.createCompetitionFactHost({...options, memoryPath: path}),
+    {code: 'INVALID_ARGUMENT'});
+  let host = app.createCompetitionFactHost(options);
+  try {
+    const key = {...source};
+    const first = {...key, sourceRevision: 'a'.repeat(64), line: 1,
+      summary: 'Synthetic meeting at 17:00', observedAt: '2026-09-25T00:00:00.000Z',
+      validFrom: '2026-09-25T00:00:00.000Z', validUntil: '2027-01-01T00:00:00.000Z',
+      expectedFactRevision: host.readPublicSourceHead(key)};
+    assert.equal(host.recordPublicSource(first, context()).fact.ref.revision, 1);
+    assert.equal(host.recordPublicSource(first, context()).appended, false);
+    await host.drain({limit: 10, maxBatches: 2, ...context()});
+    assert.equal(host.listImpactReceipts({afterGraphRevision: 0, limit: 10}).length, 1);
+    host.close(); app.close();
+    app = createRuntimeApplication({path, profile: 'huawei_ict_agentarts'});
+    host = app.createCompetitionFactHost(options);
+    assert.equal(host.readPublicSourceHead(key), 1);
+    const second = {...first, sourceRevision: 'b'.repeat(64),
+      summary: 'Synthetic meeting at 18:00', expectedFactRevision: 1};
+    assert.equal(host.recordPublicSource(second, context()).fact.ref.revision, 2);
+    assert.throws(() => host.recordPublicSource({...second, sourceRevision: 'c'.repeat(64)}, context()),
+      {code: 'REVISION_CONFLICT'});
+    await host.drain({limit: 10, maxBatches: 2, ...context()});
+    assert.equal(host.listImpactReceipts({afterGraphRevision: 0, limit: 10}).length, 2);
+    const reports = host.processImpacts({at: '2026-09-25T03:00:00.000Z', limit: 10, ...context()});
+    assert.equal(reports.length, 2);
+    assert.equal(host.readCompletedImpact(reports[1].batchToken).batchToken, reports[1].batchToken);
+    host.close();
+    assert.throws(() => host.readPublicSourceHead(key), {code: 'UNSUPPORTED_CAPABILITY'});
+  } finally {
+    host.close(); app.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});
 
 test('trusted SQLite feed binding confirms public source corrections across restart', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'personal-agent-fact-host-'));

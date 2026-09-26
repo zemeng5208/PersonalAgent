@@ -140,7 +140,7 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | `ConnectorPort`、`ConnectorHost`、`SecretStorePort.read` | 类型、FakeConnector、宿主单测 | 账号会话未持久化；wire connect/disconnect 未接 Runtime；无真实账号 | `provisional` |
 | `StoragePort` | contracts 类型、FakeStorage | 只有同步 get/set/delete；没有 revision、事务、容量和失败语义 | `provisional` |
 | `CoordinationPort`、`CloudAgentPort`、Competition Runtime/工具循环 | PR #36、#49：Fake、审批恢复和 continuation 离线循环 | Workflow 输入 #72 与载荷边界 #80 尚未进入 main；真实 deployment/version/trace、成功云 API、MCP/Skill 和目标系统读回未验证 | `provisional` |
-| `createSqliteFactProjectionHost`、`SqliteMemoryHost.withdrawPublicSource` | DEP02 将固定 public feed/query/确认和 Runtime 持久投影组合，来源撤回写入幂等 tombstone/变化事件 | 真实来源撤回证明、生产触发/生命周期和完整目标系统读回未验证；不作为 Runtime wire capability | `provisional` |
+| `createSqliteFactProjectionHost`、`RuntimeApplication.createCompetitionFactHost`、`SqliteMemoryHost.withdrawPublicSource` | DEP02 将固定 public feed/query/确认和 Runtime 持久投影组合；Application 宿主工厂管理独立 Memory SQLite，来源修订/撤回以 CAS 写入幂等 Fact 变化事件 | 受信来源读回、生产触发/生命周期、真实来源撤回证明和完整目标系统读回仍待 Desktop 接线验证；不作为 Runtime wire capability | `provisional` |
 | NotificationService | PR #27、#81：持久批次、ack、DST、摘要与毫秒窗口测试 | 无 Runtime wire 查询、Desktop 展示和真实通知通道 | `provisional` |
 
 这些接口可以继续迭代，但消费者必须固定精确包版本或提交，并准备迁移；不能称为“冻结接口”。
