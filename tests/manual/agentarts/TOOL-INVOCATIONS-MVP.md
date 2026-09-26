@@ -69,10 +69,10 @@ session ID；两者仅是调用方请求/会话关联信息，不伪造服务端
 离线验证需覆盖：显式开关、严格提案/文本、伪造 verification/额外字段、结构错误、
 8KiB投影边界、无授权零网络失败、取消/deadline、同task不同request身份与无自动重试。
 真实验收使用合成目录/文件与显式本地批准；必须读回工具结果、Evidence、最终文字及
-同库重启。当前尚未完成这些本地闭环步骤，不能宣称工具闭环可用。
+同库重启。2026-09-24 的合成 Desktop 闭环读回见下文；它不等于生产数据或比赛全项验收。
 
 云原生工具暂停/同run恢复、跨进程恢复云run及正式MCP桥仍 unavailable。多invocation
-可能增加云调用/模型成本；只有真实运行后才能报告费用和trace。不得自动回退 Local，
+可能增加云调用/模型成本；真实运行后仍须单独读回费用和平台 trace。不得自动回退 Local，
 不得把真实工具标 mock，取消后不发第二次云请求。
 
 ## 当前验证
@@ -115,8 +115,125 @@ Runtime审批纵向消费由B接线验证，完整仓库门禁由该组合增量
 query使用D2从真实本地合成SQLite/Graph快照导出的版本化目标、更新后的FactRef和
 允许依赖白名单；只投影会议从15:00到17:00及准备事项到16:00的必要字段，不发送
 Evidence、凭据或私人日程。`invokeMode`未显式设置，适配使用默认published。
-Desktop消费时须由可信composition显式设置相应`responseMode`和候选版本，并保持
+Desktop消费须由可信composition显式设置相应`responseMode`和候选版本，并保持
 JSON续接的同步`beforeSend`出机门禁。首次提案探针没有执行工具；候选探针没有审批或
-写图。第二次云invocation、同一本地task的Evidence与终态、可信preview、Policy/
-ToolGateway CAS提交和同库重启仍需B/D2在真实Desktop链路分别验收；三次独立API
-探针不能替代这些证据。候选契约与前置输入见`REPAIR-CANDIDATE-ADAPTER.md`。
+写图。三次独立API探针不能替代下列 Desktop 证据。候选契约与前置输入见
+`REPAIR-CANDIDATE-ADAPTER.md`。
+
+## 2026-09-24 合成 Desktop 真实云闭环读回
+
+D2 的运行时源码基线为 `02f7273`，已包含 A 的候选续调修复 `edae887`；当时的手工
+脚本修正随后提交为 D2 `c2ec9a2`，本文核对时 D2 checkout 为 `e408314`。A 当前
+`565ad48` 的后续改动仅增加拒绝把候选藏在审核摘要里的负例测试。收据保留在 D2
+工作树被忽略的 `.cache/desktop-agentarts-wu7Qlf/`，不纳入 Git，也不含本文所需的
+原始云正文或凭据。D2 的完整验收描述位于
+[PR #104](https://github.com/zemeng5208/PersonalAgent/pull/104) 的
+`tests/manual/agentarts/MVP-ACCEPTANCE.md`（本地提交 `c2ec9a2`）。
+
+同一个本地 source task 在 published AgentArts API 发出两次**不同的云请求**，调用方
+`X-Request-Id` 脱敏引用分别为 `300bf45a…32f2c`、`c7d97e82…6b87c`；它们不是平台
+runId/trace。两次均为 HTTP 200、完整 SSE、无 error event。第一次最终对象为严格
+`tool_proposal`；Desktop 呈现并在合成 UI 自动化中消费本地 `allow_once` 读取审批，
+ToolGateway 确认合成文件读取，Fact revision 2 投影为 graph revision 6，持久保存
+任务与 Evidence 绑定。第二次最终对象为严格 `repair_candidate` v1.0，本地 source
+task 读回 `succeeded`，原生预览路径生成三个目标的候选摘要。候选只是建议，云端
+没有写图；自动化代答预览对话框不构成人工点击或桌面合成画面的视觉验收。
+
+首次手工脚本在进入写入审批阶段时把 UI 快照的 `action` 错认作 `toolName`，因此脚本
+收据为 `ERR_ASSERTION`/`failed`；此时 source task 已成功，候选已预览，但本地修复
+尚未批准或提交。修正后的同库恢复通过 Admin UI 的 `cognition.commit_repair`
+`allow_once` 审批，读回独立 local task `succeeded`、graph revision 9、图内容与执行
+Evidence；再次重启仍读到两任务成功及修复结果。恢复阶段 `cloudRequests:0`。这两段
+证据不能合写成一次无中断通过的脚本运行，也不能解释为云原生同 run 暂停/恢复。
+
+目前已验证 published API 的文字、提案、候选格式，以及这一次合成 Desktop 的工具
+执行、候选预览、本地审批/CAS 和重启读回。平台版本、trace 和 usage 的后续只读
+读回见下文；真实私人数据、原生同云 run 恢复、人工预览点击、AgentArts 评估与
+正式比赛提交均不在这份 MVP 证据内。
+
+## 2026-09-24 已登录控制台升级前只读读回
+
+AgentArts `cn-southwest-2` 控制台的版本历史显示，应用当前编辑态为“未发布”，
+保存于 2026-09-17 16:09:27；最新已发布应用版本为 `v20260917160941`，版本 ID
+`1789632586610`，发布时间 2026-09-17 16:09:46 CST。API 渠道显示“已发布”，
+发布时间 16:09:47。主运行时 `agent-arts-d5ae…e4` 状态正常，`Latest` 访问方式
+指向运行时 `v6`，更新时间 16:10:17。应用版本号与运行时版本号不可混作一个字段。
+
+在“观测 → 调用链分析”筛选“多智能体 → PersonalAgent持续认知协调器 → 近1天”后，
+19:48—19:49 的两条成功 trace 的会话 ID 相同（脱敏为 `pa-3531…b3863`）。可见输入分别是
+`tool_proposal` 请求和携带本地确认投影的 `repair_candidate` 请求，与上述 Desktop
+同一 source task 的两次请求顺序和语义一致。平台没有展示调用方 `X-Request-Id`，
+因此这里只能按同会话、输入和时间匹配，不能把两个本地 UUID 精确绑定到平台 trace。
+
+| 输入语义 | Trace ID（脱敏） | 开始时间（CST） | 平台耗时 | Input tokens | Output tokens | Total tokens |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| 只读工具提案 | `b916…47c9` | 2026-09-24 19:48:41 | 48,973 ms | 2,071 | 2,560 | 4,631 |
+| 修复候选 | `5f59…5f12` | 2026-09-24 19:49:31 | 60,164 ms | 5,476 | 3,091 | 8,567 |
+
+两条根 trace 均显示三个 `UserInput` 子调用；工具提案 trace 的第一个模型 span
+显示 `DeepSeek-V4-Flash`，该 span 为 417 input + 819 output = 1,236 tokens。
+这证明有云端模型活动，不证明三个设计角色分别实际执行，也不证明本地工具在云端
+执行。trace 列表的输出栏均为 `{"output":null}`，严格提案和候选正文仍以本地完整
+SSE 收据及解析读回为依据。主运行时页面显示日志记录未开启；trace 不等于日志。
+本次未取得单次请求的账单费用、平台原生 run 恢复、失败/回滚、AgentArts 评估分数
+或 API 请求 ID 到 trace 的精确 join。上述读回期间没有发起新模型调用、更新版本、
+重新部署或改动凭据；控制台 API 示例中的认证值未复制、使用或保存。
+
+### 同日稍后升级子工作流引用并提交应用新版本
+
+控制器配置读回世界状态影响分析为起始、计划最小修复为默认、证据安全审查为结束；
+三张同名独立“子工作流”卡也连接到控制器，但仍引用 2026-09-14 旧版。用户选择
+升级后，将世界状态分析 `1789359963516` → `1789532410207`、计划最小修复
+`1789360087304` → `1789532322503`、证据安全审查 `1789360043485` →
+`1789532214390`。三个 `_1` 角色卡此前已引用相同的 2026-09-16 最新发布版本。
+
+多智能体版本历史读回 `v20260924214829`（版本 ID `1790257800407`）于
+2026-09-24 21:50:00 CST 已发布。提交时取消了默认勾选的“同步部署至实例”；
+版本提交成功不代表现有 `Latest` 端点已切换，也不能将上述旧版本 trace 归给新版本。
+本次没有发起新模型调用或更新凭据，提交后尚未读回实例与新应用版本的绑定。
+
+### 后续另一组请求：第二次发送结果未知
+
+另一次 Desktop 合成验收不是上表的同一组请求。D2 本地收据记载：第一次 AgentArts
+请求始于 2026-09-24 21:16:53 CST，读到 HTTP 200；第二次始于 21:17:24 CST，
+fetch 以 `TypeError` 拒绝，约 21:17:35 结束，没有 HTTP 状态，也没有自动重试。
+错误文本本身不足以确定失败发生在网络、网关、授权还是服务端。
+
+21:27 CST 在同一“多智能体、近1天”观测页刷新后，最新只见一条本次时段的
+`PersonalAgent持续认知协调器` 成功 trace `07b9…0af3`，开始于 21:17:06，
+耗时 17,892 ms，input 2,038 + output 1,043 = 3,081 tokens；其可见输入语义为
+`tool_proposal`。它与本地第一次请求的时间、输入和 HTTP 200 结果相符，但平台
+未显示调用方 `X-Request-Id`，不能精确 join。第二次本地请求后未见更晚的 trace，
+只能说**当前页面未读回对应记录**，不能据此断言远端没有收到或执行。第二请求的
+平台状态保持 `unknown`，不记为成功、不盲目补发，也不归因于某种未证实的权限故障。
+
+## 2026-09-25 修复后合成主链读回
+
+9 月 24 日 22:31 的另一次主链调用虽然 HTTP 200、SSE 完整，最终却是末端
+`PA-证据安全审查` 工作流固定要求的八字段审查报告，不符合本地严格
+`tool_proposal` / `repair_candidate` 协议；本地 source task 为 `failed`，
+`confirmedReads:0`，不能记为闭环通过。平台 trace
+`9510c10d1222ebec68930748f7e5ec45` 的末端模型 span 读回了该系统提示。
+这与 21:17 第二次 fetch 状态未知是两个不同失败，不能合并归因。
+
+随后在原资源上把证据审查源工作流发布为 `v20260924224413`
+（版本 ID `1790261079291`），主协调器两个证据审查引用均读回该版本；
+主协调器提交 `v20260924225602`，控制台出现“部署成功”，原运行时
+`agent-arts-d5ae1174bc7d4cb8ab3dbbc6fae654e4` 于 22:56:23 读回“正常”。
+该状态与资源版本共同支持修复已部署的判断，但仍缺每条请求的服务端部署版本字段。
+
+9 月 25 日 18:33:57—18:36:26 CST，在已有 `afda` 集成树
+`0468592517c194b43bb8cb23643edefb7c1ead2b` 的同一合成会议场景复验：
+两次独立 AgentArts 调用均 HTTP 200、完整 SSE、零 error event；第一响应
+156 字符，严格 `tool_proposal`，第二响应 762 字符，严格
+`repair_candidate`。本地一次性批准读取合成文件，受信 Runtime 记录读回和
+Evidence；原生预览核对会议 17:00、准备 16:00、三个节点引用与依赖后，独立
+批准 `cognition.commit_repair`，CAS 写图到 revision 9。两任务均为
+`succeeded`；真实 Electron 同库重启后任务、图内容、各一条 confirmed 执行记录
+和 Evidence 仍可读回。Laya 在 graph revision 6 给出 `ready` /
+`ESCALATE_AGENTARTS` / `low_confidence` 建议，没有签发权限或写图。
+
+本机完整脱敏收据位于被忽略的 `D:/PersonalAgent/.cache/full-chain-acceptance-20260924.md`
+和 `afda` 工作树 `.cache/desktop-agentarts-wRje2A/receipt.json`。复验没有改动产品
+代码，也没有证明其他场景稳定性、云原生同 run 恢复、请求 ID 到平台 trace 的精确
+join、部署回滚或全比赛验收。前述旧请求的 `TypeError`/远端未知结论继续保留。
