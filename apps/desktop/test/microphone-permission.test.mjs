@@ -82,3 +82,15 @@ test('a lease cannot be created for another window, page, or expired authorizati
   assert.throws(() => gate.grant({webContents: panel, deadlineAtMs: 100}));
   assert.equal(requested(gate, panel, 'media', details), false);
 });
+
+test('lease revoke callback fires once when navigation invalidates an active capture', () => {
+  const panel = contents();
+  const gate = createMicrophonePermissionGate({expectedPageUrl: 'file:///C:/PersonalAgent/index.html',
+    isTrustedWindow: target => target === panel, now: () => 100});
+  let revoked = 0;
+  const revoke = gate.grant({webContents: panel, deadlineAtMs: 200, onRevoke: () => { revoked++; }});
+  panel.emit('did-start-navigation');
+  revoke();
+  assert.equal(revoked, 1);
+  assert.equal(requested(gate, panel, 'media', details), false);
+});
