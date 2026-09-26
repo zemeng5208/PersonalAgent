@@ -1,6 +1,12 @@
-# 编程工具：可信工作区只读与固定命令能力（MOD-18）
+# 编程工具：可信工作区能力（MOD-18）
 
-`@personal-agent/coding-tools` 为 `huawei_ict_agentarts` Competition Profile 提供两个本地只读工具，以及一个必须由可信宿主显式配置和注册的固定命令工具。它不接受自由 shell/argv，不应用 patch、不自动发布，也不提供 Artifact/Evidence 服务。
+`@personal-agent/coding-tools` 为 `huawei_ict_agentarts` Competition Profile 提供两个受限只读工具、一个须由可信宿主显式注册的固定命令工具，以及授权后创建文本补丁候选文件的工具。它不接受自由 shell/argv，不把候选文件应用到原文件，不自动发布，也不提供 Artifact/Evidence 服务。
+
+## 当前增量：授权后的文本补丁候选文件
+
+`createWorkspacePatchStageTool(options)` 提供显式注册的 `workspace.stage_text_patch@1.0.0`。可信宿主提供工作区根；现有 ToolGateway/Policy 按任务、工具、参数和 `workspace:read` + `workspace:write` 授权，本包不签发授权。输入沿用预览的规范路径、`expectedSha256` 和有界 `edits`。它拒绝链接、硬链接、目录逃逸、敏感文件和过期哈希，在可信根下排他创建 `.pa-stage-*.patch` 候选文件，读回摘要并复核原文件。返回的 `stagedPath` 是相对路径；原文件始终不打开写入、不重命名、不覆盖。`registerWorkspacePatchStage(host, options)` 沿用现有 ToolHost 生命周期，默认不在产品中注册。
+
+候选文件创建属于 `local_write`，不支持自动幂等重试与恢复；失败时尝试删除本次候选，无法确认清理则报告 `RESULT_UNKNOWN`。候选文件不是已应用补丁或最终 Artifact。真正修改原文件需要独立的可信写入和读回验收。
 
 ## 公开入口
 
@@ -34,7 +40,7 @@
 
 原始字节数不等于 JSON 帧大小：Tab、换行、回车、引号和反斜杠会在 JSON 中转义。默认 256 KiB 即使全部由当前允许的最坏单字节转义字符组成，结果自身仍落在 960 KiB 预算内；NUL 等会产生更大 `\u00xx` 膨胀的控制字符会先被二进制策略拒绝。宿主提高原始文件上限时，工具会按实际序列化大小再次 fail-closed。该预算只约束 `WorkspaceReadResult`，不是对任意未来包装的保证：公共 Schema 没有限制所有 ID 与 `evidenceRefs` 的总长度，上层仍必须调用 `encodeFrame` 执行最终 1 MiB 帧校验。
 
-这是一层应用内约束，不是 OS 沙箱。跨平台 Node API 没有提供对整条路径逐目录、不可替换的句柄遍历；实现用 canonical path、打开句柄身份和读取后元数据复核缩小符号链接/junction 与 TOCTOU 风险，但不能在攻击者可并发改写目录项的工作区内宣称消除了所有竞态。只读检查不能当作写入沙箱；固定命令 provider 也不提升为任意代码隔离能力。
+这是一层应用内约束，不是 OS 沙箱。跨平台 Node API 没有提供对整条路径逐目录、不可替换的句柄遍历；实现用 canonical path、打开句柄身份和读取后元数据复核缩小符号链接/junction 与 TOCTOU 风险，但不能在攻击者可并发改写目录项的工作区内宣称消除了所有竞态。只读检查与候选创建不能当作原文件写入沙箱；固定命令 provider 也不提升为任意代码隔离能力。
 
 返回的源码只交给已经通过本地授权的调用路径。本包不会上传 AgentArts、写日志或持久化内容；调用方若要把内容发往云端，仍须单独执行最小化、脱敏和出机授权。
 
@@ -46,7 +52,7 @@
 
 本包消费 `@personal-agent/contracts@0.1.0-alpha.1` 的 provisional `RegisteredTool`、`ToolContext` 与 `ToolHost`，并按现有 Gateway/Policy scope 机制工作。它没有私设仍为 unavailable 的 `ToolExecutionPort`、ArtifactPort 或 EvidencePort。
 
-AgentArts 工具提案、Runtime composition、目标系统读回、Evidence 和最终回答尚未接通；这些只是离线可验证的本地工具，不是完整编程执行能力，也不是 Competition Golden Path 已完成或真实 AgentArts 可用的证据。根 `package.json` build 编排与 `package-lock.json` workspace 记录随 PR #83 直接从 `main@1e3b56b6` 重建；旧 Draft #63 已关闭且不作为本 PR 的堆叠依赖。`workspace.list_entries` 与固定命令均不会自动进入生产 composition。
+已合并的只读工具验收不证明候选文件工具已进入 Runtime 或真实 AgentArts。`workspace.list_entries`、固定命令和候选文件工具均不会自动进入生产 composition。根 `package.json` build 编排与 `package-lock.json` workspace 记录随 PR #83 从 `main@1e3b56b6` 重建；旧 Draft #63 已关闭。
 
 ## 定向验证
 
