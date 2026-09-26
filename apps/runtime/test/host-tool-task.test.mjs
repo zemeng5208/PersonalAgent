@@ -172,6 +172,29 @@ test('approval persisted before dispatch resumes after restart without a second 
   }
 });
 
+test('distinct namespace and command ID pairs cannot share an idempotency key', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'personal-agent-host-tool-'));
+  const databasePath = path.join(directory, 'runtime.sqlite');
+  const tool = {descriptor, execute: async () => ({revision: 1})};
+  let app = createRuntimeApplication({path: databasePath, profile: 'huawei_ict_agentarts',
+    hostUserNamespace: 'a:b', tools: [tool]});
+  try {
+    const first = app.submitHostToolTask(request('c'));
+    await waitFor(app, first.task.taskId, 'waiting_approval');
+    await waitForIdle(app);
+    app.close();
+    app = createRuntimeApplication({path: databasePath, profile: 'huawei_ict_agentarts',
+      hostUserNamespace: 'a', tools: [tool]});
+    const second = app.submitHostToolTask(request('b:c'));
+    await waitFor(app, second.task.taskId, 'waiting_approval');
+    assert.notEqual(second.task.taskId, first.task.taskId);
+    assert.throws(() => app.readHostToolTask(first.task.taskId), {code: 'NOT_FOUND'});
+  } finally {
+    await waitForIdle(app);
+    app.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});
 test('host task rejects numbers that JSON persistence would silently change', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'personal-agent-host-tool-'));
   const nullable = {...descriptor, name: 'fixture.nullable', inputSchema: {type: 'object',

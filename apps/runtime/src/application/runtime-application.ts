@@ -150,7 +150,8 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     const descriptor = this.hostToolDescriptor(request.toolName, request.toolVersion);
     const deadlineMs = Date.parse(request.deadline);
     if (!Number.isFinite(deadlineMs)) throw new ProtocolError('INVALID_ARGUMENT', 'Invalid host tool deadline');
-    const existing = this.runtime.findTaskByIdempotencyKey(`host-tool:${this.hostUserNamespace}:${request.commandId}`);
+    const idempotencyKey = `host-tool:${JSON.stringify([this.hostUserNamespace, request.commandId])}`;
+    const existing = this.runtime.findTaskByIdempotencyKey(idempotencyKey);
     if (!existing && deadlineMs <= this.now().getTime()) throw new ProtocolError('TIMEOUT', 'Host tool deadline has expired');
     let args: Record<string, unknown>;
     try { args = structuredClone(request.arguments); }
@@ -168,7 +169,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     };
     const task = this.runtime.submitTaskWithCheckpoint({
       goal: `Host tool ${descriptor.name}`, conversationId: `host-tool:${this.hostUserNamespace}`,
-      idempotencyKey: `host-tool:${this.hostUserNamespace}:${request.commandId}`,
+      idempotencyKey,
     }, HOST_TOOL_CHECKPOINT, intent);
     if (task.state === 'created') this.dispatchHostToolTask(task.taskId);
     else if (['planning', 'running', 'verifying'].includes(task.state) && !this.activeTextTasks.has(task.taskId)) {
