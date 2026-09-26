@@ -469,6 +469,66 @@ export class SqliteMemoryHost {
     }
   }
 
+  /** Host-only tombstone after the caller independently verifies source withdrawal. */
+  withdrawPublicSource(namespaceValue: unknown, value: unknown): {
+    readonly fact: FactVersion;
+    readonly appended: boolean;
+  } {
+    try {
+      const namespace = text(namespaceValue);
+      const record = exact(value, ['vaultId', 'path', 'factId', 'withdrawalId',
+        'expectedFactRevision', 'observedAt', 'deadline', 'signal']);
+      const operation = context(record, queryFail);
+      const key = publicSourceKey(record);
+      const withdrawalId = text(record.withdrawalId, 128);
+      if (!/^[A-Za-z0-9_.-]+$/.test(withdrawalId)
+        || typeof record.expectedFactRevision !== 'number'
+        || !Number.isSafeInteger(record.expectedFactRevision)
+        || record.expectedFactRevision < 1) return queryFail();
+      const observedAt = time(record.observedAt).text;
+      const marker = `withdrawn:${withdrawalId}`;
+      const fingerprint = JSON.stringify([marker, record.expectedFactRevision, observedAt]);
+      return transaction(this.db, () => {
+        const row = this.db.prepare(`SELECT source_revision, fact_revision, fingerprint
+          FROM memory_public_sources WHERE namespace = ? AND vault_id = ?
+          AND source_path = ? AND fact_id = ?`)
+          .get(namespace, key.vaultId, key.path, key.factId) as Row | undefined;
+        if (row === undefined) return queryFail('NOT_FOUND');
+        const currentRevision = rowNumber(row, 'fact_revision');
+        if (rowText(row, 'source_revision') === marker) {
+          if (rowText(row, 'fingerprint') !== fingerprint
+            || currentRevision !== (record.expectedFactRevision as number) + 1) return queryFail('REVISION_CONFLICT');
+          const saved = this.db.prepare(`SELECT payload FROM memory_facts
+            WHERE namespace = ? AND fact_id = ? AND revision = ?`)
+            .get(namespace, key.factId, currentRevision) as Row | undefined;
+          if (saved === undefined) return queryFail();
+          return {fact: fact(parseJson(rowText(saved, 'payload'))), appended: false};
+        }
+        if (currentRevision !== record.expectedFactRevision) return queryFail('REVISION_CONFLICT');
+        const previousRow = this.db.prepare(`SELECT payload FROM memory_facts
+          WHERE namespace = ? AND fact_id = ? AND revision = ?`)
+          .get(namespace, key.factId, currentRevision) as Row | undefined;
+        if (previousRow === undefined) return queryFail();
+        const previous = fact(parseJson(rowText(previousRow, 'payload')));
+        if (previous.state !== 'active') return queryFail('REVISION_CONFLICT');
+        const next = fact({ref: {id: key.factId, revision: currentRevision + 1},
+          summary: 'Public source withdrawn', sourceRef: previous.sourceRef,
+          observedAt, validFrom: previous.validFrom, validUntil: previous.validUntil,
+          sensitivity: 'public', state: 'withdrawn', confirmation: 'external_observation',
+          corrects: previous.ref});
+        const saved = this.appendFact(namespace, next);
+        this.db.prepare(`UPDATE memory_public_sources SET source_revision = ?,
+          fact_revision = ?, fingerprint = ? WHERE namespace = ? AND vault_id = ?
+          AND source_path = ? AND fact_id = ?`).run(marker, next.ref.revision, fingerprint,
+            namespace, key.vaultId, key.path, key.factId);
+        return {fact: saved, appended: true};
+      }, () => active(operation, queryFail));
+    } catch (error) {
+      if (error instanceof MemoryQueryError) throw error;
+      return queryFail();
+    }
+  }
+
   bind(namespaceValue: unknown, optionsValue: unknown): MemoryQueryPort {
     let namespace: string;
     let allowed: ReturnType<typeof scope>;
