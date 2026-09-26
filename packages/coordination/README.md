@@ -3,7 +3,7 @@
 COMPETITION-PORTS-01 provides provisional, in-process `CoordinationPort.execute` and
 `CloudAgentPort.invoke` types. The consuming coordination package owns their shape.
 Runtime injects CoordinationPort; `AgentArtsCloudAgentPort` is the explicit,
-offline-testable HTTP implementation of the text-only CloudAgentPort boundary.
+offline-testable HTTP implementation of the CloudAgentPort boundary.
 
 MOD-04B adds `CompetitionCoordinator`, which validates each bounded text/tool-proposal
 exchange with an explicitly injected `CloudAgentPort`. It forwards task revision and
@@ -31,13 +31,17 @@ A non-cooperative provider may continue its own internal work after cancellation
 its late result is discarded. The coordinator is an in-process boundary, not a sandbox
 or a data-export authorizer.
 
-Input is the submitted goal, task ID/revision, deadline and AbortSignal. It excludes
-conversation history, attachments, credentials, authorization and Runtime methods.
+Input is the submitted goal, task ID/revision, deadline and AbortSignal. An explicitly
+enabled initial request may also carry a trusted, per-task directory containing only
+`name`, `version` and `inputSchema` for selected tools. It excludes conversation
+history, attachments, credentials, authorization and Runtime methods.
 After a locally confirmed tool execution, Runtime may add a bounded continuation with
-the proposal ID and JSON result only for the explicit offline `mock` path. The host must
-authorize any real cloud transmission; an available port is not consent. Results may be
-bounded text or a strict tool proposal (`mock` or `unverified`), but Runtime rejects
-`unverified` tool execution/export in this slice. Proposals cannot contain authorization, Evidence or task state.
+the proposal ID and a host-selected JSON result. Real cloud export requires an explicit
+read-only tool binding, a bounded projection, and a final host permission check
+before transport dispatch. An available port is not consent. Results may be bounded
+text, a strict tool proposal (`mock` or `unverified`), or an explicitly enabled
+versioned repair candidate. Proposals cannot contain authorization, Evidence or task
+state; Runtime and Policy retain execution and task authority.
 
 Explicit offline fixtures live at `@personal-agent/coordination/testing`:
 `new FakeCoordinationPort(request => 'Fake: ' + request.goal)` and
@@ -57,10 +61,11 @@ The trusted host supplies an `AgentArtsAuthorizationProvider`; its `read(signal)
 called for every invocation and its complete Authorization header value is never
 cached, logged, placed in the request body, or returned in an error. Do not put an API
 key in an environment example, Renderer state, test fixture, or repository. The
-adapter does not read environment variables and does not implement IAM signing. Session
-and request IDs are stable, ASCII-safe header values bounded to 64 characters; local
-task IDs are always represented by a deterministic one-way hash rather than exported
-directly. Authorization must be non-empty,
+adapter does not read environment variables and does not implement IAM signing. The
+session ID is a stable hash of the local task ID; text mode derives a stable request ID,
+while proposal mode uses a fresh UUID for each invocation. Header values are ASCII-safe
+and bounded to 64 characters. The local task ID is not exported directly.
+Authorization must be non-empty,
 bounded, and free of HTTP control characters such as CR/LF.
 
 ```ts
@@ -71,9 +76,12 @@ const cloud = new AgentArtsCloudAgentPort(
 const result = await cloud.invoke(request);
 ```
 
-Only bounded text is returned (`verification: 'unverified'`). Responses must declare
-`application/json` or `text/event-stream`; both forms are byte-limited. Metadata or tool
-payloads are not treated as executable proposals. SSE follows standard event boundaries and joins
+Default mode returns only bounded text (`verification: 'unverified'`). Explicit
+`responseMode: 'tool-proposal-json'` accepts a strict application JSON text or tool
+proposal; `repairCandidateVersion: '1.0'` additionally permits a strict repair
+candidate. All remain unverified cloud output, not execution evidence. Responses must
+declare `application/json` or `text/event-stream`; both forms are byte-limited. SSE
+follows standard event boundaries and joins
 multiple `data:` lines with `\n`; for gateways that omit separators, a conservative
 fallback accepts only one complete JSON event per `data:` line. Malformed or conflicting
 events are rejected. This adapter uses the existing contract error names: `CANCELLED`
@@ -81,15 +89,29 @@ for cancellation, `TIMEOUT` for a deadline (the contract has no
 `DEADLINE_EXCEEDED`), and `EXTERNAL_FAILURE` for authorization, transport, HTTP, or
 malformed-response failures (the contract has no `EXTERNAL_SERVICE_ERROR`).
 
-The adapter is not a claim that AgentArts is available. Real project/runtime setup,
-deployment, authentication, streaming behavior, trace/usage, and local Policy or
-ToolGateway read-back remain unverified; without explicit configuration composition
-must keep the capability unavailable and must not silently fall back to Local or Fake.
+For a cloud deployment whose prompt accepts tool selection, trusted composition may
+set `responseMode: 'tool-proposal-json'` and `initialRequestMode: 'goal-with-tools-json'`.
+The initial `query` then contains exactly `{"goal": string, "availableTools":
+[{"name": string, "version": string, "inputSchema": object}]}`. The host selects
+and minimizes the directory for that task; it is capped at 16 entries and 8 KiB.
+Missing or empty directories fail locally with `UNSUPPORTED_CAPABILITY`, before
+credentials or network. The host must provide `beforeInitialToolCatalogSend` as the
+fifth constructor argument to recheck its current task binding after credential read;
+absence or rejection prevents transport. The fourth `beforeSend` argument remains the
+existing synchronous continuation guard. A confirmed-result continuation keeps its
+existing separate query and does not resend the tool directory. Without the opt-in,
+the adapter sends the raw goal and rejects a supplied directory.
 
-Ports are not frozen. The in-process Fake path covers strict tool proposals and
-confirmed-result continuation, but the real HTTP adapter remains text-only.
-Deployment/version/trace, usage, resumable real cloud runs and data-export consent need
-separate verified contracts. No wire Schema or storage migration changes.
+The adapter alone does not establish AgentArts availability. Deployment, API,
+trace/usage and local tool read-back require their own operational evidence. Without
+explicit trusted configuration, composition keeps the capability unavailable and never
+silently falls back to Local or Fake.
+
+Ports are not frozen. The real adapter's confirmed-result continuation is a separate
+invocation, not a native AgentArts run resume. Its bounded projection needs host
+authorization; the original goal is not automatically sent again. Request-level
+deployment/version/trace and usage association need separate verified contracts. No
+wire Schema or storage migration changes.
 
 Tool proposal and confirmed continuation JSON copies preserve own special keys such
 as `__proto__` as ordinary data properties. They do not change the copied object's

@@ -206,6 +206,17 @@ function buildPreview(
   };
 }
 
+/** Internal snapshot entry for scoped, read-only previews. */
+export function previewRepairSnapshot(
+  snapshot: GraphSnapshot,
+  at: string,
+  request: StoredRepairRequest
+): StoredRepairPreview {
+  validateRequest(request);
+  validateAt(at);
+  return isolatedPreview(buildPreview(structuredClone(snapshot), at, request));
+}
+
 /**
  * Validate and preview a complete, explicit repair chain without writing the
  * host-bound store. This is a candidate only; it does not approve semantics,
