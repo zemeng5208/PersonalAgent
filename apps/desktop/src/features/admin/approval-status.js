@@ -54,3 +54,21 @@ export function authorizationListHtml(items, escape, now = Date.now()) {
   }).join('');
   return `<div class="sheet"><h2>授权状态</h2><div class="table-scroll"><table><thead><tr><th>授权</th><th>任务</th><th>工具与范围</th><th>状态与期限</th><th>决定</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="empty">没有待处理授权。授权决定由 Runtime 校验，界面不直接授予权限。</td></tr>'}</tbody></table></div></div>`;
 }
+
+export function authorizationHistoryHtml(items, escape, status, now = Date.now()) {
+  const rows = items.filter(item => item.state !== 'pending').map(item => {
+    const presentation = approvalPresentation(item, now);
+    return `<tr><td>${escape(item.approvalId)}</td><td>${escape(item.taskId)}</td><td><b>${escape(presentation.action)}</b><br><small>参数：${escape(presentation.argumentLabel)}</small><br><small>范围：${escape(presentation.scopesLabel)}</small></td><td>${escape(presentation.stateLabel)}</td></tr>`;
+  }).join('');
+  const empty = status.loading && !status.loaded ? '正在读取授权历史…'
+    : status.error ? '授权历史读取失败，可重试。'
+      : status.loaded ? '没有已处理的授权记录。' : '授权历史尚未加载。';
+  const control = status.loading ? '<span class="status-note">正在读取…</span>'
+    : status.error ? '<button class="btn btn-sm" id="approval-history-retry">重试</button>'
+      : !status.loaded ? '<span class="status-note">尚未加载</span>'
+      : '<button class="btn btn-sm" id="approval-history-refresh">刷新</button>'
+        + (status.nextBeforeRowId !== undefined
+          ? '<button class="btn btn-sm" id="approval-history-more">加载更早记录</button>'
+          : '<span class="status-note">已到最早记录</span>');
+  return `<div class="sheet"><div class="row"><h2>授权历史</h2><span class="spacer"></span>${control}</div><p class="muted">每次从 Runtime 读取最多 50 条脱敏记录；历史记录不可再次批准。</p><div class="table-scroll"><table><thead><tr><th>授权</th><th>任务</th><th>工具与范围</th><th>状态</th></tr></thead><tbody>${rows || `<tr><td colspan="4" class="empty">${empty}</td></tr>`}</tbody></table></div>${status.error && rows ? '<p role="alert">授权历史读取失败，已加载记录仍可查看。</p>' : ''}</div>`;
+}

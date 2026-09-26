@@ -132,9 +132,14 @@ test('trusted host revocation stays durable and cannot be replayed into a grant'
   await assert.rejects(app.revokeHostAuthorization({...scope, conversationId: 'conversation-b',
     authorize: () => {checks++; return true;}}), {code: 'UNAUTHORIZED'});
   assert.ok(app.runtime.policy.get('revoke-approval'));
+  await assert.rejects(app.revokeHostAuthorization({...scope, expectedApprovalRevision: revision - 1,
+    authorize: () => {checks++; return true;}}), {code: 'UNAUTHORIZED'});
+  await assert.rejects(app.revokeHostAuthorization({...scope, taskId: 'wrong-task',
+    authorize: () => {checks++; return true;}}), {code: 'UNAUTHORIZED'});
+  assert.ok(app.runtime.policy.get('revoke-approval'));
   assert.deepEqual(await app.revokeHostAuthorization({...scope, authorize: () => {checks++; return true;}}),
     {revoked: true, grantPresent: false, approvalRevision: revision});
-  assert.equal(checks, 3);
+  assert.equal(checks, 5);
   assert.equal(app.runtime.policy.get('revoke-approval'), undefined);
   app.close();
   app = createRuntimeApplication({path});

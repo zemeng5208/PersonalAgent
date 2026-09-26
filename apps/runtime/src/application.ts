@@ -1,5 +1,5 @@
 export {createRuntimeApplication, RuntimeApplication} from './application/runtime-application.js';
-export type {RuntimeApplicationOptions, RuntimeApplicationTransport,
+export type {RuntimeApplicationOptions, RuntimeApplicationTransport, SubmitHostToolTaskRequest, HostToolTaskReadback,
   RevokeHostAuthorizationRequest, RevokeHostAuthorizationResult} from './application/runtime-application.js';
 export type {LocalRepairHostOptions, LocalRepairBinding, SubmitLocalRepairRequest} from './application/local-repair.js';
 export {createAgentArtsRuntimeApplication} from './application/agentarts.js';
