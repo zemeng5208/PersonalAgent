@@ -36,11 +36,20 @@ export class DesktopState {
       }
     } catch { /* Missing or damaged preferences use safe defaults. */ }
   }
-  save() {
+  save(value = this.value) {
     mkdirSync(path.dirname(this.file), {recursive: true});
-    writeFileSync(this.file + '.tmp', JSON.stringify(this.value), 'utf8');
+    writeFileSync(this.file + '.tmp', JSON.stringify(value), 'utf8');
     renameSync(this.file + '.tmp', this.file);
   }
-  update(patch) { this.value.settings = normalizeSettings({...this.value.settings, ...patch}); this.save(); return {...this.value.settings}; }
-  remember(key, bounds) { this.value.windows[key] = bounds; this.save(); }
+  update(patch) {
+    const next = {...this.value, settings: normalizeSettings({...this.value.settings, ...patch})};
+    this.save(next);
+    this.value = next;
+    return {...next.settings};
+  }
+  remember(key, bounds) {
+    const next = {...this.value, windows: {...this.value.windows, [key]: bounds}};
+    this.save(next);
+    this.value = next;
+  }
 }

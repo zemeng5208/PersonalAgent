@@ -129,6 +129,7 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | --- | --- | --- | --- |
 | `event.subscribe`、`RuntimeApplication.readEvents`、Client `EventCursor` | 本地顺序、去重、缺口检测和桌面恢复测试 | 无 unsubscribe；服务端不裁剪事件，尚不产生真实 `CURSOR_EXPIRED`；未来跨进程通道未冻结 | `provisional` |
 | `RuntimeApplicationTransport.send`、`activeTaskCount`、`close`、模型配置入口 | 进程内 Runtime Application 与 Desktop smoke | Host 健康/关闭/升级/未结束等待任务语义不完整 | `provisional` |
+| `RuntimeApplication.submitHostToolTask`、`readHostToolTask` | DEP01 可信宿主单工具任务、SQLite checkpoint、既有审批/Policy/ToolGateway 恢复及定向测试 | 仅限宿主注入；Goal/Windows 等具体生产工具与 Desktop 消费、真实写入读回和非作者评审尚未完成；不公布新 wire capability | `provisional` |
 | `authorization.respond` | SQLite 审批、revision、一次性授权、恢复测试 | 真实模型提出工具请求的闭环未验证；持续授权未实现 | `provisional` |
 | `capability.list`、`tool.invoke` | ToolGateway、Policy、Runtime、Fake 工具闭环 | 真实盘古工具提案与真实工具读回未执行；核实入口不完整 | `provisional` |
 | `ToolDescriptor`、`RegisteredTool`、`ToolContext`、`ToolHost` | contracts 类型、FakeToolHost、生产 ToolGateway | Windows/MCP/Skill/第三方写工具尚未作为独立消费者验证 | `provisional` |
