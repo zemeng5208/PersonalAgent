@@ -129,8 +129,10 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | --- | --- | --- | --- |
 | `event.subscribe`、`RuntimeApplication.readEvents`、Client `EventCursor` | 本地顺序、去重、缺口检测和桌面恢复测试 | 无 unsubscribe；服务端不裁剪事件，尚不产生真实 `CURSOR_EXPIRED`；未来跨进程通道未冻结 | `provisional` |
 | `RuntimeApplicationTransport.send`、`activeTaskCount`、`close`、模型配置入口 | 进程内 Runtime Application 与 Desktop smoke | Host 健康/关闭/升级/未结束等待任务语义不完整 | `provisional` |
+| `RuntimeApplication.submitHostToolTask`、`readHostToolTask` | DEP01 可信宿主单工具任务、SQLite checkpoint、既有审批/Policy/ToolGateway 恢复及定向测试 | 仅限宿主注入；Goal/Windows 等具体生产工具与 Desktop 消费、真实写入读回和非作者评审尚未完成；不公布新 wire capability | `provisional` |
 | `authorization.respond` | SQLite 审批、revision、一次性授权、恢复测试 | 真实模型提出工具请求的闭环未验证；持续授权未实现 | `provisional` |
 | `capability.list`、`tool.invoke` | ToolGateway、Policy、Runtime、Fake 工具闭环 | 真实盘古工具提案与真实工具读回未执行；核实入口不完整 | `provisional` |
+| `RuntimeApplication.prepareCompetitionToolCatalog`、`assertCompetitionToolCatalogAllowed` | DEP05 按任务选择已注册 ToolDescriptor、显式结果出口和宿主动态可用性，持久绑定精简 Schema 并在提案前复核；写工具仍走本地 Policy 审批与结果核实 | AgentArts 初始目录载荷由 MOD-04B/30 另行接线与真实发布验收；目录本身不授予执行或外发结果权限 | `provisional` |
 | `ToolDescriptor`、`RegisteredTool`、`ToolContext`、`ToolHost` | contracts 类型、FakeToolHost、生产 ToolGateway | Windows/MCP/Skill/第三方写工具尚未作为独立消费者验证 | `provisional` |
 | `PolicyPort`、`AuthorizationPolicy` | 参数摘要、任务/工具/scope/期限/次数绑定及 SQLite 事务测试 | 跨任务持续授权、撤销管理面和真实宿主消费未完成 | `provisional` |
 | `ModelProvider`、`ModelGateway`、Agent 执行循环 | Fake Provider、Mock fetch、离线 Agent/工具测试 | Agent 依赖具体 `ModelGateway`；真实盘古工具调用未通过 | `provisional` |
@@ -138,6 +140,7 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | `ConnectorPort`、`ConnectorHost`、`SecretStorePort.read` | 类型、FakeConnector、宿主单测 | 账号会话未持久化；wire connect/disconnect 未接 Runtime；无真实账号 | `provisional` |
 | `StoragePort` | contracts 类型、FakeStorage | 只有同步 get/set/delete；没有 revision、事务、容量和失败语义 | `provisional` |
 | `CoordinationPort`、`CloudAgentPort`、Competition Runtime/工具循环 | PR #36、#49：Fake、审批恢复和 continuation 离线循环 | Workflow 输入 #72 与载荷边界 #80 尚未进入 main；真实 deployment/version/trace、成功云 API、MCP/Skill 和目标系统读回未验证 | `provisional` |
+| `createSqliteFactProjectionHost`、`SqliteMemoryHost.withdrawPublicSource` | DEP02 将固定 public feed/query/确认和 Runtime 持久投影组合，来源撤回写入幂等 tombstone/变化事件 | 真实来源撤回证明、生产触发/生命周期和完整目标系统读回未验证；不作为 Runtime wire capability | `provisional` |
 | NotificationService | PR #27、#81：持久批次、ack、DST、摘要与毫秒窗口测试 | 无 Runtime wire 查询、Desktop 展示和真实通知通道 | `provisional` |
 
 这些接口可以继续迭代，但消费者必须固定精确包版本或提交，并准备迁移；不能称为“冻结接口”。
@@ -155,7 +158,7 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | 结果 | 结构化 `TaskResult` | 当前仅 `resultSummary` 字符串；需正文、模型、usage、verification、plan/evidence 分离 | MOD-02/03 `goo122` |
 | 会话 | 显式创建、重命名、归档、删除、重试关联 | 当前只有 `task.submit` 携带 conversationId 和只读列表 | MOD-02/03 `goo122` |
 | 调度 | 循环规则、唤醒计时器、睡眠恢复公共 API | Runtime 只有内部一次性调度，没有 wire operation | MOD-03 `goo122` |
-| Evidence | 公开 list/get/content 与提交端口 | Runtime 只有内部 `readEvidence(taskId)`，没有 wire operation 或访问控制 | MOD-03/05 `goo122` |
+| Evidence / 授权撤销 | 公开 list/get/content、提交与 revoke 端口 | 新增 provisional 宿主 `ScopedEvidenceReader` 元数据 list/get 与 `revokeHostAuthorization`，逐次要求宿主鉴权、核对持久审批并读回 grant 删除；Runtime 仍无主体 ACL、wire operation、内容读取或提交端口，生产宿主鉴权来源未接入 | MOD-03/05 `goo122` |
 | Artifact | 创建、读取、过期、释放、分片和背压 | 仅有 attachment/artifact 引用原则，没有服务和 Fake | MOD-01/02/05 `goo122` |
 | 设置 | 生产 `settings.get` / `settings.update` | Schema 和 Fake 存在；生产 Runtime 不公布也不处理 | MOD-02/03 `goo122` |
 | 连接器 | 生产 `connector.connect` / `connector.disconnect` wire 路由 | Schema 与 ConnectorHost 存在，但 Runtime 未公布/分派，账号语义不一致 | MOD-05 `goo122` |
@@ -163,7 +166,7 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | 通知 | Runtime 列表/恢复、已读/隐藏、策略配置与 Desktop 展示 | NotificationService 已集成但尚未接 wire 或 Desktop；`notification.created` 仍无生产发布链 | MOD-23 `Potatos498`、MOD-13 `zemeng` |
 | 语音 | `voice.start` / `voice.stop`、ASR/TTS 流和设备适配 | session/wake/transcript consumer 仍在冲突的堆叠分支，main 无生产提供者；真实供应商、流协议和设备验收未提供 | MOD-14/15 `zemeng` |
 | 知识 | `KnowledgePort`、Obsidian/LLM Wiki | PR #93～#95、#97、#98 已合并：provisional `KnowledgePort`、脱机及 Obsidian 只读适配器、显式 `knowledge.search` ToolGateway/Policy 接线、公开演示资料的 Fake Competition 审批链已完成离线验收。真实 Vault 授权/验收、生产 Runtime 注册、可安装插件、私人结果云端发送控制和 LLM Wiki 仍 unavailable | MOD-08 `goo122` |
-| 记忆 | 生产 `MemoryQueryPort` / `FactChangeFeed` 提供者、确认消费、修正/删除 | PR #89、#90、#91 已合并 provisional 端口、Fake、SQLite 恢复与确认后原子激活投影；生产 Runtime capability、真实来源和删除验收仍未提供 | MOD-09 `goo122` |
+| 记忆 | 生产 `MemoryQueryPort` / `FactChangeFeed` 提供者、确认消费、修正/删除 | PR #89、#90、#91 已合并 provisional 端口、Fake、SQLite 恢复与确认后原子激活投影；DEP02 仅新增可信组合和显式撤回版本，生产 Runtime capability、自动触发、真实来源及撤回证明仍未提供 | MOD-09 `goo122` |
 | MCP | 本地 MCP Host/Client 端口 | 对应 package、注册适配和真实调用未提供 | MOD-06 `goo122` |
 | Skills | 本地 Skill 加载/版本/执行端口 | 对应 package 和闭环未提供 | MOD-07 `goo122` |
 | 决策 | 目标/事实/决策图谱的生产集成 | main 已有版本图及 SQLite/Fake 原子 `appendBatch`；自动事实投影、真实事实来源与生产消费未完成 | MOD-27 `zemeng`，存储 `goo122` |

@@ -9,6 +9,14 @@ import {
 } from './patch-preview.js';
 import {createWorkspacePatchStageToolFromReader} from './patch-stage.js';
 export {
+  createWorkspaceCommandTool,
+  registerWorkspaceCommand,
+  WORKSPACE_COMMAND_SCOPE,
+  WORKSPACE_COMMAND_TOOL_NAME,
+  WORKSPACE_COMMAND_TOOL_VERSION,
+} from './command.js';
+export type {WorkspaceCommandOptions, WorkspaceCommandRecipe, WorkspaceCommandResult} from './command.js';
+export {
   MAX_SERIALIZED_WORKSPACE_PATCH_INPUT_BYTES,
   MAX_WORKSPACE_PATCH_EDITS,
   MAX_WORKSPACE_PATCH_PREVIEW_BYTES,
