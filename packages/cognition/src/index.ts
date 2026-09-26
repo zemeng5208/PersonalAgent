@@ -9,6 +9,9 @@ export type {StoredRepairChange, StoredRepairRequest, StoredRepairPreview,
 export {selectGoalRevisionImpact, previewGoalRevisionRepair} from './goal-revision.js';
 export type {GoalRevisionSelectionRequest, GoalRevisionImpact,
   GoalRevisionRepairRequest, GoalRevisionRepairPreview} from './goal-revision.js';
+export {selectProjectedRepairScope, previewProjectedRepair} from './projected-repair.js';
+export type {ProjectedRepairInput, ProjectedRepairScope,
+  ProjectedRepairRequest, ProjectedRepairPreview} from './projected-repair.js';
 export {ProactiveDecisionService, DecisionError, INTERVENTIONS} from './proactive-decision.js';
 export type {DecisionPort, DecisionRequest, DecisionEvent, DecisionSuggestion, DecisionRef,
   BoundedDecisionModel, ModelChoice, Intervention} from './proactive-decision.js';
