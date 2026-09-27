@@ -33,6 +33,8 @@ export type {ProjectedFactDecisionInput} from './projected-fact-decision.js';
 export {LayaTriageService} from './laya-triage.js';
 export type {LayaTriageMessage, LayaTriageRequest, LayaTriageResult, LayaTriageScores, LayaTriageOptions} from './laya-triage.js';
 export type {LayaBatchPayload, LayaBatchInferencePort} from './laya-triage.js';
+export {prepareTriageDispatch} from './triage-consumer.js';
+export type {TriageDispatchInput, TriageDispatchRef, TriageDeferredRef, TriageDispatch} from './triage-consumer.js';
 export {LocalLayaBatchHttpTransport} from './laya-batch-transport.js';
 export {LayaActionChoiceService, actionArgumentsDigest} from './laya-action-choice.js';
 export type {LayaActionCandidate, LayaActionChoiceRequest, LayaActionSelection} from './laya-action-choice.js';
