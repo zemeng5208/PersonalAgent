@@ -1337,7 +1337,14 @@ async function initializeLiveVoice() {
           state: task.state, result: resultText(task.resultSummary).slice(0, 1600)})),
       messages: conversations.messagesFor('panel').slice(-20).map(({role, text}) => ({role, text: text.slice(0, 1600)})),
       capabilities: capabilities.map(item => ({name: item.name ?? item.id, version: item.version})),
-      note: '目录声明不代表真实执行成功，任务成功以 Runtime 返回为准。'}),
+      tools: [...(codingWorkspace?.competitionToolAvailability ?? []),
+        ...(productTools?.competitionToolAvailability ?? []),...(feedsHost?.competitionToolAvailability ?? []),
+        ...(todoHost?.competitionToolAvailability ?? []),...(goalCloudHost?.competitionToolAvailability ?? [])]
+        .map(({toolName,toolVersion})=>({name:toolName,version:toolVersion,state:'registered_requires_task_authorization'})),
+      sessionPermissions:{goals:goalCloudHost?.snapshot().sessionAllowed===true,
+        coding: codingWorkspace?.snapshot().cloudExportAllowed===true,
+        mailAnalysis:mailConfig?.snapshot().cloudAnalysisAllowed===true},
+      note: '工具名称来自与文字任务相同的宿主目录；注册不代表本次已授权或已执行。需要工作时调用 request_work，由 Runtime 为实际任务检查目录、权限和参数；不能将注册列表冒充当前全部可用。任务成功以 Runtime 返回为准。'}),
   });
 }
 
