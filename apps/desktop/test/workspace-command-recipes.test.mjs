@@ -340,6 +340,53 @@ test('project scripts gatekeeping: npm build/test recipes require all conditions
     npmCliPath: internalNpmCli,
     allowProjectScripts: true,
   }), /outside the writable workspace/i);
+
+  // Case 9: Security: package.json as a symbolic link pointing outside workspace is rejected
+  const symlinkRoot = createTempDir('pa-cmd-symlink-root-');
+  t.after(() => rmSync(symlinkRoot, {recursive: true, force: true}));
+  const externalPkg = path.join(externalDir, 'secret-package.json');
+  writeFileSync(externalPkg, JSON.stringify({name: 'secret', scripts: {build: 'echo secret'}}));
+  let fileSymlinkCreated = true;
+  try {
+    symlinkSync(externalPkg, path.join(symlinkRoot, 'package.json'), 'file');
+  } catch {
+    fileSymlinkCreated = false;
+  }
+  if (fileSymlinkCreated) {
+    const {recipes, diagnostics} = buildWorkspaceCommandRecipes({
+      workspaceRoot: symlinkRoot,
+      nodeExecutable: process.execPath,
+      jobHelperExecutable: externalHelper,
+      npmCliPath: externalNpmCli,
+      allowProjectScripts: true,
+    });
+    assert.equal(diagnostics.projectScriptsExposed, false);
+    assert.ok(diagnostics.reasons.some(r => r.includes('package.json must not be a symbolic link')));
+  }
+
+  // Case 10: Security: node_modules as a symbolic link/junction pointing outside workspace is rejected
+  const junctionRoot = createTempDir('pa-cmd-junction-root-');
+  t.after(() => rmSync(junctionRoot, {recursive: true, force: true}));
+  writeFileSync(path.join(junctionRoot, 'package.json'), JSON.stringify({name: 'app', scripts: {build: 'echo 1'}}));
+  const externalModules = path.join(externalDir, 'external_node_modules');
+  mkdirSync(externalModules);
+  let junctionCreated = true;
+  try {
+    symlinkSync(externalModules, path.join(junctionRoot, 'node_modules'), 'junction');
+  } catch {
+    junctionCreated = false;
+  }
+  if (junctionCreated) {
+    const {recipes, diagnostics} = buildWorkspaceCommandRecipes({
+      workspaceRoot: junctionRoot,
+      nodeExecutable: process.execPath,
+      jobHelperExecutable: externalHelper,
+      npmCliPath: externalNpmCli,
+      allowProjectScripts: true,
+    });
+    assert.equal(diagnostics.projectScriptsExposed, false);
+    assert.ok(diagnostics.reasons.some(r => r.includes('dependencies_missing')));
+  }
 });
 
 test('public command contract validation: recipe limits and properties', async t => {

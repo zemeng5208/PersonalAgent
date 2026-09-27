@@ -256,3 +256,111 @@ test('WindowsJobProcessHost terminates grandchild process tree on abort', {
   }
   assert.ok(grandchildDied, 'grandchild process must be terminated by Job Object');
 });
+
+test('WindowsJobProcessHost runs fixed command successfully and returns complete output', {
+  skip: process.platform !== 'win32' ? 'Windows only test' : false,
+}, async t => {
+  const root = await fixture(t);
+  const jobHostExe = join(import.meta.dirname, '..', 'native', 'bin', 'Debug', 'net8.0-windows', 'WindowsJobProcessHost.exe');
+  let jobHostFound = false;
+  try {
+    const s = statSync(jobHostExe);
+    jobHostFound = s.isFile();
+  } catch {}
+  if (!jobHostFound) {
+    t.skip('WindowsJobProcessHost.exe not compiled, skipping success test');
+    return;
+  }
+
+  const pidPath = join(root, 'child-success.pid');
+  const tool = createWorkspaceCommandTool({
+    rootPath: root,
+    recipes: [{
+      id: 'job-success',
+      executable: jobHostExe,
+      args: ['--cwd', root, '--exe', process.execPath, '--', '-e', `
+        require("node:fs").writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+        process.stdout.write("JOB_SUCCESS_MARKER\\n");
+      `],
+    }],
+  });
+
+  const res = await tool.execute({recipeId: 'job-success'}, context());
+  assert.equal(res.recipeId, 'job-success');
+  assert.equal(res.exitCode, 0);
+  assert.equal(res.stdout, 'JOB_SUCCESS_MARKER\n');
+  assert.equal(res.stderr, '');
+
+  const childPid = Number(await readFile(pidPath, 'utf8'));
+  assert.ok(Number.isSafeInteger(childPid) && childPid > 0);
+  assert.throws(() => process.kill(childPid, 0), {code: 'ESRCH'});
+});
+
+test('WindowsJobProcessHost terminates grandchild process tree on deadline timeout', {
+  skip: process.platform !== 'win32' ? 'Windows only test' : false,
+}, async t => {
+  const root = await fixture(t);
+  const jobHostExe = join(import.meta.dirname, '..', 'native', 'bin', 'Debug', 'net8.0-windows', 'WindowsJobProcessHost.exe');
+  let jobHostFound = false;
+  try {
+    const s = statSync(jobHostExe);
+    jobHostFound = s.isFile();
+  } catch {}
+  if (!jobHostFound) {
+    t.skip('WindowsJobProcessHost.exe not compiled, skipping timeout test');
+    return;
+  }
+
+  const grandchildPidPath = join(root, 'grandchild-timeout.pid');
+  const spawnerScript = join(root, 'spawner-timeout.cjs');
+  await writeFile(spawnerScript, `
+    const { spawn } = require('node:child_process');
+    const child = spawn(process.execPath, ['-e', 'require("node:fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)', ${JSON.stringify(grandchildPidPath)}], {
+      stdio: 'ignore',
+      detached: false,
+    });
+    setInterval(() => {}, 1000);
+  `);
+
+  const treeTool = createWorkspaceCommandTool({
+    rootPath: root,
+    recipes: [{
+      id: 'run-tree-timeout',
+      executable: jobHostExe,
+      args: ['--cwd', root, '--exe', process.execPath, '--', spawnerScript],
+    }],
+  });
+
+  const execution = treeTool.execute({recipeId: 'run-tree-timeout'}, context({
+    deadline: new Date(Date.now() + 300).toISOString(),
+  }));
+
+  let grandchildPid;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      grandchildPid = Number(await readFile(grandchildPidPath, 'utf8'));
+      if (grandchildPid > 0) break;
+    } catch {
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+  }
+  assert.ok(Number.isSafeInteger(grandchildPid) && grandchildPid > 0, 'grandchild started');
+
+  assert.doesNotThrow(() => process.kill(grandchildPid, 0));
+
+  await assert.rejects(execution, err => err.code === 'TIMEOUT' || err.code === 'RESULT_UNKNOWN');
+
+  let grandchildDied = false;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      process.kill(grandchildPid, 0);
+      await new Promise(resolve => setTimeout(resolve, 50));
+    } catch (e) {
+      if (e.code === 'ESRCH') {
+        grandchildDied = true;
+        break;
+      }
+    }
+  }
+  assert.ok(grandchildDied, 'grandchild process must be terminated by Job Object after timeout');
+});

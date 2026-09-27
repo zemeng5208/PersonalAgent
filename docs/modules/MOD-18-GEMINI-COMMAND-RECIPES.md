@@ -36,9 +36,12 @@
 - **禁止模型提供可执行文件路径、任意脚本路径、或 shell 命令行字符串**。
 - 模型在执行时仅提供 `{recipeId}`，枚举值严格收紧至当前批准的配方集合。
 
-### 1.4 路径合法性与跨界逃逸防御
+### 1.4 路径合法性、符号链接与跨界逃逸防御
 - **工作区边界**：`workspaceRoot` 必须为本机绝对目录，禁止驱动器根目录（如 `C:\`），禁止 UNC 网络路径，禁止符号链接。若指定 `authorizedWorkspaceRoot`，必须严格与已授权目录身份一致。
 - **待检查源文件**：`checkFiles` 必须是工作区内的规范相对路径。严格拒绝绝对路径、驱动器盘符、UNC 路径、`..` 目录逃逸、符号链接（`isSymbolicLink()`）以及指向工作区外的目标。
+- **package.json 与 node_modules 防逃逸**：
+  - `inspectPackageJson` 先通过 `lstatSync` 校验 `package.json` **非符号链接**，再通过 `realpathSync.native` 验证其真实存储位置严格在工作区内部；严禁跟随符号链接读取工作区外部的私人/未授权文件；
+  - `checkNodeModules` 同样通过 `lstatSync` 拒绝符号链接，并验证 `realpathSync.native` 边界，严防把工作区外部的 junction / symlink 目录误算为已安装依赖。
 
 ---
 
@@ -48,15 +51,20 @@
 
 为此，我们在 `packages/coding-tools/native/` 下实现了极简专用的原生宿主助手：`WindowsJobProcessHost`（基于 .NET 8 与 Win32 API）：
 
-### 2.1 严格的 Win32 Job Object 不变量
+### 2.1 严格的 Win32 Job Object 不变量与错误处理
 1. **Kill On Job Close 保证**：使用 `CreateJobObjectW` 创建 Win32 作业对象，并配置 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (0x2000)`，同时坚决禁止 breakaway（严防进程从 Job Object 逃逸）。
 2. **挂起创建与纳管前序**：使用 `CreateProcessW` 配合 `CREATE_SUSPENDED (0x4)` 与 `CREATE_NO_WINDOW (0x08000000)` 创建目标 Node/npm 进程。
 3. **关键安全不变量（Assign Before Resume）**：
    - 在挂起进程的主线程被唤醒前，必须先调用 `AssignProcessToJobObject` 将其加入作业对象；
-   - **若加入作业对象失败，立即调用 `TerminateProcess` 强制销毁该挂起进程**，绝不放任任何未纳管的进程开始运行；
-   - 只有在成功加入作业对象后，才调用 `ResumeThread` 恢复进程执行。
-4. **内核级原子灭活**：当父进程（Node 工具）发送 SIGKILL、被任务系统终止、或者 helper 进程由于任何原因退出时，操作系统内核会自动关闭 Job Object 句柄，从而瞬间、原子地强制终止整棵子进程树中的所有子进程、孙进程。
-5. **管道与退出码安全转发**：通过匿名管道异步转发子进程的标准输出与标准错误流，并在子进程退出后如实返回退出码。
+   - **若加入作业对象失败，立即调用 `TerminateProcess` 强制销毁该挂起进程**，决不放任任何未纳管的进程开始运行；
+   - 只有在成功加入作业对象后，才调用 `ResumeThread` 恢复进程执行；若 `ResumeThread` 失败（返回 `0xFFFFFFFF`），同样立即 `TerminateProcess` 并关闭句柄 Fail Closed。
+4. **管道与句柄严密管理**：
+   - 检查 `CreatePipe` 与 `SetHandleInformation` 返回值；任一管道创建失败立即关闭已分配句柄并退出；
+   - 进程创建成功后立即在 helper 中关闭 stdout/stderr 的写端句柄，使管道读流能正常捕获 EOF。
+5. **内核级原子灭活**：当父进程（Node 工具）发送 SIGKILL、被任务系统终止、或者 helper 进程由于任何原因退出时，操作系统内核自动关闭 Job Object 句柄，从而瞬间、原子地强制终止整棵子进程树中的所有子进程、孙进程。
+6. **注意：非 OS 沙箱声明与证据边界**：
+   - **这不是 OS 权限沙箱**：执行进程仍以当前 Windows 用户凭据运行；
+   - **不能把 helper 退出直接等同于孙进程停止**：helper 自身的退出并不构成孙进程灭活的证据；测试中必须通过 Windows 操作系统内核的 Job Object 机制并在销毁后轮询真实孙进程 PID（确认返回 `ESRCH`）作为独立验证依据。
 
 ---
 
@@ -80,8 +88,8 @@
 1. `allowProjectScripts === true`：宿主显式选择开启；
 2. **受信 Job Helper 注入**：宿主显式提供 `jobHelperExecutable`（通过 `resolveJobHelperExecutable` 校验为工作区外、规范化普通文件、非 symlink，Windows 下为 `.exe`）；
 3. **受信 npm-cli 路径注入**：宿主显式提供 `npmCliPath`（通过 `resolveNpmCliPath` 校验为工作区外、规范化普通文件、非 symlink，为 `npm-cli.js`）；
-4. **package.json 声明脚本**：工作区根目录存在 `package.json`，且声明了 `build` 或 `test` 脚本（只核验脚本名称存在，绝不读取、存储或泄露脚本正文）；
-5. **本地依赖存在性门禁**：工作区根目录必须已经存在 `node_modules/` 目录；若不存在，诊断记录 `dependencies_missing`，**坚决不自动执行 `npm install` 或联网下载包**。
+4. **package.json 声明脚本**：工作区根目录存在非符号链接的 `package.json`，且声明了 `build` 或 `test` 脚本（只核验脚本名称存在，绝不读取、存储或泄露脚本正文）；
+5. **本地依赖存在性门禁**：工作区根目录必须已经存在合法的实体 `node_modules/` 目录（非指向外部的 symlink/junction）；若不存在，诊断记录 `dependencies_missing`，**坚决不自动执行 `npm install` 或联网下载包**。
 
 若上述任一条件不满足，诊断信息记录明确原因，配方中仅包含合规的 `node --check`，绝不暴露未准备好的 npm 配方。
 
@@ -89,16 +97,22 @@
 
 ## 5. 验证证据与测试记录
 
-### 5.1 coding-tools 单元测试与 Job Object 进程树终止合成验证
-在 `packages/coding-tools/test/workspace-command.test.mjs` 中执行：
-- 验证环境变量格式校验、敏感词（`GITHUB_TOKEN`, `API_KEY`, `USER_AUTH_DATA` 等）拦截；
-- 验证环境变量合并与外部进程私有变量防泄漏隔离；
-- **WindowsJobProcessHost 进程树终止合成验证**：启动由 Node 派生孙进程（长期循环）的进程树，通过 AbortController 取消执行后，断言 `WindowsJobProcessHost.exe` 终止，并通过 `process.kill(grandchildPid, 0)` 循环重试确认孙进程已被 Windows 内核通过 Job Object 彻底杀死（抛出 `ESRCH`）。
+### 5.1 coding-tools 单元测试与 Job Object 3 条完整执行路径验证
+在 `packages/coding-tools/test/workspace-command.test.mjs` 中执行，验证了合成环境下的完整三态回执：
+1. **成功执行路径（Success Path）**：
+   - 验证固定命令在 `WindowsJobProcessHost` 下正常运行、返回 `exitCode: 0`、完整输出 `JOB_SUCCESS_MARKER\n`、子进程正常退出且无任何残留进程；
+2. **取消中断路径（Abort Path）**：
+   - 验证 Node 派生孙进程进入长期循环并记录 PID，随后通过 `AbortController` 取消执行，工具返回 `CANCELLED`，并通过轮询 `process.kill(grandchildPid, 0)` 确认 Windows 内核 Job Object 已将孙进程彻底杀灭（返回 `ESRCH`）；
+3. **超时截止路径（Timeout Path）**：
+   - 验证当工具到达 `deadline` 时触发超时机制，工具返回 `TIMEOUT`（或保守 `RESULT_UNKNOWN`），随后通过轮询确认孙进程已被内核 Job Object 灭活（返回 `ESRCH`）；
+4. **环境变量与凭据隔离**：
+   - 验证环境变量格式校验、敏感词（`GITHUB_TOKEN`, `API_KEY`, `USER_AUTH_DATA` 等）拦截；
+   - 验证环境变量合并与外部进程私有变量防泄漏隔离。
 
 运行结果：
 ```powershell
-npm test --workspace=@personal-agent/coding-tools
-# 35 tests, 29 pass, 6 skip (PowerShell 7 helper unavailable), 0 fail.
+node --test packages/coding-tools/test/workspace-command.test.mjs
+# 7 tests, 7 pass, 0 fail (耗时 ~1.6s).
 ```
 
 ### 5.2 Desktop 配方工具与门禁测试
@@ -108,12 +122,15 @@ npm test --workspace=@personal-agent/coding-tools
 - 验证 5 项条件全部满足时，正确生成并暴露 `npm-build` 与 `npm-test` 配方；
 - 验证生成配方的参数结构（`--cwd`, `--exe`, `--`, `npm-cli.js`, `run`, `build`）；
 - 验证安全环境变量白名单过滤与敏感 token 阻断；
-- 验证 helper 与 npmCli 位于工作区内时的逃逸拦截报错。
+- 验证 helper 与 npmCli 位于工作区内时的逃逸拦截报错；
+- **防符号链接逃逸验证**：
+  - 验证 `package.json` 为指向外部文件的符号链接时，严密拦截并不予读取（`package_json_invalid: package.json must not be a symbolic link`）；
+  - 验证 `node_modules` 为指向外部目录的符号链接/junction 时，拒绝算作有效依赖（`dependencies_missing`）。
 
 运行结果：
 ```powershell
 node --test apps/desktop/test/workspace-command-recipes.test.mjs
-# 6 tests, 6 pass, 0 fail (耗时 ~90ms).
+# 6 tests, 6 pass, 0 fail (耗时 ~100ms).
 ```
 
 ### 5.3 语法与类型校验
@@ -128,12 +145,13 @@ git diff --check
 
 ---
 
-## 6. 架构边界与后续接线说明
+## 6. 架构边界、真实限制与后续接线说明
 
 1. **组合与接线边界**：
    本包仅交付 Desktop Main 侧的纯逻辑与构造 helper，**不自动在 UI 勾选、不直接修改 `main.js` 或 `workspace-config-host.js`**。
-   Root 将在后续集成工作包中将 UI 复选框、Runtime 审批流及 Policy 授权消费与之串联。
+   Root 可在后续集成工作包中将 UI 复选框、Runtime 审批流及 Policy 授权消费与之安全串联。
 2. **零凭据与零外部上传**：
    本 helper 不生成、不存储、不外发任何凭据；执行结果严格保留在本地，不自动上传云端。
-3. **产品能力状态**：
-   在产品端和公开接口目录中，命令执行能力严格维持 `unavailable`。
+3. **真实限制（必须明确区分）**：
+   - **合成证明 vs 真实 npm 未验**：当前的进程树杀灭和成功回执是在受控的合成脚本（Node 衍生孙进程）下验证的内核级 Job Object 行为；**尚未在真实的大型复杂 npm 项目（含原生 C++ 扩展、嵌套打包工具等）中进行端到端全链路真实执行验证**；
+   - **产品能力状态**：在产品端和公开接口目录中，命令执行能力严格维持 `unavailable`。

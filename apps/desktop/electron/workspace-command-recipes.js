@@ -169,9 +169,18 @@ function inspectPackageJson(canonicalRoot) {
   const pkgPath = path.join(canonicalRoot, 'package.json');
   if (!existsSync(pkgPath)) return {exists: false, scripts: []};
   try {
-    const stat = statSync(pkgPath);
+    const lstat = lstatSync(pkgPath);
+    if (lstat.isSymbolicLink()) {
+      return {exists: false, scripts: [], invalid: true, reason: 'package.json must not be a symbolic link'};
+    }
+    const canonicalPkg = realpathSync.native(pkgPath);
+    const fromRoot = path.relative(canonicalRoot, canonicalPkg);
+    if (fromRoot === '' || fromRoot.startsWith('..') || path.isAbsolute(fromRoot)) {
+      return {exists: false, scripts: [], invalid: true, reason: 'package.json canonical target must reside inside the workspace root'};
+    }
+    const stat = statSync(canonicalPkg);
     if (!stat.isFile()) return {exists: false, scripts: []};
-    const content = readFileSync(pkgPath, 'utf8');
+    const content = readFileSync(canonicalPkg, 'utf8');
     const parsed = JSON.parse(content);
     const scripts = parsed && typeof parsed.scripts === 'object' && parsed.scripts !== null
       ? Object.keys(parsed.scripts)
@@ -186,7 +195,14 @@ function checkNodeModules(canonicalRoot) {
   const nmPath = path.join(canonicalRoot, 'node_modules');
   if (!existsSync(nmPath)) return false;
   try {
-    return statSync(nmPath).isDirectory();
+    const lstat = lstatSync(nmPath);
+    if (lstat.isSymbolicLink()) return false;
+    const canonicalNm = realpathSync.native(nmPath);
+    const fromRoot = path.relative(canonicalRoot, canonicalNm);
+    if (fromRoot === '' || fromRoot.startsWith('..') || path.isAbsolute(fromRoot)) {
+      return false;
+    }
+    return statSync(canonicalNm).isDirectory();
   } catch {
     return false;
   }
@@ -303,14 +319,18 @@ export function buildWorkspaceCommandRecipes({
 
     const pkg = inspectPackageJson(canonicalRoot);
     if (!pkg.exists) {
-      diagnostics.reasons.push('package_json_missing: No package.json found in workspace root');
+      if (pkg.reason) {
+        diagnostics.reasons.push(`package_json_invalid: ${pkg.reason}`);
+      } else {
+        diagnostics.reasons.push('package_json_missing: No package.json found in workspace root');
+      }
     } else if (pkg.invalid) {
       diagnostics.reasons.push('package_json_invalid: package.json could not be parsed');
     }
 
     const hasNodeModules = checkNodeModules(canonicalRoot);
     if (!hasNodeModules) {
-      diagnostics.reasons.push('dependencies_missing: node_modules directory does not exist in workspace root; run install outside first');
+      diagnostics.reasons.push('dependencies_missing: node_modules directory does not exist in workspace root or points outside; run install outside first');
     }
 
     if (canonicalJobHelper && canonicalNpmCli && pkg.exists && !pkg.invalid && hasNodeModules) {

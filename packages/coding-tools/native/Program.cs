@@ -256,17 +256,34 @@ internal static class Program
                 lpSecurityDescriptor = IntPtr.Zero
             };
 
-            if (!CreatePipe(out IntPtr hStdOutRead, out IntPtr hStdOutWrite, ref sa, 0) ||
-                !CreatePipe(out IntPtr hStdErrRead, out IntPtr hStdErrWrite, ref sa, 0))
+            if (!CreatePipe(out IntPtr hStdOutRead, out IntPtr hStdOutWrite, ref sa, 0))
             {
                 int err = Marshal.GetLastWin32Error();
-                Console.Error.WriteLine($"WindowsJobProcessHost: CreatePipe failed with error {err}");
+                Console.Error.WriteLine($"WindowsJobProcessHost: CreatePipe for stdout failed with error {err}");
+                return 1;
+            }
+
+            if (!CreatePipe(out IntPtr hStdErrRead, out IntPtr hStdErrWrite, ref sa, 0))
+            {
+                int err = Marshal.GetLastWin32Error();
+                CloseHandle(hStdOutRead);
+                CloseHandle(hStdOutWrite);
+                Console.Error.WriteLine($"WindowsJobProcessHost: CreatePipe for stderr failed with error {err}");
                 return 1;
             }
 
             // Ensure read handles are not inherited by child process
-            SetHandleInformation(hStdOutRead, HANDLE_FLAG_INHERIT, 0);
-            SetHandleInformation(hStdErrRead, HANDLE_FLAG_INHERIT, 0);
+            if (!SetHandleInformation(hStdOutRead, HANDLE_FLAG_INHERIT, 0) ||
+                !SetHandleInformation(hStdErrRead, HANDLE_FLAG_INHERIT, 0))
+            {
+                int err = Marshal.GetLastWin32Error();
+                CloseHandle(hStdOutRead);
+                CloseHandle(hStdOutWrite);
+                CloseHandle(hStdErrRead);
+                CloseHandle(hStdErrWrite);
+                Console.Error.WriteLine($"WindowsJobProcessHost: SetHandleInformation failed with error {err}");
+                return 1;
+            }
 
             var pi = new PROCESS_INFORMATION();
             var si = new STARTUPINFO
@@ -332,8 +349,18 @@ internal static class Program
             }
 
             // 6. Resume the thread now that it is safely inside the Job Object
-            ResumeThread(pi.hThread);
+            uint resumeResult = ResumeThread(pi.hThread);
             CloseHandle(pi.hThread);
+            if (resumeResult == unchecked((uint)-1))
+            {
+                int err = Marshal.GetLastWin32Error();
+                TerminateProcess(pi.hProcess, 1);
+                CloseHandle(pi.hProcess);
+                CloseHandle(hStdOutRead);
+                CloseHandle(hStdErrRead);
+                Console.Error.WriteLine($"WindowsJobProcessHost: ResumeThread failed with error {err}");
+                return 1;
+            }
 
             // 7. Asynchronously pump stdout and stderr to host streams
             var stdoutTask = Task.Run(() =>
@@ -362,7 +389,13 @@ internal static class Program
             WaitForSingleObject(pi.hProcess, INFINITE);
             Task.WaitAll(stdoutTask, stderrTask);
 
-            GetExitCodeProcess(pi.hProcess, out uint exitCode);
+            uint exitCode = 1;
+            if (!GetExitCodeProcess(pi.hProcess, out exitCode))
+            {
+                int err = Marshal.GetLastWin32Error();
+                Console.Error.WriteLine($"WindowsJobProcessHost: GetExitCodeProcess failed with error {err}");
+                exitCode = 1;
+            }
             CloseHandle(pi.hProcess);
 
             return (int)exitCode;
