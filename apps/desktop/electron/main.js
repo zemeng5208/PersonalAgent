@@ -141,7 +141,7 @@ let liveConfig;
 let agentArtsConfig;
 let activeCloudBinding;
 const runtimeStartup = createDeferredRuntimeStartup({
-  isConfigured: () => !competitionMode || agentArtsConfig?.snapshot().configured === true,
+  isConfigured: () => !competitionMode || agentArtsConfig?.snapshot().runtimeReady === true,
   initialize: initializeProductServices,
 });
 let liveVoice;
@@ -531,17 +531,17 @@ async function initializeModelFromEnvironment() {
       ...model,
       provider: 'agentarts',
       label: 'AgentArts · Competition Profile',
-      status: 'configured',
+      status: cloudSettings.configured?'configured':'unconfigured',
       verification: 'unverified',
       baseUrl: cloudSettings.gatewayUrl,
       model: 'AgentArts Runtime',
       deployment: cloudSettings.runtimeName,
-      configured: true,
+      configured: cloudSettings.configured,
       keyConfigured: cloudSettings.configured,
       persisted: false,
       enabled: true,
       capabilities: {text: true, streaming: false, toolCalling: false, structuredOutput: false, vision: false},
-      reason: 'Competition Profile 已装配；云端结果仍需真实调用和本地读回验证',
+      reason: cloudSettings.configured?'Competition Profile 已装配；云端结果仍需真实调用和本地读回验证':cloudSettings.reason,
       lastTestAt: null,
       latencyMs: null,
     };
@@ -727,7 +727,8 @@ async function initializeRuntime() {
     const dbPath = dataPaths.runtime;
     mkdirSync(path.dirname(dbPath), {recursive: true});
     if (competitionMode) {
-      const cloudBinding=agentArtsConfig.binding();
+      const cloudBinding=agentArtsConfig.runtimeBinding();
+      if (!cloudBinding) throw Error(agentArtsConfig.snapshot().reason);
       activeCloudBinding = cloudBinding;
       feedsHost?.prepare();
       const syntheticTools = syntheticMvp
@@ -995,6 +996,7 @@ async function action(event, name, payload) {
     if (liveVoice && !liveShortcut.registered) registerLiveShortcut();
     const requiresRestart = startup.state !== 'ready' || result.gatewayUrl !== activeCloudBinding?.gatewayUrl
       || result.runtimeName !== activeCloudBinding?.runtimeName;
+    if (!requiresRestart) await initializeModelFromEnvironment();
     publish();
     return {...result, requiresRestart, reason: requiresRestart
       ? '配置已加密保存，请重启应用完成连接。'
@@ -1191,6 +1193,7 @@ async function action(event, name, payload) {
   if (name === 'task.submit') {
     if (sender !== panel && sender !== workspace) throw Error('请在对话工作区发送消息');
     if (typeof payload !== 'string' || !payload.trim()) throw Error('请输入有效任务');
+    if (competitionMode && !agentArtsConfig.snapshot().configured) throw Error('请先在设置 → 模型中保存 AgentArts Authorization；Live 语音配置无需重新填写');
     if (!fakeMode && model.enabled === false) throw Error('模型已停用，请先在模型设置中启用');
     const surface = sender === workspace ? 'workspace' : 'panel';
     if (submitting.has(surface) || [...tasks.values()].some(task => taskSurface(task) === surface && !terminalTaskStates.has(task.state))) throw Error('请等待当前回答完成，或先停止当前任务');
@@ -1332,6 +1335,7 @@ async function initializeLiveVoice() {
     onTranscript: message => conversations.addLiveMessage(message),
     onTaskSubmitted: ({taskId, goal}) => {conversations.add(taskId, 'panel', goal); taskGoals.set(taskId, goal);},
     readContext: () => JSON.stringify({profile: 'huawei_ict_agentarts',
+      agentArts:{configured:agentArtsConfig.snapshot().configured,reason:agentArtsConfig.snapshot().reason},
       tasks: orderedTasks().filter(task => taskSurface(task) === 'panel').slice(-10)
         .map(task => ({taskId: task.taskId, goal: (taskGoals.get(task.taskId) ?? conversations.goal(task.taskId) ?? '').slice(0, 800),
           state: task.state, result: resultText(task.resultSummary).slice(0, 1600)})),
