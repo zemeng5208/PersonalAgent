@@ -100,10 +100,21 @@ def create_app(agent, api_key):
         finally:
             # A CPU forward cannot be preempted. Keep admission closed until it
             # ends, even when the client deadline/disconnect cancels its waiter.
-            if future is not None and not future.done():
-                future.add_done_callback(lambda _future: gate.release())
-            else:
+            def release_completed(completed):
+                try:
+                    # After timeout/cancellation no waiter consumes late model errors.
+                    # Retrieve them without logging private provider details.
+                    if not completed.cancelled():
+                        completed.exception()
+                finally:
+                    gate.release()
+
+            if future is None:
                 gate.release()
+            elif future.done():
+                release_completed(future)
+            else:
+                future.add_done_callback(release_completed)
 
     @app.get("/health")
     async def health(request: Request):

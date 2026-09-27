@@ -1,6 +1,6 @@
 # 当前接口目录与冻结登记
 
-版本：1.3 · 日期：2026-09-22 · 基线提交：`d78613a226b5d490f8f2dd47f3e5c8236a3d7ec2`
+版本：1.3 · 日期：2026-09-27 · 基线提交：`9c40a0853b8db9e05e91c978e35d8e1a40788b39`
 
 协议负责人：`goo122` · 核心认知与 AgentArts 消费负责人：`zemeng` · 连接器消费负责人：`Potatos498`
 
@@ -133,14 +133,16 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | `authorization.respond` | SQLite 审批、revision、一次性授权、恢复测试 | 真实模型提出工具请求的闭环未验证；持续授权未实现 | `provisional` |
 | `capability.list`、`tool.invoke` | ToolGateway、Policy、Runtime、Fake 工具闭环 | 真实盘古工具提案与真实工具读回未执行；核实入口不完整 | `provisional` |
 | `RuntimeApplication.prepareCompetitionToolCatalog`、`assertCompetitionToolCatalogAllowed` | DEP05 按任务选择已注册 ToolDescriptor、显式结果出口和宿主动态可用性，持久绑定精简 Schema 并在提案前复核；写工具仍走本地 Policy 审批与结果核实 | AgentArts 初始目录载荷由 MOD-04B/30 另行接线与真实发布验收；目录本身不授予执行或外发结果权限 | `provisional` |
+| `workspace.stage_text_patch`、`workspace.apply_text_patch` | PR #133/#147 已合入；Policy/ToolGateway 授权和合成工作区测试通过，合并后 Windows PowerShell 7 全仓检查中 coding-tools 33/33 通过、0 跳过 | #147 合并前缺非作者批准评审；未在 Runtime/Desktop 生产组合注册；恢复目录 ACL、写中崩溃对账、真实用户工作区与 AgentArts 工具闭环未验收 | `provisional` |
 | `ToolDescriptor`、`RegisteredTool`、`ToolContext`、`ToolHost` | contracts 类型、FakeToolHost、生产 ToolGateway | Windows/MCP/Skill/第三方写工具尚未作为独立消费者验证 | `provisional` |
+| Windows Host 内部 Pipe 帧 `0.1.0` | [独立 Schema 与关联校验](WINDOWS_HOST_CONTRACT.md)，未改公共 wire 1.0.0 | 仅有契约与包测试；Pipe 身份/ACL、Host 服务、Runtime/Policy 接线和真实记事本读回未验收 | `provisional` 契约；执行能力 `unavailable` |
 | `PolicyPort`、`AuthorizationPolicy` | 参数摘要、任务/工具/scope/期限/次数绑定及 SQLite 事务测试 | 跨任务持续授权、撤销管理面和真实宿主消费未完成 | `provisional` |
 | `ModelProvider`、`ModelGateway`、Agent 执行循环 | Fake Provider、Mock fetch、离线 Agent/工具测试 | Agent 依赖具体 `ModelGateway`；真实盘古工具调用未通过 | `provisional` |
 | `StructuredToolProvider` | 严格 JSON 解析、工具名/版本/参数校验单测 | 只是文字 JSON 提案适配器；没有真实盘古闭环，不是原生 function calling | `provisional` |
 | `ConnectorPort`、`ConnectorHost`、`SecretStorePort.read` | 类型、FakeConnector、宿主单测 | 账号会话未持久化；wire connect/disconnect 未接 Runtime；无真实账号 | `provisional` |
 | `StoragePort` | contracts 类型、FakeStorage | 只有同步 get/set/delete；没有 revision、事务、容量和失败语义 | `provisional` |
 | `CoordinationPort`、`CloudAgentPort`、Competition Runtime/工具循环 | PR #36、#49：Fake、审批恢复和 continuation 离线循环 | Workflow 输入 #72 与载荷边界 #80 尚未进入 main；真实 deployment/version/trace、成功云 API、MCP/Skill 和目标系统读回未验证 | `provisional` |
-| `createSqliteFactProjectionHost`、`RuntimeApplication.createCompetitionFactHost`、`SqliteMemoryHost.withdrawPublicSource` | DEP02 将固定 public feed/query/确认和 Runtime 持久投影组合；Application 宿主工厂管理独立 Memory SQLite，来源修订/撤回以 CAS 写入幂等 Fact 变化事件 | 受信来源读回、生产触发/生命周期、真实来源撤回证明和完整目标系统读回仍待 Desktop 接线验证；不作为 Runtime wire capability | `provisional` |
+| `createSqliteFactProjectionHost`、`RuntimeApplication.createCompetitionFactHost`、`SqliteMemoryHost.withdrawPublicSource` | DEP02 将固定 public feed/query/确认和 Runtime 持久投影组合；PR #177 已将 Application 宿主工厂合入 main，管理独立 Memory SQLite，来源修订/撤回以 CAS 写入幂等 Fact 变化事件 | #177 合并前缺非作者批准评审；受信来源读回、生产触发/生命周期、真实来源撤回证明和完整目标系统读回仍待 Desktop 接线验证；不作为 Runtime wire capability | `provisional` |
 | NotificationService | PR #27、#81：持久批次、ack、DST、摘要与毫秒窗口测试 | 无 Runtime wire 查询、Desktop 展示和真实通知通道 | `provisional` |
 
 这些接口可以继续迭代，但消费者必须固定精确包版本或提交，并准备迁移；不能称为“冻结接口”。
@@ -173,7 +175,7 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | 认知 | 事件驱动的完整计划修复 | main 已有离线影响分析与显式修复预览/提交，并通过原子 `appendBatch` 写入；事实变化流、自动投影和真实 Evidence 未完成 | MOD-28 `zemeng` |
 | AgentArts | Competition Profile 的真实身份、Agent/Workflow、MaaS/模型、知识、MCP/Skill、工具提案与多 Agent | main 已有 provisional adapter 和离线工具循环；Workflow 输入仍在堆叠分支，没有成功 deployment/API/trace 与真实 MCP/Skill 读回 | MOD-29～31 `zemeng` |
 | AgentArts | Competition 发布、API、trace、评估、成本、回滚和端到端证据 | 无云资源读回、本地 Policy/ToolGateway 闭环或 profile 防静默回退证据 | MOD-32 `zemeng` |
-| Windows | Named Pipe、DesktopActionPort、资源锁、用户接管 | 对应 Host/Client package 与真实应用验收未提供 | MOD-16 `zemeng` |
+| Windows | Named Pipe、DesktopActionPort、资源锁、用户接管 | 内部帧契约为 provisional；Host/Client 生产接线与真实应用验收未提供 | MOD-16 `zemeng` |
 | TraceGuard | 公开工具和 Evidence/恢复端口 | 仓库适配 package 未提供 | MOD-17 `zemeng` |
 | 编程 | 正文读取、patch、command、artifact 端口 | PR #83 已集成受限 `workspace.list` 与 `workspace.read_text`；两者仍为 provisional，patch、command、artifact 和完整隔离验收未提供 | MOD-18 `zemeng` |
 | 分发 | 生产装配、安装、升级、卸载生命周期契约 | 无安装包与隔离安装证据 | MOD-19 `zemeng`、根装配 `goo122` |
@@ -259,6 +261,6 @@ PR #91 已经非作者评审、Foundation CI 通过并合并；采用未生效�
 Competition 工具提案/Runtime Application/Desktop 装配仍未由此项交付，运行能力保持 unavailable。
 本包接口保持 provisional，非作者评审前不冻结。
 
-截至 2026-09-24，**冻结范围仍只有 Core Runtime Profile 1 的消息、任务、会话与审批只读查询子集；不冻结整套协议、外部模型工具调用或 AgentArts 编排。** main 中已有 Competition 的离线 Coordination/审批工具循环、版本图、原子存储、显式修复预览/提交、受限工作区读取、公开演示知识检索，以及 provisional 的 SQLite 事实查询/变化流与可恢复投影；生产自动消费、Runtime Memory capability 和语音消费仍未进入 main。
+截至 2026-09-27，**冻结范围仍只有 Core Runtime Profile 1 的消息、任务、会话与审批只读查询子集；不冻结整套协议、外部模型工具调用或 AgentArts 编排。** main 中已有 Competition 的离线 Coordination/审批工具循环、版本图、原子存储、显式修复预览/提交、受限工作区读取、公开演示知识检索，以及 provisional 的 SQLite 事实查询/变化流、可恢复投影和受信 Fact host 工厂；编码工具的补丁候选与独占 apply 也已合入 package，但尚未生产注册。生产事实自动消费、Runtime Memory capability、真实工作区写入与语音消费仍未完成验收。
 
 真实 AgentArts deployment/API/trace、目标系统工具读回、完整 Evidence、真实语音设备和外部事实提供者仍 `unavailable`。Fake、合成评估、HTTP 200、配置成功或平台截图都不能提升这些状态；正式比赛路径不得静默回退 Local。
