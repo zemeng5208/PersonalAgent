@@ -896,6 +896,48 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     );
   }
 
+  /** Freeze a trusted host intent only while its prepared task is still at the observed revision. */
+  saveCheckpointOnceForCreatedTask(taskId: string, key: string, value: unknown,
+    expectedRevision: number): boolean {
+    requireText(key, 'checkpoint key');
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
+      throw new RuntimeError('INVALID_ARGUMENT', 'Invalid expected task revision');
+    }
+    const encoded = JSON.stringify(value);
+    if (encoded === undefined) throw new RuntimeError('INVALID_ARGUMENT', 'Checkpoint must be JSON serializable');
+    return this.transaction(() => {
+      const task = this.getTask(taskId);
+      if (task.state !== 'created' || task.revision !== expectedRevision) {
+        throw new RuntimeError('REVISION_CONFLICT', 'Prepared host task changed before finalization');
+      }
+      const result = this.db.prepare('INSERT INTO task_checkpoints (task_id, checkpoint_key, value_json, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(task_id, checkpoint_key) DO NOTHING').run(
+        taskId, key, encoded, this.timestamp()
+      );
+      return result.changes === 1;
+    });
+  }
+
+  /** Cancel a prepared task only if no intent was frozen at the observed revision. */
+  cancelCreatedTaskWithoutCheckpoint(taskId: string, absentKey: string,
+    expectedRevision: number): TaskSnapshot {
+    requireText(absentKey, 'checkpoint key');
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
+      throw new RuntimeError('INVALID_ARGUMENT', 'Invalid expected task revision');
+    }
+    return structuredClone(this.transaction(() => {
+      const task = this.getTask(taskId);
+      if (this.loadCheckpoint(taskId, absentKey) !== undefined) {
+        throw new RuntimeError('REVISION_CONFLICT', 'Prepared host task intent was already finalized');
+      }
+      if (task.state === 'cancelled') return task;
+      if (task.state !== 'created' || task.revision !== expectedRevision) {
+        throw new RuntimeError('REVISION_CONFLICT', 'Prepared host task changed before cancellation');
+      }
+      this.updateTask(taskId, 'cancelling', {cancelRequested: true}, true);
+      return this.updateTask(taskId, 'cancelled', {cancelRequested: true}, true);
+    }));
+  }
+
   loadCheckpoint(taskId: string, key: string): unknown {
     const row = this.db.prepare('SELECT value_json FROM task_checkpoints WHERE task_id = ? AND checkpoint_key = ?').get(taskId, requireText(key, 'checkpoint key')) as unknown as {value_json: string} | undefined;
     return row ? structuredClone(JSON.parse(row.value_json)) : undefined;
