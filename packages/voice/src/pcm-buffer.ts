@@ -56,6 +56,7 @@ function parseDeadline(value: unknown): number {
 function chunkByteLength(value: unknown): number {
   if (typedArrayByteLength === undefined) invalid('Invalid voice PCM chunk');
   try {
+    if (!(value instanceof Uint8Array)) invalid('Invalid voice PCM chunk');
     return typedArrayByteLength.call(value) as number;
   } catch {
     invalid('Invalid voice PCM chunk');
