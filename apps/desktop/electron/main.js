@@ -28,6 +28,7 @@ import {createWorkspaceConfigHost} from './workspace-config-host.js';
 import {createAgentArtsConfig} from './agentarts-config.js';
 import {createDeferredRuntimeStartup} from './runtime-startup.js';
 import {createMailConfig} from './mail-config.js';
+import {createDesktopMailAnalysisHost} from './mail-analysis-host.js';
 import {createDesktopFeedsHost} from './feeds-host.js';
 import {createDesktopNotepadHost} from './notepad-host.js';
 import {createDesktopTodoHost} from './todo-host.js';
@@ -164,6 +165,7 @@ let notepadHost;
 let notepadClosing;
 let notepadClosed = false;
 let mailHost;
+let mailAnalysisHost;
 let mailFailure = '';
 let localLaya;
 let localServicesStopping = false;
@@ -175,7 +177,7 @@ function mailSnapshot() {
   const host = mailHost?.snapshot();
   return {...host, ...config, status:host?.status === 'stop_unconfirmed' ? 'stop_unconfirmed'
     : mailFailure ? 'unavailable' : config.sessionAllowed ? host?.status ?? config.status : config.status,
-    counts:host?.counts, localModelReady:localLaya?.snapshot().ready === true,
+    counts:host?.counts, analyses:mailAnalysisHost?.snapshot(), localModelReady:localLaya?.snapshot().ready === true,
     reason:host?.status === 'stop_unconfirmed' ? '已撤销新读取；现有邮箱连接退出尚未确认'
       : mailFailure || (config.sessionAllowed ? host?.reason ?? config.reason : config.reason)};
 }
@@ -186,6 +188,7 @@ async function refreshMail() {
   const before = JSON.stringify(mailSnapshot());
   try {await mailHost.refresh();}
   catch {await mailHost.cancel(); mailFailure = '邮箱处理未完成，已停止读取；请重新配置或重启后恢复';}
+  await mailAnalysisHost?.tick();
   if (JSON.stringify(mailSnapshot()) !== before) publish();
 }
 
@@ -788,7 +791,8 @@ async function initializeRuntime() {
         createChooser:({port,getApiKey}) => new LayaActionChoiceService(new LocalLayaHttpTransport(port,getApiKey)),
         onUpdate:publish});
       mailConfig = createMailConfig({userData:app.getPath('userData'), safeStorage,
-        onRevoke:async () => {await mailHost?.cancel();}});
+        onRevoke:async () => {await mailHost?.cancel();},
+        onCloudRevoke:async () => {await mailAnalysisHost?.revoke();}});
       const configuredMail = mailConfig.current();
       if (configuredMail) {
         try {
@@ -815,6 +819,10 @@ async function initializeRuntime() {
             throw Error('目标主动分析宿主尚未就绪');
           }
           proactiveHost?.assertCognitionCloudSend(request);
+          if (!mailAnalysisHost && runtimeApplication.runtime.getTask(request.taskId).conversationId?.startsWith('desktop-mail-analysis:')) {
+            throw Error('邮件分析宿主尚未就绪');
+          }
+          mailAnalysisHost?.assertCloudSend(request);
         },
         tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...goalHost.tools, ...productTools.tools, ...(mailHost?.tools ?? []), ...(feedsHost?.tools ?? []), ...(notepadHost?.tools ?? []), ...(todoHost?.tools ?? [])],
         ...(syntheticMvp ? {localRepair: syntheticRepairHost.localRepair} : {}),
@@ -872,6 +880,13 @@ async function initializeRuntime() {
     ? 'Fake Runtime · 联调模式'
     : competitionMode ? '本地 Runtime · AgentArts Competition' : '本地 Runtime · 已连接';
   eventCursor = new EventCursor('tasks');
+  if (competitionMode && mailHost) mailAnalysisHost = createDesktopMailAnalysisHost({
+    application:runtimeApplication,client,mail:mailHost,config:mailConfig,namespace:desktopHost.userNamespace,
+    onUpdate:publish,onTask:({taskId,goal})=>{
+      if (!conversations.turns.has(taskId)) conversations.add(taskId,'panel',goal);
+      taskGoals.set(taskId,goal);
+    },
+  });
   await syncCapabilities();
   await syncRuntimeSnapshots();
   if (competitionMode) proactiveHost = createDesktopProactiveHost({application: runtimeApplication,
@@ -986,13 +1001,15 @@ async function action(event, name, payload) {
     if (name === 'coding.revoke') codingWorkspace.revoke();
     publish();return {coding:codingWorkspace.snapshot()};
   }
-  if (['mail.configure','mail.enable','mail.read','mail.disable','laya.start','laya.stop'].includes(name)) {
+  if (['mail.configure','mail.enable','mail.read','mail.disable','mail.enableCloud','mail.disableCloud','laya.start','laya.stop'].includes(name)) {
     if (sender !== admin || !competitionMode || !mailConfig || !localLaya) throw Error('此操作仅允许从本项目设置调用');
     if (name === 'laya.start') {localServicesStopped = false; return localLaya.start();}
     if (name === 'laya.stop') {await mailHost?.cancel(); const result = await localLaya.stop(); publish(); return result;}
     if (name === 'mail.configure') {await mailConfig.configure(payload); mailFailure = '';}
     if (name === 'mail.enable') mailConfig.enableSession(payload);
     if (name === 'mail.disable') await mailConfig.revoke();
+    if (name === 'mail.enableCloud') mailConfig.enableCloudAnalysis(payload);
+    if (name === 'mail.disableCloud') await mailConfig.revokeCloudAnalysis();
     if (name === 'mail.read') {
       if (!mailHost || mailConfig.snapshot().requiresRestart) throw Error('邮箱配置将在下次启动应用时接入');
       if (!localLaya.snapshot().ready) throw Error('请先启动本地 Laya');

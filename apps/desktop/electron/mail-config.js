@@ -1,5 +1,6 @@
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
+import {randomUUID} from 'node:crypto';
 
 const valid = value => value && typeof value.user === 'string'
   && /^[A-Za-z0-9._+-]+@qq\.com$/i.test(value.user) && value.user.length <= 254
@@ -7,9 +8,10 @@ const valid = value => value && typeof value.user === 'string'
 const mask = user => user ? `${user.slice(0, 1)}***@qq.com` : '';
 
 /** Main-process only. Persist credentials, never persist the local read consent. */
-export function createMailConfig({userData, safeStorage, onRevoke = async () => {}}) {
+export function createMailConfig({userData, safeStorage, onRevoke = async () => {}, onCloudRevoke = async () => {}}) {
   const target = path.join(userData, 'mail-config.json');
   let saved, sessionAllowed = false, boundRevision, failure = '';
+  let cloudGeneration;
   if (existsSync(target)) {
     try {
       const data = JSON.parse(readFileSync(target, 'utf8'));
@@ -20,18 +22,33 @@ export function createMailConfig({userData, safeStorage, onRevoke = async () => 
     } catch {failure = '邮箱加密配置无法读取，请重新保存';}
   }
   const snapshot = () => ({account: mask(saved?.user), configured: Boolean(saved), sessionAllowed,
+    cloudAnalysisAllowed: Boolean(cloudGeneration && sessionAllowed && boundRevision === saved?.revision),
     requiresRestart: Boolean(saved && boundRevision !== saved.revision), headersOnly: true,
     status: failure ? 'unavailable' : sessionAllowed ? 'enabled' : saved ? 'disabled' : 'unconfigured',
     reason: failure || (sessionAllowed ? '允许本会话整批收件箱信头本地分类；不会发送或修改邮件'
       : '读取许可不会跨应用重启恢复')});
   const revoke = async () => {
     sessionAllowed = false;
+    cloudGeneration = undefined;
+    await onCloudRevoke();
     await onRevoke();
     return snapshot();
   };
   return Object.freeze({
     snapshot,
     current: () => saved ? {...saved} : undefined,
+    cloudLease: () => sessionAllowed && boundRevision === saved?.revision ? cloudGeneration : undefined,
+    enableCloudAnalysis(input) {
+      if (!saved || !sessionAllowed || boundRevision !== saved.revision || input?.cloudAnalysisConsent !== true
+        || Object.keys(input).some(key => key !== 'cloudAnalysisConsent')) throw Error('请先启用本地分类，并单独允许将待分析信头发送到 AgentArts');
+      cloudGeneration ??= randomUUID();
+      return snapshot();
+    },
+    async revokeCloudAnalysis() {
+      cloudGeneration = undefined;
+      await onCloudRevoke();
+      return snapshot();
+    },
     isSessionAllowed: revision => sessionAllowed && saved?.revision === revision && boundRevision === revision,
     markBound(revision) {
       if (!saved || revision !== saved.revision) throw Error('邮箱装配版本不匹配');
