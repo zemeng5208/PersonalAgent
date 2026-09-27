@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {test} from 'node:test';
 import {Client} from '@personal-agent/client';
+import {parseCoordinationAvailableTools, MAX_AVAILABLE_TOOLS} from '@personal-agent/coordination';
 import {createRuntimeApplication} from '../dist/application.js';
 
 const descriptor = {
@@ -361,10 +362,33 @@ test('catalog binding rejects versions beyond the cloud adapter limit', () => {
   }), {code: 'INVALID_ARGUMENT'});
 });
 
+test('combined module catalog survives Runtime projection and cloud parsing without truncation', async () => {
+  const names = Array.from({length: 24}, (_, i) => `module${i}.read`);
+  const tools = names.map(name => ({descriptor:{...descriptor,name},execute:async()=>({value:'unused'})}));
+  let observed;
+  const app = createRuntimeApplication({path:':memory:',profile:'huawei_ict_agentarts',tools,
+    competitionToolExports:names.map(toolName=>({...toolExport,toolName})),
+    competitionToolAvailability:names.map(toolName=>({toolName,toolVersion:descriptor.version,available:()=>true})),
+    coordination:{execute:async request=>{
+      observed=parseCoordinationAvailableTools(request.availableTools);
+      await app.assertCompetitionToolCatalogAllowed({...request,availableTools:observed});
+      return {kind:'text',text:'Catalog accepted',verification:'mock'};
+    }}});
+  try {
+    const client=new Client(app,Date.now);await client.connect();
+    const {taskId}=await client.call('task.submit',{goal:'Synthetic combined modules',conversationId:'catalog'},
+      {idempotencyKey:'combined-modules'});
+    assert.equal((await waitFor(app,taskId,['failed','succeeded'])).state,'succeeded');
+    assert.deepEqual(observed.map(tool=>tool.name),names);
+    assert.throws(()=>parseCoordinationAvailableTools(Array.from({length:MAX_AVAILABLE_TOOLS+1},(_,i)=>
+      ({name:`tool${i}`,version:'1',inputSchema:{type:'object',properties:{}}}))));
+  } finally {app.close();}
+});
+
 test('catalog exceeding the cloud adapter byte limit fails before export', async () => {
   const largeDescriptor = {...descriptor, inputSchema: {type: 'object', required: [],
     additionalProperties: false,
-    properties: Object.fromEntries(Array.from({length: 70}, (_, index) => [
+    properties: Object.fromEntries(Array.from({length: 200}, (_, index) => [
       `a${'x'.repeat(115)}${index}`, {type: 'string'},
     ]))}};
   let cloudCalls = 0;
