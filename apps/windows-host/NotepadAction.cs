@@ -246,18 +246,11 @@ public static class NotepadAction
             for (var i = 0; i < edits.Count; i++)
             {
                 var edit = edits[i];
-                try
-                {
-                    if (edit.Current.IsOffscreen || !edit.Current.IsEnabled) continue;
-                    if (!edit.TryGetCurrentPattern(ValuePattern.Pattern, out var pattern)) continue;
-                    var value = (ValuePattern)pattern;
-                    if (value.Current.IsReadOnly) continue;
-                    candidates.Add((edit, value));
-                }
-                catch (Exception ex) when (ex is ElementNotAvailableException or InvalidOperationException)
-                {
-                    // Candidate element became unavailable or faulted during metadata query.
-                }
+                if (edit.Current.IsOffscreen || !edit.Current.IsEnabled) continue;
+                if (!edit.TryGetCurrentPattern(ValuePattern.Pattern, out var pattern)) continue;
+                var value = (ValuePattern)pattern;
+                if (value.Current.IsReadOnly) continue;
+                candidates.Add((edit, value));
             }
             if (candidates.Count == 1)
             {
