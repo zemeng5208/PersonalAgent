@@ -26,7 +26,7 @@ Host 只返回短期随机 `targetRef`，不返回或记录标题、正文、HWN
 `TARGET_STALE`、`TIMEOUT`），不会用断连伪造拒绝。断连后目标引用立即失去执行效力。
 
 审批前的只读 `target_ready` 帧复用目标的 HWND/PID、进程起始、窗口身份、唯一标签、
-前台与有效期检查。目标有效回 `target_ready_result(ready=true, expiresAt)`，目标失效回
+唯一可见启用可写 UIA 文本控件结构、前台与有效期检查。目标有效回 `target_ready_result(ready=true, expiresAt)`，目标失效回
 `ready=false, errorCode=TARGET_STALE`，过期回 `ready=false, errorCode=TIMEOUT`。它不读取正文、
 不新建或续期目标、不激活窗口，也不消费授权。
 

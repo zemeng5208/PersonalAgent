@@ -9,6 +9,7 @@ using System.Windows.Automation;
 [assembly: InternalsVisibleTo("WindowsHost.Timing")]
 [assembly: InternalsVisibleTo("ManualNotepadProbe")]
 [assembly: InternalsVisibleTo("WindowsHost.Host")]
+[assembly: InternalsVisibleTo("WindowsHost.HostFixture")]
 
 namespace PersonalAgent.WindowsHost;
 
@@ -65,19 +66,13 @@ public static class NotepadAction
                 return new(ActionState.Rejected, "Window identity changed", "TARGET_STALE");
             if (!TryGetOnlyTab(root, target.ProcessId, out var selectedTab))
                 return new(ActionState.Rejected, "Exactly one Notepad tab is required", "TARGET_AMBIGUOUS");
-            var edits = root.FindAll(TreeScope.Descendants,
-                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
-            if (edits.Count != 1 || !edits[0].TryGetCurrentPattern(ValuePattern.Pattern, out var pattern))
-                return new(ActionState.Rejected, "Exactly one editable UIA text control is required", "TARGET_AMBIGUOUS");
-            var edit = edits[0];
-            var value = (ValuePattern)pattern;
-            if (!edit.Current.IsEnabled || value.Current.IsReadOnly)
-                return new(ActionState.Rejected, "Target text changed or is not editable", "TARGET_STALE");
+            if (!TryGetOnlyEditableTextControl(root, out var edit, out var value, out _))
+                return new(ActionState.Rejected, "Exactly one editable UIA text control is required", "TARGET_STALE");
 
             cancellationToken.ThrowIfCancellationRequested();
             if (LastInputTick() != inputTick)
                 return new(ActionState.Rejected, "User input detected before execution", "USER_TAKEOVER");
-            if (!PrewriteStable(inputTick, target.ExpectedText, () => value.Current.Value,
+            if (!PrewriteStable(inputTick, target.ExpectedText, () => value!.Current.Value,
                     LastInputTick, () => IsSameForegroundTarget(target)))
                 return new(ActionState.Rejected, "User input or target text changed before execution",
                     LastInputTick() != inputTick ? "USER_TAKEOVER" : "TARGET_STALE");
@@ -89,14 +84,12 @@ public static class NotepadAction
                 !TryGetOnlyTab(prewriteRoot, target.ProcessId, out var prewriteTab) ||
                 !SameElement(selectedTab, prewriteTab))
                 return new(ActionState.Rejected, "Target tab changed before execution", "TARGET_STALE");
-            var prewriteEdits = prewriteRoot.FindAll(TreeScope.Descendants,
-                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
-            if (prewriteEdits.Count != 1 || !prewriteEdits[0].Equals(edit) ||
-                !edit.Current.IsEnabled || value.Current.IsReadOnly)
+            if (!TryGetOnlyEditableTextControl(prewriteRoot, out var prewriteEdit, out _, out _) ||
+                !SameElement(edit, prewriteEdit))
                 return new(ActionState.Rejected, "Target editor changed before execution", "TARGET_STALE");
             if (LastInputTick() != inputTick)
                 return new(ActionState.Rejected, "User input detected before execution", "USER_TAKEOVER");
-            if (!PrewriteStable(inputTick, target.ExpectedText, () => value.Current.Value,
+            if (!PrewriteStable(inputTick, target.ExpectedText, () => value!.Current.Value,
                     LastInputTick, () => IsSameForegroundTarget(target)))
                 return new(ActionState.Rejected, "Target editor changed before execution",
                     LastInputTick() != inputTick ? "USER_TAKEOVER" : "TARGET_STALE");
@@ -104,7 +97,7 @@ public static class NotepadAction
 
             // SetValue can mutate before returning or throwing. Any subsequent failure is unknown.
             mutationStarted = true;
-            value.SetValue(target.ReplacementText);
+            value!.SetValue(target.ReplacementText);
             if (cancellationToken.IsCancellationRequested || !IsSameForegroundTarget(target) ||
                 LastInputTick() != inputTick)
                 return new(ActionState.ResultUnknown, "Interrupted after text mutation; read back before retry", "RESULT_UNKNOWN");
@@ -115,11 +108,9 @@ public static class NotepadAction
                 !TryGetOnlyTab(reread, target.ProcessId, out var readbackTab) ||
                 !SameElement(selectedTab, readbackTab))
                 return new(ActionState.ResultUnknown, "Target tab changed during readback", "RESULT_UNKNOWN");
-            var currentEdits = reread.FindAll(TreeScope.Descendants,
-                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
-            if (currentEdits.Count != 1 || !currentEdits[0].Equals(edit) ||
-                !currentEdits[0].TryGetCurrentPattern(ValuePattern.Pattern, out var currentPattern) ||
-                ((ValuePattern)currentPattern).Current.Value != target.ReplacementText)
+            if (!TryGetOnlyEditableTextControl(reread, out var readbackEdit, out var readbackValue, out _) ||
+                !SameElement(edit, readbackEdit) ||
+                readbackValue!.Current.Value != target.ReplacementText)
                 return new(ActionState.ResultUnknown, "Target readback did not confirm replacement", "RESULT_UNKNOWN");
             if (!IsSameForegroundTarget(target) || LastInputTick() != inputTick ||
                 cancellationToken.IsCancellationRequested)
@@ -233,7 +224,55 @@ public static class NotepadAction
         catch { return (false, "TARGET_STALE"); }
         if (root.Current.ProcessId != pid) return (false, "TARGET_STALE");
         if (!TryGetOnlyTab(root, pid, out _)) return (false, "TARGET_AMBIGUOUS");
+        if (!TryGetOnlyEditableTextControl(root, out _, out _, out var editError))
+            return (false, editError ?? "TARGET_AMBIGUOUS");
         return (true, null);
+    }
+
+    internal static bool TryGetOnlyEditableTextControl(
+        AutomationElement root,
+        out AutomationElement? editControl,
+        out ValuePattern? valuePattern,
+        out string? errorCode)
+    {
+        editControl = null;
+        valuePattern = null;
+        errorCode = null;
+        try
+        {
+            var edits = root.FindAll(TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
+            var candidates = new List<(AutomationElement Edit, ValuePattern Value)>();
+            for (var i = 0; i < edits.Count; i++)
+            {
+                var edit = edits[i];
+                try
+                {
+                    if (edit.Current.IsOffscreen || !edit.Current.IsEnabled) continue;
+                    if (!edit.TryGetCurrentPattern(ValuePattern.Pattern, out var pattern)) continue;
+                    var value = (ValuePattern)pattern;
+                    if (value.Current.IsReadOnly) continue;
+                    candidates.Add((edit, value));
+                }
+                catch (Exception ex) when (ex is ElementNotAvailableException or InvalidOperationException)
+                {
+                    // Candidate element became unavailable or faulted during metadata query.
+                }
+            }
+            if (candidates.Count == 1)
+            {
+                editControl = candidates[0].Edit;
+                valuePattern = candidates[0].Value;
+                return true;
+            }
+            errorCode = "TARGET_AMBIGUOUS";
+            return false;
+        }
+        catch (Exception ex) when (ex is ElementNotAvailableException or InvalidOperationException)
+        {
+            errorCode = "TARGET_STALE";
+            return false;
+        }
     }
 
     private static bool TryGetOnlyTab(AutomationElement root, int pid, out AutomationElement? selectedTab)
