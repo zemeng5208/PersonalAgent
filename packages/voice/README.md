@@ -69,21 +69,53 @@ ports and UI state until authorized production setup and real-device acceptance 
 
 The minimal reproducible native host is defined by single source file
 `packages/voice/host/WindowsSystemSpeechHost.cs`. It requires no external package
-dependencies and can be built into `packages/voice/host/windows-system-speech-host.exe` using
-the Windows `.NET Framework` C# compiler (`csc.exe`) referencing the system `System.Speech.dll`:
+dependencies and is compiled into `packages/voice/host/windows-system-speech-host.exe`
+via the module build script (`scripts/build-host.mjs`).
 
-```cmd
-C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:exe /r:C:\Windows\Microsoft.NET\assembly\GAC_MSIL\System.Speech\v4.0_4.0.0.0__31bf3856ad364e35\System.Speech.dll /out:packages\voice\host\windows-system-speech-host.exe packages\voice\host\WindowsSystemSpeechHost.cs
+To build or verify the native host directly:
+
+```powershell
+npm.cmd run build:host --workspace=@personal-agent/voice
 ```
 
-Availability of `csc.exe` and specific GAC assembly locations depends on host environment
-configuration and installed .NET Framework components; the presence of these tools or paths
-is not guaranteed across all Windows installations. If the compiler or assembly is absent, or
-if the executable has not been built at the fixed in-module path, the adapter detects this
-missing executable via `existsSync()` and explicitly returns `UNSUPPORTED_CAPABILITY` without
-attempting script execution or policy modification. Likewise, if the host launches on a system
-lacking `zh-CN` speech recognition or synthesis voice components, it exits with code 2 and
-surfaces `UNSUPPORTED_CAPABILITY`.
+Native host compilation is also integrated into:
+
+```powershell
+npm.cmd run build --workspace=@personal-agent/voice
+```
+
+The build script automatically detects whether the target binary is missing or stale
+relative to `WindowsSystemSpeechHost.cs`:
+- If the binary is current (`output.mtime >= source.mtime` and size > 0), compilation is
+  skipped to avoid redundant compiler runs.
+- If the binary is missing, empty, or stale, the script locates the Windows `.NET Framework`
+  C# compiler (`csc.exe`) and `System.Speech.dll` at fixed controlled system paths under
+  `SystemRoot` and compiles via `execFile` (with `shell: false`, `windowsHide: true`, and
+  no PowerShell policy bypass).
+- On non-Windows platforms, host compilation is cleanly skipped, preserving cross-platform
+  build portability.
+- If `csc.exe` or `System.Speech.dll` is missing, or if compiler execution fails, the build
+  script produces a clear bounded error and unlinks any stale executable so an outdated
+  binary is never mistaken for current.
+
+### Native host limitations
+
+1. **Host environment requirements**: Native Windows System.Speech execution requires a
+   Windows system with installed `.NET Framework` 4.x components (providing `csc.exe` and
+   `System.Speech.dll`). Non-Windows platforms cleanly skip build and report
+   `UNSUPPORTED_CAPABILITY` at runtime.
+2. **Fixed controlled paths**: Only verified system locations under `SystemRoot` are searched.
+   Arbitrary compiler paths, executable locations, or user commands are not accepted.
+3. **Voice components**: The host strictly requires installed Chinese (`zh-CN`) speech
+   recognition and speech synthesis voice components. If missing on the machine, the host
+   exits with code 2 and surfaces `UNSUPPORTED_CAPABILITY`.
+4. **Adapter startup verification**: `createWindowsSystemSpeechPorts()` verifies that
+   `windows-system-speech-host.exe` exists, is non-empty, and is not stale compared to
+   `WindowsSystemSpeechHost.cs`. If absent or stale, the adapter reports `UNSUPPORTED_CAPABILITY`
+   (`Windows System.Speech is unavailable`) through the existing error shape.
+5. **Hardware and devices**: The adapter does not verify microphone capture, physical speakers,
+   or audio routing devices.
+
 
 ## Fake use and verification
 

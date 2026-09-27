@@ -1,5 +1,5 @@
 import {spawn, type ChildProcessWithoutNullStreams} from 'node:child_process';
-import {existsSync} from 'node:fs';
+import {existsSync, statSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
@@ -210,6 +210,19 @@ function failedOperation<T>(error: VoiceSessionError): VoiceOperation<T> {
   return {result: Promise.reject(error), async stop(): Promise<void> {}};
 }
 
+function isHostCurrent(executable: string, source: string): boolean {
+  try {
+    if (!existsSync(executable) || !existsSync(source)) return false;
+    const exeStat = statSync(executable);
+    if (!exeStat.isFile() || exeStat.size === 0) return false;
+    const srcStat = statSync(source);
+    if (srcStat.mtimeMs > exeStat.mtimeMs) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function createFixedHostSpawner(): WindowsSpeechHostSpawner {
   if (process.platform !== 'win32') return () => { throw fixedUnavailable(); };
   const root = process.env.SystemRoot;
@@ -218,21 +231,25 @@ function createFixedHostSpawner(): WindowsSpeechHostSpawner {
   }
   const systemRoot = path.win32.resolve(root);
   const executable = fileURLToPath(new URL('../host/windows-system-speech-host.exe', import.meta.url));
-  if (!existsSync(executable)) return () => { throw fixedUnavailable(); };
+  const source = fileURLToPath(new URL('../host/WindowsSystemSpeechHost.cs', import.meta.url));
+  if (!isHostCurrent(executable, source)) return () => { throw fixedUnavailable(); };
   // Speech needs Windows/profile locations, never the Desktop's cloud credentials.
   const environment: NodeJS.ProcessEnv = {SystemRoot: systemRoot, WINDIR: systemRoot};
   for (const key of ['TEMP', 'TMP', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA']) {
     const value = process.env[key];
     if (value !== undefined) environment[key] = value;
   }
-  return mode => spawn(executable, [
-    '--mode', mode,
-  ], {
-    shell: false,
-    windowsHide: true,
-    env: environment,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  return mode => {
+    if (!isHostCurrent(executable, source)) throw fixedUnavailable();
+    return spawn(executable, [
+      '--mode', mode,
+    ], {
+      shell: false,
+      windowsHide: true,
+      env: environment,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  };
 }
 
 class WindowsSystemSpeechAdapter {
