@@ -152,6 +152,7 @@ export interface TaskPort {
   transitionTask(taskId: string, state: TaskState, patch?: TransitionPatch): TaskSnapshot;
   requestCancel(taskId: string, reason?: string): {taskId: string; state: TaskState; cancelAccepted: boolean};
   saveCheckpoint(taskId: string, key: string, value: unknown): void;
+  saveCheckpointOnce(taskId: string, key: string, value: unknown): boolean;
   loadCheckpoint(taskId: string, key: string): unknown;
 }
 
@@ -936,6 +937,18 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
       this.updateTask(taskId, 'cancelling', {cancelRequested: true}, true);
       return this.updateTask(taskId, 'cancelled', {cancelRequested: true}, true);
     }));
+  }
+
+  /** Atomic create-only checkpoint for irreversible host attempts. Never replaces a run identity. */
+  saveCheckpointOnce(taskId: string, key: string, value: unknown): boolean {
+    requireText(key, 'checkpoint key');
+    this.getTask(taskId);
+    const encoded = JSON.stringify(value);
+    if (encoded === undefined) throw new RuntimeError('INVALID_ARGUMENT', 'Checkpoint must be JSON serializable');
+    const result = this.db.prepare('INSERT INTO task_checkpoints (task_id, checkpoint_key, value_json, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(task_id, checkpoint_key) DO NOTHING').run(
+      taskId, key, encoded, this.timestamp()
+    );
+    return result.changes === 1;
   }
 
   loadCheckpoint(taskId: string, key: string): unknown {
