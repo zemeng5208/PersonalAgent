@@ -168,3 +168,27 @@ root lock file registers the voice workspace/link; no external dependency was ad
 upgraded. A trusted integration owner must still wire the Desktop/Runtime composition
 and keep the public wire capability unavailable until production adapters and
 real-device acceptance exist.
+
+## Authorized PCM Frame Source Port
+
+`createVoicePcmFrameSourcePort(binding)` provides bounded, authorized PCM delivery
+using a trusted host's pre-authorized microphone capture source. The voice module
+never opens a microphone or grants OS permission itself.
+
+**Shared-source contract:** `VoicePcmCaptureBinding.start(sink)` attaches to one
+physical host capture with refcount/fanout, allowing simultaneous wake and ASR
+subscribers. It must not open a separate microphone per subscription.
+
+`subscription.ready` resolves only after `start(sink)` returns a valid release
+handle and the subscription is still active, unrevoked and before its deadline.
+Async readiness, new frames and queued frame delivery each recheck that lifecycle;
+a delayed deadline timer cannot extend capture delivery. The subscription is
+registered before host start, so synchronous reentrant disposal includes it.
+
+`closed` proves only that this subscription's attachment was released. Other
+subscribers may keep the physical capture active. Whole-source shutdown requires
+`port.dispose()` to await every attachment and the host to confirm the last track's
+release. Release failure remains `EXTERNAL_FAILURE`, not a false success receipt.
+Frames are 16 kHz mono PCM S16LE, at most 3200 bytes each, with at most four queued
+frames/12800 queued bytes. Delivered and discarded local copies are zeroed; this
+port neither submits nor cancels Runtime tasks. Real device acceptance is separate.

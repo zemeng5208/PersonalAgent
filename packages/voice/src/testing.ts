@@ -9,6 +9,9 @@ import type {
   TranscriptConsumptionResult,
   VoiceOperation,
   VoiceOperationStopReason,
+  VoicePcmCaptureBinding,
+  VoicePcmCaptureSink,
+  VoicePcmCaptureSubscription,
 } from './ports.js';
 
 export interface FakeVoiceCall {
@@ -114,5 +117,55 @@ export class FakeSpeechOutputPort extends FakePortBase implements SpeechOutputPo
       signal: request.signal,
       characterCount: request.text.length,
     }, result);
+  }
+}
+
+export interface FakeVoicePcmCaptureBindingOptions {
+  readonly releaseDelayMs?: number;
+}
+
+/** Synthetic capture binding. Simulates authorized host audio hardware. */
+export class FakeVoicePcmCaptureBinding implements VoicePcmCaptureBinding {
+  readonly sinks = new Set<VoicePcmCaptureSink>();
+  startCount = 0;
+  releaseCount = 0;
+  activeSubscriptions = 0;
+
+  constructor(private readonly options: FakeVoicePcmCaptureBindingOptions = {}) {}
+
+  start(sink: VoicePcmCaptureSink): VoicePcmCaptureSubscription {
+    this.startCount += 1;
+    this.activeSubscriptions += 1;
+    this.sinks.add(sink);
+
+    return {
+      release: async (): Promise<void> => {
+        if (!this.sinks.has(sink)) return;
+        this.sinks.delete(sink);
+        this.activeSubscriptions -= 1;
+        this.releaseCount += 1;
+        if (this.options.releaseDelayMs && this.options.releaseDelayMs > 0) {
+          await new Promise(resolve => setTimeout(resolve, this.options.releaseDelayMs));
+        }
+      },
+    };
+  }
+
+  emitFrame(data: Uint8Array): void {
+    for (const sink of this.sinks) {
+      sink.onFrame(data);
+    }
+  }
+
+  emitRevoked(): void {
+    for (const sink of this.sinks) {
+      sink.onRevoked?.();
+    }
+  }
+
+  emitDeviceUnavailable(): void {
+    for (const sink of this.sinks) {
+      sink.onDeviceUnavailable?.();
+    }
   }
 }
