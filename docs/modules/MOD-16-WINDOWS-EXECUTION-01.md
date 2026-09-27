@@ -11,7 +11,7 @@
 
 输入 tick 基线在 UIA 查找及首次读取预期文本前建立；执行前再次核对同一 tick、目标身份与当前预期文本。紧贴 `SetValue` 前重新发现已确认窗口的唯一选中标签与同一编辑控件，并复核文本、输入 tick 和前台；标签或控件已换则写前拒绝，不读取其他标签的文本。定向回归注入“首次读取后用户输入”及“不改变 tick 的程序改值”，两者均须在写前拒绝。UIA 读值与 `SetValue` 并非原子 CAS，用户输入 tick 也不是完整接管事件流；剩余窗口须在 Windows 实机验收并交 Runtime 的受信协调和恢复处理。
 
-本增量在 `apps/windows-host/host/` 增加独立 Host 进程：读取 #168 的同源 Schema、当前用户 Pipe/对端身份和 nonce 会话绑定、短期 opaque 目标、写前持久 run 记录、断连取消及跨会话只读状态核实。Host 仅是执行端；`ConfirmedNotepadTarget` 仍可构造，Pipe 帧里的 `authorizationRef` 也不是授权凭证。Runtime/Policy/ToolGateway 的授权消费、跨进程调用仲裁、Desktop 受信确认与产品 Evidence 仍按 #114 由原负责人正式组合。未完成这些接线和真实验收时不能注册 capability。此包不改公共 Schema、Runtime/Policy/ToolGateway、Desktop 或根配置/锁文件。没有凭据适配；MOD-05 的 SecretStore 与 Windows 安全存储另需边界契约，不能把机器本地凭据当作授权。
+本增量在 `apps/windows-host/host/` 增加独立 Host 进程：读取 #168 的同源 Schema、当前用户 Pipe/对端身份和 nonce 会话绑定、短期 opaque 目标、写前持久 run 记录、断连取消及跨会话只读状态核实。另有受信 Pipe Bridge 进程持有真正的 Windows Pipe client handle，以 Win32 API 核对服务端 PID 后才对 Node 透传原协议帧；Host 反向核对 Bridge PID、进程起始时间、session 与用户 SID。Bridge 启动及退出会改变进程生命周期，但不构成授权。Host 仅是执行端；`ConfirmedNotepadTarget` 仍可构造，Pipe 帧里的 `authorizationRef` 也不是授权凭证。Runtime/Policy/ToolGateway 的授权消费、跨进程调用仲裁、Desktop 受信确认与产品 Evidence 仍按 #114 由原负责人正式组合。未完成这些接线和真实验收时不能注册 capability。此包不改公共 Schema、Runtime/Policy/ToolGateway、Desktop 或根配置/锁文件。没有凭据适配；MOD-05 的 SecretStore 与 Windows 安全存储另需边界契约，不能把机器本地凭据当作授权。
 
 ## Windows 实机验收步骤与证据
 

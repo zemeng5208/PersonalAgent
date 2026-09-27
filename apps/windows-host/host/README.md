@@ -4,10 +4,19 @@
 公共 contracts 拷贝该 Schema 到 Host 输出目录；缺失或版本不符时启动前拒绝。
 当前分支叠加 #117/#120；必须与 #168 合并后的同源 Schema 配合，不复制另一份 DTO。
 
-可信 Desktop/Runtime 组合方生成随机 `pa_<32位小写十六进制>` Pipe 名，启动
-`WindowsHost.Host` 并传入 `--pipe <name> --client-pid <自身PID>`。Host 限当前用户
-Pipe ACL，连接时核对对端 PID、进程启动时间、Windows session 和用户 SID，再执行
-`hello → hello_ack → bind` nonce 会话绑定。Pipe 名/启动参数本身不是授权；
+可信 Desktop/Runtime 组合方启动 `WindowsHost.PipeBridge.exe --host <Host.exe绝对路径>`。
+Bridge 生成随机 `pa_<32位小写十六进制>` Pipe 名，启动 Host 并传入
+`--pipe <name> --client-pid <Bridge自身PID>`。Bridge 持有实际 Pipe client handle，
+经 Win32 `GetNamedPipeServerProcessId` 核对它启动的 Host PID、进程起始时间与 session；
+验证通过后只在标准错误流写一次 `VERIFIED`，失败写 `REFUSED` 并拒绝转发。
+标准输入/输出原样透传 #168 JSONL，不引入第二套业务帧。Node 调用方必须等待
+`VERIFIED` 后才发送 `hello`，不能将进程启动或随机 Pipe 名当成身份验证。
+Bridge 退出时结束其 Host；Host 也监视绑定的 Bridge 进程，避免强制终止后留下
+等待连接且占住互斥锁的孤儿进程。
+
+Host 限当前用户 Pipe ACL，连接时核对对端 Bridge PID、进程启动时间与 Windows
+session；收到并校验 `hello` 后、发送 `hello_ack` 前，以该已读取消息的身份核对
+用户 SID，然后执行 `hello → hello_ack → bind` nonce 会话绑定。Pipe 名/启动参数本身不是授权；
 同用户其他进程仍可直接调用 Windows UIA，所以 Host 不宣称 OS 沙箱。
 
 `observe` 只接受本会话建立后新增、身份可信、当前前台、全局唯一且单标签的
@@ -32,3 +41,9 @@ argumentsDigest/targetRef` 和本地文本摘要记入用户范围的追加日�
 
 没有正式桌面组合方、真实 Pipe/ACL/UIA/授权链与重启读回验收前，能力继续
 `unavailable`。本目录不修改公共 Schema、Runtime、Policy、Desktop 或根 lock。
+
+从仓库根目录分别构建 `dotnet build apps/windows-host/host/WindowsHost.Host.csproj` 和
+`dotnet build apps/windows-host/host/bridge/WindowsHost.PipeBridge.csproj`。`--host` 指向
+前者的绝对 `.exe` 路径，其同目录必须含 #168 Schema 拷贝的 `windows-host.json`。
+目前 Pipe PID 双向核验及 stdio 透传仍需受控 Windows 连接验证；构建与协议夹具
+不能代替设备验收。

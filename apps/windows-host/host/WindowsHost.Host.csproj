@@ -8,7 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../WindowsHost.csproj" />
-    <Compile Remove="test/**/*.cs" />
+    <Compile Remove="test/**/*.cs;bridge/**/*.cs" />
     <Content Include="../../../packages/contracts/schema/windows-host.json"
              Condition="Exists('../../../packages/contracts/schema/windows-host.json')"
              Link="windows-host.json" CopyToOutputDirectory="PreserveNewest" />
