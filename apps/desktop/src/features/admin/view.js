@@ -7,6 +7,7 @@ import {mountLayaControls} from '../../app/laya-controls.js';
 import {mountWorkspaceControls} from '../../app/workspace-controls.js';
 import {mountAgentArtsControls} from '../../app/agentarts-controls.js';
 import {mountFeedsControls} from '../../app/feeds-controls.js';
+import {mountNotepadControls} from '../../app/notepad-controls.js';
 import {profilePage, bindProfile} from './profile.js';
 import {approvalPresentation, authorizationHistoryHtml, authorizationListHtml, nextApprovalExpiry} from './approval-status.js';
 import {agentArtsModelPage} from './agentarts-model.js';
@@ -112,7 +113,7 @@ export function mountAdmin(root, invoke, escape) {
   localSettingsButton.textContent = '桌面设置与恢复';
   localSettingsButton.addEventListener('click', () => window.desktop.openSettings().catch(error => { root.querySelector('#error').textContent = error.message; }));
   root.querySelector('.admin-bar').insertBefore(localSettingsButton, root.querySelector('#admin-close'));
-  let liveControls,proactiveControls,mailControls,layaControls,codingControls,agentArtsControls,feedsControls;
+  let liveControls,proactiveControls,mailControls,layaControls,codingControls,agentArtsControls,feedsControls,notepadControls;
 
   function capabilityTable(data) {
     const status = data.capabilityDirectory ?? {state: 'unavailable', reason: '可信宿主尚未报告能力目录状态'};
@@ -250,6 +251,8 @@ export function mountAdmin(root, invoke, escape) {
     liveControls?.render(data.live);liveControls?.showSettings(section==='voice',section==='voice');
     if (section==='computer') proactiveControls ??= mountProactiveControls(root.querySelector('.main'),invoke,{settings:true});
     proactiveControls?.render(data.proactive);proactiveControls?.show(section==='computer');
+    if (section==='computer' && data.notepad) notepadControls ??= mountNotepadControls(root.querySelector('.main'),invoke);
+    notepadControls?.render(data.notepad);notepadControls?.show(section==='computer');
     if (section==='connections' && data.mail) mailControls ??= mountMailControls(root.querySelector('.main'),invoke);
     mailControls?.render(data.mail);mailControls?.showSettings(section==='connections');
     if (section==='connections' && data.feeds) feedsControls ??= mountFeedsControls(root.querySelector('.main'),invoke);

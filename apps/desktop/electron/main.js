@@ -1,6 +1,7 @@
 import {app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, safeStorage, screen, session, Tray} from 'electron';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
+import {spawn} from 'node:child_process';
 import path from 'node:path';
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
 import {EventCursor} from '@personal-agent/client';
@@ -28,6 +29,7 @@ import {createAgentArtsConfig} from './agentarts-config.js';
 import {createDeferredRuntimeStartup} from './runtime-startup.js';
 import {createMailConfig} from './mail-config.js';
 import {createDesktopFeedsHost} from './feeds-host.js';
+import {createDesktopNotepadHost} from './notepad-host.js';
 import {createMailMetadataStorage} from './mail-metadata-storage.js';
 import {createLocalLayaHost} from './laya-local-host.js';
 import {resultText} from '../src/features/conversation/result-text.js';
@@ -153,6 +155,9 @@ let productTools;
 let codingWorkspace;
 let mailConfig;
 let feedsHost;
+let notepadHost;
+let notepadClosing;
+let notepadClosed = false;
 let mailHost;
 let mailFailure = '';
 let localLaya;
@@ -218,6 +223,8 @@ function snapshot(surface) {
     proactive: proactiveHost?.snapshot() ?? {enabled: false, cloudAnalysis: false, status: 'disabled', reason: '主动观察尚未装配', suggestions: []},
     mail: mailSnapshot(),
     feeds: feedsHost?.snapshot(),
+    notepad: notepadHost?.snapshot() ?? {available:false,busy:false,state:'unavailable',
+      reason:'本机执行组件尚未就绪，记事本操作暂不可用。'},
     coding: codingWorkspace?.snapshot() ?? {configured:false,reason:'编程工作区尚未装配'},
     agentArts: agentArtsConfig?.snapshot(),
     laya: localLaya?.snapshot() ?? {state:'unavailable', ready:false, reason:'本地模型尚未装配'},
@@ -730,6 +737,25 @@ async function initializeRuntime() {
       const {createDesktopCompetitionToolCatalog} = await import('./competition-tool-catalog.js');
       const namespace = desktopHost.userNamespace;
       goalHost = createGoalHost(namespace);
+      const hostPath = path.resolve(dir, '../../windows-host/host/bin/Release/net8.0-windows/WindowsHost.Host.exe');
+      const bridgePath = path.resolve(dir, '../../windows-host/host/bridge/bin/Release/net8.0-windows/WindowsHost.PipeBridge.exe');
+      if (!syntheticMvp && process.platform === 'win32' && existsSync(hostPath) && existsSync(bridgePath)) {
+        notepadHost = createDesktopNotepadHost({
+          createAdapter:runtimeModule.createWindowsHostNotepadAdapter,
+          createAttempts:runtimeModule.createRuntimeWindowsHostAttemptStore,
+          transport:runtimeModule.createWindowsHostBridgeTransport({hostPath,bridgePath}),
+          registerConfirmation:handler => globalShortcut.register('F9',handler)
+            ? () => globalShortcut.unregister('F9') : undefined,
+          openNotepad:() => new Promise((resolve,reject) => {
+            const child=spawn(path.join(process.env.SystemRoot ?? 'C:\\Windows','System32','notepad.exe'),[],
+              {windowsHide:false,stdio:'ignore'});
+            child.once('spawn',()=>{child.unref();resolve();});child.once('error',reject);
+          }),
+          respond:payload => client.call('authorization.respond',payload),
+          cancelTask:taskId => client.call('task.cancel',{taskId,reason:'用户停止记事本操作'}),
+          onUpdate:publish,
+        });
+      }
       if (syntheticFactSource) competitionCatalog = createDesktopCompetitionToolCatalog({
         rootPath: path.resolve(dir, '../fixtures/agentarts'), createWorkspaceReadTool,
       });
@@ -774,7 +800,7 @@ async function initializeRuntime() {
           }
           proactiveHost?.assertCognitionCloudSend(request);
         },
-        tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...goalHost.tools, ...productTools.tools, ...(mailHost?.tools ?? []), ...(feedsHost?.tools ?? [])],
+        tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...goalHost.tools, ...productTools.tools, ...(mailHost?.tools ?? []), ...(feedsHost?.tools ?? []), ...(notepadHost?.tools ?? [])],
         ...(syntheticMvp ? {localRepair: syntheticRepairHost.localRepair} : {}),
         ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
         ...(process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT === undefined ? {} : {workflowGoalInput: process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT}),
@@ -799,6 +825,7 @@ async function initializeRuntime() {
       codingWorkspace.bindApplication(runtimeApplication);
       feedsHost?.bindApplication(runtimeApplication);
       goalHost.bind(runtimeApplication);
+      notepadHost?.bind(runtimeApplication);
       goalHost.resumeApproved();
       if (!syntheticMvp && competitionCatalog && !codingWorkspace.tools.length) competitionFactBridge = createDesktopCompetitionFactBridge({
         application: runtimeApplication, catalog: competitionCatalog,
@@ -845,7 +872,7 @@ async function initializeRuntime() {
       if (task.state === 'succeeded') void promptSyntheticRepairCandidate(task.taskId).catch(() => {});
     }
   }
-  eventPoll = setInterval(() => {void pumpEvents(); void proactiveHost?.tick(); void refreshMail();}, 120);
+  eventPoll = setInterval(() => {void pumpEvents(); void proactiveHost?.tick(); void refreshMail(); void notepadHost?.refresh();}, 120);
 }
 
 async function initializeProductServices() {
@@ -876,6 +903,10 @@ async function action(event, name, payload) {
     throw Error('Competition Profile 的 AgentArts 配置只允许由可信主进程提供；盘古配置操作不可用');
   }
   if (name === 'snapshot') return snapshot(sender === workspace ? 'workspace' : sender === admin ? undefined : 'panel');
+  if (name === 'notepad.start' || name === 'notepad.cancel') {
+    if (sender !== admin || !notepadHost || notepadClosing) throw Error('请从电脑操控设置操作记事本');
+    return name === 'notepad.start' ? notepadHost.start(payload) : notepadHost.cancel();
+  }
   if (name === 'admin.open') { openAdmin(payload?.page); return; }
   if (name === 'workspace.open' && sender === panel) { openWorkspace(); return; }
   if (name === 'workspace.close' && sender === workspace) { workspace.close(); return; }
@@ -1331,6 +1362,13 @@ app.whenReady().then(async () => {
       event.preventDefault(); runtimeError = 'Runtime 正在连接，请稍后退出'; publish(); return;
     }
     proactiveHost?.stop();
+    if (notepadHost && !notepadClosed) {
+      event.preventDefault();
+      if (!notepadClosing) notepadClosing = notepadHost.close().then(() => {
+        notepadClosed = true; app.quit();
+      }).catch(() => {notepadClosing = undefined;runtimeError = '本机操作停止尚未确认，请稍后退出';publish();});
+      return;
+    }
     if (!localServicesStopped && (mailHost || localLaya)) {
       event.preventDefault();
       if (!localServicesStopping) {
