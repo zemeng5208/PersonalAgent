@@ -107,6 +107,16 @@ trace/usage and local tool read-back require their own operational evidence. Wit
 explicit trusted configuration, composition keeps the capability unavailable and never
 silently falls back to Local or Fake.
 
+Trusted composition may pass a sixth constructor argument, `onDiagnostic`, to receive
+one content-free receipt when an invocation fails. It contains a fixed failure stage
+and error code, with available local request ID, HTTP status, coarse response media
+type, observed SSE terminal-event flags, and a fixed schema category. It contains no
+goal, response text, authorization, transcript, tool arguments or endpoint. The host
+may forward this receipt to its existing private diagnostic outlet. Observer errors
+do not change the invocation result; the callback does not authorize retry or change
+Runtime task state. Request validation failures before an invocation starts do not
+produce a receipt.
+
 Ports are not frozen. The real adapter's confirmed-result continuation is a separate
 invocation, not a native AgentArts run resume. Its bounded projection needs host
 authorization; the original goal is not automatically sent again. Request-level

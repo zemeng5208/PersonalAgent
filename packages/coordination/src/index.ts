@@ -74,10 +74,13 @@ export interface CloudAgentPort {
 export {AgentArtsCloudAgentPort} from './agentarts.js';
 export type {
   AgentArtsAuthorizationProvider,
+  AgentArtsDiagnosticStage,
   AgentArtsFetch,
   AgentArtsFetchInit,
+  AgentArtsFailureDiagnostic,
   AgentArtsResponse,
   AgentArtsRuntimeConfig,
+  AgentArtsSchemaCategory,
 } from './agentarts.js';
 
 /** Runtime validates even typed adapters. Text is not execution evidence. */
