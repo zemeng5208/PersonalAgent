@@ -1,4 +1,6 @@
 export {analyzeImpact, proposePlanRevision, CognitionError} from './impact.js';
+export {buildMinimalRepairCandidate} from './minimal-repair.js';
+export type {MinimalRepairSelection, MinimalRepairResult} from './minimal-repair.js';
 export type {ImpactCause, ImpactItem, ImpactReport, PlanRevisionRequest, PlanRevisionProposal} from './impact.js';
 export {analyzeStoredImpact, commitStoredPlanRevision} from './persistent.js';
 export type {StoredImpact, StoredPlanRevisionRequest, StoredPlanRevisionResult,

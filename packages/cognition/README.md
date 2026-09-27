@@ -4,6 +4,21 @@ Owner: zemeng. Profile: huawei_ict_agentarts. Pure local domain increment with
 an optional host-bound persistent-store consumer; no AgentArts, Memory,
 scheduler, tool execution or TaskRuntime state transition.
 
+`buildMinimalRepairCandidate(snapshot, at, {expectedGraphRevision, targets})`
+builds an isolated dependency-only repair for a trusted RECHECK subset. It
+orders changes by dependency, retains text and dependency identities, and
+reports targets that still need RECHECK. Withdrawn, expired, future or cyclic
+heads are not silently rebound. A candidate is not proof that existing plan
+text remains correct after a semantic change. `semanticReviewRequired` means
+trusted semantic validation is needed; it does not require interrupting the
+user for each routine action. Laya selects among legitimate approaches and
+passes its choice to AgentArts for orchestration. Low-risk actions within a
+current, revocable host authorization can then run through Policy; Laya cannot
+grant that authorization or bypass AgentArts. Runtime's provisional proactive
+host composes existing Fact receipts, task checkpoints and a minimized host-approved
+AgentArts handoff; it does not directly commit repairs. See
+[`MVP-TWIN-B-PROACTIVE-01`](../../docs/modules/MVP-TWIN-B-PROACTIVE-01.md).
+
 `analyzeImpact(graph, evaluatedAt)` validates and replays the complete MOD-27
 graph. It returns current Goal/Decision/Plan references with KEEP or RECHECK,
 reasons and exact causal references. Superseded, withdrawn and out-of-validity
