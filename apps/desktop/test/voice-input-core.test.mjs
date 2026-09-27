@@ -8,7 +8,7 @@ function deferred() {
   return {promise, resolve, reject};
 }
 
-function fixture({authorizeError} = {}) {
+function fixture({authorizeError, recognizeError} = {}) {
   const calls = [];
   const fixedNow = Date.parse('2026-09-25T00:00:00.000Z');
   const ready = deferred();
@@ -23,7 +23,11 @@ function fixture({authorizeError} = {}) {
   class Manager {
     async start(options) { calls.push(['session-start', options.deadline]); return {sessionId: 'session-1'}; }
     current() { return {sessionId: 'session-1', state: 'listening', revision: 1}; }
-    async recognizeAudio(_id, clip) { calls.push(['recognize', [...clip.data]]); return {transcriptId: 'transcript-1'}; }
+    async recognizeAudio(_id, clip) {
+      calls.push(['recognize', [...clip.data]]);
+      if (recognizeError) throw recognizeError;
+      return {transcriptId: 'transcript-1'};
+    }
     async consumeTranscript(_id, receipt, consumer) { calls.push(['consume', receipt, consumer]); return {replyId: 'reply-1'}; }
     async speakReply(_id, receipt) { calls.push(['speak', receipt]); return {completed: true, interrupted: false}; }
     async stop() { calls.push('session-stop'); }
@@ -34,7 +38,9 @@ function fixture({authorizeError} = {}) {
       calls.push(['buffer-deadline', options.deadline]);
       const data = [];
       return {append: chunk => { calls.push('append'); data.push(...chunk); },
-        finish: () => { calls.push('finish-buffer'); return {data: Uint8Array.from(data),
+        finish: () => { calls.push('finish-buffer');
+          if (!data.length) throw Object.assign(Error('private empty buffer detail'), {code: 'INVALID_STATE'});
+          return {data: Uint8Array.from(data),
           format: {encoding: 'pcm_s16le', sampleRateHz: 16000, channels: 1}, durationMs: data.length / 32}; },
         dispose: () => { calls.push('dispose-buffer'); }};
     },
@@ -90,6 +96,9 @@ test('unconfirmed PCM release blocks recognition and reports failure', async () 
   f.closed.reject(Error('track stop failed'));
   await assert.rejects(finishing, /麦克风释放未确认/);
   assert.equal(f.calls.some(call => Array.isArray(call) && call[0] === 'recognize'), false);
+  assert.deepEqual(f.input.snapshot().failure, {
+    stage: 'pcm_release', code: 'EXTERNAL_FAILURE', message: '麦克风释放未确认',
+  });
 });
 
 test('capture deadline finalizes audio while the session keeps time for ASR and Runtime', async () => {
@@ -103,6 +112,61 @@ test('capture deadline finalizes audio while the session keeps time for ASR and 
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.calls.some(call => Array.isArray(call) && call[0] === 'recognize'), true);
   assert.equal(f.input.snapshot().status, 'awaiting_speech');
+});
+
+test('automatic deadline keeps a bounded ASR failure after cleanup', async () => {
+  const sensitive = Object.assign(Error('private transcript and provider credentials'),
+    {code: 'UNSUPPORTED_CAPABILITY'});
+  const f = fixture({recognizeError: sensitive});
+  const pending = f.input.beginCapture(6);
+  f.ready.resolve();
+  await pending;
+  f.options.onFrame({data: Uint8Array.of(1, 2)});
+  f.options.onEnd('deadline');
+  f.closed.resolve();
+  await new Promise(resolve => setImmediate(resolve));
+  const state = f.input.snapshot();
+  assert.equal(state.status, 'error');
+  assert.deepEqual(state.failure, {
+    stage: 'recognition', code: 'UNSUPPORTED_CAPABILITY', message: '语音适配器当前不可用',
+  });
+  assert.equal(state.reason, state.failure.message);
+  assert.equal(f.calls.some(call => Array.isArray(call) && call[0] === 'consume'), false);
+  assert.equal(JSON.stringify(state).includes('private transcript'), false);
+  assert.equal(f.input.hasActive(), false);
+});
+
+test('automatic deadline reports PCM release failure before ASR', async () => {
+  const f = fixture();
+  const pending = f.input.beginCapture(7);
+  f.ready.resolve();
+  await pending;
+  f.options.onFrame({data: Uint8Array.of(1, 2)});
+  f.options.onEnd('deadline');
+  f.closed.reject(Error('private device detail'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.input.snapshot().status, 'error');
+  assert.deepEqual(f.input.snapshot().failure, {
+    stage: 'pcm_release', code: 'EXTERNAL_FAILURE', message: '麦克风释放未确认',
+  });
+  assert.equal(f.calls.some(call => Array.isArray(call) && call[0] === 'recognize'), false);
+  assert.equal(JSON.stringify(f.input.snapshot()).includes('private device detail'), false);
+});
+
+test('automatic deadline reports an empty PCM buffer without invoking ASR', async () => {
+  const f = fixture();
+  const pending = f.input.beginCapture(8);
+  f.ready.resolve();
+  await pending;
+  f.options.onEnd('deadline');
+  f.closed.resolve();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.input.snapshot().status, 'error');
+  assert.deepEqual(f.input.snapshot().failure, {
+    stage: 'audio_buffer', code: 'INVALID_STATE', message: '语音处理失败',
+  });
+  assert.equal(f.calls.some(call => Array.isArray(call) && call[0] === 'recognize'), false);
+  assert.equal(JSON.stringify(f.input.snapshot()).includes('private empty buffer detail'), false);
 });
 
 test('beginWakeCapture reuses active authorized capture without re-authorizing', async () => {
