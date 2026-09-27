@@ -167,6 +167,15 @@ export function createDesktopVoiceWakeHost({
     }
   }
 
+  let releasePending = null;
+  function trackResourceClosure() {
+    const pending = awaitResourceClosure().finally(() => {
+      if (releasePending === pending) releasePending = null;
+    });
+    releasePending = pending;
+    return pending;
+  }
+
   // Authorization checker: delegates to caller-provided auth port or finite lease
   const effectiveAuthPort = {
     async check(input) {
@@ -193,7 +202,12 @@ export function createDesktopVoiceWakeHost({
     const handoff = {sessionId: event.sessionId};
     handoffPending = handoff;
     let captureReady;
-    try { captureReady = onWake(event); }
+    try {
+      captureReady = onWake(event);
+      if (!captureReady || typeof captureReady.then !== 'function') {
+        throw new TypeError('onWake must return an ASR capture-ready Promise');
+      }
+    }
     catch (error) { captureReady = Promise.reject(error); }
     // The trusted callback resolves when the ASR subscription is ready. Keep
     // wake's microphone reference until then, then detach only that reference.
@@ -272,6 +286,14 @@ export function createDesktopVoiceWakeHost({
     if (!isEnabled) throw new Error('语音唤醒未开启');
     if (!controller) throw new Error('语音唤醒组件不可用');
 
+    // An active subscription is meant to remain open. Do not wait for its
+    // closed promise or create another capture on an idempotent enable.
+    const current = controller.snapshot?.();
+    if (current?.state === 'listening') {
+      return {kind: 'listening', sessionId: current.sessionId,
+        expiresAtMs: current.expiresAtMs, snapshot: snapshot()};
+    }
+
     if (callAuth) currentAuthPort = callAuth;
     if (lease) {
       if (!lease.expiresAtMs || !Number.isSafeInteger(lease.expiresAtMs) || !lease.revocationSignal) {
@@ -286,7 +308,7 @@ export function createDesktopVoiceWakeHost({
       throw new TypeError('Invalid enable deadline: must be a finite timestamp in the future');
     }
 
-    await awaitResourceClosure();
+    if (releasePending) await releasePending;
     lastError = '';
     publish();
 
@@ -309,7 +331,7 @@ export function createDesktopVoiceWakeHost({
 
   async function disable() {
     controller?.disable?.();
-    await awaitResourceClosure();
+    await trackResourceClosure();
     publish();
     return snapshot();
   }
@@ -319,7 +341,7 @@ export function createDesktopVoiceWakeHost({
     currentAuthPort = null;
     let failure;
     try { controller?.disable?.(); } catch (error) { failure = error; }
-    try { await awaitResourceClosure(); } catch (error) { failure ??= error; }
+    try { await trackResourceClosure(); } catch (error) { failure ??= error; }
     // User revoke is global: still stop the physical capture when wake cleanup
     // cannot be confirmed, including any concurrent ASR subscriber.
     try { await microphoneHost?.revoke?.(); } catch (error) { failure ??= error; }
@@ -350,7 +372,7 @@ export function createDesktopVoiceWakeHost({
     currentLease = null;
     let failure;
     try { controller?.dispose?.(); } catch (err) { failure ??= err; }
-    try { await awaitResourceClosure(); } catch (err) { failure ??= err; }
+    try { await trackResourceClosure(); } catch (err) { failure ??= err; }
     if (ownsPcmSource && pcmSource?.dispose) {
       try { await pcmSource.dispose(); } catch (err) { failure ??= err; }
     }

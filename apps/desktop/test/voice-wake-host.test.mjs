@@ -111,6 +111,20 @@ test('enable awaits detector.ready and pcm.ready; does not mock success', async 
   assert.equal(woke, true);
 });
 
+test('repeat enable while listening returns the same session without reopening capture', {timeout: 1000}, async () => {
+  const f = createFixture({onWake: () => Promise.resolve()});
+  f.detectorReady.resolve();
+  f.pcmReady.resolve();
+  const options = {deadlineAtMs: Date.parse('2026-09-25T00:05:00.000Z'), lease: f.lease};
+  const first = await f.host.enable(options);
+  const second = await f.host.enable(options);
+  assert.equal(second.kind, 'listening');
+  assert.equal(second.sessionId, first.sessionId);
+  assert.equal(f.calls.filter(call => call === 'pcm:subscribe').length, 1);
+  assert.equal(f.calls.filter(call => call === 'detector:start').length, 1);
+  assert.equal(f.calls.filter(call => call === 'ctrl:enable').length, 1);
+});
+
 test('failed startup actively stops resources and does not hang', async () => {
   const f = createFixture({onWake: () => {}});
   const pending = f.host.enable({deadlineAtMs: Date.parse('2026-09-25T00:05:00.000Z'), lease: f.lease});
@@ -174,6 +188,19 @@ test('rejected ASR handoff reports failure and releases KWS', async () => {
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.calls.includes('pcm:unsubscribe'), true);
   assert.equal(f.errors.includes('CALLBACK_FAILED'), true);
+});
+
+test('missing ASR readiness promise reports failure and releases KWS', async () => {
+  const f = createFixture({onWake: () => undefined});
+  f.detectorReady.resolve();
+  f.pcmReady.resolve();
+  await f.host.enable({deadlineAtMs: Date.parse('2026-09-25T00:05:00.000Z'), lease: f.lease});
+  f.emitDetected();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.errors.includes('CALLBACK_FAILED'), true);
+  assert.equal(f.calls.includes('pcm:unsubscribe'), true);
+  assert.equal(f.calls.includes('detector:stop'), true);
+  assert.equal(f.host.isListening(), false);
 });
 
 test('late ASR handoff cannot disable a newer wake session', async () => {
