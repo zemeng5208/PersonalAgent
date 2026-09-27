@@ -79,6 +79,9 @@ internal sealed class HostService(HostLaunchBinding launch, HostWire wire, RunJo
                     case "observe":
                         await ObserveAsync(pipe, targets, frame, connected).ConfigureAwait(false);
                         break;
+                    case "target_ready":
+                        await TargetReadyAsync(pipe, targets, frame, connected).ConfigureAwait(false);
+                        break;
                     case "execute":
                         await StartExecuteAsync(pipe, targets, frame, connected).ConfigureAwait(false);
                         break;
@@ -119,6 +122,45 @@ internal sealed class HostService(HostLaunchBinding launch, HostWire wire, RunJo
             kind = "observed", protocolVersion = Version, requestId, sessionId,
             targetRef = result.target.Reference, expiresAt = Timestamp(result.target.ExpiresUtc),
             source = "windows-uia"
+        }, connected).ConfigureAwait(false);
+    }
+
+    private async Task TargetReadyAsync(NamedPipeServerStream pipe, NotepadTargets targets,
+        JsonElement frame, CancellationToken connected)
+    {
+        var requestId = Field(frame, "requestId");
+        var sessionId = Field(frame, "sessionId");
+        var targetRef = Field(frame, "targetRef");
+        var deadline = Utc(Field(frame, "deadline"));
+
+        if (deadline <= DateTime.UtcNow)
+        {
+            await SendAsync(pipe, new
+            {
+                kind = "target_ready_result", protocolVersion = Version, requestId, sessionId,
+                targetRef, ready = false, errorCode = "TIMEOUT"
+            }, connected).ConfigureAwait(false);
+            return;
+        }
+
+        ObservedNotepadTarget? target;
+        try { target = targets.Resolve(targetRef); }
+        catch { target = null; }
+
+        if (target is null)
+        {
+            await SendAsync(pipe, new
+            {
+                kind = "target_ready_result", protocolVersion = Version, requestId, sessionId,
+                targetRef, ready = false, errorCode = "TARGET_STALE"
+            }, connected).ConfigureAwait(false);
+            return;
+        }
+
+        await SendAsync(pipe, new
+        {
+            kind = "target_ready_result", protocolVersion = Version, requestId, sessionId,
+            targetRef, ready = true, expiresAt = Timestamp(target.ExpiresUtc)
         }, connected).ConfigureAwait(false);
     }
 
@@ -190,7 +232,7 @@ internal sealed class HostService(HostLaunchBinding launch, HostWire wire, RunJo
                 {
                     "verified" => null,
                     "cancelled" => effectiveDeadline <= DateTime.UtcNow ? "TIMEOUT" : "CANCELLED",
-                    "refused" => "TARGET_STALE",
+                    "refused" => action.ErrorCode ?? "TARGET_STALE",
                     _ => "RESULT_UNKNOWN"
                 };
                 var receipt = journal.Complete(identity, state, Timestamp(DateTime.UtcNow),

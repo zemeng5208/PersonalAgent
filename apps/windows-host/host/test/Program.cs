@@ -20,6 +20,100 @@ foreach (var invalid in fixtures.RootElement.GetProperty("invalid").EnumerateArr
     catch (InvalidDataException) { }
 }
 
+var targetReadyValid = new
+{
+    kind = "target_ready",
+    protocolVersion = "0.1.0",
+    requestId = "req-tr-1",
+    sessionId = "s1",
+    targetRef = "opaque-notepad-1",
+    deadline = "2026-09-27T12:00:00.000Z"
+};
+using var parsedTr = wire.Parse(wire.Encode(targetReadyValid)[..^1]);
+if (parsedTr.RootElement.GetProperty("kind").GetString() != "target_ready")
+    throw new Exception("target_ready frame parse failed");
+
+var targetReadyResultTrue = new
+{
+    kind = "target_ready_result",
+    protocolVersion = "0.1.0",
+    requestId = "req-tr-1",
+    sessionId = "s1",
+    targetRef = "opaque-notepad-1",
+    ready = true,
+    expiresAt = "2026-09-27T12:00:30.000Z"
+};
+using var parsedTrrTrue = wire.Parse(wire.Encode(targetReadyResultTrue)[..^1]);
+if (parsedTrrTrue.RootElement.GetProperty("ready").GetBoolean() != true)
+    throw new Exception("target_ready_result true parse failed");
+
+var targetReadyResultFalse = new
+{
+    kind = "target_ready_result",
+    protocolVersion = "0.1.0",
+    requestId = "req-tr-1",
+    sessionId = "s1",
+    targetRef = "opaque-notepad-1",
+    ready = false,
+    errorCode = "TARGET_STALE"
+};
+using var parsedTrrFalse = wire.Parse(wire.Encode(targetReadyResultFalse)[..^1]);
+if (parsedTrrFalse.RootElement.GetProperty("ready").GetBoolean() != false)
+    throw new Exception("target_ready_result false parse failed");
+
+try
+{
+    var invalidTrrBoth = new
+    {
+        kind = "target_ready_result",
+        protocolVersion = "0.1.0",
+        requestId = "req-tr-1",
+        sessionId = "s1",
+        targetRef = "opaque-notepad-1",
+        ready = true,
+        expiresAt = "2026-09-27T12:00:30.000Z",
+        errorCode = "TARGET_STALE"
+    };
+    wire.Parse(JsonSerializer.SerializeToUtf8Bytes(invalidTrrBoth));
+    throw new Exception("Host accepted target_ready_result with both expiresAt and errorCode");
+}
+catch (InvalidDataException) { }
+
+try
+{
+    var invalidTrrExpiresWhenFalse = new
+    {
+        kind = "target_ready_result",
+        protocolVersion = "0.1.0",
+        requestId = "req-tr-1",
+        sessionId = "s1",
+        targetRef = "opaque-notepad-1",
+        ready = false,
+        expiresAt = "2026-09-27T12:00:30.000Z",
+        errorCode = "TARGET_STALE"
+    };
+    wire.Parse(JsonSerializer.SerializeToUtf8Bytes(invalidTrrExpiresWhenFalse));
+    throw new Exception("Host accepted target_ready_result with ready=false and expiresAt");
+}
+catch (InvalidDataException) { }
+
+try
+{
+    var invalidTrrStringReady = new
+    {
+        kind = "target_ready_result",
+        protocolVersion = "0.1.0",
+        requestId = "req-tr-1",
+        sessionId = "s1",
+        targetRef = "opaque-notepad-1",
+        ready = "true",
+        expiresAt = "2026-09-27T12:00:30.000Z"
+    };
+    wire.Parse(JsonSerializer.SerializeToUtf8Bytes(invalidTrrStringReady));
+    throw new Exception("Host accepted target_ready_result with string ready");
+}
+catch (InvalidDataException) { }
+
 var journalPath = Path.Combine(Path.GetTempPath(), $"pa-host-fixture-{Guid.NewGuid():N}.jsonl");
 try
 {

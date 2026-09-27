@@ -18,8 +18,12 @@ if (-not (Test-Path -LiteralPath $schemaDestination)) {
 }
 
 $start = [System.Diagnostics.ProcessStartInfo]::new($bridge)
-$start.ArgumentList.Add('--host')
-$start.ArgumentList.Add($hostProcess)
+if ($start.PSObject.Properties['ArgumentList']) {
+    $start.ArgumentList.Add('--host')
+    $start.ArgumentList.Add($hostProcess)
+} else {
+    $start.Arguments = "--host `"$hostProcess`""
+}
 $start.UseShellExecute = $false
 $start.CreateNoWindow = $true
 $start.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
