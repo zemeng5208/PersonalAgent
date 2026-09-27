@@ -350,10 +350,11 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   }
 
   /** Trusted Runtime-managed subagent dispatch tool. Creates and tracks real child tasks. */
-  createSubagentDispatchTool(): RegisteredTool {
+  createSubagentDispatchTool(modelGatewayFactory?: (modelName?: string) => import('@personal-agent/models').ModelGateway | undefined): RegisteredTool {
     return createRuntimeSubagentDispatchTool({
       getRuntime: () => this.runtime,
       getTools: () => this.tools,
+      ...(modelGatewayFactory ? {getModelGateway: modelGatewayFactory} : {}),
     });
   }
 

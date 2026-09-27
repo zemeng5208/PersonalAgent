@@ -94,6 +94,8 @@ export interface AgentRunOptions {
   maxSteps: number;
   maxTokens?: number;
   maxRepairAttempts?: number;
+  reasoningEffort?: 'none' | 'low' | 'medium' | 'high';
+  thinkingBudget?: number;
   onUnknownResult?: (context: AgentWorkerContext, result: ToolInvocationResult) => void | Promise<void>;
 }
 
@@ -139,6 +141,8 @@ async function complete(context: AgentWorkerContext, options: AgentRunOptions, m
     messages,
     tools: options.tools.list(),
     ...(remainingTokens === undefined ? {} : {maxOutputTokens: remainingTokens}),
+    ...(options.reasoningEffort !== undefined ? {reasoningEffort: options.reasoningEffort} : {}),
+    ...(options.thinkingBudget !== undefined ? {thinkingBudget: options.thinkingBudget} : {}),
     deadline: context.deadline,
     signal: context.signal,
   });

@@ -46,11 +46,15 @@ export interface ModelUsage {
   totalTokens?: number;
 }
 
+export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high';
+
 export interface ModelRequest {
   messages: readonly ModelMessage[];
   tools: readonly ToolDescriptor[];
   requiredCapabilities?: readonly ModelCapability[];
   maxOutputTokens?: number;
+  reasoningEffort?: ReasoningEffort;
+  thinkingBudget?: number;
   deadline: string;
   signal: AbortSignal;
 }
@@ -87,6 +91,12 @@ function requiredText(value: string, field: string): string {
 function validateRequest(request: ModelRequest): void {
   if (request.maxOutputTokens !== undefined && (!Number.isSafeInteger(request.maxOutputTokens) || request.maxOutputTokens < 1)) {
     throw new ProtocolError('INVALID_ARGUMENT', 'maxOutputTokens must be a positive integer');
+  }
+  if (request.reasoningEffort !== undefined && !['none', 'low', 'medium', 'high'].includes(request.reasoningEffort)) {
+    throw new ProtocolError('INVALID_ARGUMENT', 'reasoningEffort must be one of none, low, medium, high');
+  }
+  if (request.thinkingBudget !== undefined && (!Number.isSafeInteger(request.thinkingBudget) || request.thinkingBudget < 0)) {
+    throw new ProtocolError('INVALID_ARGUMENT', 'thinkingBudget must be a non-negative integer');
   }
   if (!Number.isFinite(Date.parse(request.deadline))) throw new ProtocolError('INVALID_ARGUMENT', 'deadline must be an ISO timestamp');
   if (request.signal.aborted) throw new ProtocolError('CANCELLED', 'Model request was cancelled');
@@ -335,6 +345,7 @@ export class PanguModelProvider implements ModelProvider {
           model: this.model,
           messages,
           ...(request.maxOutputTokens === undefined ? {} : {max_tokens: request.maxOutputTokens}),
+          ...(request.reasoningEffort !== undefined ? {reasoning_effort: request.reasoningEffort} : {}),
           stream: false,
         }),
         signal: controller.signal,

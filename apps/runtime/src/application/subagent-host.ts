@@ -10,15 +10,15 @@ import {
   type SubtaskExecutionSummary,
 } from '@personal-agent/agents';
 import {runAgent} from '@personal-agent/agents';
-import type {ModelGateway} from '@personal-agent/models';
+import type {ModelGateway, ModelMessage} from '@personal-agent/models';
 import type {TaskRuntime, WorkerContext, SubmitTaskInput} from '../index.js';
 
 export interface SubagentHostOptions {
   getRuntime: () => TaskRuntime;
-  getTools?: () => AgentToolPort | undefined;
-  getModelGateway?: (modelName?: string) => ModelGateway | undefined;
-  now?: () => number;
-  maxRecursionDepth?: number;
+  getTools?: (() => AgentToolPort | undefined) | undefined;
+  getModelGateway?: ((modelName?: string) => ModelGateway | undefined) | undefined;
+  now?: (() => number) | undefined;
+  maxRecursionDepth?: number | undefined;
 }
 
 export function createRuntimeSubagentDispatchTool(options: SubagentHostOptions): RegisteredTool {
@@ -105,76 +105,114 @@ export function createRuntimeSubagentDispatchTool(options: SubagentHostOptions):
         return taskSnapshot.resultSummary ?? '';
       }
 
-      // 5. 使用 runtime.runTask 真实运行子任务
+      // 5. 使用 runtime.runTask 真实运行子任务并监听父级取消以联动取消子任务
       const childDeadline = context.deadline;
-      const outcome = await runtime.runTask(
-        taskSnapshot.taskId,
-        async (childWorker: WorkerContext) => {
-          if (signal.aborted || childWorker.signal.aborted) {
-            throw new ProtocolError('CANCELLED', 'Subtask cancelled during execution');
-          }
+      const abortListener = () => {
+        try {
+          runtime.requestCancel(taskSnapshot.taskId, 'Parent task cancelled');
+        } catch {
+          // ignore if already terminal
+        }
+      };
+      if (signal.aborted || context.signal.aborted) {
+        abortListener();
+      } else {
+        signal.addEventListener('abort', abortListener, {once: true});
+        context.signal.addEventListener('abort', abortListener, {once: true});
+      }
 
-          childWorker.reportProgress({
-            stepId: `child-${subtask.subtaskId}`,
-            label: `[${roleLabel}] 正在执行: ${subtask.goal}`,
-          });
+      try {
+        const outcome = await runtime.runTask(
+          taskSnapshot.taskId,
+          async (childWorker: WorkerContext) => {
+            if (signal.aborted || childWorker.signal.aborted || context.signal.aborted) {
+              throw new ProtocolError('CANCELLED', 'Subtask cancelled during execution');
+            }
 
-          // 检查是否配置了 ModelGateway
-          const model = options.getModelGateway?.(subtask.model);
-          if (model) {
-            const childTools = options.getTools?.();
-            const agentOutcome = await runAgent(
-              {
-                taskId: childTaskId,
-                deadline: childWorker.deadline,
-                signal: childWorker.signal,
-                saveCheckpoint: (k, v) => childWorker.saveCheckpoint(k, v),
-                loadCheckpoint: (k) => childWorker.loadCheckpoint(k),
-                reportProgress: (p) => childWorker.reportProgress(p),
-              },
-              {
-                goal: subtask.goal,
-                model,
-                tools: childTools ?? {list: () => [], invoke: async () => { throw new Error('No tools'); }},
-                authorizationRefFor: () => `subtask-auth-${childTaskId}`,
-                maxSteps: subtask.thinkingDepth !== undefined ? Math.max(2, (subtask.thinkingDepth + 1) * 2) : 6,
-              },
-            );
+            childWorker.reportProgress({
+              stepId: `child-${subtask.subtaskId}`,
+              label: `[${roleLabel}] 正在执行: ${subtask.goal}`,
+            });
+
+            // 检查是否配置了 ModelGateway 进行真实模型推理
+            const model = options.getModelGateway?.(subtask.model);
+            if (model) {
+              const childTools = options.getTools?.();
+              const effortLevels: ('none' | 'low' | 'medium' | 'high')[] = ['none', 'low', 'low', 'medium', 'high', 'high'];
+              const reasoningEffort = subtask.thinkingDepth !== undefined
+                ? (effortLevels[Math.min(Math.max(0, subtask.thinkingDepth), 5)] ?? 'low')
+                : undefined;
+
+              const rolePrompt: ModelMessage = {
+                role: 'system',
+                content: `你是专业次级智能体，当前承担职责为【${roleLabel}】(${subtask.role})。请聚焦于此职责，独立执行指派的目标。`,
+              };
+
+              const agentOutcome = await runAgent(
+                {
+                  taskId: childTaskId,
+                  deadline: childWorker.deadline,
+                  signal: childWorker.signal,
+                  saveCheckpoint: (k, v) => childWorker.saveCheckpoint(k, v),
+                  loadCheckpoint: (k) => childWorker.loadCheckpoint(k),
+                  reportProgress: (p) => childWorker.reportProgress(p),
+                },
+                {
+                  goal: subtask.goal,
+                  initialMessages: [rolePrompt],
+                  model,
+                  tools: childTools ?? {list: () => [], invoke: async () => { throw new Error('No tools'); }},
+                  authorizationRefFor: () => `subtask-auth-${childTaskId}`,
+                  maxSteps: subtask.thinkingDepth !== undefined ? Math.max(2, (subtask.thinkingDepth + 1) * 2) : 6,
+                  ...(reasoningEffort !== undefined ? {reasoningEffort} : {}),
+                },
+              );
+              return {
+                resultSummary: agentOutcome.resultSummary,
+                evidenceRefs: agentOutcome.evidenceRefs,
+              };
+            }
+
+            // 未配置模型时使用基于角色职责的结构化执行
+            let detail = '';
+            if (subtask.role === 'researcher') {
+              detail = `【${roleLabel}】完成针对性资料检索与事实调研：${subtask.goal}`;
+            } else if (subtask.role === 'coder') {
+              detail = `【${roleLabel}】工程工作区与代码实现核验完毕：${subtask.goal}`;
+            } else if (subtask.role === 'reviewer') {
+              detail = `【${roleLabel}】合规性与质量复核通过：${subtask.goal}`;
+            } else if (subtask.role === 'planner') {
+              detail = `【${roleLabel}】子目标与执行步骤已结构化拆解：${subtask.goal}`;
+            } else {
+              detail = `【${roleLabel}】协作协调与输出汇总完成：${subtask.goal}`;
+            }
+
+            const modelNote = subtask.model ? ` [model=${subtask.model}]` : '';
+            const thinkingNote = subtask.thinkingDepth !== undefined ? ` [thinking_depth=${subtask.thinkingDepth}]` : '';
+
             return {
-              resultSummary: agentOutcome.resultSummary,
-              evidenceRefs: agentOutcome.evidenceRefs,
+              resultSummary: `${detail}${modelNote}${thinkingNote}`,
+              evidenceRefs: [],
             };
-          }
+          },
+          {
+            deadline: childDeadline,
+            sideEffect: 'read',
+          },
+        );
 
-          // 结构化子任务执行（按职责执行并形成脱敏摘要）
-          let detail = '';
-          if (subtask.role === 'researcher') {
-            detail = `【${roleLabel}】完成针对性资料检索与事实调研：${subtask.goal}`;
-          } else if (subtask.role === 'coder') {
-            detail = `【${roleLabel}】工程工作区与代码实现核验完毕：${subtask.goal}`;
-          } else if (subtask.role === 'reviewer') {
-            detail = `【${roleLabel}】合规性与质量复核通过：${subtask.goal}`;
-          } else if (subtask.role === 'planner') {
-            detail = `【${roleLabel}】子目标与执行步骤已结构化拆解：${subtask.goal}`;
-          } else {
-            detail = `【${roleLabel}】协作协调与输出汇总完成：${subtask.goal}`;
-          }
+        if (outcome.state === 'cancelled') {
+          throw new ProtocolError('CANCELLED', 'Subtask was cancelled');
+        }
+        if (outcome.state === 'failed') {
+          throw new Error(outcome.error?.message || outcome.resultSummary || 'Subtask execution failed');
+        }
 
-          const modelNote = subtask.model ? ` [model=${subtask.model}]` : '';
-          const thinkingNote = subtask.thinkingDepth !== undefined ? ` [thinking_depth=${subtask.thinkingDepth}]` : '';
-
-          return {
-            resultSummary: `${detail}${modelNote}${thinkingNote}`,
-            evidenceRefs: [],
-          };
-        },
-        {
-          deadline: childDeadline,
-          sideEffect: 'read',
-        },
-      );
-
-      return outcome.resultSummary ?? '';
+        return outcome.resultSummary ?? '';
+      } finally {
+        signal.removeEventListener('abort', abortListener);
+        context.signal.removeEventListener('abort', abortListener);
+      }
     };
 
     return dispatchSubtasks(workerBridge, input.subtasks, executor);
