@@ -22,7 +22,7 @@ export function createPublicConnectorHost({systemObservationFactory,
       }
       return summary;
     }});
-  return createProductToolsComposition({
+  const composition = createProductToolsComposition({
     modules:{weather, research, windows:{createSystemObservationTool:systemObservationFactory}},
     systemObservation:typeof systemObservationFactory === 'function',
     connectors:{
@@ -50,4 +50,7 @@ export function createPublicConnectorHost({systemObservationFactory,
       })),
     ],
   });
+  return Object.freeze({...composition, competitionToolAvailability:Object.freeze(
+    composition.competitionToolAvailability.map(binding=>binding.toolName==='weather.forecast'
+      ? {...binding,publicEnumPaths:['/units']} : binding))});
 }
