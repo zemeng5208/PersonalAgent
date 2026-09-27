@@ -21,7 +21,7 @@ async function terminal(application,id) {
   }
   throw Error('Synthetic task did not settle');
 }
-async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCredentialRead=false}={}) {
+async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCredentialRead=false,uncertain=false}={}) {
   const root=fileURLToPath(new URL('../../../.cache/desktop-goal-cognition/',import.meta.url));
   await mkdir(root,{recursive:true});const directory=await mkdtemp(path.join(root,'case-'));
   let host,layaCalls=0,time=Date.now();const sent=[],announced=[];
@@ -55,8 +55,9 @@ async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCred
   const chooser=new LayaActionChoiceService({infer:async payload=>{
     layaCalls++;
     const keys=Object.keys(payload.questions.action.criteria),selected=keys.at(-1);
-    return {answers:{action:{choice:selected,probabilities:Object.fromEntries(keys.map(key=>[key,key===selected?0.98:0.02/(keys.length-1)])),
-      answer_confidence:0.98,confidence:0.5}}};
+    const probability=uncertain?1/keys.length:0.98;
+    return {answers:{action:{choice:selected,probabilities:Object.fromEntries(keys.map(key=>[key,key===selected?probability:(1-probability)/(keys.length-1)])),
+      answer_confidence:probability,confidence:0.5}}};
   }});
   const options={application,client,facts,namespace,goalHost,chooser,ready:()=>true,
     createHost:createProactiveCognitionHost,onTask:item=>announced.push(item),now:()=>time};
@@ -95,4 +96,21 @@ test('a newer graph revision before HTTP invalidates the old selected projection
   const taskId=f.announced[0]?.taskId;assert.ok(taskId);
   assert.equal((await terminal(f.application,taskId)).state,'failed');
   assert.equal(f.sent.length,0);assert.equal(f.store.read().revision,6);
+});
+
+test('uncertain Laya selection hands off one explicit machine review without claiming a chosen action',async t=>{
+  const f=await fixture(t,{uncertain:true});
+  f.host().configure({enabled:true,cloudAllowed:false});await f.host().tick();
+  assert.equal(f.sent.length,0);assert.match(f.host().snapshot().reason,/尚不确定/);
+  f.host().configure({enabled:true,cloudAllowed:true});await f.host().tick();
+  const taskId=f.announced[0]?.taskId;assert.ok(taskId);
+  assert.equal((await terminal(f.application,taskId)).state,'succeeded');
+  assert.equal(f.sent.length,1);
+  assert.match(f.sent[0].query,/Laya 尚未确定选择/);
+  assert.doesNotMatch(f.sent[0].query,/Laya 已选择|PRIVATE_SOURCE_SENTINEL/);
+  const payload=JSON.parse(f.sent[0].query.slice(f.sent[0].query.indexOf('\n')+1));
+  assert.equal(payload.action,'RECHECK');assert.equal(payload.selectedOption,null);
+  assert.equal(payload.eligibleForRuntime,false);assert.equal(payload.executed,false);
+  f.advance();await f.host().tick();assert.equal(f.sent.length,1);assert.equal(f.layaCalls(),1);
+  assert.equal(f.store.read().revision,5);
 });

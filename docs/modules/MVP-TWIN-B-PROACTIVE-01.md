@@ -151,6 +151,14 @@ forward the signal and check it immediately before actual Runtime/network submis
 
 ## Validation and remaining work
 
+Desktop consumes `machineReview` separately from a confirmed `selectedOption`.
+The outgoing projection identifies host uncertainty escalation, fixes the requested
+action to RECHECK, and explicitly records no confirmed choice or execution. The
+existing session grant, graph revision and final HTTP-send checks remain in place.
+The Desktop integration's four focused tests passed, including uncertain handoff,
+grant revocation during credential loading, graph revision changes and duplicate
+suppression. These use Fake cloud responses; real AgentArts acceptance is pending.
+
 Verification uses synthetic SQLite sources, Fake Laya and Fake AgentArts. No real
 model process, cloud, mailbox, microphone, Electron or installer is started.
 Available Node 26.3.0/npm 11.16.0 differs from required Node 24.15.x/npm 11.12.x;
