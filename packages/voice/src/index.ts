@@ -26,6 +26,11 @@ export {
   UnavailableSpeechRecognitionPort,
   UnavailableTranscriptConsumerPort,
 } from './unavailable.js';
+export {
+  RuntimeClientTranscriptConsumer,
+  createRuntimeClientTranscriptConsumer,
+} from './runtime-consumer.js';
+export type {RuntimeClientTranscriptConsumerOptions} from './runtime-consumer.js';
 export {VoiceSessionManager} from './voice-session.js';
 export type {
   ReplyReceipt,
