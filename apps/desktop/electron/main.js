@@ -14,6 +14,7 @@ import {readCapabilityDirectory} from './capability-directory.js';
 import {createMicrophonePermissionGate} from './microphone-permission.js';
 import {readApprovalPage} from './approval-history.js';
 import {createAgentArtsConfig} from './agentarts-config.js';
+import {createDeferredRuntimeStartup} from './runtime-startup.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -106,6 +107,11 @@ const approvals = new Map();
 const notifications = new Map();
 let runtimeApplication;
 let agentArtsConfig;
+let activeCloudBinding;
+const runtimeStartup = createDeferredRuntimeStartup({
+  isConfigured: () => !competitionMode || agentArtsConfig?.snapshot().configured === true,
+  initialize: initializeProductServices,
+});
 let syntheticRepairHost;
 const repairPrompts = new Set();
 let microphonePermissionGate;
@@ -611,6 +617,7 @@ async function initializeRuntime() {
     mkdirSync(path.dirname(dbPath), {recursive: true});
     if (competitionMode) {
       const cloudBinding=agentArtsConfig.binding();
+      activeCloudBinding = cloudBinding;
       const syntheticTools = syntheticMvp
         ? (await import('./competition-synthetic-workspace.js')).createSyntheticMeetingToolset(
           path.resolve(dir, '../../../tests/manual/agentarts/fixtures/mvp-meeting'),
@@ -678,6 +685,18 @@ async function initializeRuntime() {
   eventPoll = setInterval(() => void pumpEvents(), 120);
 }
 
+async function initializeProductServices() {
+  try {
+    runtimeError = '';
+    await initializeRuntime();
+    await initializeModelFromEnvironment();
+  } catch (error) {
+    runtimeError = error instanceof Error ? error.message : 'Runtime 初始化失败';
+    connectionLabel = 'Runtime 未连接';
+    throw error;
+  }
+}
+
 async function action(event, name, payload) {
   const sender = [orb, panel, admin, workspace].find(win => win && !win.isDestroyed() && win.webContents === event.sender);
   if (!sender || event.senderFrame !== sender.webContents.mainFrame) throw Error('Untrusted sender');
@@ -716,8 +735,16 @@ async function action(event, name, payload) {
   if (name === 'panel.dragEnd' && sender === panel) { dragging = false; panelDragOrigin = undefined; away = Date.now() + 400; return; }
   if (name === 'app.quit') { app.quit(); return; }
   if (name === 'agentarts.configure') {
-    if (sender!==admin || !competitionMode || runtimeApplication?.activeTaskCount) throw Error('请在任务结束后从设置配置 AgentArts');
-    const result=agentArtsConfig.configure(payload);publish();return result;
+    if (sender!==admin || !competitionMode || runtimeApplication?.activeTaskCount
+      || runtimeStartup.snapshot().state==='starting') throw Error('请在任务及启动结束后从设置配置 AgentArts');
+    const result=agentArtsConfig.configure(payload);
+    const startup = await runtimeStartup.start();
+    const requiresRestart = startup.state !== 'ready' || result.gatewayUrl !== activeCloudBinding?.gatewayUrl
+      || result.runtimeName !== activeCloudBinding?.runtimeName;
+    publish();
+    return {...result, requiresRestart, reason: requiresRestart
+      ? '配置已加密保存，请重启应用完成连接。'
+      : '配置已加密保存，Runtime 已连接；云端可用性以实际任务结果为准。'};
   }
   if (name === 'voice.stop') {
     if (sender !== panel) throw Error('语音操作只能从面板调用');
@@ -820,8 +847,11 @@ app.whenReady().then(async () => {
   try {
     conversations = new Conversations(dataPaths.conversations);
     if (!competitionMode) restoreModelConfig();
-    await initializeRuntime();
-    await initializeModelFromEnvironment();
+    const startup = await runtimeStartup.start();
+    if (startup.state === 'configuration_required') {
+      runtimeError = agentArtsConfig.snapshot().reason;
+      connectionLabel = 'Runtime 等待配置';
+    }
   } catch (error) {
     runtimeError = error instanceof Error ? error.message : 'Runtime 初始化失败';
     connectionLabel = 'Runtime 未连接';
