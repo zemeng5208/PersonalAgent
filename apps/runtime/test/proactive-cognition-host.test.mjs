@@ -37,10 +37,11 @@ function chooser(state) {
     const keys = Object.keys(criteria);
     const selected = keys.find(key =>
       JSON.parse(criteria[key]).description.includes('minimal dependency repair')) ?? keys[0];
+    const confidence = state.choiceConfidence ?? 0.9;
     const probabilities = Object.fromEntries(keys.map(key => [key,
-      key === selected ? 0.9 : 0.1 / (keys.length - 1)]));
+      key === selected ? confidence : (1 - confidence) / (keys.length - 1)]));
     return {answers: {action: {choice: selected, probabilities,
-      answer_confidence: 0.9, confidence: 0.5}}};
+      answer_confidence: confidence, confidence: 0.5}}};
   }});
 }
 
@@ -63,7 +64,13 @@ function open(paths, state) {
         await state.prepareGate.pending;
       }
       if (state.prepareUnavailable) return undefined;
-      assert.equal(review.selectedOption.id, state.selectedId ?? 'revise');
+      if (state.expectMachineReview) {
+        assert.equal(review.selectedOption, undefined);
+        assert.equal(review.selection.state, 'review');
+        assert.equal(review.selection.reason, 'uncertain');
+        assert.deepEqual(review.machineReview, {reason: 'uncertain', action: 'RECHECK',
+          option: {id: 'recheck', revision: 1}});
+      } else assert.equal(review.selectedOption.id, state.selectedId ?? 'revise');
       return {exportPolicyVersion: 'synthetic-public-v1',
         goal: 'Review a synthetic public meeting correction and propose a revised plan.'};
     },
@@ -520,5 +527,67 @@ test('public Fact expiry without a new feed event creates one durable AgentArts 
   } finally {
     binding.close();
     await rm(paths.directory, {recursive: true, force: true});
+  }
+});
+
+test('uncertain Laya choice preserves its receipt and recovers a machine review handoff once', async () => {
+  const paths = await workspace();
+  const calls = state({choiceConfidence: 0.6, expectMachineReview: true, handoff: false});
+  let binding = open(paths, calls);
+  try {
+    const {review} = await factChain(binding);
+    assert.equal(review.review.selectedOption, undefined);
+    assert.equal(review.review.action, 'RECHECK');
+    assert.equal(review.review.selection.reason, 'uncertain');
+    assert.equal(review.review.selection.eligibleForRuntime, false);
+    assert.deepEqual(review.review.selection.selected, {id: 'revise', revision: 1});
+    assert.equal(review.review.selection.answerConfidence, 0.6);
+    assert.equal(calls.agentArtsCalls, 0);
+    const original = structuredClone(review.review.selection);
+    // Simulate a persisted review produced before machine-review routing existed.
+    const legacy = structuredClone(review.review);
+    delete legacy.machineReview;
+    binding.application.runtime.saveCheckpoint(review.task.taskId, 'proactive-cognition-review-v1', legacy);
+    binding.close(); calls.handoff = true;
+    binding = open(paths, calls);
+    const resumed = await binding.host.handoffReview(review.task.taskId, context());
+    assert.equal(resumed.handoff.state, 'submitted');
+    assert.equal(resumed.review.selectedOption, undefined);
+    assert.deepEqual(resumed.review.selection, original);
+    assert.deepEqual(resumed.review.machineReview.option, {id: 'recheck', revision: 1});
+    await waitFor(binding.application, resumed.handoff.task.taskId, 'succeeded');
+    const persisted = binding.application.runtime.loadCheckpoint(review.task.taskId, 'proactive-cognition-review-v1');
+    assert.deepEqual(persisted.machineReview, resumed.review.machineReview);
+    binding.close(); binding = open(paths, calls);
+    const replay = await binding.host.handoffReview(review.task.taskId, context());
+    assert.equal(replay.handoff.task.taskId, resumed.handoff.task.taskId);
+    assert.deepEqual(replay.review.selection, original);
+    assert.equal(calls.layaCalls, 1);
+    assert.equal(calls.agentArtsCalls, 1);
+    assert.equal(binding.application.runtime.bindCoordinationStore(graphNamespace).read().revision, 5);
+  } finally {
+    binding.close();
+    await rm(paths.directory, {recursive: true, force: true});
+  }
+});
+
+test('unavailable Laya or uncertainty without an offered recheck never invents a handoff route', async () => {
+  for (const mode of ['unavailable', 'no_recheck']) {
+    const paths = await workspace();
+    const calls = state(mode === 'unavailable' ? {onInfer: () => { throw Error('Fake Laya unavailable'); }}
+      : {choiceConfidence: 0.6, prepareOptions: review => review.options.filter(option => option.id !== 'recheck')});
+    const binding = open(paths, calls);
+    try {
+      const {review} = await factChain(binding);
+      assert.equal(review.review.selection.reason, mode === 'unavailable' ? 'unavailable' : 'uncertain');
+      assert.equal(review.review.selectedOption, undefined);
+      assert.equal(review.review.machineReview, undefined);
+      assert.equal(review.handoff, undefined);
+      assert.equal(calls.prepares, 0);
+      assert.equal(calls.agentArtsCalls, 0);
+    } finally {
+      binding.close();
+      await rm(paths.directory, {recursive: true, force: true});
+    }
   }
 });

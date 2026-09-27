@@ -37,6 +37,8 @@ export interface ProactiveCognitionReview {
   affected: ImpactItem[];
   options: ProactiveCognitionOption[];
   selectedOption?: ProactiveCognitionOption;
+  /** Low-confidence Laya result routed to the already-offered machine RECHECK option. */
+  machineReview?: {reason: 'uncertain'; action: 'RECHECK'; option: {id: string; revision: number}};
   selection?: LayaActionSelection;
   /** Structural proposals are inputs to AgentArts semantic reasoning, not completed repairs. */
   semanticReviewRequired: true;
@@ -129,6 +131,18 @@ function expiredPublicFactScope(snapshot: GraphSnapshot, at: string): {facts: No
   return {facts: facts.filter(ref => used.has(refKey(ref))).sort((a, b) => refKey(a).localeCompare(refKey(b))), items};
 }
 
+function uncertainRecheck(review: ProactiveCognitionReview): ProactiveCognitionReview['machineReview'] {
+  const selection = review.selection;
+  if (selection?.state !== 'review' || selection.reason !== 'uncertain'
+    || selection.eligibleForRuntime !== false || !selection.selected
+    || !review.options.some(option => option.id === selection.selected!.id
+      && option.revision === selection.selected!.revision)) return undefined;
+  const recheck = review.options.filter(option => option.id === 'recheck' && option.action === 'RECHECK'
+    && option.repair === undefined && Number.isSafeInteger(option.revision) && option.revision > 0);
+  return recheck.length === 1 ? {reason: 'uncertain', action: 'RECHECK',
+    option: {id: recheck[0]!.id, revision: recheck[0]!.revision}} : undefined;
+}
+
 /** Trusted Competition composition: choose locally, then hand off to AgentArts. No local execution shortcut. */
 export function createProactiveCognitionHost(options: ProactiveCognitionHostOptions): ProactiveCognitionHost {
   const {application, facts, graphNamespace, bindingVersion, chooser, prepareOptions, selectionHandoff: handoff} = options;
@@ -155,11 +169,21 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
   const handoffWork = async (taskId: string, context: MemoryReadContext): Promise<ProactiveReviewReadback> => {
     open(); active(context);
     const readback = readReview(taskId);
-    const result = readback.review;
-    if (readback.task.state !== 'succeeded' || !result?.selectedOption) return readback;
-    if (!handoff) return {...readback, handoff: {state: 'unavailable'}};
+    let result = readback.review;
+    if (readback.task.state !== 'succeeded' || !result) return readback;
     let intent = runtime.loadCheckpoint(taskId, HANDOFF) as ProactiveSelectionHandoff | undefined;
+    const machineReview = result.selectedOption ? undefined : uncertainRecheck(result);
+    if (!result.selectedOption && !machineReview) return readback;
+    if (result.machineReview && JSON.stringify(result.machineReview) !== JSON.stringify(machineReview)) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Invalid persisted machine review');
+    }
+    if (!handoff) return {...readback, handoff: {state: 'unavailable'}};
     if (!intent) {
+      if (machineReview && !result.machineReview) {
+        result = {...result, machineReview};
+        runtime.saveCheckpoint(taskId, REVIEW, result);
+        readback.review = structuredClone(result);
+      }
       const projected = await handoff.prepare(structuredClone(result), context);
       active(context); open();
       if (!projected) return {...readback, handoff: {state: 'unavailable'}};
@@ -297,6 +321,8 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
               && option.revision === result.selection!.selected?.revision);
             if (selected) { result.action = selected.action; result.selectedOption = structuredClone(selected); }
           }
+          const machineReview = uncertainRecheck(result);
+          if (machineReview) result.machineReview = machineReview;
         }
         active(context);
         worker.saveCheckpoint(REVIEW, result);

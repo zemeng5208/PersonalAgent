@@ -86,6 +86,30 @@ tracking scope and revocation state. Public Fact summaries cannot supply these
 fields. Do not derive a body hash from a summary or treat observation time as a
 successful source check. No missing provider is replaced with a production Fake.
 
+### Uncertain choices continue as machine review
+
+An otherwise valid Laya `review/uncertain` response can follow an existing offered
+`recheck` candidate to AgentArts for further reasoning. The original selection,
+tentative candidate, scores and `eligibleForRuntime: false` remain unchanged.
+`selectedOption` stays absent: the host records its routing decision separately as
+`machineReview: {reason: 'uncertain', action: 'RECHECK', option: {id, revision}}`.
+The referenced offered option must be `recheck`, have action RECHECK and no repair;
+without that option the host does not manufacture a fallback. Cancelled, expired,
+unavailable, invalid and high-risk responses do not enter this route.
+
+The same existing handoff applies, including export preparation, current permission
+checks and the persistent command ID. Legacy uncertain reviews without a HANDOFF
+can gain this machine-review field before preparing their first handoff; an existing
+handoff never rewrites its saved review or digest. This is machine reasoning rather
+than user approval, and does not execute a repair. The Desktop projection must
+explicitly accept `machineReview` and describe the uncertainty instead of claiming
+that Laya confidently selected the fallback. That adapter remains root-owned.
+
+This increment passed the Runtime build and four targeted cases: preserved uncertain
+receipt and legacy SQLite recovery; unavailable/no offered recheck rejection;
+cancellation during choice; export-scope denial. The tests use Fake Laya/AgentArts
+and real SQLite. They do not establish live model or cloud availability.
+
 `selectionHandoff` implements:
 
 ```ts
