@@ -341,10 +341,16 @@ export function createDesktopVoiceWakeHost({
     currentAuthPort = null;
     let failure;
     try { controller?.disable?.(); } catch (error) { failure = error; }
-    try { await trackResourceClosure(); } catch (error) { failure ??= error; }
-    // User revoke is global: still stop the physical capture when wake cleanup
-    // cannot be confirmed, including any concurrent ASR subscriber.
-    try { await microphoneHost?.revoke?.(); } catch (error) { failure ??= error; }
+    // Start physical revocation without waiting for a possibly stuck wake close.
+    // Still await both confirmations and preserve failures; never report an
+    // unconfirmed release as success, including for a concurrent ASR subscriber.
+    const results = await Promise.allSettled([
+      trackResourceClosure(),
+      (async () => { await microphoneHost?.revoke?.(); })(),
+    ]);
+    for (const result of results) {
+      if (result.status === 'rejected') failure ??= result.reason;
+    }
     publish();
     if (failure) throw failure;
     return snapshot();
