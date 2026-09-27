@@ -1,5 +1,5 @@
 import {ProtocolError, validateToolValue} from '@personal-agent/contracts';
-import type {Event, Request, Response, RegisteredTool, TaskSnapshot} from '@personal-agent/contracts';
+import type {Event, Request, Response, RegisteredTool, TaskSnapshot, ToolDescriptor} from '@personal-agent/contracts';
 import {RuntimeToolInvoker} from '@personal-agent/agents';
 import type {AgentToolPort} from '@personal-agent/agents';
 import {ToolGateway, toolArgumentsDigest} from '@personal-agent/tool-gateway';
@@ -11,16 +11,73 @@ import type {CoordinationPort, CoordinationRequest, CoordinationRepairCandidateR
 import {startCoordinationTask, assertCompetitionExportAllowed, type CompetitionToolExport} from './coordination.js';
 import {createLocalRepairTool, prepareLocalRepair, startLocalRepairTask, LOCAL_REPAIR_CHECKPOINT} from './local-repair.js';
 import type {LocalRepairHostOptions, SubmitLocalRepairRequest} from './local-repair.js';
+import {ScopedEvidenceReader} from './evidence-reader.js';
+import type {EvidenceReaderOptions} from './evidence-reader.js';
+import {RuntimeCompetitionToolCatalog} from './tool-catalog.js';
+import type {CompetitionAvailableTool, CompetitionToolAvailability} from './tool-catalog.js';
+import {isDeepStrictEqual} from 'node:util';
+import {createCompetitionFactHost} from './competition-fact-host.js';
+import type {CompetitionFactHost, CompetitionFactHostOptions} from './competition-fact-host.js';
+import {resolve} from 'node:path';
 type SuccessfulResponse = Extract<Response, {outcome: 'ok'}>;
+
+export interface RevokeHostAuthorizationRequest {
+  subjectRef: string;
+  conversationId: string;
+  taskId: string;
+  authorizationRef: string;
+  expectedApprovalRevision: number;
+  /** Trusted host checks current session ownership and permission on each call. */
+  authorize: (scope: Readonly<{subjectRef: string; conversationId: string; taskId: string;
+    authorizationRef: string}>) => boolean | Promise<boolean>;
+}
+
+export interface RevokeHostAuthorizationResult {revoked: boolean; grantPresent: false; approvalRevision: number;}
 
 const CONVERSATION_HISTORY_LIMIT = 20;
 const MODEL_METADATA = /\s*\[model=[^;\]]+;\s*verification=[^;\]]+;\s*tokens=[^\]]+\]\s*$/;
+const HOST_TOOL_CHECKPOINT = 'host-tool-intent';
+const HOST_TOOL_PREPARATION_CHECKPOINT = 'host-tool-preparation';
+const HOST_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+
+export interface SubmitHostToolTaskRequest {
+  /** Stable across retries and application restarts, chosen by the trusted host. */
+  commandId: string;
+  toolName: string;
+  toolVersion: string;
+  arguments: Record<string, unknown>;
+  deadline: string;
+}
+
+export type PrepareHostToolTaskRequest = Omit<SubmitHostToolTaskRequest, 'arguments'>;
+export interface FinalizeHostToolTaskRequest {
+  taskId: string;
+  commandId: string;
+  expectedTaskRevision: number;
+  arguments: Record<string, unknown>;
+}
+
+interface HostToolPreparation extends PrepareHostToolTaskRequest { namespace: string; }
+
+interface HostToolIntent extends SubmitHostToolTaskRequest {
+  namespace: string;
+  argumentsDigest: string;
+}
+
+export interface HostToolTaskReadback {
+  commandId: string;
+  toolName: string;
+  toolVersion: string;
+  task: TaskSnapshot;
+  approval?: {approvalId: string; revision: number; state: 'pending' | 'allowed' | 'denied'};
+  confirmed?: {runId: string; result: unknown; evidenceRefs: string[]};
+}
 
 function assistantText(resultSummary: string): string {
   return resultSummary.replace(MODEL_METADATA, '').trim();
 }
 
-export interface RuntimeApplicationOptions { path: string; now?: () => Date; idFactory?: () => string; text?: TextApplicationOptions; tools?: readonly RegisteredTool[]; profile?: 'local' | 'huawei_ict_agentarts'; coordination?: CoordinationPort; competitionToolExports?: readonly CompetitionToolExport[]; repairCandidateVersion?: '1.0'; localRepair?: LocalRepairHostOptions; }
+export interface RuntimeApplicationOptions { path: string; now?: () => Date; idFactory?: () => string; text?: TextApplicationOptions; tools?: readonly RegisteredTool[]; profile?: 'local' | 'huawei_ict_agentarts'; coordination?: CoordinationPort; competitionToolExports?: readonly CompetitionToolExport[]; competitionToolAvailability?: readonly CompetitionToolAvailability[]; repairCandidateVersion?: '1.0'; localRepair?: LocalRepairHostOptions; hostUserNamespace?: string; }
 export interface RuntimeApplicationTransport { send(request: Request, signal: AbortSignal): Promise<Response>; }
 
 export class RuntimeApplication implements RuntimeApplicationTransport {
@@ -33,19 +90,29 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   private readonly competitionToolExports: readonly CompetitionToolExport[];
   private readonly repairCandidateVersion: '1.0' | undefined;
   private readonly localRepair: LocalRepairHostOptions | undefined;
+  private readonly competitionToolCatalog?: RuntimeCompetitionToolCatalog;
+  private readonly hostUserNamespace: string | undefined;
+  private readonly now: () => Date;
+  private readonly storagePath: string;
 
   constructor(options: RuntimeApplicationOptions) {
+    this.storagePath = resolve(options.path);
     this.profile = options.profile ?? 'local';
     if (!['local', 'huawei_ict_agentarts'].includes(this.profile)
-      || (this.profile === 'local' && (options.coordination !== undefined || options.competitionToolExports !== undefined || options.repairCandidateVersion !== undefined))
+      || (this.profile === 'local' && (options.coordination !== undefined || options.competitionToolExports !== undefined || options.competitionToolAvailability !== undefined || options.repairCandidateVersion !== undefined || options.hostUserNamespace !== undefined))
       || (options.repairCandidateVersion !== undefined && options.repairCandidateVersion !== '1.0')
       || (options.localRepair !== undefined && options.repairCandidateVersion !== '1.0')
       || (this.profile === 'huawei_ict_agentarts' && options.text !== undefined)) {
       throw new ProtocolError('INVALID_ARGUMENT', 'Choose explicit competition coordination or existing local text configuration, not both');
     }
     this.coordination = options.coordination;
+    this.now = options.now ?? (() => new Date());
     this.repairCandidateVersion = options.repairCandidateVersion;
     this.localRepair = options.localRepair;
+    if (options.hostUserNamespace !== undefined && !HOST_ID.test(options.hostUserNamespace)) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Invalid trusted host user namespace');
+    }
+    this.hostUserNamespace = options.hostUserNamespace;
     if (this.localRepair && (!this.localRepair.graphNamespace?.trim() || !this.localRepair.bindingVersion?.trim()
       || typeof this.localRepair.resolveBinding !== 'function' || typeof this.localRepair.matchesSource !== 'function'
       || typeof this.localRepair.withSourceLock !== 'function'
@@ -93,6 +160,11 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
         return invoker.invoke({...invocation, authorizationRef: ref});
       }};
     }
+    if (options.competitionToolAvailability !== undefined) {
+      if (!this.tools) throw new ProtocolError('INVALID_ARGUMENT', 'Competition tool catalog needs registered tools');
+      this.competitionToolCatalog = new RuntimeCompetitionToolCatalog(
+        this.runtime, this.tools, this.competitionToolExports, options.competitionToolAvailability);
+    }
     this.textApplication = createTextApplication({...options.text, ...(this.tools ? {tools: this.tools} : {})});
   }
 
@@ -110,11 +182,238 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     return response;
   }
 
+  /** Trusted-host entrypoint. The task and original arguments commit atomically. */
+  submitHostToolTask(request: SubmitHostToolTaskRequest): HostToolTaskReadback {
+    if (!this.hostUserNamespace || !this.tools) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Host tool tasks are not configured');
+    if (!HOST_ID.test(request.commandId)) throw new ProtocolError('INVALID_ARGUMENT', 'Invalid host command ID');
+    const descriptor = this.hostToolDescriptor(request.toolName, request.toolVersion);
+    const deadlineMs = Date.parse(request.deadline);
+    if (!Number.isFinite(deadlineMs)) throw new ProtocolError('INVALID_ARGUMENT', 'Invalid host tool deadline');
+    const idempotencyKey = `host-tool:${JSON.stringify([this.hostUserNamespace, request.commandId])}`;
+    const existing = this.runtime.findTaskByIdempotencyKey(idempotencyKey);
+    if (existing && this.runtime.loadCheckpoint(existing.taskId,
+      HOST_TOOL_PREPARATION_CHECKPOINT) !== undefined) {
+      throw new ProtocolError('REVISION_CONFLICT', 'Prepared host tool command requires finalization');
+    }
+    if (!existing && deadlineMs <= this.now().getTime()) throw new ProtocolError('TIMEOUT', 'Host tool deadline has expired');
+    const args = this.hostToolArguments(descriptor, request.arguments);
+    const intent: HostToolIntent = {
+      namespace: this.hostUserNamespace, commandId: request.commandId,
+      toolName: descriptor.name, toolVersion: descriptor.version, arguments: args,
+      argumentsDigest: toolArgumentsDigest(args), deadline: request.deadline,
+    };
+    const task = this.runtime.submitTaskWithCheckpoint({
+      goal: `Host tool ${descriptor.name}`, conversationId: `host-tool:${this.hostUserNamespace}`,
+      idempotencyKey,
+    }, HOST_TOOL_CHECKPOINT, intent);
+    this.dispatchOrReconcileHostToolTask(task);
+    return this.readHostToolTask(task.taskId);
+  }
+
+  /** Trusted host creates a stable task ID before observing a short-lived external target. */
+  prepareHostToolTask(request: PrepareHostToolTaskRequest): TaskSnapshot {
+    if (!this.hostUserNamespace || !this.tools) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Host tool tasks are not configured');
+    if (!HOST_ID.test(request.commandId)) throw new ProtocolError('INVALID_ARGUMENT', 'Invalid host command ID');
+    const descriptor = this.hostToolDescriptor(request.toolName, request.toolVersion);
+    const deadlineMs = Date.parse(request.deadline);
+    if (!Number.isFinite(deadlineMs)) throw new ProtocolError('INVALID_ARGUMENT', 'Invalid host tool deadline');
+    const idempotencyKey = `host-tool:${JSON.stringify([this.hostUserNamespace, request.commandId])}`;
+    const existing = this.runtime.findTaskByIdempotencyKey(idempotencyKey);
+    if (existing && (existing.state !== 'created'
+      || this.runtime.loadCheckpoint(existing.taskId, HOST_TOOL_PREPARATION_CHECKPOINT) === undefined
+      || this.runtime.loadCheckpoint(existing.taskId, HOST_TOOL_CHECKPOINT) !== undefined)) {
+      throw new ProtocolError('REVISION_CONFLICT', 'Host tool command is no longer preparable');
+    }
+    if (!existing && deadlineMs <= this.now().getTime()) throw new ProtocolError('TIMEOUT', 'Host tool deadline has expired');
+    const preparation: HostToolPreparation = {namespace: this.hostUserNamespace,
+      commandId: request.commandId, toolName: descriptor.name,
+      toolVersion: descriptor.version, deadline: request.deadline};
+    return this.runtime.submitTaskWithCheckpoint({
+      goal: `Host tool ${descriptor.name}`, conversationId: `host-tool:${this.hostUserNamespace}`,
+      idempotencyKey,
+    }, HOST_TOOL_PREPARATION_CHECKPOINT, preparation);
+  }
+
+  /** Freeze observed arguments at the prepared revision, then enter existing approval flow. */
+  finalizeHostToolTask(request: FinalizeHostToolTaskRequest): HostToolTaskReadback {
+    if (!this.hostUserNamespace || !this.tools) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Host tool tasks are not configured');
+    if (!HOST_ID.test(request.commandId)) throw new ProtocolError('INVALID_ARGUMENT', 'Invalid host command ID');
+    const preparation = this.runtime.loadCheckpoint(request.taskId,
+      HOST_TOOL_PREPARATION_CHECKPOINT) as HostToolPreparation | undefined;
+    if (!preparation || preparation.namespace !== this.hostUserNamespace
+      || preparation.commandId !== request.commandId) {
+      throw new ProtocolError('NOT_FOUND', 'Prepared host tool task not found');
+    }
+    const descriptor = this.hostToolDescriptor(preparation.toolName, preparation.toolVersion);
+    const args = this.hostToolArguments(descriptor, request.arguments);
+    const intent: HostToolIntent = {...preparation, arguments: args,
+      argumentsDigest: toolArgumentsDigest(args)};
+    const previous = this.runtime.loadCheckpoint(request.taskId, HOST_TOOL_CHECKPOINT);
+    if (previous !== undefined) {
+      if (!isDeepStrictEqual(previous, intent)) throw new ProtocolError('REVISION_CONFLICT', 'Host tool arguments changed after finalization');
+    } else {
+      if (Date.parse(preparation.deadline) <= this.now().getTime()) throw new ProtocolError('TIMEOUT', 'Host tool deadline has expired');
+      const created = this.runtime.saveCheckpointOnceForCreatedTask(request.taskId,
+        HOST_TOOL_CHECKPOINT, intent, request.expectedTaskRevision);
+      if (!created && !isDeepStrictEqual(this.runtime.loadCheckpoint(request.taskId, HOST_TOOL_CHECKPOINT), intent)) {
+        throw new ProtocolError('REVISION_CONFLICT', 'Host tool arguments changed during finalization');
+      }
+    }
+    this.dispatchOrReconcileHostToolTask(this.runtime.getTask(request.taskId));
+    return this.readHostToolTask(request.taskId);
+  }
+
+  /** A prepared task with no frozen arguments can be cancelled without a tool attempt. */
+  cancelPreparedHostToolTask(taskId: string, commandId: string, expectedTaskRevision: number): TaskSnapshot {
+    if (!this.hostUserNamespace) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Host tool tasks are not configured');
+    const preparation = this.runtime.loadCheckpoint(taskId,
+      HOST_TOOL_PREPARATION_CHECKPOINT) as HostToolPreparation | undefined;
+    if (!preparation || preparation.namespace !== this.hostUserNamespace
+      || preparation.commandId !== commandId) throw new ProtocolError('NOT_FOUND', 'Prepared host tool task not found');
+    return this.runtime.cancelCreatedTaskWithoutCheckpoint(taskId,
+      HOST_TOOL_CHECKPOINT, expectedTaskRevision);
+  }
+
+  private hostToolArguments(descriptor: ToolDescriptor, raw: Record<string, unknown>): Record<string, unknown> {
+    let args: Record<string, unknown>;
+    try { args = structuredClone(raw); }
+    catch { throw new ProtocolError('INVALID_ARGUMENT', 'Host tool arguments must be cloneable'); }
+    try {
+      const persisted = JSON.parse(JSON.stringify(args)) as Record<string, unknown>;
+      if (!isDeepStrictEqual(persisted, args)) throw Error();
+      args = persisted;
+    } catch { throw new ProtocolError('INVALID_ARGUMENT', 'Host tool arguments must retain their JSON value'); }
+    validateToolValue(descriptor.inputSchema, args);
+    return args;
+  }
+
+  private dispatchOrReconcileHostToolTask(task: TaskSnapshot): void {
+    if (task.state === 'created') this.dispatchHostToolTask(task.taskId);
+    else if (['planning', 'running', 'verifying'].includes(task.state) && !this.activeTextTasks.has(task.taskId)) {
+      this.runtime.transitionTask(task.taskId, 'waiting_reconciliation', {
+        error: {code: 'RESULT_UNKNOWN', message: 'Host tool was interrupted; reconcile its result before retrying', retryable: false},
+      });
+    } else if (task.state === 'waiting_approval') this.resumeHostToolTask(task.taskId);
+  }
+
+  /** Call after restart for a persisted allowed approval that predated dispatch. */
+  resumeHostToolTask(taskId: string): HostToolTaskReadback {
+    const readback = this.readHostToolTask(taskId);
+    if (readback.task.state === 'waiting_approval' && readback.approval?.state === 'allowed') {
+      this.resumeTask(taskId);
+    }
+    return this.readHostToolTask(taskId);
+  }
+
+  /** Trusted-host readback; raw tool results never enter the public task snapshot. */
+  readHostToolTask(taskId: string): HostToolTaskReadback {
+    const intent = this.runtime.loadCheckpoint(taskId, HOST_TOOL_CHECKPOINT) as HostToolIntent | undefined;
+    if (!intent || intent.namespace !== this.hostUserNamespace) throw new ProtocolError('NOT_FOUND', 'Host tool task not found');
+    const task = this.runtime.getTask(taskId);
+    const runId = `host-tool-${taskId}`;
+    const record = this.runtime.readToolExecutions(taskId).find(item => item.evidenceId === runId);
+    const result = record?.state === 'confirmed'
+      ? this.runtime.loadCheckpoint(taskId, `tool-result-${runId}`) as {result: unknown} | undefined : undefined;
+    let approval: HostToolTaskReadback['approval'];
+    if (task.state === 'waiting_approval' || record?.state === 'confirmed') {
+      try {
+        const value = this.runtime.getApproval(runId);
+        approval = {approvalId: value.approvalId, revision: value.revision, state: value.state};
+      } catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'NOT_FOUND')) throw error;
+      }
+    }
+    return {commandId: intent.commandId, toolName: intent.toolName, toolVersion: intent.toolVersion,
+      task, ...(approval ? {approval} : {}),
+      ...(task.state === 'succeeded' && result ? {confirmed: {runId, result: result.result, evidenceRefs: [runId]}} : {})};
+  }
+
+  private hostToolDescriptor(name: string, version: string): ToolDescriptor {
+    const descriptor = this.tools?.list().find(tool => tool.name === name && tool.version === version);
+    if (!descriptor) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Host tool is not registered at this version');
+    return descriptor;
+  }
+
+  private dispatchHostToolTask(taskId: string, resume = false): void {
+    if (this.activeTextTasks.has(taskId)) return;
+    const intent = this.runtime.loadCheckpoint(taskId, HOST_TOOL_CHECKPOINT) as HostToolIntent | undefined;
+    if (!intent || intent.namespace !== this.hostUserNamespace || !this.tools) throw new ProtocolError('NOT_FOUND', 'Host tool intent not found');
+    const descriptor = this.hostToolDescriptor(intent.toolName, intent.toolVersion);
+    const execution = this.runtime.runTask(taskId, async context => {
+      const args = structuredClone(intent.arguments);
+      if (toolArgumentsDigest(args) !== intent.argumentsDigest) throw new ProtocolError('REVISION_CONFLICT', 'Host tool arguments changed');
+      validateToolValue(descriptor.inputSchema, args);
+      const runId = `host-tool-${taskId}`;
+      const result = await this.tools!.invoke({taskId, runId, authorizationRef: runId,
+        toolName: descriptor.name, toolVersion: descriptor.version, arguments: args,
+        deadline: context.deadline, signal: context.signal});
+      if (result.state === 'pending') return {resultSummary: 'Host tool awaits approval', evidenceRefs: result.evidenceRefs};
+      if (result.state === 'unknown') return {resultSummary: 'Host tool requires reconciliation', evidenceRefs: result.evidenceRefs};
+      return {resultSummary: 'Host tool result confirmed', evidenceRefs: result.evidenceRefs};
+    }, {deadline: intent.deadline, sideEffect: descriptor.sideEffect, ...(resume ? {resume: true} : {})})
+      .finally(() => this.activeTextTasks.delete(taskId));
+    this.activeTextTasks.set(taskId, execution);
+    void execution.catch(() => {});
+  }
+
   private requireLocalText(): void {
     if (this.profile !== 'local') throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Local text configuration is unavailable in competition profile');
   }
 
   readEvents(afterSequence = 0): Event[] { return this.runtime.readEvents(afterSequence); }
+
+  /** Trusted host only: binds an independently verified public source to durable Fact/Graph projection. */
+  createCompetitionFactHost(options: CompetitionFactHostOptions): CompetitionFactHost {
+    const memoryPath = resolve(options.memoryPath);
+    if ((process.platform === 'win32' ? memoryPath.toLowerCase() : memoryPath)
+      === (process.platform === 'win32' ? this.storagePath.toLowerCase() : this.storagePath)) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Competition Memory requires a separate SQLite file');
+    }
+    return createCompetitionFactHost(this, options);
+  }
+
+  /** Trusted host only: session ownership must be checked on every metadata read. */
+  createEvidenceReader(options: Omit<EvidenceReaderOptions, 'runtime'>): ScopedEvidenceReader {
+    return new ScopedEvidenceReader({...options, runtime: this.runtime});
+  }
+
+  /** Trusted host only. Stops future grant consumption; it cannot undo an execution already started. */
+  async revokeHostAuthorization(input: RevokeHostAuthorizationRequest): Promise<RevokeHostAuthorizationResult> {
+    const bounded = (value: unknown): value is string => typeof value === 'string'
+      && value.length > 0 && value.length <= 256 && value.trim() === value;
+    if (!bounded(input.subjectRef) || !bounded(input.conversationId) || !bounded(input.taskId)
+      || !bounded(input.authorizationRef) || !Number.isInteger(input.expectedApprovalRevision)
+      || input.expectedApprovalRevision < 1 || typeof input.authorize !== 'function') {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Invalid host authorization revocation request');
+    }
+    const scope = Object.freeze({subjectRef: input.subjectRef, conversationId: input.conversationId,
+      taskId: input.taskId, authorizationRef: input.authorizationRef});
+    let allowed = false;
+    try { allowed = await input.authorize(scope) === true; } catch { /* host details stay private */ }
+    if (!allowed) throw new ProtocolError('UNAUTHORIZED', 'Authorization revocation denied');
+    let task: TaskSnapshot;
+    let approval: ReturnType<TaskRuntime['getApproval']>;
+    try {
+      task = this.runtime.getTask(input.taskId);
+      approval = this.runtime.getApproval(input.authorizationRef);
+    } catch {
+      throw new ProtocolError('UNAUTHORIZED', 'Authorization revocation denied');
+    }
+    if (task.conversationId !== input.conversationId || approval.taskId !== input.taskId
+      || approval.state !== 'allowed' || approval.revision !== input.expectedApprovalRevision) {
+      throw new ProtocolError('UNAUTHORIZED', 'Authorization revocation scope changed');
+    }
+    const grant = this.runtime.policy.get(input.authorizationRef);
+    if (grant && (grant.taskId !== input.taskId || grant.toolName !== approval.toolName
+      || grant.argumentsDigest !== approval.argumentsDigest)) {
+      throw new ProtocolError('UNAUTHORIZED', 'Authorization grant binding changed');
+    }
+    const revoked = this.runtime.policy.revoke(input.authorizationRef);
+    if (this.runtime.policy.get(input.authorizationRef)) {
+      throw new ProtocolError('EXTERNAL_FAILURE', 'Authorization revocation readback failed');
+    }
+    return {revoked, grantPresent: false, approvalRevision: approval.revision};
+  }
 
   /** Explicit host preview only; neither this read nor a cloud candidate grants a write. */
   readRepairCandidate(taskId: string): CoordinationRepairCandidateResult | undefined {
@@ -148,7 +447,21 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
 
   /** Host-only real-adapter guard; never exposed as a wire or Renderer operation. */
   assertCompetitionExportAllowed(request: CoordinationRequest): void {
-    assertCompetitionExportAllowed(this.runtime, this.tools, this.competitionToolExports, request);
+    assertCompetitionExportAllowed(this.runtime, this.tools, this.competitionToolExports, request,
+      this.competitionToolCatalog !== undefined);
+  }
+
+  /** Trusted host obtains only the task-selected public tool shape for cloud input construction. */
+  async prepareCompetitionToolCatalog(input: {taskId: string; deadline: string; signal: AbortSignal}): Promise<CompetitionAvailableTool[]> {
+    if (!this.competitionToolCatalog) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition tool catalog is unavailable');
+    return this.competitionToolCatalog.prepare(input);
+  }
+
+  /** The cloud adapter calls this after credential reads, immediately before its initial fetch. */
+  async assertCompetitionToolCatalogAllowed(input: {taskId: string; revision: number; deadline: string; signal: AbortSignal;
+    availableTools: readonly CompetitionAvailableTool[]}): Promise<void> {
+    if (!this.competitionToolCatalog) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition tool catalog is unavailable');
+    await this.competitionToolCatalog.assertSelectionCurrent(input);
   }
 
   configureText(options: TextApplicationOptions): TextApplication['deployment'] {
@@ -164,6 +477,12 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   resumeTask(taskId: string): void {
     if (this.activeTextTasks.has(taskId)) return;
     if (this.runtime.getTask(taskId).state !== 'waiting_approval') throw new ProtocolError('REVISION_CONFLICT', 'Task is not awaiting approval');
+    if (this.runtime.loadCheckpoint(taskId, HOST_TOOL_CHECKPOINT) !== undefined) {
+      const runId = `host-tool-${taskId}`;
+      if (this.runtime.getApproval(runId).state !== 'allowed') throw new ProtocolError('UNAUTHORIZED', 'Host tool is not approved');
+      this.dispatchHostToolTask(taskId, true);
+      return;
+    }
     if (this.runtime.loadCheckpoint(taskId, LOCAL_REPAIR_CHECKPOINT) !== undefined) {
       if (!this.localRepair || !this.tools || this.runtime.getApproval('local-repair-' + taskId).state !== 'allowed') {
         throw new ProtocolError('UNAUTHORIZED', 'Local repair is unavailable or not approved');
@@ -183,6 +502,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       const execution = startCoordinationTask(
         this.runtime, this.coordination, this.tools, taskId, goal, deadline,
         {resume: true, toolExports: this.competitionToolExports,
+          ...(this.competitionToolCatalog ? {toolCatalog: this.competitionToolCatalog} : {}),
           ...(this.repairCandidateVersion ? {repairCandidateVersion: this.repairCandidateVersion} : {})},
       ).finally(() => this.activeTextTasks.delete(taskId));
       this.activeTextTasks.set(taskId, execution);
@@ -216,6 +536,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       const execution = Promise.resolve().then(() => startCoordinationTask(
         this.runtime, this.coordination, this.tools, taskId, goal, request.deadline,
         {toolExports: this.competitionToolExports,
+          ...(this.competitionToolCatalog ? {toolCatalog: this.competitionToolCatalog} : {}),
           ...(this.repairCandidateVersion ? {repairCandidateVersion: this.repairCandidateVersion} : {})},
       )).finally(() => this.activeTextTasks.delete(taskId));
       this.activeTextTasks.set(taskId, execution);
