@@ -8,7 +8,7 @@ function deferred() {
   return {promise, resolve, reject};
 }
 
-function fixture() {
+function fixture({authorizeError, recognizeError} = {}) {
   const calls = [];
   const fixedNow = Date.parse('2026-09-25T00:00:00.000Z');
   const ready = deferred();
@@ -18,12 +18,16 @@ function fixture() {
     unsubscribe: () => { calls.push('unsubscribe'); }};
   const source = {subscribe: value => { calls.push('subscribe'); options = value; return subscription; },
     dispose: async () => { calls.push('dispose-source'); }};
-  const microphoneHost = {authorize: () => { calls.push('authorize'); },
+  const microphoneHost = {authorize: () => { calls.push('authorize'); if (authorizeError) throw authorizeError; },
     snapshot: () => ({subscriberCount: 0}), revoke: async () => { calls.push('revoke'); }};
   class Manager {
     async start(options) { calls.push(['session-start', options.deadline]); return {sessionId: 'session-1'}; }
     current() { return {sessionId: 'session-1', state: 'listening', revision: 1}; }
-    async recognizeAudio(_id, clip) { calls.push(['recognize', [...clip.data]]); return {transcriptId: 'transcript-1'}; }
+    async recognizeAudio(_id, clip) {
+      calls.push(['recognize', [...clip.data]]);
+      if (recognizeError) throw recognizeError;
+      return {transcriptId: 'transcript-1'};
+    }
     async consumeTranscript(_id, receipt, consumer) { calls.push(['consume', receipt, consumer]); return {replyId: 'reply-1'}; }
     async speakReply(_id, receipt) { calls.push(['speak', receipt]); return {completed: true, interrupted: false}; }
     async stop() { calls.push('session-stop'); }
@@ -34,7 +38,9 @@ function fixture() {
       calls.push(['buffer-deadline', options.deadline]);
       const data = [];
       return {append: chunk => { calls.push('append'); data.push(...chunk); },
-        finish: () => { calls.push('finish-buffer'); return {data: Uint8Array.from(data),
+        finish: () => { calls.push('finish-buffer');
+          if (!data.length) throw Object.assign(Error('private empty buffer detail'), {code: 'INVALID_STATE'});
+          return {data: Uint8Array.from(data),
           format: {encoding: 'pcm_s16le', sampleRateHz: 16000, channels: 1}, durationMs: data.length / 32}; },
         dispose: () => { calls.push('dispose-buffer'); }};
     },
@@ -43,6 +49,15 @@ function fixture() {
     enabled: true, now: () => fixedNow});
   return {input, calls, ready, closed, get options() { return options; }};
 }
+
+test('failed explicit authorization leaves no active capture or buffer', async () => {
+  const f = fixture({authorizeError: Error('authorization denied')});
+  await assert.rejects(() => f.input.beginCapture(3), /authorization denied/);
+  assert.equal(f.input.hasActive(), false);
+  assert.equal(f.calls.includes('dispose-buffer'), true);
+  assert.equal(f.calls.includes('subscribe'), false);
+  await assert.rejects(() => f.input.beginCapture(3), /authorization denied/);
+});
 
 test('explicit voice path waits for physical ready and release before ASR; playback stays explicit', async () => {
   const f = fixture();
@@ -81,6 +96,9 @@ test('unconfirmed PCM release blocks recognition and reports failure', async () 
   f.closed.reject(Error('track stop failed'));
   await assert.rejects(finishing, /麦克风释放未确认/);
   assert.equal(f.calls.some(call => Array.isArray(call) && call[0] === 'recognize'), false);
+  assert.deepEqual(f.input.snapshot().failure, {
+    stage: 'pcm_release', code: 'EXTERNAL_FAILURE', message: '麦克风释放未确认',
+  });
 });
 
 test('capture deadline finalizes audio while the session keeps time for ASR and Runtime', async () => {
@@ -94,4 +112,121 @@ test('capture deadline finalizes audio while the session keeps time for ASR and 
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.calls.some(call => Array.isArray(call) && call[0] === 'recognize'), true);
   assert.equal(f.input.snapshot().status, 'awaiting_speech');
+});
+
+test('automatic deadline keeps a bounded ASR failure after cleanup', async () => {
+  const sensitive = Object.assign(Error('private transcript and provider credentials'),
+    {code: 'UNSUPPORTED_CAPABILITY'});
+  const f = fixture({recognizeError: sensitive});
+  const pending = f.input.beginCapture(6);
+  f.ready.resolve();
+  await pending;
+  f.options.onFrame({data: Uint8Array.of(1, 2)});
+  f.options.onEnd('deadline');
+  f.closed.resolve();
+  await new Promise(resolve => setImmediate(resolve));
+  const state = f.input.snapshot();
+  assert.equal(state.status, 'error');
+  assert.deepEqual(state.failure, {
+    stage: 'recognition', code: 'UNSUPPORTED_CAPABILITY', message: '语音适配器当前不可用',
+  });
+  assert.equal(state.reason, state.failure.message);
+  assert.equal(f.calls.some(call => Array.isArray(call) && call[0] === 'consume'), false);
+  assert.equal(JSON.stringify(state).includes('private transcript'), false);
+  assert.equal(f.input.hasActive(), false);
+});
+
+test('automatic deadline reports PCM release failure before ASR', async () => {
+  const f = fixture();
+  const pending = f.input.beginCapture(7);
+  f.ready.resolve();
+  await pending;
+  f.options.onFrame({data: Uint8Array.of(1, 2)});
+  f.options.onEnd('deadline');
+  f.closed.reject(Error('private device detail'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.input.snapshot().status, 'error');
+  assert.deepEqual(f.input.snapshot().failure, {
+    stage: 'pcm_release', code: 'EXTERNAL_FAILURE', message: '麦克风释放未确认',
+  });
+  assert.equal(f.calls.some(call => Array.isArray(call) && call[0] === 'recognize'), false);
+  assert.equal(JSON.stringify(f.input.snapshot()).includes('private device detail'), false);
+});
+
+test('automatic deadline reports an empty PCM buffer without invoking ASR', async () => {
+  const f = fixture();
+  const pending = f.input.beginCapture(8);
+  f.ready.resolve();
+  await pending;
+  f.options.onEnd('deadline');
+  f.closed.resolve();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.input.snapshot().status, 'error');
+  assert.deepEqual(f.input.snapshot().failure, {
+    stage: 'audio_buffer', code: 'INVALID_STATE', message: '语音处理失败',
+  });
+  assert.equal(f.calls.some(call => Array.isArray(call) && call[0] === 'recognize'), false);
+  assert.equal(JSON.stringify(f.input.snapshot()).includes('private empty buffer detail'), false);
+});
+
+test('beginWakeCapture reuses active authorized capture without re-authorizing', async () => {
+  // Create a new fixture with microphoneHost that reports authorized+active+subscriberCount>0
+  const calls2 = [];
+  const fixedNow2 = Date.parse('2026-09-25T00:00:00.000Z');
+  const ready2 = deferred();
+  const closed2 = deferred();
+  let options2;
+  const subscription2 = {ready: ready2.promise, closed: closed2.promise,
+    unsubscribe: () => { calls2.push('unsubscribe'); }};
+  let subscriberCount = 1; // Wake already holds the physical microphone.
+  const source2 = {subscribe: value => { calls2.push('subscribe'); options2 = value; subscriberCount++; return subscription2; },
+    dispose: async () => { calls2.push('dispose-source'); }};
+  const microphoneHost2 = {authorize: () => { calls2.push('authorize'); },
+    snapshot: () => ({authorized: true, active: true, subscriberCount}),
+    revoke: async () => { calls2.push('revoke'); }};
+  class Manager2 {
+    async start(options) { calls2.push(['session-start', options.deadline]); return {sessionId: 'session-w1'}; }
+    current() { return {sessionId: 'session-w1', state: 'listening', revision: 1}; }
+    async stop() { calls2.push('session-stop'); }
+  }
+  const input2 = createDesktopVoiceInputCore({source: source2, microphoneHost: microphoneHost2, client: {call: () => {}},
+    createBuffer: opts => {
+      const data = [];
+      return {append: chunk => data.push(...chunk),
+        finish: () => ({data: Uint8Array.from(data), format: {encoding: 'pcm_s16le', sampleRateHz: 16000, channels: 1}, durationMs: 0}),
+        dispose: () => {}};
+    },
+    VoiceSessionManager: Manager2, createConsumer: () => ({}),
+    createSpeechPorts: () => ({recognition: {}, output: {}, dispose: async () => {}}),
+    enabled: true, now: () => fixedNow2});
+
+  const pending = input2.beginWakeCapture(7);
+  // authorize must NOT be called — wake capture reuses existing authorization
+  assert.equal(calls2.includes('authorize'), false, 'authorize must not be called for wake capture');
+  assert.equal(calls2.includes('subscribe'), true, 'source.subscribe must be called');
+  ready2.resolve();
+  await pending;
+  assert.equal(input2.snapshot().status, 'listening');
+  assert.equal(subscriberCount, 2);
+  const stopping = input2.cancelCapture(7);
+  subscriberCount--;
+  closed2.resolve();
+  await stopping;
+  assert.equal(subscriberCount, 1);
+  assert.equal(calls2.includes('revoke'), false, 'stopping ASR keeps the wake lease');
+});
+
+test('beginWakeCapture rejects when capture is not wake-authorized', async () => {
+  const calls3 = [];
+  const fixedNow3 = Date.parse('2026-09-25T00:00:00.000Z');
+  const source3 = {subscribe: () => ({}), dispose: async () => {}};
+  const microphoneHost3 = {authorize: () => {}, snapshot: () => ({authorized: false, active: false, subscriberCount: 0}),
+    revoke: async () => {}};
+  class Manager3 { async start() { return {}; } current() {} async stop() {} }
+  const input3 = createDesktopVoiceInputCore({source: source3, microphoneHost: microphoneHost3, client: {call: () => {}},
+    createBuffer: () => ({append: () => {}, finish: () => ({}), dispose: () => {}}),
+    VoiceSessionManager: Manager3, createConsumer: () => ({}),
+    createSpeechPorts: () => ({recognition: {}, output: {}, dispose: async () => {}}),
+    enabled: true, now: () => fixedNow3});
+  await assert.rejects(() => input3.beginWakeCapture(8), /语音唤醒采集未就绪/);
 });

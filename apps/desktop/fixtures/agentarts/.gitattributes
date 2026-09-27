@@ -1,0 +1,2 @@
+# Keep the byte-verified Competition fixture identical on every checkout.
+meeting-update.json text eol=lf
