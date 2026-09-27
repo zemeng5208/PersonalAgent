@@ -48,6 +48,14 @@ export {
 } from './runtime-consumer.js';
 export type {RuntimeClientTranscriptConsumerOptions} from './runtime-consumer.js';
 export {VoiceSessionManager} from './voice-session.js';
+export {createHuaweiSisRecognitionPort, createHuaweiSisOutputPort} from './huawei-sis.js';
+export type {
+  HuaweiSisConfig,
+  HuaweiSisOutputConfig,
+  HuaweiSisRegion,
+  HuaweiSisTokenPort,
+  HuaweiSisWavPlaybackPort,
+} from './huawei-sis.js';
 export type {
   ReplyReceipt,
   SpeechPlaybackResult,
