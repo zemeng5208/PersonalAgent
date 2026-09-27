@@ -111,16 +111,27 @@ MOD-29 的唯一平台记录只读关联者读回 trace `668cded1dd4cb0de4a38bae
 
 ## 分支编排的最小角色证据约定
 
-MOD-30 已在 AgentArts 管理界面确认新的单组合入口设计：Start → Python Code 严格解析分类
-→ Judge；复杂 continuation/repairContext 走 World LLM → Plan → Review，普通真实目录请求走
-Review 一次，非法或缺目录输入给严格文本。主多 Agent 仍保留三个独立源角色，避免外层
-重复模型调用。这是**配置设计与界面读回**，不是各分支运行时已验收。
+MOD-30 于 2026-09-25 22:16 在 AgentArts 管理界面读回当前配置：主应用
+`32d4d44c-eade-4f3f-8f76-209c74609e79` 的源版本为 `v20260925221532`，仅绑定 World
+子工作流版本 ID `1790345132102`，之后到“终止”；主应用的可选起始、默认、结束角色槽
+均为空。World 源版本 `v20260925220514` 在其内部做分支编排：
+
+| World 内部分支 | 已读回的配置路径 |
+| --- | --- |
+| `text` | Code → 聚合 → End |
+| `review` | Code → Review `v20260925214120` → 聚合 → End |
+| `complex` | Code → World LLM → Plan `v20260925204323` → Review `v20260925214120` → 聚合 → End |
+
+这里的“World 容器”在所有分支均被调用；“World LLM”是仅复杂分支执行的语义角色，
+两者不能混作同一角色运行证据。既有 runtime `agent-arts-d5ae1174bc7d4cb8ab3dbbc6fae654e4`
+当时状态正常，Latest 指向 v9，v8 保留。这些均为**配置和绑定读回**，尚未证明任何
+请求实际选中某分支、调用 Plan/Review、产生交接或绑定到哪个请求级部署版本。
 
 | 实际选中分支 | 预期角色证据 | 评分口径 |
 | --- | --- | --- |
-| 复杂 continuation/repairContext | World、Plan、Review 各自稳定的源身份与版本、实际 span 开始/结束、World→Plan 与 Plan→Review 的父子或关联边，以及脱敏输入输出字段 | 只有真实 trace 能连接三角色和两次交接时，才计多 Agent 路由/交接；失败、超时和降级单独记录 |
-| 普通真实目录请求 | 受信分类与路由原因、Review 的实际源身份/span、最终输出 | World/Plan 若确实未被选中，记 `skipped_by_route`，预期交接为 0；Review-only 不作为三角色协作成功案例 |
-| 非法或缺目录 | 受信分类与严格文本分支、实际到达的节点与终结输出 | 未进入的角色按证据记 `skipped_by_route`；不凭文本自行推断任何角色运行 |
+| 复杂 continuation/repairContext | World 容器内 World LLM、Plan、Review 各自稳定的源身份与版本、实际 span 开始/结束、World LLM→Plan 与 Plan→Review 的父子或关联边，以及脱敏输入输出字段 | 只有真实 trace 能连接三语义角色和两次交接时，才计多 Agent 路由/交接；失败、超时和降级单独记录 |
+| 普通真实目录请求 | World 容器的受信分类与路由原因、Review 的实际源身份/span、最终输出 | World LLM/Plan 若确实未被选中，记 `skipped_by_route`，预期语义角色交接为 0；Review-only 不作为三角色协作成功案例 |
+| 非法或缺目录 | World 容器的受信分类与严格文本分支、实际到达的 Code/聚合/End 节点及终结输出 | World LLM/Plan/Review 若确实未进入，按证据记 `skipped_by_route`；不凭文本自行推断任何语义角色运行 |
 
 每次观察至少关联同一请求、已发布主版本与源角色版本、平台 trace、受信分支决定和原因；
 嵌套角色 span 应有稳定角色/工作流 ID、时间顺序、父子或 links、交接源/目标及必要的脱敏
