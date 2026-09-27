@@ -1123,7 +1123,7 @@ async function action(event, name, payload) {
   }
   if (name === 'snapshot') return snapshot(sender === workspace ? 'workspace' : sender === admin ? undefined : 'panel');
   if (name === 'notepad.start' || name === 'notepad.cancel') {
-    if (sender !== admin || !notepadHost || notepadClosing) throw Error('请从电脑操控设置操作记事本');
+    if ((sender !== admin && sender !== workspace) || !notepadHost || notepadClosing) throw Error('请从电脑操控设置操作记事本');
     return name === 'notepad.start' ? notepadHost.start(payload) : notepadHost.cancel();
   }
   if (name === 'admin.open') { openAdmin(payload?.page); return; }
@@ -1186,7 +1186,7 @@ async function action(event, name, payload) {
     const result = name === 'feeds.refresh' ? feedsHost.snapshot() : feedsHost[name.slice('feeds.'.length)](payload); publish(); return result;
   }
   if (['coding.select','coding.selectNode','coding.selectNpmCli','coding.selectCheckFile','coding.authorize','coding.revoke'].includes(name)) {
-    if (sender !== admin || !competitionMode || syntheticMvp || !codingWorkspace) throw Error('请从正式应用设置配置编程工作区');
+    if ((sender !== admin && sender !== workspace) || !competitionMode || syntheticMvp || !codingWorkspace) throw Error('请从正式应用设置配置编程工作区');
     if (name !== 'coding.revoke' && runtimeApplication.activeTaskCount > 0) throw Error('请等待当前任务结束后更改工作区');
     if (name === 'coding.select') await codingWorkspace.select();
     if (name === 'coding.selectNode') await codingWorkspace.selectNode();
