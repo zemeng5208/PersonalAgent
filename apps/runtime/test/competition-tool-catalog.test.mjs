@@ -111,6 +111,28 @@ test('task catalog projects only public Schema fields and rechecks before export
   }
 });
 
+test('only host-approved enum paths are published and narrowing is rechecked before export', async () => {
+  const binding={toolName:descriptor.name,toolVersion:descriptor.version,publicEnumPaths:['/units'],available:()=>true};
+  let observed;
+  const app=createRuntimeApplication({path:':memory:',profile:'huawei_ict_agentarts',
+    tools:[{descriptor,execute:async()=>({value:'fixture'})}],competitionToolExports:[toolExport],
+    competitionToolAvailability:[binding],coordination:{execute:async request=>{
+      observed=request.availableTools;
+      assert.deepEqual(observed[0].inputSchema.properties.units,{type:'string',enum:['metric','imperial']});
+      assert.doesNotMatch(JSON.stringify(observed),/secret-path|private|Users/);
+      await app.assertCompetitionToolCatalogAllowed({...request,availableTools:observed});
+      binding.publicEnumPaths=[];
+      await assert.rejects(app.assertCompetitionToolCatalogAllowed({...request,availableTools:observed}),{code:'UNAUTHORIZED'});
+      return {kind:'text',text:'Public enum checked',verification:'mock'};
+    }}});
+  try {
+    const client=new Client(app,Date.now);await client.connect();
+    const {taskId}=await client.call('task.submit',{goal:'Use public unit options',conversationId:'enum'}, {idempotencyKey:'enum'});
+    assert.equal((await waitFor(app,taskId,['succeeded','failed'])).state,'succeeded');
+    assert.ok(observed);
+  } finally {app.close();}
+});
+
 test('empty trusted catalog stops an opt-in first cloud request', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'personal-agent-catalog-'));
   let cloudCalls = 0;
