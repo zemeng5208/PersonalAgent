@@ -60,6 +60,17 @@ export function createDesktopHost() {
       'application_contract', 'other'].includes(receipt.schemaCategory)) {
       detail.schemaCategory = receipt.schemaCategory;
     }
+    if (detail.schemaCategory === 'provider_failure') {
+      if (['event', 'type', 'status', 'data.event', 'data.type', 'data.status']
+        .includes(receipt.providerFailureField)) detail.providerFailureField = receipt.providerFailureField;
+      if (['error', 'failed', 'failure'].includes(receipt.providerFailureToken)) {
+        detail.providerFailureToken = receipt.providerFailureToken;
+      }
+      if (typeof receipt.providerErrorCode === 'string'
+        && /^[A-Z][A-Z0-9_]{1,31}\.[0-9]{3,8}$/.test(receipt.providerErrorCode)) {
+        detail.providerErrorCode = receipt.providerErrorCode;
+      }
+    }
     log('agentarts-failure', 'runtime', JSON.stringify(detail));
   }
   function area(bounds) { return screen.getDisplayMatching(bounds).workArea; }
