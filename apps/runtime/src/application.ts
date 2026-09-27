@@ -8,6 +8,8 @@ export type {AgentArtsRuntimeApplicationOptions} from './application/agentarts.j
 export {createMemoryProjectionApplication, createPendingImpactApplication} from './application/memory.js';
 export {createSqliteFactProjectionHost} from './application/sqlite-fact-projection.js';
 export type {SqliteFactProjectionHost, SqliteFactProjectionHostOptions} from './application/sqlite-fact-projection.js';
+export type {CompetitionFactHost, CompetitionFactHostOptions, PublicSourceKey,
+  TrustedPublicSource, TrustedPublicWithdrawal} from './application/competition-fact-host.js';
 export type {FactImpactReceipt, FactProjectionReceipt, CompletedFactImpact} from './fact-projection-store.js';
 export {ingestPublicSource} from './application/public-source.js';
 export {ScopedEvidenceReader} from './application/evidence-reader.js';

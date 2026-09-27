@@ -107,6 +107,13 @@ requires `initialRequestMode: 'goal-with-tools-json'` whenever a catalog is conf
   A trusted host must trigger it after verified source
   changes and on startup recovery; it does not poll private sources or publish to
   AgentArts. Source correction and withdrawal remain append-only Fact revisions.
+  The trusted Competition host can instead call
+  `RuntimeApplication.createCompetitionFactHost({memoryPath, memoryNamespace,
+  graphNamespace, consumerKey})`: this owns a separate Memory SQLite file and
+  exposes `readPublicSourceHead`, `recordPublicSource` and `withdrawPublicSource`
+  alongside the fixed-scope projection methods. The caller must independently
+  reread and validate the approved local source, supply its SHA-256 revision and
+  expected Fact revision, and close this host before closing the application.
 - Explicit task transition rules and immutable terminal states.
 - Submission idempotency: the same key and input returns the original task; different input is rejected.
 - Ordered event replay after a persisted sequence.
