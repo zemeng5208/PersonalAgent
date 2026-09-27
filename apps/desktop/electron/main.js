@@ -158,6 +158,7 @@ let competitionFactBridge;
 let proactiveHost;
 let productTools;
 let codingWorkspace;
+let competitionToolAvailabilityList = [];
 let mailConfig;
 let feedsHost;
 let todoHost;
@@ -519,7 +520,13 @@ function toggleModel(input) {
 function updateThinking(input) {
   const depth = Number(input?.depth);
   if (!Number.isInteger(depth) || depth < 0 || depth > 5) throw Error('思考深度必须是 0 到 5');
-  thinking = {depth, fast: Boolean(input?.fast), applied: false, reason: '已保存桌面测试设置，等待 Runtime 思考参数契约'};
+  const fast = Boolean(input?.fast);
+  if (runtimeApplication?.configureThinking) {
+    const state = runtimeApplication.configureThinking({depth, fast});
+    thinking = {depth: state.depth, fast: state.fast, applied: true, maxSteps: state.maxSteps, reason: state.reason};
+  } else {
+    thinking = {depth, fast, applied: false, reason: '已保存桌面测试设置，等待 Runtime 思考参数契约'};
+  }
   publish();
   return structuredClone(thinking);
 }
@@ -722,6 +729,10 @@ async function initializeRuntime() {
       path: dataPaths.runtime,
       text: {mode: 'unavailable', model: modelConfig.model},
     });
+    if (runtimeApplication?.configureThinking) {
+      const state = runtimeApplication.configureThinking({depth: thinking.depth, fast: thinking.fast});
+      thinking = {depth: state.depth, fast: state.fast, applied: true, maxSteps: state.maxSteps, reason: state.reason};
+    }
     readEvents = after => runtime.readEvents('tasks', after);
   } else {
     const dbPath = dataPaths.runtime;
@@ -833,6 +844,43 @@ async function initializeRuntime() {
             isSessionAllowed:() => mailConfig.isSessionAllowed(revision)});
         } catch {mailFailure = '邮箱本地分类状态无法装配；其他功能可继续使用';}
       }
+      const {createSubagentDispatchTool, SUBAGENT_DISPATCH_TOOL_NAME, SUBAGENT_DISPATCH_TOOL_VERSION} = await import('@personal-agent/agents');
+      const subagentTool = createSubagentDispatchTool();
+      const subagentAvailability = {
+        toolName: SUBAGENT_DISPATCH_TOOL_NAME,
+        toolVersion: SUBAGENT_DISPATCH_TOOL_VERSION,
+        available: async () => true,
+      };
+      const subagentExport = {
+        toolName: SUBAGENT_DISPATCH_TOOL_NAME,
+        toolVersion: SUBAGENT_DISPATCH_TOOL_VERSION,
+        exportPolicyVersion: '1.0.0',
+        accepts: () => true,
+        project: async ({output}) => output,
+      };
+      const knowledgeDir = path.join(app.getPath('userData'), 'knowledge');
+      mkdirSync(knowledgeDir, {recursive: true});
+      const {openReadOnlyVault} = await import('@personal-agent/knowledge/filesystem');
+      const {createKnowledgeSearchTool, KNOWLEDGE_SEARCH_TOOL_NAME, KNOWLEDGE_SEARCH_TOOL_VERSION} = await import('@personal-agent/knowledge/tool');
+      let knowledgeTool = null;
+      let knowledgeAvailability = null;
+      let knowledgeExport = null;
+      try {
+        const vault = await openReadOnlyVault({vaultId: 'desktop-notes', rootPath: knowledgeDir});
+        knowledgeTool = createKnowledgeSearchTool(vault);
+        knowledgeAvailability = {
+          toolName: KNOWLEDGE_SEARCH_TOOL_NAME,
+          toolVersion: KNOWLEDGE_SEARCH_TOOL_VERSION,
+          available: async () => true,
+        };
+        knowledgeExport = {
+          toolName: KNOWLEDGE_SEARCH_TOOL_NAME,
+          toolVersion: KNOWLEDGE_SEARCH_TOOL_VERSION,
+          exportPolicyVersion: '1.0.0',
+          accepts: () => true,
+          project: async ({output}) => output,
+        };
+      } catch {}
       runtimeApplication = runtimeModule.createAgentArtsRuntimeApplication({
         path: dbPath,
         hostUserNamespace: namespace,
@@ -840,14 +888,14 @@ async function initializeRuntime() {
         competitionMaxSteps: 8,
         // Module availability/consent, input validation and ToolGateway still run.
         // Explicit names prevent future destructive tools inheriting this policy.
-        automaticTools: [...productTools.tools,...codingWorkspace.tools,...(goalCloudHost?.tools??[]),
+        automaticTools: [...productTools.tools,...codingWorkspace.tools,...(goalCloudHost?.tools??[]),...(subagentTool?[subagentTool]:[]),...(knowledgeTool?[knowledgeTool]:[]),
           ...(todoHost?.tools??[]),...(feedsHost?.tools??[])].filter(tool=>[
             'weather.forecast','research.search','feeds.collect','feeds.subscriptions',
             'todo.list','todo.create','todo.update','notifications.status',
             'goals.list','goals.get','goals.create','goals.revise',
             'workspace.read_text','workspace.list_entries','workspace.preview_text_patch',
             'workspace.stage_text_patch','workspace.apply_text_patch','workspace.git_diff_check',
-            'workspace.node_check','workspace.npm_build','workspace.npm_test',
+            'workspace.node_check','workspace.npm_build','workspace.npm_test',SUBAGENT_DISPATCH_TOOL_NAME,KNOWLEDGE_SEARCH_TOOL_NAME,
           ].includes(tool.descriptor.name))
           .map(tool=>({toolName:tool.descriptor.name,toolVersion:tool.descriptor.version})),
         beforeCompetitionSend:request=> {
@@ -861,15 +909,15 @@ async function initializeRuntime() {
           }
           mailAnalysisHost?.assertCloudSend(request);
         },
-        tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...(goalCloudHost?.tools ?? goalHost.tools), ...productTools.tools, ...(mailHost?.tools ?? []), ...(feedsHost?.tools ?? []), ...(notepadHost?.tools ?? []), ...(todoHost?.tools ?? [])],
+        tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...(goalCloudHost?.tools ?? goalHost.tools), ...productTools.tools, ...(mailHost?.tools ?? []), ...(feedsHost?.tools ?? []), ...(notepadHost?.tools ?? []), ...(todoHost?.tools ?? []), ...(subagentTool ? [subagentTool] : []), ...(knowledgeTool ? [knowledgeTool] : [])],
         ...(syntheticMvp ? {localRepair: syntheticRepairHost.localRepair} : {}),
         ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
         ...(process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT === undefined ? {} : {workflowGoalInput: process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT}),
         responseMode: agentArtsResponseMode ?? 'tool-proposal-json',
         ...(syntheticMvp ? {competitionToolExports: syntheticTools.competitionToolExports} : {
           initialRequestMode: 'goal-with-tools-json',
-          competitionToolAvailability: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolAvailability : competitionCatalog ? [competitionCatalog.availability] : []), ...productTools.competitionToolAvailability, ...feedsHost.competitionToolAvailability, ...(todoHost?.competitionToolAvailability ?? []), ...(goalCloudHost?.competitionToolAvailability ?? [])],
-          competitionToolExports: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolExports : competitionCatalog ? [competitionCatalog.export] : []), ...productTools.competitionToolExports, ...feedsHost.competitionToolExports, ...(todoHost?.competitionToolExports ?? []), ...(goalCloudHost?.competitionToolExports ?? [])],
+          competitionToolAvailability: (competitionToolAvailabilityList = [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolAvailability : competitionCatalog ? [competitionCatalog.availability] : []), ...productTools.competitionToolAvailability, ...feedsHost.competitionToolAvailability, ...(todoHost?.competitionToolAvailability ?? []), ...(goalCloudHost?.competitionToolAvailability ?? []), ...(subagentAvailability ? [subagentAvailability] : []), ...(knowledgeAvailability ? [knowledgeAvailability] : [])]),
+          competitionToolExports: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolExports : competitionCatalog ? [competitionCatalog.export] : []), ...productTools.competitionToolExports, ...feedsHost.competitionToolExports, ...(todoHost?.competitionToolExports ?? []), ...(goalCloudHost?.competitionToolExports ?? []), ...(subagentExport ? [subagentExport] : []), ...(knowledgeExport ? [knowledgeExport] : [])],
         }),
         ...cloudBinding,
         invokeMode: agentArtsInvokeMode,
@@ -881,6 +929,10 @@ async function initializeRuntime() {
           },
         },
       });
+      if (runtimeApplication?.configureThinking) {
+        const state = runtimeApplication.configureThinking({depth: thinking.depth, fast: thinking.fast});
+        thinking = {depth: state.depth, fast: state.fast, applied: true, maxSteps: state.maxSteps, reason: state.reason};
+      }
       if (syntheticRepairHost) await syntheticRepairHost.initialize(runtimeApplication.runtime);
       if (mailHost) {mailHost.bindApplication(runtimeApplication); mailConfig.markBound(configuredMail.revision);}
       codingWorkspace.bindApplication(runtimeApplication);
@@ -903,6 +955,10 @@ async function initializeRuntime() {
         path: dbPath,
         text: {mode: 'unavailable', model: modelConfig.model},
       });
+      if (runtimeApplication?.configureThinking) {
+        const state = runtimeApplication.configureThinking({depth: thinking.depth, fast: thinking.fast});
+        thinking = {depth: state.depth, fast: state.fast, applied: true, maxSteps: state.maxSteps, reason: state.reason};
+      }
     }
     runtime = runtimeApplication.runtime;
     readEvents = after => runtimeApplication.readEvents(after);
@@ -1361,9 +1417,10 @@ async function initializeLiveVoice() {
           state: task.state, result: resultText(task.resultSummary).slice(0, 1600)})),
       messages: conversations.messagesFor('panel').slice(-20).map(({role, text}) => ({role, text: text.slice(0, 1600)})),
       capabilities: capabilities.map(item => ({name: item.name ?? item.id, version: item.version})),
-      tools: [...(codingWorkspace?.competitionToolAvailability ?? []),
+      tools: (competitionToolAvailabilityList.length ? competitionToolAvailabilityList : [
+        ...(codingWorkspace?.competitionToolAvailability ?? []),
         ...(productTools?.competitionToolAvailability ?? []),...(feedsHost?.competitionToolAvailability ?? []),
-        ...(todoHost?.competitionToolAvailability ?? []),...(goalCloudHost?.competitionToolAvailability ?? [])]
+        ...(todoHost?.competitionToolAvailability ?? []),...(goalCloudHost?.competitionToolAvailability ?? [])])
         .map(({toolName,toolVersion})=>({name:toolName,version:toolVersion,state:'registered_requires_task_authorization'})),
       sessionPermissions:{goals:goalCloudHost?.snapshot().sessionAllowed===true,
         coding: codingWorkspace?.snapshot().cloudExportAllowed===true,

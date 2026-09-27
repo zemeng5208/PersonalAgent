@@ -52,3 +52,17 @@ test('public client cancel remains waiting until runtime confirms terminal state
   assert.equal(orbState(result),'waiting');runtime.advance(taskId);
   const task=await client.call('task.get',{taskId});assert.equal(task.state,'cancelled');assert.equal(orbState(task),'idle');
 });
+test('thinking configuration is applied to Runtime Application and affects task execution steps', async () => {
+  const {createRuntimeApplication} = await import('@personal-agent/runtime/application');
+  const app = createRuntimeApplication({
+    path: ':memory:',
+    text: {mode: 'fake'},
+  });
+  const state = app.configureThinking({depth: 3, fast: true});
+  assert.equal(state.applied, true);
+  assert.equal(state.depth, 3);
+  assert.equal(state.fast, true);
+  assert.equal(state.maxSteps, 6);
+  assert.match(state.reason, /思考深度已传入 Runtime/);
+  app.close();
+});

@@ -82,7 +82,19 @@ function assistantText(resultSummary: string): string {
   return resultSummary.replace(MODEL_METADATA, '').trim();
 }
 
+export interface ThinkingConfig {
+  depth: number;
+  fast: boolean;
+}
+
+export interface ThinkingState extends ThinkingConfig {
+  maxSteps: number;
+  applied: boolean;
+  reason: string;
+}
+
 export interface RuntimeApplicationOptions { path: string; now?: () => Date; idFactory?: () => string; text?: TextApplicationOptions; tools?: readonly RegisteredTool[]; profile?: 'local' | 'huawei_ict_agentarts'; coordination?: CoordinationPort; competitionToolExports?: readonly CompetitionToolExport[]; competitionToolAvailability?: readonly CompetitionToolAvailability[]; competitionMaxSteps?: number; repairCandidateVersion?: '1.0'; localRepair?: LocalRepairHostOptions; hostUserNamespace?: string;
+  thinking?: ThinkingConfig;
   /** Trusted host policy for routine operations inside already enabled module scopes. */
   automaticTools?: readonly {toolName: string; toolVersion: string}[];
 }
@@ -96,7 +108,8 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   readonly profile: 'local' | 'huawei_ict_agentarts';
   private readonly coordination: CoordinationPort | undefined;
   private readonly competitionToolExports: readonly CompetitionToolExport[];
-  private readonly competitionMaxSteps: number;
+  private competitionMaxSteps: number;
+  private thinkingConfig: ThinkingConfig = {depth: 1, fast: false};
   private readonly repairCandidateVersion: '1.0' | undefined;
   private readonly localRepair: LocalRepairHostOptions | undefined;
   private readonly hostUserNamespace: string | undefined;
@@ -114,6 +127,8 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       throw new ProtocolError('INVALID_ARGUMENT', 'Competition step budget must be a positive integer');
     }
     this.competitionMaxSteps = options.competitionMaxSteps ?? 4;
+    if (options.thinking) this.configureThinking(options.thinking);
+    else if (options.competitionMaxSteps !== undefined) this.thinkingConfig = {depth: Math.min(5, Math.max(0, Math.floor(options.competitionMaxSteps / 2) - 1)), fast: false};
     if (!['local', 'huawei_ict_agentarts'].includes(this.profile)
       || (this.profile === 'local' && (options.coordination !== undefined || options.competitionToolExports !== undefined || options.competitionToolAvailability !== undefined || options.repairCandidateVersion !== undefined || options.hostUserNamespace !== undefined))
       || (options.repairCandidateVersion !== undefined && options.repairCandidateVersion !== '1.0')
@@ -252,6 +267,42 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
 
   get deployment(): TextApplication['deployment'] { this.requireLocalText(); return structuredClone(this.textApplication.deployment); }
   get activeTaskCount(): number { return this.activeTextTasks.size; }
+
+  configureThinking(config: ThinkingConfig): ThinkingState {
+    const depth = Number(config?.depth);
+    if (!Number.isInteger(depth) || depth < 0 || depth > 5) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Thinking depth must be an integer between 0 and 5');
+    }
+    const fast = Boolean(config?.fast);
+    this.thinkingConfig = {depth, fast};
+    this.competitionMaxSteps = this.calculateThinkingMaxSteps(depth, fast);
+    const labels = ['最低', '低', '平衡', '深入', '高', '最高'];
+    return {
+      depth,
+      fast,
+      maxSteps: this.competitionMaxSteps,
+      applied: true,
+      reason: `思考深度已传入 Runtime：深度 ${labels[depth]}（${fast ? '快速模式' : '标准模式'}，最大步数 ${this.competitionMaxSteps}）`,
+    };
+  }
+
+  getThinkingState(): ThinkingState {
+    const {depth, fast} = this.thinkingConfig;
+    const maxSteps = this.calculateThinkingMaxSteps(depth, fast);
+    const labels = ['最低', '低', '平衡', '深入', '高', '最高'];
+    return {
+      depth,
+      fast,
+      maxSteps,
+      applied: true,
+      reason: `思考深度已传入 Runtime：深度 ${labels[depth]}（${fast ? '快速模式' : '标准模式'}，最大步数 ${maxSteps}）`,
+    };
+  }
+
+  private calculateThinkingMaxSteps(depth: number, fast: boolean): number {
+    const baseSteps = Math.max(2, (depth + 1) * 2);
+    return fast ? Math.max(2, baseSteps - 2) : baseSteps;
+  }
 
   /** Trusted composition only. Native audio never replaces AgentArts task coordination. */
   createLiveVoiceModel(config: {workspaceId: string; apiKey: string}): Pick<QwenRealtimeModelGateway, 'connect'> {
@@ -691,6 +742,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       this.runtime.saveCheckpoint(taskId, 'application-goal', goal);
       this.runtime.saveCheckpoint(taskId, 'application-deadline', request.deadline);
       this.runtime.saveCheckpoint(taskId, 'competition-max-steps', this.competitionMaxSteps);
+      this.runtime.saveCheckpoint(taskId, 'task-thinking', {depth: this.thinkingConfig.depth, fast: this.thinkingConfig.fast, maxSteps: this.competitionMaxSteps});
       const execution = Promise.resolve().then(() => startCoordinationTask(
         this.runtime, this.coordination, this.tools, taskId, goal, request.deadline,
         {toolExports: this.competitionToolExports,
