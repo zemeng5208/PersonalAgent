@@ -38,7 +38,6 @@ ACL 已限权；正式组合在核验目录访问控制前不得注册 apply。�
 
 ## 既有增量：授权后的文本补丁候选文件
 
-
 `createWorkspacePatchStageTool(options)` 提供显式注册的 `workspace.stage_text_patch@1.0.0`。可信宿主提供工作区根；现有 ToolGateway/Policy 按任务、工具、参数和 `workspace:read` + `workspace:write` 授权，本包不签发授权。输入沿用预览的规范路径、`expectedSha256` 和有界 `edits`。它拒绝链接、硬链接、目录逃逸、敏感文件和过期哈希，在可信根下排他创建 `.pa-stage-*.patch` 候选文件，读回摘要并复核原文件。返回的 `stagedPath` 是相对路径；原文件始终不打开写入、不重命名、不覆盖。`registerWorkspacePatchStage(host, options)` 沿用现有 ToolHost 生命周期，默认不在产品中注册。
 
 候选文件创建属于 `local_write`，不支持自动幂等重试与恢复；失败时尝试删除本次候选，无法确认清理则报告 `RESULT_UNKNOWN`。候选文件不是已应用补丁或最终 Artifact。上述 apply 是独立的独占句柄原位应用路径，不把 stage 的哈希检查或 rename 冒充原子 CAS。
@@ -88,6 +87,8 @@ ACL 已限权；正式组合在核验目录访问控制前不得注册 apply。�
 本包消费 `@personal-agent/contracts@0.1.0-alpha.1` 的 provisional `RegisteredTool`、`ToolContext` 与 `ToolHost`，并按现有 Gateway/Policy scope 机制工作。它没有私设仍为 unavailable 的 `ToolExecutionPort`、ArtifactPort 或 EvidencePort。
 
 已合并的只读工具验收不证明候选或 apply 工具已进入 Runtime 或真实 AgentArts。`workspace.list_entries`、固定命令、候选文件和 apply 工具均不会自动进入生产 composition。根 `package.json` build 编排与 `package-lock.json` workspace 记录随 PR #83 从 `main@1e3b56b6` 重建；旧 Draft #63 已关闭。
+
+真实目标系统读回、Evidence 与最终回答仍须在 Runtime/Desktop 联合链路验收；本地工具测试不构成 Competition Golden Path 的完成证据。
 
 ## 定向验证
 

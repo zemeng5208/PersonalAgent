@@ -2,6 +2,7 @@ import {
   AgentArtsCloudAgentPort,
   CompetitionCoordinator,
   type AgentArtsAuthorizationProvider,
+  type AgentArtsFailureDiagnostic,
   type AgentArtsFetch,
 } from '@personal-agent/coordination';
 import {ProtocolError} from '@personal-agent/contracts';
@@ -21,6 +22,7 @@ export interface AgentArtsRuntimeApplicationOptions
   initialRequestMode?: 'goal' | 'goal-with-tools-json';
   authorizationProvider: AgentArtsAuthorizationProvider;
   fetchImpl?: AgentArtsFetch;
+  onDiagnostic?: (receipt: AgentArtsFailureDiagnostic) => void;
 }
 
 /**
@@ -39,6 +41,7 @@ export function createAgentArtsRuntimeApplication(
     initialRequestMode,
     authorizationProvider,
     fetchImpl,
+    onDiagnostic,
     ...runtimeOptions
   } = options;
   if (initialRequestMode === 'goal-with-tools-json'
@@ -71,6 +74,7 @@ export function createAgentArtsRuntimeApplication(
         revision: request.revision, deadline: request.deadline, signal: request.signal,
         availableTools: request.availableTools});
     },
+    onDiagnostic,
   );
   application = createRuntimeApplication({
     ...runtimeOptions,

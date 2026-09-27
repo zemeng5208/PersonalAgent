@@ -1,5 +1,9 @@
 import {stateNames} from '../conversation/state.js';
 import {themePreference, saveTheme, saveCalm} from '../../ui/preferences.js';
+import {mountLiveVoiceControls} from '../../app/live-voice-controls.js';
+import {mountProactiveControls} from '../../app/proactive-controls.js';
+import {mountMailControls} from '../../app/mail-controls.js';
+import {mountLayaControls} from '../../app/laya-controls.js';
 import {profilePage, bindProfile} from './profile.js';
 import {approvalPresentation, authorizationHistoryHtml, authorizationListHtml, nextApprovalExpiry} from './approval-status.js';
 import {agentArtsModelPage} from './agentarts-model.js';
@@ -105,6 +109,12 @@ export function mountAdmin(root, invoke, escape) {
   localSettingsButton.textContent = '桌面设置与恢复';
   localSettingsButton.addEventListener('click', () => window.desktop.openSettings().catch(error => { root.querySelector('#error').textContent = error.message; }));
   root.querySelector('.admin-bar').insertBefore(localSettingsButton, root.querySelector('#admin-close'));
+  const liveControls = mountLiveVoiceControls(root, invoke);
+  const proactiveControls = mountProactiveControls(root.querySelector('.main'), invoke, {settings:true});
+  proactiveControls.show(false);
+  const mailControls = mountMailControls(root.querySelector('.main'), invoke);
+  const layaControls = mountLayaControls(root.querySelector('.main'), invoke);
+  mailControls.showSettings(false); layaControls.show(false);
 
   function capabilityTable(data) {
     const status = data.capabilityDirectory ?? {state: 'unavailable', reason: '可信宿主尚未报告能力目录状态'};
@@ -171,9 +181,9 @@ export function mountAdmin(root, invoke, escape) {
         settingRow('对话面板宽度', '桌面固定宽度，窄屏自动收缩', '<span class="value-pill">420px</span>') +
         settingRow('任务取消', '只显示 Runtime 回读后的最终状态', '<span class="value-pill">严格确认</span>') +
         settingRow('默认终端', '终端连接器尚未提供选择接口', '<span class="status-note">待接入</span>', 'is-unavailable')],
-      voice: ['语音', '语音输入、播报与设备选择',
-        settingRow('语音服务', data.voice?.reason ?? '语音供应商尚未连接', '<span class="status-note">未连接</span>', 'is-unavailable') +
-        settingRow('输入设备', '连接语音 Provider 后可选择麦克风', '<span class="status-note">不可用</span>', 'is-unavailable') +
+      voice: ['语音', '听写、原生实时对话和加密凭据',
+        settingRow('麦克风听写', '华为 SIS 转写填入输入框；你确认发送后用文字回答', `<span class="value-pill">${data.voice?.configuration?.configured ? '已配置' : '未配置'}</span>`) +
+        settingRow('Live 实时语音', data.live?.reason ?? '在下方配置百炼北京业务空间和 API Key', `<span class="value-pill">${data.live?.active ? '通话中' : data.live?.configured ? '已配置' : '未配置'}</span>`) +
         settingRow('语音播报', '停止播报与任务取消保持独立', '<span class="value-pill">安全隔离</span>')],
       notifications: ['通知', '任务状态与需要用户处理的提醒',
         settingRow('应用内通知', '当前只显示真实 Runtime 状态', '<span class="value-pill">已启用</span>') +
@@ -194,7 +204,7 @@ export function mountAdmin(root, invoke, escape) {
         settingRow('发送消息', '输入框内提交任务', '<kbd>Enter</kbd>') +
         settingRow('换行', '在输入框中插入新行', '<kbd>Shift</kbd><span class="key-plus">＋</span><kbd>Enter</kbd>') +
         settingRow('收起面板', '使用面板右上角关闭按钮', '<span class="value-pill">按钮</span>') +
-        settingRow('全局快捷键', 'Windows 全局注册能力尚未接入', '<span class="status-note">待接入</span>', 'is-unavailable')],
+        settingRow('Live 开启 / 关闭', data.live?.shortcut?.reason || '在语音设置中修改全局快捷键', `<kbd>${escape(data.live?.shortcut?.key ?? 'F8')}</kbd><button class="btn btn-sm" data-jump="voice">语音设置</button>`)],
       diagnostics: ['诊断与关于', '运行状态、版本边界与应用操作',
         settingRow('Runtime', data.connectionError ? `${data.connection} · ${data.connectionError}` : data.connection, '<button class="btn btn-sm" data-jump="connections">连接状态</button>') +
         settingRow('能力目录', capabilitySummary(data), '<button class="btn btn-sm" data-jump="capabilities">查看目录</button>') +
@@ -238,6 +248,12 @@ export function mountAdmin(root, invoke, escape) {
     }
     if (root.querySelector('#profile-dialog')?.open) return;
     root.querySelector('.main').dataset.section = section;
+    liveControls.render(data.live);
+    liveControls.showSettings(section === 'voice', section === 'voice');
+    proactiveControls.render(data.proactive);
+    proactiveControls.show(section === 'computer');
+    mailControls.render(data.mail); mailControls.showSettings(section === 'connections');
+    layaControls.render(data.laya); layaControls.show(section === 'connections' || section === 'memory');
     const directSettings = {settings: 'general', appearance: 'appearance', voice: 'voice', shortcuts: 'shortcuts'};
     const featureSections = ['import', 'profile', 'configuration', 'personalization', 'pets', 'usage', 'analytics', 'account', 'computer', 'browser', 'hooks', 'git', 'environment', 'worktrees', 'archive', 'memory'];
     root.querySelector('.main').dataset.surface = section === 'models' ? 'models' : directSettings[section] || featureSections.includes(section) ? 'settings' : 'standard';
@@ -273,6 +289,8 @@ export function mountAdmin(root, invoke, escape) {
       content = settingsPane(data, directSettings[section]);
     } else if (section === 'profile') {
       content = profilePage(data, escape);
+    } else if (section === 'computer') {
+      content = '';
     } else if (featureSections.includes(section)) {
       content = featurePage(data, section);
     } else {

@@ -1,4 +1,6 @@
 export {createRuntimeApplication, RuntimeApplication} from './application/runtime-application.js';
+export type {StartSystemObservationSessionRequest, SystemObservationSession} from './application/system-observation-session.js';
+export {createSystemObservationTool} from '@personal-agent/windows-client';
 export type {RuntimeApplicationOptions, RuntimeApplicationTransport, SubmitHostToolTaskRequest,
   PrepareHostToolTaskRequest, FinalizeHostToolTaskRequest, HostToolTaskReadback,
   RevokeHostAuthorizationRequest, RevokeHostAuthorizationResult} from './application/runtime-application.js';
@@ -23,3 +25,8 @@ export type {
   PendingImpactApplication,
   PendingImpactApplicationOptions
 } from './application/memory.js';
+export {createInboxTriagePipeline} from './application/inbox-triage.js';
+export type {InboxTriageContext, InboxTriagePage, InboxTriageMetadata, InboxTriageOptions} from './application/inbox-triage.js';
+export {createQQMailTriageHost, createLocalInboxClassifier} from './application/mail-triage.js';
+export type {QQMailTriageHostOptions} from './application/mail-triage.js';
+export type {StartMailReadSessionRequest, MailReadSession} from './application/mail-read-session.js';

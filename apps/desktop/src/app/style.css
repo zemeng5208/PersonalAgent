@@ -47,6 +47,17 @@ button,input,textarea {font:inherit} button {cursor:pointer} button:disabled {cu
 .send-btn:disabled {background:rgba(255,255,255,.22);color:rgba(255,255,255,.45)}
 .send-btn:hover:not(:disabled) {transform:scale(1.06)}
 .mic-state {margin:8px 6px 2px}
+.sis-settings {margin:12px 0;border:1px solid var(--glass-border);border-radius:12px;padding:9px 11px;color:var(--fg-2);font-size:11px}
+.sis-settings[hidden] {display:none}
+.sis-settings summary {cursor:pointer}
+.sis-fields {display:grid;gap:8px;margin-top:10px}
+.sis-fields label {display:grid;gap:4px}
+.sis-fields input,.sis-fields select {min-width:0;width:100%;padding:7px 8px;border:1px solid var(--glass-border);border-radius:7px;background:var(--glass-bg-strong);color:var(--fg);font:inherit}
+.sis-fields button {padding:8px;border:0;border-radius:8px;background:var(--accent);color:#061316;font:inherit}
+.sis-fields button:disabled {opacity:.5}
+.sis-fields .notice {margin:0}
+.sis-fields .mail-consent {display:flex;align-items:center;gap:8px}
+.sis-fields .mail-consent input[type="checkbox"] {width:auto;flex:none;margin:0}
 .error {color:var(--danger);font-size:12px;overflow-wrap:anywhere}.status {font-size:11px;color:var(--accent)}
 :root[data-theme="light"] .icon-btn:hover:not(:disabled),:root[data-theme="light"] .model-select:hover {background:rgba(0,0,0,.06)}
 :root[data-theme="light"] .send-btn {background:#15181b;color:#fff}
