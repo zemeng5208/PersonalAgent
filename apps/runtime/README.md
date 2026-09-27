@@ -114,6 +114,21 @@ requires `initialRequestMode: 'goal-with-tools-json'` whenever a catalog is conf
   alongside the fixed-scope projection methods. The caller must independently
   reread and validate the approved local source, supply its SHA-256 revision and
   expected Fact revision, and close this host before closing the application.
+  An optional `evidence` binding fixes one public relative path, a trusted byte
+  reader/parser and a source lock. In the same Competition task's confirmed
+  `workspace.read_text@1.0.0` export callback, `bindConfirmedPublicRead` checks
+  the persisted tool record, exact approval/arguments/result and independently
+  reread bytes/SHA. It appends the existing Fact's Goal → Decision → Plan
+  baseline by graph CAS before recording the corrected Fact, drains the fixed
+  projection, completes its scoped impact receipt, and saves an immutable
+  task/evidence/Fact/Node/graph/batch-token binding.
+  `createPublicFactRepairHostProxy` lets trusted composition configure the
+  existing local repair tool before the Fact host is installed. The repair
+  still waits for source task success and its own approval; it rechecks the
+  source bytes and binding before the graph write. The Desktop exporter chooses
+  only a bounded public projection for the cloud continuation; this host never
+  exports raw source content by itself. Interrupted tasks do not replay an
+  unknown write.
 - Explicit task transition rules and immutable terminal states.
 - Submission idempotency: the same key and input returns the original task; different input is rejected.
 - Ordered event replay after a persisted sequence.

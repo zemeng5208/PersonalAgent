@@ -31,6 +31,9 @@ export interface LocalRepairHostOptions {
   withSourceLock<T>(work: () => Promise<T>): Promise<T>;
   resolveBinding(input: {sourceTaskId: string; evidenceId: string}): LocalRepairBinding;
   matchesSource(input: {result: unknown; fact: FactVersion; node: NodeVersion}): boolean;
+  /** Optional trusted association for path/SHA-backed public Facts; synthetic evidence keeps its exact sourceRef rule. */
+  matchesPublicSourceBinding?(input: {sourceTaskId: string; evidenceId: string;
+    result: unknown; fact: FactVersion; node: NodeVersion; binding: LocalRepairBinding}): boolean;
 }
 
 export interface SubmitLocalRepairRequest {
@@ -174,7 +177,13 @@ export function createLocalRepairTool(getRuntime: () => TaskRuntime, host: Local
           || !sameRef(node, intent.binding.node) || !sameRef(fact.ref, intent.binding.fact)
           || fact.state !== 'active' || node.state !== 'active' || fact.confirmation === 'model_inference'
           || Date.parse(fact.validFrom) > now || Date.parse(fact.validUntil) <= now
-          || fact.sourceRef !== 'tool-evidence:' + intent.evidenceId || node.sourceRef !== fact.sourceRef
+          || (host.matchesPublicSourceBinding
+            ? host.matchesPublicSourceBinding({sourceTaskId: intent.sourceTaskId,
+              evidenceId: intent.evidenceId, result: structuredClone(sourceResult),
+              fact: structuredClone(fact), node: structuredClone(node),
+              binding: structuredClone(intent.binding)}) !== true
+            : fact.sourceRef !== 'tool-evidence:' + intent.evidenceId)
+          || node.sourceRef !== fact.sourceRef
           || node.summary !== fact.summary || node.validFrom !== fact.validFrom || node.validUntil !== fact.validUntil
           || host.matchesSource({result: structuredClone(sourceResult), fact: structuredClone(fact), node: structuredClone(node)}) !== true) denied();
         previewStoredRepair(store, new Date(now).toISOString(), intent.candidate.candidate);

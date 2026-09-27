@@ -10,6 +10,9 @@ export {createSqliteFactProjectionHost} from './application/sqlite-fact-projecti
 export type {SqliteFactProjectionHost, SqliteFactProjectionHostOptions} from './application/sqlite-fact-projection.js';
 export type {CompetitionFactHost, CompetitionFactHostOptions, PublicSourceKey,
   TrustedPublicSource, TrustedPublicWithdrawal} from './application/competition-fact-host.js';
+export {createPublicFactRepairHostProxy} from './application/competition-evidence-binding.js';
+export type {CompetitionEvidenceOptions, ConfirmedPublicReadRequest,
+  PublicBaseline, PublicEvidenceBinding} from './application/competition-evidence-binding.js';
 export type {FactImpactReceipt, FactProjectionReceipt, CompletedFactImpact} from './fact-projection-store.js';
 export {ingestPublicSource} from './application/public-source.js';
 export {ScopedEvidenceReader} from './application/evidence-reader.js';

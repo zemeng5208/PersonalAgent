@@ -1,10 +1,14 @@
 import {ProtocolError} from '@personal-agent/contracts';
-import type {FactVersion, MemoryReadContext} from '@personal-agent/memory';
+import type {FactVersion, MemoryQueryPort, MemoryReadContext} from '@personal-agent/memory';
 import {openSqliteMemoryHost} from '@personal-agent/memory/sqlite';
 import {isAbsolute} from 'node:path';
 import type {RuntimeApplication} from './runtime-application.js';
 import {createSqliteFactProjectionHost} from './sqlite-fact-projection.js';
 import type {SqliteFactProjectionHost} from './sqlite-fact-projection.js';
+import {createCompetitionEvidenceBinder} from './competition-evidence-binding.js';
+import type {CompetitionEvidenceOptions, ConfirmedPublicReadRequest, PublicEvidenceBinding} from './competition-evidence-binding.js';
+import type {LocalRepairBinding} from './local-repair.js';
+import type {NodeVersion} from '@personal-agent/goals';
 
 export interface CompetitionFactHostOptions {
   /** A separate, trusted host-owned SQLite file; never the Runtime database. */
@@ -12,6 +16,7 @@ export interface CompetitionFactHostOptions {
   readonly memoryNamespace: string;
   readonly graphNamespace: string;
   readonly consumerKey: string;
+  readonly evidence?: CompetitionEvidenceOptions;
 }
 
 export interface PublicSourceKey {
@@ -38,11 +43,18 @@ export interface TrustedPublicWithdrawal extends PublicSourceKey {
 }
 
 export interface CompetitionFactHost extends SqliteFactProjectionHost {
+  readonly publicMemory: MemoryQueryPort;
   readPublicSourceHead(key: PublicSourceKey): number | null;
   recordPublicSource(source: TrustedPublicSource, context: MemoryReadContext):
     {readonly fact: FactVersion; readonly appended: boolean};
   withdrawPublicSource(source: TrustedPublicWithdrawal, context: MemoryReadContext):
     {readonly fact: FactVersion; readonly appended: boolean};
+  bindConfirmedPublicRead(request: ConfirmedPublicReadRequest,
+    context: MemoryReadContext): Promise<PublicEvidenceBinding>;
+  resolveEvidenceBinding(input: {sourceTaskId: string; evidenceId: string}): LocalRepairBinding;
+  matchesEvidenceBinding(input: {sourceTaskId: string; evidenceId: string; result: unknown;
+    fact: FactVersion; node: NodeVersion; binding: LocalRepairBinding}): boolean;
+  withSourceLock<T>(work: () => Promise<T>): Promise<T>;
   close(): void;
 }
 
@@ -65,18 +77,47 @@ export function createCompetitionFactHost(
     const projection = createSqliteFactProjectionHost({memory, runtime: application.runtime,
       memoryNamespace: options.memoryNamespace, graphNamespace: options.graphNamespace,
       consumerKey: options.consumerKey});
+    const query = memory.bind(options.memoryNamespace, {allowedSensitivities: ['public']});
+    const readPublicSourceHead = (key: PublicSourceKey) => {
+      active();
+      return memory.readPublicSourceHead(options.memoryNamespace, key);
+    };
+    const recordPublicSource = (source: TrustedPublicSource, context: MemoryReadContext) => {
+      active();
+      return memory.appendPublicSource(options.memoryNamespace, {...source, ...context});
+    };
+    const evidence = options.evidence && createCompetitionEvidenceBinder({
+      runtime: application.runtime, memory: query, projection,
+      graphNamespace: options.graphNamespace, readPublicSourceHead, recordPublicSource,
+      options: options.evidence,
+    });
+    const requireEvidence = () => {
+      active();
+      if (!evidence) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Public Evidence binding is not configured');
+      return evidence;
+    };
     return Object.freeze({
-      readPublicSourceHead: (key: PublicSourceKey) => {
-        active();
-        return memory.readPublicSourceHead(options.memoryNamespace, key);
-      },
-      recordPublicSource: (source: TrustedPublicSource, context: MemoryReadContext) => {
-        active();
-        return memory.appendPublicSource(options.memoryNamespace, {...source, ...context});
-      },
+      publicMemory: Object.freeze({
+        listCurrent: (request: Parameters<MemoryQueryPort['listCurrent']>[0]) => { active(); return query.listCurrent(request); },
+        listHistory: (request: Parameters<MemoryQueryPort['listHistory']>[0]) => { active(); return query.listHistory(request); },
+        getVersion: (request: Parameters<MemoryQueryPort['getVersion']>[0]) => { active(); return query.getVersion(request); },
+      }),
+      readPublicSourceHead,
+      recordPublicSource,
       withdrawPublicSource: (source: TrustedPublicWithdrawal, context: MemoryReadContext) => {
         active();
         return memory.withdrawPublicSource(options.memoryNamespace, {...source, ...context});
+      },
+      bindConfirmedPublicRead: (request: ConfirmedPublicReadRequest, context: MemoryReadContext) =>
+        requireEvidence().bindConfirmedRead(request, context),
+      resolveEvidenceBinding: (input: {sourceTaskId: string; evidenceId: string}) =>
+        requireEvidence().resolveBinding(input),
+      matchesEvidenceBinding: (input: {sourceTaskId: string; evidenceId: string; result: unknown;
+        fact: FactVersion; node: NodeVersion; binding: LocalRepairBinding}) =>
+        requireEvidence().matchesBinding(input),
+      withSourceLock: <T>(work: () => Promise<T>) => {
+        requireEvidence();
+        return options.evidence!.withSourceLock(work);
       },
       consume: (request: Parameters<SqliteFactProjectionHost['consume']>[0]) => {
         active();

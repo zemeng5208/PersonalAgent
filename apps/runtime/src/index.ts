@@ -896,6 +896,27 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     );
   }
 
+  /** Bind a trusted, immutable source receipt to an existing task. */
+  saveCheckpointOnce(taskId: string, key: string, value: unknown): boolean {
+    requireText(key, 'checkpoint key');
+    const encoded = JSON.stringify(value);
+    if (encoded === undefined) throw new RuntimeError('INVALID_ARGUMENT', 'Checkpoint must be JSON serializable');
+    const normalized = JSON.parse(encoded);
+    return this.transaction(() => {
+      this.getTask(taskId);
+      const existing = this.loadCheckpoint(taskId, key);
+      if (existing !== undefined) {
+        if (canonical(existing) !== canonical(normalized)) {
+          throw new RuntimeError('REVISION_CONFLICT', 'Immutable checkpoint identity conflict');
+        }
+        return false;
+      }
+      this.db.prepare('INSERT INTO task_checkpoints (task_id, checkpoint_key, value_json, updated_at) VALUES (?, ?, ?, ?)')
+        .run(taskId, key, encoded, this.timestamp());
+      return true;
+    });
+  }
+
   loadCheckpoint(taskId: string, key: string): unknown {
     const row = this.db.prepare('SELECT value_json FROM task_checkpoints WHERE task_id = ? AND checkpoint_key = ?').get(taskId, requireText(key, 'checkpoint key')) as unknown as {value_json: string} | undefined;
     return row ? structuredClone(JSON.parse(row.value_json)) : undefined;
