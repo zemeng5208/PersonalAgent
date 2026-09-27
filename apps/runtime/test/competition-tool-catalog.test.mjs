@@ -21,6 +21,46 @@ const toolExport = {toolName: descriptor.name, toolVersion: descriptor.version,
   exportPolicyVersion: 'public-v1', accepts: () => true,
   project: ({result}) => ({value: result.value})};
 
+test('trusted step budget supports four tools plus answer and is not reset by approval resume', async () => {
+  for (const budget of [undefined,5]) {
+    let calls=0,executions=0;
+    const app=createRuntimeApplication({path:':memory:',profile:'huawei_ict_agentarts',
+      ...(budget===undefined?{}:{competitionMaxSteps:budget}),
+      tools:[{descriptor,execute:async()=>{executions++;return {value:'synthetic'};}}],
+      competitionToolExports:[toolExport],
+      competitionToolAvailability:[{toolName:descriptor.name,toolVersion:descriptor.version,available:()=>true}],
+      coordination:{execute:async()=>++calls<=4
+        ? {kind:'tool_proposal',proposalId:`budget-${calls}`,toolName:descriptor.name,
+          toolVersion:descriptor.version,arguments:{path:'secret-path'},verification:'unverified'}
+        : {kind:'text',text:'Four synthetic operations completed',verification:'unverified'}},
+    });
+    try {
+      const client=new Client(app,Date.now);await client.connect();
+      const {taskId}=await client.call('task.submit',{goal:'Four dependent operations',conversationId:'budget'},
+        {idempotencyKey:`budget-${budget??'default'}`});
+      const approved=new Set();
+      let terminal;
+      for (let attempt=0;attempt<200;attempt++) {
+        const task=app.runtime.getTask(taskId);
+        if (['succeeded','failed'].includes(task.state)) {terminal=task;break;}
+        for (const approval of (await client.call('approval.list',{taskId})).items) {
+          if (approval.state!=='pending'||approved.has(approval.approvalId)) continue;
+          approved.add(approval.approvalId);
+          await client.call('authorization.respond',{approvalId:approval.approvalId,
+            expectedRevision:approval.revision,decision:'allow_once'});
+        }
+        await new Promise(resolve=>setTimeout(resolve,5));
+      }
+      assert.ok(terminal);
+      assert.equal(app.runtime.loadCheckpoint(taskId,'competition-max-steps'),budget??4);
+      assert.equal(terminal.state,budget===undefined?'failed':'succeeded');
+      assert.equal(executions,budget===undefined?3:4);
+      assert.equal(calls,budget===undefined?4:5);
+      if (budget===undefined) assert.equal(terminal.error.code,'TIMEOUT');
+    } finally {app.close();}
+  }
+});
+
 async function waitFor(app, taskId, states) {
   for (let attempt = 0; attempt < 200; attempt++) {
     const task = app.runtime.getTask(taskId);

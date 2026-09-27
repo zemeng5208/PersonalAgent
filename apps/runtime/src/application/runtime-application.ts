@@ -77,7 +77,7 @@ function assistantText(resultSummary: string): string {
   return resultSummary.replace(MODEL_METADATA, '').trim();
 }
 
-export interface RuntimeApplicationOptions { path: string; now?: () => Date; idFactory?: () => string; text?: TextApplicationOptions; tools?: readonly RegisteredTool[]; profile?: 'local' | 'huawei_ict_agentarts'; coordination?: CoordinationPort; competitionToolExports?: readonly CompetitionToolExport[]; competitionToolAvailability?: readonly CompetitionToolAvailability[]; repairCandidateVersion?: '1.0'; localRepair?: LocalRepairHostOptions; hostUserNamespace?: string; }
+export interface RuntimeApplicationOptions { path: string; now?: () => Date; idFactory?: () => string; text?: TextApplicationOptions; tools?: readonly RegisteredTool[]; profile?: 'local' | 'huawei_ict_agentarts'; coordination?: CoordinationPort; competitionToolExports?: readonly CompetitionToolExport[]; competitionToolAvailability?: readonly CompetitionToolAvailability[]; competitionMaxSteps?: number; repairCandidateVersion?: '1.0'; localRepair?: LocalRepairHostOptions; hostUserNamespace?: string; }
 export interface RuntimeApplicationTransport { send(request: Request, signal: AbortSignal): Promise<Response>; }
 
 export class RuntimeApplication implements RuntimeApplicationTransport {
@@ -88,6 +88,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   readonly profile: 'local' | 'huawei_ict_agentarts';
   private readonly coordination: CoordinationPort | undefined;
   private readonly competitionToolExports: readonly CompetitionToolExport[];
+  private readonly competitionMaxSteps: number;
   private readonly repairCandidateVersion: '1.0' | undefined;
   private readonly localRepair: LocalRepairHostOptions | undefined;
   private readonly competitionToolCatalog?: RuntimeCompetitionToolCatalog;
@@ -98,6 +99,11 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   constructor(options: RuntimeApplicationOptions) {
     this.storagePath = resolve(options.path);
     this.profile = options.profile ?? 'local';
+    if (options.competitionMaxSteps !== undefined && (this.profile !== 'huawei_ict_agentarts'
+      || !Number.isSafeInteger(options.competitionMaxSteps) || options.competitionMaxSteps < 1)) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Competition step budget must be a positive integer');
+    }
+    this.competitionMaxSteps = options.competitionMaxSteps ?? 4;
     if (!['local', 'huawei_ict_agentarts'].includes(this.profile)
       || (this.profile === 'local' && (options.coordination !== undefined || options.competitionToolExports !== undefined || options.competitionToolAvailability !== undefined || options.repairCandidateVersion !== undefined || options.hostUserNamespace !== undefined))
       || (options.repairCandidateVersion !== undefined && options.repairCandidateVersion !== '1.0')
@@ -533,6 +539,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       this.runtime.saveCheckpoint(taskId, 'application-profile', this.profile);
       this.runtime.saveCheckpoint(taskId, 'application-goal', goal);
       this.runtime.saveCheckpoint(taskId, 'application-deadline', request.deadline);
+      this.runtime.saveCheckpoint(taskId, 'competition-max-steps', this.competitionMaxSteps);
       const execution = Promise.resolve().then(() => startCoordinationTask(
         this.runtime, this.coordination, this.tools, taskId, goal, request.deadline,
         {toolExports: this.competitionToolExports,

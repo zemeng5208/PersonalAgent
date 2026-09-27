@@ -5,7 +5,6 @@ import type {CloudAgentPort, CoordinationAvailableTool, CoordinationContinuation
 
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_TEXT_CHARS = 16_000;
-const MAX_CONTINUATION_BYTES = 8_192;
 const MAX_INITIAL_QUERY_BYTES = 32_768;
 const MAX_AUTHORIZATION_CHARS = 4_096;
 const MAX_REQUEST_ID_CHARS = 64;
@@ -177,9 +176,6 @@ function validateRequest(request: CoordinationRequest, responseMode: 'text' | 't
   if (input.continuation !== undefined) {
     if (responseMode === 'text') invalid('AgentArts text adapter does not support tool continuation');
     continuation = parseCoordinationContinuation(input.continuation);
-    if (new TextEncoder().encode(JSON.stringify(continuation)).byteLength > MAX_CONTINUATION_BYTES) {
-      invalid('AgentArts continuation projection exceeds the byte limit');
-    }
   }
   if (input.availableTools !== undefined && continuation !== undefined) {
     invalid('AgentArts continuation cannot include an initial tool directory');
