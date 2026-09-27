@@ -206,6 +206,7 @@ async function open(transport: WindowsHostTransport): Promise<Bound> {
 export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptions): {
   tool: RegisteredTool;
   observe(taskId: string, deadline: string, signal: AbortSignal): Promise<ObservedNotepad>;
+  releaseObservation(taskId: string): Promise<void>;
   recover(taskId: string, runId: string): Promise<WindowsHostRecovery>;
   close(): Promise<void>;
 } {
@@ -247,6 +248,7 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
         throw new ProtocolError('PROTOCOL_MISMATCH', 'Windows Host observation reply mismatch');
       }
       validateWindowsHostObservation(request, reply);
+      active({deadline, signal}, now);
       if (reply.kind === 'observation_refused') {
         throw new ProtocolError(observationCode(reply.errorCode), 'Windows Host refused Notepad observation');
       }
@@ -254,7 +256,18 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
       const target = {targetRef: reply.targetRef, expiresAt: reply.expiresAt};
       observed.set(taskId, {bound, target});
       return target;
-    } catch (error) { await bound.connection.close(); occupied = false; throw error; }
+    } catch (error) {
+      try { await bound.connection.close(); } finally { occupied = false; }
+      throw error;
+    }
+  }
+
+  async function releaseObservation(taskId: string): Promise<void> {
+    ensureOpen();
+    const entry = observed.get(taskId);
+    if (!entry) return;
+    observed.delete(taskId);
+    try { await entry.bound.connection.close(); } finally { occupied = false; }
   }
 
   async function poll(bound: Bound, identity: WindowsHostRunIdentity): Promise<WindowsHostResult | WindowsHostStatusReply> {
@@ -365,11 +378,13 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
         await bound.connection.close();
         try { await reconcile(identity); } catch { /* original unknown remains */ }
         throw error;
-      } finally { await bound.connection.close(); occupied = false; }
+      } finally {
+        try { await bound.connection.close(); } finally { occupied = false; }
+      }
     },
   };
 
-  return {tool, observe, recover, async close() {
+  return {tool, observe, releaseObservation, recover, async close() {
     if (closed) return;
     closed = true;
     occupied = false;

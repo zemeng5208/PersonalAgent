@@ -17,6 +17,7 @@ function fixture({executeState = 'verified', statusState = 'not_found', readback
   const attempts = new Map();
   let sessions = 0;
   let verifiedReads = 0;
+  let closes = 0;
   const transport = {
     async openVerifiedConnection() {
       const sessionId = 'session_' + ++sessions;
@@ -40,7 +41,7 @@ function fixture({executeState = 'verified', statusState = 'not_found', readback
             taskId: frame.taskId, runId: frame.runId, state: statusState};
           throw Error('Unexpected frame ' + frame.kind);
         },
-        async close() {},
+        async close() { closes++; },
       };
     },
   };
@@ -66,7 +67,8 @@ function fixture({executeState = 'verified', statusState = 'not_found', readback
       return readback;
     },
   });
-  return {adapter, sent, attempts, get verifiedReads() {return verifiedReads;}};
+  return {adapter, sent, attempts, get verifiedReads() {return verifiedReads;},
+    get closes() {return closes;}};
 }
 
 test('registered Notepad tool binds observed target and run identity, then requires readback', async () => {
@@ -145,6 +147,16 @@ test('one adapter serializes Host sessions until the observed target is consumed
   await f.adapter.tool.execute(input, context());
   const recovered = await f.adapter.recover('task-1', 'run-1');
   assert.deepEqual(recovered, {state: 'unknown', reason: 'not_found'});
+});
+
+test('trusted host can release an unused observation after denial or cancellation', async () => {
+  const f = fixture();
+  await f.adapter.observe('task-1', deadline(), new AbortController().signal);
+  await f.adapter.releaseObservation('task-1');
+  assert.equal(f.closes, 1);
+  await f.adapter.observe('task-1', deadline(), new AbortController().signal);
+  await f.adapter.releaseObservation('task-1');
+  assert.equal(f.sent.filter(frame => frame.kind === 'execute').length, 0);
 });
 
 test('Host verified without independent readback remains result unknown', async () => {

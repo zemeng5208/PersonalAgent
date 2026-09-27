@@ -58,7 +58,7 @@ for the precise offline boundary and the unresolved real cloud/MCP lifecycle.
 
 The trusted Windows composition may create a Notepad `RegisteredTool` with
 `createWindowsHostNotepadAdapter`, pass `adapter.tool` in Runtime Application's
-`tools`, and keep `adapter.observe`/`recover` host-only. The bridge transport
+`tools`, and keep `adapter.observe`/`releaseObservation`/`recover` host-only. The bridge transport
 starts the exact native PipeBridge executable, which launches the Host with a
 random named pipe and verifies the connected server PID before exposing the
 unchanged bounded JSONL frame stream. The adapter requires a
