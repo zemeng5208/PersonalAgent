@@ -52,6 +52,11 @@ export interface AgentArtsFailureDiagnostic {
   readonly contentType?: 'json' | 'sse' | 'missing' | 'other';
   readonly terminalEvents?: Readonly<{taskEnd: boolean; end: boolean}>;
   readonly schemaCategory?: AgentArtsSchemaCategory;
+  readonly providerFailureField?: 'event' | 'type' | 'status'
+    | 'data.event' | 'data.type' | 'data.status';
+  readonly providerFailureToken?: 'error' | 'failed' | 'failure';
+  /** Only a canonical service prefix plus numeric code, never a provider message. */
+  readonly providerErrorCode?: string;
 }
 
 export interface AgentArtsFetchInit {
@@ -492,7 +497,22 @@ async function readResponseText(response: AgentArtsResponse, combined: CombinedS
 }
 
 type WorkflowIdentity = {id: string | undefined; name: string | undefined};
-interface TerminalDiagnosticState {taskEnd: boolean; end: boolean;}
+interface TerminalDiagnosticState {
+  taskEnd: boolean;
+  end: boolean;
+  providerFailureField?: AgentArtsFailureDiagnostic['providerFailureField'];
+  providerFailureToken?: AgentArtsFailureDiagnostic['providerFailureToken'];
+  providerErrorCode?: string;
+}
+
+function diagnosticProviderErrorCode(event: Record<string, unknown>, data: Record<string, unknown> | undefined): string | undefined {
+  for (const candidate of [data?.error_code, event.error_code]) {
+    if (typeof candidate === 'string' && /^[A-Za-z][A-Za-z0-9_]{1,31}\.[0-9]{3,8}$/.test(candidate)) {
+      return candidate.toUpperCase();
+    }
+  }
+  return undefined;
+}
 
 class TextCollector {
   private readonly indexed = new Map<number, string>();
@@ -571,6 +591,18 @@ class TextCollector {
     if (this.workflowSeen) external('AgentArts workflow event order is malformed');
   }
 
+  markProviderFailure(
+    field: AgentArtsFailureDiagnostic['providerFailureField'],
+    token: AgentArtsFailureDiagnostic['providerFailureToken'],
+    code: string | undefined,
+  ): void {
+    if (this.diagnostic) {
+      this.diagnostic.providerFailureField = field;
+      this.diagnostic.providerFailureToken = token;
+      this.diagnostic.providerErrorCode = code;
+    }
+  }
+
   finish(requireCompletion = false): string {
     if ((requireCompletion || (this.strictCompletion && this.terminalPhase !== 'open'))
       && this.terminalPhase !== 'ended') {
@@ -600,18 +632,30 @@ function consumeEvent(value: unknown, collector: TextCollector): void {
   // Gateways may report an error in the event name or in a status/type field,
   // sometimes after emitting one or more partial message events.  Fail closed
   // before inspecting the event payload so provider details are never exposed.
-  const failureFields = ['event', 'type', 'status'];
-  const indicatesFailure = (candidate: unknown): boolean => {
-    if (typeof candidate !== 'string') return false;
+  const failureFields = ['event', 'type', 'status'] as const;
+  const failureToken = (candidate: unknown): AgentArtsFailureDiagnostic['providerFailureToken'] => {
+    if (typeof candidate !== 'string') return undefined;
     const tokens = candidate.trim().toLowerCase().split(/[^a-z]+/).filter(Boolean);
-    return tokens.some(token => token === 'error' || token === 'failed' || token === 'failure');
+    return tokens.find((token): token is 'error' | 'failed' | 'failure' =>
+      token === 'error' || token === 'failed' || token === 'failure');
   };
-  if (failureFields.some(field => indicatesFailure(event[field]))) {
-    external('AgentArts response reported a failure');
-  }
   const data = asPlainObject(event.data);
-  if (data && failureFields.some(field => indicatesFailure(data[field]))) {
-    external('AgentArts response reported a failure');
+  for (const field of failureFields) {
+    const token = failureToken(event[field]);
+    if (token !== undefined) {
+      collector.markProviderFailure(field, token, diagnosticProviderErrorCode(event, data));
+      external('AgentArts response reported a failure');
+    }
+  }
+  if (data) {
+    for (const field of failureFields) {
+      const token = failureToken(data[field]);
+      if (token !== undefined) {
+        collector.markProviderFailure(('data.' + field) as AgentArtsFailureDiagnostic['providerFailureField'],
+          token, diagnosticProviderErrorCode(event, data));
+        external('AgentArts response reported a failure');
+      }
+    }
   }
 
   const eventName = event.event;
@@ -751,7 +795,13 @@ function parseSsePayload(
     // Some gateways omit the blank separator between self-contained JSON events.
     // Retry only with the conservative line-oriented form; a valid standard
     // multiline event is returned above without ever being split.
-    if (diagnostic) { diagnostic.taskEnd = false; diagnostic.end = false; }
+    if (diagnostic) {
+      diagnostic.taskEnd = false;
+      diagnostic.end = false;
+      diagnostic.providerFailureField = undefined;
+      diagnostic.providerFailureToken = undefined;
+      diagnostic.providerErrorCode = undefined;
+    }
     return parseSseWithoutSeparators(payload, strictCompletion, diagnostic);
   }
 }
@@ -1012,8 +1062,13 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
           ...(httpStatus === undefined ? {} : {httpStatus}),
           ...(contentType === undefined ? {} : {contentType}),
           ...(stage === 'response_schema' || stage === 'application_schema'
-            ? {terminalEvents: Object.freeze({...terminalEvents})} : {}),
+            ? {terminalEvents: Object.freeze({taskEnd: terminalEvents.taskEnd, end: terminalEvents.end})} : {}),
           ...(schemaCategory === undefined ? {} : {schemaCategory}),
+          ...(schemaCategory === 'provider_failure' && terminalEvents.providerFailureField !== undefined
+            ? {providerFailureField: terminalEvents.providerFailureField,
+              providerFailureToken: terminalEvents.providerFailureToken,
+              ...(terminalEvents.providerErrorCode === undefined ? {} : {providerErrorCode: terminalEvents.providerErrorCode})}
+            : {}),
         });
         try {
           const observed: unknown = this.onDiagnostic(receipt);
