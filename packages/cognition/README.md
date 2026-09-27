@@ -19,6 +19,14 @@ host composes existing Fact receipts, task checkpoints and a minimized host-appr
 AgentArts handoff; it does not directly commit repairs. See
 [`MVP-TWIN-B-PROACTIVE-01`](../../docs/modules/MVP-TWIN-B-PROACTIVE-01.md).
 
+`buildInterestOptions(input)` derives legitimate approaches from the existing
+interest policy. `LayaInterestDecisionService.choose(input, context)` asks Laya to
+select among those approaches for AgentArts orchestration. A one-off question has
+no tracking option; revocation cannot be overridden by a model. Tracking proposals
+bind current public source, evidence, scope and expiry, and always require fresh
+host validation before any actual subscription. No watcher or permanent memory is
+created here. See [`MVP-TWIN-B-INTEREST-01`](../../docs/modules/MVP-TWIN-B-INTEREST-01.md).
+
 `analyzeImpact(graph, evaluatedAt)` validates and replays the complete MOD-27
 graph. It returns current Goal/Decision/Plan references with KEEP or RECHECK,
 reasons and exact causal references. Superseded, withdrawn and out-of-validity
