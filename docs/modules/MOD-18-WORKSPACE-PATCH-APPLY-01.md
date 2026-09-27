@@ -1,7 +1,7 @@
 # MOD-18-WORKSPACE-PATCH-APPLY-01
 
-- Profile：`huawei_ict_agentarts`；负责人 `zemeng`；非作者评审 `goo122`；状态 `review`。
-- 基线：#133 stage-only head `c59534e`；工作树 `mod18-safe-apply`；仅 `packages/coding-tools/**` 和本记录。不改公共 Schema、Runtime/Policy、根 lock、Desktop 或业务连接器。
+- Profile：`huawei_ict_agentarts`；负责人 `zemeng`；状态 `review`。PR #147 已合入 main（`5816785`），合并前未取得非作者批准评审。
+- 基线：已合并的 #133 stage 工作包；本增量仅涉及 `packages/coding-tools/**` 和本记录。不改公共 Schema、Runtime/Policy、根 lock、Desktop 或业务连接器。
 
 `workspace.apply_text_patch@1.0.0` 复用 preview 的精确编辑、UTF-8、相对路径、敏感项与 expected SHA 校验，使用独立 `workspace:apply` scope。真实源文件写入由 Windows 固定 helper 完成：可信宿主传入授权根、受控且与工作区分离的限权恢复根、PowerShell 路径；helper 脚本和可执行文件须位于授权根外。候选字节由本次 preview 生成并经 SHA 校验后通过 stdin 传递，不读取可被外部编辑的 stage 文件。工具不默认注册到产品，仍由既有 Policy/ToolGateway 对精确参数与一次性授权决定是否调用。
 
@@ -9,4 +9,4 @@ helper 用 .NET `FileStream(FileShare.None)` 独占打开源文件，校验已�
 
 系统 Windows PowerShell 5.1 在本机为 `Restricted`，固定 `.ps1` 被策略拒绝；实现不使用 `ExecutionPolicy Bypass`。定向测试改用本机已有 PowerShell 7（`RemoteSigned`），因此受信宿主需要提供允许执行此本地脚本的 PowerShell 路径，正式安装/运行环境尚未验收。恢复目录访问控制由受信宿主创建并在生产注册前核验；当前 factory 不验证 ACL，只验证目录在工作区外且存在。未完成 ACL 核验时该能力必须保持未注册/不可用。备份可能包含源码，不是 Artifact，也不自动出机；合成 tmp 目录测试不证明隐私访问控制。
 
-最小验证：coding-tools build 通过；在系统临时目录合成工作区、声明 Node 24.15.0 与 PowerShell 7 下 apply 定向测试 6/6 通过：成功应用/同锁读回且无残留备份、旧 SHA 与已占用源文件不覆盖、缺独立 scope/取消/硬链接拒绝、首写前备份创建失败时原文件不变、现有 Policy/ToolGateway 精确参数绑定的一次性授权，以及遗留同源 `.inflight` 标记拒绝二次 apply。尚未以真实写中强制终止覆盖进程/宿主崩溃恢复；此风险须在编程链一次联合验收中验证停止/读回。未运行全仓 check、真实用户工作区、AgentArts 或编程链联合验收。`ToolGateway` 当前把所有 `local_write` 异常保守映射 `RESULT_UNKNOWN`，包括 helper 首写前冲突；分阶段错误保留属于公共 owner 的后续接口工作。
+最小验证：coding-tools build 通过；在系统临时目录合成工作区、Node 24.15.0 与 PowerShell 7 下 apply 定向测试 6/6 通过：成功应用/同锁读回且无残留备份、旧 SHA 与已占用源文件不覆盖、缺独立 scope/取消/硬链接拒绝、首写前备份创建失败时原文件不变、现有 Policy/ToolGateway 精确参数绑定的一次性授权，以及遗留同源 `.inflight` 标记拒绝二次 apply。合并前发现 PowerShell 默认 stdin 编码会破坏中文 Windows 路径；`e7a6fc5` 显式设为 UTF-8，并将测试根目录固定为中文路径。带本机 PowerShell 7 的 `npm run check` 已在 PR head 和 2026-09-27 合并后主线通过；合并后 coding-tools 33/33 通过、0 跳过。尚未以真实写中强制终止覆盖进程/宿主崩溃恢复；此风险须在编程链一次联合验收中验证停止/读回。真实用户工作区、AgentArts 和编程链联合验收仍未运行。`ToolGateway` 当前把所有 `local_write` 异常保守映射 `RESULT_UNKNOWN`，包括 helper 首写前冲突；分阶段错误保留属于公共 owner 的后续接口工作。
