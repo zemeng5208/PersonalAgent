@@ -27,6 +27,7 @@ import {createWorkspaceConfigHost} from './workspace-config-host.js';
 import {createAgentArtsConfig} from './agentarts-config.js';
 import {createDeferredRuntimeStartup} from './runtime-startup.js';
 import {createMailConfig} from './mail-config.js';
+import {createDesktopFeedsHost} from './feeds-host.js';
 import {createMailMetadataStorage} from './mail-metadata-storage.js';
 import {createLocalLayaHost} from './laya-local-host.js';
 import {resultText} from '../src/features/conversation/result-text.js';
@@ -151,6 +152,7 @@ let proactiveHost;
 let productTools;
 let codingWorkspace;
 let mailConfig;
+let feedsHost;
 let mailHost;
 let mailFailure = '';
 let localLaya;
@@ -215,6 +217,7 @@ function snapshot(surface) {
     live: {...(liveVoice?.snapshot() ?? liveConfig?.snapshot()), shortcut: {...liveShortcut}},
     proactive: proactiveHost?.snapshot() ?? {enabled: false, cloudAnalysis: false, status: 'disabled', reason: '主动观察尚未装配', suggestions: []},
     mail: mailSnapshot(),
+    feeds: feedsHost?.snapshot(),
     coding: codingWorkspace?.snapshot() ?? {configured:false,reason:'编程工作区尚未装配'},
     agentArts: agentArtsConfig?.snapshot(),
     laya: localLaya?.snapshot() ?? {state:'unavailable', ready:false, reason:'本地模型尚未装配'},
@@ -706,6 +709,7 @@ async function initializeRuntime() {
     if (competitionMode) {
       const cloudBinding=agentArtsConfig.binding();
       activeCloudBinding = cloudBinding;
+      feedsHost.prepare();
       const syntheticTools = syntheticMvp
         ? (await import('./competition-synthetic-workspace.js')).createSyntheticMeetingToolset(
           path.resolve(dir, '../../../tests/manual/agentarts/fixtures/mvp-meeting'),
@@ -770,15 +774,15 @@ async function initializeRuntime() {
           }
           proactiveHost?.assertCognitionCloudSend(request);
         },
-        tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...goalHost.tools, ...productTools.tools, ...(mailHost?.tools ?? [])],
+        tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...goalHost.tools, ...productTools.tools, ...(mailHost?.tools ?? []), ...feedsHost.tools],
         ...(syntheticMvp ? {localRepair: syntheticRepairHost.localRepair} : {}),
         ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
         ...(process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT === undefined ? {} : {workflowGoalInput: process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT}),
         responseMode: agentArtsResponseMode ?? 'tool-proposal-json',
         ...(syntheticMvp ? {competitionToolExports: syntheticTools.competitionToolExports} : {
           initialRequestMode: 'goal-with-tools-json',
-          competitionToolAvailability: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolAvailability : competitionCatalog ? [competitionCatalog.availability] : []), ...productTools.competitionToolAvailability],
-          competitionToolExports: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolExports : competitionCatalog ? [competitionCatalog.export] : []), ...productTools.competitionToolExports],
+          competitionToolAvailability: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolAvailability : competitionCatalog ? [competitionCatalog.availability] : []), ...productTools.competitionToolAvailability, ...feedsHost.competitionToolAvailability],
+          competitionToolExports: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolExports : competitionCatalog ? [competitionCatalog.export] : []), ...productTools.competitionToolExports, ...feedsHost.competitionToolExports],
         }),
         ...cloudBinding,
         invokeMode: agentArtsInvokeMode,
@@ -793,6 +797,7 @@ async function initializeRuntime() {
       if (syntheticRepairHost) await syntheticRepairHost.initialize(runtimeApplication.runtime);
       if (mailHost) {mailHost.bindApplication(runtimeApplication); mailConfig.markBound(configuredMail.revision);}
       codingWorkspace.bindApplication(runtimeApplication);
+      feedsHost.bindApplication(runtimeApplication);
       goalHost.bind(runtimeApplication);
       goalHost.resumeApproved();
       if (!syntheticMvp && competitionCatalog && !codingWorkspace.tools.length) competitionFactBridge = createDesktopCompetitionFactBridge({
@@ -913,6 +918,13 @@ async function action(event, name, payload) {
     return {...result, requiresRestart, reason: requiresRestart
       ? '配置已加密保存，请重启应用完成连接。'
       : '配置已加密保存，Runtime 已连接；云端可用性以实际任务结果为准。'};
+  }
+  if (['feeds.add','feeds.remove','feeds.authorize','feeds.revoke'].includes(name)) {
+    if (sender !== admin || !competitionMode || !feedsHost) throw Error('请从订阅设置操作');
+    if (name !== 'feeds.revoke' && (runtimeApplication?.activeTaskCount || runtimeStartup.snapshot().state==='starting')) {
+      throw Error('请等待当前任务和启动结束后修改订阅');
+    }
+    const result = feedsHost[name.slice('feeds.'.length)](payload); publish(); return result;
   }
   if (['coding.select','coding.authorize','coding.revoke'].includes(name)) {
     if (sender !== admin || !competitionMode || syntheticMvp || !codingWorkspace) throw Error('请从正式应用设置配置编程工作区');
@@ -1253,6 +1265,7 @@ app.whenReady().then(async () => {
   sisConfigHost = createDesktopSisConfigHost({userData: app.getPath('userData'), safeStorage});
   liveConfig = createLiveVoiceConfig({userData: app.getPath('userData'), safeStorage});
   agentArtsConfig = createAgentArtsConfig({userData: app.getPath('userData'), safeStorage});
+  if (competitionMode) feedsHost = createDesktopFeedsHost({userData:app.getPath('userData'),safeStorage});
   ipcMain.on('desktop:live-event', (event, message) => {liveVoice?.receive(event, message);});
   ipcMain.on('desktop:voice-playback-event', (event, message) => {
     if (sisPlaybackHost?.receive(event, message)) publish();
@@ -1314,6 +1327,9 @@ app.whenReady().then(async () => {
     else if (panel.isVisible()) { if (!away) away = Date.now(); else if (Date.now() - away > 520) { panel.hide(); away = 0; } }
   }, 80);
   app.on('before-quit', event => {
+    if (runtimeStartup.snapshot().state === 'starting') {
+      event.preventDefault(); runtimeError = 'Runtime 正在连接，请稍后退出'; publish(); return;
+    }
     proactiveHost?.stop();
     if (!localServicesStopped && (mailHost || localLaya)) {
       event.preventDefault();
@@ -1372,6 +1388,7 @@ app.whenReady().then(async () => {
       competitionCatalog?.close();
       productTools?.close();
       codingWorkspace?.close();
+      feedsHost?.close();
     } catch (error) {
       event.preventDefault();
       app.isQuitting = false;
