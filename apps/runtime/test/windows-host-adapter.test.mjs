@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
+import {mkdtemp, rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {test} from 'node:test';
-import {toolArgumentsDigest} from '@personal-agent/tool-gateway';
+import {ToolGateway, toolArgumentsDigest} from '@personal-agent/tool-gateway';
+import {TaskRuntime} from '../dist/index.js';
+import {createRuntimeWindowsHostAttemptStore} from '../dist/application.js';
 import {createWindowsHostNotepadAdapter} from '../dist/application/windows-host-adapter.js';
 
 const targetRef = 'notepad_target_123456789';
@@ -11,12 +16,11 @@ const context = () => ({taskId: 'task-1', runId: 'run-1', authorizationRef: 'gra
 const base = frame => ({protocolVersion: frame.protocolVersion, requestId: frame.requestId,
   sessionId: frame.sessionId});
 
-function fixture({executeState = 'verified', statusState = 'not_found', readback = true,
-  presence = true, onRecord, observationError, now} = {}) {
+function fixture({executeState = 'verified', statusState = 'not_found', mismatchedResult = false,
+  presence = true, onRecord, observationError, now, taskId = 'task-1', attemptStore} = {}) {
   const sent = [];
   const attempts = new Map();
   let sessions = 0;
-  let verifiedReads = 0;
   let closes = 0;
   const transport = {
     async openVerifiedConnection() {
@@ -34,7 +38,8 @@ function fixture({executeState = 'verified', statusState = 'not_found', readback
               expiresAt: deadline(), source: 'windows-uia'};
           if (frame.kind === 'execute') return {kind: 'result', ...base(frame), taskId: frame.taskId,
             runId: frame.runId, toolName: frame.toolName, toolVersion: frame.toolVersion,
-            argumentsDigest: frame.argumentsDigest, targetRef: frame.targetRef, state: executeState,
+            argumentsDigest: frame.argumentsDigest,
+            targetRef: mismatchedResult ? 'wrong_target_123456' : frame.targetRef, state: executeState,
             startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
             ...(executeState === 'verified' ? {evidenceRef: 'host-evidence'} : {errorCode: 'RESULT_UNKNOWN'})};
           if (frame.kind === 'status') return {kind: 'status_reply', ...base(frame),
@@ -46,7 +51,7 @@ function fixture({executeState = 'verified', statusState = 'not_found', readback
     },
   };
   const adapter = createWindowsHostNotepadAdapter({transport, now,
-    attempts: {
+    attempts: attemptStore ?? {
       async record(identity) {
         if (attempts.has(identity.runId)) throw Error('duplicate run');
         attempts.set(identity.runId, structuredClone(identity));
@@ -58,20 +63,14 @@ function fixture({executeState = 'verified', statusState = 'not_found', readback
       },
     },
     async authorizePresence(value) {
-      assert.equal(value.taskId, 'task-1');
+      assert.equal(value.taskId, taskId);
       return presence;
     },
-    async verifyTarget(value) {
-      verifiedReads++;
-      assert.equal(value.replacementText, 'new');
-      return readback;
-    },
   });
-  return {adapter, sent, attempts, get verifiedReads() {return verifiedReads;},
-    get closes() {return closes;}};
+  return {adapter, sent, attempts, get closes() {return closes;}};
 }
 
-test('registered Notepad tool binds observed target and run identity, then requires readback', async () => {
+test('registered Notepad tool binds observed target and run identity to Host UIA readback receipt', async () => {
   const f = fixture();
   assert.equal(f.adapter.tool.descriptor.name, 'computer.notepad.replace_text');
   assert.equal(f.adapter.tool.descriptor.sideEffect, 'local_write');
@@ -79,7 +78,6 @@ test('registered Notepad tool binds observed target and run identity, then requi
   await f.adapter.observe('task-1', deadline(), new AbortController().signal);
   const result = await f.adapter.tool.execute(input, context());
   assert.deepEqual(result, {state: 'verified', hostEvidenceRef: 'host-evidence'});
-  assert.equal(f.verifiedReads, 1);
   const execute = f.sent.find(frame => frame.kind === 'execute');
   assert.equal(execute.taskId, 'task-1');
   assert.equal(execute.runId, 'run-1');
@@ -91,7 +89,7 @@ test('registered Notepad tool binds observed target and run identity, then requi
 });
 
 test('trusted presence callback is mandatory and denial prevents observation or execution', async () => {
-  assert.throws(() => createWindowsHostNotepadAdapter({transport: {}, attempts: {}, verifyTarget: async () => true}),
+  assert.throws(() => createWindowsHostNotepadAdapter({transport: {}, attempts: {}}),
     {code: 'UNSUPPORTED_CAPABILITY'});
   const f = fixture({presence: false});
   await assert.rejects(f.adapter.observe('task-1', deadline(), new AbortController().signal),
@@ -159,11 +157,64 @@ test('trusted host can release an unused observation after denial or cancellatio
   assert.equal(f.sent.filter(frame => frame.kind === 'execute').length, 0);
 });
 
-test('Host verified without independent readback remains result unknown', async () => {
-  const f = fixture({readback: false});
+test('Host nonverified result remains unknown and cannot confirm a write', async () => {
+  const f = fixture({executeState: 'result_unknown'});
   await f.adapter.observe('task-1', deadline(), new AbortController().signal);
   await assert.rejects(f.adapter.tool.execute(input, context()), {code: 'RESULT_UNKNOWN'});
   assert.equal(f.sent.filter(frame => frame.kind === 'execute').length, 1);
+});
+
+test('Host verified with substituted target identity cannot confirm a write', async () => {
+  const f = fixture({mismatchedResult: true});
+  await f.adapter.observe('task-1', deadline(), new AbortController().signal);
+  await assert.rejects(f.adapter.tool.execute(input, context()), {code: 'INVALID_ARGUMENT'});
+  assert.equal(f.sent.filter(frame => frame.kind === 'execute').length, 1);
+});
+
+test('Runtime consumes one Policy grant and projects the correlated Host receipt as execution Evidence', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'pa-windows-gateway-'));
+  let runtime;
+  try {
+    const attempts = createRuntimeWindowsHostAttemptStore(() => runtime);
+    const taskId = 'windows-task-1';
+    const f = fixture({taskId, attemptStore: attempts});
+    let nextId = 0;
+    runtime = new TaskRuntime(join(directory, 'runtime.sqlite'), {
+      idFactory: () => nextId++ === 0 ? taskId : 'event-' + nextId,
+      createToolGateway: policy => {
+      const gateway = new ToolGateway({policy});
+      gateway.register(f.adapter.tool);
+      return gateway;
+    }});
+    const task = runtime.submitTask({goal: 'Synthetic Notepad text change',
+      conversationId: 'synthetic', idempotencyKey: 'windows-task'});
+    assert.equal(task.taskId, taskId);
+    runtime.transitionTask(taskId, 'planning');
+    runtime.transitionTask(taskId, 'running');
+    runtime.policy.grant({authorizationRef: 'grant-1', taskId,
+      toolName: f.adapter.tool.descriptor.name, scopes: ['computer:notepad:write'],
+      expiresAt: deadline(), maxUses: 1, argumentsDigest: toolArgumentsDigest(input)});
+    await f.adapter.observe(taskId, deadline(), new AbortController().signal);
+    const request = {kind: 'request', protocolVersion: '1.0.0', requestId: 'invoke-1',
+      taskId, deadline: deadline(), idempotencyKey: 'run-1', operation: 'tool.invoke',
+      payload: {toolName: f.adapter.tool.descriptor.name, toolVersion: '1.0.0',
+        arguments: input, scopeRef: 'grant-1'}};
+    const first = await runtime.send(request, new AbortController().signal);
+    assert.equal(first.outcome, 'ok');
+    assert.equal(first.data.state, 'confirmed');
+    assert.deepEqual(first.data.result, {state: 'verified', hostEvidenceRef: 'host-evidence'});
+    assert.equal(runtime.policy.get('grant-1').usesRemaining, 0);
+    assert.equal(runtime.readToolExecutions(taskId)[0].state, 'confirmed');
+    assert.equal(runtime.readEvidence(taskId)[0].verification, 'conditional');
+    assert.equal(runtime.readEvidence(taskId)[0].evidenceId, 'run-1');
+    const replay = await runtime.send(request, new AbortController().signal);
+    assert.equal(replay.outcome, 'ok');
+    assert.equal(f.sent.filter(frame => frame.kind === 'execute').length, 1);
+    await f.adapter.close();
+  } finally {
+    runtime?.close();
+    await rm(directory, {recursive: true, force: true});
+  }
 });
 
 test('recovery polls original identity in a new session; not_found is unknown and never replays', async () => {

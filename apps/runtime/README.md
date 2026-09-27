@@ -62,15 +62,18 @@ The trusted Windows composition may create a Notepad `RegisteredTool` with
 starts the exact native PipeBridge executable, which launches the Host with a
 random named pipe and verifies the connected server PID before exposing the
 unchanged bounded JSONL frame stream. The adapter requires a
-live local-presence callback, a short-lived Host target, a create-only Runtime
-attempt checkpoint (`createRuntimeWindowsHostAttemptStore`), and independent
-target readback before a successful tool result. ToolGateway consumes the
+live local-presence callback, a short-lived Host target and a create-only Runtime
+attempt checkpoint (`createRuntimeWindowsHostAttemptStore`). The mutually
+authenticated Host issues `verified` only after its own same-target UIA text
+readback; Runtime correlates that result and records the formal tool Evidence.
+ToolGateway consumes the
 one-use Policy grant before `RegisteredTool.execute`; a disconnect, cancel,
 `not_found`, or uncertain write remains unknown and never triggers a replay.
 Current `tool.invoke` has no trusted `userPresent` field, so this adapter checks
 presence through the trusted host callback and keeps the descriptor's wire
-presence flag false. No Desktop binding or real Named Pipe/UIA acceptance has
-been performed; the product capability remains unavailable.
+presence flag false. MOD16 separately verified the native Pipe PID and hello
+boundary; Node transport/bridge composition, Desktop, bind/observe and real
+Notepad UIA execution remain unverified. The product capability is unavailable.
 
 - SQLite-backed tasks, checkpoints, events and one-shot schedules.
 - Explicit task transition rules and immutable terminal states.

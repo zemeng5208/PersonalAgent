@@ -159,9 +159,6 @@ export interface WindowsHostAdapterOptions {
   /** Desktop derives live local presence for this task. Checked at observation and again before execution. */
   authorizePresence(input: {taskId: string; targetRef?: string; deadline: string;
     signal: AbortSignal}): Promise<boolean>;
-  /** Independent trusted target readback after the Host's internal UIA receipt. */
-  verifyTarget(input: {identity: WindowsHostRunIdentity; expectedText: string;
-    replacementText: string; hostEvidenceRef: string; signal: AbortSignal; deadline: string}): Promise<boolean>;
 }
 
 export interface ObservedNotepad {
@@ -203,7 +200,7 @@ async function open(transport: WindowsHostTransport): Promise<Bound> {
   } catch (error) { await connection.close(); throw error; }
 }
 
-/** Adapter is only registered by trusted composition when both Host and readback are available. */
+/** The mutually authenticated Host's verified result includes its same-target UIA readback. */
 export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptions): {
   tool: RegisteredTool;
   observe(taskId: string, deadline: string, signal: AbortSignal): Promise<ObservedNotepad>;
@@ -212,9 +209,8 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
   close(): Promise<void>;
 } {
   if (!options.transport || !options.attempts || typeof options.attempts.record !== 'function'
-    || typeof options.attempts.read !== 'function' || typeof options.authorizePresence !== 'function'
-    || typeof options.verifyTarget !== 'function') {
-    throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Trusted Host, durable attempt store, presence and target readback are required');
+    || typeof options.attempts.read !== 'function' || typeof options.authorizePresence !== 'function') {
+    throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Trusted Host, durable attempt store and presence are required');
   }
   const observed = new Map<string, {bound: Bound; target: ObservedNotepad}>();
   const now = options.now ?? Date.now;
@@ -367,10 +363,8 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
           if (context.signal.aborted) unknown('Windows Host cancellation requires status reconciliation');
           if (reply.state !== 'verified' || !reply.evidenceRef) unknown('Windows Host write requires reconciliation');
           active(context, now);
-          const readback = await options.verifyTarget({identity, expectedText: input.expectedText,
-            replacementText: input.replacementText, hostEvidenceRef: reply.evidenceRef,
-            signal: context.signal, deadline: context.deadline});
-          if (readback !== true || context.signal.aborted) unknown('Notepad target readback did not verify the write');
+          // Host's verified journal receipt is issued only after same-target UIA text readback.
+          // Runtime's tool execution record projects this correlated receipt as local Evidence.
           return {state: 'verified', hostEvidenceRef: reply.evidenceRef};
         } finally { context.signal.removeEventListener('abort', onAbort); }
       } catch (error) {
