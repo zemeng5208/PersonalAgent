@@ -121,6 +121,8 @@ export function createPcmKeywordWakeSignalSource(
         context.signal.removeEventListener('abort', onAbort);
         if (deadlineTimer) clearTimeout(deadlineTimer);
         releasePromise = (async () => {
+          // A synchronous detector start may revoke before assigning its returned handle.
+          await Promise.resolve();
           // A host may revoke synchronously from inside subscribe before its handle returns.
           if (sourceStarting) await sourceStartFinished;
           let unsubscribeFailed = false;
