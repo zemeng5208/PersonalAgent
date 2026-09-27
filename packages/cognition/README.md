@@ -27,6 +27,15 @@ bind current public source, evidence, scope and expiry, and always require fresh
 host validation before any actual subscription. No watcher or permanent memory is
 created here. See [`MVP-TWIN-B-INTEREST-01`](../../docs/modules/MVP-TWIN-B-INTEREST-01.md).
 
+`planKnowledgeReevaluation({namespace, freshness, dependencies, checkpoint})`
+turns existing freshness decisions into exact source/version/content-bound
+consumer rechecks. Stable work keys survive JSON checkpoint replay and repeated
+polls. A confirmed content change or withdrawal remains invalid for that cached
+identity, even after a later unchanged check. Persist each nonduplicate work key
+through the existing Runtime before saving the returned consumption checkpoint.
+No source fetch, task store or permission is created. See
+[`MVP-TWIN-B-KNOWLEDGE-01`](../../docs/modules/MVP-TWIN-B-KNOWLEDGE-01.md).
+
 `analyzeImpact(graph, evaluatedAt)` validates and replays the complete MOD-27
 graph. It returns current Goal/Decision/Plan references with KEEP or RECHECK,
 reasons and exact causal references. Superseded, withdrawn and out-of-validity
