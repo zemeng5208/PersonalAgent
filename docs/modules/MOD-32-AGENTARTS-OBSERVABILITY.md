@@ -127,6 +127,22 @@ Goal/Desktop 验收。它展示已发生阶段，不代表五条交付链全部�
 | 4:00–4:35 | 明确提示“下面是独立的本地 Goal/Desktop 验收，不含 AgentArts 云请求”。展示 create task、批准、重启读回 Goal revision 1，再 revise task、批准、第二次重启读回 revision 2。 | MOD-11 固定组合验收 commit `89154c3b662d063d574f10ebe3d74a09fa94d040`；两个任务均 succeeded/revision 10、一次性审批 allowed/revision 2、ToolExecution confirmed，各一条 Evidence；Fact revision 2，影响 receipt completed。该回执 `cloudInvocations=0`，只能证明本地 UI/Runtime 路径。 |
 | 4:35–4:55 | 收尾：“云端建议、本地执行与独立 Goal/Desktop 路径已有分段证据；请求版本精确绑定、World/Plan/Review 实际交接、成本、平台回滚、固定模型评估及完整 MVP 仍待验证。” | 缺项按本文件矩阵显示。非会议 query 探针只返回未执行的候选，仍不计作工具闭环。口述时长约 4:55 仅为制作安排，赛事视频时限仍以官方规则核实为准。 |
 
+**可选替换镜头：本地编程工具（单独交付链，不计入上述 4:55 主分镜）**
+
+MOD-11 固定 Coding 验收使用隔离组合 head
+`81ef55c`（commit `81ef55c`）：stage、apply、固定 command 三个 task 各经
+`allow_once` 后 `succeeded`，任务 revision 10；SQLite 审批状态 `allowed`、revision 2，
+ToolExecution `confirmed` 且 `policyDecision=allow`，每项一条 Evidence ref。stage
+后文件保持不变；apply 后文件 SHA-256 为
+`1235F8F435B1D16F7AAC442351F2E29FF1BD2B74652392C4ACCB5EC5565973DA`；固定 command
+exit code 0，stdout SHA 与源文件一致；没有 `.inflight`/恢复残留、重试或云调用。
+
+口述建议：“这是本地编程工具的独立合成工作区验收。预览不改文件；获批后 apply
+并运行固定命令，哈希读回一致。”素材/实现来源为 MOD-11 head 与其忽略目录的本地
+验收记录，不能把隔离过程视频当成当前公共 PR 页面素材。状态仍为 `conditional`；
+不证明公网 PR #176 已合并，也不证明真实外部工作区可用。只有确认官方片长要求和
+最终剪辑取舍后，才决定是否用此镜头替换本地 Goal 镜头。
+
 素材索引：主工作树忽略目录 `.cache/full-chain-acceptance-20260924.md`；D2 留存的
 脱敏回执/截图位于其本机忽略目录 `.cache/desktop-agentarts-wRje2A/`；公开评审入口
 为 [PR #104](https://github.com/zemeng5208/PersonalAgent/pull/104) 中的
