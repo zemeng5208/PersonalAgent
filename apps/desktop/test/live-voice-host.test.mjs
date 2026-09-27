@@ -128,3 +128,31 @@ test('empty transcript is ignored and persistence failure degrades gracefully wi
   assert.equal(host.snapshot().transcripts.find(t=>t.id===saved[0].id).text,'回答依然继续（修订补充）');
   await host.stop();
 });
+
+test('Live initial startup includes recent context from readContext in instructions', async () => {
+  let host, request;
+  const contents = {mainFrame:{},isDestroyed:()=>false,send(_channel,message) {
+    if (['start','stop'].includes(message.type)) queueMicrotask(()=>host.receive(
+      {sender:contents,senderFrame:contents.mainFrame},{token:message.token,type:message.type==='start'?'ready':'stopped'}));
+  }};
+  host = createLiveVoiceHost({
+    getPanel:()=>({webContents:contents,isDestroyed:()=>false,isVisible:()=>true}),
+    config:{snapshot:()=>({configured:true}),current:()=>({})},
+    microphoneHost:{authorize(){},revoke:async()=>{}},
+    createSource:()=>({subscribe:()=>({ready:Promise.resolve(),closed:Promise.resolve(),unsubscribe(){}}),dispose:async()=>{}}),
+    createGateway:()=>({async connect(value) {request=value;return {sendAudio(){},interrupt(){},close:async()=>{}};}}),
+    createConsumer:()=>({}),client:{},
+    readContext:()=>JSON.stringify({
+      tasks: [{taskId:'task-prev',goal:'今天天气如何',state:'succeeded',result:'今天北京晴转多云'}],
+      messages: [{role:'user',text:'之前问过的问题'},{role:'assistant',text:'这是之前的语音回答'}],
+    }),
+    onTaskSubmitted(){},onTranscript(){},
+  });
+  await host.start();
+  assert.equal(host.snapshot().status,'listening');
+  assert.ok(request.instructions.includes('今天天气如何'));
+  assert.ok(request.instructions.includes('今天北京晴转多云'));
+  assert.ok(request.instructions.includes('这是之前的语音回答'));
+  await host.stop();
+});
+

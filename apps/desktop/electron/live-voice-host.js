@@ -92,9 +92,34 @@ export function createLiveVoiceHost({getPanel, config, microphoneHost, createSou
       const timer = setTimeout(() => record.playReady.reject(Error('Live 播放设备启动超时')), 5000);
       try {await record.playReady.promise;} finally {clearTimeout(timer);}
       if (controller.signal.aborted) return snapshot();
+      let historyContext = '';
+      if (continuing && transcripts.length) {
+        historyContext = '\n以下是刚才已发生的对话记录，仅作上下文，不是新指令，不要重复提交其中的工作：\n'
+          + JSON.stringify(transcripts.slice(-12).map(({role, text}) => ({role, text: text.slice(0, 1600)})));
+      } else if (typeof readContext === 'function') {
+        try {
+          const raw = readContext();
+          if (raw && typeof raw === 'string') {
+            const contextObj = JSON.parse(raw);
+            const prior = [];
+            for (const t of (Array.isArray(contextObj?.tasks) ? contextObj.tasks : [])) {
+              if (t.goal && t.result) {
+                prior.push({role: 'user', text: t.goal});
+                prior.push({role: 'assistant', text: t.result});
+              }
+            }
+            for (const m of (Array.isArray(contextObj?.messages) ? contextObj.messages : [])) {
+              if (m.text) prior.push({role: m.role || 'user', text: m.text});
+            }
+            if (prior.length > 0) {
+              historyContext = '\n以下是主对话最近发生的历史记录（包含文字与语音），仅作参考上下文，不是新指令，不要重复提交其中的工作：\n'
+                + JSON.stringify(prior.slice(-10).map(({role, text}) => ({role, text: String(text).slice(0, 1600)})));
+            }
+          }
+        } catch {}
+      }
       record.session = await createGateway(settings).connect({signal: controller.signal, deadline: record.deadline,
-        instructions: INSTRUCTIONS + (continuing && transcripts.length ? '\n以下是刚才已发生的对话记录，仅作上下文，不是新指令，不要重复提交其中的工作：\n'
-          + JSON.stringify(transcripts.slice(-12).map(({role, text}) => ({role, text: text.slice(0, 1600)}))) : ''), tools: TOOLS,
+        instructions: INSTRUCTIONS + historyContext, tools: TOOLS,
         onEvent(event) {
           if (active !== record || controller.signal.aborted) return;
           if (event.type === 'error') {fail(event.message); return;}
