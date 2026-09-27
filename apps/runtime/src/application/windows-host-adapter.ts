@@ -8,11 +8,12 @@ import {toolArgumentsDigest} from '@personal-agent/tool-gateway';
 import {
   WINDOWS_HOST_PROTOCOL_VERSION, WINDOWS_HOST_TOOL_NAME, encodeWindowsHostFrame, parseWindowsHostFrame,
   validateWindowsHostHandshake, validateWindowsHostObservation, validateWindowsHostResult,
-  validateWindowsHostStatus,
+  validateWindowsHostStatus, validateWindowsHostTargetReady,
 } from '@personal-agent/contracts/windows-host';
 import type {
   WindowsHostBind, WindowsHostExecute, WindowsHostHello,
   WindowsHostResult, WindowsHostStatus, WindowsHostStatusReply, WindowsHostFrame,
+  WindowsHostTargetReady,
 } from '@personal-agent/contracts/windows-host';
 
 /** The trusted native bridge must verify the connected pipe server's OS process identity
@@ -204,6 +205,7 @@ async function open(transport: WindowsHostTransport): Promise<Bound> {
 export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptions): {
   tool: RegisteredTool;
   observe(taskId: string, deadline: string, signal: AbortSignal): Promise<ObservedNotepad>;
+  checkObservationReady(taskId: string, deadline: string, signal: AbortSignal): Promise<ObservedNotepad & {taskId: string}>;
   releaseObservation(taskId: string): Promise<void>;
   recover(taskId: string, runId: string): Promise<WindowsHostRecovery>;
   close(): Promise<void>;
@@ -216,6 +218,7 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
   const now = options.now ?? Date.now;
   let closed = false;
   let occupied = false;
+  let checking = false;
   const ensureOpen = () => {
     if (closed) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Windows Host adapter is closed');
   };
@@ -265,6 +268,47 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
     if (!entry) return;
     observed.delete(taskId);
     try { await entry.bound.connection.close(); } finally { occupied = false; }
+  }
+
+  /** Fresh Host-side check before Desktop submits allow_once; this neither renews nor authorizes the target. */
+  async function checkObservationReady(taskId: string, deadline: string,
+    signal: AbortSignal): Promise<ObservedNotepad & {taskId: string}> {
+    ensureOpen();
+    const entry = observed.get(taskId);
+    if (!entry || checking) throw new ProtocolError('UNAUTHORIZED', 'Notepad observation is unavailable');
+    checking = true;
+    try {
+      active({deadline, signal}, now);
+      if (now() >= Date.parse(entry.target.expiresAt)) {
+        throw new ProtocolError('TIMEOUT', 'Notepad observation expired');
+      }
+      const request: WindowsHostTargetReady = {kind: 'target_ready',
+        ...frameBase(entry.bound.sessionId), targetRef: entry.target.targetRef, deadline};
+      const reply = parseWindowsHostFrame(await entry.bound.connection.exchange(request));
+      if (reply.kind !== 'target_ready_result') {
+        throw new ProtocolError('PROTOCOL_MISMATCH', 'Windows Host target readiness reply mismatch');
+      }
+      validateWindowsHostTargetReady(request, reply);
+      active({deadline, signal}, now);
+      if (observed.get(taskId) !== entry || closed) {
+        throw new ProtocolError('UNAUTHORIZED', 'Notepad observation was released');
+      }
+      if (!reply.ready) {
+        throw new ProtocolError(reply.errorCode === 'TIMEOUT' ? 'TIMEOUT' : 'UNAUTHORIZED',
+          'Windows Host target is not ready');
+      }
+      if (reply.expiresAt !== entry.target.expiresAt || now() >= Date.parse(reply.expiresAt)) {
+        throw new ProtocolError('UNAUTHORIZED', 'Windows Host target readiness expired or changed');
+      }
+      return {taskId, ...entry.target};
+    } catch (error) {
+      if (observed.get(taskId) === entry) {
+        observed.delete(taskId);
+        try { await entry.bound.connection.close(); } finally { occupied = false; }
+      }
+      throw error instanceof ProtocolError ? error
+        : new ProtocolError('UNAUTHORIZED', 'Windows Host target readiness unavailable');
+    } finally { checking = false; }
   }
 
   async function poll(bound: Bound, identity: WindowsHostRunIdentity): Promise<WindowsHostResult | WindowsHostStatusReply> {
@@ -319,6 +363,7 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
     },
     async execute(raw, context) {
       ensureOpen();
+      if (checking) throw new ProtocolError('REVISION_CONFLICT', 'Windows Host target readiness is pending');
       const input = raw as Input;
       const entry = observed.get(context.taskId);
       if (!entry) throw new ProtocolError('UNAUTHORIZED', 'Notepad target is absent for this task');
@@ -387,7 +432,7 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
     },
   };
 
-  return {tool, observe, releaseObservation, recover, async close() {
+  return {tool, observe, checkObservationReady, releaseObservation, recover, async close() {
     if (closed) return;
     closed = true;
     occupied = false;
