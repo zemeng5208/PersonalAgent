@@ -14,6 +14,10 @@ const root = document.querySelector('#root');
 const mode = new URLSearchParams(location.search).get('mode');
 const bridge = window.desktop;
 const escape = value => String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const voiceFailureStages = Object.freeze({pcm_acquire:'麦克风就绪',session_start:'会话启动',
+  pcm_release:'麦克风释放',audio_buffer:'音频缓冲',recognition:'语音识别',
+  consumption:'请求回答',auto_finish:'自动结束',cleanup:'资源释放',
+  initialization:'适配器启动'});
 const responseIcons={copy:'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>',share:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="m8.2 10.8 7.6-4.5M8.2 13.2l7.6 4.5"/></svg>',like:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10v10H4V10h3Zm3 10h7.2a2 2 0 0 0 1.9-1.4l1.5-5A2 2 0 0 0 18.7 11H15l.6-3.1A3.2 3.2 0 0 0 12.5 4L10 10v10Z"/></svg>'};
 async function invoke(action,payload) {
   if(!bridge) throw Error('桌面桥未连接，请从 PersonalAgent 桌面应用启动');
@@ -93,7 +97,10 @@ else {
   };
   root.querySelector('#tasks').onclick=async e=>{const b=e.target.closest('[data-action],[data-ui-action]');if(!b)return;const uiAction=b.dataset.uiAction;if(uiAction==='like'){const on=!likedTasks.has(b.dataset.id);if(on)likedTasks.add(b.dataset.id);else likedTasks.delete(b.dataset.id);b.classList.toggle('active',on);b.setAttribute('aria-pressed',String(on));return;}if(uiAction==='copy'||uiAction==='share'){const task=current?.tasks.find(item=>item.taskId===b.dataset.id);const text=resultText(task?.resultSummary);if(!text)return;try{if(uiAction==='share'&&navigator.share){await navigator.share({text});}else{await invoke('clipboard.writeText',text);b.title=uiAction==='copy'?'已复制':'已复制分享文本';b.setAttribute('aria-label',b.title);setTimeout(()=>{b.title=uiAction==='copy'?'复制':'分享';b.setAttribute('aria-label',`${b.title}回答`);},1600);}}catch(err){if(err?.name!=='AbortError')report(err);}return;}b.disabled=true;try{await invoke(b.dataset.action,b.dataset.id);}catch(err){report(err);}finally{b.disabled=false;}};
   render=data=>{current=data;const task=data.tasks.at(-1);const connectionNode=root.querySelector('#connection');connectionNode.textContent=data.fakeModel?data.connection+' · Fake Model':data.connection;root.querySelector('#state').textContent=task?stateNames[task.state]:'待机';
-    root.querySelector('#error').textContent=data.connectionError??'';
+    const voiceFailure=data.voice?.status==='error'?data.voice.failure:null;
+    const voiceFailureStage=voiceFailureStages[voiceFailure?.stage]??'处理';
+    const voiceError=data.voice?.status==='error'?`语音${voiceFailureStage}失败：${voiceFailure?.message??data.voice.reason??'语音处理失败'}`:'';
+    root.querySelector('#error').textContent=data.connectionError||voiceError;
     const modelReady=data.model?.status==='ready';
     // Thinking controls are a local test surface.  They must remain draggable
     // even while the provider is unconfigured or its connection test failed;
@@ -111,7 +118,7 @@ else {
     talkButton.disabled=!voiceReady||!['unavailable','error','listening','awaiting_speech'].includes(voiceState);
     talkButton.title=voiceState==='listening'?'结束录音并识别':voiceState==='awaiting_speech'?'播报回答':voiceReady?'开始语音试用（尚未真实验收）':'语音转文字未连接';
     talkButton.setAttribute('aria-label',talkButton.title);
-    root.querySelector('.mic-state').textContent=voiceState==='listening'?'麦克风：正在采集，点击结束':voiceState==='acquiring'?'麦克风：等待设备就绪':voiceState==='recognizing'?'语音：正在识别':voiceState==='consuming'?'语音：正在请求回答':voiceState==='awaiting_speech'?'语音：回答已生成，可点击播报':voiceState==='speaking'?'语音：正在播报':voiceReady?'语音试用：尚未完成真实设备验收':'麦克风：未采集';
+    root.querySelector('.mic-state').textContent=voiceError|| (voiceState==='listening'?'麦克风：正在采集，点击结束':voiceState==='acquiring'?'麦克风：等待设备就绪':voiceState==='recognizing'?'语音：正在识别':voiceState==='consuming'?'语音：正在请求回答':voiceState==='awaiting_speech'?'语音：回答已生成，可点击播报':voiceState==='speaking'?'语音：正在播报':voiceReady?'语音试用：尚未完成真实设备验收':'麦克风：未采集');
     stopButton.disabled=voiceState!=='speaking';stopButton.title=voiceState==='speaking'?'停止播报':'停止播报（当前未播放）';
     root.querySelector('.bubble').hidden=data.tasks.length>0;
     const taskSignature=JSON.stringify(data.tasks.map(t=>[t.taskId,t.state,t.revision,t.userMessage,t.resultSummary,t.error?.message]));

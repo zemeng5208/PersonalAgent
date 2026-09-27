@@ -99,6 +99,7 @@ let microphonePermissionGate;
 let microphoneCaptureHost;
 let voicePcmSource;
 let voiceInput;
+let voiceInitializationFailure = null;
 let voiceDisposed = false;
 let voiceDisposal;
 let voiceDisposalFailed = false;
@@ -124,7 +125,8 @@ function snapshot(surface) {
     notifications: [...notifications.values()],
     model: structuredClone(model),
     thinking: structuredClone(thinking),
-    voice: voiceInput?.snapshot() ?? {available: false, status: 'unavailable', reason: '语音供应商尚未连接',
+    voice: voiceInput?.snapshot() ?? {available: false, status: voiceInitializationFailure ? 'error' : 'unavailable',
+      reason: voiceInitializationFailure?.message ?? '语音供应商尚未连接', failure: voiceInitializationFailure,
       capture: microphoneCaptureHost?.snapshot() ?? {authorized: false, active: false, busy: false,
         subscriberCount: 0, lastRelease: {stopped: true, verified: false, reason: 'never_started'}}},
   };
@@ -818,17 +820,19 @@ app.whenReady().then(async () => {
     await initializeRuntime();
     await initializeModelFromEnvironment();
     if (competitionMode) {
-      const {createVoicePcmFrameSourcePort} = await import('@personal-agent/voice');
-      voicePcmSource = createVoicePcmFrameSourcePort(microphoneCaptureHost.binding);
-      if (process.env.PA_DESKTOP_VOICE_EXPERIMENTAL === '1') {
-        try {
+      try {
+        const {createVoicePcmFrameSourcePort} = await import('@personal-agent/voice');
+        voicePcmSource = createVoicePcmFrameSourcePort(microphoneCaptureHost.binding);
+        if (process.env.PA_DESKTOP_VOICE_EXPERIMENTAL === '1') {
           const {createDesktopVoiceInput} = await import('./voice-input.js');
           voiceInput = createDesktopVoiceInput({source: voicePcmSource,
             microphoneHost: microphoneCaptureHost, client, onUpdate: publish, enabled: true});
-        } catch {
-          // A failed voice adapter must not take down an otherwise connected text Runtime.
-          voiceInput = undefined;
         }
+      } catch {
+        // A failed voice adapter must not take down an otherwise connected text Runtime.
+        voiceInput = undefined;
+        voiceInitializationFailure = {stage: 'initialization', code: 'EXTERNAL_FAILURE',
+          message: '语音适配器启动失败'};
       }
     }
   } catch (error) {

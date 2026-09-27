@@ -1,6 +1,8 @@
 const CAPTURE_MS = 60_000;
 const SESSION_MS = 10 * 60_000;
 const TERMINAL = new Set(['stopped', 'cancelled', 'expired']);
+const VOICE_ERROR_CODES = new Set(['INVALID_ARGUMENT', 'INVALID_STATE', 'UNSUPPORTED_CAPABILITY',
+  'CANCELLED', 'TIMEOUT', 'STALE_SESSION', 'EXTERNAL_FAILURE']);
 
 function safeFailure(error) {
   if (error?.code === 'UNSUPPORTED_CAPABILITY') return '语音适配器当前不可用';
@@ -18,14 +20,22 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
   const consumer = createConsumer({client, conversationId: 'desktop-voice-panel'});
   let active;
   let lastError = '';
+  let lastFailure = null;
   let disposed = false;
   const publish = () => { try { onUpdate(); } catch {} };
+
+  function recordFailure(stage, error, message = safeFailure(error)) {
+    lastError = message;
+    lastFailure = {stage, code: VOICE_ERROR_CODES.has(error?.code) ? error.code : 'EXTERNAL_FAILURE', message};
+    publish();
+  }
 
   function snapshot() {
     const session = active?.sessionId ? manager.current() : undefined;
     return {available: false, experimental: enabled, verification: 'unverified',
       status: active?.phase ?? (lastError ? 'error' : 'unavailable'),
       reason: lastError || (enabled ? '语音试用尚待真实设备验收' : '语音供应商尚未连接'),
+      failure: lastFailure,
       capture: microphoneHost.snapshot(),
       ...(session ? {session: {state: session.state, revision: session.revision,
         transcriptReady: session.transcriptReady, replyReady: session.replyReady,
@@ -71,7 +81,9 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
       sessionId: undefined, replyId: undefined};
     active = record;
     lastError = '';
+    lastFailure = null;
     publish();
+    let stage = 'pcm_acquire';
     try {
       record.subscription = source.subscribe({signal: controller.signal, deadline: captureDeadline,
         onFrame: frame => {
@@ -83,7 +95,9 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
         },
         onEnd: reason => {
           if (active === record && record.phase === 'listening' && reason === 'deadline') {
-            queueMicrotask(() => { if (active === record) void finishCapture(senderId).catch(() => {}); });
+            queueMicrotask(() => { if (active === record) void finishCapture(senderId).catch(error => {
+              if (!lastFailure && (active === record || !active)) recordFailure('auto_finish', error);
+            }); });
           } else if (active === record && ['acquiring', 'listening'].includes(record.phase)
             && reason !== 'cancelled') queueMicrotask(() => { if (active === record) void cancelCapture(senderId).catch(() => {
               lastError = '麦克风释放未确认'; publish();
@@ -92,14 +106,17 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
       });
       await record.subscription.ready;
       if (active !== record || controller.signal.aborted) throw Error('语音采集已取消');
+      stage = 'session_start';
       const session = await manager.start({deadline: sessionDeadline, signal: controller.signal, locale: 'zh-CN'});
       record.sessionId = session.sessionId;
       record.phase = 'listening';
       publish();
       return snapshot();
     } catch (error) {
-      lastError = safeFailure(error);
-      try { await cleanup(record); } catch { lastError = '麦克风释放未确认'; }
+      recordFailure(stage, error);
+      try { await cleanup(record); } catch (releaseError) {
+        recordFailure('cleanup', releaseError, '麦克风释放未确认');
+      }
       throw Error(lastError);
     }
   }
@@ -111,25 +128,33 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
     record.phase = 'recognizing';
     publish();
     let clip;
+    let stage = 'pcm_release';
     try {
       record.subscription.unsubscribe();
       await record.subscription.closed;
+      stage = 'audio_buffer';
       clip = record.buffer.finish();
       record.buffer = undefined;
+      stage = 'recognition';
       const transcript = await manager.recognizeAudio(record.sessionId, clip);
       clip.data.fill(0);
       record.phase = 'consuming';
       publish();
+      stage = 'consumption';
       const reply = await manager.consumeTranscript(record.sessionId, transcript.transcriptId, consumer);
       record.replyId = reply.replyId;
       record.phase = 'awaiting_speech';
       lastError = '';
+      lastFailure = null;
       publish();
       return snapshot();
     } catch (error) {
       clip?.data.fill(0);
-      lastError = safeFailure(error);
-      try { await cleanup(record); } catch { lastError = '麦克风释放未确认'; }
+      recordFailure(stage, error, stage === 'pcm_release' ? '麦克风释放未确认' : safeFailure(error));
+      try { await cleanup(record); } catch (releaseError) {
+        recordFailure(stage === 'pcm_release' ? 'pcm_release' : 'cleanup',
+          releaseError, '麦克风释放未确认');
+      }
       throw Error(lastError);
     }
   }
@@ -146,6 +171,7 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
       const result = await manager.speakReply(record.sessionId, replyId);
       await cleanup(record);
       lastError = '';
+      lastFailure = null;
       return {completed: result.completed, interrupted: result.interrupted, voice: snapshot()};
     } catch (error) {
       lastError = safeFailure(error);
@@ -175,6 +201,7 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
     try { await cleanup(record); }
     catch { lastError = '语音资源释放未确认'; publish(); throw Error(lastError); }
     lastError = '';
+    lastFailure = null;
     return {cancelled: true, voice: snapshot()};
   }
 
