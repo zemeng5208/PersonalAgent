@@ -156,6 +156,10 @@ export interface WindowsHostAdapterOptions {
   transport: WindowsHostTransport;
   attempts: WindowsHostAttemptStore;
   now?: () => number;
+  /** Trusted Desktop may open a new target and wait for a local confirmation gesture.
+   * Runs after Host readiness/binding, before the short-lived target is observed.
+   * This is not a tool authorization and must not inspect or select private windows. */
+  prepareObservation?(input: {taskId: string; deadline: string; signal: AbortSignal}): Promise<void>;
   /** Desktop derives live local presence for this task. Checked at observation and again before execution. */
   authorizePresence(input: {taskId: string; targetRef?: string; deadline: string;
     signal: AbortSignal}): Promise<boolean>;
@@ -215,6 +219,7 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
   const observed = new Map<string, {bound: Bound; target: ObservedNotepad}>();
   const now = options.now ?? Date.now;
   let closed = false;
+  const lifetime = new AbortController();
   let occupied = false;
   const ensureOpen = () => {
     if (closed) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Windows Host adapter is closed');
@@ -237,6 +242,30 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
     try { bound = await open(options.transport); }
     catch (error) { occupied = false; throw error; }
     try {
+      active({deadline, signal}, now);
+      if (options.prepareObservation) {
+        const preparation = new AbortController();
+        const abort = () => preparation.abort();
+        signal.addEventListener('abort', abort, {once: true});
+        lifetime.signal.addEventListener('abort', abort, {once: true});
+        const timer = setTimeout(abort, Math.max(1, Date.parse(deadline) - now()));
+        try {
+          await new Promise<void>((resolve, reject) => {
+            preparation.signal.addEventListener('abort', () => reject(new ProtocolError(
+              signal.aborted || lifetime.signal.aborted ? 'CANCELLED' : 'TIMEOUT',
+              'Windows Host target preparation ended')), {once: true});
+            if (signal.aborted || lifetime.signal.aborted) { abort(); return; }
+            Promise.resolve().then(() => options.prepareObservation!({taskId, deadline,
+              signal: preparation.signal})).then(resolve, reject);
+          });
+        } finally {
+          clearTimeout(timer);
+          signal.removeEventListener('abort', abort);
+          lifetime.signal.removeEventListener('abort', abort);
+          preparation.abort();
+        }
+      }
+      ensureOpen();
       active({deadline, signal}, now);
       const request = {kind: 'observe' as const, ...frameBase(bound.sessionId), deadline,
         capability: 'notepad.replace_text' as const};
@@ -382,6 +411,7 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
   return {tool, observe, releaseObservation, recover, async close() {
     if (closed) return;
     closed = true;
+    lifetime.abort();
     occupied = false;
     const pending = [...observed.values()];
     observed.clear();
