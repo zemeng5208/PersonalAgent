@@ -150,3 +150,27 @@ test('a newly registered Goal supplies its real subject to the first planning ha
   assert.doesNotMatch(f.sent[0].query,/PRIVATE_SOURCE_SENTINEL|private-source/);
   f.advance();await f.host().tick();assert.equal(f.sent.length,1);assert.equal(f.store.read().revision,2);
 });
+
+test('goal cognition snapshot exposes trigger, Laya choice, and executionStatus for Desktop rendering', async t => {
+  const f = await fixture(t);
+  f.host().configure({enabled: true, cloudAllowed: false});
+  await f.host().tick();
+  const snapshot = f.host().snapshot();
+  assert.equal(snapshot.enabled, true);
+  assert.equal(snapshot.cloudAllowed, false);
+  assert.equal(snapshot.reviews.length, 1);
+  const review = snapshot.reviews[0];
+  assert.ok(review.trigger, 'trigger must be present');
+  assert.match(review.choice, /defer|revise|recheck|plan/);
+  assert.equal(review.executionStatus, '本地决策建议');
+
+  // When cloud is allowed and submitted
+  f.host().configure({enabled: true, cloudAllowed: true});
+  await f.host().tick();
+  const taskId = f.announced[0]?.taskId;
+  assert.ok(taskId);
+  assert.equal((await terminal(f.application, taskId)).state, 'succeeded');
+  const updated = f.host().snapshot().reviews[0];
+  assert.equal(updated.executionStatus, '已提交 AgentArts 编排');
+});
+

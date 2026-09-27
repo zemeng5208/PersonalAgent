@@ -1,5 +1,6 @@
 const statusNames = {disabled:'未开启',waiting_approval:'等待授权',monitoring:'正在监控',error:'监控异常'};
 const analysisNames = {submitting:'正在提交分析',submitted:'分析任务已受理',submission_unknown:'提交结果待核实',pending:'等待分析',running:'正在分析',verifying:'正在核实',waiting_approval:'分析任务等待授权',waiting_external:'等待外部结果',waiting_reconciliation:'等待核实',succeeded:'分析完成',failed:'分析失败',cancelled:'分析已取消',cancelling:'正在取消'};
+const escape = str => String(str ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 // Pure snapshot projection, shared by settings and the compact panel.
 export function proactiveSuggestions(snapshot) {
@@ -14,10 +15,11 @@ export function mountProactiveControls(container, invoke, {settings = false} = {
   const section = document.createElement('section');
   section.className = settings ? 'feature-page' : 'proactive-notices';
   section.setAttribute('aria-label', settings ? '主动变化提醒设置' : '主动变化提醒');
-  section.innerHTML = `<h2>主动变化提醒</h2>${settings ? '<p class="notice">仅读取 CPU / 内存占用，每 30 秒采样一次。本次应用会话最长 8 小时；关闭监控或退出应用立即撤销，重启后不恢复开关。实际执行仍需经过本地 Policy 校验与必要审批。</p><form class="settings-list"><label class="setting-row"><input type="checkbox" name="enabled">开启电脑状态监控</label><label class="setting-row"><input type="checkbox" name="cloudAnalysis">允许持续 CPU / 内存压力触发 AgentArts 自动分析</label><p class="notice">云端分析默认关闭。启用后，持续 CPU / 内存压力会自动触发 AgentArts 分析，仅发送最小脱敏指标：CPU / 内存占用比例、来源及采样时间；也可手动请求分析。保存设置不表示系统调整已获授权。</p><button class="btn btn-sm" type="submit">保存主动提醒设置</button><p class="notice" data-feedback role="status"></p></form>' : ''}<p class="notice" data-status role="status"></p><div data-suggestions></div>`;
+  section.innerHTML = `<h2>主动变化提醒</h2>${settings ? '<p class="notice">仅读取 CPU / 内存占用，每 30 秒采样一次。本次应用会话最长 8 小时；关闭监控或退出应用立即撤销，重启后不恢复开关。实际执行仍需经过本地 Policy 校验与必要审批。</p><form class="settings-list"><label class="setting-row"><input type="checkbox" name="enabled">开启电脑状态监控</label><label class="setting-row"><input type="checkbox" name="cloudAnalysis">允许持续 CPU / 内存压力触发 AgentArts 自动分析</label><p class="notice">云端分析默认关闭。启用后，持续 CPU / 内存压力会自动触发 AgentArts 分析，仅发送最小脱敏指标：CPU / 内存占用比例、来源及采样时间；也可手动请求分析。保存设置不表示系统调整已获授权。</p><button class="btn btn-sm" type="submit">保存主动提醒设置</button><p class="notice" data-feedback role="status"></p></form>' : ''}<p class="notice" data-status role="status"></p><div data-suggestions></div><div data-cognition-reviews class="cognition-reviews"></div>`;
   container.append(section);
   const status = section.querySelector('[data-status]');
   const list = section.querySelector('[data-suggestions]');
+  const reviewsList = section.querySelector('[data-cognition-reviews]');
   const form = section.querySelector('form');
   const feedback = section.querySelector('[data-feedback]');
   const cognitionStatus=document.createElement('p');
@@ -52,7 +54,8 @@ export function mountProactiveControls(container, invoke, {settings = false} = {
   function render(snapshot) {
     current = snapshot;
     const items = proactiveSuggestions(snapshot);
-    if (!settings) section.hidden = items.length === 0 && !snapshot?.cognition?.enabled;
+    const cognitionReviews = Array.isArray(snapshot?.cognition?.reviews) ? snapshot.cognition.reviews : [];
+    if (!settings) section.hidden = items.length === 0 && !snapshot?.cognition?.enabled && cognitionReviews.length === 0;
     cognitionStatus.hidden=!snapshot?.cognition;
     cognitionStatus.textContent=snapshot?.cognition ? `目标分析：${snapshot.cognition.reason}` : '';
     status.textContent = snapshot ? `${statusNames[snapshot.status] ?? '状态未知'}${snapshot.reason ? ` · ${snapshot.reason}` : ''}` : '主动监控尚未连接';
@@ -93,6 +96,19 @@ export function mountProactiveControls(container, invoke, {settings = false} = {
       const allowed = snapshot?.enabled && snapshot?.cloudAnalysis && snapshot?.status === 'monitoring' && item.kind === 'system_pressure';
       button.disabled = !allowed || Boolean(item.analysisTaskId) || pending.has(item.id);
       button.title = item.analysisTaskId ? '分析任务已受理，请查看任务状态' : item.kind !== 'system_pressure' ? '当前云端授权仅覆盖 CPU / 内存采样；此建议尚无已授权投影' : !snapshot?.cloudAnalysis ? '请在设置 → 电脑操控中开启云端分析' : !allowed ? '请先开启监控并完成必要授权' : '仅提交分析；实际执行仍需 Policy 校验';
+    }
+    if (reviewsList) {
+      if (cognitionReviews.length > 0) {
+        reviewsList.innerHTML = '<h3 style="margin-top:12px;font-size:14px;color:var(--text-secondary)">目标与计划决策</h3>' + cognitionReviews.map(r => `
+          <article class="task cognition-review-card" data-review-id="${escape(r.reviewTaskId || '')}">
+            <p class="cognition-trigger"><strong>触发原因：</strong>${escape(r.trigger || '事实或目标变更')}</p>
+            <p class="cognition-choice"><strong>Laya 方案：</strong>${escape(r.choice || '本地决策建议')}</p>
+            <p class="notice cognition-status"><strong>执行状态：</strong>${escape(r.executionStatus || r.state || '已记录')}</p>
+          </article>
+        `).join('');
+      } else {
+        reviewsList.innerHTML = '';
+      }
     }
   }
   return {render, show(visible) {section.hidden = !visible;}};

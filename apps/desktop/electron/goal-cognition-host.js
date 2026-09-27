@@ -114,10 +114,26 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
       // Session grants are not restored from persisted tasks after restart.
       throw Error('此主动分析任务没有当前会话的出云许可');
     },
-    snapshot:()=>({enabled,cloudAllowed,status,reason,reviews:[...reviews.values()].map(value=>({
-      reviewTaskId:value.task.taskId,action:value.review.action,selected:value.review.selectedOption?.id,
-      taskId:value.handoff?.state==='submitted'?value.handoff.task.taskId:undefined,
-      state:value.handoff?.state??value.review.selection?.state??'local'}))}),
+    snapshot:()=>({enabled,cloudAllowed,status,reason,reviews:[...reviews.values()].map(value=>{
+      const r = value.review;
+      const trigger = r?.subjectGoal ? `新登记目标：${r.subjectGoal.id}` :
+        (Array.isArray(r?.affected) && r.affected.length > 0) ? r.affected.map(a => a.causes?.map(c => `事实 ${c.reference.id} 变更`).join(', ') || a.node?.summary || a.node?.id).filter(Boolean).join('；') :
+        '事实或目标变更';
+      const choice = r?.selectedOption ? `${r.selectedOption.id} · ${r.selectedOption.description}` :
+        machineReview(r) ? 'Laya 置信不足，转人工复核 (RECHECK)' : (r?.action === 'KEEP' ? '保持现状 (KEEP)' : '本地建议方案');
+      const executionStatus = value.handoff?.state === 'submitted' ? '已提交 AgentArts 编排' :
+        value.review?.selection?.state === 'review' ? '等待复核' : '本地决策建议';
+      return {
+        reviewTaskId: value.task.taskId,
+        action: r?.action,
+        selected: r?.selectedOption?.id,
+        trigger,
+        choice,
+        executionStatus,
+        taskId: value.handoff?.state === 'submitted' ? value.handoff.task.taskId : undefined,
+        state: value.handoff?.state ?? value.review?.selection?.state ?? 'local',
+      };
+    })}),
     async tick() {
       if (!enabled || closed || busy || now()<nextTick) return;
       if (!ready()) {status='waiting_model';reason='等待本地 Laya 服务就绪';return;}
