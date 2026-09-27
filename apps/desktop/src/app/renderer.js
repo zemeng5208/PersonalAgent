@@ -149,6 +149,14 @@ else {
   render=data=>{current=data;const task=currentTask(data.tasks);const connectionNode=root.querySelector('#connection');connectionNode.textContent=data.fakeModel?data.connection+' · Fake Model':data.connection;const liveStates={connecting:'正在连接',reconnecting:'正在续接',listening:'正在聆听',speaking:'正在回答',working:'正在处理任务',stopping:'正在关闭',error:'连接失败'};root.querySelector('#state').textContent=data.live?.active?(liveStates[data.live.status]??'Live 已开启'):task?stateNames[task.state]:'待机';
     liveControls.render(data.live);
     proactiveControls.render(data.proactive);
+    const notifs=Array.isArray(data.notifications)?data.notifications:[];
+    if(notifs.length>0){
+      bellMenu.innerHTML=notifs.slice(0,5).map(n=>`<div class="notice" style="color:var(--fg);margin:6px 4px"><strong>${escape(n.summary)}</strong><br><small style="color:var(--muted)">${escape(new Date(n.occurredAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}))}</small></div>`).join('');
+      bellBtn.title=`通知 (${notifs.length})`;bellBtn.setAttribute('aria-label',bellBtn.title);
+    }else{
+      bellMenu.innerHTML='<div class="notice">暂无新通知</div>';
+      bellBtn.title='通知';bellBtn.setAttribute('aria-label','通知');
+    }
     sisSettings.hidden=data.model?.provider!=='agentarts';
     const sisConfiguration=data.voice?.configuration;
     sisSettings.querySelector('summary').textContent=sisConfiguration?.configured?'华为云语音设置 · 已配置':'华为云语音设置';
