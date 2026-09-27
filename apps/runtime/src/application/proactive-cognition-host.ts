@@ -1,11 +1,11 @@
 import {ProtocolError} from '@personal-agent/contracts';
 import type {TaskSnapshot} from '@personal-agent/contracts';
-import {actionArgumentsDigest, buildMinimalRepairCandidate, previewStoredRepair,
+import {actionArgumentsDigest, analyzeImpact, buildMinimalRepairCandidate, previewStoredRepair,
   selectGoalRevisionImpact, selectProjectedRepairScope} from '@personal-agent/cognition';
 import type {GoalRevisionSelectionRequest, ImpactItem, LayaActionChoiceService,
   LayaActionSelection, ProjectedRepairInput, StoredRepairRequest} from '@personal-agent/cognition';
 import type {MemoryReadContext} from '@personal-agent/memory';
-import type {GraphSnapshot} from '@personal-agent/goals';
+import type {GraphSnapshot, NodeRef} from '@personal-agent/goals';
 import {toolArgumentsDigest} from '@personal-agent/tool-gateway';
 import type {RuntimeApplication} from './runtime-application.js';
 import type {SqliteFactProjectionHost} from './sqlite-fact-projection.js';
@@ -14,7 +14,8 @@ const INTENT = 'proactive-cognition-intent-v1';
 const REVIEW = 'proactive-cognition-review-v1';
 const HANDOFF = 'proactive-cognition-handoff-v1';
 type Trigger = {kind: 'fact'; input: ProjectedRepairInput}
-  | {kind: 'goal'; input: GoalRevisionSelectionRequest};
+  | {kind: 'goal'; input: GoalRevisionSelectionRequest}
+  | {kind: 'expiry'; input: {graphRevision: number; facts: NodeRef[]; consumers: NodeRef[]}};
 interface ReviewIntent {
   version: 1; graphNamespace: string; bindingVersion: string; trigger: Trigger; evaluatedAt: string;
 }
@@ -112,6 +113,22 @@ function localDecisionContext(snapshot: GraphSnapshot, affected: readonly Impact
   return JSON.stringify(context);
 }
 
+const refKey = (ref: NodeRef): string => JSON.stringify([ref.id, ref.revision]);
+function expiredPublicFactScope(snapshot: GraphSnapshot, at: string): {facts: NodeRef[]; items: ImpactItem[]} {
+  const current = new Map(snapshot.history.map(node => [node.id, node]));
+  const expired = [...current.values()].filter(node => node.kind === 'fact' && node.state === 'active'
+    && node.sensitivity === 'public' && Date.parse(node.validUntil) <= Date.parse(at));
+  const facts = expired.map(node => ({id: node.id, revision: node.revision}));
+  const keys = new Set(facts.map(refKey));
+  const items = analyzeImpact(snapshot, at).items.filter(item => item.action === 'RECHECK'
+    && item.causes.some(cause => cause.reason === 'not_effective'
+      && cause.currentRevision === cause.reference.revision && keys.has(refKey(cause.reference))));
+  const used = new Set(items.flatMap(item => item.causes.filter(cause => cause.reason === 'not_effective'
+    && cause.currentRevision === cause.reference.revision && keys.has(refKey(cause.reference)))
+    .map(cause => refKey(cause.reference))));
+  return {facts: facts.filter(ref => used.has(refKey(ref))).sort((a, b) => refKey(a).localeCompare(refKey(b))), items};
+}
+
 /** Trusted Competition composition: choose locally, then hand off to AgentArts. No local execution shortcut. */
 export function createProactiveCognitionHost(options: ProactiveCognitionHostOptions): ProactiveCognitionHost {
   const {application, facts, graphNamespace, bindingVersion, chooser, prepareOptions, selectionHandoff: handoff} = options;
@@ -199,7 +216,9 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
   };
   const review = async (trigger: Trigger, request: MemoryReadContext & {at: string}): Promise<ProactiveReviewReadback> => {
     open(); active(request); evaluationTime(request.at);
-    const key = 'proactive-cognition:' + toolArgumentsDigest({graphNamespace, bindingVersion, trigger});
+    const identity = trigger.kind === 'expiry' ? {kind: trigger.kind, facts: trigger.input.facts,
+      consumers: trigger.input.consumers} : trigger;
+    const key = 'proactive-cognition:' + toolArgumentsDigest({graphNamespace, bindingVersion, trigger: identity});
     const existing = runtime.findTaskByIdempotencyKey(key);
     if (existing && existing.state !== 'created') {
       const saved = readReview(existing.taskId);
@@ -209,12 +228,15 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
       return handoffReview(existing.taskId, request);
     }
     const persisted = existing ? runtime.loadCheckpoint(existing.taskId, INTENT) as ReviewIntent : undefined;
-    if (persisted) request = {...request, at: persisted.evaluatedAt};
-    const revision = trigger.kind === 'fact' ? trigger.input.projection.graphRevision : trigger.input.expectedGraphRevision;
+    if (persisted) { request = {...request, at: persisted.evaluatedAt}; trigger = persisted.trigger; }
+    const revision = trigger.kind === 'fact' ? trigger.input.projection.graphRevision
+      : trigger.kind === 'goal' ? trigger.input.expectedGraphRevision : trigger.input.graphRevision;
     const snapshot = store.read(revision);
     const scope = trigger.kind === 'fact'
       ? selectProjectedRepairScope(snapshot, request.at, trigger.input)
-      : selectGoalRevisionImpact(snapshot, request.at, trigger.input);
+      : trigger.kind === 'goal' ? selectGoalRevisionImpact(snapshot, request.at, trigger.input)
+        : {items: expiredPublicFactScope(snapshot, request.at).items.filter(item =>
+          trigger.input.consumers.some(ref => refKey(ref) === refKey(item.node)))};
     const intent: ReviewIntent = {version: 1, graphNamespace, bindingVersion, trigger: structuredClone(trigger), evaluatedAt: request.at};
     const task = runtime.submitTaskWithCheckpoint({goal: 'Choose an approach for trusted dependency changes',
       conversationId: 'proactive-cognition:' + graphNamespace, idempotencyKey: key}, INTENT, intent);
@@ -231,13 +253,13 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
           action: scope.items.length ? 'RECHECK' : 'KEEP', affected: structuredClone(scope.items),
           options: [], semanticReviewRequired: true};
         if (scope.items.length) {
-          const candidate = buildMinimalRepairCandidate(snapshot, request.at, {
+          const candidate = trigger.kind === 'expiry' ? undefined : buildMinimalRepairCandidate(snapshot, request.at, {
             expectedGraphRevision: snapshot.revision, targets: scope.items.map(item => item.node),
           });
           result.options = [
             {id: 'recheck', revision: 1, action: 'RECHECK', description: 'Ask AgentArts to verify the changed sources and affected dependencies before deciding a plan.'},
             {id: 'defer', revision: 1, action: 'RECHECK', description: 'Ask AgentArts to retain the current plan and arrange a later recheck without executing the stale plan.'},
-            ...(candidate.kind === 'candidate' ? [{id: 'revise', revision: 1, action: 'REVISE' as const,
+            ...(candidate?.kind === 'candidate' ? [{id: 'revise', revision: 1, action: 'REVISE' as const,
               description: 'Ask AgentArts to evaluate this minimal dependency repair and revise affected plan content as needed; the candidate is not yet executed.',
               repair: candidate.request}] : []),
           ];
@@ -247,6 +269,7 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
           const seen = new Set<string>();
           for (const option of result.options) {
             if (!option || seen.has(option.id) || !['RECHECK', 'REVISE'].includes(option.action)
+              || (trigger.kind === 'expiry' && (option.action !== 'RECHECK' || option.repair !== undefined))
               || Object.keys(option).some(key => !['id', 'revision', 'description', 'action', 'repair'].includes(key))) {
               throw new ProtocolError('INVALID_ARGUMENT', 'Invalid cognition option');
             }
@@ -298,6 +321,14 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
         nextGraphRevision = receipt.projection.graphRevision;
       }
       const hasMoreReviews = facts.listImpactReceipts({afterGraphRevision: nextGraphRevision, limit: 1}).length > 0;
+      if (consumed.batch.atWatermark && !hasMoreReviews && reviews.length === 0) {
+        const snapshot = store.read();
+        const scope = expiredPublicFactScope(snapshot, request.at);
+        if (scope.items.length) reviews.push(await review({kind: 'expiry', input: {
+          graphRevision: snapshot.revision, facts: scope.facts,
+          consumers: scope.items.map(item => item.node).sort((a, b) => refKey(a).localeCompare(refKey(b))),
+        }}, request));
+      }
       return {reviews, nextGraphRevision, atWatermark: consumed.batch.atWatermark, hasMoreReviews};
     },
     reviewGoalRevision: (input: GoalRevisionSelectionRequest, request: MemoryReadContext & {at: string}) =>

@@ -54,6 +54,38 @@ three-node excerpt and cloud goal truncation limits are removed. Existing transp
 body limits and actual server option-count constraints still apply. Local context
 is not automatically copied into the independently approved cloud projection.
 
+### Time-only expiry consumption
+
+`consumeAndReview` also detects current public Facts whose `validUntil` has elapsed,
+even if the source feed has no new event. Once the feed reaches its watermark and
+the receipt backlog is empty, an idle consumption pass uses the existing
+`analyzeImpact` to select their affected Goal/Decision/Plan versions. A pass that
+already processed Fact reviews leaves the expiry scan to the next existing tick.
+The Desktop goal cognition host already calls this entry point; no new scheduler
+or store is introduced.
+
+An expiry review uses the same TaskRuntime intent/review checkpoints, Laya chooser
+and AgentArts handoff. Its key binds exact expired Fact and consumer references,
+excluding polling time, deadline and unrelated graph revision changes. It does not
+advance the Fact receipt cursor. Only active, public, current Fact versions past
+their end time qualify; future or superseded versions do not. Expiry offers RECHECK
+and defer, without a local repair or an extension to the source validity period.
+Custom options for this trigger must also remain RECHECK without a repair payload.
+
+Targeted validation: Runtime build passed; the existing Fact correction and Goal
+revision cases plus the new expiry-to-AgentArts case passed 3/3 using real SQLite
+and explicit Fake Laya/AgentArts. The new case covers the expiry boundary, repeated
+polling, restart and an unrelated graph append. No live cloud/model or Desktop
+smoke was run for this host-only increment.
+
+This consumes graph validity, not the separate knowledge-cache or interest helpers.
+Those still need trusted providers: knowledge requires cache version, exact content
+hash, successful-check time, bound changed/withdrawn receipts and exact consumer
+references; interests require topic/interaction evidence, verified source transport,
+tracking scope and revocation state. Public Fact summaries cannot supply these
+fields. Do not derive a body hash from a summary or treat observation time as a
+successful source check. No missing provider is replaced with a production Fake.
+
 `selectionHandoff` implements:
 
 ```ts

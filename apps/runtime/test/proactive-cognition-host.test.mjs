@@ -472,3 +472,53 @@ test('Goal revision also routes Laya selection to AgentArts without graph mutati
     await rm(paths.directory, {recursive: true, force: true});
   }
 });
+
+test('public Fact expiry without a new feed event creates one durable AgentArts review', async () => {
+  const paths = await workspace();
+  const calls = state({selectedId: 'recheck'});
+  let binding = open(paths, calls);
+  const expiry = '2026-09-27T04:00:00.000Z';
+  try {
+    binding.facts.recordPublicSource({...source, sourceRevision: 'a'.repeat(64), line: 1,
+      summary: 'Public meeting schedule valid until the announced cutoff',
+      observedAt: '2026-09-25T00:00:00.000Z', validFrom: '2026-09-25T00:00:00.000Z',
+      validUntil: expiry, expectedFactRevision: null}, context());
+    const baseline = await binding.host.consumeAndReview({...context(), at, limit: 10, afterGraphRevision: 0});
+    const store = binding.application.runtime.bindCoordinationStore(graphNamespace);
+    const factId = store.read().history[0].id;
+    store.append(1, node('goal', 'goal', [ref(factId)]));
+    store.append(2, node('decision', 'decision', [ref('goal')]));
+    store.append(3, node('plan', 'plan', [ref('decision')]));
+    const poll = time => binding.host.consumeAndReview({...context(), at: time, limit: 10,
+      afterGraphRevision: baseline.nextGraphRevision});
+    assert.deepEqual((await poll(at)).reviews, []);
+    assert.equal(calls.layaCalls, 0);
+    const expired = await poll(expiry);
+    assert.equal(expired.atWatermark, true);
+    assert.equal(expired.hasMoreReviews, false);
+    assert.equal(expired.nextGraphRevision, baseline.nextGraphRevision, 'expiry does not advance the Fact receipt cursor');
+    assert.equal(expired.reviews.length, 1);
+    const review = expired.reviews[0];
+    assert.equal(review.task.state, 'succeeded');
+    assert.equal(review.review.action, 'RECHECK');
+    assert.deepEqual(review.review.options.map(option => option.id), ['recheck', 'defer']);
+    assert.deepEqual(review.review.affected.map(item => item.node.id), ['goal', 'decision', 'plan']);
+    assert.equal(review.handoff.state, 'submitted');
+    await waitFor(binding.application, review.handoff.task.taskId, 'succeeded');
+    assert.equal(store.read().revision, 4, 'expired knowledge is not locally repaired or renewed');
+    const later = await poll('2026-09-27T04:01:00.000Z');
+    assert.equal(later.reviews[0].task.taskId, review.task.taskId);
+    store.append(4, node('unrelated', 'fact', [], 'Unrelated public observation'));
+    binding.close();
+    binding = open(paths, calls);
+    const recovered = await poll('2026-09-27T04:02:00.000Z');
+    assert.equal(recovered.reviews[0].task.taskId, review.task.taskId);
+    assert.equal(recovered.reviews[0].handoff.task.taskId, review.handoff.task.taskId);
+    assert.equal(calls.layaCalls, 1, 'polling, restart and unrelated graph changes do not rerun Laya');
+    assert.equal(calls.agentArtsCalls, 1);
+    assert.equal(binding.application.runtime.bindCoordinationStore(graphNamespace).read().revision, 5);
+  } finally {
+    binding.close();
+    await rm(paths.directory, {recursive: true, force: true});
+  }
+});
