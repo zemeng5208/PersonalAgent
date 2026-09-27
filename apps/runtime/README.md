@@ -104,6 +104,10 @@ requires `initialRequestMode: 'goal-with-tools-json'` whenever a catalog is conf
   receipts by increasing graph revision within that fixed consumer scope. The
   consumer persists its last fully handled graph revision only after processing
   the page. Batches without new Fact nodes need no cognition impact receipt.
+  If a trusted Memory erasure intent rewrites a delivery, `consume` reads that
+  exact token and atomically replaces stale, unactivated staging before replaying
+  its surviving facts, including a batch confirmed before a crash. Already
+  activated graph history and receipts still require separate erasure handling.
   A trusted host must trigger it after verified source
   changes and on startup recovery; it does not poll private sources or publish to
   AgentArts. Source correction and withdrawal remain append-only Fact revisions.

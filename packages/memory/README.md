@@ -75,9 +75,21 @@ operation.
 This adapter is not registered as a Runtime capability and does not make the ports
 `frozen`. Its confirmation transaction covers only the memory-owned delivery journal;
 Goal/cognition projection and feed confirmation are not yet one atomic host
-transaction. Physical deletion, retention/backup policy, real ingestion and
-cognition/Runtime projection remain unavailable. See
+transaction. Host-only `eraseUnboundFact` removes all versions and public-source
+mapping for an exact head only when the namespace has never had a feed binding;
+an empty deletion marker prevents reuse of the same fact ID. It invalidates
+only query snapshots that contained the fact and rejects bound
+namespaces. Host-only `beginFactErasure` records a durable pending intent for a
+bound fact. It hides the fact from Memory queries and new feed reads, rewrites
+mixed deliveries entry by entry, and keeps unrelated checkpoints. The fact's
+rows remain until Runtime projections and source re-import are handled. A trusted
+consumer can read the revised durable delivery by exact token and atomically
+replace an unactivated Runtime staging record before replay; this
+method is not a completed deletion operation. Deletion of projected facts,
+retention/backup policy, real ingestion and production cognition/Runtime
+projection remain unavailable. See
 [ADR-0008](../../docs/adr/0008-fact-feed-consumption.md) (proposed) and
+[ADR-0010](../../docs/adr/0010-memory-erasure.md) (proposed) and
 [MOD-09C](../../docs/modules/MOD-09C-MEMORY-SQLITE-01.md).
 
 Feed transactions check cancellation/deadline after acquiring the write lock and

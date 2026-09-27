@@ -18,11 +18,13 @@ import {FactProjectionError} from '../fact-projection-store.js';
 import type {
   CompletedFactImpact,
   FactProjectionReceipt,
-  FactProjectionStore
+  FactProjectionStore,
+  StagedFactProjection
 } from '../fact-projection-store.js';
 
 export interface FactChangeConfirmationPort {
   confirm(request: ConfirmFactChangeBatchRequest): FactChangeReceipt | Promise<FactChangeReceipt>;
+  readBatch?(request: MemoryReadContext & {readonly batchToken: string}): FactChangeBatch | Promise<FactChangeBatch>;
 }
 
 export interface MemoryProjectionApplication {
@@ -89,6 +91,23 @@ export function createMemoryProjectionApplication(
       if (!Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > 100) {
         throw new FactProjectionError('INVALID_ARGUMENT');
       }
+      const refresh = async (saved: StagedFactProjection): Promise<StagedFactProjection> => {
+        if (!options.confirmation.readBatch) return saved;
+        const current = parseFactChangeBatch(await options.confirmation.readBatch({
+          batchToken: saved.batch.batchToken, deadline: request.deadline, signal: request.signal,
+        }));
+        if (current.batchToken !== saved.batch.batchToken) throw new FactProjectionError('INTEGRITY_CONFLICT');
+        if (JSON.stringify(current) === JSON.stringify(saved.batch)) return saved;
+        const surviving = current.entries.map(entry => {
+          const index = saved.batch.entries.findIndex(old => old.eventId === entry.eventId
+            && old.fact.id === entry.fact.id && old.fact.revision === entry.fact.revision);
+          if (index < 0) throw new FactProjectionError('INTEGRITY_CONFLICT');
+          return saved.facts[index]!;
+        });
+        options.projection.reviseStaged({consumerKey, memoryNamespace,
+          batch: current, facts: surviving, deadline: request.deadline, signal: request.signal});
+        return {...saved, batch: current, facts: surviving};
+      };
       let staged = options.projection.readStaged(consumerKey, memoryNamespace);
       if (!staged) {
         const batch = parseFactChangeBatch(await options.feed.read(request));
@@ -101,6 +120,7 @@ export function createMemoryProjectionApplication(
         });
         staged = {consumerKey, memoryNamespace, batch, facts};
       }
+      staged = await refresh(staged);
       const {batch, facts} = staged;
       let providerReceipt: FactChangeReceipt;
       try {
@@ -112,6 +132,7 @@ export function createMemoryProjectionApplication(
           signal: request.signal
         });
       } catch (error) {
+        if (error instanceof FactChangeFeedError && error.code === 'INVALID_ARGUMENT') await refresh(staged);
         if (error instanceof FactChangeFeedError
           && ['REBUILD_REQUIRED', 'SCOPE_DENIED', 'REVISION_CONFLICT'].includes(error.code)) {
           options.projection.discardStaged(consumerKey, memoryNamespace, batch.batchToken);

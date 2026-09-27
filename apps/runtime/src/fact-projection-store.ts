@@ -47,6 +47,7 @@ export type StagedFactProjection = Pick<FactProjectionRequest,
 export interface FactProjectionStore {
   stage(request: FactProjectionRequest): void;
   readStaged(consumerKey: string, memoryNamespace: string): StagedFactProjection | undefined;
+  reviseStaged(request: FactProjectionRequest): void;
   discardStaged(consumerKey: string, memoryNamespace: string, batchToken: string): void;
   project(request: FactProjectionRequest, providerReceipt: FactChangeReceipt): FactProjectionReceipt;
   readPending(limit?: number, scope?: {readonly consumerKey: string; readonly memoryNamespace: string}): readonly PendingFactImpact[];
@@ -314,6 +315,57 @@ export function bindFactProjectionStore(db: DatabaseSync, graphNamespace: string
         || digest({batch, facts}) !== rows[0]!.handled_key) throw new FactProjectionError('INTEGRITY_CONFLICT');
       return {consumerKey: consumer, memoryNamespace: memory, batch, facts};
     }),
+    reviseStaged: (request: FactProjectionRequest): void => {
+      const input = validateRequest(request);
+      storage(() => {
+        checkpoint(input);
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          const row = db.prepare([
+            'SELECT handled_key, payload_json FROM coordination_projection_staging',
+            'WHERE graph_namespace = ? AND memory_namespace = ? AND consumer_key = ? AND batch_token = ?',
+          ].join(' ')).get(namespace, input.memoryNamespace, input.consumerKey,
+            input.batch.batchToken) as Record<string, unknown> | undefined;
+          if (!row) throw new FactProjectionError('NOT_FOUND');
+          const old = JSON.parse(row.payload_json as string) as {batch: FactChangeBatch; facts: FactVersion[]};
+          const oldBatch = parseFactChangeBatch(old.batch);
+          const oldFacts = old.facts.map(parseFact);
+          if (digest({batch: oldBatch, facts: oldFacts}) !== row.handled_key
+            || oldBatch.batchToken !== input.batch.batchToken
+            || oldBatch.mode !== input.batch.mode
+            || oldBatch.baseCheckpoint !== input.batch.baseCheckpoint
+            || oldBatch.watermark !== input.batch.watermark
+            || input.batch.entries.length > oldBatch.entries.length
+            || (input.batch.entries.length === oldBatch.entries.length
+              && input.batch.atWatermark === oldBatch.atWatermark)) {
+            throw new FactProjectionError('INTEGRITY_CONFLICT');
+          }
+          let oldIndex = 0;
+          for (let index = 0; index < input.batch.entries.length; index++) {
+            const entry = input.batch.entries[index]!;
+            while (oldIndex < oldBatch.entries.length
+              && (oldBatch.entries[oldIndex]!.eventId !== entry.eventId
+                || factKey(oldBatch.entries[oldIndex]!.fact) !== factKey(entry.fact))) oldIndex++;
+            if (oldIndex === oldBatch.entries.length
+              || canonical(oldFacts[oldIndex]) !== canonical(input.facts[index])) {
+              throw new FactProjectionError('INTEGRITY_CONFLICT');
+            }
+            oldIndex++;
+          }
+          db.prepare([
+            'UPDATE coordination_projection_staging SET handled_key = ?, payload_json = ?',
+            'WHERE graph_namespace = ? AND memory_namespace = ? AND consumer_key = ? AND batch_token = ?',
+          ].join(' ')).run(digest({batch: input.batch, facts: input.facts}),
+            JSON.stringify({batch: input.batch, facts: input.facts}),
+            namespace, input.memoryNamespace, input.consumerKey, input.batch.batchToken);
+          checkpoint(input);
+          db.exec('COMMIT');
+        } catch (error) {
+          db.exec('ROLLBACK');
+          throw error;
+        }
+      });
+    },
     discardStaged: (consumerKey: string, memoryNamespace: string, batchToken: string): void => storage(() => {
       db.prepare([
         'DELETE FROM coordination_projection_staging',
