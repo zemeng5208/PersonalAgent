@@ -709,7 +709,7 @@ async function initializeRuntime() {
     if (competitionMode) {
       const cloudBinding=agentArtsConfig.binding();
       activeCloudBinding = cloudBinding;
-      feedsHost.prepare();
+      feedsHost?.prepare();
       const syntheticTools = syntheticMvp
         ? (await import('./competition-synthetic-workspace.js')).createSyntheticMeetingToolset(
           path.resolve(dir, '../../../tests/manual/agentarts/fixtures/mvp-meeting'),
@@ -774,7 +774,7 @@ async function initializeRuntime() {
           }
           proactiveHost?.assertCognitionCloudSend(request);
         },
-        tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...goalHost.tools, ...productTools.tools, ...(mailHost?.tools ?? []), ...feedsHost.tools],
+        tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...goalHost.tools, ...productTools.tools, ...(mailHost?.tools ?? []), ...(feedsHost?.tools ?? [])],
         ...(syntheticMvp ? {localRepair: syntheticRepairHost.localRepair} : {}),
         ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
         ...(process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT === undefined ? {} : {workflowGoalInput: process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT}),
@@ -797,7 +797,7 @@ async function initializeRuntime() {
       if (syntheticRepairHost) await syntheticRepairHost.initialize(runtimeApplication.runtime);
       if (mailHost) {mailHost.bindApplication(runtimeApplication); mailConfig.markBound(configuredMail.revision);}
       codingWorkspace.bindApplication(runtimeApplication);
-      feedsHost.bindApplication(runtimeApplication);
+      feedsHost?.bindApplication(runtimeApplication);
       goalHost.bind(runtimeApplication);
       goalHost.resumeApproved();
       if (!syntheticMvp && competitionCatalog && !codingWorkspace.tools.length) competitionFactBridge = createDesktopCompetitionFactBridge({
@@ -920,7 +920,7 @@ async function action(event, name, payload) {
       : '配置已加密保存，Runtime 已连接；云端可用性以实际任务结果为准。'};
   }
   if (['feeds.add','feeds.remove','feeds.authorize','feeds.revoke'].includes(name)) {
-    if (sender !== admin || !competitionMode || !feedsHost) throw Error('请从订阅设置操作');
+    if (sender !== admin || !competitionMode || syntheticMvp || !feedsHost) throw Error('请从正式应用订阅设置操作');
     if (name !== 'feeds.revoke' && (runtimeApplication?.activeTaskCount || runtimeStartup.snapshot().state==='starting')) {
       throw Error('请等待当前任务和启动结束后修改订阅');
     }
@@ -1265,7 +1265,7 @@ app.whenReady().then(async () => {
   sisConfigHost = createDesktopSisConfigHost({userData: app.getPath('userData'), safeStorage});
   liveConfig = createLiveVoiceConfig({userData: app.getPath('userData'), safeStorage});
   agentArtsConfig = createAgentArtsConfig({userData: app.getPath('userData'), safeStorage});
-  if (competitionMode) feedsHost = createDesktopFeedsHost({userData:app.getPath('userData'),safeStorage});
+  if (competitionMode && !syntheticMvp) feedsHost = createDesktopFeedsHost({userData:app.getPath('userData'),safeStorage});
   ipcMain.on('desktop:live-event', (event, message) => {liveVoice?.receive(event, message);});
   ipcMain.on('desktop:voice-playback-event', (event, message) => {
     if (sisPlaybackHost?.receive(event, message)) publish();
