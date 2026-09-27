@@ -33,6 +33,8 @@ export {
   createRuntimeClientTranscriptConsumer,
 } from './runtime-consumer.js';
 export type {RuntimeClientTranscriptConsumerOptions} from './runtime-consumer.js';
+export {createWindowsSystemSpeechPorts} from './windows-system-speech.js';
+export type {WindowsSystemSpeechPorts} from './windows-system-speech.js';
 export {VoiceSessionManager} from './voice-session.js';
 export type {
   ReplyReceipt,
