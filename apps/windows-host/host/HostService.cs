@@ -308,7 +308,7 @@ internal sealed class HostService(HostLaunchBinding launch, HostWire wire, RunJo
                 {
                     "verified" => null,
                     "cancelled" => effectiveDeadline <= DateTime.UtcNow ? "TIMEOUT" : "CANCELLED",
-                    "refused" => action.ErrorCode ?? "TARGET_STALE",
+                    "refused" => action.ErrorCode == "TARGET_AMBIGUOUS" ? "TARGET_STALE" : action.ErrorCode ?? "TARGET_STALE",
                     _ => "RESULT_UNKNOWN"
                 };
                 var receipt = journal.Complete(identity, state, Timestamp(DateTime.UtcNow),
