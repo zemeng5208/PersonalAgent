@@ -15,6 +15,7 @@ import {createMicrophonePermissionGate} from './microphone-permission.js';
 import {readApprovalPage} from './approval-history.js';
 import {createAgentArtsConfig} from './agentarts-config.js';
 import {createDeferredRuntimeStartup} from './runtime-startup.js';
+import {createDesktopFeedsHost} from './feeds-host.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -107,6 +108,7 @@ const approvals = new Map();
 const notifications = new Map();
 let runtimeApplication;
 let agentArtsConfig;
+let feedsHost;
 let activeCloudBinding;
 const runtimeStartup = createDeferredRuntimeStartup({
   isConfigured: () => !competitionMode || agentArtsConfig?.snapshot().configured === true,
@@ -135,6 +137,7 @@ function snapshot(surface) {
     notifications: [...notifications.values()],
     model: structuredClone(model),
     agentArts: agentArtsConfig?.snapshot(),
+    feeds: feedsHost?.snapshot(),
     thinking: structuredClone(thinking),
     voice: {available: false, status: 'unavailable', reason: '语音供应商尚未连接'},
   };
@@ -618,6 +621,7 @@ async function initializeRuntime() {
     if (competitionMode) {
       const cloudBinding=agentArtsConfig.binding();
       activeCloudBinding = cloudBinding;
+      if (!syntheticMvp) feedsHost.prepare();
       const syntheticTools = syntheticMvp
         ? (await import('./competition-synthetic-workspace.js')).createSyntheticMeetingToolset(
           path.resolve(dir, '../../../tests/manual/agentarts/fixtures/mvp-meeting'),
@@ -638,6 +642,12 @@ async function initializeRuntime() {
         ...syntheticTools,
         ...(syntheticMvp ? {localRepair: syntheticRepairHost.localRepair} : {}),
         ...(agentArtsResponseMode === undefined ? {} : {responseMode: agentArtsResponseMode}),
+        ...(!syntheticMvp && feedsHost.tools.length ? {
+          tools:feedsHost.tools, responseMode:agentArtsResponseMode ?? 'tool-proposal-json',
+          initialRequestMode:'goal-with-tools-json',
+          competitionToolAvailability:feedsHost.competitionToolAvailability,
+          competitionToolExports:feedsHost.competitionToolExports,
+        } : {}),
         ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
         ...cloudBinding,
         invokeMode: agentArtsInvokeMode,
@@ -651,6 +661,7 @@ async function initializeRuntime() {
         },
       });
       if (syntheticRepairHost) await syntheticRepairHost.initialize(runtimeApplication.runtime);
+      if (!syntheticMvp) feedsHost.bindApplication(runtimeApplication);
     } else {
       const createApplication = process.argv.includes('--weather-tools')
         ? (await import('@personal-agent/runtime/weather')).createOpenMeteoApplication
@@ -746,6 +757,13 @@ async function action(event, name, payload) {
       ? '配置已加密保存，请重启应用完成连接。'
       : '配置已加密保存，Runtime 已连接；云端可用性以实际任务结果为准。'};
   }
+  if (['feeds.add','feeds.remove','feeds.authorize','feeds.revoke'].includes(name)) {
+    if (sender !== admin || !competitionMode || syntheticMvp || !feedsHost) throw Error('请从正式应用订阅设置操作');
+    if (name !== 'feeds.revoke' && (runtimeApplication?.activeTaskCount || runtimeStartup.snapshot().state==='starting')) {
+      throw Error('请等待当前任务和启动结束后修改订阅');
+    }
+    const result = feedsHost[name.slice('feeds.'.length)](payload); publish(); return result;
+  }
   if (name === 'voice.stop') {
     if (sender !== panel) throw Error('语音操作只能从面板调用');
     return {available: false, stopped: false, reason: '语音供应商尚未连接'};
@@ -838,6 +856,7 @@ app.whenReady().then(async () => {
   if (!ownsDesktopInstance) return;
   desktopHost = createDesktopHost();
   agentArtsConfig = createAgentArtsConfig({userData: app.getPath('userData'), safeStorage});
+  if (competitionMode && !syntheticMvp) feedsHost = createDesktopFeedsHost({userData:app.getPath('userData'),safeStorage});
   microphonePermissionGate = createMicrophonePermissionGate({
     expectedPageUrl: pathToFileURL(entry).href,
     isTrustedWindow: contents => contents === panel?.webContents,
@@ -894,6 +913,9 @@ app.whenReady().then(async () => {
     else if (panel.isVisible()) { if (!away) away = Date.now(); else if (Date.now() - away > 520) { panel.hide(); away = 0; } }
   }, 80);
   app.on('before-quit', event => {
+    if (runtimeStartup.snapshot().state === 'starting') {
+      event.preventDefault(); runtimeError = 'Runtime 正在连接，请稍后退出'; publish(); return;
+    }
     if ((runtimeApplication?.activeTaskCount ?? 0) > 0) {
       event.preventDefault();
       app.isQuitting = false;
@@ -904,6 +926,7 @@ app.whenReady().then(async () => {
     try {
       if (runtimeApplication) runtimeApplication.close();
       else runtime?.close?.();
+      feedsHost?.close();
     } catch (error) {
       event.preventDefault();
       app.isQuitting = false;
