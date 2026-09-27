@@ -1,6 +1,47 @@
-# 编程工具：可信工作区只读能力（MOD-18）
+# 编程工具：可信工作区能力（MOD-18）
 
-`@personal-agent/coding-tools` 当前交付 `huawei_ict_agentarts` Competition Profile 的两个本地只读能力：由可信宿主绑定一个工作区根目录，并按需把 `workspace.read_text@1.0.0`、`workspace.list_entries@1.0.0` 注册到现有 `ToolHost`。它不执行命令、不生成或应用 patch、不修改 Git 状态，也不提供 Artifact/Evidence 服务。
+`@personal-agent/coding-tools` 为 `huawei_ict_agentarts` Competition Profile 提供两个受限只读工具、一个须由可信宿主显式注册的固定命令工具，以及独立授权的补丁候选和原文件应用工具。它不接受自由 shell/argv，不自动把候选文件应用到原文件，不自动发布，也不提供 Artifact/Evidence 服务。
+
+## 当前增量：独占句柄内应用文本补丁
+
+`createWorkspacePatchApplyTool(options)` / `registerWorkspacePatchApply(host, options)`
+显式提供 `workspace.apply_text_patch@1.0.0`。它复用现有只读 preview 的严格
+相对路径、原 SHA-256、唯一精确编辑和有界 UTF-8 候选字节；额外要求
+`workspace:apply`，不能把 stage 的 `workspace:write` 授权升级为源文件应用。
+可信宿主提供工作区根、工作区外且已限权的恢复目录、受信 PowerShell 可执行文件；
+helper 脚本和可执行文件也必须位于授权工作区外，模型和工具输入都不能改变
+这些位置。当前仅支持 Windows，默认不注册到产品。
+
+固定的 `scripts/locked-apply.ps1` 不使用 `ExecutionPolicy Bypass`，通过 stdin
+接收本次 preview 生成、SHA 绑定的候选字节，不信任可由其他进程修改的 stage
+文件。它用 .NET `FileStream` 的 `FileShare.None` 在同一独占句柄内核对源 SHA、
+最终路径和单硬链接身份；首写前在受信恢复目录排他创建备份并 `Flush(true)`、
+读回备份，之后才原位写入、截断、`Flush(true)` 并在仍持锁时读回目标 SHA。
+打开文件时已有其他句柄或原 SHA 不符时不写。成功结果只证明独占读回的那个
+时刻，锁释放后的用户编辑仍可继续。写入开始后故障、超时或进程终止可能留下
+部分文件与备份，必须以任务/运行标识查找备份并重新核对当前源文件及授权，
+不自动重试或盲目回滚。恢复目录还按源文件保留 `.inflight` 标记及 helper PID：
+候选字节发送前持久创建，只有进程 `close` 确认后才删除；2 秒停止等待超时
+可以先向上层返回未知，但标记未消失前不得对账或再次 apply 同一源文件。
+进程/宿主崩溃留下的标记只能由受信恢复流程确认 PID 已退出、核对备份和
+当前源文件后处理。原位写入不是断电/崩溃时始终原子旧或新的替换。
+
+此工具仍不构成任意路径的 OS 沙箱；Node 先拒绝链接、硬链接和越界路径，
+helper 再对已打开句柄核对最终路径和链接数，无法证明时不写。恢复目录必须由
+可信宿主预先创建并限制访问；本包不把备份当作 Artifact，也不允许其内容自动
+送往云端。当前 factory 只确认恢复目录位于工作区外且存在，不能证明 Windows
+ACL 已限权；正式组合在核验目录访问控制前不得注册 apply。合成临时目录测试
+不构成该核验。现有 ToolGateway 对所有 `local_write` 异常保守映射
+`RESULT_UNKNOWN`，包括可以证明首写前安全拒绝的冲突，需由公共 owner 后续
+明确分阶段错误；本包不越界修改 Gateway。真实用户工作区验收须与命令工具
+共用编程链的一次联合回执。
+
+## 既有增量：授权后的文本补丁候选文件
+
+
+`createWorkspacePatchStageTool(options)` 提供显式注册的 `workspace.stage_text_patch@1.0.0`。可信宿主提供工作区根；现有 ToolGateway/Policy 按任务、工具、参数和 `workspace:read` + `workspace:write` 授权，本包不签发授权。输入沿用预览的规范路径、`expectedSha256` 和有界 `edits`。它拒绝链接、硬链接、目录逃逸、敏感文件和过期哈希，在可信根下排他创建 `.pa-stage-*.patch` 候选文件，读回摘要并复核原文件。返回的 `stagedPath` 是相对路径；原文件始终不打开写入、不重命名、不覆盖。`registerWorkspacePatchStage(host, options)` 沿用现有 ToolHost 生命周期，默认不在产品中注册。
+
+候选文件创建属于 `local_write`，不支持自动幂等重试与恢复；失败时尝试删除本次候选，无法确认清理则报告 `RESULT_UNKNOWN`。候选文件不是已应用补丁或最终 Artifact。上述 apply 是独立的独占句柄原位应用路径，不把 stage 的哈希检查或 rename 冒充原子 CAS。
 
 ## 公开入口
 
@@ -18,6 +59,14 @@
 - 输入为 `{path, limit?}`；只有 `path:'.'` 表示受信根，其他路径必须是规范相对子目录。默认 limit 为 100；宿主 `maxEntries` 可降低请求上限，模块硬上限为 1000。
 - 输出为 `{path, entries:[{name, kind:'file'|'directory'}], truncated}`。只返回直接子项名称与类别，不递归、不读取正文，也不返回绝对路径、权限、所有者、大小或时间；结果自身同样受 960 KiB 序列化门禁约束。
 
+固定命令使用独立入口与 scope：
+
+- `createWorkspaceCommandTool(options)` 创建 `workspace.run_allowed_command@1.0.0`；`registerWorkspaceCommand(host, options)` 显式注册并返回 disposer。`rootPath`、非空 `recipes` 及其中每个绝对可执行文件路径和完整 argv 均来自可信宿主；可执行文件不能位于可写工作区内。工具输入仅有 `{recipeId}`，严格枚举并拒绝额外字段。宿主配置在注册时复制，不受后续数组修改影响。
+- scope 为 `workspace:execute`，descriptor 是 `local_write`、不可幂等/不可自动恢复；已有 Policy/ToolGateway 必须对精确参数审批并消费授权。当前 `requiresPresence:false` 仅因 Runtime 未提供独立在场字段，绝不代替审批。
+- 用 Node 内置 `spawn` 的 `shell:false`、固定 canonical 工作目录、空环境及隐藏窗口执行；不引入 execa 或另一套调度器。运行期限默认 30 秒、至多 120 秒；合并 stdout/stderr 原始字节预算默认 64 KiB、至多 256 KiB。超限、截止或取消会请求终止直接子进程；无法在 2 秒内确认退出时返回未知结果。输出必须完整有效 UTF-8，不截断成功结果。
+- 输出 `{recipeId,exitCode,stdout,stderr}` 只证明该直接进程的退出码与收集到的文本；非零码是失败的验证命令，不代表产物已读回、Artifact 已保存或副作用可重试。`ToolGateway` 对 `local_write` 异常统一返回 `RESULT_UNKNOWN`，调用方必须对账。
+- `rootPath` 只是 cwd，不是进程文件系统边界。固定可信命令仍以宿主 OS 账号权限访问文件；本工具不保证 Windows 子进程树清理、任意代码隔离或命令只写工作区。宿主只能注册已审查、无需派生不受控子进程的固定 recipe；任意项目脚本/自由命令要先有另行验证的进程与文件系统隔离。生产组合目前不注册此能力。
+
 ## 安全边界
 
 工具拒绝绝对路径、`..`、Windows 盘符与 drive-relative 路径、UNC/设备路径、ADS、保留设备名和含尾随点/空格的歧义段。可信根使用 OS-native 同步 realpath，候选文件使用异步 realpath，避免 Windows CI 临时目录的 legacy/native 别名差异造成错误拒绝；随后通过 `path.relative` 的目录边界判断，不会用字符串前缀判断 containment。打开文件前后会再次核对 realpath 和文件标识，读取期间按块检查取消与 deadline，并在文件元数据变化时拒绝返回。
@@ -26,7 +75,7 @@
 
 原始字节数不等于 JSON 帧大小：Tab、换行、回车、引号和反斜杠会在 JSON 中转义。默认 256 KiB 即使全部由当前允许的最坏单字节转义字符组成，结果自身仍落在 960 KiB 预算内；NUL 等会产生更大 `\u00xx` 膨胀的控制字符会先被二进制策略拒绝。宿主提高原始文件上限时，工具会按实际序列化大小再次 fail-closed。该预算只约束 `WorkspaceReadResult`，不是对任意未来包装的保证：公共 Schema 没有限制所有 ID 与 `evidenceRefs` 的总长度，上层仍必须调用 `encodeFrame` 执行最终 1 MiB 帧校验。
 
-这是一层应用内约束，不是 OS 沙箱。跨平台 Node API 没有提供对整条路径逐目录、不可替换的句柄遍历；实现用 canonical path、打开句柄身份和读取后元数据复核缩小符号链接/junction 与 TOCTOU 风险，但不能在攻击者可并发改写目录项的工作区内宣称消除了所有竞态。后续 command/patch 执行必须使用独立、经验证的进程/文件系统隔离方案，不能把本工具的检查当作写入沙箱。
+这是一层应用内约束，不是 OS 沙箱。跨平台 Node API 没有提供对整条路径逐目录、不可替换的句柄遍历；实现用 canonical path、打开句柄身份和读取后元数据复核缩小符号链接/junction 与 TOCTOU 风险，但不能在攻击者可并发改写目录项的工作区内宣称消除了所有竞态。只读检查与候选创建不能当作原文件写入沙箱；固定命令 provider 也不提升为任意代码隔离能力。
 
 返回的源码只交给已经通过本地授权的调用路径。本包不会上传 AgentArts、写日志或持久化内容；调用方若要把内容发往云端，仍须单独执行最小化、脱敏和出机授权。
 
@@ -38,7 +87,7 @@
 
 本包消费 `@personal-agent/contracts@0.1.0-alpha.1` 的 provisional `RegisteredTool`、`ToolContext` 与 `ToolHost`，并按现有 Gateway/Policy scope 机制工作。它没有私设仍为 unavailable 的 `ToolExecutionPort`、ArtifactPort 或 EvidencePort。
 
-AgentArts 工具提案、Runtime composition、目标系统读回、Evidence 和最终回答尚未接通；因此这些只是离线可验证的本地只读工具，不是完整编程执行能力，也不是 Competition Golden Path 已完成或真实 AgentArts 可用的证据。根 `package.json` build 编排与 `package-lock.json` workspace 记录随 PR #83 直接从 `main@1e3b56b6` 重建；旧 Draft #63 已关闭且不作为本 PR 的堆叠依赖。`workspace.list_entries` 不会自动进入生产 composition。
+已合并的只读工具验收不证明候选或 apply 工具已进入 Runtime 或真实 AgentArts。`workspace.list_entries`、固定命令、候选文件和 apply 工具均不会自动进入生产 composition。根 `package.json` build 编排与 `package-lock.json` workspace 记录随 PR #83 从 `main@1e3b56b6` 重建；旧 Draft #63 已关闭。
 
 ## 定向验证
 

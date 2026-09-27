@@ -3,12 +3,12 @@ export type {VoiceErrorCode} from './errors.js';
 export {
   MAX_AUDIO_BYTES,
   MAX_AUDIO_DURATION_MS,
-  MAX_FRAME_BYTES,
-  MAX_QUEUE_BYTES,
-  MAX_QUEUE_FRAMES,
   MAX_SPEECH_CHARACTERS,
   MAX_TRANSCRIPT_CHARACTERS,
   VOICE_AUDIO_FORMAT,
+  MAX_FRAME_BYTES,
+  MAX_QUEUE_BYTES,
+  MAX_QUEUE_FRAMES,
 } from './ports.js';
 export type {
   SpeechOutputPort,
@@ -32,12 +32,19 @@ export type {
   VoicePcmFrameSubscription,
   VoicePcmTerminalReason,
 } from './ports.js';
+export {createVoicePcmBuffer} from './pcm-buffer.js';
+export type {VoicePcmBuffer, VoicePcmBufferOptions} from './pcm-buffer.js';
 export {createVoicePcmFrameSourcePort} from './pcm-frame-source.js';
 export {
   UnavailableSpeechOutputPort,
   UnavailableSpeechRecognitionPort,
   UnavailableTranscriptConsumerPort,
 } from './unavailable.js';
+export {
+  RuntimeClientTranscriptConsumer,
+  createRuntimeClientTranscriptConsumer,
+} from './runtime-consumer.js';
+export type {RuntimeClientTranscriptConsumerOptions} from './runtime-consumer.js';
 export {createWindowsSystemSpeechPorts} from './windows-system-speech.js';
 export type {WindowsSystemSpeechPorts} from './windows-system-speech.js';
 export {VoiceSessionManager} from './voice-session.js';

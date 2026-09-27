@@ -12,6 +12,18 @@ visible; unrelated new facts do not invalidate every plan. Time is explicit UTC
 so expiry and JSON replay are deterministic. Withdrawn plans KEEP their inactive
 state; KEEP is not an assertion of truth, task success or authorization.
 
+`selectGoalRevisionImpact(snapshot, evaluatedAt, {expectedGraphRevision,
+previousGoal, currentGoal})` takes two consecutive Goal references already
+present in one trusted graph snapshot. It reuses `analyzeImpact` and returns
+only current RECHECK items causally pinned to the superseded Goal version;
+unrelated Fact changes and old historical items stay outside this subset.
+`previewGoalRevisionRepair(boundStore, evaluatedAt, {...selection, changes})`
+applies caller-authored changes only to that subset on an isolated copy via
+the existing repair preflight. It neither chooses new plan text nor writes.
+The complete impact report can still contain other RECHECK items, and a partial
+preview does not imply complete repair. See
+[`MOD-28-GOAL-REVISION-01`](../../docs/modules/MOD-28-GOAL-REVISION-01.md).
+
 `proposePlanRevision(graph, evaluatedAt, {expectedGraphRevision, plan: {id,
 revision}, summary, reason})` validates an explicit candidate for an affected
 active plan. It returns REVISE with one before/after summary change. It rejects
@@ -124,3 +136,51 @@ feed nor starts the Laya process. The synthetic local probe is
 server plus `LAYA_PORT` and `LAYA_API_KEY` in its process environment. The
 Desktop production Fact consumer has not been connected yet. See
 [`MOD-28-LAYA-DECISION-01`](../../docs/modules/MOD-28-LAYA-DECISION-01.md).
+
+`selectProjectedRepairScope(snapshot, at, {graphNamespace, projection})`
+accepts the existing committed Runtime Fact projection receipt and recomputes
+impact for its exact graph revision. It returns only current RECHECK nodes
+caused by the projected Fact versions. `previewProjectedRepair(boundStore, at,
+{graphNamespace, projection, changes})` restricts an explicit repair candidate
+to that subset on one isolated snapshot. It does not poll the feed, ask
+AgentArts, acknowledge a batch, approve or commit changes. See
+[`MOD-28-PROJECTED-REPAIR-01`](../../docs/modules/MOD-28-PROJECTED-REPAIR-01.md).
+
+`decideDurableFactProjection(boundStore, decision, scopedHost, input)` is the local
+cognition handoff after a public Fact batch has been durably projected and its
+impact processed. The trusted Runtime caller supplies the projection receipt;
+the fixed-scope host reads the completed impact report for the same `batchToken`.
+An unscoped impact array cannot establish that this batch completed. This entry
+checks the original and current graph revisions and recomputes impact from the
+bound store before selecting only the projected Facts' RECHECK scope and asking
+for bounded Laya advice. The returned scope can be passed to the existing
+explicit `previewProjectedRepair` path. It does not poll or confirm a feed,
+write the graph, perform a repair, or execute any suggested action. DEP02's
+`readCompletedImpact(batchToken)` exposes the required shape for its fixed
+consumer. For a recovered older batch, the entry verifies the persisted report
+against the graph at its original revision, then computes the current impact at
+the caller's explicit `at`. A superseded Fact version cannot trigger advice;
+another graph append during advice causes a revision conflict. Production
+composition and joint acceptance are still pending. Module tests use synthetic
+data only.
+
+`previewDurableFactRepair(boundStore, scopedHost, at, {graphNamespace,
+projection, changes})` uses the same durable completion and historical report
+check for an explicit candidate after advice. It reuses `previewProjectedRepair`
+on the current graph, so unrelated graph revisions can advance without losing
+the affected subset. The projected Fact must still be the current version;
+candidate targets must be the current affected node versions and retain their
+original dependency IDs. A changed Fact or target is a revision conflict, and
+an unrelated dependency replacement is not applicable. This remains a read-only
+preview; approval, source Evidence and graph CAS are enforced by the existing
+local repair task before any write.
+
+The entry first calls that exact scoped durable read. A pending batch gives `NOT_APPLICABLE`;
+another consumer's batch remains the host's `NOT_FOUND`. The trusted caller
+must recover the original projection receipt and batch token across restart.
+DEP02's `listImpactReceipts({afterGraphRevision,limit})` now pages pending and
+completed receipts for the fixed consumer from the existing projection records.
+Production composition must replay them before advancing the feed and only
+advance its existing task checkpoint after accounting for each handoff.
+`drain()` alone reports only a batch count and watermark. The module has not
+been connected to a real source trigger or restart flow yet.
