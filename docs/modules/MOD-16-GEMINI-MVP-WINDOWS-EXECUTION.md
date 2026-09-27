@@ -46,6 +46,18 @@
 - 命名管道连接断开时，`HostService` 清空当前会话的 `NotepadTargets`（旧 `targetRef` 立即失效，不可跨会话重用）。
 - 严格释放所有 `Process`、`SafePipeHandle`、`CancellationTokenSource` 及 Win32 进程句柄。
 
+### 1.5 活跃重复执行（Duplicate Execute）收敛与最终 Durable Receipt 关联
+- **缺陷返修背景**：原实现中，当针对同一 `identity` 的重复 `execute` 请求在原任务后台执行中到达时，`journal.Start` 返回非终态记录（`previous.Terminal == false`），`HostService` 立即通过 `SendRecordAsync` 将其过早映射为 `result_unknown` 返回给重复请求方，即使后台 `_active` 任务仍在正常执行，导致重复请求过早报错。
+- **活跃执行跟踪（`ActiveExecution`）**：
+  - 将 `_active` 的值类型由纯 `CancellationTokenSource` 扩展为 `ActiveExecution`，跟踪运行生命周期及所有等待该终态结果的请求者 `ExecutionRequester(Pipe, RequestId, SessionId, Connected)`。
+  - 当重复 `execute` 到达且 `identity.RunId` 处于 `_active` 时，调用 `active.TryAttach` 将其登记为等待者（并按 `(RequestId, SessionId)` 去重），方法立即返回，**完全不阻塞 `ServeConnectionAsync` 循环**，保障随后的 `cancel`、`status` 等帧仍能被及时读取与处理。
+  - 当后台 UIA 替换完成并产生落盘终态收据（`verified`、`refused`、`cancelled` 或写后异常 `result_unknown`）后，`MarkCompleted` 将同一真实 durable receipt 分别以各自对应的 `requestId` 响应所有关联请求者，杜绝重放写入的同时杜绝假冒完成与过早报错。
+  - **重启遗留未知与已终态运行保持原语义**：
+    - 若 `journal.Start` 返回 `Terminal == false` 但 `_active` 中无此任务，说明属于宿主进程崩溃/重启后的遗留日志，按预期安全返回 `result_unknown`。
+    - 若 `previous.Terminal == true`，直接返回已持久化的终态结果。
+    - 若相同 `runId` 传入不同参数，`RunJournal.Start` 抛出 `InvalidDataException` 拒绝。
+  - **取消与断连边界**：写前取消/超时产生 `cancelled` / `refused`，写后异常/中断产生不可逆的 `result_unknown`。
+
 ---
 
 ## 2. 验证证据与测试记录
@@ -65,6 +77,7 @@
   - 新增 `target_ready_result`（`ready=true` 带 `expiresAt`、`ready=false` 带 `errorCode`）合法帧。
   - 异常约束：`ready=true` 携带 `errorCode`、`ready=false` 携带 `expiresAt`、`ready` 传入非布尔值等非法帧，全部被严格拒绝（抛出 `InvalidDataException`）。
   - `RunJournal` 幂等开始、断线后 `result_unknown` 恢复、相同 `runId` 传不同输入拒绝。
+  - 新增 `ActiveExecution` 状态机回归：验证进行中重复请求附着（`TryAttach`）、相同请求去重、执行完成全量分发（`MarkCompleted`）、完成之后附着立即返回终态收据。
 - 输出：`Windows Host portable contract and durable-run fixture passed`，Exit 0。
 
 ### 2.3 定向时序回归（`WindowsHost.Timing`）

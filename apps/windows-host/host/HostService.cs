@@ -6,11 +6,60 @@ using System.Text.Json;
 
 namespace PersonalAgent.WindowsHost.Service;
 
+internal readonly record struct ExecutionRequester(
+    NamedPipeServerStream Pipe,
+    string RequestId,
+    string SessionId,
+    CancellationToken Connected);
+
+internal sealed class ActiveExecution
+{
+    private readonly object _gate = new();
+    private HostRunRecord? _terminalReceipt;
+    internal CancellationTokenSource Lifetime { get; }
+    internal List<ExecutionRequester> Requesters { get; }
+
+    internal ActiveExecution(CancellationTokenSource lifetime, NamedPipeServerStream pipe,
+        string requestId, string sessionId, CancellationToken connected)
+    {
+        Lifetime = lifetime;
+        Requesters = [new ExecutionRequester(pipe, requestId, sessionId, connected)];
+    }
+
+    internal bool TryAttach(NamedPipeServerStream pipe, string requestId, string sessionId,
+        CancellationToken connected, out HostRunRecord? completedReceipt)
+    {
+        lock (_gate)
+        {
+            if (_terminalReceipt is not null)
+            {
+                completedReceipt = _terminalReceipt;
+                return false;
+            }
+            if (!Requesters.Any(r => r.RequestId == requestId && r.SessionId == sessionId))
+            {
+                Requesters.Add(new ExecutionRequester(pipe, requestId, sessionId, connected));
+            }
+            completedReceipt = null;
+            return true;
+        }
+    }
+
+    internal List<ExecutionRequester> MarkCompleted(HostRunRecord receipt)
+    {
+        lock (_gate)
+        {
+            _terminalReceipt = receipt;
+            return new List<ExecutionRequester>(Requesters);
+        }
+    }
+}
+
 internal sealed class HostService(HostLaunchBinding launch, HostWire wire, RunJournal journal)
 {
     private const string Version = "0.1.0";
     private readonly SemaphoreSlim _writeLock = new(1, 1);
-    private readonly ConcurrentDictionary<string, CancellationTokenSource> _active = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ActiveExecution> _active = new(StringComparer.Ordinal);
 
     internal async Task RunAsync(CancellationToken stop)
     {
@@ -31,7 +80,7 @@ internal sealed class HostService(HostLaunchBinding launch, HostWire wire, RunJo
                     connection.Cancel();
                     foreach (var active in _active.Values)
                     {
-                        try { active.Cancel(); }
+                        try { active.Lifetime.Cancel(); }
                         catch (ObjectDisposedException) { /* Completion won the disconnect race. */ }
                     }
                 }
@@ -180,8 +229,23 @@ internal sealed class HostService(HostLaunchBinding launch, HostWire wire, RunJo
         var previous = journal.Start(identity, startedAt);
         if (previous is not null)
         {
+            if (previous.Terminal)
+            {
+                await SendRecordAsync(pipe, previous, requestId, sessionId, connected).ConfigureAwait(false);
+                return; // Reconnects and duplicate runIds never replay a write.
+            }
+            if (_active.TryGetValue(identity.RunId, out var active))
+            {
+                if (active.TryAttach(pipe, requestId, sessionId, connected, out var completedReceipt))
+                {
+                    return; // Active run in progress; receipt will be delivered when complete.
+                }
+                await SendRecordAsync(pipe, completedReceipt!, requestId, sessionId, connected).ConfigureAwait(false);
+                return;
+            }
+            // Host process was restarted after an uncompleted run: only journal entry exists.
             await SendRecordAsync(pipe, previous, requestId, sessionId, connected).ConfigureAwait(false);
-            return; // Reconnects and duplicate runIds never replay a write.
+            return;
         }
 
         var deadline = Utc(Field(frame, "deadline"));
@@ -209,11 +273,21 @@ internal sealed class HostService(HostLaunchBinding launch, HostWire wire, RunJo
             return;
         }
         lifetime.CancelAfter(remaining);
-        if (!_active.TryAdd(identity.RunId, lifetime))
+        var execution = new ActiveExecution(lifetime, pipe, requestId, sessionId, connected);
+        if (!_active.TryAdd(identity.RunId, execution))
         {
             lifetime.Dispose();
-            await SendRecordAsync(pipe, journal.Find(identity.RunId)!, requestId, sessionId, connected)
-                .ConfigureAwait(false);
+            if (_active.TryGetValue(identity.RunId, out var existingActive))
+            {
+                if (existingActive.TryAttach(pipe, requestId, sessionId, connected, out var completedReceipt))
+                {
+                    return;
+                }
+                await SendRecordAsync(pipe, completedReceipt!, requestId, sessionId, connected).ConfigureAwait(false);
+                return;
+            }
+            var latest = journal.Find(identity.RunId) ?? journal.Start(identity, startedAt)!;
+            await SendRecordAsync(pipe, latest, requestId, sessionId, connected).ConfigureAwait(false);
             return;
         }
         var expectedText = Field(frame, "expectedText");
@@ -237,7 +311,11 @@ internal sealed class HostService(HostLaunchBinding launch, HostWire wire, RunJo
                 };
                 var receipt = journal.Complete(identity, state, Timestamp(DateTime.UtcNow),
                     state == "verified" ? RandomId() : null, error);
-                await TrySendRecordAsync(pipe, receipt, requestId, sessionId, connected).ConfigureAwait(false);
+                var requesters = execution.MarkCompleted(receipt);
+                foreach (var req in requesters)
+                {
+                    await TrySendRecordAsync(req.Pipe, receipt, req.RequestId, req.SessionId, req.Connected).ConfigureAwait(false);
+                }
             }
             catch
             {
@@ -245,7 +323,11 @@ internal sealed class HostService(HostLaunchBinding launch, HostWire wire, RunJo
                 {
                     var receipt = journal.Complete(identity, "result_unknown", Timestamp(DateTime.UtcNow),
                         null, "RESULT_UNKNOWN");
-                    await TrySendRecordAsync(pipe, receipt, requestId, sessionId, connected).ConfigureAwait(false);
+                    var requesters = execution.MarkCompleted(receipt);
+                    foreach (var req in requesters)
+                    {
+                        await TrySendRecordAsync(req.Pipe, receipt, req.RequestId, req.SessionId, req.Connected).ConfigureAwait(false);
+                    }
                 }
                 catch { Environment.Exit(3); } // The durable started record keeps the result unknown.
             }
@@ -262,7 +344,7 @@ internal sealed class HostService(HostLaunchBinding launch, HostWire wire, RunJo
         var record = FindMatching(frame);
         if (record is not null && _active.TryGetValue(record.Identity.RunId, out var active))
         {
-            try { active.Cancel(); }
+            try { active.Lifetime.Cancel(); }
             catch (ObjectDisposedException) { /* Completion won the cancel race. */ }
         }
         // There is no cancel acknowledgement frame in 0.1.0. Caller polls status.
