@@ -36,6 +36,13 @@ through the existing Runtime before saving the returned consumption checkpoint.
 No source fetch, task store or permission is created. See
 [`MVP-TWIN-B-KNOWLEDGE-01`](../../docs/modules/MVP-TWIN-B-KNOWLEDGE-01.md).
 
+`prepareTriageDispatch({namespace, messages, labels, results})` validates the
+same-call `LayaTriageService` input/receipt binding and returns metadata-only
+label groups, `mainAgent` and machine `review` queues, and deferred items with
+their original required route. Stable work keys use the existing Runtime
+idempotency boundary. This does not read or write mail, grant permission, or
+export content. See [`MVP-TWIN-B-TRIAGE-01`](../../docs/modules/MVP-TWIN-B-TRIAGE-01.md).
+
 `analyzeImpact(graph, evaluatedAt)` validates and replays the complete MOD-27
 graph. It returns current Goal/Decision/Plan references with KEEP or RECHECK,
 reasons and exact causal references. Superseded, withdrawn and out-of-validity
