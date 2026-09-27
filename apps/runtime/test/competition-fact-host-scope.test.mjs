@@ -8,7 +8,7 @@ import {createRuntimeApplication} from '../dist/application.js';
 const context = () => ({deadline: new Date(Date.now() + 60_000).toISOString(),
   signal: new AbortController().signal});
 
-test('mutating source configuration cannot redirect a bound Competition Fact host', async () => {
+test('mutable caller inputs cannot redirect a bound Competition Fact host', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'personal-agent-fact-scope-'));
   let app;
   const hosts = [];
@@ -27,19 +27,21 @@ test('mutating source configuration cannot redirect a bound Competition Fact hos
       summary: 'Synthetic original source', observedAt: '2026-09-25T00:00:00.000Z',
       validFrom: '2026-09-25T00:00:00.000Z', validUntil: '2027-01-01T00:00:00.000Z',
       expectedFactRevision: null};
-    original.recordPublicSource(first, context());
+    original.recordPublicSource(first, {...context(), factId: 'spoofed-note'});
 
     options.memoryNamespace = 'synthetic-other';
     options.graphNamespace = 'synthetic-other-graph';
     options.consumerKey = 'synthetic-other-consumer';
     assert.equal(host.readPublicSourceHead(key), 1);
+    assert.equal(host.readPublicSourceHead({...key, factId: 'spoofed-note'}), null);
     assert.equal(host.recordPublicSource({...first, sourceRevision: 'b'.repeat(64),
       summary: 'Synthetic corrected source', expectedFactRevision: 1}, context()).fact.ref.revision, 2);
     assert.equal(original.readPublicSourceHead(key), 2);
     assert.equal(other.readPublicSourceHead(key), null);
 
     const withdrawn = host.withdrawPublicSource({...key, withdrawalId: 'synthetic-withdrawal',
-      expectedFactRevision: 2, observedAt: '2026-09-25T01:00:00.000Z'}, context());
+      expectedFactRevision: 2, observedAt: '2026-09-25T01:00:00.000Z'},
+    {...context(), factId: 'spoofed-note'});
     assert.equal(withdrawn.fact.state, 'withdrawn');
     assert.equal(original.readPublicSourceHead(key), 3);
     assert.equal(other.readPublicSourceHead(key), null);
