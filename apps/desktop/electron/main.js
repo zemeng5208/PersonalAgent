@@ -13,6 +13,7 @@ import {restoreSyntheticRepairSubmission} from './competition-repair-submission.
 import {readCapabilityDirectory} from './capability-directory.js';
 import {createMicrophonePermissionGate} from './microphone-permission.js';
 import {readApprovalPage} from './approval-history.js';
+import {createAgentArtsConfig} from './agentarts-config.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -104,6 +105,7 @@ const terminalTaskStates = new Set(['succeeded', 'failed', 'cancelled']);
 const approvals = new Map();
 const notifications = new Map();
 let runtimeApplication;
+let agentArtsConfig;
 let syntheticRepairHost;
 const repairPrompts = new Set();
 let microphonePermissionGate;
@@ -126,6 +128,7 @@ function snapshot(surface) {
     approvals: [...approvals.values()],
     notifications: [...notifications.values()],
     model: structuredClone(model),
+    agentArts: agentArtsConfig?.snapshot(),
     thinking: structuredClone(thinking),
     voice: {available: false, status: 'unavailable', reason: '语音供应商尚未连接'},
   };
@@ -406,17 +409,18 @@ function updateThinking(input) {
 
 async function initializeModelFromEnvironment() {
   if (competitionMode) {
+    const cloudSettings=agentArtsConfig.snapshot();
     model = {
       ...model,
       provider: 'agentarts',
       label: 'AgentArts · Competition Profile',
       status: 'configured',
       verification: 'unverified',
-      baseUrl: process.env.PA_AGENTARTS_GATEWAY_URL ?? '',
+      baseUrl: cloudSettings.gatewayUrl,
       model: 'AgentArts Runtime',
-      deployment: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
+      deployment: cloudSettings.runtimeName,
       configured: true,
-      keyConfigured: Boolean(process.env.PA_AGENTARTS_AUTHORIZATION),
+      keyConfigured: cloudSettings.configured,
       persisted: false,
       enabled: true,
       capabilities: {text: true, streaming: false, toolCalling: false, structuredOutput: false, vision: false},
@@ -606,9 +610,7 @@ async function initializeRuntime() {
     const dbPath = dataPaths.runtime;
     mkdirSync(path.dirname(dbPath), {recursive: true});
     if (competitionMode) {
-      if (!process.env.PA_AGENTARTS_AUTHORIZATION) {
-        throw Error('PA_AGENTARTS_AUTHORIZATION 未配置；Competition Runtime 不会启动');
-      }
+      const cloudBinding=agentArtsConfig.binding();
       const syntheticTools = syntheticMvp
         ? (await import('./competition-synthetic-workspace.js')).createSyntheticMeetingToolset(
           path.resolve(dir, '../../../tests/manual/agentarts/fixtures/mvp-meeting'),
@@ -630,17 +632,14 @@ async function initializeRuntime() {
         ...(syntheticMvp ? {localRepair: syntheticRepairHost.localRepair} : {}),
         ...(agentArtsResponseMode === undefined ? {} : {responseMode: agentArtsResponseMode}),
         ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
-        gatewayUrl: process.env.PA_AGENTARTS_GATEWAY_URL ?? '',
-        runtimeName: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
+        ...cloudBinding,
         invokeMode: agentArtsInvokeMode,
         ...(process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT === undefined ? {} : {
           workflowGoalInput: process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT,
         }),
         authorizationProvider: {
           read: async () => {
-            const authorization = process.env.PA_AGENTARTS_AUTHORIZATION;
-            if (!authorization) throw Error('AgentArts authorization is unavailable');
-            return authorization;
+            return agentArtsConfig.readAuthorization(cloudBinding);
           },
         },
       });
@@ -716,6 +715,10 @@ async function action(event, name, payload) {
   }
   if (name === 'panel.dragEnd' && sender === panel) { dragging = false; panelDragOrigin = undefined; away = Date.now() + 400; return; }
   if (name === 'app.quit') { app.quit(); return; }
+  if (name === 'agentarts.configure') {
+    if (sender!==admin || !competitionMode || runtimeApplication?.activeTaskCount) throw Error('请在任务结束后从设置配置 AgentArts');
+    const result=agentArtsConfig.configure(payload);publish();return result;
+  }
   if (name === 'voice.stop') {
     if (sender !== panel) throw Error('语音操作只能从面板调用');
     return {available: false, stopped: false, reason: '语音供应商尚未连接'};
@@ -807,6 +810,7 @@ app.on('second-instance', () => {
 app.whenReady().then(async () => {
   if (!ownsDesktopInstance) return;
   desktopHost = createDesktopHost();
+  agentArtsConfig = createAgentArtsConfig({userData: app.getPath('userData'), safeStorage});
   microphonePermissionGate = createMicrophonePermissionGate({
     expectedPageUrl: pathToFileURL(entry).href,
     isTrustedWindow: contents => contents === panel?.webContents,
