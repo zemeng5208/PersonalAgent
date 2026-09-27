@@ -107,6 +107,27 @@ export function createDesktopTodoHost({userData,safeStorage,namespace,createDeli
       const known=records();if(!known[input.id]) throw Error('通知不存在');
       known[input.id].state='dismissed';storage.set('desktop-reminder-records',known);return snapshot();
     },
+    async create(input) {
+      if(!active) throw Error('待办服务未就绪');
+      if(!input || typeof input.title!=='string' || !input.title.trim()) throw Error('待办标题不能为空');
+      const createInput = {title: input.title.trim()};
+      if (input.notes) createInput.notes = input.notes;
+      if (input.dueUtc) createInput.due = {kind: 'instant', utc: input.dueUtc};
+      if (input.remindUtc) createInput.reminder = {remindAt: {kind: 'instant', utc: input.remindUtc}, missedPolicy: input.missedPolicy ?? 'run_once'};
+      service.create(createInput);
+      await tick(true);
+      return snapshot();
+    },
+    async update(input) {
+      if(!active || !input || typeof input.id!=='string') throw Error('待办标识无效');
+      const updateInput = {};
+      if (input.title) updateInput.title = input.title.trim();
+      if (input.notes !== undefined) updateInput.notes = input.notes;
+      if (input.status && ['open','done','cancelled'].includes(input.status)) updateInput.status = input.status;
+      service.update(input.id, updateInput);
+      await tick(true);
+      return snapshot();
+    },
     get competitionToolAvailability(){return tools.map(tool=>({toolName:tool.descriptor.name,
       toolVersion:tool.descriptor.version,
       publicEnumPaths:tool.descriptor.name==='todo.list'?['/status']:tool.descriptor.name==='todo.update'?['/status','/missedPolicy']:tool.descriptor.name==='todo.create'?['/missedPolicy']:[],

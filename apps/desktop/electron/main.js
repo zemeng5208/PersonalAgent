@@ -1143,20 +1143,20 @@ async function action(event, name, payload) {
       ? '配置已加密保存，请重启应用完成连接。'
       : '配置已加密保存，Runtime 已连接；云端可用性以实际任务结果为准。'};
   }
-  if (['todo.authorize','todo.revoke','todo.configureNotifications','todo.dismiss'].includes(name)) {
-    if(sender!==admin || !competitionMode || syntheticMvp || !todoHost) throw Error('请从正式应用待办设置操作');
-    const result=todoHost[name.slice(5)](payload);publish();return result;
+  if (['todo.authorize','todo.revoke','todo.configureNotifications','todo.dismiss','todo.create','todo.update'].includes(name)) {
+    if ((sender !== admin && sender !== workspace && sender !== panel) || !competitionMode || syntheticMvp || !todoHost) throw Error('请从正式应用待办设置操作');
+    const result = await todoHost[name.slice(5)](payload); publish(); return result;
   }
   if (['goalCloud.authorize','goalCloud.revoke'].includes(name)) {
     if(sender!==admin || !competitionMode || syntheticMvp || !goalCloudHost) throw Error('请从正式应用目标管理设置操作');
     const result=goalCloudHost[name.slice('goalCloud.'.length)](payload);publish();return result;
   }
-  if (['feeds.add','feeds.remove','feeds.authorize','feeds.revoke'].includes(name)) {
+  if (['feeds.add','feeds.remove','feeds.authorize','feeds.revoke','feeds.refresh'].includes(name)) {
     if (sender !== admin || !competitionMode || syntheticMvp || !feedsHost) throw Error('请从正式应用订阅设置操作');
-    if (name !== 'feeds.revoke' && (runtimeApplication?.activeTaskCount || runtimeStartup.snapshot().state==='starting')) {
+    if (name !== 'feeds.revoke' && name !== 'feeds.refresh' && (runtimeApplication?.activeTaskCount || runtimeStartup.snapshot().state==='starting')) {
       throw Error('请等待当前任务和启动结束后修改订阅');
     }
-    const result = feedsHost[name.slice('feeds.'.length)](payload); publish(); return result;
+    const result = name === 'feeds.refresh' ? feedsHost.snapshot() : feedsHost[name.slice('feeds.'.length)](payload); publish(); return result;
   }
   if (['coding.select','coding.selectNode','coding.selectNpmCli','coding.selectCheckFile','coding.authorize','coding.revoke'].includes(name)) {
     if (sender !== admin || !competitionMode || syntheticMvp || !codingWorkspace) throw Error('请从正式应用设置配置编程工作区');
