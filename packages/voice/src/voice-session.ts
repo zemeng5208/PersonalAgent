@@ -331,6 +331,9 @@ export class VoiceSessionManager {
   private readonly notificationQueue: VoiceSessionSnapshot[] = [];
   private publishingNotifications = false;
   private active?: SessionRecord;
+  // A rejected stop leaves resource ownership unknown. Do not erase that fact
+  // when removing an operation or replacing its session.
+  private releaseFailed = false;
 
   constructor(options: VoiceSessionManagerOptions = {}) {
     this.recognition = options.recognition ?? new UnavailableSpeechRecognitionPort();
@@ -365,6 +368,7 @@ export class VoiceSessionManager {
     }
     if (signalAborted(signal)) throw new VoiceSessionError('CANCELLED', 'Voice session cancelled');
     if (expiresAt <= Date.now()) throw new VoiceSessionError('TIMEOUT', 'Voice session deadline expired');
+    this.assertResourcesReleased();
 
     const sessionId = this.createId('session');
     const record: SessionRecord = {
@@ -440,6 +444,8 @@ export class VoiceSessionManager {
       const raw = await this.waitForOperation(record, active);
       this.assertUsable(record);
       const transcript = parseRecognitionResult(raw, record.locale);
+      await this.finishOperation(record, active, 'completed');
+      this.assertUsable(record);
       const transcriptId = this.createId('transcript');
       record.transcripts.clear();
       record.transcripts.set(transcriptId, transcript);
@@ -491,6 +497,8 @@ export class VoiceSessionManager {
       const raw = await this.waitForOperation(record, active);
       this.assertUsable(record);
       const reply = parseConsumptionResult(raw, transcript.locale);
+      await this.finishOperation(record, active, 'completed');
+      this.assertUsable(record);
       const replyId = this.createId('reply');
       record.replies.clear();
       record.replies.set(replyId, reply);
@@ -531,6 +539,8 @@ export class VoiceSessionManager {
       active = this.attachOperation(record, 'playback', controller, handle);
       this.transition(record, 'speaking');
       await this.waitForOperation(record, active);
+      await this.finishOperation(record, active, 'completed');
+      this.assertResourcesReleased();
       if (active.interruptedByUser) {
         return {sessionId: record.sessionId, completed: false, interrupted: true};
       }
@@ -560,7 +570,7 @@ export class VoiceSessionManager {
     }
     const playback = [...record.operations].find(operation => operation.kind === 'playback');
     if (playback === undefined) {
-      return {sessionId: record.sessionId, playbackStopped: false, resourcesReleased: true};
+      return {sessionId: record.sessionId, playbackStopped: false, resourcesReleased: !this.releaseFailed};
     }
     playback.interruptedByUser = true;
     playback.abortCode = 'CANCELLED';
@@ -568,6 +578,7 @@ export class VoiceSessionManager {
     const releasePromise = this.releaseOperation(playback, 'interrupted');
     playback.controller.abort();
     const released = await releasePromise;
+    if (!released) await this.terminate(record, 'disposed');
     if (this.active === record && !terminalStates.has(record.state) && record.state !== 'listening') {
       this.transition(record, 'listening');
     }
@@ -613,6 +624,7 @@ export class VoiceSessionManager {
   }
 
   private assertUsable(record: SessionRecord): void {
+    this.assertResourcesReleased();
     if (this.active !== record) throw new VoiceSessionError('STALE_SESSION', 'Voice session was replaced');
     if (record.abortCode !== undefined || record.root.signal.aborted) {
       throw new VoiceSessionError(record.abortCode ?? 'CANCELLED', record.abortMessage ?? 'Voice session cancelled');
@@ -624,6 +636,12 @@ export class VoiceSessionManager {
     if (terminalStates.has(record.state)) {
       const details = abortDetails(record.terminalReason ?? 'cancelled');
       throw new VoiceSessionError(details.code, details.message);
+    }
+  }
+
+  private assertResourcesReleased(): void {
+    if (this.releaseFailed) {
+      throw new VoiceSessionError('EXTERNAL_FAILURE', 'Voice operation resource release failed');
     }
   }
 
@@ -758,6 +776,13 @@ export class VoiceSessionManager {
     const released = await this.releaseOperation(active, reason);
     active.detachRoot();
     record.operations.delete(active);
+    if (!released) {
+      // Drop private receipts and stop any other in-flight work without retrying
+      // the failed release. terminate preserves the sticky failure in its receipt.
+      void this.terminate(record, 'disposed');
+      // Do not replace an existing cancellation/provider error in a finally.
+      // Successful paths call assertUsable after this cleanup before publishing.
+    }
     return released;
   }
 
@@ -773,6 +798,7 @@ export class VoiceSessionManager {
       await operation.stop(reason);
       return true;
     } catch {
+      this.releaseFailed = true;
       return false;
     }
   }
@@ -811,7 +837,7 @@ export class VoiceSessionManager {
         state: terminalState(reason),
         reason,
         stopped: true,
-        resourcesReleased: results.every(Boolean),
+        resourcesReleased: !this.releaseFailed && results.every(Boolean),
       });
     });
     return stopPromise;
