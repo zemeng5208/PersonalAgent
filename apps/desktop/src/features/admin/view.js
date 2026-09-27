@@ -4,6 +4,7 @@ import {mountLiveVoiceControls} from '../../app/live-voice-controls.js';
 import {mountProactiveControls} from '../../app/proactive-controls.js';
 import {mountMailControls} from '../../app/mail-controls.js';
 import {mountLayaControls} from '../../app/laya-controls.js';
+import {mountWorkspaceControls} from '../../app/workspace-controls.js';
 import {profilePage, bindProfile} from './profile.js';
 import {approvalPresentation, authorizationHistoryHtml, authorizationListHtml, nextApprovalExpiry} from './approval-status.js';
 import {agentArtsModelPage} from './agentarts-model.js';
@@ -114,6 +115,8 @@ export function mountAdmin(root, invoke, escape) {
   proactiveControls.show(false);
   const mailControls = mountMailControls(root.querySelector('.main'), invoke);
   const layaControls = mountLayaControls(root.querySelector('.main'), invoke);
+  const codingControls = mountWorkspaceControls(root.querySelector('.main'), invoke);
+  codingControls.show(false);
   mailControls.showSettings(false); layaControls.show(false);
 
   function capabilityTable(data) {
@@ -254,6 +257,7 @@ export function mountAdmin(root, invoke, escape) {
     proactiveControls.show(section === 'computer');
     mailControls.render(data.mail); mailControls.showSettings(section === 'connections');
     layaControls.render(data.laya); layaControls.show(section === 'connections' || section === 'memory');
+    codingControls.render(data); codingControls.show(section === 'worktrees' || section === 'environment');
     const directSettings = {settings: 'general', appearance: 'appearance', voice: 'voice', shortcuts: 'shortcuts'};
     const featureSections = ['import', 'profile', 'configuration', 'personalization', 'pets', 'usage', 'analytics', 'account', 'computer', 'browser', 'hooks', 'git', 'environment', 'worktrees', 'archive', 'memory'];
     root.querySelector('.main').dataset.surface = section === 'models' ? 'models' : directSettings[section] || featureSections.includes(section) ? 'settings' : 'standard';

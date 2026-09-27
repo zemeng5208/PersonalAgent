@@ -23,6 +23,7 @@ import {createLiveVoiceConfig} from './live-voice-config.js';
 import {createLiveVoiceHost} from './live-voice-host.js';
 import {createDesktopProactiveHost} from './proactive-host.js';
 import {createPublicConnectorHost} from './public-connector-host.js';
+import {createWorkspaceConfigHost} from './workspace-config-host.js';
 import {createMailConfig} from './mail-config.js';
 import {createMailMetadataStorage} from './mail-metadata-storage.js';
 import {createLocalLayaHost} from './laya-local-host.js';
@@ -139,6 +140,7 @@ let competitionCatalog;
 let competitionFactBridge;
 let proactiveHost;
 let productTools;
+let codingWorkspace;
 let mailConfig;
 let mailHost;
 let mailFailure = '';
@@ -204,6 +206,7 @@ function snapshot(surface) {
     live: {...(liveVoice?.snapshot() ?? liveConfig?.snapshot()), shortcut: {...liveShortcut}},
     proactive: proactiveHost?.snapshot() ?? {enabled: false, cloudAnalysis: false, status: 'disabled', reason: '主动观察尚未装配', suggestions: []},
     mail: mailSnapshot(),
+    coding: codingWorkspace?.snapshot() ?? {configured:false,reason:'编程工作区尚未装配'},
     laya: localLaya?.snapshot() ?? {state:'unavailable', ready:false, reason:'本地模型尚未装配'},
     voice: voiceInput ? {...voiceInput.snapshot(), experimental: sisConfigHost?.snapshot().configured,
       configuration: sisConfigHost?.snapshot()} : {available: false, status: voiceInitializationFailure ? 'error' : 'unconfigured',
@@ -717,6 +720,12 @@ async function initializeRuntime() {
         rootPath: path.resolve(dir, '../fixtures/agentarts'), createWorkspaceReadTool,
       });
       productTools = createPublicConnectorHost({systemObservationFactory:runtimeModule.createSystemObservationTool});
+      codingWorkspace = createWorkspaceConfigHost({userData:app.getPath('userData'),safeStorage,
+        selectDirectory:async () => {
+          const result = await dialog.showOpenDialog(admin, {title:'选择允许 PersonalAgent 使用的编程工作区',
+            properties:['openDirectory']});
+          return result.canceled ? undefined : result.filePaths[0];
+        }});
       localLaya = createLocalLayaHost({projectRoot:path.resolve(dir, '../../..'),
         createService:runtimeModule.createLocalInboxClassifier, onUpdate:publish});
       mailConfig = createMailConfig({userData:app.getPath('userData'), safeStorage,
@@ -740,15 +749,15 @@ async function initializeRuntime() {
       runtimeApplication = runtimeModule.createAgentArtsRuntimeApplication({
         path: dbPath,
         hostUserNamespace: namespace,
-        tools: [...(syntheticMvp ? syntheticTools.tools : [competitionCatalog.tool]), ...goalHost.tools, ...productTools.tools, ...(mailHost?.tools ?? [])],
+        tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : [competitionCatalog.tool]), ...goalHost.tools, ...productTools.tools, ...(mailHost?.tools ?? [])],
         ...(syntheticMvp ? {localRepair: syntheticRepairHost.localRepair} : {}),
         ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
         ...(process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT === undefined ? {} : {workflowGoalInput: process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT}),
         responseMode: agentArtsResponseMode ?? 'tool-proposal-json',
         ...(syntheticMvp ? {competitionToolExports: syntheticTools.competitionToolExports} : {
           initialRequestMode: 'goal-with-tools-json',
-          competitionToolAvailability: [competitionCatalog.availability, ...productTools.competitionToolAvailability],
-          competitionToolExports: [competitionCatalog.export, ...productTools.competitionToolExports],
+          competitionToolAvailability: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolAvailability : [competitionCatalog.availability]), ...productTools.competitionToolAvailability],
+          competitionToolExports: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolExports : [competitionCatalog.export]), ...productTools.competitionToolExports],
         }),
         gatewayUrl: process.env.PA_AGENTARTS_GATEWAY_URL ?? '',
         runtimeName: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
@@ -765,9 +774,10 @@ async function initializeRuntime() {
       });
       if (syntheticRepairHost) await syntheticRepairHost.initialize(runtimeApplication.runtime);
       if (mailHost) {mailHost.bindApplication(runtimeApplication); mailConfig.markBound(configuredMail.revision);}
+      codingWorkspace.bindApplication(runtimeApplication);
       goalHost.bind(runtimeApplication);
       goalHost.resumeApproved();
-      if (!syntheticMvp) competitionFactBridge = createDesktopCompetitionFactBridge({
+      if (!syntheticMvp && !codingWorkspace.tools.length) competitionFactBridge = createDesktopCompetitionFactBridge({
         application: runtimeApplication, catalog: competitionCatalog,
         runtimePath: dbPath, userNamespace: namespace,
       });
@@ -850,6 +860,14 @@ async function action(event, name, payload) {
   }
   if (name === 'panel.dragEnd' && sender === panel) { dragging = false; panelDragOrigin = undefined; away = Date.now() + 400; return; }
   if (name === 'app.quit') { app.quit(); return; }
+  if (['coding.select','coding.authorize','coding.revoke'].includes(name)) {
+    if (sender !== admin || !competitionMode || syntheticMvp || !codingWorkspace) throw Error('请从正式应用设置配置编程工作区');
+    if (name !== 'coding.revoke' && runtimeApplication.activeTaskCount > 0) throw Error('请等待当前任务结束后更改工作区');
+    if (name === 'coding.select') await codingWorkspace.select();
+    if (name === 'coding.authorize') codingWorkspace.authorize(payload);
+    if (name === 'coding.revoke') codingWorkspace.revoke();
+    publish();return {coding:codingWorkspace.snapshot()};
+  }
   if (['mail.configure','mail.enable','mail.read','mail.disable','laya.start','laya.stop'].includes(name)) {
     if (sender !== admin || !competitionMode || !mailConfig || !localLaya) throw Error('此操作仅允许从本项目设置调用');
     if (name === 'laya.start') {localServicesStopped = false; return localLaya.start();}
@@ -1305,6 +1323,7 @@ app.whenReady().then(async () => {
       else runtime?.close?.();
       competitionCatalog?.close();
       productTools?.close();
+      codingWorkspace?.close();
     } catch (error) {
       event.preventDefault();
       app.isQuitting = false;
