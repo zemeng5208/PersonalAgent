@@ -68,8 +68,8 @@ export function createLocalLayaHost({projectRoot, createService, createChooser, 
     if (child || stopping) throw Error('本地模型尚未停止');
     const config = discover(projectRoot);
     if (!config) {state = 'unavailable'; reason = '未找到项目内已安装的 Laya 和模型；不会自动下载'; publish(); return snapshot();}
-    if (freeMemory() < 3 * 1024 ** 3) {
-      state = 'memory_insufficient'; reason = '当前可用内存不足 3 GB，暂不加载本地模型；其他功能可继续使用'; publish(); return snapshot();
+    if (freeMemory() < (Number(process.env.PA_LAYA_MIN_FREE_MEM_BYTES) || (2 * 1024 ** 3))) {
+      state = 'memory_insufficient'; reason = '当前可用内存不足 2 GB，暂不加载本地模型；其他功能可继续使用'; publish(); return snapshot();
     }
     controller = new AbortController();
     const signal = controller.signal, key = randomBytes(32).toString('hex');
