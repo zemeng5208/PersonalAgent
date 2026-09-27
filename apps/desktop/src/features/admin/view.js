@@ -233,13 +233,13 @@ export function mountAdmin(root, invoke, escape) {
 
   function render(data) {
     current = data;
-    if (section==='computer' && data.notepad) notepadControls ??= mountNotepadControls(root.querySelector('.main'),invoke);
-    notepadControls?.render(data.notepad);notepadControls?.show(section==='computer');
     clearApprovalExpiryTimer();
     if (data.adminNavigation && data.adminNavigation.revision !== navigationRevision) {
       navigationRevision = data.adminNavigation.revision;
       if (sections[data.adminNavigation.page]) section = data.adminNavigation.page;
     }
+    if (section==='computer' && data.notepad) notepadControls ??= mountNotepadControls(root.querySelector('.main'),invoke);
+    notepadControls?.render(data.notepad);notepadControls?.show(section==='computer');
     if (root.querySelector('#profile-dialog')?.open) return;
     root.querySelector('.main').dataset.section = section;
     const directSettings = {settings: 'general', appearance: 'appearance', voice: 'voice', shortcuts: 'shortcuts'};
