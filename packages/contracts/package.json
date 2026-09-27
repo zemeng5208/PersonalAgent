@@ -8,7 +8,12 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./schema": "./schema/protocol.json"
+    "./schema": "./schema/protocol.json",
+    "./windows-host": {
+      "types": "./dist/windows-host.d.ts",
+      "import": "./dist/windows-host.js"
+    },
+    "./windows-host-schema": "./schema/windows-host.json"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
