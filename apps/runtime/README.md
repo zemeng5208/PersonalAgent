@@ -56,6 +56,22 @@ synchronous receipt/scope check after credential reads, immediately before the a
 to the cloud adapter. See [export work package](../../docs/modules/MOD-30-COMPETITION-EXPORT-01.md)
 for the precise offline boundary and the unresolved real cloud/MCP lifecycle.
 
+The trusted Windows composition may create a Notepad `RegisteredTool` with
+`createWindowsHostNotepadAdapter`, pass `adapter.tool` in Runtime Application's
+`tools`, and keep `adapter.observe`/`recover` host-only. The bridge transport
+starts the exact native PipeBridge executable, which launches the Host with a
+random named pipe and verifies the connected server PID before exposing the
+unchanged bounded JSONL frame stream. The adapter requires a
+live local-presence callback, a short-lived Host target, a create-only Runtime
+attempt checkpoint (`createRuntimeWindowsHostAttemptStore`), and independent
+target readback before a successful tool result. ToolGateway consumes the
+one-use Policy grant before `RegisteredTool.execute`; a disconnect, cancel,
+`not_found`, or uncertain write remains unknown and never triggers a replay.
+Current `tool.invoke` has no trusted `userPresent` field, so this adapter checks
+presence through the trusted host callback and keeps the descriptor's wire
+presence flag false. No Desktop binding or real Named Pipe/UIA acceptance has
+been performed; the product capability remains unavailable.
+
 - SQLite-backed tasks, checkpoints, events and one-shot schedules.
 - Explicit task transition rules and immutable terminal states.
 - Submission idempotency: the same key and input returns the original task; different input is rejected.
