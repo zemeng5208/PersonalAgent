@@ -54,6 +54,35 @@ three-node excerpt and cloud goal truncation limits are removed. Existing transp
 body limits and actual server option-count constraints still apply. Local context
 is not automatically copied into the independently approved cloud projection.
 
+### First planning after a committed Goal creation
+
+The host exposes `reviewGoalCreated({expectedGraphRevision, currentGoal}, context)`
+with the same `{at, deadline, signal}` context as Goal revision review. The caller
+uses a verified `goals.create` receipt with no previous Goal, then passes the current
+graph revision and the receipt's exact Goal reference. The host requires that this
+is still the current Goal head, revision 1, active and effective at the evaluation
+time. A stale, non-Goal or inactive reference creates no review task.
+
+The review records `subjectGoal` and an empty `affected` list: creation is not a
+dependency failure. Laya receives the actual Goal description, validity and its
+referenced background. Its offered routes are `plan` (prepare the first steps for
+the already registered Goal), `recheck` (verify context and constraints first) and
+`defer` (defer planning). All are RECHECK approaches with no repair payload, including
+custom options. The chosen route uses the same persistent Runtime/Laya/AgentArts
+handoff, uncertainty route and temporary-unavailability recovery. The stable initial
+review identity uses the exact Goal ref rather than unrelated graph revisions.
+
+Desktop owns consumption of the no-previous-Goal receipt, inclusion of `subjectGoal`
+in the existing redacted projection and the `plan` strategy wording. The output is
+a planning handoff; it does not claim that a Plan node was created or that the Goal
+was executed. No Goal write, public wire operation or scheduler is added here.
+
+Runtime build and three targeted cases passed: an actual public `createGoal` command
+over SQLite followed by initial planning and restart deduplication; rejection of
+non-Goal/stale/withdrawn refs before inference; compatibility with the existing Goal
+revision path. Laya and AgentArts are explicit Fakes. Desktop consumption and real
+cloud planning remain separate root integration checks.
+
 ### Time-only expiry consumption
 
 `consumeAndReview` also detects current public Facts whose `validUntil` has elapsed,

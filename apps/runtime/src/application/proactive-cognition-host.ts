@@ -5,7 +5,8 @@ import {actionArgumentsDigest, analyzeImpact, buildMinimalRepairCandidate, previ
 import type {GoalRevisionSelectionRequest, ImpactItem, LayaActionChoiceService,
   LayaActionSelection, ProjectedRepairInput, StoredRepairRequest} from '@personal-agent/cognition';
 import type {MemoryReadContext} from '@personal-agent/memory';
-import type {GraphSnapshot, NodeRef} from '@personal-agent/goals';
+import {isEffective} from '@personal-agent/goals';
+import type {GraphSnapshot, NodeRef, NodeVersion} from '@personal-agent/goals';
 import {toolArgumentsDigest} from '@personal-agent/tool-gateway';
 import type {RuntimeApplication} from './runtime-application.js';
 import type {SqliteFactProjectionHost} from './sqlite-fact-projection.js';
@@ -16,7 +17,9 @@ const HANDOFF = 'proactive-cognition-handoff-v1';
 const LAYA_COOLDOWN = 'proactive-cognition-laya-cooldown-v1';
 type Trigger = {kind: 'fact'; input: ProjectedRepairInput}
   | {kind: 'goal'; input: GoalRevisionSelectionRequest}
+  | {kind: 'goal_created'; input: GoalCreatedSelectionRequest}
   | {kind: 'expiry'; input: {graphRevision: number; facts: NodeRef[]; consumers: NodeRef[]}};
+export interface GoalCreatedSelectionRequest {expectedGraphRevision: number; currentGoal: NodeRef}
 interface ReviewIntent {
   version: 1; graphNamespace: string; bindingVersion: string; trigger: Trigger; evaluatedAt: string;
   retryOf?: string;
@@ -37,6 +40,8 @@ export interface ProactiveCognitionReview {
   evaluatedAt: string;
   action: 'KEEP' | 'RECHECK' | 'REVISE';
   affected: ImpactItem[];
+  /** Exact newly registered Goal; this is not a fabricated impact item or a created Plan. */
+  subjectGoal?: NodeRef;
   options: ProactiveCognitionOption[];
   selectedOption?: ProactiveCognitionOption;
   /** Low-confidence Laya result routed to the already-offered machine RECHECK option. */
@@ -85,6 +90,7 @@ export interface ProactiveCognitionHost {
     reviews: ProactiveReviewReadback[]; nextGraphRevision: number; atWatermark: boolean; hasMoreReviews: boolean;
   }>;
   reviewGoalRevision(input: GoalRevisionSelectionRequest, request: MemoryReadContext & {at: string}): Promise<ProactiveReviewReadback>;
+  reviewGoalCreated(input: GoalCreatedSelectionRequest, request: MemoryReadContext & {at: string}): Promise<ProactiveReviewReadback>;
   readReview(taskId: string): ProactiveReviewReadback;
   /** Retry the same idempotent AgentArts handoff, never rerun a saved Laya decision. */
   handoffReview(taskId: string, context: MemoryReadContext): Promise<ProactiveReviewReadback>;
@@ -116,6 +122,37 @@ function localDecisionContext(snapshot: GraphSnapshot, affected: readonly Impact
   const context = {destination: 'AgentArts orchestration', semanticReviewRequired: true,
     affectedCount: affected.length, detail};
   return JSON.stringify(context);
+}
+
+function createdGoal(snapshot: GraphSnapshot, ref: NodeRef, at: string): NodeVersion {
+  const goal = snapshot.history.findLast(node => node.id === ref.id);
+  if (!goal || goal.kind !== 'goal' || goal.state !== 'active' || !isEffective(goal, at)) {
+    throw new ProtocolError('INVALID_ARGUMENT', 'New Goal is not active and effective');
+  }
+  if (goal.revision !== 1 || ref.revision !== 1) {
+    throw new ProtocolError('REVISION_CONFLICT', 'New Goal revision changed');
+  }
+  return goal;
+}
+function goalCreatedInput(input: GoalCreatedSelectionRequest): GoalCreatedSelectionRequest {
+  const ref = input?.currentGoal;
+  if (!input || typeof input !== 'object' || Array.isArray(input)
+    || Reflect.ownKeys(input).length !== 2 || !Object.hasOwn(input, 'expectedGraphRevision')
+    || !Object.hasOwn(input, 'currentGoal') || !Number.isSafeInteger(input.expectedGraphRevision)
+    || input.expectedGraphRevision < 1 || !ref || typeof ref !== 'object' || Array.isArray(ref)
+    || Reflect.ownKeys(ref).length !== 2 || !Object.hasOwn(ref, 'id') || !Object.hasOwn(ref, 'revision')
+    || typeof ref.id !== 'string' || !ref.id.trim() || ref.revision !== 1) {
+    throw new ProtocolError('INVALID_ARGUMENT', 'Invalid new Goal receipt');
+  }
+  return {expectedGraphRevision: input.expectedGraphRevision, currentGoal: {id: ref.id, revision: 1}};
+}
+function initialGoalContext(snapshot: GraphSnapshot, goal: NodeVersion): string {
+  return JSON.stringify({destination: 'AgentArts orchestration', semanticReviewRequired: true,
+    goal: {summary: goal.summary, validFrom: goal.validFrom, validUntil: goal.validUntil,
+      dependencies: goal.dependencies.map(ref => {
+        const node = snapshot.history.find(item => item.id === ref.id && item.revision === ref.revision)!;
+        return {kind: node.kind, summary: node.summary};
+      })}});
 }
 
 const refKey = (ref: NodeRef): string => JSON.stringify([ref.id, ref.revision]);
@@ -245,7 +282,8 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
   const review = async (trigger: Trigger, request: MemoryReadContext & {at: string}): Promise<ProactiveReviewReadback> => {
     open(); active(request); evaluationTime(request.at);
     const identity = trigger.kind === 'expiry' ? {kind: trigger.kind, facts: trigger.input.facts,
-      consumers: trigger.input.consumers} : trigger;
+      consumers: trigger.input.consumers} : trigger.kind === 'goal_created'
+        ? {kind: trigger.kind, currentGoal: trigger.input.currentGoal} : trigger;
     let key = 'proactive-cognition:' + toolArgumentsDigest({graphNamespace, bindingVersion, trigger: identity});
     let existing = runtime.findTaskByIdempotencyKey(key);
     let retryOf: string | undefined;
@@ -285,16 +323,22 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
     const persisted = existing ? runtime.loadCheckpoint(existing.taskId, INTENT) as ReviewIntent : undefined;
     if (persisted) { request = {...request, at: persisted.evaluatedAt}; trigger = persisted.trigger; }
     const revision = trigger.kind === 'fact' ? trigger.input.projection.graphRevision
-      : trigger.kind === 'goal' ? trigger.input.expectedGraphRevision : trigger.input.graphRevision;
+      : trigger.kind === 'goal' || trigger.kind === 'goal_created'
+        ? trigger.input.expectedGraphRevision : trigger.input.graphRevision;
     const snapshot = store.read(revision);
     const scope = trigger.kind === 'fact'
       ? selectProjectedRepairScope(snapshot, request.at, trigger.input)
       : trigger.kind === 'goal' ? selectGoalRevisionImpact(snapshot, request.at, trigger.input)
+        : trigger.kind === 'goal_created' ? {items: [] as ImpactItem[]}
         : {items: expiredPublicFactScope(snapshot, request.at).items.filter(item =>
           trigger.input.consumers.some(ref => refKey(ref) === refKey(item.node)))};
+    const subject = trigger.kind === 'goal_created'
+      ? createdGoal(snapshot, trigger.input.currentGoal, request.at) : undefined;
     const intent: ReviewIntent = {version: 1, graphNamespace, bindingVersion, trigger: structuredClone(trigger),
       evaluatedAt: request.at, ...(retryOf ? {retryOf} : {})};
-    const task = runtime.submitTaskWithCheckpoint({goal: 'Choose an approach for trusted dependency changes',
+    const task = runtime.submitTaskWithCheckpoint({goal: subject
+      ? 'Choose an initial planning approach for the registered Goal'
+      : 'Choose an approach for trusted dependency changes',
       conversationId: 'proactive-cognition:' + graphNamespace, idempotencyKey: key}, INTENT, intent);
     const controller = new AbortController();
     const abort = () => controller.abort();
@@ -306,13 +350,18 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
         active(context);
         const result: ProactiveCognitionReview = {taskId: task.taskId, graphNamespace,
           graphRevision: snapshot.revision, bindingVersion, evaluatedAt: request.at,
-          action: scope.items.length ? 'RECHECK' : 'KEEP', affected: structuredClone(scope.items),
+          action: scope.items.length || subject ? 'RECHECK' : 'KEEP', affected: structuredClone(scope.items),
+          ...(subject ? {subjectGoal: {id: subject.id, revision: subject.revision}} : {}),
           options: [], semanticReviewRequired: true};
-        if (scope.items.length) {
-          const candidate = trigger.kind === 'expiry' ? undefined : buildMinimalRepairCandidate(snapshot, request.at, {
+        if (scope.items.length || subject) {
+          const candidate = trigger.kind === 'expiry' || subject ? undefined : buildMinimalRepairCandidate(snapshot, request.at, {
             expectedGraphRevision: snapshot.revision, targets: scope.items.map(item => item.node),
           });
-          result.options = [
+          result.options = subject ? [
+            {id: 'plan', revision: 1, action: 'RECHECK', description: 'Ask AgentArts to draft an initial plan for this registered Goal; no Plan has been created.'},
+            {id: 'recheck', revision: 1, action: 'RECHECK', description: 'Ask AgentArts to verify background and constraints before planning this Goal.'},
+            {id: 'defer', revision: 1, action: 'RECHECK', description: 'Defer initial planning for this Goal.'},
+          ] : [
             {id: 'recheck', revision: 1, action: 'RECHECK', description: 'Ask AgentArts to verify the changed sources and affected dependencies before deciding a plan.'},
             {id: 'defer', revision: 1, action: 'RECHECK', description: 'Ask AgentArts to retain the current plan and arrange a later recheck without executing the stale plan.'},
             ...(candidate?.kind === 'candidate' ? [{id: 'revise', revision: 1, action: 'REVISE' as const,
@@ -325,7 +374,8 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
           const seen = new Set<string>();
           for (const option of result.options) {
             if (!option || seen.has(option.id) || !['RECHECK', 'REVISE'].includes(option.action)
-              || (trigger.kind === 'expiry' && (option.action !== 'RECHECK' || option.repair !== undefined))
+              || ((trigger.kind === 'expiry' || subject)
+                && (option.action !== 'RECHECK' || option.repair !== undefined))
               || Object.keys(option).some(key => !['id', 'revision', 'description', 'action', 'repair'].includes(key))) {
               throw new ProtocolError('INVALID_ARGUMENT', 'Invalid cognition option');
             }
@@ -342,7 +392,7 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
           result.selection = await chooser.choose({
             // Local-only source/plan excerpts help choose an approach. They do
             // not become a cloud payload; handoff.prepare separately controls egress.
-            context: localDecisionContext(snapshot, scope.items),
+            context: subject ? initialGoalContext(snapshot, subject) : localDecisionContext(snapshot, scope.items),
             candidates: result.options.map(option => ({id: option.id, revision: option.revision, description: option.description,
               kind: 'escalate' as const, sources: [], scopeRef: key, expiresAt: request.deadline, risk: 'low' as const,
               argumentsDigest: actionArgumentsDigest({})})), ...context,
@@ -358,7 +408,9 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
         }
         active(context);
         worker.saveCheckpoint(REVIEW, result);
-        return {resultSummary: 'Laya approach recorded for AgentArts orchestration; no plan executed'};
+        return {resultSummary: subject
+          ? 'Initial Goal planning approach recorded for AgentArts orchestration; no Plan created'
+          : 'Laya approach recorded for AgentArts orchestration; no plan executed'};
       }, {deadline: request.deadline, sideEffect: 'read'});
       const completed = readReview(task.taskId);
       if (completed.task.state === 'succeeded' && completed.review?.selection?.state === 'abstain'
@@ -401,6 +453,16 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
     },
     reviewGoalRevision: (input: GoalRevisionSelectionRequest, request: MemoryReadContext & {at: string}) =>
       review({kind: 'goal', input: structuredClone(input)}, request),
+    reviewGoalCreated: (input: GoalCreatedSelectionRequest, request: MemoryReadContext & {at: string}) => {
+      open(); active(request); evaluationTime(request.at);
+      const selected = goalCreatedInput(input);
+      const snapshot = store.read();
+      if (snapshot.revision !== selected.expectedGraphRevision) {
+        throw new ProtocolError('REVISION_CONFLICT', 'Goal graph revision changed');
+      }
+      createdGoal(snapshot, selected.currentGoal, request.at);
+      return review({kind: 'goal_created', input: selected}, request);
+    },
     readReview, handoffReview,
     close: () => { closed = true; for (const controller of controllers) controller.abort(); },
   });
