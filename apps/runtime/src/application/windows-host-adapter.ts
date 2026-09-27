@@ -321,42 +321,49 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
       ensureOpen();
       const input = raw as Input;
       const entry = observed.get(context.taskId);
-      if (!entry || input.targetRef !== entry.target.targetRef
-        || now() >= Date.parse(entry.target.expiresAt)) {
-        throw new ProtocolError('UNAUTHORIZED', 'Notepad target is absent, stale or belongs to another task');
-      }
+      if (!entry) throw new ProtocolError('UNAUTHORIZED', 'Notepad target is absent for this task');
       observed.delete(context.taskId); // one observation, one attempt
       const {bound} = entry;
-      const identity: WindowsHostRunIdentity = {taskId: context.taskId, runId: context.runId,
-        toolName: WINDOWS_HOST_TOOL_NAME, toolVersion: VERSION,
-        argumentsDigest: toolArgumentsDigest(input), targetRef: input.targetRef};
+      const requireLiveTarget = (): void => {
+        active(context, now);
+        if (input.targetRef !== entry.target.targetRef
+          || now() >= Date.parse(entry.target.expiresAt)) {
+          throw new ProtocolError('UNAUTHORIZED', 'Notepad target is stale or belongs to another task');
+        }
+      };
+      let identity: WindowsHostRunIdentity | undefined;
       let started = false;
       try {
-        active(context, now);
+        requireLiveTarget();
+        identity = {taskId: context.taskId, runId: context.runId,
+          toolName: WINDOWS_HOST_TOOL_NAME, toolVersion: VERSION,
+          argumentsDigest: toolArgumentsDigest(input), targetRef: input.targetRef};
+        const runIdentity = identity;
         if (!await presenceAllowed({taskId: context.taskId, targetRef: input.targetRef,
           deadline: context.deadline, signal: context.signal})) {
           throw new ProtocolError('UNAUTHORIZED', 'Local user presence was not authorized');
         }
-        active(context, now);
+        requireLiveTarget();
         if (input.expectedText === input.replacementText) {
           throw new ProtocolError('INVALID_ARGUMENT', 'Notepad replacement must change text');
         }
         if (await options.attempts.read(context.taskId, context.runId)) {
           unknown('Windows Host run already exists; reconcile it without replay');
         }
-        await options.attempts.record(identity);
-        active(context, now);
+        requireLiveTarget();
+        await options.attempts.record(runIdentity);
+        requireLiveTarget();
         const execute: WindowsHostExecute = {kind: 'execute', ...frameBase(bound.sessionId),
-          ...identity, authorizationRef: context.authorizationRef, deadline: context.deadline,
+          ...runIdentity, authorizationRef: context.authorizationRef, deadline: context.deadline,
           expectedText: input.expectedText, replacementText: input.replacementText};
         started = true;
         const onAbort = (): void => {
-          const cancel = {kind: 'cancel' as const, ...frameBase(bound.sessionId), ...identity};
+          const cancel = {kind: 'cancel' as const, ...frameBase(bound.sessionId), ...runIdentity};
           void bound.connection.send(cancel).finally(() => bound.connection.close()).catch(() => undefined);
         };
         context.signal.addEventListener('abort', onAbort, {once: true});
         try {
-          active(context, now); // no Host execute after a late abort or expired deadline
+          requireLiveTarget(); // no Host execute after a late abort, deadline or target expiry
           const reply = parseWindowsHostFrame(await bound.connection.exchange(execute));
           if (reply.kind !== 'result') unknown('Windows Host did not return a terminal result');
           validateWindowsHostResult(execute, reply);
@@ -368,7 +375,7 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
           return {state: 'verified', hostEvidenceRef: reply.evidenceRef};
         } finally { context.signal.removeEventListener('abort', onAbort); }
       } catch (error) {
-        if (!started) throw error;
+        if (!started || !identity) throw error;
         // Never replay execute. A new authenticated Host session may query the journal.
         await bound.connection.close();
         try { await reconcile(identity); } catch { /* original unknown remains */ }

@@ -17,7 +17,8 @@ const base = frame => ({protocolVersion: frame.protocolVersion, requestId: frame
   sessionId: frame.sessionId});
 
 function fixture({executeState = 'verified', statusState = 'not_found', mismatchedResult = false,
-  presence = true, onRecord, observationError, now, taskId = 'task-1', attemptStore} = {}) {
+  presence = true, onPresence, onRecord, observationError, targetExpiresAt,
+  now, taskId = 'task-1', attemptStore} = {}) {
   const sent = [];
   const attempts = new Map();
   let sessions = 0;
@@ -35,7 +36,7 @@ function fixture({executeState = 'verified', statusState = 'not_found', mismatch
           if (frame.kind === 'observe') return observationError
             ? {kind: 'observation_refused', ...base(frame), errorCode: observationError}
             : {kind: 'observed', ...base(frame), targetRef,
-              expiresAt: deadline(), source: 'windows-uia'};
+              expiresAt: targetExpiresAt?.() ?? deadline(), source: 'windows-uia'};
           if (frame.kind === 'execute') return {kind: 'result', ...base(frame), taskId: frame.taskId,
             runId: frame.runId, toolName: frame.toolName, toolVersion: frame.toolVersion,
             argumentsDigest: frame.argumentsDigest,
@@ -64,6 +65,7 @@ function fixture({executeState = 'verified', statusState = 'not_found', mismatch
     },
     async authorizePresence(value) {
       assert.equal(value.taskId, taskId);
+      await onPresence?.(value);
       return presence;
     },
   });
@@ -126,6 +128,34 @@ test('deadline after durable attempt is recorded never sends execute', async () 
   await assert.rejects(f.adapter.tool.execute(input, expiredContext), {code: 'TIMEOUT'});
   assert.equal(f.attempts.has('run-1'), true);
   assert.equal(f.sent.filter(frame => frame.kind === 'execute').length, 0);
+});
+
+test('target expiring during trusted presence check releases session before attempt', async () => {
+  let time = Date.now();
+  const f = fixture({now: () => time,
+    targetExpiresAt: () => new Date(time + 1000).toISOString(),
+    onPresence: value => { if (value.targetRef) time += 1500; }});
+  await f.adapter.observe('task-1', deadline(), new AbortController().signal);
+  await assert.rejects(f.adapter.tool.execute(input, context()), {code: 'UNAUTHORIZED'});
+  assert.equal(f.attempts.size, 0);
+  assert.equal(f.sent.filter(frame => frame.kind === 'execute').length, 0);
+  assert.equal(f.closes, 1);
+  await f.adapter.observe('task-1', deadline(), new AbortController().signal);
+  await f.adapter.releaseObservation('task-1');
+});
+
+test('target expiring after durable attempt never reaches Host execute', async () => {
+  let time = Date.now();
+  const f = fixture({now: () => time,
+    targetExpiresAt: () => new Date(time + 1000).toISOString(),
+    onRecord: () => { time += 1500; }});
+  await f.adapter.observe('task-1', deadline(), new AbortController().signal);
+  await assert.rejects(f.adapter.tool.execute(input, context()), {code: 'UNAUTHORIZED'});
+  assert.equal(f.attempts.has('run-1'), true);
+  assert.equal(f.sent.filter(frame => frame.kind === 'execute').length, 0);
+  assert.equal(f.closes, 1);
+  await f.adapter.observe('task-1', deadline(), new AbortController().signal);
+  await f.adapter.releaseObservation('task-1');
 });
 
 test('missing observation and changed target never reach Host execute', async () => {
