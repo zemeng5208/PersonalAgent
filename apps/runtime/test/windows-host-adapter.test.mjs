@@ -118,6 +118,7 @@ test('late abort after durable attempt is recorded never sends execute', async (
     {code: 'CANCELLED'});
   assert.equal(f.attempts.has('run-1'), true);
   assert.equal(f.sent.filter(frame => frame.kind === 'execute').length, 0);
+  assert.equal(f.sent.filter(frame => frame.kind === 'cancel').length, 0);
 });
 
 test('deadline after durable attempt is recorded never sends execute', async () => {
@@ -197,7 +198,7 @@ test('Host nonverified result remains unknown and cannot confirm a write', async
 test('Host verified with substituted target identity cannot confirm a write', async () => {
   const f = fixture({mismatchedResult: true});
   await f.adapter.observe('task-1', deadline(), new AbortController().signal);
-  await assert.rejects(f.adapter.tool.execute(input, context()), {code: 'INVALID_ARGUMENT'});
+  await assert.rejects(f.adapter.tool.execute(input, context()), {code: 'RESULT_UNKNOWN'});
   assert.equal(f.sent.filter(frame => frame.kind === 'execute').length, 1);
 });
 

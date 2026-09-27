@@ -332,7 +332,7 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
         }
       };
       let identity: WindowsHostRunIdentity | undefined;
-      let started = false;
+      let exchangeAttempted = false;
       try {
         requireLiveTarget();
         identity = {taskId: context.taskId, runId: context.runId,
@@ -356,14 +356,15 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
         const execute: WindowsHostExecute = {kind: 'execute', ...frameBase(bound.sessionId),
           ...runIdentity, authorizationRef: context.authorizationRef, deadline: context.deadline,
           expectedText: input.expectedText, replacementText: input.replacementText};
-        started = true;
         const onAbort = (): void => {
+          if (!exchangeAttempted) return;
           const cancel = {kind: 'cancel' as const, ...frameBase(bound.sessionId), ...runIdentity};
           void bound.connection.send(cancel).finally(() => bound.connection.close()).catch(() => undefined);
         };
+        requireLiveTarget(); // final local gate before a Host execute can be sent
         context.signal.addEventListener('abort', onAbort, {once: true});
         try {
-          requireLiveTarget(); // no Host execute after a late abort, deadline or target expiry
+          exchangeAttempted = true;
           const reply = parseWindowsHostFrame(await bound.connection.exchange(execute));
           if (reply.kind !== 'result') unknown('Windows Host did not return a terminal result');
           validateWindowsHostResult(execute, reply);
@@ -375,11 +376,11 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
           return {state: 'verified', hostEvidenceRef: reply.evidenceRef};
         } finally { context.signal.removeEventListener('abort', onAbort); }
       } catch (error) {
-        if (!started || !identity) throw error;
+        if (!exchangeAttempted || !identity) throw error;
         // Never replay execute. A new authenticated Host session may query the journal.
         await bound.connection.close();
         try { await reconcile(identity); } catch { /* original unknown remains */ }
-        throw error;
+        unknown('Windows Host execution outcome requires reconciliation');
       } finally {
         try { await bound.connection.close(); } finally { occupied = false; }
       }
