@@ -32,6 +32,7 @@ import {createDesktopMailAnalysisHost} from './mail-analysis-host.js';
 import {createDesktopFeedsHost} from './feeds-host.js';
 import {createDesktopNotepadHost} from './notepad-host.js';
 import {createDesktopTodoHost} from './todo-host.js';
+import {createDesktopGoalCloudHost} from './goal-cloud-host.js';
 import {createMailMetadataStorage} from './mail-metadata-storage.js';
 import {createLocalLayaHost} from './laya-local-host.js';
 import {resultText} from '../src/features/conversation/result-text.js';
@@ -150,6 +151,7 @@ let voiceDisposed = false;
 let voiceDisposal;
 let voiceDisposalFailed = false;
 let goalHost;
+let goalCloudHost;
 let competitionCatalog;
 let competitionFactBridge;
 let proactiveHost;
@@ -232,6 +234,7 @@ function snapshot(surface) {
     mail: mailSnapshot(),
     feeds: feedsHost?.snapshot(),
     todo: todoHost?.snapshot() ?? {available:false,items:[],notifications:[],reason:todoFailure || '待办将在 Runtime 连接后可用'},
+    goalCloud:goalCloudHost?.snapshot() ?? {available:false,sessionAllowed:false,reason:'目标工具将在 Runtime 连接后可用'},
     notepad: notepadHost?.snapshot() ?? {available:false,busy:false,state:'unavailable',
       reason:'本机执行组件尚未就绪，记事本操作暂不可用。'},
     coding: codingWorkspace?.snapshot() ?? {configured:false,reason:'编程工作区尚未装配'},
@@ -746,6 +749,7 @@ async function initializeRuntime() {
       const {createDesktopCompetitionToolCatalog} = await import('./competition-tool-catalog.js');
       const namespace = desktopHost.userNamespace;
       goalHost = createGoalHost(namespace);
+      if (!syntheticMvp) goalCloudHost = createDesktopGoalCloudHost({goalHost});
       if (!syntheticMvp) {
         try {todoHost = createDesktopTodoHost({userData:app.getPath('userData'),safeStorage,namespace,
           createDeliveryHost:runtimeModule.createReminderDeliveryHost,onUpdate:publish,
@@ -819,20 +823,21 @@ async function initializeRuntime() {
             throw Error('目标主动分析宿主尚未就绪');
           }
           proactiveHost?.assertCognitionCloudSend(request);
+          goalCloudHost?.assertCloudSend(request);
           if (!mailAnalysisHost && runtimeApplication.runtime.getTask(request.taskId).conversationId?.startsWith('desktop-mail-analysis:')) {
             throw Error('邮件分析宿主尚未就绪');
           }
           mailAnalysisHost?.assertCloudSend(request);
         },
-        tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...goalHost.tools, ...productTools.tools, ...(mailHost?.tools ?? []), ...(feedsHost?.tools ?? []), ...(notepadHost?.tools ?? []), ...(todoHost?.tools ?? [])],
+        tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...(goalCloudHost?.tools ?? goalHost.tools), ...productTools.tools, ...(mailHost?.tools ?? []), ...(feedsHost?.tools ?? []), ...(notepadHost?.tools ?? []), ...(todoHost?.tools ?? [])],
         ...(syntheticMvp ? {localRepair: syntheticRepairHost.localRepair} : {}),
         ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
         ...(process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT === undefined ? {} : {workflowGoalInput: process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT}),
         responseMode: agentArtsResponseMode ?? 'tool-proposal-json',
         ...(syntheticMvp ? {competitionToolExports: syntheticTools.competitionToolExports} : {
           initialRequestMode: 'goal-with-tools-json',
-          competitionToolAvailability: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolAvailability : competitionCatalog ? [competitionCatalog.availability] : []), ...productTools.competitionToolAvailability, ...feedsHost.competitionToolAvailability, ...(todoHost?.competitionToolAvailability ?? [])],
-          competitionToolExports: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolExports : competitionCatalog ? [competitionCatalog.export] : []), ...productTools.competitionToolExports, ...feedsHost.competitionToolExports, ...(todoHost?.competitionToolExports ?? [])],
+          competitionToolAvailability: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolAvailability : competitionCatalog ? [competitionCatalog.availability] : []), ...productTools.competitionToolAvailability, ...feedsHost.competitionToolAvailability, ...(todoHost?.competitionToolAvailability ?? []), ...(goalCloudHost?.competitionToolAvailability ?? [])],
+          competitionToolExports: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolExports : competitionCatalog ? [competitionCatalog.export] : []), ...productTools.competitionToolExports, ...feedsHost.competitionToolExports, ...(todoHost?.competitionToolExports ?? []), ...(goalCloudHost?.competitionToolExports ?? [])],
         }),
         ...cloudBinding,
         invokeMode: agentArtsInvokeMode,
@@ -850,6 +855,7 @@ async function initializeRuntime() {
       feedsHost?.bindApplication(runtimeApplication);
       todoHost?.bindApplication(runtimeApplication);
       goalHost.bind(runtimeApplication);
+      goalCloudHost?.bindApplication(runtimeApplication);
       notepadHost?.bind(runtimeApplication);
       goalHost.resumeApproved();
       if (!syntheticMvp && competitionCatalog && !codingWorkspace.tools.length) competitionFactBridge = createDesktopCompetitionFactBridge({
@@ -985,6 +991,10 @@ async function action(event, name, payload) {
   if (['todo.authorize','todo.revoke','todo.configureNotifications','todo.dismiss'].includes(name)) {
     if(sender!==admin || !competitionMode || syntheticMvp || !todoHost) throw Error('请从正式应用待办设置操作');
     const result=todoHost[name.slice(5)](payload);publish();return result;
+  }
+  if (['goalCloud.authorize','goalCloud.revoke'].includes(name)) {
+    if(sender!==admin || !competitionMode || syntheticMvp || !goalCloudHost) throw Error('请从正式应用目标管理设置操作');
+    const result=goalCloudHost[name.slice('goalCloud.'.length)](payload);publish();return result;
   }
   if (['feeds.add','feeds.remove','feeds.authorize','feeds.revoke'].includes(name)) {
     if (sender !== admin || !competitionMode || syntheticMvp || !feedsHost) throw Error('请从正式应用订阅设置操作');
@@ -1464,6 +1474,8 @@ app.whenReady().then(async () => {
     globalShortcut.unregisterAll();
     try {
       proactiveHost?.close();
+      goalCloudHost?.close();
+      mailAnalysisHost?.close();
       competitionFactBridge?.close();
       if (runtimeApplication) runtimeApplication.close();
       else runtime?.close?.();
