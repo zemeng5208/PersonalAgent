@@ -4,6 +4,9 @@ export type {MinimalRepairSelection, MinimalRepairResult} from './minimal-repair
 export {buildInterestOptions, LayaInterestDecisionService} from './interest-options.js';
 export type {InterestApproachId, InterestApproach, InterestOptions,
   InterestChoiceReceipt, InterestChoiceResult} from './interest-options.js';
+export {planKnowledgeReevaluation} from './knowledge-reevaluation.js';
+export type {KnowledgeDependency, KnowledgeReevaluationCheckpoint, KnowledgeReevaluationInput,
+  KnowledgeReevaluationWork, KnowledgeReevaluationPlan} from './knowledge-reevaluation.js';
 export type {ImpactCause, ImpactItem, ImpactReport, PlanRevisionRequest, PlanRevisionProposal} from './impact.js';
 export {analyzeStoredImpact, commitStoredPlanRevision} from './persistent.js';
 export type {StoredImpact, StoredPlanRevisionRequest, StoredPlanRevisionResult,
