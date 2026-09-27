@@ -38,6 +38,83 @@ async function waitForIdle(application) {
   throw new Error('Runtime Application did not finish active task cleanup');
 }
 
+test('trusted host prepares task ID before target observation and freezes arguments at revision', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'personal-agent-host-prepare-'));
+  const targetDescriptor = {...descriptor, name: 'fixture.notepad_target',
+    inputSchema: {type: 'object', required: ['targetRef', 'title'], additionalProperties: false,
+      properties: {targetRef: {type: 'string', minLength: 16}, title: {type: 'string', minLength: 1}}}};
+  let executions = 0;
+  const app = createRuntimeApplication({path: path.join(directory, 'runtime.sqlite'),
+    profile: 'huawei_ict_agentarts', hostUserNamespace: 'user-1',
+    tools: [{descriptor: targetDescriptor, execute: async () => { executions++; return {revision: 2}; }}]});
+  try {
+    const preparation = {commandId: 'notepad-1', toolName: targetDescriptor.name,
+      toolVersion: targetDescriptor.version, deadline: new Date(Date.now() + 60_000).toISOString()};
+    const prepared = app.prepareHostToolTask(preparation);
+    assert.equal(prepared.state, 'created');
+    assert.equal(app.prepareHostToolTask(preparation).taskId, prepared.taskId);
+    assert.throws(() => app.prepareHostToolTask({...preparation,
+      deadline: new Date(Date.now() + 90_000).toISOString()}), {code: 'REVISION_CONFLICT'});
+    assert.deepEqual(app.runtime.readToolExecutions(prepared.taskId), []);
+    assert.equal(executions, 0);
+    const arguments_ = {targetRef: 'observed_target_123456', title: 'New text'};
+    assert.throws(() => app.submitHostToolTask({...preparation, arguments: arguments_}),
+      {code: 'REVISION_CONFLICT'});
+    assert.throws(() => app.finalizeHostToolTask({taskId: prepared.taskId,
+      commandId: preparation.commandId, expectedTaskRevision: prepared.revision + 1,
+      arguments: arguments_}), {code: 'REVISION_CONFLICT'});
+    assert.equal(app.runtime.getTask(prepared.taskId).state, 'created');
+    app.finalizeHostToolTask({taskId: prepared.taskId, commandId: preparation.commandId,
+      expectedTaskRevision: prepared.revision, arguments: arguments_});
+    await waitFor(app, prepared.taskId, 'waiting_approval');
+    assert.equal(executions, 0);
+    assert.throws(() => app.cancelPreparedHostToolTask(prepared.taskId,
+      preparation.commandId, prepared.revision), {code: 'REVISION_CONFLICT'});
+    assert.throws(() => app.finalizeHostToolTask({taskId: prepared.taskId,
+      commandId: preparation.commandId, expectedTaskRevision: prepared.revision,
+      arguments: {...arguments_, targetRef: 'other_target_1234567'}}), {code: 'REVISION_CONFLICT'});
+    const approval = app.readHostToolTask(prepared.taskId).approval;
+    const client = new Client(app, Date.now);
+    await client.connect();
+    await client.call('authorization.respond', {approvalId: approval.approvalId,
+      expectedRevision: approval.revision, decision: 'allow_once'});
+    await waitFor(app, prepared.taskId, 'succeeded');
+    assert.equal(executions, 1);
+    assert.equal(app.runtime.readEvidence(prepared.taskId)[0].verification, 'conditional');
+    assert.deepEqual(app.readHostToolTask(prepared.taskId).confirmed.result, {revision: 2});
+  } finally {
+    await waitForIdle(app);
+    app.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('cancelled prepared host task cannot freeze arguments or execute', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'personal-agent-host-prepare-'));
+  let executions = 0;
+  const app = createRuntimeApplication({path: path.join(directory, 'runtime.sqlite'),
+    profile: 'huawei_ict_agentarts', hostUserNamespace: 'user-1',
+    tools: [{descriptor, execute: async () => { executions++; return {revision: 2}; }}]});
+  try {
+    const preparation = {commandId: 'notepad-cancel', toolName: descriptor.name,
+      toolVersion: descriptor.version, deadline: new Date(Date.now() + 60_000).toISOString()};
+    const prepared = app.prepareHostToolTask(preparation);
+    const cancelled = app.cancelPreparedHostToolTask(prepared.taskId,
+      preparation.commandId, prepared.revision);
+    assert.equal(cancelled.state, 'cancelled');
+    assert.equal(app.cancelPreparedHostToolTask(prepared.taskId,
+      preparation.commandId, prepared.revision).state, 'cancelled');
+    assert.throws(() => app.finalizeHostToolTask({taskId: prepared.taskId,
+      commandId: preparation.commandId, expectedTaskRevision: prepared.revision,
+      arguments: {title: 'never write'}}), {code: 'REVISION_CONFLICT'});
+    assert.equal(executions, 0);
+    assert.deepEqual(app.runtime.readToolExecutions(prepared.taskId), []);
+  } finally {
+    app.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
 test('trusted host tool task persists approval and resumes once after restart', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'personal-agent-host-tool-'));
   const databasePath = path.join(directory, 'runtime.sqlite');
