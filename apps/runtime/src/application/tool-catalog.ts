@@ -38,7 +38,12 @@ function safeSchema(value: unknown, depth = 0, publicEnums: ReadonlySet<string> 
     throw new ProtocolError('INVALID_ARGUMENT', 'Tool input Schema cannot be projected');
   }
   const schema = value as Record<string, unknown>;
-  const type = schema.type;
+  // Public connector schemas may express scalar types using enum alone.
+  // Infer the shape without publishing values unless the host approves their path.
+  const enumTypes = Array.isArray(schema.enum) && schema.enum.length
+    ? new Set(schema.enum.map(item => item === null ? 'null' : typeof item)) : undefined;
+  const inferredType = enumTypes?.size === 1 ? [...enumTypes][0] : undefined;
+  const type = schema.type ?? inferredType;
   if (!['object', 'array', 'string', 'integer', 'number', 'boolean'].includes(type as string)) {
     throw new ProtocolError('INVALID_ARGUMENT', 'Tool input Schema type is unavailable');
   }
