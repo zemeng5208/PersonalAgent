@@ -25,6 +25,7 @@ import {createDesktopProactiveHost} from './proactive-host.js';
 import {createPublicConnectorHost} from './public-connector-host.js';
 import {createWorkspaceConfigHost} from './workspace-config-host.js';
 import {createAgentArtsConfig} from './agentarts-config.js';
+import {createDeferredRuntimeStartup} from './runtime-startup.js';
 import {createMailConfig} from './mail-config.js';
 import {createMailMetadataStorage} from './mail-metadata-storage.js';
 import {createLocalLayaHost} from './laya-local-host.js';
@@ -131,6 +132,11 @@ let sisPlaybackHost;
 let sisConfigHost;
 let liveConfig;
 let agentArtsConfig;
+let activeCloudBinding;
+const runtimeStartup = createDeferredRuntimeStartup({
+  isConfigured: () => !competitionMode || agentArtsConfig?.snapshot().configured === true,
+  initialize: initializeProductServices,
+});
 let liveVoice;
 let liveShortcut = {key: 'F8', registered: false, reason: ''};
 let lastLiveShortcutAt = 0;
@@ -699,6 +705,7 @@ async function initializeRuntime() {
     mkdirSync(path.dirname(dbPath), {recursive: true});
     if (competitionMode) {
       const cloudBinding=agentArtsConfig.binding();
+      activeCloudBinding = cloudBinding;
       const syntheticTools = syntheticMvp
         ? (await import('./competition-synthetic-workspace.js')).createSyntheticMeetingToolset(
           path.resolve(dir, '../../../tests/manual/agentarts/fixtures/mvp-meeting'),
@@ -836,6 +843,27 @@ async function initializeRuntime() {
   eventPoll = setInterval(() => {void pumpEvents(); void proactiveHost?.tick(); void refreshMail();}, 120);
 }
 
+async function initializeProductServices() {
+  try {
+    runtimeError = '';
+    await initializeRuntime();
+    await initializeModelFromEnvironment();
+    if (competitionMode) {
+      try {await initializeSisVoice();}
+      catch {
+        voiceInput = undefined;
+        voiceInitializationFailure = {stage:'initialization',code:'EXTERNAL_FAILURE',message:'语音适配器启动失败'};
+      }
+      try {await initializeLiveVoice();}
+      catch {runtimeError = 'Live 适配器启动失败；文字与听写仍可使用';}
+    }
+  } catch (error) {
+    runtimeError = error instanceof Error ? error.message : 'Runtime 初始化失败';
+    connectionLabel = 'Runtime 未连接';
+    throw error;
+  }
+}
+
 async function action(event, name, payload) {
   const sender = [orb, panel, admin, workspace].find(win => win && !win.isDestroyed() && win.webContents === event.sender);
   if (!sender || event.senderFrame !== sender.webContents.mainFrame) throw Error('Untrusted sender');
@@ -874,8 +902,17 @@ async function action(event, name, payload) {
   if (name === 'panel.dragEnd' && sender === panel) { dragging = false; panelDragOrigin = undefined; away = Date.now() + 400; return; }
   if (name === 'app.quit') { app.quit(); return; }
   if (name === 'agentarts.configure') {
-    if (sender!==admin || !competitionMode || runtimeApplication?.activeTaskCount || liveVoice?.hasActive()) throw Error('请在任务及通话结束后从设置配置 AgentArts');
-    const result=agentArtsConfig.configure(payload);publish();return result;
+    if (sender!==admin || !competitionMode || runtimeApplication?.activeTaskCount || liveVoice?.hasActive()
+      || runtimeStartup.snapshot().state==='starting') throw Error('请在任务、通话及启动结束后从设置配置 AgentArts');
+    const result=agentArtsConfig.configure(payload);
+    const startup = await runtimeStartup.start();
+    if (liveVoice && !liveShortcut.registered) registerLiveShortcut();
+    const requiresRestart = startup.state !== 'ready' || result.gatewayUrl !== activeCloudBinding?.gatewayUrl
+      || result.runtimeName !== activeCloudBinding?.runtimeName;
+    publish();
+    return {...result, requiresRestart, reason: requiresRestart
+      ? '配置已加密保存，请重启应用完成连接。'
+      : '配置已加密保存，Runtime 已连接；云端可用性以实际任务结果为准。'};
   }
   if (['coding.select','coding.authorize','coding.revoke'].includes(name)) {
     if (sender !== admin || !competitionMode || syntheticMvp || !codingWorkspace) throw Error('请从正式应用设置配置编程工作区');
@@ -1223,19 +1260,10 @@ app.whenReady().then(async () => {
   try {
     conversations = new Conversations(dataPaths.conversations);
     if (!competitionMode) restoreModelConfig();
-    await initializeRuntime();
-    await initializeModelFromEnvironment();
-    if (competitionMode) {
-      try {
-        await initializeSisVoice();
-      } catch {
-        // A failed voice adapter must not take down an otherwise connected text Runtime.
-        voiceInput = undefined;
-        voiceInitializationFailure = {stage: 'initialization', code: 'EXTERNAL_FAILURE',
-          message: '语音适配器启动失败'};
-      }
-      try {await initializeLiveVoice();}
-      catch {runtimeError = 'Live 适配器启动失败；文字与听写仍可使用';}
+    const startup = await runtimeStartup.start();
+    if (startup.state === 'configuration_required') {
+      runtimeError = agentArtsConfig.snapshot().reason;
+      connectionLabel = 'Runtime 等待配置';
     }
   } catch (error) {
     runtimeError = error instanceof Error ? error.message : 'Runtime 初始化失败';

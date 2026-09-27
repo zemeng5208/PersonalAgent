@@ -7,7 +7,7 @@ export function mountAgentArtsControls(root,invoke) {
     event.preventDefault();const button=form.querySelector('button');button.disabled=true;
     const input=Object.fromEntries(['gatewayUrl','runtimeName','authorization'].map(key=>[key,form.elements[key].value.trim()]));
     form.elements.authorization.value='';
-    try {await invoke('agentarts.configure',input);dirty=false;status.textContent='已加密保存，请重启应用使配置生效。';}
+    try {const result=await invoke('agentarts.configure',input);dirty=false;status.textContent=result?.reason || '配置已保存。';}
     catch {status.textContent='配置未保存，请核对网关、运行时名称和 Authorization。';}
     finally {input.authorization='';button.disabled=false;}
   });
