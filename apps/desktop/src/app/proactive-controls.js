@@ -20,6 +20,12 @@ export function mountProactiveControls(container, invoke, {settings = false} = {
   const list = section.querySelector('[data-suggestions]');
   const form = section.querySelector('form');
   const feedback = section.querySelector('[data-feedback]');
+  const cognitionStatus=document.createElement('p');
+  cognitionStatus.className='notice';cognitionStatus.setAttribute('role','status');
+  status.after(cognitionStatus);
+  if(form) form.querySelector('button').insertAdjacentHTML('beforebegin',
+    '<h3>目标与计划变化</h3><label class="setting-row"><input type="checkbox" name="goalAnalysis">开启本地 Laya 目标变化分析</label><label class="setting-row"><input type="checkbox" name="goalCloudAnalysis">允许把选中的方案交给 AgentArts 规划</label><p class="notice">需要先在本地模型设置中启动 Laya。云端规划将接收受影响的目标、决策和计划描述（包括私人目标描述）及公开事实；标为受限的节点和非公开来源事实不会发送。仅在本次会话生效，关闭后停止新分析和新的出云请求；已执行的动作不会撤回。工具执行仍经过 Policy。</p>');
+  const fields=['enabled','cloudAnalysis','goalAnalysis','goalCloudAnalysis'];
   let current, dirty = false, saving = false;
   const rows = new Map(), pending = new Set();
   if (form) {
@@ -28,8 +34,8 @@ export function mountProactiveControls(container, invoke, {settings = false} = {
       event.preventDefault();
       if (saving || !current) return;
       saving = true; form.querySelector('button').disabled = true;
-      const payload = {enabled:form.elements.enabled.checked,cloudAnalysis:form.elements.cloudAnalysis.checked};
-      form.elements.enabled.disabled = true; form.elements.cloudAnalysis.disabled = true;
+      const payload = Object.fromEntries(fields.map(name=>[name,form.elements[name].checked]));
+      for(const name of fields) form.elements[name].disabled=true;
       feedback.textContent = '正在保存设置…';
       try {
         await invoke('proactive.configure', payload);
@@ -38,8 +44,7 @@ export function mountProactiveControls(container, invoke, {settings = false} = {
       } catch (error) {feedback.textContent = error.message;}
       finally {
         saving = false;
-        form.elements.enabled.disabled = !current;
-        form.elements.cloudAnalysis.disabled = !current;
+        for(const name of fields) form.elements[name].disabled=!current;
         form.querySelector('button').disabled = !current;
       }
     });
@@ -47,12 +52,17 @@ export function mountProactiveControls(container, invoke, {settings = false} = {
   function render(snapshot) {
     current = snapshot;
     const items = proactiveSuggestions(snapshot);
-    if (!settings) section.hidden = items.length === 0;
+    if (!settings) section.hidden = items.length === 0 && !snapshot?.cognition?.enabled;
+    cognitionStatus.hidden=!snapshot?.cognition;
+    cognitionStatus.textContent=snapshot?.cognition ? `目标分析：${snapshot.cognition.reason}` : '';
     status.textContent = snapshot ? `${statusNames[snapshot.status] ?? '状态未知'}${snapshot.reason ? ` · ${snapshot.reason}` : ''}` : '主动监控尚未连接';
     if (form) {
-      if (!dirty && !saving) {form.elements.enabled.checked = snapshot?.enabled === true; form.elements.cloudAnalysis.checked = snapshot?.cloudAnalysis === true;}
-      form.elements.enabled.disabled = !snapshot || saving;
-      form.elements.cloudAnalysis.disabled = !snapshot || saving;
+      if (!dirty && !saving) {
+        form.elements.enabled.checked = snapshot?.enabled === true; form.elements.cloudAnalysis.checked = snapshot?.cloudAnalysis === true;
+        form.elements.goalAnalysis.checked=snapshot?.cognition?.enabled===true;
+        form.elements.goalCloudAnalysis.checked=snapshot?.cognition?.cloudAllowed===true;
+      }
+      for(const name of fields) form.elements[name].disabled=!snapshot || saving;
       form.querySelector('button').disabled = !snapshot || saving;
     }
     const ids = new Set(items.map(item => item.id));

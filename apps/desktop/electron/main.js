@@ -757,6 +757,12 @@ async function initializeRuntime() {
         hostUserNamespace: namespace,
         // Match the existing text tool workflow budget; preserve room for the final answer.
         competitionMaxSteps: 8,
+        beforeCompetitionSend:request=> {
+          if (!proactiveHost && runtimeApplication.runtime.getTask(request.taskId).conversationId?.startsWith('desktop-proactive-goals:')) {
+            throw Error('目标主动分析宿主尚未就绪');
+          }
+          proactiveHost?.assertCognitionCloudSend(request);
+        },
         tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...goalHost.tools, ...productTools.tools, ...(mailHost?.tools ?? [])],
         ...(syntheticMvp ? {localRepair: syntheticRepairHost.localRepair} : {}),
         ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
@@ -814,6 +820,8 @@ async function initializeRuntime() {
   await syncRuntimeSnapshots();
   if (competitionMode) proactiveHost = createDesktopProactiveHost({application: runtimeApplication,
     client, userData: app.getPath('userData'), namespace: desktopHost.userNamespace, onUpdate: publish,
+    goalHost,chooser:localLaya,cognitionReady:()=>localLaya.snapshot().state==='ready',
+    createCognitionHost:runtimeModule.createProactiveCognitionHost,
     onAnalysisTask: ({taskId, goal}) => {
       if (!conversations.turns.has(taskId)) conversations.add(taskId, 'panel', goal);
       taskGoals.set(taskId, goal);

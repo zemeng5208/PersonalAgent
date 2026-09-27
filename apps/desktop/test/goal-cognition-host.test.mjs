@@ -1,0 +1,98 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdir,mkdtemp,rm} from 'node:fs/promises';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {Client} from '@personal-agent/client';
+import {LayaActionChoiceService} from '@personal-agent/cognition';
+import {createAgentArtsRuntimeApplication,createProactiveCognitionHost} from '@personal-agent/runtime/application';
+import {createDesktopGoalCognitionHost} from '../electron/goal-cognition-host.js';
+
+const namespace='synthetic-desktop-cognition';
+const ref=(id,revision=1)=>({id,revision});
+const node=(id,kind,dependencies,summary=id,sensitivity='public')=>({id,kind,dependencies,summary,sensitivity,
+  sourceRef:'synthetic/source',state:'active',reason:'fixture',
+  validFrom:'2026-01-01T00:00:00.000Z',validUntil:'2099-01-01T00:00:00.000Z'});
+async function terminal(application,id) {
+  for(let i=0;i<100;i++) {
+    const task=application.runtime.getTask(id);
+    if(['succeeded','failed','cancelled'].includes(task.state)) return task;
+    await new Promise(resolve=>setTimeout(resolve,5));
+  }
+  throw Error('Synthetic task did not settle');
+}
+async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCredentialRead=false}={}) {
+  const root=fileURLToPath(new URL('../../../.cache/desktop-goal-cognition/',import.meta.url));
+  await mkdir(root,{recursive:true});const directory=await mkdtemp(path.join(root,'case-'));
+  let host,layaCalls=0,time=Date.now();const sent=[],announced=[];
+  const application=createAgentArtsRuntimeApplication({path:path.join(directory,'runtime.sqlite'),
+    gatewayUrl:'https://agentarts.example.test',runtimeName:'synthetic',
+    beforeCompetitionSend:request=>host.assertCloudSend(request),
+    authorizationProvider:{read:async()=>{
+      if(revokeDuringCredentialRead) host.configure({enabled:true,cloudAllowed:false});
+      if(changeGraphDuringCredentialRead) store.append(store.read().revision,node('goal','goal',[ref('private-source')],'更新的目标','private'));
+      return 'Bearer synthetic-not-a-key';
+    }},
+    fetchImpl:async(_url,input)=>{
+      sent.push(JSON.parse(input.body));
+      return new Response(JSON.stringify({event:'message',data:{text:'合成规划已接收',index:0}}),
+        {headers:{'content-type':'application/json'}});
+    }});
+  const store=application.runtime.provisionCoordinationStore(namespace);
+  store.append(0,node('private-source','fact',[],'PRIVATE_SOURCE_SENTINEL','private'));
+  store.append(1,node('goal','goal',[ref('private-source')],'原目标','private'));
+  store.append(2,node('decision','decision',[ref('goal')],'关联决策'));
+  store.append(3,node('plan','plan',[ref('decision')],'关联计划'));
+  store.append(4,node('goal','goal',[ref('private-source')],'修改后的目标','private'));
+  const sourceTask=application.runtime.submitTask({goal:'Synthetic completed goal edit',conversationId:'host-fixture',idempotencyKey:'synthetic-goal-edit'});
+  await application.runtime.runTask(sourceTask.taskId,async()=>({resultSummary:'Synthetic goal receipt'}),
+    {deadline:new Date(Date.now()+60_000).toISOString(),sideEffect:'read'});
+  const goalHost={listTasks:()=>[{taskId:sourceTask.taskId,state:'succeeded',result:{kind:'applied',
+    graphRevision:5,previousGoal:ref('goal'),currentGoal:ref('goal',2)}}]};
+  const facts=application.createCompetitionFactHost({memoryPath:path.join(directory,'memory.sqlite'),
+    memoryNamespace:'synthetic-public-memory',graphNamespace:namespace,consumerKey:'fixture'});
+  const client=new Client(application,Date.now);await client.connect();
+  const chooser=new LayaActionChoiceService({infer:async payload=>{
+    layaCalls++;
+    const keys=Object.keys(payload.questions.action.criteria),selected=keys.at(-1);
+    return {answers:{action:{choice:selected,probabilities:Object.fromEntries(keys.map(key=>[key,key===selected?0.98:0.02/(keys.length-1)])),
+      answer_confidence:0.98,confidence:0.5}}};
+  }});
+  const options={application,client,facts,namespace,goalHost,chooser,ready:()=>true,
+    createHost:createProactiveCognitionHost,onTask:item=>announced.push(item),now:()=>time};
+  host=createDesktopGoalCognitionHost(options);
+  t.after(async()=>{host.close();facts.close();application.close();await rm(directory,{recursive:true,force:true});});
+  return {application,sent,announced,store,host:()=>host,layaCalls:()=>layaCalls,
+    advance:()=>{time+=1100;},restart:()=>{host.close();host=createDesktopGoalCognitionHost(options);return host;}};
+}
+
+test('goal change chooses locally; explicit cloud grant sends one minimized task and restart cannot reuse its grant',async t=>{
+  const f=await fixture(t);
+  f.host().configure({enabled:true,cloudAllowed:false});await f.host().tick();
+  assert.equal(f.layaCalls(),1);assert.equal(f.sent.length,0);
+  f.host().configure({enabled:true,cloudAllowed:true});await f.host().tick();
+  const taskId=f.announced[0]?.taskId;assert.ok(taskId);
+  assert.equal((await terminal(f.application,taskId)).state,'succeeded');
+  assert.equal(f.sent.length,1);assert.match(f.sent[0].query,/修改后的目标/);
+  assert.doesNotMatch(f.sent[0].query,/PRIVATE_SOURCE_SENTINEL|synthetic\/source|private-source/);
+  f.advance();await f.host().tick();assert.equal(f.layaCalls(),1);assert.equal(f.sent.length,1);
+  assert.equal(f.store.read().revision,5,'selection does not directly mutate plans');
+  const restarted=f.restart();
+  assert.throws(()=>restarted.assertCloudSend({taskId,goal:f.sent[0].query,signal:new AbortController().signal}),/当前会话/);
+});
+
+test('revocation while credentials are pending prevents the actual cloud request',async t=>{
+  const f=await fixture(t,{revokeDuringCredentialRead:true});
+  f.host().configure({enabled:true,cloudAllowed:true});await f.host().tick();
+  const taskId=f.announced[0]?.taskId;assert.ok(taskId);
+  assert.equal((await terminal(f.application,taskId)).state,'failed');
+  assert.equal(f.sent.length,0);assert.equal(f.layaCalls(),1);
+});
+
+test('a newer graph revision before HTTP invalidates the old selected projection',async t=>{
+  const f=await fixture(t,{changeGraphDuringCredentialRead:true});
+  f.host().configure({enabled:true,cloudAllowed:true});await f.host().tick();
+  const taskId=f.announced[0]?.taskId;assert.ok(taskId);
+  assert.equal((await terminal(f.application,taskId)).state,'failed');
+  assert.equal(f.sent.length,0);assert.equal(f.store.read().revision,6);
+});

@@ -1,9 +1,11 @@
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {createProactiveComposition} from './proactive-composition.js';
+import {createDesktopGoalCognitionHost} from './goal-cognition-host.js';
 
 // Desktop preferences and notification metadata only. Runtime owns every sample/task/approval.
 export function createDesktopProactiveHost({application, client, userData, namespace,
+  goalHost, chooser, cognitionReady, createCognitionHost,
   onUpdate = () => {}, onAnalysisTask = () => {}, now = Date.now}) {
   const file = path.join(userData, 'proactive-state.json');
   let stored = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {version: 1, cloudAnalysis: false, values: {}};
@@ -25,6 +27,9 @@ export function createDesktopProactiveHost({application, client, userData, names
     storage: {get: key => structuredClone(stored.values[key]), set: (key, value) => write({...stored, values: {...stored.values, [key]: value}})},
   });
   const publish = () => {try {onUpdate();} catch {}};
+  const cognition = createCognitionHost && createDesktopGoalCognitionHost({application,client,
+    facts:factHost,namespace,goalHost,chooser,ready:cognitionReady,createHost:createCognitionHost,
+    onTask:onAnalysisTask,onUpdate:publish,now});
   function observeAnalysis(item) {
     if (item.analysisTaskId) onAnalysisTask({taskId: item.analysisTaskId, goal: item.summary});
     publish();
@@ -41,8 +46,16 @@ export function createDesktopProactiveHost({application, client, userData, names
     }
   });
   async function configure(input) {
-    if (!input || Object.keys(input).some(key => !['enabled', 'cloudAnalysis'].includes(key))
+    if (!input || Object.keys(input).some(key => !['enabled', 'cloudAnalysis', 'goalAnalysis', 'goalCloudAnalysis'].includes(key))
       || typeof input.enabled !== 'boolean' || typeof input.cloudAnalysis !== 'boolean') throw Error('主动提醒设置无效');
+    if ('goalAnalysis' in input || 'goalCloudAnalysis' in input) {
+      if (typeof input.goalAnalysis!=='boolean' || typeof input.goalCloudAnalysis!=='boolean') throw Error('目标分析设置无效');
+      if (!cognition && (input.goalAnalysis || input.goalCloudAnalysis)) throw Error('目标分析尚未装配');
+      const previous=cognition?.snapshot();
+      if (previous && (previous.enabled!==input.goalAnalysis || previous.cloudAllowed!==input.goalCloudAnalysis)) {
+        cognition.configure({enabled:input.goalAnalysis,cloudAllowed:input.goalCloudAnalysis});
+      }
+    }
     if (lease && !input.enabled) {
       const old = lease; lease = undefined;
       application.stopSystemObservationSession(old.sessionId); composition.stop(); pendingTaskId = undefined;
@@ -57,8 +70,9 @@ export function createDesktopProactiveHost({application, client, userData, names
     publish(); return snapshot();
   }
   const snapshot = () => ({enabled: Boolean(lease), cloudAnalysis,
-    status, reason, expiresAt: lease?.expiresAt, suggestions: composition.list()});
+    status, reason, expiresAt: lease?.expiresAt, suggestions: composition.list(), cognition:cognition?.snapshot()});
   async function tick() {
+    await cognition?.tick();
     if (!lease || busy || now() < nextTick) return;
     busy = true; nextTick = now() + 1000;
     try {
@@ -83,11 +97,13 @@ export function createDesktopProactiveHost({application, client, userData, names
     } finally {busy = false; publish();}
   }
   function stop() {
+    cognition?.configure({enabled:false,cloudAllowed:false});
     const old = lease; lease = undefined; cloudAnalysis = false; pendingTaskId = undefined;
     if (old) application.stopSystemObservationSession(old.sessionId);
     composition.stop(); status = 'disabled'; reason = '已停止观察';
   }
   return {snapshot, configure, analyze, tick, stop,
-    close() {stop(); unsubscribe(); factHost.close();},
+    assertCognitionCloudSend:request=>cognition?.assertCloudSend(request),
+    close() {stop(); cognition?.close(); unsubscribe(); factHost.close();},
   };
 }

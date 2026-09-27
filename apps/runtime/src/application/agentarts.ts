@@ -4,6 +4,7 @@ import {
   type AgentArtsAuthorizationProvider,
   type AgentArtsFailureDiagnostic,
   type AgentArtsFetch,
+  type CoordinationRequest,
 } from '@personal-agent/coordination';
 import {ProtocolError} from '@personal-agent/contracts';
 import {
@@ -23,6 +24,8 @@ export interface AgentArtsRuntimeApplicationOptions
   authorizationProvider: AgentArtsAuthorizationProvider;
   fetchImpl?: AgentArtsFetch;
   onDiagnostic?: (receipt: AgentArtsFailureDiagnostic) => void;
+  /** Trusted host egress check, synchronously re-run immediately before each HTTP send. */
+  beforeCompetitionSend?: (request: CoordinationRequest) => void;
 }
 
 /**
@@ -42,6 +45,7 @@ export function createAgentArtsRuntimeApplication(
     authorizationProvider,
     fetchImpl,
     onDiagnostic,
+    beforeCompetitionSend,
     ...runtimeOptions
   } = options;
   if (initialRequestMode === 'goal-with-tools-json'
@@ -67,7 +71,10 @@ export function createAgentArtsRuntimeApplication(
     },
     authorizationProvider,
     fetchImpl,
-    request => application.assertCompetitionExportAllowed(request),
+    request => {
+      application.assertCompetitionExportAllowed(request);
+      beforeCompetitionSend?.(request);
+    },
     request => {
       if (!request.availableTools) throw new ProtocolError('UNAUTHORIZED', 'Initial Competition tool catalog is missing');
       return application.assertCompetitionToolCatalogAllowed({taskId: request.taskId,
