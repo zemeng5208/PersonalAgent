@@ -31,6 +31,17 @@ Renderer、公开 Evidence、日志或模型回显。
 `UNAUTHORIZED`）。拒绝不返回 HWND/PID、标题、路径或候选列表；断连仍按传输故障处理，
 不能由它推断写前安全拒绝。
 
+审批前的可选 `target_ready` 只对同一已绑定 session 的原 `targetRef` 做当下只读
+复核，包含调用方 deadline。Host 复用目标的 HWND/PID、进程起始、窗口身份、唯一
+标签、前台与有效期检查；成功回 `target_ready_result` 的 `ready=true` 和原
+`expiresAt`，目标失效回 `ready=false,errorCode=TARGET_STALE`，请求过期回
+`ready=false,errorCode=TIMEOUT`。回包必须逐一匹配版本、requestId、sessionId
+和 targetRef。它不读取正文、不新建或续期目标、不激活窗口，也不消费授权。
+Desktop 仅在收到同目标有效的就绪结果后才可提交 `allow_once`；`execute` 仍须
+再次独立核验，先前就绪不保证之后的前台状态。这个帧是内部 provisional `0.1.0`
+的可选扩展：旧客户端不发送；旧 Host 不支持时新客户端应在审批前拒绝并关闭
+会话，不能回退到缓存中的前台猜测。
+
 `execute` 只能由已通过 Runtime/Policy/ToolGateway 检查的可信组合入口发送。其
 `authorizationRef`、`taskId`、`runId`、`toolName`/`toolVersion`、`targetRef`、
 `argumentsDigest`、deadline 必须与授权记录和实际 ToolGateway 调用一致。
