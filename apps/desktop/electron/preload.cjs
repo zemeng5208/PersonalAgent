@@ -24,4 +24,12 @@ contextBridge.exposeInMainWorld('desktop', Object.freeze({
     },
     report: message => ipcRenderer.send('desktop:microphone-event', message),
   }),
+  sisPlayback: Object.freeze({
+    onCommand: listener => {
+      const receive = (_event, command) => listener(command);
+      ipcRenderer.on('desktop:voice-playback-command', receive);
+      return () => ipcRenderer.removeListener('desktop:voice-playback-command', receive);
+    },
+    report: message => ipcRenderer.send('desktop:voice-playback-event', message),
+  }),
 }));

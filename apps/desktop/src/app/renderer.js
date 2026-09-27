@@ -52,6 +52,23 @@ else {
   let current,pending=false,lastTaskSignature='';const likedTasks=new Set();
   const report=e=>root.querySelector('#error').textContent=e.message;
   const form=root.querySelector('form'),input=root.querySelector('textarea'),thread=root.querySelector('.thread'),tasksNode=root.querySelector('#tasks');
+  const sisSettings=document.createElement('details');
+  sisSettings.className='sis-settings';
+  sisSettings.innerHTML='<summary>华为 SIS 语音配置</summary><div class="sis-fields"><label>区域<select id="sis-region"><option value="cn-north-4">华北-北京四</option><option value="cn-east-3">华东-上海一</option></select></label><label>项目 ID<input id="sis-project" autocomplete="off" maxlength="128"></label><label>独立 IAM Token<input id="sis-token" type="password" autocomplete="off" maxlength="16384"></label><label>Token 到期时间（UTC，可选）<input id="sis-expiry" autocomplete="off" placeholder="YYYY-MM-DDTHH:mm:ssZ"></label><button type="button" id="sis-save">保存并接入语音</button><p class="notice" id="sis-reason"></p></div>';
+  root.querySelector('#error').before(sisSettings);
+  const sisRegion=sisSettings.querySelector('#sis-region');
+  const sisProject=sisSettings.querySelector('#sis-project');
+  const sisToken=sisSettings.querySelector('#sis-token');
+  const sisExpiry=sisSettings.querySelector('#sis-expiry');
+  sisSettings.querySelector('#sis-save').onclick=async()=>{
+    const save=sisSettings.querySelector('#sis-save');
+    save.disabled=true;
+    try { await invoke('voice.configure',{region:sisRegion.value,projectId:sisProject.value.trim(),
+      iamToken:sisToken.value,tokenExpiresAt:sisExpiry.value.trim()});
+      sisToken.value='';sisSettings.open=false;root.querySelector('#error').textContent=''; }
+    catch(err){sisToken.value='';report(err);}
+    finally{save.disabled=false;}
+  };
   const goalControl=createGoalControl(invoke,()=>input.value);
   root.querySelector('.composer-bar .spacer').before(goalControl.button);
   root.querySelector('.panel').append(goalControl.dialog);
@@ -97,6 +114,11 @@ else {
   };
   root.querySelector('#tasks').onclick=async e=>{const b=e.target.closest('[data-action],[data-ui-action]');if(!b)return;const uiAction=b.dataset.uiAction;if(uiAction==='like'){const on=!likedTasks.has(b.dataset.id);if(on)likedTasks.add(b.dataset.id);else likedTasks.delete(b.dataset.id);b.classList.toggle('active',on);b.setAttribute('aria-pressed',String(on));return;}if(uiAction==='copy'||uiAction==='share'){const task=current?.tasks.find(item=>item.taskId===b.dataset.id);const text=resultText(task?.resultSummary);if(!text)return;try{if(uiAction==='share'&&navigator.share){await navigator.share({text});}else{await invoke('clipboard.writeText',text);b.title=uiAction==='copy'?'已复制':'已复制分享文本';b.setAttribute('aria-label',b.title);setTimeout(()=>{b.title=uiAction==='copy'?'复制':'分享';b.setAttribute('aria-label',`${b.title}回答`);},1600);}}catch(err){if(err?.name!=='AbortError')report(err);}return;}b.disabled=true;try{await invoke(b.dataset.action,b.dataset.id);}catch(err){report(err);}finally{b.disabled=false;}};
   render=data=>{current=data;const task=data.tasks.at(-1);const connectionNode=root.querySelector('#connection');connectionNode.textContent=data.fakeModel?data.connection+' · Fake Model':data.connection;root.querySelector('#state').textContent=task?stateNames[task.state]:'待机';
+    sisSettings.hidden=data.model?.provider!=='agentarts';
+    const sisConfiguration=data.voice?.configuration;
+    sisSettings.querySelector('#sis-reason').textContent=sisConfiguration?.reason??'SIS 尚未配置';
+    if(!sisSettings.open){sisRegion.value='cn-north-4';sisProject.value='';
+      sisExpiry.value=sisConfiguration?.tokenExpiresAt||'';}
     const voiceFailure=data.voice?.status==='error'?data.voice.failure:null;
     const voiceFailureStage=voiceFailureStages[voiceFailure?.stage]??'处理';
     const voiceError=data.voice?.status==='error'?`语音${voiceFailureStage}失败：${voiceFailure?.message??data.voice.reason??'语音处理失败'}`:'';
