@@ -39,6 +39,7 @@ const agentArtsInvokeMode = process.env.PA_AGENTARTS_INVOKE_MODE === undefined
   : process.env.PA_AGENTARTS_INVOKE_MODE;
 const competitionMode = !fakeMode && runtimeProfile === 'huawei_ict_agentarts';
 const syntheticMvp = process.env.PA_DESKTOP_SYNTHETIC_MVP === '1';
+const syntheticFactSource = process.env.PA_DESKTOP_SYNTHETIC_FACT_SOURCE === '1';
 const agentArtsResponseMode = process.env.PA_AGENTARTS_RESPONSE_MODE;
 const repairCandidateVersion = process.env.PA_AGENTARTS_REPAIR_CANDIDATE_VERSION;
 const layaPort = process.env.PA_DESKTOP_LAYA_PORT;
@@ -716,7 +717,7 @@ async function initializeRuntime() {
       const {createDesktopCompetitionToolCatalog} = await import('./competition-tool-catalog.js');
       const namespace = desktopHost.userNamespace;
       goalHost = createGoalHost(namespace);
-      competitionCatalog = createDesktopCompetitionToolCatalog({
+      if (syntheticFactSource) competitionCatalog = createDesktopCompetitionToolCatalog({
         rootPath: path.resolve(dir, '../fixtures/agentarts'), createWorkspaceReadTool,
       });
       productTools = createPublicConnectorHost({systemObservationFactory:runtimeModule.createSystemObservationTool});
@@ -749,15 +750,17 @@ async function initializeRuntime() {
       runtimeApplication = runtimeModule.createAgentArtsRuntimeApplication({
         path: dbPath,
         hostUserNamespace: namespace,
-        tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : [competitionCatalog.tool]), ...goalHost.tools, ...productTools.tools, ...(mailHost?.tools ?? [])],
+        // Match the existing text tool workflow budget; preserve room for the final answer.
+        competitionMaxSteps: 8,
+        tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...goalHost.tools, ...productTools.tools, ...(mailHost?.tools ?? [])],
         ...(syntheticMvp ? {localRepair: syntheticRepairHost.localRepair} : {}),
         ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
         ...(process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT === undefined ? {} : {workflowGoalInput: process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT}),
         responseMode: agentArtsResponseMode ?? 'tool-proposal-json',
         ...(syntheticMvp ? {competitionToolExports: syntheticTools.competitionToolExports} : {
           initialRequestMode: 'goal-with-tools-json',
-          competitionToolAvailability: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolAvailability : [competitionCatalog.availability]), ...productTools.competitionToolAvailability],
-          competitionToolExports: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolExports : [competitionCatalog.export]), ...productTools.competitionToolExports],
+          competitionToolAvailability: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolAvailability : competitionCatalog ? [competitionCatalog.availability] : []), ...productTools.competitionToolAvailability],
+          competitionToolExports: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolExports : competitionCatalog ? [competitionCatalog.export] : []), ...productTools.competitionToolExports],
         }),
         gatewayUrl: process.env.PA_AGENTARTS_GATEWAY_URL ?? '',
         runtimeName: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
@@ -777,7 +780,7 @@ async function initializeRuntime() {
       codingWorkspace.bindApplication(runtimeApplication);
       goalHost.bind(runtimeApplication);
       goalHost.resumeApproved();
-      if (!syntheticMvp && !codingWorkspace.tools.length) competitionFactBridge = createDesktopCompetitionFactBridge({
+      if (!syntheticMvp && competitionCatalog && !codingWorkspace.tools.length) competitionFactBridge = createDesktopCompetitionFactBridge({
         application: runtimeApplication, catalog: competitionCatalog,
         runtimePath: dbPath, userNamespace: namespace,
       });

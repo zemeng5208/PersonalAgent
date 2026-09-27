@@ -9,6 +9,8 @@ test('selected workspace binds tasks, keeps consent session-only and rejects reu
   const root=await mkdtemp(path.join(os.tmpdir(),'pa-coding-selected-'));
   const userData=await mkdtemp(path.join(os.tmpdir(),'pa-coding-config-'));
   await writeFile(path.join(root,'hello.js'),'console.log("hello");\n');
+  const largerSource='// Synthetic source above the old demo limit\n'.repeat(256);
+  await writeFile(path.join(root,'larger.js'),largerSource);
   // Explicit in-memory crypto stand-in; no actual account configuration is accessed.
   const safeStorage={isEncryptionAvailable:()=>true,encryptString:s=>Buffer.from(s),decryptString:b=>b.toString()};
   let host=createWorkspaceConfigHost({userData,safeStorage,selectDirectory:async()=>root});
@@ -30,6 +32,9 @@ test('selected workspace binds tasks, keeps consent session-only and rejects reu
     const result=await read.execute({path:'hello.js'},context);
     assert.equal(result.content,'console.log("hello");\n');
     const policy=host.competitionToolExports.find(item=>item.toolName==='workspace.read_text');
+    const larger=await read.execute({path:'larger.js'},context);
+    assert.equal(larger.content,largerSource);
+    assert.equal(policy.project({...request,result:larger}).content,largerSource);
     assert.equal(policy.accepts(request),true);
     host.revoke();assert.equal(policy.accepts(request),false);
     await assert.rejects(read.execute({path:'hello.js'},context),/撤销|绑定/);

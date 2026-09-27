@@ -60,7 +60,7 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory}
   if (savedRoot) {
     try {
       boundRoot=savedRoot; rootIdentity=statSync(boundRoot,{bigint:true});
-      const options={rootPath:boundRoot,maxReadBytes:4096,maxPreviewBytes:4096};
+      const options={rootPath:boundRoot};
       implementations.push(coding.createWorkspaceReadTool(options), coding.createWorkspaceListTool({rootPath:boundRoot}),
         coding.createWorkspacePatchPreviewTool(options),coding.createWorkspacePatchStageTool(options));
       const pwsh=executable('pwsh.exe');
@@ -68,7 +68,7 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory}
         try {
           applyHost=createDesktopCodingToolHost({workspaceRoot:boundRoot,authorizedWorkspaceRoot:boundRoot,
             recoveryRootPath:recoveryDirectory(userData,boundRoot,pwsh),powerShellPath:pwsh,
-            createWorkspacePatchApplyTool:options => coding.createWorkspacePatchApplyTool({...options,maxReadBytes:4096,maxPreviewBytes:4096})});
+            createWorkspacePatchApplyTool:coding.createWorkspacePatchApplyTool});
           implementations.push(...applyHost.tools);
         } catch {failure='读取和候选生成可用；安全应用补丁所需的目录或 PowerShell 检查未通过';}
       } else failure='读取和候选生成可用；安全应用补丁需要 PowerShell 7';
@@ -111,7 +111,7 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory}
     commandAvailable:tools.some(tool=>tool.descriptor.name==='workspace.git_diff_check' && enabled(tool)),
     cloudExportAllowed:consent?.cloudExportAllowed===true,
     reason:savedRoot!==boundRoot?'目录已保存，请重启应用完成工具装配后授权':failure || (consent
-      ? '当前工作区已授权；文件大小上限 4 KB，命令仅检查 Git 差异；执行仍经过 Policy'
+      ? '当前工作区已授权；命令仅检查 Git 差异，执行仍经过 Policy'
       : savedRoot?'请为本次应用会话授权工作区；重启后需要重新授权':'请选择编程工作区')});
   const revoke=() => {
     consent=undefined;generation=randomUUID();
@@ -144,7 +144,7 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory}
       accepts:({taskId})=>enabled(tool) && bound(taskId),
       project:({taskId,result,signal})=> {
         if (signal.aborted || !enabled(tool) || !bound(taskId)) throw Error('工作区出云许可已失效');
-        if (Buffer.byteLength(JSON.stringify(result),'utf8')>7000) throw Error('工具结果过大，请缩小范围');
+        if (Buffer.byteLength(JSON.stringify(result),'utf8')>coding.MAX_SERIALIZED_WORKSPACE_TOOL_RESULT_BYTES) throw Error('工具结果超过传输上限，请缩小范围');
         return structuredClone(result);
       }})),
     close(){active=false;revoke();applyHost?.close();},

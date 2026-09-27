@@ -17,7 +17,7 @@ export function createPublicConnectorHost({systemObservationFactory,
     project:({result, signal}) => {
       if (signal.aborted) throw Error('Public connector projection cancelled');
       const summary = project(result);
-      if (Buffer.byteLength(JSON.stringify(summary), 'utf8') > 7_000) {
+      if (Buffer.byteLength(JSON.stringify(summary), 'utf8') > 960 * 1024) {
         throw Error('Public result is too large; request fewer results');
       }
       return summary;
@@ -42,18 +42,12 @@ export function createPublicConnectorHost({systemObservationFactory,
             confidence:result.forecast.resolved.confidence, alternatives:result.forecast.resolved.alternatives}} : {})},
         source:result.record.source, occurredAt:result.record.occurredAt, cache:cacheProjection(result.cache),
       })),
-      publicResult('research.search', research.RESEARCH_MODULE_VERSION, result => {
-        const summary = {results:result.results.map(item => ({citation:item.record.contentRef,
+      publicResult('research.search', research.RESEARCH_MODULE_VERSION, result => ({
+        results:result.results.map(item => ({citation:item.record.contentRef,
           source:item.record.source, publishedAt:item.publishedAt,
           publishedTimeKind:item.publishedTimeKind, freshness:item.freshness, ageMs:item.ageMs})),
-          cache:cacheProjection(result.cache), returnedCount:result.results.length,
-          includedCount:result.results.length, truncated:false};
-        // Keep complete citations and explicitly report a reduced projection.
-        while (summary.results.length && Buffer.byteLength(JSON.stringify(summary),'utf8') > 7_000) {
-          summary.results.pop(); summary.truncated=true; summary.includedCount=summary.results.length;
-        }
-        return summary;
-      }),
+        cache:cacheProjection(result.cache),
+      })),
     ],
   });
 }
