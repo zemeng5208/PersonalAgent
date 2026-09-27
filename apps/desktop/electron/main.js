@@ -838,6 +838,18 @@ async function initializeRuntime() {
         hostUserNamespace: namespace,
         // Match the existing text tool workflow budget; preserve room for the final answer.
         competitionMaxSteps: 8,
+        // Module availability/consent, input validation and ToolGateway still run.
+        // Explicit names prevent future destructive tools inheriting this policy.
+        automaticTools: [...productTools.tools,...codingWorkspace.tools,...(goalCloudHost?.tools??[]),
+          ...(todoHost?.tools??[]),...(feedsHost?.tools??[])].filter(tool=>[
+            'weather.forecast','research.search','feeds.collect','feeds.subscriptions',
+            'todo.list','todo.create','todo.update','notifications.status',
+            'goals.list','goals.get','goals.create','goals.revise',
+            'workspace.read_text','workspace.list_entries','workspace.preview_text_patch',
+            'workspace.stage_text_patch','workspace.apply_text_patch','workspace.git_diff_check',
+            'workspace.node_check','workspace.npm_build','workspace.npm_test',
+          ].includes(tool.descriptor.name))
+          .map(tool=>({toolName:tool.descriptor.name,toolVersion:tool.descriptor.version})),
         beforeCompetitionSend:request=> {
           if (!proactiveHost && runtimeApplication.runtime.getTask(request.taskId).conversationId?.startsWith('desktop-proactive-goals:')) {
             throw Error('目标主动分析宿主尚未就绪');

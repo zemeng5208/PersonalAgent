@@ -362,6 +362,35 @@ test('catalog binding rejects versions beyond the cloud adapter limit', () => {
   }), {code: 'INVALID_ARGUMENT'});
 });
 
+test('routine queries and scoped local work execute without prompting while other tools still wait', async () => {
+  for (const [automatic,sideEffect] of [[true,'read'],[true,'local_write'],[false,'read']]) {
+    let executions=0;
+    const app=createRuntimeApplication({path:':memory:',profile:'huawei_ict_agentarts',
+      tools:[{descriptor:{...descriptor,sideEffect},execute:async()=>{executions++;return {value:'public forecast'};}}],
+      automaticTools:automatic?[{toolName:descriptor.name,toolVersion:descriptor.version}]:[],
+      competitionToolExports:[toolExport],
+      competitionToolAvailability:[{toolName:descriptor.name,toolVersion:descriptor.version,available:()=>true}],
+      coordination:{execute:async request=>request.continuation
+        ? {kind:'text',text:'Public query completed',verification:'unverified'}
+        : {kind:'tool_proposal',proposalId:'public-query',toolName:descriptor.name,
+          toolVersion:descriptor.version,arguments:{path:'secret-path'},verification:'unverified'}}});
+    try {
+      const client=new Client(app,Date.now);await client.connect();
+      const {taskId}=await client.call('task.submit',{goal:'Read public forecast',conversationId:'public'},
+        {idempotencyKey:'public-query'});
+      const task=await waitFor(app,taskId,['succeeded','failed','waiting_approval']);
+      assert.equal(task.state,automatic?'succeeded':'waiting_approval');
+      assert.equal(executions,automatic?1:0);
+      const approvals=(await client.call('approval.list',{taskId})).items;
+      assert.equal(approvals.length,automatic?0:1);
+      if(automatic) assert.ok(app.runtime.loadCheckpoint(taskId,`routine-tool-policy:competition-tool-${taskId}-1`));
+    }finally{app.close();}
+  }
+  assert.throws(()=>createRuntimeApplication({path:':memory:',profile:'huawei_ict_agentarts',
+    tools:[{descriptor:{...descriptor,sideEffect:'external_write'},execute:async()=>({value:'unused'})}],
+    automaticTools:[{toolName:descriptor.name,toolVersion:descriptor.version}]}),{code:'INVALID_ARGUMENT'});
+});
+
 test('combined module catalog survives Runtime projection and cloud parsing without truncation', async () => {
   const names = Array.from({length: 24}, (_, i) => `module${i}.read`);
   const tools = names.map(name => ({descriptor:{...descriptor,name},execute:async()=>({value:'unused'})}));

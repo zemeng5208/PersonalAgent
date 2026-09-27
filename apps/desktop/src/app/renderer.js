@@ -10,6 +10,7 @@ import {createGoalControl} from '../features/conversation/goal-view.js';
 import {mountDesktopShell} from '../ui/desktop-shell.js';
 import {mountLiveVoiceControls} from './live-voice-controls.js';
 import {mountProactiveControls} from './proactive-controls.js';
+import {approvalCards,approvalResponse} from '../features/conversation/approval-card.js';
 
 applyPreferences();
 mountDesktopShell();
@@ -138,6 +139,13 @@ else {
     finally{talkButton.disabled=Boolean(current?.live?.active)||!current?.voice?.experimental||!['unavailable','error','listening','awaiting_speech'].includes(current?.voice?.status);}
   };
   root.querySelector('#tasks').onclick=async e=>{const b=e.target.closest('[data-action],[data-ui-action]');if(!b)return;const uiAction=b.dataset.uiAction;if(uiAction==='like'){const on=!likedTasks.has(b.dataset.id);if(on)likedTasks.add(b.dataset.id);else likedTasks.delete(b.dataset.id);b.classList.toggle('active',on);b.setAttribute('aria-pressed',String(on));return;}if(uiAction==='copy'||uiAction==='share'){const task=current?.tasks.find(item=>item.taskId===b.dataset.id);const message=current?.messages?.find(item=>item.id===b.dataset.messageId);const text=b.dataset.messageId?message?.text:resultText(task?.resultSummary);if(!text)return;try{if(uiAction==='share'&&navigator.share){await navigator.share({text});}else{await invoke('clipboard.writeText',text);b.title=uiAction==='copy'?'已复制':'已复制分享文本';b.setAttribute('aria-label',b.title);setTimeout(()=>{b.title=uiAction==='copy'?'复制':'分享';b.setAttribute('aria-label',`${b.title}回答`);},1600);}}catch(err){if(err?.name!=='AbortError')report(err);}return;}b.disabled=true;try{await invoke(b.dataset.action,b.dataset.id);}catch(err){report(err);}finally{b.disabled=false;}};
+  root.querySelector('#tasks').addEventListener('click',async event=>{
+    const button=event.target.closest('[data-approval-decision]');if(!button)return;
+    button.disabled=true;
+    try{await invoke('authorization.respond',approvalResponse(button.dataset.approvalId,
+      button.dataset.approvalDecision,current?.tasks??[],current?.approvals??[]));}
+    catch(error){report(error);button.disabled=false;}
+  });
   render=data=>{current=data;const task=currentTask(data.tasks);const connectionNode=root.querySelector('#connection');connectionNode.textContent=data.fakeModel?data.connection+' · Fake Model':data.connection;const liveStates={connecting:'正在连接',reconnecting:'正在续接',listening:'正在聆听',speaking:'正在回答',working:'正在处理任务',stopping:'正在关闭',error:'连接失败'};root.querySelector('#state').textContent=data.live?.active?(liveStates[data.live.status]??'Live 已开启'):task?stateNames[task.state]:'待机';
     liveControls.render(data.live);
     proactiveControls.render(data.proactive);
@@ -173,10 +181,14 @@ else {
     root.querySelector('.mic-state').textContent=voiceError|| (voiceState==='listening'?'麦克风：正在采集，点击结束':voiceState==='acquiring'?'麦克风：等待设备就绪':voiceState==='recognizing'?'语音：正在转成文字':voiceReady?'麦克风：语音转文字，不自动发送':'麦克风：未采集');
     stopButton.disabled=voiceState!=='speaking'&&!data.live?.active;stopButton.title=data.live?.active?'打断回答（保持 Live）':voiceState==='speaking'?'停止播报':'停止播报（当前未播放）';
     root.querySelector('.bubble').hidden=data.tasks.length>0 || Boolean(data.messages?.length);
-    const taskSignature=JSON.stringify([data.tasks.map(t=>[t.taskId,t.createdAt,t.state,t.revision,t.userMessage,t.resultSummary,t.error?.message]),data.messages]);
+    const taskSignature=JSON.stringify([data.tasks.map(t=>[t.taskId,t.createdAt,t.state,t.revision,t.userMessage,t.resultSummary,t.error?.message]),data.messages,data.approvals]);
     const thinkingGrid='<span class="thinking-grid" aria-hidden="true">'+[0,1,2,1,2,3,2,3,4].map((delay,index)=>`<i style="--i:${delay}" data-cell="${index}"></i>`).join('')+'</span>';
     const wasAtBottom=thread.scrollHeight-thread.scrollTop-thread.clientHeight<90;
     if(taskSignature!==lastTaskSignature) tasksNode.innerHTML=conversationTimeline(data.tasks,data.messages).map(entry=>{if(entry.kind==='message'){const m=entry.value;const body=`<div class="${m.role==='user'?'user-message':'assistant-message'}">${escape(m.text)}</div><div class="response-actions"><button type="button" data-ui-action="copy" data-message-id="${escape(m.id)}" title="复制" aria-label="复制语音消息">${responseIcons.copy}</button></div>`;return `<article class="task turn" data-turn="live:${escape(m.id)}">${m.role==='assistant'?`<div class="assistant-turn">${body}</div>`:body}</article>`;}const t=entry.value;const terminal=isTerminal(t);const waiting=['waiting_approval','waiting_external','waiting_reconciliation','cancelling'].includes(t.state);const activity=waiting?stateNames[t.state]:t.state==='verifying'?'整理回答':t.state==='running'?'执行中':'思考中';const answer=resultText(t.resultSummary);const failure=t.error?.message;const answerActions=answer?`<div class="response-actions"><button type="button" data-ui-action="copy" data-id="${escape(t.taskId)}" title="复制" aria-label="复制回答">${responseIcons.copy}</button><button type="button" data-ui-action="share" data-id="${escape(t.taskId)}" title="分享" aria-label="分享回答">${responseIcons.share}</button><button type="button" data-ui-action="like" data-id="${escape(t.taskId)}" title="点赞" aria-label="点赞回答" aria-pressed="${likedTasks.has(t.taskId)}" class="${likedTasks.has(t.taskId)?'active':''}">${responseIcons.like}</button></div>`:'';return `<article class="task turn" data-turn="${escape(t.taskId)}">${t.userMessage?`<div class="user-message">${escape(t.userMessage)}</div>`:''}<div class="assistant-turn">${!terminal?`<div class="thinking-line">${thinkingGrid}<span>${activity}</span></div>`:answer?`<div class="assistant-message">${escape(answer)}</div>${answerActions}`:failure?`<div class="assistant-error">${escape(failure)}</div>`:''}</div>${!terminal?`<div class="turn-actions"><button class="turn-action" data-action="task.cancel" data-id="${escape(t.taskId)}" ${t.state==='cancelling'?'disabled':''}>停止</button>${data.fake?`<button class="turn-action" data-action="test.advance" data-id="${escape(t.taskId)}">推进联调</button>`:''}</div>`:''}</article>`;}).join('');
+    if(taskSignature!==lastTaskSignature) for(const task of data.tasks){
+      const article=tasksNode.querySelector(`[data-turn="${CSS.escape(task.taskId)}"]`);
+      article?.insertAdjacentHTML('beforeend',approvalCards(task,data.approvals));
+    }
     setSendMode(Boolean(input.value.trim()));
     if(taskSignature!==lastTaskSignature){lastTaskSignature=taskSignature;requestAnimationFrame(()=>{if(wasAtBottom)thread.scrollTop=thread.scrollHeight;updateRail();});}};
 }

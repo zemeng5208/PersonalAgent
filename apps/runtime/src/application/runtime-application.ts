@@ -82,7 +82,10 @@ function assistantText(resultSummary: string): string {
   return resultSummary.replace(MODEL_METADATA, '').trim();
 }
 
-export interface RuntimeApplicationOptions { path: string; now?: () => Date; idFactory?: () => string; text?: TextApplicationOptions; tools?: readonly RegisteredTool[]; profile?: 'local' | 'huawei_ict_agentarts'; coordination?: CoordinationPort; competitionToolExports?: readonly CompetitionToolExport[]; competitionToolAvailability?: readonly CompetitionToolAvailability[]; competitionMaxSteps?: number; repairCandidateVersion?: '1.0'; localRepair?: LocalRepairHostOptions; hostUserNamespace?: string; }
+export interface RuntimeApplicationOptions { path: string; now?: () => Date; idFactory?: () => string; text?: TextApplicationOptions; tools?: readonly RegisteredTool[]; profile?: 'local' | 'huawei_ict_agentarts'; coordination?: CoordinationPort; competitionToolExports?: readonly CompetitionToolExport[]; competitionToolAvailability?: readonly CompetitionToolAvailability[]; competitionMaxSteps?: number; repairCandidateVersion?: '1.0'; localRepair?: LocalRepairHostOptions; hostUserNamespace?: string;
+  /** Trusted host policy for routine operations inside already enabled module scopes. */
+  automaticTools?: readonly {toolName: string; toolVersion: string}[];
+}
 export interface RuntimeApplicationTransport { send(request: Request, signal: AbortSignal): Promise<Response>; }
 
 export class RuntimeApplication implements RuntimeApplicationTransport {
@@ -185,6 +188,14 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     });
     if (gateway) {
       const descriptors = gateway.list();
+      const automaticTools = new Set<string>();
+      for (const binding of options.automaticTools ?? []) {
+        const descriptor = descriptors.find(tool => tool.name === binding.toolName && tool.version === binding.toolVersion);
+        if (this.profile !== 'huawei_ict_agentarts' || !descriptor || descriptor.sideEffect === 'external_write' || descriptor.requiresPresence) {
+          throw new ProtocolError('INVALID_ARGUMENT', 'Routine policy requires a registered non-external tool without presence requirements');
+        }
+        automaticTools.add(JSON.stringify([binding.toolName, binding.toolVersion]));
+      }
       const invoker = new RuntimeToolInvoker(this.runtime, descriptors);
       this.tools = {list: () => structuredClone(descriptors), invoke: async invocation => {
         const tool = descriptors.find(item => item.name === invocation.toolName && item.version === invocation.toolVersion);
@@ -206,6 +217,21 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
           this.mailReadSessions.assertPage(mailSession, invocation.taskId);
         }
         const ref = invocation.runId;
+        if (!this.runtime.policy.get(ref) && automaticTools.has(JSON.stringify([tool.name, tool.version]))) {
+          const decisionKey = `routine-tool-policy:${ref}`;
+          if (this.runtime.loadCheckpoint(invocation.taskId, decisionKey)) {
+            throw new ProtocolError('UNAUTHORIZED', 'Routine tool grant was revoked');
+          }
+          if (invocation.signal.aborted || this.runtime.getTask(invocation.taskId).state !== 'running'
+            || Date.parse(invocation.deadline) <= this.now().getTime()) {
+            throw new ProtocolError('CANCELLED', 'Routine task is no longer active');
+          }
+          const argumentsDigest = toolArgumentsDigest(invocation.arguments);
+          this.runtime.saveCheckpoint(invocation.taskId, decisionKey, {toolName:tool.name,
+            toolVersion:tool.version, argumentsDigest, source:'trusted-routine-tool-policy'});
+          this.runtime.policy.grant({authorizationRef:ref,taskId:invocation.taskId,toolName:tool.name,
+            scopes:tool.requiredScopes,argumentsDigest,maxUses:1,expiresAt:invocation.deadline});
+        }
         if (!this.runtime.policy.get(ref)) {
           const expiresAt = new Date((options.now?.() ?? new Date()).getTime() + 600_000).toISOString();
           const approval = this.runtime.requestToolApproval(ref, invocation.taskId, tool, expiresAt, toolArgumentsDigest(invocation.arguments));
