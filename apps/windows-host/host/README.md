@@ -30,8 +30,10 @@ Policy/ToolGateway 中完成任务、工具、参数摘要、目标与期限的�
 argumentsDigest/targetRef` 和本地文本摘要记入用户范围的追加日志；日志无正文、路径、
 窗口名或 HWND。首次 UIA 调用前持久记录已开始，重复 runId 只能查询已有结果，
 不能重做写入。单进程互斥和原类库输入锁串行写入。Host 将核心 UIA 真实读回映射为
-内部 `verified`；该 `evidenceRef` 是 Host 回执标识，**不是** Runtime 的公开 Evidence
-或任务终态。正式消费方仍需可信读回和 Evidence 投影。
+内部 `verified`；这一步已从真实 UIA 目标完成后置读回。该 `evidenceRef` 是 Host 回执
+标识，**不是** Runtime 的公开 Evidence 或任务终态。正式消费方须校验认证会话中的
+回执关联，并将 Host 的执行读回状态投影为 Runtime Evidence；无需再造第二套 UIA
+读回器。`verified` 只证明当前控件文本匹配，不证明文件已保存。
 
 取消只发取消信号，随后以 `status` 查询；Schema 未定义取消确认帧。连接断开时
 取消未结束动作。Host 单次操作另有十分钟看门狗；超过期限同样发取消信号。
