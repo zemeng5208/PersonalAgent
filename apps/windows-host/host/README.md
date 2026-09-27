@@ -26,7 +26,7 @@ Host 只返回短期随机 `targetRef`，不返回或记录标题、正文、HWN
 `TARGET_STALE`、`TIMEOUT`），不会用断连伪造拒绝。断连后目标引用立即失去执行效力。
 
 审批前的只读 `target_ready` 帧复用目标的 HWND/PID、进程起始、窗口身份、唯一标签、
-唯一可见启用可写 UIA 文本控件结构、前台与有效期检查。目标有效回 `target_ready_result(ready=true, expiresAt)`，目标失效回
+唯一可见启用可写 UIA 文本控件结构（候选异常即 fail closed）、前台与有效期检查。目标有效回 `target_ready_result(ready=true, expiresAt)`，目标失效或结构异常回
 `ready=false, errorCode=TARGET_STALE`，过期回 `ready=false, errorCode=TIMEOUT`。它不读取正文、
 不新建或续期目标、不激活窗口，也不消费授权。
 
@@ -57,4 +57,4 @@ argumentsDigest/targetRef` 和本地文本摘要记入用户范围的追加日�
 在普通用户 Windows 会话已用固定 #168 Schema 执行受控 `hello` 短链：Bridge 的
 OS 服务端 PID 核验返回 `VERIFIED`，Host 的反向 PID/SID 核验后回关联一致的
 `hello_ack`，桥正常退出且两个进程无残留。此检查没有发送 `bind`、`observe` 或
-`execute`；不能代替授权、记事本 UIA 或设备完整验收。
+`execute`；本机未实际观察现代 Notepad UIA 树，离线编译与死句柄测试不能证明真实现代记事本可写，不能代替授权、记事本 UIA 或设备完整验收。
