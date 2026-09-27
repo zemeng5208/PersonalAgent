@@ -1,4 +1,4 @@
-import {app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, safeStorage, screen, session, Tray} from 'electron';
+import {app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, safeStorage, screen, session, Tray} from 'electron';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
 import {spawn} from 'node:child_process';
@@ -30,6 +30,7 @@ import {createDeferredRuntimeStartup} from './runtime-startup.js';
 import {createMailConfig} from './mail-config.js';
 import {createDesktopFeedsHost} from './feeds-host.js';
 import {createDesktopNotepadHost} from './notepad-host.js';
+import {createDesktopTodoHost} from './todo-host.js';
 import {createMailMetadataStorage} from './mail-metadata-storage.js';
 import {createLocalLayaHost} from './laya-local-host.js';
 import {resultText} from '../src/features/conversation/result-text.js';
@@ -155,6 +156,10 @@ let productTools;
 let codingWorkspace;
 let mailConfig;
 let feedsHost;
+let todoHost;
+let todoFailure = '';
+let todoClosing;
+let todoClosed = false;
 let notepadHost;
 let notepadClosing;
 let notepadClosed = false;
@@ -216,13 +221,14 @@ function snapshot(surface) {
     health: structuredClone(health),
     capabilityDirectory: {...capabilityDirectory},
     approvals: [...approvals.values()],
-    notifications: [...notifications.values()],
+    notifications: [...notifications.values(),...(todoHost?.snapshot().notifications ?? [])],
     model: structuredClone(model),
     thinking: structuredClone(thinking),
     live: {...(liveVoice?.snapshot() ?? liveConfig?.snapshot()), shortcut: {...liveShortcut}},
     proactive: proactiveHost?.snapshot() ?? {enabled: false, cloudAnalysis: false, status: 'disabled', reason: '主动观察尚未装配', suggestions: []},
     mail: mailSnapshot(),
     feeds: feedsHost?.snapshot(),
+    todo: todoHost?.snapshot() ?? {available:false,items:[],notifications:[],reason:todoFailure || '待办将在 Runtime 连接后可用'},
     notepad: notepadHost?.snapshot() ?? {available:false,busy:false,state:'unavailable',
       reason:'本机执行组件尚未就绪，记事本操作暂不可用。'},
     coding: codingWorkspace?.snapshot() ?? {configured:false,reason:'编程工作区尚未装配'},
@@ -737,6 +743,16 @@ async function initializeRuntime() {
       const {createDesktopCompetitionToolCatalog} = await import('./competition-tool-catalog.js');
       const namespace = desktopHost.userNamespace;
       goalHost = createGoalHost(namespace);
+      if (!syntheticMvp) {
+        try {todoHost = createDesktopTodoHost({userData:app.getPath('userData'),safeStorage,namespace,
+          createDeliveryHost:runtimeModule.createReminderDeliveryHost,onUpdate:publish,
+          onNotification:item=>{
+            if(!Notification.isSupported()) return;
+            const notification=new Notification({title:'PersonalAgent 待办提醒',body:item.summary});
+            notification.on('click',()=>openPanel());notification.show();
+          }});}
+        catch {todoFailure = '待办存储无法读取，原数据已保留，请恢复本机安全存储';}
+      }
       const hostPath = path.resolve(dir, '../../windows-host/host/bin/Release/net8.0-windows/WindowsHost.Host.exe');
       const bridgePath = path.resolve(dir, '../../windows-host/host/bridge/bin/Release/net8.0-windows/WindowsHost.PipeBridge.exe');
       if (!syntheticMvp && process.platform === 'win32' && existsSync(hostPath) && existsSync(bridgePath)) {
@@ -800,15 +816,15 @@ async function initializeRuntime() {
           }
           proactiveHost?.assertCognitionCloudSend(request);
         },
-        tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...goalHost.tools, ...productTools.tools, ...(mailHost?.tools ?? []), ...(feedsHost?.tools ?? []), ...(notepadHost?.tools ?? [])],
+        tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...goalHost.tools, ...productTools.tools, ...(mailHost?.tools ?? []), ...(feedsHost?.tools ?? []), ...(notepadHost?.tools ?? []), ...(todoHost?.tools ?? [])],
         ...(syntheticMvp ? {localRepair: syntheticRepairHost.localRepair} : {}),
         ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
         ...(process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT === undefined ? {} : {workflowGoalInput: process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT}),
         responseMode: agentArtsResponseMode ?? 'tool-proposal-json',
         ...(syntheticMvp ? {competitionToolExports: syntheticTools.competitionToolExports} : {
           initialRequestMode: 'goal-with-tools-json',
-          competitionToolAvailability: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolAvailability : competitionCatalog ? [competitionCatalog.availability] : []), ...productTools.competitionToolAvailability, ...feedsHost.competitionToolAvailability],
-          competitionToolExports: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolExports : competitionCatalog ? [competitionCatalog.export] : []), ...productTools.competitionToolExports, ...feedsHost.competitionToolExports],
+          competitionToolAvailability: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolAvailability : competitionCatalog ? [competitionCatalog.availability] : []), ...productTools.competitionToolAvailability, ...feedsHost.competitionToolAvailability, ...(todoHost?.competitionToolAvailability ?? [])],
+          competitionToolExports: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolExports : competitionCatalog ? [competitionCatalog.export] : []), ...productTools.competitionToolExports, ...feedsHost.competitionToolExports, ...(todoHost?.competitionToolExports ?? [])],
         }),
         ...cloudBinding,
         invokeMode: agentArtsInvokeMode,
@@ -824,6 +840,7 @@ async function initializeRuntime() {
       if (mailHost) {mailHost.bindApplication(runtimeApplication); mailConfig.markBound(configuredMail.revision);}
       codingWorkspace.bindApplication(runtimeApplication);
       feedsHost?.bindApplication(runtimeApplication);
+      todoHost?.bindApplication(runtimeApplication);
       goalHost.bind(runtimeApplication);
       notepadHost?.bind(runtimeApplication);
       goalHost.resumeApproved();
@@ -872,7 +889,7 @@ async function initializeRuntime() {
       if (task.state === 'succeeded') void promptSyntheticRepairCandidate(task.taskId).catch(() => {});
     }
   }
-  eventPoll = setInterval(() => {void pumpEvents(); void proactiveHost?.tick(); void refreshMail(); void notepadHost?.refresh();}, 120);
+  eventPoll = setInterval(() => {void pumpEvents(); void proactiveHost?.tick(); void refreshMail(); void notepadHost?.refresh(); void todoHost?.tick();}, 120);
 }
 
 async function initializeProductServices() {
@@ -949,6 +966,10 @@ async function action(event, name, payload) {
     return {...result, requiresRestart, reason: requiresRestart
       ? '配置已加密保存，请重启应用完成连接。'
       : '配置已加密保存，Runtime 已连接；云端可用性以实际任务结果为准。'};
+  }
+  if (['todo.authorize','todo.revoke','todo.configureNotifications','todo.dismiss'].includes(name)) {
+    if(sender!==admin || !competitionMode || syntheticMvp || !todoHost) throw Error('请从正式应用待办设置操作');
+    const result=todoHost[name.slice(5)](payload);publish();return result;
   }
   if (['feeds.add','feeds.remove','feeds.authorize','feeds.revoke'].includes(name)) {
     if (sender !== admin || !competitionMode || syntheticMvp || !feedsHost) throw Error('请从正式应用订阅设置操作');
@@ -1362,6 +1383,12 @@ app.whenReady().then(async () => {
       event.preventDefault(); runtimeError = 'Runtime 正在连接，请稍后退出'; publish(); return;
     }
     proactiveHost?.stop();
+    if(todoHost && !todoClosed) {
+      event.preventDefault();
+      todoClosing ??= todoHost.close().then(()=>{todoClosed=true;app.quit();})
+        .catch(()=>{todoClosing=undefined;runtimeError='提醒队列尚未结束，请稍后退出';publish();});
+      return;
+    }
     if (notepadHost && !notepadClosed) {
       event.preventDefault();
       if (!notepadClosing) notepadClosing = notepadHost.close().then(() => {
@@ -1427,6 +1454,7 @@ app.whenReady().then(async () => {
       productTools?.close();
       codingWorkspace?.close();
       feedsHost?.close();
+      void todoHost?.close();
     } catch (error) {
       event.preventDefault();
       app.isQuitting = false;

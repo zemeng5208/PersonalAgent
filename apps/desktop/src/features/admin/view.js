@@ -8,6 +8,7 @@ import {mountWorkspaceControls} from '../../app/workspace-controls.js';
 import {mountAgentArtsControls} from '../../app/agentarts-controls.js';
 import {mountFeedsControls} from '../../app/feeds-controls.js';
 import {mountNotepadControls} from '../../app/notepad-controls.js';
+import {mountTodoControls} from '../../app/todo-controls.js';
 import {profilePage, bindProfile} from './profile.js';
 import {approvalPresentation, authorizationHistoryHtml, authorizationListHtml, nextApprovalExpiry} from './approval-status.js';
 import {agentArtsModelPage} from './agentarts-model.js';
@@ -113,7 +114,7 @@ export function mountAdmin(root, invoke, escape) {
   localSettingsButton.textContent = '桌面设置与恢复';
   localSettingsButton.addEventListener('click', () => window.desktop.openSettings().catch(error => { root.querySelector('#error').textContent = error.message; }));
   root.querySelector('.admin-bar').insertBefore(localSettingsButton, root.querySelector('#admin-close'));
-  let liveControls,proactiveControls,mailControls,layaControls,codingControls,agentArtsControls,feedsControls,notepadControls;
+  let liveControls,proactiveControls,mailControls,layaControls,codingControls,agentArtsControls,feedsControls,notepadControls,todoControls;
 
   function capabilityTable(data) {
     const status = data.capabilityDirectory ?? {state: 'unavailable', reason: '可信宿主尚未报告能力目录状态'};
@@ -257,6 +258,8 @@ export function mountAdmin(root, invoke, escape) {
     mailControls?.render(data.mail);mailControls?.showSettings(section==='connections');
     if (section==='connections' && data.feeds) feedsControls ??= mountFeedsControls(root.querySelector('.main'),invoke);
     feedsControls?.render(data.feeds);feedsControls?.show(section==='connections');
+    if(section==='connections' && data.todo) todoControls ??= mountTodoControls(root.querySelector('.main'),invoke);
+    todoControls?.render(data.todo);todoControls?.show(section==='connections');
     if ((section==='connections' || section==='memory') && data.laya) layaControls ??= mountLayaControls(root.querySelector('.main'),invoke);
     layaControls?.render(data.laya);layaControls?.show(section==='connections' || section==='memory');
     if (section==='worktrees' || section==='environment') codingControls ??= mountWorkspaceControls(root.querySelector('.main'),invoke);

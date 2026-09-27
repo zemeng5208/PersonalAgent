@@ -37,3 +37,4 @@ export type {ProactiveCognitionHost, ProactiveCognitionHostOptions, ProactiveCog
   ProactiveSelectionHandoff, ProactiveSelectionHandoffPort} from './application/proactive-cognition-host.js';
 export type {QQMailTriageHostOptions} from './application/mail-triage.js';
 export type {StartMailReadSessionRequest, MailReadSession} from './application/mail-read-session.js';
+export {createReminderDeliveryHost} from './application/reminder-delivery.js';

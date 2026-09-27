@@ -166,8 +166,8 @@ export interface SchedulerPort {
   listSchedules(conversationId: string): ScheduleSnapshot[];
   /** Exclusive trusted owner supplies its complete desired set before dispatch/recovery. */
   reconcileSchedules(conversationId: string, desired: readonly ScheduleInput[]): ScheduleSnapshot[];
-  dispatchDueSchedules(): ScheduleDispatch[];
-  recoverMissedSchedules(): ScheduleDispatch[];
+  dispatchDueSchedules(conversationId?: string): ScheduleDispatch[];
+  recoverMissedSchedules(conversationId?: string): ScheduleDispatch[];
 }
 
 interface TaskRow {
@@ -1197,9 +1197,12 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     });
   }
 
-  private processDue(recovery: boolean): ScheduleDispatch[] {
+  private processDue(recovery: boolean, conversationId?: string): ScheduleDispatch[] {
     const now = this.timestamp();
-    const rows = this.db.prepare('SELECT schedule_id FROM task_schedules WHERE status = ? AND run_at <= ? ORDER BY run_at, schedule_id').all('pending', now) as unknown as {schedule_id: string}[];
+    if (conversationId !== undefined) requireText(conversationId, 'conversationId');
+    const rows = (conversationId === undefined
+      ? this.db.prepare('SELECT schedule_id FROM task_schedules WHERE status = ? AND run_at <= ? ORDER BY run_at, schedule_id').all('pending', now)
+      : this.db.prepare('SELECT schedule_id FROM task_schedules WHERE status = ? AND run_at <= ? AND conversation_id = ? ORDER BY run_at, schedule_id').all('pending', now, conversationId)) as unknown as {schedule_id: string}[];
     const dispatches = rows.map(({schedule_id}) => this.transaction(() => {
       const schedule = this.getSchedule(schedule_id);
       if (schedule.status !== 'pending' || Date.parse(schedule.runAt) > Date.parse(now)) return undefined;
@@ -1218,11 +1221,11 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     return dispatches.filter(dispatch => dispatch !== undefined);
   }
 
-  dispatchDueSchedules(): ScheduleDispatch[] {
-    return structuredClone(this.processDue(false));
+  dispatchDueSchedules(conversationId?: string): ScheduleDispatch[] {
+    return structuredClone(this.processDue(false, conversationId));
   }
 
-  recoverMissedSchedules(): ScheduleDispatch[] {
-    return structuredClone(this.processDue(true));
+  recoverMissedSchedules(conversationId?: string): ScheduleDispatch[] {
+    return structuredClone(this.processDue(true, conversationId));
   }
 }
