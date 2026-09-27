@@ -74,11 +74,13 @@ export function createCompetitionFactHost(
       },
       recordPublicSource: (source: TrustedPublicSource, context: MemoryReadContext) => {
         active();
-        return memory.appendPublicSource(memoryNamespace, {...source, ...context});
+        return memory.appendPublicSource(memoryNamespace,
+          {...source, deadline: context.deadline, signal: context.signal});
       },
       withdrawPublicSource: (source: TrustedPublicWithdrawal, context: MemoryReadContext) => {
         active();
-        return memory.withdrawPublicSource(memoryNamespace, {...source, ...context});
+        return memory.withdrawPublicSource(memoryNamespace,
+          {...source, deadline: context.deadline, signal: context.signal});
       },
       consume: (request: Parameters<SqliteFactProjectionHost['consume']>[0]) => {
         active();
