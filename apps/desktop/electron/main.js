@@ -796,6 +796,11 @@ async function initializeRuntime() {
             properties:['openFile'],filters:[{name:'Node executable',extensions:['exe']}]});
           return result.canceled?undefined:result.filePaths[0];
         },
+        selectNpmCli:async () => {
+          const result=await dialog.showOpenDialog(admin,{title:'选择可信 Node 安装目录中的 npm-cli.js',
+            properties:['openFile'],filters:[{name:'npm CLI',extensions:['js']}]});
+          return result.canceled?undefined:result.filePaths[0];
+        },
         selectCheckFile:async workspaceRoot => {
           const result=await dialog.showOpenDialog(admin,{title:'选择此工作区内需要语法检查的文件',
             defaultPath:workspaceRoot,properties:['openFile'],filters:[{name:'JavaScript',extensions:['js','mjs','cjs']}]});
@@ -1017,11 +1022,12 @@ async function action(event, name, payload) {
     }
     const result = feedsHost[name.slice('feeds.'.length)](payload); publish(); return result;
   }
-  if (['coding.select','coding.selectNode','coding.selectCheckFile','coding.authorize','coding.revoke'].includes(name)) {
+  if (['coding.select','coding.selectNode','coding.selectNpmCli','coding.selectCheckFile','coding.authorize','coding.revoke'].includes(name)) {
     if (sender !== admin || !competitionMode || syntheticMvp || !codingWorkspace) throw Error('请从正式应用设置配置编程工作区');
     if (name !== 'coding.revoke' && runtimeApplication.activeTaskCount > 0) throw Error('请等待当前任务结束后更改工作区');
     if (name === 'coding.select') await codingWorkspace.select();
     if (name === 'coding.selectNode') await codingWorkspace.selectNode();
+    if (name === 'coding.selectNpmCli') await codingWorkspace.selectNpmCli();
     if (name === 'coding.selectCheckFile') await codingWorkspace.selectCheckFile();
     if (name === 'coding.authorize') codingWorkspace.authorize(payload);
     if (name === 'coding.revoke') codingWorkspace.revoke();
