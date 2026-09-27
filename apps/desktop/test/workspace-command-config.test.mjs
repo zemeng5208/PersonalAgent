@@ -62,9 +62,55 @@ test('encrypted legacy workspace adds fixed Node check without granting writes o
       {recipeId:'node-check',exitCode:0,passed:true});
     host.revoke();assert.equal(binding.available(request),false);
     assert.throws(()=>host.authorize({cloudExportAllowed:true,writeAllowed:false,
-      commandAllowed:true,projectCodeAllowed:true}),/权限/);
+      commandAllowed:true,projectCodeAllowed:true}),/尚未准备好/);
     await assert.rejects(host.selectNode(),/Node/);
     await assert.rejects(host.selectCheckFile(),/工作区/);
     assert.equal(host.snapshot().checkFileName,'syntax.js');
+  } finally {host.close();}
+});
+
+test('project scripts need a trusted helper, factory receipt and separate session consent',async()=>{
+  const root=mkdtempSync(new URL('project-',cache));
+  const userData=mkdtempSync(new URL('project-data-',cache));
+  const source=path.join(root,'syntax.js');writeFileSync(source,'const ready = true;\n');
+  const npmCli=path.join(userData,'npm-cli.js');writeFileSync(npmCli,'// local fixture\n');
+  const helper=path.join(userData,'WindowsJobProcessHost.exe');writeFileSync(helper,'fixture');
+  const options={userData,safeStorage,selectDirectory:async()=>root,
+    selectNodeExecutable:async()=>process.execPath,selectCheckFile:async()=>source,
+    selectNpmCli:async()=>npmCli,jobHelperExecutable:helper};
+  let host=createWorkspaceConfigHost(options);
+  await host.select();await host.selectNode();await host.selectCheckFile();await host.selectNpmCli();host.close();
+  const fakeFactory=input=>{
+    assert.equal(input.allowProjectScripts,true);
+    assert.equal(input.npmCliPath,npmCli);
+    assert.equal(input.jobHelperExecutable,helper);
+    const recipes=[{id:'node-check',executable:input.nodeExecutable,args:['--check','syntax.js']},
+      {id:'npm-build',executable:helper,args:['--cwd',root,'--exe',input.nodeExecutable,'--',npmCli,'run','build']}];
+    const tool={descriptor:{name:'workspace.run_allowed_command',version:'1.0.0',sideEffect:'local_write',
+      requiredScopes:['workspace:execute']},
+    execute:async({recipeId})=>({recipeId,exitCode:0,stdout:'private source',stderr:`${root} private path`})};
+    return {tool,recipes,diagnostics:{projectScriptsExposed:true}};
+  };
+  host=createWorkspaceConfigHost({...options,createCommandRecipeTool:fakeFactory});
+  const checkpoints=new Map();host.bindApplication({runtime:{
+    loadCheckpoint:(id,key)=>checkpoints.get(`${id}:${key}`),
+    saveCheckpoint:(id,key,value)=>checkpoints.set(`${id}:${key}`,value)}});
+  try {
+    assert.equal(host.snapshot().projectScriptsAvailable,true);
+    assert.deepEqual(host.snapshot().projectCommands,['build']);
+    const binding=host.competitionToolAvailability.find(item=>item.toolName==='workspace.npm_build');
+    const request={taskId:'project-task',signal:new AbortController().signal};
+    assert.equal(binding.available(request),false);
+    assert.throws(()=>host.authorize({cloudExportAllowed:true,writeAllowed:false,
+      commandAllowed:false,projectCodeAllowed:true}),/不能授权/);
+    host.authorize({cloudExportAllowed:true,writeAllowed:false,commandAllowed:true,projectCodeAllowed:false});
+    assert.equal(binding.available(request),false);
+    host.authorize({cloudExportAllowed:true,writeAllowed:false,commandAllowed:true,projectCodeAllowed:true});
+    assert.equal(binding.available(request),true);
+    const output=await host.tools.find(item=>item.descriptor.name==='workspace.npm_build')
+      .execute({}, {...request,scopes:['workspace:execute']});
+    assert.deepEqual(host.competitionToolExports.find(item=>item.toolName==='workspace.npm_build')
+      .project({...request,result:output}),{recipeId:'npm-build',exitCode:0,passed:true});
+    host.revoke();assert.equal(binding.available(request),false);
   } finally {host.close();}
 });

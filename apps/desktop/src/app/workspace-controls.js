@@ -13,11 +13,13 @@ export function mountWorkspaceControls(root, invoke) {
     <button class="btn" type="button" data-workspace="select-node">选择本机 Node</button>
     <button class="btn" type="button" data-workspace="select-file">选择要做语法检查的 JS 文件</button>
     <p class="notice">Node --check 只检查所选文件的语法，不运行项目脚本；可执行文件和文件路径由本机宿主固定，Agent 无法指定。</p>
+    <p class="notice" data-workspace="project-status"></p>
+    <button class="btn" type="button" data-workspace="select-npm">找不到 npm 时选择本机 npm 文件</button>
     <label class="setting-row"><input type="checkbox" data-workspace="cloud">允许将此工作区的工具结果发送给 AgentArts</label>
     <label class="setting-row"><input type="checkbox" data-workspace="write">额外允许写入工作区</label>
     <label class="setting-row"><input type="checkbox" data-workspace="command">额外允许执行受限命令</label>
-    <label class="setting-row"><input type="checkbox" data-workspace="project-code" disabled>允许执行项目 build/test（目前不可用）</label>
-    <p class="notice">项目 build/test 会运行工作区代码，并非系统沙箱；需有受控进程树和单独的本会话许可后才会开放。</p>
+    <label class="setting-row"><input type="checkbox" data-workspace="project-code" disabled><span data-workspace="project-label">允许执行项目构建/测试（尚未准备好）</span></label>
+    <p class="notice">项目构建和测试会执行工作区中的代码，可读写当前用户有权访问的内容。这不是隔离沙箱；只有本机执行组件就绪且你在本会话单独勾选后才会开放，每次执行仍需本地审批。</p>
     <p class="notice">发送范围与写入、命令许可由宿主保存；每次实际执行仍须经过本地 Policy 校验与必要审批。</p>
     <button class="btn" type="button" data-workspace="authorize">授权所选权限</button>
     <button class="btn" type="button" data-workspace="revoke">撤销工作区授权</button>
@@ -35,9 +37,11 @@ export function mountWorkspaceControls(root, invoke) {
     field('select').disabled = busy;
     field('select-node').disabled = busy || !configured;
     field('select-file').disabled = busy || !configured;
+    field('select-npm').disabled = busy || !configured || state.nodeConfigured !== true;
     field('cloud').disabled = busy || !configured;
     field('write').disabled = busy || !configured;
     field('command').disabled = busy || !configured;
+    field('project-code').disabled = busy || !configured || state.projectScriptsAvailable !== true;
     field('authorize').disabled = busy || !configured || !field('cloud').checked;
     field('revoke').disabled = busy || (!configured && state.cloudExportAllowed !== true);
   }
@@ -58,12 +62,22 @@ export function mountWorkspaceControls(root, invoke) {
     field('node-status').textContent = configured
       ? `Node：${state.nodeConfigured === true ? '已选择' : '未选择'} · 检查文件：${state.checkFileConfigured === true && typeof state.checkFileName === 'string' ? state.checkFileName : '未选择'} · Node 语法检查：${state.nodeCheckAvailable === true ? '可用' : '不可用'}${typeof state.commandReason === 'string' && state.commandReason ? ` · ${state.commandReason}` : ''}`
       : '先选择工作区，再由本机宿主选择 Node 与工作区内 JS 文件。';
+    const projectReady = configured && state.projectScriptsAvailable === true;
+    field('project-status').textContent = configured
+      ? `npm 文件：${state.npmCliConfigured === true ? '已确定' : '未找到，可手动选择'} · 项目构建/测试：${projectReady ? '可授权' : '暂不可用'}${typeof state.projectReason === 'string' && state.projectReason ? ` · ${state.projectReason}` : ''}`
+      : '选择工作区后才会检查项目构建和测试是否可用。';
+    field('project-label').textContent = projectReady
+      ? '单独允许本会话执行项目构建/测试'
+      : '允许执行项目构建/测试（尚未准备好）';
+    if (!projectReady) field('project-code').checked = false;
     if (!configured || previousName !== state.displayName || (previouslyAllowed && state.cloudExportAllowed !== true)) {
       field('write').checked = false;
       field('command').checked = false;
+      field('project-code').checked = false;
       consentDirty = false;
     }
     if (!consentDirty) field('cloud').checked = configured && state.cloudExportAllowed === true;
+    if (!consentDirty) field('project-code').checked = projectReady && state.projectCodeAllowed === true;
     field('status').textContent = feedback || (typeof state.reason === 'string' ? state.reason : '')
       || (configured ? '请按需选择授权范围；设置状态以宿主读回为准。' : '请先由本机宿主选择工作区。');
     updateButtons();
@@ -93,16 +107,18 @@ export function mountWorkspaceControls(root, invoke) {
   }
 
   field('cloud').addEventListener('change', () => { consentDirty = true; updateButtons(); });
+  field('project-code').addEventListener('change', () => { consentDirty = true; updateButtons(); });
   field('select').addEventListener('click', () => run('coding.select'));
   field('select-node').addEventListener('click', () => run('coding.selectNode'));
   field('select-file').addEventListener('click', () => run('coding.selectCheckFile'));
+  field('select-npm').addEventListener('click', () => run('coding.selectNpmCli'));
   field('authorize').addEventListener('click', () => {
     if (!field('cloud').checked || state.configured !== true) return;
     run('coding.authorize', {
       cloudExportAllowed: true,
       writeAllowed: field('write').checked,
       commandAllowed: field('command').checked,
-      projectCodeAllowed: false,
+      projectCodeAllowed: state.projectScriptsAvailable === true && field('project-code').checked,
     });
   });
   field('revoke').addEventListener('click', () => run('coding.revoke'));
