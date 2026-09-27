@@ -45,5 +45,7 @@ argumentsDigest/targetRef` 和本地文本摘要记入用户范围的追加日�
 从仓库根目录分别构建 `dotnet build apps/windows-host/host/WindowsHost.Host.csproj` 和
 `dotnet build apps/windows-host/host/bridge/WindowsHost.PipeBridge.csproj`。`--host` 指向
 前者的绝对 `.exe` 路径，其同目录必须含 #168 Schema 拷贝的 `windows-host.json`。
-目前 Pipe PID 双向核验及 stdio 透传仍需受控 Windows 连接验证；构建与协议夹具
-不能代替设备验收。
+在普通用户 Windows 会话已用固定 #168 Schema 执行受控 `hello` 短链：Bridge 的
+OS 服务端 PID 核验返回 `VERIFIED`，Host 的反向 PID/SID 核验后回关联一致的
+`hello_ack`，桥正常退出且两个进程无残留。此检查没有发送 `bind`、`observe` 或
+`execute`；不能代替授权、记事本 UIA 或设备完整验收。
