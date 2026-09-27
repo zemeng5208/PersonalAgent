@@ -16,6 +16,17 @@ Competition 文字接线由可信 Desktop 主进程显式选择，不由 Rendere
 管理后台原有盘古配置、测试和启停动作在 Competition 模式下会明确拒绝，避免把
 Local 配置误写成 AgentArts 状态。
 
+Competition 语音试用显式接华为 SIS 短音频 ASR 和同步 TTS，保持现有按键采集、
+Runtime 文字消费和本机 WAV 播放。可信面板中的“华为 SIS 语音配置”只接受
+`cn-north-4` 或 `cn-east-3`、对应项目 ID 和**独立的 SIS IAM Token**；
+主进程用 Electron `safeStorage` 加密后写入当前用户数据目录，不向 Renderer
+快照、日志或 AgentArts 请求暴露 Token。启动时也可由主进程读取
+`PA_HUAWEI_SIS_REGION`、`PA_HUAWEI_SIS_PROJECT_ID`、
+`PA_HUAWEI_SIS_IAM_TOKEN` 和可选的 `PA_HUAWEI_SIS_TOKEN_EXPIRES_AT`，已保存的加密配置优先。Token 到期后须在可信
+面板更新；当前没有自动刷新。未配置或无法解密时明确显示不可用，不回退到
+Windows 本地识别/合成。配置成功仍仅表示端口可用；SIS 云请求、麦克风、
+扬声器及完整语音收发尚需一次真实验收。
+
 Competition 工具目录由主进程从实际注册的工具生成。当前只选择
 `workspace.read_text@1.0.0`，根目录固定在随 Desktop 提供的合成夹具目录，
 且 `meeting-update.json` 必须仍是预期内容、可读取、未过期且任务未取消。
@@ -36,7 +47,7 @@ Competition 与 `--fake-model`/`PA_DESKTOP_MODEL_MODE=fake` 的组合都会拒�
 
 球体窗口 112px，画布按原版卡片保持 132px 并居中（球面约 70px），避免缩小画布后点距变密。无窗口阴影、无球体模糊，透明边缘用径向渐隐。以球心 90px 检测靠近，420px 面板按工作区左右避让；拖动抑制展开，输入/点击固定。独立后台关闭不销毁 Runtime。冷光青与标准毛玻璃令牌来自恢复后的原稿；后台表格共享父层玻璃材质。
 
-任务提交、快照读取、事件订阅、能力目录、授权决定和取消调用公共 SDK。桌面主进程普通启动使用项目内持久化 `TaskRuntime`，显式 `--fake-runtime` 才使用测试 Runtime；两者都通过 `@personal-agent/client` 握手。没有 UI 计时器伪造任务进度，状态由 `event.subscribe` 后的 Runtime 事件回读驱动。取消受理显示“正在取消”，终态以 Runtime 快照为准。停止播报是独立的 `voice.stop` 操作，不调用 `task.cancel`；当前无语音提供者，因此按钮保持不可用并明确提示未连接。
+任务提交、快照读取、事件订阅、能力目录、授权决定和取消调用公共 SDK。桌面主进程普通启动使用项目内持久化 `TaskRuntime`，显式 `--fake-runtime` 才使用测试 Runtime；两者都通过 `@personal-agent/client` 握手。没有 UI 计时器伪造任务进度，状态由 `event.subscribe` 后的 Runtime 事件回读驱动。取消受理显示“正在取消”，终态以 Runtime 快照为准。停止播报是独立的 `voice.stop` 操作，不调用 `task.cancel`；SIS 未配置时保持不可用并提示配置原因。
 
 后台“模型”页已提供盘古 V2 的真实 API 配置与连接测试：Endpoint、模型、部署和 API Key 通过受限 IPC 发送到主进程。ModelArts MaaS 可填 `https://api.modelarts-maas.com/openai/v1`，适配器会追加 `/chat/completions`；点击“测试真实连接”才会发起实际请求。保存配置时 API Key 使用 Electron/Windows 加密存储，绝不进入快照、日志或前端；重启后会自动恢复，无法使用系统加密存储时会拒绝落盘。面板思考滑块和快速模式可在连接失败时继续调整，用于桌面测试，但 Runtime 尚未公开对应参数，尚未把它伪装成任务参数。
 
@@ -73,7 +84,7 @@ npm run test:text-smoke --workspace=@personal-agent/desktop
 
 截图保存在模块 `.cache` 下的对应 QA 目录。真实模型、付费服务和外部账号仍需用户另行授权。
 
-后台未连接的业务页显示真实空状态，不把设计稿的手写业务数据带入产品。盘古 Provider 已接入，但真实 Endpoint/API Key 需要在“模型”页显式配置和测试；思考参数仍待 Runtime 公共契约与根装配接入。语音供应商、外部 Runtime 进程/Named Pipe、全局快捷键、安装卸载仍待对应模块接入。当前玻璃为 CSS 材质；原生 Windows 桌面背景模糊未验收。多屏位置算法已测，物理多显示器/DPI 切换未实机验收。PR #25 已合并，但不代表 MOD-11/12/13 或 P0 全部完成。
+后台未连接的业务页显示真实空状态，不把设计稿的手写业务数据带入产品。盘古 Provider 已接入，但真实 Endpoint/API Key 需要在“模型”页显式配置和测试；思考参数仍待 Runtime 公共契约与根装配接入。SIS 语音仅完成代码接线，真实服务和设备未验收；外部 Runtime 进程/Named Pipe、全局快捷键、安装卸载仍待对应模块接入。当前玻璃为 CSS 材质；原生 Windows 桌面背景模糊未验收。多屏位置算法已测，物理多显示器/DPI 切换未实机验收。PR #25 已合并，但不代表 MOD-11/12/13 或 P0 全部完成。
 
 ## 文字交互垂直链路
 

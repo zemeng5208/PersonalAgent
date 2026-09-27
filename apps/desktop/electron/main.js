@@ -12,6 +12,8 @@ import {createMicrophonePermissionGate} from './microphone-permission.js';
 import {createMicrophoneCaptureHost} from './microphone-capture-host.js';
 import {createDesktopEvidenceHost} from './evidence-host.js';
 import {createDesktopCompetitionFactBridge} from './competition-fact-bridge.js';
+import {createDesktopSisPlaybackHost} from './huawei-sis-playback.js';
+import {createDesktopSisConfigHost} from './huawei-sis-config.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -99,6 +101,8 @@ let microphonePermissionGate;
 let microphoneCaptureHost;
 let voicePcmSource;
 let voiceInput;
+let sisPlaybackHost;
+let sisConfigHost;
 let voiceInitializationFailure = null;
 let voiceDisposed = false;
 let voiceDisposal;
@@ -125,8 +129,10 @@ function snapshot(surface) {
     notifications: [...notifications.values()],
     model: structuredClone(model),
     thinking: structuredClone(thinking),
-    voice: voiceInput?.snapshot() ?? {available: false, status: voiceInitializationFailure ? 'error' : 'unavailable',
-      reason: voiceInitializationFailure?.message ?? '语音供应商尚未连接', failure: voiceInitializationFailure,
+    voice: voiceInput ? {...voiceInput.snapshot(), experimental: sisConfigHost?.snapshot().configured,
+      configuration: sisConfigHost?.snapshot()} : {available: false, status: voiceInitializationFailure ? 'error' : 'unconfigured',
+      reason: voiceInitializationFailure?.message ?? sisConfigHost?.snapshot().reason ?? 'SIS 尚未配置',
+      failure: voiceInitializationFailure, configuration: sisConfigHost?.snapshot(),
       capture: microphoneCaptureHost?.snapshot() ?? {authorized: false, active: false, busy: false,
         subscriberCount: 0, lastRelease: {stopped: true, verified: false, reason: 'never_started'}}},
   };
@@ -659,6 +665,35 @@ async function action(event, name, payload) {
     return voiceInput ? voiceInput.stopSpeaking(sender.webContents.id)
       : {available: false, stopped: false, reason: '语音供应商尚未连接'};
   }
+  if (name === 'voice.configure') {
+    if (sender !== panel || !competitionMode) throw Error('SIS 配置只能从 Competition 可信面板提交');
+    if (!voiceInput && sisPlaybackHost) throw Error('旧语音播放资源释放未确认，无法重新装配');
+    if (voiceInput?.hasActive()) throw Error('请先结束当前语音会话再更新 SIS 配置');
+    sisConfigHost.configure(payload ?? {});
+    if (voiceInput) {
+      try { await voiceInput.dispose(); }
+      catch {
+        voiceInput = undefined;
+        voicePcmSource = undefined;
+        voiceInitializationFailure = {stage: 'cleanup', code: 'EXTERNAL_FAILURE',
+          message: '旧语音资源释放未确认'};
+        publish();
+        throw Error('SIS 配置已保存，但旧语音资源释放未确认');
+      }
+      voiceInput = undefined;
+      voicePcmSource = undefined;
+      sisPlaybackHost = undefined;
+    }
+    try { await initializeSisVoice(); }
+    catch {
+      voiceInitializationFailure = {stage: 'initialization', code: 'EXTERNAL_FAILURE',
+        message: 'SIS 语音适配器启动失败'};
+      publish();
+      throw Error('SIS 配置已保存，但语音适配器启动失败');
+    }
+    publish();
+    return {configured: true, ...sisConfigHost.snapshot()};
+  }
   if (name.startsWith('voice.record.') || name === 'voice.play') {
     if (sender !== panel || !voiceInput) throw Error('语音试用只允许从 Competition 可信面板调用');
     const senderId = sender.webContents.id;
@@ -800,6 +835,46 @@ app.on('second-instance', () => {
   if (desktopHost && orb && panel && !orb.isDestroyed() && !panel.isDestroyed()) { pinned = true; openPanel(true); publish(); }
 });
 
+async function initializeSisVoice() {
+  if (!competitionMode || !client || voiceInput) return;
+  if (sisPlaybackHost) throw Error('旧语音播放资源释放未确认');
+  if (!sisConfigHost.snapshot().configured) return;
+  const config = sisConfigHost.current();
+  if (!config) return;
+  const {createVoicePcmFrameSourcePort, createHuaweiSisRecognitionPort,
+    createHuaweiSisOutputPort} = await import('@personal-agent/voice');
+  const {createDesktopVoiceInput} = await import('./voice-input.js');
+  const tokenPort = {getSisToken: async ({region, signal}) => {
+    if (signal.aborted || region !== config.region) throw Error('SIS 凭据不可用');
+    const selected = sisConfigHost.current();
+    if (!selected || selected.region !== region || selected.projectId !== config.projectId
+      || selected.tokenExpiresAt && Date.parse(selected.tokenExpiresAt) <= Date.now() + 10_000) {
+      throw Error('SIS 凭据不可用');
+    }
+    return selected.token;
+  }};
+  const speechConfig = {region: config.region, projectId: config.projectId, tokenPort};
+  const playback = createDesktopSisPlaybackHost({getPanel: () => panel});
+  let source;
+  try {
+    const speechPorts = {
+      recognition: createHuaweiSisRecognitionPort(speechConfig),
+      output: createHuaweiSisOutputPort({...speechConfig, playback}),
+      dispose: () => playback.dispose(),
+    };
+    source = createVoicePcmFrameSourcePort(microphoneCaptureHost.binding);
+    voiceInput = createDesktopVoiceInput({source, microphoneHost: microphoneCaptureHost,
+      client, onUpdate: publish, enabled: true, speechPorts});
+    voicePcmSource = source;
+    sisPlaybackHost = playback;
+    voiceInitializationFailure = null;
+  } catch (error) {
+    await source?.dispose?.();
+    await playback.dispose();
+    throw error;
+  }
+}
+
 app.whenReady().then(async () => {
   if (!ownsDesktopInstance) return;
   desktopHost = createDesktopHost();
@@ -814,6 +889,10 @@ app.whenReady().then(async () => {
   ipcMain.on('desktop:microphone-event', (event, message) => {
     if (microphoneCaptureHost.receive(event, message)) publish();
   });
+  sisConfigHost = createDesktopSisConfigHost({userData: app.getPath('userData'), safeStorage});
+  ipcMain.on('desktop:voice-playback-event', (event, message) => {
+    if (sisPlaybackHost?.receive(event, message)) publish();
+  });
   try {
     conversations = new Conversations(dataPaths.conversations);
     if (!competitionMode) restoreModelConfig();
@@ -821,13 +900,7 @@ app.whenReady().then(async () => {
     await initializeModelFromEnvironment();
     if (competitionMode) {
       try {
-        const {createVoicePcmFrameSourcePort} = await import('@personal-agent/voice');
-        voicePcmSource = createVoicePcmFrameSourcePort(microphoneCaptureHost.binding);
-        if (process.env.PA_DESKTOP_VOICE_EXPERIMENTAL === '1') {
-          const {createDesktopVoiceInput} = await import('./voice-input.js');
-          voiceInput = createDesktopVoiceInput({source: voicePcmSource,
-            microphoneHost: microphoneCaptureHost, client, onUpdate: publish, enabled: true});
-        }
+        await initializeSisVoice();
       } catch {
         // A failed voice adapter must not take down an otherwise connected text Runtime.
         voiceInput = undefined;
@@ -846,7 +919,9 @@ app.whenReady().then(async () => {
   panel = windowFor('panel', panelBounds(orb.getBounds(), area),
     {frame: false, transparent: true, alwaysOnTop: true, skipTaskbar: true, resizable: false, hasShadow: false, backgroundMaterial: 'none', roundedCorners: true});
   panel.on('close', event => { if (!app.isQuitting) { event.preventDefault(); pinned = false; panel.hide(); publish(); } });
-  panel.on('hide', () => { void microphoneCaptureHost.revoke().catch(error => {
+  panel.on('hide', () => { void sisPlaybackHost?.stop().catch(() => {
+    runtimeError = '语音播放资源释放未确认'; publish();
+  }); void microphoneCaptureHost.revoke().catch(error => {
     runtimeError = error instanceof Error ? error.message : '麦克风释放未确认';
     publish();
   }); publish(); });
