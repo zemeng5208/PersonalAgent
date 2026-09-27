@@ -13,11 +13,13 @@ import type {SqliteFactProjectionHost} from './sqlite-fact-projection.js';
 const INTENT = 'proactive-cognition-intent-v1';
 const REVIEW = 'proactive-cognition-review-v1';
 const HANDOFF = 'proactive-cognition-handoff-v1';
+const LAYA_COOLDOWN = 'proactive-cognition-laya-cooldown-v1';
 type Trigger = {kind: 'fact'; input: ProjectedRepairInput}
   | {kind: 'goal'; input: GoalRevisionSelectionRequest}
   | {kind: 'expiry'; input: {graphRevision: number; facts: NodeRef[]; consumers: NodeRef[]}};
 interface ReviewIntent {
   version: 1; graphNamespace: string; bindingVersion: string; trigger: Trigger; evaluatedAt: string;
+  retryOf?: string;
 }
 /** A proposed approach for AgentArts, never a local tool call or authorization. */
 export interface ProactiveCognitionOption {
@@ -73,6 +75,7 @@ export interface ProactiveCognitionHostOptions {
   graphNamespace: string;
   bindingVersion: string;
   chooser: Pick<LayaActionChoiceService, 'choose'>;
+  now?: () => number;
   /** Optional host-authored legal approaches. Scope and every repair are validated before Laya. */
   prepareOptions?(review: ProactiveCognitionReview, context: MemoryReadContext): Promise<readonly ProactiveCognitionOption[]>;
   selectionHandoff?: ProactiveSelectionHandoffPort;
@@ -145,7 +148,8 @@ function uncertainRecheck(review: ProactiveCognitionReview): ProactiveCognitionR
 
 /** Trusted Competition composition: choose locally, then hand off to AgentArts. No local execution shortcut. */
 export function createProactiveCognitionHost(options: ProactiveCognitionHostOptions): ProactiveCognitionHost {
-  const {application, facts, graphNamespace, bindingVersion, chooser, prepareOptions, selectionHandoff: handoff} = options;
+  const {application, facts, graphNamespace, bindingVersion, chooser, now = Date.now,
+    prepareOptions, selectionHandoff: handoff} = options;
   if (application.profile !== 'huawei_ict_agentarts' || !graphNamespace?.trim() || !bindingVersion?.trim()) {
     throw new ProtocolError('INVALID_ARGUMENT', 'Invalid proactive cognition binding');
   }
@@ -242,14 +246,41 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
     open(); active(request); evaluationTime(request.at);
     const identity = trigger.kind === 'expiry' ? {kind: trigger.kind, facts: trigger.input.facts,
       consumers: trigger.input.consumers} : trigger;
-    const key = 'proactive-cognition:' + toolArgumentsDigest({graphNamespace, bindingVersion, trigger: identity});
-    const existing = runtime.findTaskByIdempotencyKey(key);
-    if (existing && existing.state !== 'created') {
-      const saved = readReview(existing.taskId);
+    let key = 'proactive-cognition:' + toolArgumentsDigest({graphNamespace, bindingVersion, trigger: identity});
+    let existing = runtime.findTaskByIdempotencyKey(key);
+    let retryOf: string | undefined;
+    const visited = new Set<string>();
+    while (existing && existing.state !== 'created') {
+      open(); active(request);
+      if (visited.has(existing.taskId)) throw new ProtocolError('EXTERNAL_FAILURE', 'Cognition retry chain is invalid');
+      visited.add(existing.taskId);
+      let saved = readReview(existing.taskId);
       if (existing.state === 'waiting_reconciliation') {
         runtime.reconcileTask(existing.taskId, saved.review ? 'confirmed' : 'not_performed');
+        saved = readReview(existing.taskId);
       }
-      return handoffReview(existing.taskId, request);
+      const selection = saved.review?.selection;
+      const handoffIntent = runtime.loadCheckpoint(existing.taskId, HANDOFF);
+      const layaUnavailable = saved.task.state === 'succeeded' && selection?.state === 'abstain'
+        && selection.reason === 'unavailable' && selection.eligibleForRuntime === false;
+      if (layaUnavailable && handoffIntent) return saved;
+      const unavailable = layaUnavailable && !handoffIntent;
+      if (!unavailable) return handoffReview(existing.taskId, request);
+      let cooldown = runtime.loadCheckpoint(existing.taskId, LAYA_COOLDOWN) as {notBefore: number} | undefined;
+      const current = now();
+      if (!Number.isSafeInteger(current) || current < 0) throw new ProtocolError('INVALID_ARGUMENT', 'Invalid cognition clock');
+      if (!cooldown) {
+        cooldown = {notBefore: current + 30_000};
+        runtime.saveCheckpoint(existing.taskId, LAYA_COOLDOWN, cooldown);
+      }
+      if (!Number.isSafeInteger(cooldown.notBefore) || current < cooldown.notBefore) {
+        throw new ProtocolError('EXTERNAL_FAILURE', 'Laya is unavailable; cognition review will retry');
+      }
+      retryOf = existing.taskId;
+      const previousIntent = runtime.loadCheckpoint(existing.taskId, INTENT) as ReviewIntent;
+      trigger = structuredClone(previousIntent.trigger);
+      key = 'proactive-cognition-retry:' + toolArgumentsDigest({graphNamespace, bindingVersion, retryOf});
+      existing = runtime.findTaskByIdempotencyKey(key);
     }
     const persisted = existing ? runtime.loadCheckpoint(existing.taskId, INTENT) as ReviewIntent : undefined;
     if (persisted) { request = {...request, at: persisted.evaluatedAt}; trigger = persisted.trigger; }
@@ -261,7 +292,8 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
       : trigger.kind === 'goal' ? selectGoalRevisionImpact(snapshot, request.at, trigger.input)
         : {items: expiredPublicFactScope(snapshot, request.at).items.filter(item =>
           trigger.input.consumers.some(ref => refKey(ref) === refKey(item.node)))};
-    const intent: ReviewIntent = {version: 1, graphNamespace, bindingVersion, trigger: structuredClone(trigger), evaluatedAt: request.at};
+    const intent: ReviewIntent = {version: 1, graphNamespace, bindingVersion, trigger: structuredClone(trigger),
+      evaluatedAt: request.at, ...(retryOf ? {retryOf} : {})};
     const task = runtime.submitTaskWithCheckpoint({goal: 'Choose an approach for trusted dependency changes',
       conversationId: 'proactive-cognition:' + graphNamespace, idempotencyKey: key}, INTENT, intent);
     const controller = new AbortController();
@@ -328,6 +360,16 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
         worker.saveCheckpoint(REVIEW, result);
         return {resultSummary: 'Laya approach recorded for AgentArts orchestration; no plan executed'};
       }, {deadline: request.deadline, sideEffect: 'read'});
+      const completed = readReview(task.taskId);
+      if (completed.task.state === 'succeeded' && completed.review?.selection?.state === 'abstain'
+        && completed.review.selection.reason === 'unavailable'
+        && completed.review.selection.eligibleForRuntime === false
+        && !runtime.loadCheckpoint(task.taskId, HANDOFF)) {
+        const current = now();
+        if (!Number.isSafeInteger(current) || current < 0) throw new ProtocolError('INVALID_ARGUMENT', 'Invalid cognition clock');
+        runtime.saveCheckpoint(task.taskId, LAYA_COOLDOWN, {notBefore: current + 30_000});
+        throw new ProtocolError('EXTERNAL_FAILURE', 'Laya is unavailable; cognition review will retry');
+      }
       return handoffReview(task.taskId, request);
     } finally { controllers.delete(controller); request.signal.removeEventListener('abort', abort); }
   };

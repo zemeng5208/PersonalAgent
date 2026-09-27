@@ -102,7 +102,7 @@ function open(paths, state) {
     }
   };
   const host = createProactiveCognitionHost({application, facts, graphNamespace,
-    bindingVersion: 'test-binding-v1', chooser: chooser(state),
+    bindingVersion: 'test-binding-v1', chooser: chooser(state), now: () => state.now ?? Date.now(),
     ...(state.prepareOptions ? {prepareOptions: state.prepareOptions} : {}),
     ...(selectionHandoff ? {selectionHandoff} : {})});
   return {application, facts, host, close() { host.close(); facts.close(); application.close(); }};
@@ -578,7 +578,13 @@ test('unavailable Laya or uncertainty without an offered recheck never invents a
       : {choiceConfidence: 0.6, prepareOptions: review => review.options.filter(option => option.id !== 'recheck')});
     const binding = open(paths, calls);
     try {
-      const {review} = await factChain(binding);
+      let review;
+      if (mode === 'unavailable') {
+        await assert.rejects(factChain(binding), {code: 'EXTERNAL_FAILURE'});
+        const task = binding.application.runtime.listTasks({conversationId: `proactive-cognition:${graphNamespace}`})
+          .items.find(task => binding.host.readReview(task.taskId).review?.selection?.reason === 'unavailable');
+        review = binding.host.readReview(task.taskId);
+      } else ({review} = await factChain(binding));
       assert.equal(review.review.selection.reason, mode === 'unavailable' ? 'unavailable' : 'uncertain');
       assert.equal(review.review.selectedOption, undefined);
       assert.equal(review.review.machineReview, undefined);
@@ -589,5 +595,65 @@ test('unavailable Laya or uncertainty without an offered recheck never invents a
       binding.close();
       await rm(paths.directory, {recursive: true, force: true});
     }
+  }
+});
+
+test('Laya availability recovery keeps cooldown and prior receipts while handing off only the recovered review', async () => {
+  const paths = await workspace();
+  const calls = state({now: Date.now(), onInfer: () => { throw Error('Fake Laya temporarily unavailable'); }});
+  let binding = open(paths, calls);
+  let evaluatedAt = at;
+  const poll = () => binding.host.consumeAndReview({...context(), at: evaluatedAt, limit: 10, afterGraphRevision: 1});
+  const tasks = () => binding.application.runtime.listTasks({conversationId: `proactive-cognition:${graphNamespace}`}).items;
+  try {
+    await assert.rejects(factChain(binding), {code: 'EXTERNAL_FAILURE'});
+    const originalTask = tasks().find(task => binding.host.readReview(task.taskId).review?.selection?.reason === 'unavailable');
+    assert.ok(originalTask);
+    const original = binding.host.readReview(originalTask.taskId);
+    const count = tasks().length;
+    assert.equal(calls.layaCalls, 1);
+    for (let tick = 0; tick < 2; tick++) {
+      calls.now += 1_000;
+      await assert.rejects(poll(), {code: 'EXTERNAL_FAILURE'});
+    }
+    assert.equal(tasks().length, count, 'ticks during cooldown create no successor task');
+    assert.equal(calls.layaCalls, 1);
+    binding.close(); binding = open(paths, calls);
+    await assert.rejects(poll(), {code: 'EXTERNAL_FAILURE'});
+    assert.equal(tasks().length, count, 'restart preserves cooldown');
+    calls.now += 30_000;
+    await assert.rejects(poll(), {code: 'EXTERNAL_FAILURE'});
+    assert.equal(tasks().length, count + 1);
+    assert.equal(calls.layaCalls, 2);
+    const next = tasks().find(task => binding.application.runtime.loadCheckpoint(task.taskId,
+      'proactive-cognition-intent-v1')?.retryOf === originalTask.taskId);
+    assert.ok(next, 'successor is explicitly bound to its prior completed task');
+    calls.now += 1_000;
+    await assert.rejects(poll(), {code: 'EXTERNAL_FAILURE'});
+    assert.equal(tasks().length, count + 1, 'persistent unavailability gets a fresh cooldown');
+    assert.equal(calls.layaCalls, 2);
+    assert.deepEqual(binding.host.readReview(originalTask.taskId), original);
+    assert.equal(calls.agentArtsCalls, 0);
+    delete calls.onInfer;
+    calls.now += 30_000;
+    evaluatedAt = '2026-09-27T03:02:00.000Z';
+    const recovered = (await poll()).reviews[0];
+    assert.equal(recovered.review.selectedOption.id, 'revise');
+    assert.equal(recovered.review.evaluatedAt, evaluatedAt, 'fresh inference checks validity at the retry time');
+    assert.notEqual(recovered.task.taskId, originalTask.taskId);
+    assert.equal(binding.application.runtime.loadCheckpoint(recovered.task.taskId,
+      'proactive-cognition-intent-v1').retryOf, next.taskId);
+    await waitFor(binding.application, recovered.handoff.task.taskId, 'succeeded');
+    binding.close(); binding = open(paths, calls);
+    const replay = (await poll()).reviews[0];
+    assert.equal(replay.task.taskId, recovered.task.taskId);
+    assert.equal(replay.handoff.task.taskId, recovered.handoff.task.taskId);
+    assert.equal(calls.layaCalls, 3);
+    assert.equal(calls.agentArtsCalls, 1);
+    assert.deepEqual(binding.host.readReview(originalTask.taskId), original);
+    assert.equal(binding.application.runtime.bindCoordinationStore(graphNamespace).read().revision, 5);
+  } finally {
+    binding.close();
+    await rm(paths.directory, {recursive: true, force: true});
   }
 });

@@ -110,6 +110,38 @@ receipt and legacy SQLite recovery; unavailable/no offered recheck rejection;
 cancellation during choice; export-scope denial. The tests use Fake Laya/AgentArts
 and real SQLite. They do not establish live model or cloud availability.
 
+### Recovering temporary Laya unavailability
+
+A saved `abstain/unavailable` result is retained as an observation, rather than
+treated as a completed decision that permanently consumes the change. The caller
+receives `EXTERNAL_FAILURE`, so the existing Desktop error path leaves its Fact
+cursor or new Goal marker unadvanced and applies its existing 30-second backoff.
+An independent Runtime checkpoint also preserves that cooldown across ticks and
+restart; calls inside the interval create no task and make no model call.
+
+After the cooldown, the next consumption call creates or finds one successor by a
+stable key bound to the prior task ID. Its intent records `retryOf`; the old terminal
+task and Laya receipt remain intact. A new attempt checks validity at the current
+request time; resuming an already-created attempt uses its own persisted time.
+A call runs at most one new inference attempt,
+and another unavailable result starts a new cooldown. The recovered decision uses
+the original handoff path and command deduplication. Any existing HANDOFF, cancelled
+or expired request, invalid response or other abstention reason is excluded from
+this automatic retry. No task store, timer or retry-count limit is added.
+
+The optional factory `now` dependency is a test clock and defaults to `Date.now`;
+existing composition calls require no API change. Legacy unavailable reviews gain
+their first cooldown when encountered. Fact history is encountered through existing
+receipt replay. A legacy Desktop Goal marker must fall through to the existing
+latest-Goal validation and `reviewGoalRevision` when its saved review is unavailable;
+otherwise its old marker would continue suppressing calls. That adapter is root-owned.
+
+Runtime build and four targeted cases passed: persistent cooldown/successor recovery,
+unavailable/no recheck routing, cancellation and uncertain handoff compatibility.
+The recovery case uses a controlled clock, real SQLite and Fake inference/cloud to
+check repeated failure, restart, current evaluation time, preserved old receipts
+and one successful AgentArts handoff. No real Laya or cloud request was made.
+
 `selectionHandoff` implements:
 
 ```ts
