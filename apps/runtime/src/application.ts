@@ -12,6 +12,10 @@ export type {FactImpactReceipt, FactProjectionReceipt, CompletedFactImpact} from
 export {ingestPublicSource} from './application/public-source.js';
 export {ScopedEvidenceReader} from './application/evidence-reader.js';
 export type {EvidenceReadScope, EvidenceReaderOptions, EvidencePage} from './application/evidence-reader.js';
+export {createWindowsHostBridgeTransport, createWindowsHostNotepadAdapter} from './application/windows-host-adapter.js';
+export {createRuntimeWindowsHostAttemptStore} from './application/windows-host-attempt-store.js';
+export type {WindowsHostTransport, VerifiedWindowsHostConnection, WindowsHostAttemptStore,
+  WindowsHostAdapterOptions, WindowsHostRunIdentity, ObservedNotepad} from './application/windows-host-adapter.js';
 export type {
   FactChangeConfirmationPort,
   MemoryProjectionApplication,

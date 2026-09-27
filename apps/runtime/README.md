@@ -91,6 +91,23 @@ and an unknown write result waits for reconciliation. Tools requiring a live pre
 are omitted until the Runtime invocation carries that signal. The trusted AgentArts factory
 requires `initialRequestMode: 'goal-with-tools-json'` whenever a catalog is configured.
 
+The trusted Windows composition may create a Notepad `RegisteredTool` with
+`createWindowsHostNotepadAdapter`, pass `adapter.tool` in Runtime Application's
+`tools`, and keep `adapter.observe`/`releaseObservation`/`recover` host-only. The bridge transport
+starts the exact native PipeBridge executable, which launches the Host with a
+random named pipe and verifies the connected server PID before exposing the
+unchanged bounded JSONL frame stream. The adapter requires a
+live local-presence callback, a short-lived Host target, a create-only Runtime
+attempt checkpoint (`createRuntimeWindowsHostAttemptStore`), and independent
+target readback before a successful tool result. ToolGateway consumes the
+one-use Policy grant before `RegisteredTool.execute`; a disconnect, cancel,
+`not_found`, or uncertain write remains unknown and never triggers a replay.
+Current `tool.invoke` has no trusted `userPresent` field, so this adapter checks
+presence through the trusted host callback and keeps the descriptor's wire
+presence flag false. The native bridge has a separate real Pipe PID and hello
+handshake receipt; bind, Desktop composition and real UIA/readback acceptance
+remain unverified, so the product capability remains unavailable.
+
 - SQLite-backed tasks, checkpoints, events and one-shot schedules.
 - `createSqliteFactProjectionHost` binds a pre-provisioned public Memory namespace
   to one fixed consumer, the SQLite feed/query, durable Runtime graph projection,
