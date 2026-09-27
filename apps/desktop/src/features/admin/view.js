@@ -173,7 +173,7 @@ export function mountAdmin(root, invoke, escape) {
     const panes = {
       general: ['常规', '管理应用的基础行为与入口',
         settingRow('界面语言', '当前版本提供简体中文', '<span class="value-pill">简体中文</span>') +
-        settingRow('模型与 API', agentArts ? 'AgentArts 配置由可信主进程提供；本页只查看状态' : '模型、Endpoint 和密钥在独立页面管理', '<button class="btn btn-sm" data-jump="models">打开模型</button>') +
+        settingRow('模型与 API', agentArts ? '在模型页面管理 AgentArts 运行时和本机加密凭据' : '模型、Endpoint 和密钥在独立页面管理', '<button class="btn btn-sm" data-jump="models">打开模型</button>') +
         settingRow('开机启动', '宿主能力尚未接入', '<span class="status-note">待接入</span>', 'is-unavailable') +
         settingRow('后台驻留', '关闭面板后托盘仍保持运行', '<span class="value-pill">已启用</span>')],
       appearance: ['外观', '延续 ORB-02 冷光青与标准毛玻璃设计',
@@ -196,7 +196,7 @@ export function mountAdmin(root, invoke, escape) {
         settingRow('授权提醒', '待处理授权会出现在“授权”页面', '<button class="btn btn-sm" data-jump="authorizations">查看授权</button>')],
       privacy: ['隐私与数据', '敏感数据与本地运行边界',
         (agentArts
-          ? settingRow('AgentArts 凭据', '由可信主进程管理；后台不读取凭据或保存状态', '<span class="status-note">只读</span>')
+          ? settingRow('AgentArts 凭据', '已保存的密钥不回传界面；在模型页面配置或更换', '<button class="btn btn-sm" data-jump="models">管理配置</button>')
           : settingRow('API Key', data.model?.persisted ? '由 Windows 安全存储加密' : '尚未持久化到本机安全存储', `<span class="value-pill">${data.model?.persisted ? '已加密' : '未保存'}</span>`)) +
         settingRow('模型状态', modelStatus, `<button class="btn btn-sm" data-jump="models">${agentArts ? '查看状态' : '管理'}</button>`) +
         settingRow('任务数据', '本地 Runtime 按公共契约保存；界面不绕过 Runtime', '<span class="value-pill">本地</span>') +

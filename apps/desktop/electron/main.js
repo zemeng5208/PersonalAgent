@@ -1261,6 +1261,8 @@ app.whenReady().then(async () => {
     try { return {ok: true, value: await action(...args)}; }
     catch (error) { return {ok: false, error: error instanceof Error ? error.message : '操作失败'}; }
   });
+  // First-run configuration must be reachable even when cloud credentials prevent Runtime startup.
+  if (competitionMode && !agentArtsConfig.snapshot().configured) openAdmin('models');
 
   function reposition() {
     orb.setBounds(clampOrb(orb.getBounds(), screen.getDisplayMatching(orb.getBounds()).workArea));
