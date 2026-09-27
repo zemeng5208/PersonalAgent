@@ -24,6 +24,7 @@ import {createLiveVoiceHost} from './live-voice-host.js';
 import {createDesktopProactiveHost} from './proactive-host.js';
 import {createPublicConnectorHost} from './public-connector-host.js';
 import {createWorkspaceConfigHost} from './workspace-config-host.js';
+import {createAgentArtsConfig} from './agentarts-config.js';
 import {createMailConfig} from './mail-config.js';
 import {createMailMetadataStorage} from './mail-metadata-storage.js';
 import {createLocalLayaHost} from './laya-local-host.js';
@@ -129,6 +130,7 @@ let voiceInput;
 let sisPlaybackHost;
 let sisConfigHost;
 let liveConfig;
+let agentArtsConfig;
 let liveVoice;
 let liveShortcut = {key: 'F8', registered: false, reason: ''};
 let lastLiveShortcutAt = 0;
@@ -208,6 +210,7 @@ function snapshot(surface) {
     proactive: proactiveHost?.snapshot() ?? {enabled: false, cloudAnalysis: false, status: 'disabled', reason: '主动观察尚未装配', suggestions: []},
     mail: mailSnapshot(),
     coding: codingWorkspace?.snapshot() ?? {configured:false,reason:'编程工作区尚未装配'},
+    agentArts: agentArtsConfig?.snapshot(),
     laya: localLaya?.snapshot() ?? {state:'unavailable', ready:false, reason:'本地模型尚未装配'},
     voice: voiceInput ? {...voiceInput.snapshot(), experimental: sisConfigHost?.snapshot().configured,
       configuration: sisConfigHost?.snapshot()} : {available: false, status: voiceInitializationFailure ? 'error' : 'unconfigured',
@@ -494,17 +497,18 @@ function updateThinking(input) {
 
 async function initializeModelFromEnvironment() {
   if (competitionMode) {
+    const cloudSettings=agentArtsConfig.snapshot();
     model = {
       ...model,
       provider: 'agentarts',
       label: 'AgentArts · Competition Profile',
       status: 'configured',
       verification: 'unverified',
-      baseUrl: process.env.PA_AGENTARTS_GATEWAY_URL ?? '',
+      baseUrl: cloudSettings.gatewayUrl,
       model: 'AgentArts Runtime',
-      deployment: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
+      deployment: cloudSettings.runtimeName,
       configured: true,
-      keyConfigured: Boolean(process.env.PA_AGENTARTS_AUTHORIZATION),
+      keyConfigured: cloudSettings.configured,
       persisted: false,
       enabled: true,
       capabilities: {text: true, streaming: false, toolCalling: false, structuredOutput: false, vision: false},
@@ -694,9 +698,7 @@ async function initializeRuntime() {
     const dbPath = dataPaths.runtime;
     mkdirSync(path.dirname(dbPath), {recursive: true});
     if (competitionMode) {
-      if (!process.env.PA_AGENTARTS_AUTHORIZATION) {
-        throw Error('PA_AGENTARTS_AUTHORIZATION 未配置；Competition Runtime 不会启动');
-      }
+      const cloudBinding=agentArtsConfig.binding();
       const syntheticTools = syntheticMvp
         ? (await import('./competition-synthetic-workspace.js')).createSyntheticMeetingToolset(
           path.resolve(dir, '../../../tests/manual/agentarts/fixtures/mvp-meeting'),
@@ -765,16 +767,13 @@ async function initializeRuntime() {
           competitionToolAvailability: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolAvailability : competitionCatalog ? [competitionCatalog.availability] : []), ...productTools.competitionToolAvailability],
           competitionToolExports: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolExports : competitionCatalog ? [competitionCatalog.export] : []), ...productTools.competitionToolExports],
         }),
-        gatewayUrl: process.env.PA_AGENTARTS_GATEWAY_URL ?? '',
-        runtimeName: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
+        ...cloudBinding,
         invokeMode: agentArtsInvokeMode,
         onDiagnostic: process.env.PA_AGENTARTS_SAFE_DIAGNOSTICS === '1'
           ? receipt => desktopHost.logAgentArtsFailure(receipt) : undefined,
         authorizationProvider: {
           read: async () => {
-            const authorization = process.env.PA_AGENTARTS_AUTHORIZATION;
-            if (!authorization) throw Error('AgentArts authorization is unavailable');
-            return authorization;
+            return agentArtsConfig.readAuthorization(cloudBinding);
           },
         },
       });
@@ -866,6 +865,10 @@ async function action(event, name, payload) {
   }
   if (name === 'panel.dragEnd' && sender === panel) { dragging = false; panelDragOrigin = undefined; away = Date.now() + 400; return; }
   if (name === 'app.quit') { app.quit(); return; }
+  if (name === 'agentarts.configure') {
+    if (sender!==admin || !competitionMode || runtimeApplication?.activeTaskCount || liveVoice?.hasActive()) throw Error('请在任务及通话结束后从设置配置 AgentArts');
+    const result=agentArtsConfig.configure(payload);publish();return result;
+  }
   if (['coding.select','coding.authorize','coding.revoke'].includes(name)) {
     if (sender !== admin || !competitionMode || syntheticMvp || !codingWorkspace) throw Error('请从正式应用设置配置编程工作区');
     if (name !== 'coding.revoke' && runtimeApplication.activeTaskCount > 0) throw Error('请等待当前任务结束后更改工作区');
@@ -1204,6 +1207,7 @@ app.whenReady().then(async () => {
   });
   sisConfigHost = createDesktopSisConfigHost({userData: app.getPath('userData'), safeStorage});
   liveConfig = createLiveVoiceConfig({userData: app.getPath('userData'), safeStorage});
+  agentArtsConfig = createAgentArtsConfig({userData: app.getPath('userData'), safeStorage});
   ipcMain.on('desktop:live-event', (event, message) => {liveVoice?.receive(event, message);});
   ipcMain.on('desktop:voice-playback-event', (event, message) => {
     if (sisPlaybackHost?.receive(event, message)) publish();
