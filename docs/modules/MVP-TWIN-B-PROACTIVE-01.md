@@ -83,6 +83,36 @@ non-Goal/stale/withdrawn refs before inference; compatibility with the existing 
 revision path. Laya and AgentArts are explicit Fakes. Desktop consumption and real
 cloud planning remain separate root integration checks.
 
+### Consumption of committed graph Goals
+
+At the existing feed watermark, an idle `consumeAndReview` pass also reads current
+active, effective Goal heads from the bound graph. Revision 1 enters initial
+planning; later revisions use the exact preceding Goal version and the existing
+revision review. This covers public `goals.create` / `goals.revise` writes regardless
+of whether they originated in the Desktop host-task list. A revision-1 Goal already
+referenced by a current Decision or Plan is not given another initial-planning pass.
+
+Goals without a recorded review are considered before older pending handoffs, with
+initial planning first within each group. The existing request limit bounds pending
+Goal work; completed reviews and accepted or expired handoffs do not consume it.
+Selected routes waiting for an available handoff remain recoverable, and temporary
+Laya failures retain the existing cooldown/successor chain. Goal scans leave the
+Fact receipt cursor unchanged and add no scheduler, database, dependency or wire API.
+
+Goal revision identity now binds exact previous/current Goal refs, excluding
+unrelated graph appends. Existing UI reviews with the earlier key are found through
+paginated Runtime INTENT checkpoints with a fixed snapshot sequence. Namespace,
+binding version and exact refs must match. A legacy created task runs in place;
+completed review and handoff receipts are reused across polling and SQLite restart.
+This does not relax cloud permission checks or claim completion of a Goal or Plan.
+
+Runtime build passed. Four focused host tests passed: command-created/revised Goal
+discovery and UI/restart deduplication, legacy created-task recovery, and existing
+Fact correction/expiry regressions. After the final priority fix, the two Goal cases
+passed again, including limit=1 with an old unavailable handoff and a new Goal.
+These use actual SQLite/public Goal commands and explicit Fake Laya/AgentArts;
+live cloud-tool execution and Desktop loading remain root acceptance work.
+
 ### Time-only expiry consumption
 
 `consumeAndReview` also detects current public Facts whose `validUntil` has elapsed,

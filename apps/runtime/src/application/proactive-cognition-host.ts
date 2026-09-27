@@ -207,6 +207,59 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
     const review = runtime.loadCheckpoint(taskId, REVIEW) as ProactiveCognitionReview | undefined;
     return {task, ...(review ? {review: structuredClone(review)} : {})};
   };
+  const goalIdentity = (trigger: Trigger): string | undefined => trigger.kind === 'goal_created'
+    ? JSON.stringify([trigger.kind, trigger.input.currentGoal.id, trigger.input.currentGoal.revision])
+    : trigger.kind === 'goal' ? JSON.stringify([trigger.kind,
+      trigger.input.previousGoal.id, trigger.input.previousGoal.revision,
+      trigger.input.currentGoal.id, trigger.input.currentGoal.revision]) : undefined;
+  const goalTasks = (context: MemoryReadContext): Map<string, TaskSnapshot> => {
+    const found = new Map<string, TaskSnapshot>();
+    let beforeSequence: number | undefined;
+    let snapshotSequence: number | undefined;
+    do {
+      open(); active(context);
+      const page = runtime.listTasks({conversationId: 'proactive-cognition:' + graphNamespace,
+        limit: 100, ...(snapshotSequence === undefined ? {} : {snapshotSequence}),
+        ...(beforeSequence === undefined ? {} : {beforeSequence})});
+      snapshotSequence = page.snapshotSequence;
+      for (const task of page.items) {
+        const intent = runtime.loadCheckpoint(task.taskId, INTENT) as ReviewIntent | undefined;
+        if (intent?.version !== 1 || intent.graphNamespace !== graphNamespace
+          || intent.bindingVersion !== bindingVersion || intent.retryOf) continue;
+        const identity = goalIdentity(intent.trigger);
+        if (identity && !found.has(identity)) found.set(identity, task);
+      }
+      beforeSequence = page.nextBeforeSequence;
+    } while (beforeSequence !== undefined);
+    return found;
+  };
+  const latestGoalTask = (task: TaskSnapshot): TaskSnapshot => {
+    const seen = new Set<string>();
+    while (!seen.has(task.taskId)) {
+      seen.add(task.taskId);
+      const successor = runtime.findTaskByIdempotencyKey('proactive-cognition-retry:'
+        + toolArgumentsDigest({graphNamespace, bindingVersion, retryOf: task.taskId}));
+      if (!successor) return task;
+      task = successor;
+    }
+    throw new ProtocolError('EXTERNAL_FAILURE', 'Cognition retry chain is invalid');
+  };
+  const goalNeedsReview = (task: TaskSnapshot): boolean => {
+    task = latestGoalTask(task);
+    if (task.state === 'created' || task.state === 'waiting_reconciliation') return true;
+    if (task.state !== 'succeeded') return false;
+    const review = readReview(task.taskId).review;
+    if (!review || review.action === 'KEEP') return false;
+    const handoffIntent = runtime.loadCheckpoint(task.taskId, HANDOFF) as ProactiveSelectionHandoff | undefined;
+    if (handoffIntent) return Boolean(handoff && !handoff.read(handoffIntent.commandId)
+      && Date.parse(handoffIntent.deadline) > Date.now());
+    if (review.selection?.state === 'abstain' && review.selection.reason === 'unavailable'
+      && review.selection.eligibleForRuntime === false) {
+      const cooldown = runtime.loadCheckpoint(task.taskId, LAYA_COOLDOWN) as {notBefore: number} | undefined;
+      return !cooldown || now() >= cooldown.notBefore;
+    }
+    return Boolean(handoff && (review.selectedOption || review.machineReview));
+  };
   const handoffWork = async (taskId: string, context: MemoryReadContext): Promise<ProactiveReviewReadback> => {
     open(); active(context);
     const readback = readReview(taskId);
@@ -279,13 +332,20 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
       throw error;
     } finally { clearTimeout(timer); signal.removeEventListener('abort', stop); controllers.delete(controller); }
   };
-  const review = async (trigger: Trigger, request: MemoryReadContext & {at: string}): Promise<ProactiveReviewReadback> => {
+  const review = async (trigger: Trigger, request: MemoryReadContext & {at: string},
+    knownGoalTasks?: ReadonlyMap<string, TaskSnapshot>): Promise<ProactiveReviewReadback> => {
     open(); active(request); evaluationTime(request.at);
     const identity = trigger.kind === 'expiry' ? {kind: trigger.kind, facts: trigger.input.facts,
       consumers: trigger.input.consumers} : trigger.kind === 'goal_created'
-        ? {kind: trigger.kind, currentGoal: trigger.input.currentGoal} : trigger;
+        ? {kind: trigger.kind, currentGoal: trigger.input.currentGoal} : trigger.kind === 'goal'
+          ? {kind: trigger.kind, previousGoal: trigger.input.previousGoal,
+            currentGoal: trigger.input.currentGoal} : trigger;
     let key = 'proactive-cognition:' + toolArgumentsDigest({graphNamespace, bindingVersion, trigger: identity});
     let existing = runtime.findTaskByIdempotencyKey(key);
+    if (!existing) {
+      const goalKey = goalIdentity(trigger);
+      if (goalKey) existing = (knownGoalTasks ?? goalTasks(request)).get(goalKey);
+    }
     let retryOf: string | undefined;
     const visited = new Set<string>();
     while (existing && existing.state !== 'created') {
@@ -336,7 +396,7 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
       ? createdGoal(snapshot, trigger.input.currentGoal, request.at) : undefined;
     const intent: ReviewIntent = {version: 1, graphNamespace, bindingVersion, trigger: structuredClone(trigger),
       evaluatedAt: request.at, ...(retryOf ? {retryOf} : {})};
-    const task = runtime.submitTaskWithCheckpoint({goal: subject
+    const task = existing ?? runtime.submitTaskWithCheckpoint({goal: subject
       ? 'Choose an initial planning approach for the registered Goal'
       : 'Choose an approach for trusted dependency changes',
       conversationId: 'proactive-cognition:' + graphNamespace, idempotencyKey: key}, INTENT, intent);
@@ -443,11 +503,41 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
       const hasMoreReviews = facts.listImpactReceipts({afterGraphRevision: nextGraphRevision, limit: 1}).length > 0;
       if (consumed.batch.atWatermark && !hasMoreReviews && reviews.length === 0) {
         const snapshot = store.read();
-        const scope = expiredPublicFactScope(snapshot, request.at);
-        if (scope.items.length) reviews.push(await review({kind: 'expiry', input: {
-          graphRevision: snapshot.revision, facts: scope.facts,
-          consumers: scope.items.map(item => item.node).sort((a, b) => refKey(a).localeCompare(refKey(b))),
-        }}, request));
+        const heads = new Map(snapshot.history.map(node => [node.id, node]));
+        const recorded = goalTasks(request);
+        const recordedGoal = (node: NodeVersion): boolean => recorded.has(node.revision === 1
+          ? JSON.stringify(['goal_created', node.id, node.revision])
+          : JSON.stringify(['goal', node.id, node.revision - 1, node.id, node.revision]));
+        const goals = [...heads.values()].filter(node => node.kind === 'goal'
+          && node.state === 'active' && isEffective(node, request.at))
+          .sort((a, b) => Number(recordedGoal(a)) - Number(recordedGoal(b))
+            || (a.revision === 1 ? 0 : 1) - (b.revision === 1 ? 0 : 1)
+            || a.graphRevision - b.graphRevision);
+        for (const goal of goals) {
+          open(); active(request);
+          if (reviews.length >= request.limit) break;
+          const currentGoal = {id: goal.id, revision: goal.revision};
+          let trigger: Trigger;
+          if (goal.revision === 1) {
+            if ([...heads.values()].some(node => (node.kind === 'decision' || node.kind === 'plan')
+              && node.dependencies.some(ref => refKey(ref) === refKey(currentGoal)))) continue;
+            trigger = {kind: 'goal_created', input: {expectedGraphRevision: snapshot.revision, currentGoal}};
+          } else {
+            const previousGoal = {id: goal.id, revision: goal.revision - 1};
+            trigger = {kind: 'goal', input: {expectedGraphRevision: snapshot.revision,
+              previousGoal, currentGoal}};
+          }
+          const prior = recorded.get(goalIdentity(trigger)!);
+          if (prior && !goalNeedsReview(prior)) continue;
+          reviews.push(await review(trigger, request, recorded));
+        }
+        if (reviews.length === 0) {
+          const scope = expiredPublicFactScope(snapshot, request.at);
+          if (scope.items.length) reviews.push(await review({kind: 'expiry', input: {
+            graphRevision: snapshot.revision, facts: scope.facts,
+            consumers: scope.items.map(item => item.node).sort((a, b) => refKey(a).localeCompare(refKey(b))),
+          }}, request));
+        }
       }
       return {reviews, nextGraphRevision, atWatermark: consumed.batch.atWatermark, hasMoreReviews};
     },

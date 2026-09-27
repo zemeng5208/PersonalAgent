@@ -6,6 +6,7 @@ import {test} from 'node:test';
 import {Client} from '@personal-agent/client';
 import {LayaActionChoiceService} from '@personal-agent/cognition';
 import {createGoal, reviseGoal} from '@personal-agent/goals/commands';
+import {toolArgumentsDigest} from '@personal-agent/tool-gateway';
 import {createRuntimeApplication} from '../dist/application.js';
 import {createProactiveCognitionHost} from '../dist/application/proactive-cognition-host.js';
 
@@ -721,6 +722,105 @@ test('initial planning rejects non-Goal, stale and withdrawn creation refs befor
     assert.equal(binding.application.runtime.listTasks({conversationId: `proactive-cognition:${graphNamespace}`}).items.length, 0);
     assert.equal(calls.layaCalls, 0);
     assert.equal(calls.agentArtsCalls, 0);
+  } finally {
+    binding.close();
+    await rm(paths.directory, {recursive: true, force: true});
+  }
+});
+
+test('graph Goal consumption discovers command writes and shares UI handoffs across restart', async () => {
+  const paths = await workspace();
+  const calls = state({selectedId: 'plan'});
+  let binding = open(paths, calls);
+  const poll = () => binding.host.consumeAndReview({...context(), at, limit: 1, afterGraphRevision: 0});
+  try {
+    let store = binding.application.runtime.bindCoordinationStore(graphNamespace);
+    const {kind: _kind, ...input} = node('graph-goal', 'goal', [], 'Prepare the public demonstration');
+    createGoal(store, 0, input);
+    const created = await poll();
+    assert.equal(created.reviews.length, 1);
+    const first = created.reviews[0];
+    assert.deepEqual(first.review.subjectGoal, ref('graph-goal'));
+    assert.deepEqual(first.review.affected, []);
+    assert.equal(first.review.selectedOption.id, 'plan');
+    assert.equal(created.nextGraphRevision, 0, 'Goal consumption does not advance the Fact cursor');
+    await waitFor(binding.application, first.handoff.task.taskId, 'succeeded');
+    assert.equal((await poll()).reviews.length, 0);
+    store.append(1, node('decision', 'decision', [ref('graph-goal')]));
+    store.append(2, node('plan', 'plan', [ref('decision')]));
+    reviseGoal(store, 3, 1, {...input, summary: 'Prepare an updated public demonstration'});
+    calls.selectedId = 'revise';
+    const changed = (await poll()).reviews[0];
+    assert.deepEqual(changed.review.affected.map(item => item.node.id), ['decision', 'plan']);
+    assert.equal(changed.review.selectedOption.id, 'revise');
+    await waitFor(binding.application, changed.handoff.task.taskId, 'succeeded');
+    const ui = await binding.host.reviewGoalRevision({expectedGraphRevision: 4,
+      previousGoal: ref('graph-goal'), currentGoal: ref('graph-goal', 2)}, {...context(), at});
+    assert.equal(ui.task.taskId, changed.task.taskId);
+    assert.equal(ui.handoff.task.taskId, changed.handoff.task.taskId);
+    store.append(4, node('unrelated', 'fact', []));
+    binding.close(); binding = open(paths, calls);
+    store = binding.application.runtime.bindCoordinationStore(graphNamespace);
+    assert.equal((await poll()).reviews.length, 0);
+    const replay = await binding.host.reviewGoalRevision({expectedGraphRevision: 5,
+      previousGoal: ref('graph-goal'), currentGoal: ref('graph-goal', 2)}, {...context(), at});
+    assert.equal(replay.task.taskId, changed.task.taskId);
+    assert.equal(replay.handoff.task.taskId, changed.handoff.task.taskId);
+    calls.selectedId = 'plan';
+    createGoal(store, 5, {...input, id: 'next-goal'});
+    const next = (await poll()).reviews[0];
+    assert.deepEqual(next.review.subjectGoal, ref('next-goal'), 'completed heads do not consume the one-item limit');
+    await waitFor(binding.application, next.handoff.task.taskId, 'succeeded');
+    assert.equal(calls.layaCalls, 3);
+    assert.equal(calls.agentArtsCalls, 3);
+    calls.prepareUnavailable = true;
+    createGoal(store, 6, {...input, id: 'waiting-goal'});
+    const waiting = (await poll()).reviews[0];
+    assert.deepEqual(waiting.review.subjectGoal, ref('waiting-goal'));
+    assert.equal(waiting.handoff.state, 'unavailable');
+    createGoal(store, 7, {...input, id: 'fresh-goal'});
+    const fresh = (await poll()).reviews[0];
+    assert.deepEqual(fresh.review.subjectGoal, ref('fresh-goal'),
+      'an old unavailable handoff does not starve new Goal inference at limit one');
+    assert.equal(calls.layaCalls, 5);
+    assert.equal(calls.agentArtsCalls, 3, 'unavailable export preparation does not submit cloud work');
+  } finally {
+    binding.close();
+    await rm(paths.directory, {recursive: true, force: true});
+  }
+});
+
+test('graph Goal consumption resumes a legacy created revision task without changing its identity', async () => {
+  const paths = await workspace();
+  const calls = state();
+  let binding = open(paths, calls);
+  const poll = () => binding.host.consumeAndReview({...context(), at, limit: 1, afterGraphRevision: 0});
+  try {
+    const store = binding.application.runtime.bindCoordinationStore(graphNamespace);
+    const {kind: _kind, ...input} = node('legacy-goal', 'goal', []);
+    createGoal(store, 0, input);
+    store.append(1, node('decision', 'decision', [ref('legacy-goal')]));
+    store.append(2, node('plan', 'plan', [ref('decision')]));
+    reviseGoal(store, 3, 1, {...input, summary: 'Updated legacy goal'});
+    const trigger = {kind: 'goal', input: {expectedGraphRevision: 4,
+      previousGoal: ref('legacy-goal'), currentGoal: ref('legacy-goal', 2)}};
+    const bindingVersion = 'test-binding-v1';
+    const idempotencyKey = 'proactive-cognition:' + toolArgumentsDigest({graphNamespace, bindingVersion, trigger});
+    const legacy = binding.application.runtime.submitTaskWithCheckpoint({goal: 'Legacy Goal change',
+      conversationId: `proactive-cognition:${graphNamespace}`, idempotencyKey},
+    'proactive-cognition-intent-v1', {version: 1, graphNamespace, bindingVersion, trigger, evaluatedAt: at});
+    const reviewed = (await poll()).reviews[0];
+    assert.equal(reviewed.task.taskId, legacy.taskId);
+    await waitFor(binding.application, reviewed.handoff.task.taskId, 'succeeded');
+    store.append(4, node('unrelated', 'fact', []));
+    binding.close(); binding = open(paths, calls);
+    assert.equal((await poll()).reviews.length, 0);
+    const replay = await binding.host.reviewGoalRevision({...trigger.input, expectedGraphRevision: 5}, {...context(), at});
+    assert.equal(replay.task.taskId, legacy.taskId);
+    assert.equal(replay.handoff.task.taskId, reviewed.handoff.task.taskId);
+    assert.equal(binding.application.runtime.listTasks({conversationId: `proactive-cognition:${graphNamespace}`}).items.length, 1);
+    assert.equal(calls.layaCalls, 1);
+    assert.equal(calls.agentArtsCalls, 1);
   } finally {
     binding.close();
     await rm(paths.directory, {recursive: true, force: true});
