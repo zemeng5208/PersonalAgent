@@ -5,21 +5,31 @@
  * Consumes @personal-agent/coding-tools public createWorkspaceCommandTool.
  *
  * Security Model:
- * 1. Default and currently ONLY supports node --check recipes.
- * 2. Trusted Desktop Main MUST explicitly inject a fixed, absolute nodeExecutable path.
+ * 1. Supports:
+ *    - node --check recipes for syntax verification of workspace files.
+ *    - npm-build and npm-test recipes via WindowsJobProcessHost to guarantee process tree termination.
+ * 2. Trusted Desktop Main MUST explicitly inject fixed, absolute executable paths:
+ *    - nodeExecutable: path to node.exe (or node on non-Windows).
+ *    - jobHelperExecutable: path to WindowsJobProcessHost.exe (outside workspace, regular file, non-symlink).
+ *    - npmCliPath: path to npm-cli.js (outside workspace, regular file, non-symlink).
  *    No automatic PATH/where.exe search or process.execPath defaulting is permitted.
- * 3. Node executable must reside strictly outside the writable workspace, be a regular file,
- *    and match node.exe (or node on non-Windows).
+ * 3. All host executables must reside strictly outside the writable workspace, be canonical regular files,
+ *    and cannot be symbolic links or junctions.
  * 4. Target source files for node --check must be canonical regular files inside the workspace,
  *    with symlinks, drive letters, and path traversals strictly rejected.
- * 5. Project scripts (npm run build, npm test) are NOT exposed regardless of flags:
- *    coding-tools command.ts uses env:{} and direct child termination, which does not terminate
- *    child process trees on Windows and risks orphaned processes. Separate verified process and
- *    filesystem isolation is required before project scripts can be safely enabled.
+ * 5. Project scripts (npm-build, npm-test) are exposed ONLY when ALL of the following criteria are met:
+ *    - allowProjectScripts === true (explicit opt-in).
+ *    - jobHelperExecutable is injected and verified outside workspace.
+ *    - npmCliPath is injected and verified outside workspace.
+ *    - package.json exists in workspace root and declares 'build' or 'test' scripts (only script names inspected,
+ *      script bodies are never leaked).
+ *    - node_modules directory exists in workspace root (if absent, reports dependencies_missing; never runs npm install).
+ *    - Safe minimal OS environment whitelist (APPDATA, LOCALAPPDATA, ComSpec, PATH, SystemRoot, TEMP, TMP, etc.)
+ *      is injected, with all token/key/secret variables strictly blocked.
  * 6. Caller must explicitly pass createWorkspaceCommandTool factory; missing/invalid factory fails closed.
  */
 
-import {existsSync, lstatSync, realpathSync, statSync} from 'node:fs';
+import {existsSync, lstatSync, readFileSync, realpathSync, statSync} from 'node:fs';
 import path from 'node:path';
 
 const RECIPE_ID_PATTERN = /^[a-z][a-z0-9._-]{0,63}$/u;
@@ -79,6 +89,109 @@ export function resolveNodeExecutable(workspaceRoot, explicitNode) {
   return canonical;
 }
 
+export function resolveJobHelperExecutable(workspaceRoot, explicitJobHelper) {
+  if (typeof explicitJobHelper !== 'string' || !path.isAbsolute(explicitJobHelper)) {
+    throw Error('Trusted absolute job helper executable path is required from host');
+  }
+  const canonical = canonicalFile(explicitJobHelper, 'Job helper executable');
+  if (process.platform === 'win32') {
+    const ext = path.extname(canonical).toLowerCase();
+    if (ext !== '.exe') {
+      throw Error('Job helper executable must be a Windows executable (.exe)');
+    }
+  }
+  if (!isOutsideWorkspace(workspaceRoot, canonical)) {
+    throw Error('Job helper executable must reside outside the writable workspace');
+  }
+  return canonical;
+}
+
+export function resolveNpmCliPath(workspaceRoot, explicitNpmCli) {
+  if (typeof explicitNpmCli !== 'string' || !path.isAbsolute(explicitNpmCli)) {
+    throw Error('Trusted absolute npm-cli.js path is required from host');
+  }
+  const canonical = canonicalFile(explicitNpmCli, 'npm-cli path');
+  const base = path.basename(canonical).toLowerCase();
+  if (!base.startsWith('npm') || (!base.endsWith('.js') && !base.endsWith('.cjs'))) {
+    throw Error('npm-cli path must be a JavaScript file for the npm CLI entrypoint');
+  }
+  if (!isOutsideWorkspace(workspaceRoot, canonical)) {
+    throw Error('npm-cli path must reside outside the writable workspace');
+  }
+  return canonical;
+}
+
+const ALLOWED_ENV_VARS_WIN32 = [
+  'APPDATA',
+  'LOCALAPPDATA',
+  'ComSpec',
+  'PATH',
+  'SystemRoot',
+  'TEMP',
+  'TMP',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'NUMBER_OF_PROCESSORS',
+  'PROCESSOR_ARCHITECTURE',
+  'SYSTEMDRIVE',
+  'WINDIR',
+];
+
+const ALLOWED_ENV_VARS_POSIX = [
+  'PATH',
+  'HOME',
+  'TEMP',
+  'TMP',
+  'USER',
+];
+
+const FORBIDDEN_ENV_KEY_PATTERN = /(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|AUTH)/i;
+
+export function buildSafeProjectScriptEnv(envSource = process.env) {
+  const allowedKeys = process.platform === 'win32' ? ALLOWED_ENV_VARS_WIN32 : ALLOWED_ENV_VARS_POSIX;
+  const safeEnv = {};
+  if (!envSource || typeof envSource !== 'object') return Object.freeze(safeEnv);
+  const sourceKeys = Object.keys(envSource);
+  for (const allowed of allowedKeys) {
+    const matchingKey = sourceKeys.find(k => k.toLowerCase() === allowed.toLowerCase());
+    if (matchingKey && typeof envSource[matchingKey] === 'string') {
+      if (FORBIDDEN_ENV_KEY_PATTERN.test(matchingKey)) continue;
+      const val = envSource[matchingKey];
+      if (val.length <= 4096 && !val.includes('\0')) {
+        safeEnv[allowed] = val;
+      }
+    }
+  }
+  return Object.freeze(safeEnv);
+}
+
+function inspectPackageJson(canonicalRoot) {
+  const pkgPath = path.join(canonicalRoot, 'package.json');
+  if (!existsSync(pkgPath)) return {exists: false, scripts: []};
+  try {
+    const stat = statSync(pkgPath);
+    if (!stat.isFile()) return {exists: false, scripts: []};
+    const content = readFileSync(pkgPath, 'utf8');
+    const parsed = JSON.parse(content);
+    const scripts = parsed && typeof parsed.scripts === 'object' && parsed.scripts !== null
+      ? Object.keys(parsed.scripts)
+      : [];
+    return {exists: true, scripts};
+  } catch {
+    return {exists: true, scripts: [], invalid: true};
+  }
+}
+
+function checkNodeModules(canonicalRoot) {
+  const nmPath = path.join(canonicalRoot, 'node_modules');
+  if (!existsSync(nmPath)) return false;
+  try {
+    return statSync(nmPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 export function validateCheckFile(workspaceRoot, fileEntry) {
   const relFile = typeof fileEntry === 'string' ? fileEntry : fileEntry?.path;
   if (typeof relFile !== 'string' || !relFile || relFile.includes('\0')) {
@@ -117,8 +230,11 @@ export function buildWorkspaceCommandRecipes({
   workspaceRoot,
   authorizedWorkspaceRoot,
   nodeExecutable,
+  jobHelperExecutable,
+  npmCliPath,
   checkFiles = [],
   allowProjectScripts = false,
+  projectScriptEnvSource = process.env,
 } = {}) {
   const canonicalRoot = canonicalDirectory(workspaceRoot, 'Workspace root');
   if (authorizedWorkspaceRoot !== undefined) {
@@ -138,11 +254,6 @@ export function buildWorkspaceCommandRecipes({
     projectScriptsAllowed: allowProjectScripts === true,
     projectScriptsExposed: false,
     reasons: [],
-    npmHurdles: [
-      'Windows empty env:{} execution in command.ts lacks PATH/ComSpec variables for complex build/test scripts.',
-      'child.kill("SIGKILL") in command.ts only terminates the direct node.exe process, leaving child process trees orphaned on Windows.',
-      'Project scripts execute arbitrary project code and are not sandboxed; packages/coding-tools/README.md requires verified process and filesystem isolation.',
-    ],
   };
 
   // 1. Process node --check recipes
@@ -173,11 +284,65 @@ export function buildWorkspaceCommandRecipes({
     });
   }
 
-  // 2. Project scripts policy: do NOT expose npm recipes regardless of switch
+  // 2. Project scripts gatekeeping and recipe exposure
   if (allowProjectScripts === true) {
-    diagnostics.reasons.push(
-      'npm project scripts are not exposed: coding-tools command.ts uses env:{} and direct child termination, risking orphaned process trees on Windows; separate process and filesystem isolation is required per packages/coding-tools/README.md before project scripts can be safely enabled'
-    );
+    let canonicalJobHelper;
+    let canonicalNpmCli;
+
+    if (!jobHelperExecutable) {
+      diagnostics.reasons.push('job_helper_missing: Trusted jobHelperExecutable was not provided by host');
+    } else {
+      canonicalJobHelper = resolveJobHelperExecutable(canonicalRoot, jobHelperExecutable);
+    }
+
+    if (!npmCliPath) {
+      diagnostics.reasons.push('npm_cli_missing: Trusted npmCliPath was not provided by host');
+    } else {
+      canonicalNpmCli = resolveNpmCliPath(canonicalRoot, npmCliPath);
+    }
+
+    const pkg = inspectPackageJson(canonicalRoot);
+    if (!pkg.exists) {
+      diagnostics.reasons.push('package_json_missing: No package.json found in workspace root');
+    } else if (pkg.invalid) {
+      diagnostics.reasons.push('package_json_invalid: package.json could not be parsed');
+    }
+
+    const hasNodeModules = checkNodeModules(canonicalRoot);
+    if (!hasNodeModules) {
+      diagnostics.reasons.push('dependencies_missing: node_modules directory does not exist in workspace root; run install outside first');
+    }
+
+    if (canonicalJobHelper && canonicalNpmCli && pkg.exists && !pkg.invalid && hasNodeModules) {
+      const scriptNames = new Set(pkg.scripts);
+      const safeEnv = buildSafeProjectScriptEnv(projectScriptEnvSource);
+      let exposedCount = 0;
+
+      if (scriptNames.has('build')) {
+        recipes.push({
+          id: 'npm-build',
+          executable: canonicalJobHelper,
+          args: ['--cwd', canonicalRoot, '--exe', canonicalNode, '--', canonicalNpmCli, 'run', 'build'],
+          env: safeEnv,
+        });
+        exposedCount++;
+      }
+      if (scriptNames.has('test')) {
+        recipes.push({
+          id: 'npm-test',
+          executable: canonicalJobHelper,
+          args: ['--cwd', canonicalRoot, '--exe', canonicalNode, '--', canonicalNpmCli, 'run', 'test'],
+          env: safeEnv,
+        });
+        exposedCount++;
+      }
+
+      if (exposedCount > 0) {
+        diagnostics.projectScriptsExposed = true;
+      } else {
+        diagnostics.reasons.push('no_build_or_test_scripts: package.json does not declare "build" or "test" scripts');
+      }
+    }
   }
 
   return {

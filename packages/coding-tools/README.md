@@ -62,9 +62,15 @@ ACL 已限权；正式组合在核验目录访问控制前不得注册 apply。�
 
 - `createWorkspaceCommandTool(options)` 创建 `workspace.run_allowed_command@1.0.0`；`registerWorkspaceCommand(host, options)` 显式注册并返回 disposer。`rootPath`、非空 `recipes` 及其中每个绝对可执行文件路径和完整 argv 均来自可信宿主；可执行文件不能位于可写工作区内。工具输入仅有 `{recipeId}`，严格枚举并拒绝额外字段。宿主配置在注册时复制，不受后续数组修改影响。
 - scope 为 `workspace:execute`，descriptor 是 `local_write`、不可幂等/不可自动恢复；已有 Policy/ToolGateway 必须对精确参数审批并消费授权。当前 `requiresPresence:false` 仅因 Runtime 未提供独立在场字段，绝不代替审批。
-- 用 Node 内置 `spawn` 的 `shell:false`、固定 canonical 工作目录、空环境及隐藏窗口执行；不引入 execa 或另一套调度器。运行期限默认 30 秒、至多 120 秒；合并 stdout/stderr 原始字节预算默认 64 KiB、至多 256 KiB。超限、截止或取消会请求终止直接子进程；无法在 2 秒内确认退出时返回未知结果。输出必须完整有效 UTF-8，不截断成功结果。
+- 用 Node 内置 `spawn` 的 `shell:false`、固定 canonical 工作目录、默认空环境（或由受信宿主注入并经过模式/敏感词校验的受控 `env`）及隐藏窗口执行；不引入 execa 或另一套调度器。运行期限默认 30 秒、至多 120 秒；合并 stdout/stderr 原始字节预算默认 64 KiB、至多 256 KiB。超限、截止或取消会请求终止直接子进程；无法在 2 秒内确认退出时返回未知结果。输出必须完整有效 UTF-8，不截断成功结果。
 - 输出 `{recipeId,exitCode,stdout,stderr}` 只证明该直接进程的退出码与收集到的文本；非零码是失败的验证命令，不代表产物已读回、Artifact 已保存或副作用可重试。`ToolGateway` 对 `local_write` 异常统一返回 `RESULT_UNKNOWN`，调用方必须对账。
-- `rootPath` 只是 cwd，不是进程文件系统边界。固定可信命令仍以宿主 OS 账号权限访问文件；本工具不保证 Windows 子进程树清理、任意代码隔离或命令只写工作区。宿主只能注册已审查、无需派生不受控子进程的固定 recipe；任意项目脚本/自由命令要先有另行验证的进程与文件系统隔离。生产组合目前不注册此能力。
+- `rootPath` 只是 cwd，不是进程文件系统边界。固定可信命令仍以宿主 OS 账号权限访问文件。在 Windows 上，直接执行 Node/npm 并在超时/取消时调用 `child.kill('SIGKILL')` 仅能终止直接进程，npm 脚本派生的子进程树会成为孤儿进程；为此在 `packages/coding-tools/native/` 下提供了 `WindowsJobProcessHost` 原生助手（基于 .NET 8 与 Win32 Job Object）：
+  - 通过 `CreateJobObjectW` 与 `SetInformationJobObject` 设置 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (0x2000)`，严禁 breakaway；
+  - 使用 `CreateProcessW` 配合 `CREATE_SUSPENDED` 创建挂起目标进程与标准管道重定向；
+  - 严格保持在 `ResumeThread` 前通过 `AssignProcessToJobObject` 纳管进程（分配失败立即 TerminateProcess 挂起进程），决不允许未纳管的进程开始运行；
+  - 在宿主进程被杀、超时、取消或句柄关闭时，由 Windows 内核原子终止整棵子进程树，防止后台孤儿编译/脚本进程残留；
+  - 仅用于受信 Desktop 宿主构造的受控命令（如 npm-build / npm-test），严禁向模型暴露任意 shell/argv。
+  - 受信宿主可在 recipe 或 options 中注入受控只读环境变量（key 必须满足正则、严禁包含 TOKEN/KEY/SECRET/PASSWORD/CREDENTIAL/AUTH 等敏感词、value 限制长度且不含 NUL）；未指定时默认空环境，绝不继承外部 `process.env` 私人凭据。
 
 ## 安全边界
 

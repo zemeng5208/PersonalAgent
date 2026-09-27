@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {statSync} from 'node:fs';
 import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -125,4 +126,133 @@ test('bounded output and cancellation stop the direct child; a nonzero exit rema
   controller.abort();
   await assert.rejects(execution, {code: 'CANCELLED'});
   assert.throws(() => process.kill(pid, 0), {code: 'ESRCH'});
+});
+
+test('env option and recipe env are validated, merged, and do not leak inherited secrets', async t => {
+  const root = await fixture(t);
+
+  // 1. Invalid keys and forbidden secret keywords
+  assert.throws(() => createWorkspaceCommandTool({
+    rootPath: root,
+    recipes: [{id: 'check-key', executable: process.execPath, args: ['--version'], env: {'123bad': 'val'}}],
+  }), {code: 'INVALID_ARGUMENT'});
+
+  assert.throws(() => createWorkspaceCommandTool({
+    rootPath: root,
+    recipes: [{id: 'check-secret', executable: process.execPath, args: ['--version'], env: {GITHUB_TOKEN: 'secret'}}],
+  }), {code: 'INVALID_ARGUMENT'});
+
+  assert.throws(() => createWorkspaceCommandTool({
+    rootPath: root,
+    recipes: [{id: 'check-auth', executable: process.execPath, args: ['--version'], env: {USER_AUTH_DATA: 'secret'}}],
+  }), {code: 'INVALID_ARGUMENT'});
+
+  assert.throws(() => createWorkspaceCommandTool({
+    rootPath: root,
+    recipes: [{id: 'check-key-kw', executable: process.execPath, args: ['--version'], env: {API_KEY: 'secret'}}],
+  }), {code: 'INVALID_ARGUMENT'});
+
+  assert.throws(() => createWorkspaceCommandTool({
+    rootPath: root,
+    recipes: [{id: 'check-val', executable: process.execPath, args: ['--version'], env: {VAR: 123}}],
+  }), {code: 'INVALID_ARGUMENT'});
+
+  assert.throws(() => createWorkspaceCommandTool({
+    rootPath: root,
+    recipes: [{id: 'check-nul', executable: process.execPath, args: ['--version'], env: {VAR: 'a\0b'}}],
+  }), {code: 'INVALID_ARGUMENT'});
+
+  // 2. Merging options.env and recipe.env, verifying child receives only explicitly injected env
+  process.env.PARENT_UNINJECTED_TEST_VAR = 'secret_leaked';
+  t.after(() => delete process.env.PARENT_UNINJECTED_TEST_VAR);
+  const tool = createWorkspaceCommandTool({
+    rootPath: root,
+    env: {GLOBAL_FLAG: 'global_value', OVERRIDE_ME: 'initial'},
+    recipes: [{
+      id: 'echo-env',
+      executable: process.execPath,
+      args: ['-e', 'process.stdout.write(JSON.stringify({gf: process.env.GLOBAL_FLAG, om: process.env.OVERRIDE_ME, rf: process.env.RECIPE_FLAG, leaked: process.env.PARENT_UNINJECTED_TEST_VAR}))'],
+      env: {RECIPE_FLAG: 'recipe_value', OVERRIDE_ME: 'overridden'},
+    }],
+  });
+
+  const res = await tool.execute({recipeId: 'echo-env'}, context());
+  assert.equal(res.exitCode, 0);
+  const data = JSON.parse(res.stdout);
+  assert.equal(data.gf, 'global_value');
+  assert.equal(data.om, 'overridden');
+  assert.equal(data.rf, 'recipe_value');
+  assert.equal(data.leaked, undefined); // No inherited process.env!
+});
+
+test('WindowsJobProcessHost terminates grandchild process tree on abort', {
+  skip: process.platform !== 'win32' ? 'Windows only test' : false,
+}, async t => {
+  const root = await fixture(t);
+  const jobHostExe = join(import.meta.dirname, '..', 'native', 'bin', 'Debug', 'net8.0-windows', 'WindowsJobProcessHost.exe');
+  let jobHostFound = false;
+  try {
+    const s = statSync(jobHostExe);
+    jobHostFound = s.isFile();
+  } catch {}
+  if (!jobHostFound) {
+    t.skip('WindowsJobProcessHost.exe not compiled, skipping tree kill test');
+    return;
+  }
+
+  const grandchildPidPath = join(root, 'grandchild.pid');
+  const spawnerScript = join(root, 'spawner.cjs');
+  await writeFile(spawnerScript, `
+    const { spawn } = require('node:child_process');
+    const child = spawn(process.execPath, ['-e', 'require("node:fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)', ${JSON.stringify(grandchildPidPath)}], {
+      stdio: 'ignore',
+      detached: false,
+    });
+    setInterval(() => {}, 1000);
+  `);
+
+  const treeTool = createWorkspaceCommandTool({
+    rootPath: root,
+    recipes: [{
+      id: 'run-tree',
+      executable: jobHostExe,
+      args: ['--cwd', root, '--exe', process.execPath, '--', spawnerScript],
+    }],
+  });
+
+  const controller = new AbortController();
+  const execution = treeTool.execute({recipeId: 'run-tree'}, context({signal: controller.signal}));
+
+  let grandchildPid;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      grandchildPid = Number(await readFile(grandchildPidPath, 'utf8'));
+      if (grandchildPid > 0) break;
+    } catch {
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+  }
+  assert.ok(Number.isSafeInteger(grandchildPid) && grandchildPid > 0, 'grandchild started');
+
+  // Verify grandchild is currently alive
+  assert.doesNotThrow(() => process.kill(grandchildPid, 0));
+
+  // Abort execution: tool kills WindowsJobProcessHost -> Job Object terminates grandchild!
+  controller.abort();
+  await assert.rejects(execution, {code: 'CANCELLED'});
+
+  // Wait briefly for Windows kernel to finish Job Object process tree termination
+  let grandchildDied = false;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      process.kill(grandchildPid, 0);
+      await new Promise(resolve => setTimeout(resolve, 50));
+    } catch (e) {
+      if (e.code === 'ESRCH') {
+        grandchildDied = true;
+        break;
+      }
+    }
+  }
+  assert.ok(grandchildDied, 'grandchild process must be terminated by Job Object');
 });

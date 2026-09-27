@@ -175,20 +175,24 @@ test('out-of-bounds, traversal, symlink, and invalid file rejection', t => {
   }), /outside the fixed Desktop authorization/i);
 });
 
-test('project scripts policy: npm build/test recipes are NOT exposed regardless of switch', t => {
-  const root = createTempDir('pa-cmd-npm-policy-');
-  t.after(() => rmSync(root, {recursive: true, force: true}));
+test('project scripts gatekeeping: npm build/test recipes require all conditions to be satisfied', t => {
+  const root = createTempDir('pa-cmd-npm-gate-');
+  const externalDir = createTempDir('pa-cmd-npm-ext-');
+  t.after(() => {
+    rmSync(root, {recursive: true, force: true});
+    rmSync(externalDir, {recursive: true, force: true});
+  });
+
+  const fakeHelperName = process.platform === 'win32' ? 'WindowsJobProcessHost.exe' : 'job-helper';
+  const externalHelper = path.join(externalDir, fakeHelperName);
+  writeFileSync(externalHelper, 'fake-helper');
+
+  const externalNpmCli = path.join(externalDir, 'npm-cli.js');
+  writeFileSync(externalNpmCli, 'console.log("fake npm cli");');
 
   writeFileSync(path.join(root, 'index.js'), 'console.log(1);\n');
-  writeFileSync(path.join(root, 'package.json'), JSON.stringify({
-    name: 'sample-project',
-    scripts: {
-      build: 'node -e "console.log(1)"',
-      test: 'node -e "console.log(2)"',
-    },
-  }));
 
-  // Case A: allowProjectScripts is false (default)
+  // Case 1: allowProjectScripts is false (default) -> no npm recipes
   {
     const {recipes, diagnostics} = buildWorkspaceCommandRecipes({
       workspaceRoot: root,
@@ -200,10 +204,9 @@ test('project scripts policy: npm build/test recipes are NOT exposed regardless 
     assert.equal(recipes[0].id, 'node-check');
     assert.equal(diagnostics.projectScriptsAllowed, false);
     assert.equal(diagnostics.projectScriptsExposed, false);
-    assert.ok(!recipes.some(r => r.id === 'npm-build' || r.id === 'npm-test'));
   }
 
-  // Case B: allowProjectScripts is true -> STILL no npm recipes exposed, clear diagnostic reason recorded
+  // Case 2: allowProjectScripts is true, but no helper -> job_helper_missing
   {
     const {recipes, diagnostics} = buildWorkspaceCommandRecipes({
       workspaceRoot: root,
@@ -212,13 +215,131 @@ test('project scripts policy: npm build/test recipes are NOT exposed regardless 
       allowProjectScripts: true,
     });
     assert.equal(recipes.length, 1);
-    assert.equal(recipes[0].id, 'node-check');
     assert.equal(diagnostics.projectScriptsAllowed, true);
     assert.equal(diagnostics.projectScriptsExposed, false);
-    assert.ok(!recipes.some(r => r.id === 'npm-build' || r.id === 'npm-test'));
-    assert.ok(diagnostics.reasons.some(r => r.includes('npm project scripts are not exposed')));
-    assert.ok(diagnostics.npmHurdles.length > 0);
+    assert.ok(diagnostics.reasons.some(r => r.startsWith('job_helper_missing')));
   }
+
+  // Case 3: helper provided, but no npmCliPath -> npm_cli_missing
+  {
+    const {recipes, diagnostics} = buildWorkspaceCommandRecipes({
+      workspaceRoot: root,
+      nodeExecutable: process.execPath,
+      jobHelperExecutable: externalHelper,
+      checkFiles: ['index.js'],
+      allowProjectScripts: true,
+    });
+    assert.equal(recipes.length, 1);
+    assert.equal(diagnostics.projectScriptsExposed, false);
+    assert.ok(diagnostics.reasons.some(r => r.startsWith('npm_cli_missing')));
+  }
+
+  // Case 4: helper and npmCli provided, but no package.json -> package_json_missing
+  {
+    const {recipes, diagnostics} = buildWorkspaceCommandRecipes({
+      workspaceRoot: root,
+      nodeExecutable: process.execPath,
+      jobHelperExecutable: externalHelper,
+      npmCliPath: externalNpmCli,
+      checkFiles: ['index.js'],
+      allowProjectScripts: true,
+    });
+    assert.equal(recipes.length, 1);
+    assert.equal(diagnostics.projectScriptsExposed, false);
+    assert.ok(diagnostics.reasons.some(r => r.startsWith('package_json_missing')));
+  }
+
+  // Add package.json with build and test scripts
+  writeFileSync(path.join(root, 'package.json'), JSON.stringify({
+    name: 'test-app',
+    scripts: {
+      build: 'echo build',
+      test: 'echo test',
+    },
+  }));
+
+  // Case 5: package.json exists, but node_modules missing -> dependencies_missing
+  {
+    const {recipes, diagnostics} = buildWorkspaceCommandRecipes({
+      workspaceRoot: root,
+      nodeExecutable: process.execPath,
+      jobHelperExecutable: externalHelper,
+      npmCliPath: externalNpmCli,
+      checkFiles: ['index.js'],
+      allowProjectScripts: true,
+    });
+    assert.equal(recipes.length, 1);
+    assert.equal(diagnostics.projectScriptsExposed, false);
+    assert.ok(diagnostics.reasons.some(r => r.startsWith('dependencies_missing')));
+  }
+
+  // Add node_modules directory
+  mkdirSync(path.join(root, 'node_modules'));
+
+  // Case 6: ALL gates satisfied -> generates npm-build and npm-test recipes
+  {
+    const mockEnv = {
+      PATH: 'C:\\Windows\\System32;C:\\Program Files\\nodejs',
+      SystemRoot: 'C:\\Windows',
+      ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+      SECRET_TOKEN: 'leak_attempt',
+      GITHUB_KEY: 'leak_attempt',
+    };
+    const {recipes, diagnostics} = buildWorkspaceCommandRecipes({
+      workspaceRoot: root,
+      nodeExecutable: process.execPath,
+      jobHelperExecutable: externalHelper,
+      npmCliPath: externalNpmCli,
+      checkFiles: ['index.js'],
+      allowProjectScripts: true,
+      projectScriptEnvSource: mockEnv,
+    });
+    assert.equal(diagnostics.projectScriptsAllowed, true);
+    assert.equal(diagnostics.projectScriptsExposed, true);
+    assert.equal(recipes.length, 3); // node-check, npm-build, npm-test
+
+    const buildRecipe = recipes.find(r => r.id === 'npm-build');
+    assert.ok(buildRecipe, 'npm-build recipe created');
+    assert.ok(path.isAbsolute(buildRecipe.executable));
+    assert.deepEqual(buildRecipe.args.slice(-2), ['run', 'build']);
+    assert.equal(buildRecipe.args[buildRecipe.args.length - 3], externalNpmCli);
+    assert.equal(buildRecipe.args[buildRecipe.args.length - 4], '--');
+    assert.equal(buildRecipe.args[0], '--cwd');
+    assert.equal(buildRecipe.args[2], '--exe');
+
+    const testRecipe = recipes.find(r => r.id === 'npm-test');
+    assert.ok(testRecipe, 'npm-test recipe created');
+    assert.deepEqual(testRecipe.args.slice(-2), ['run', 'test']);
+    assert.equal(testRecipe.args[testRecipe.args.length - 3], externalNpmCli);
+    assert.equal(testRecipe.args[testRecipe.args.length - 4], '--');
+
+    // Check safe environment filtering:
+    assert.equal(buildRecipe.env.SystemRoot, 'C:\\Windows');
+    assert.equal(buildRecipe.env.SECRET_TOKEN, undefined);
+    assert.equal(buildRecipe.env.GITHUB_KEY, undefined);
+  }
+
+  // Case 7: Security: jobHelper inside workspace is rejected
+  const internalHelper = path.join(root, fakeHelperName);
+  writeFileSync(internalHelper, 'fake');
+  assert.throws(() => buildWorkspaceCommandRecipes({
+    workspaceRoot: root,
+    nodeExecutable: process.execPath,
+    jobHelperExecutable: internalHelper,
+    npmCliPath: externalNpmCli,
+    allowProjectScripts: true,
+  }), /outside the writable workspace/i);
+
+  // Case 8: Security: npmCli inside workspace is rejected
+  const internalNpmCli = path.join(root, 'npm-cli.js');
+  writeFileSync(internalNpmCli, 'fake');
+  assert.throws(() => buildWorkspaceCommandRecipes({
+    workspaceRoot: root,
+    nodeExecutable: process.execPath,
+    jobHelperExecutable: externalHelper,
+    npmCliPath: internalNpmCli,
+    allowProjectScripts: true,
+  }), /outside the writable workspace/i);
 });
 
 test('public command contract validation: recipe limits and properties', async t => {
