@@ -22,6 +22,14 @@ test('public providers assemble without calls and only publish bounded public re
     assert.equal(result.results[0].citation, context.result.results[0].record.contentRef);
     assert.equal(result.cache.state, 'stale');
     assert.doesNotMatch(JSON.stringify(result), /private|accountRef|message/);
+    const large = await policy.project({...context,result:{...context.result,
+      results:Array.from({length:20},()=>({...context.result.results[0],
+        record:{...context.result.results[0].record,contentRef:'A public citation '.repeat(80)}}))}});
+    assert.ok(Buffer.byteLength(JSON.stringify(large),'utf8')<=7000);
+    assert.equal(large.returnedCount,20);
+    assert.equal(large.truncated,true);
+    assert.equal(large.includedCount,large.results.length);
+    assert.ok(large.includedCount>0);
     host.close();
     assert.equal(policy.accepts({}), false);
     await assert.rejects(policy.project(context), /unavailable/);
