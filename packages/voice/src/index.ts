@@ -31,6 +31,12 @@ export type {
   VoicePcmFrameSubscribeOptions,
   VoicePcmFrameSubscription,
   VoicePcmTerminalReason,
+  SpeechKeywordCloseReason,
+  SpeechKeywordCloseResult,
+  SpeechKeywordDetectorPort,
+  SpeechKeywordSession,
+  SpeechKeywordStartOptions,
+  WindowsSystemSpeechKeywordDetectorOptions,
 } from './ports.js';
 export {createVoicePcmBuffer} from './pcm-buffer.js';
 export type {VoicePcmBuffer, VoicePcmBufferOptions} from './pcm-buffer.js';
@@ -39,6 +45,7 @@ export {
   UnavailableSpeechOutputPort,
   UnavailableSpeechRecognitionPort,
   UnavailableTranscriptConsumerPort,
+  UnavailableSpeechKeywordDetectorPort,
 } from './unavailable.js';
 export {
   RuntimeClientTranscriptConsumer,
@@ -47,6 +54,8 @@ export {
 export type {RuntimeClientTranscriptConsumerOptions} from './runtime-consumer.js';
 export {createWindowsSystemSpeechPorts} from './windows-system-speech.js';
 export type {WindowsSystemSpeechPorts} from './windows-system-speech.js';
+export {createWindowsSystemSpeechKeywordDetector} from './windows-system-speech-keyword.js';
+export type {WindowsSpeechKeywordHostSpawner} from './windows-system-speech-keyword.js';
 export {VoiceSessionManager} from './voice-session.js';
 export type {
   ReplyReceipt,

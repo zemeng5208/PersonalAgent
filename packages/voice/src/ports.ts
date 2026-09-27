@@ -179,3 +179,39 @@ export interface VoicePcmCaptureBinding {
    */
   start(sink: VoicePcmCaptureSink): Promise<VoicePcmCaptureSubscription> | VoicePcmCaptureSubscription;
 }
+
+export type SpeechKeywordCloseReason =
+  | 'stopped'
+  | 'cancelled'
+  | 'deadline'
+  | 'unavailable'
+  | 'overflow'
+  | 'external_failure'
+  | 'disposed';
+
+export interface SpeechKeywordCloseResult {
+  readonly reason: SpeechKeywordCloseReason;
+  readonly detections: number;
+}
+
+export interface SpeechKeywordStartOptions {
+  readonly signal: AbortSignal;
+  readonly deadline: string;
+  readonly onDetected: () => void;
+}
+
+export interface SpeechKeywordSession {
+  accept(frame: VoicePcmFrame): void;
+  readonly ready: Promise<void>;
+  readonly closed: Promise<SpeechKeywordCloseResult>;
+  stop(): Promise<void>;
+}
+
+export interface WindowsSystemSpeechKeywordDetectorOptions {
+  readonly keyword: string;
+}
+
+export interface SpeechKeywordDetectorPort {
+  start(options: SpeechKeywordStartOptions): SpeechKeywordSession;
+  dispose(): Promise<void>;
+}

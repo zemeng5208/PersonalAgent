@@ -192,3 +192,32 @@ release. Release failure remains `EXTERNAL_FAILURE`, not a false success receipt
 Frames are 16 kHz mono PCM S16LE, at most 3200 bytes each, with at most four queued
 frames/12800 queued bytes. Delivered and discarded local copies are zeroed; this
 port neither submits nor cancels Runtime tasks. Real device acceptance is separate.
+
+## Speech Keyword Detector
+
+`createWindowsSystemSpeechKeywordDetector({keyword})` consumes the same authorized
+PCM frames through `SpeechKeywordSession.accept(frame)`. The fixed native host
+uses a single trusted, control-free phrase as grammar data; it opens no second
+microphone, uploads no audio, and never returns recognition text. Its `ready`
+resolves only after the installed zh-CN recognizer, restricted grammar and streaming
+recognition have started. Missing language components remain explicitly unavailable.
+Only the empty `onDetected()` callback and a detection count leave the detector.
+
+Frames use the existing 16 kHz mono PCM S16LE format, monotonically increasing
+sequence numbers and at most 3200 bytes per frame. The queue is bounded to four
+frames/12800 bytes with one in-flight packet. Overflow, malformed host envelopes,
+unexpected child exit, cancellation or expiry stop further delivery and clear
+owned queued/in-flight data. `stop()` and `dispose()` wait for the exact child to
+close; requesting a stop is not itself release confirmation.
+
+Sessions are registered before the host spawner runs, so synchronous reentrant
+disposal includes the newly started child. Close/error handlers are installed
+before delivering a pending stop, and parent cancellation is rechecked after
+spawn. Readiness, detection and queued PCM dispatch independently recheck the
+current deadline; delayed timers cannot extend the authorized lifetime.
+
+Fake keyword sessions and an explicit unavailable port support local tests.
+Controlled-child tests and C# compilation do not establish real microphone capture,
+Chinese keyword accuracy, false-positive rates, echo suppression or Desktop
+acceptance. This remains a provisional local adapter; public voice capability is
+not enabled by importing it.
