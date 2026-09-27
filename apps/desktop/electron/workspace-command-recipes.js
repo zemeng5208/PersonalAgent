@@ -5,31 +5,22 @@
  * Consumes @personal-agent/coding-tools public createWorkspaceCommandTool.
  *
  * Security Model:
- * 1. Default NO project script commands (allowProjectScripts defaults to false).
- * 2. Host pre-constructs all argv; tool input is strictly constrained to enum recipeId.
- *    Model/tool callers CANNOT provide executable paths, arbitrary script paths, or shell strings.
- * 3. Node executable must reside strictly outside the writable workspace.
+ * 1. Default and currently ONLY supports node --check recipes.
+ * 2. Trusted Desktop Main MUST explicitly inject a fixed, absolute nodeExecutable path.
+ *    No automatic PATH/where.exe search or process.execPath defaulting is permitted.
+ * 3. Node executable must reside strictly outside the writable workspace, be a regular file,
+ *    and match node.exe (or node on non-Windows).
  * 4. Target source files for node --check must be canonical regular files inside the workspace,
- *    with symlinks and path traversals strictly rejected.
- * 5. If allowProjectScripts is true, fixed recipes for npm run build and npm test may be exposed
- *    ONLY when a valid package.json with the respective scripts is present and a trusted npm-cli.js
- *    outside the workspace is available.
- * 6. Explicitly NOT an OS sandbox: project scripts execute user code. On Windows, empty env:{}
- *    and direct child process termination (without job objects/process tree kill) pose orphan process risks.
+ *    with symlinks, drive letters, and path traversals strictly rejected.
+ * 5. Project scripts (npm run build, npm test) are NOT exposed regardless of flags:
+ *    coding-tools command.ts uses env:{} and direct child termination, which does not terminate
+ *    child process trees on Windows and risks orphaned processes. Separate verified process and
+ *    filesystem isolation is required before project scripts can be safely enabled.
+ * 6. Caller must explicitly pass createWorkspaceCommandTool factory; missing/invalid factory fails closed.
  */
 
-import {existsSync, lstatSync, readFileSync, realpathSync, statSync} from 'node:fs';
-import {execFileSync} from 'node:child_process';
+import {existsSync, lstatSync, realpathSync, statSync} from 'node:fs';
 import path from 'node:path';
-
-// If @personal-agent/coding-tools is resolvable at runtime, load createWorkspaceCommandTool
-let defaultCommandToolFactory = null;
-try {
-  const coding = await import('@personal-agent/coding-tools');
-  defaultCommandToolFactory = coding.createWorkspaceCommandTool;
-} catch {
-  // Gracefully ignored when running isolated unit tests without linked node_modules
-}
 
 const RECIPE_ID_PATTERN = /^[a-z][a-z0-9._-]{0,63}$/u;
 
@@ -73,47 +64,19 @@ function isOutsideWorkspace(root, target) {
 }
 
 export function resolveNodeExecutable(workspaceRoot, explicitNode) {
-  let candidate = explicitNode;
-  if (!candidate) {
-    if (process.execPath && path.basename(process.execPath).toLowerCase().startsWith('node') && !process.execPath.toLowerCase().includes('electron')) {
-      candidate = process.execPath;
-    } else {
-      try {
-        const where = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'where.exe');
-        const found = execFileSync(where, ['node.exe'], {encoding: 'utf8', windowsHide: true, timeout: 3000})
-          .trim().split(/\r?\n/)[0];
-        if (found) candidate = found;
-      } catch {}
-    }
+  if (typeof explicitNode !== 'string' || !path.isAbsolute(explicitNode)) {
+    throw Error('Trusted absolute node.exe executable path is required from host');
   }
-  if (!candidate) {
-    throw Error('Trusted node.exe executable is required');
+  const canonical = canonicalFile(explicitNode, 'Node executable');
+  const base = path.basename(canonical).toLowerCase();
+  const expectedBase = process.platform === 'win32' ? 'node.exe' : 'node';
+  if (base !== 'node.exe' && base !== 'node') {
+    throw Error(`Node executable must be named ${expectedBase}`);
   }
-  const canonical = canonicalFile(candidate, 'Node executable');
   if (!isOutsideWorkspace(workspaceRoot, canonical)) {
     throw Error('Node executable must reside outside the writable workspace');
   }
   return canonical;
-}
-
-export function resolveNpmCliPath(workspaceRoot, nodeExecutable, explicitNpmCli) {
-  let candidate = explicitNpmCli;
-  if (!candidate && nodeExecutable) {
-    const defaultNpmCli = path.join(path.dirname(nodeExecutable), 'node_modules', 'npm', 'bin', 'npm-cli.js');
-    if (existsSync(defaultNpmCli)) {
-      candidate = defaultNpmCli;
-    }
-  }
-  if (!candidate) return undefined;
-  try {
-    const canonical = canonicalFile(candidate, 'npm-cli script');
-    if (!isOutsideWorkspace(workspaceRoot, canonical)) {
-      return undefined;
-    }
-    return canonical;
-  } catch {
-    return undefined;
-  }
 }
 
 export function validateCheckFile(workspaceRoot, fileEntry) {
@@ -156,7 +119,6 @@ export function buildWorkspaceCommandRecipes({
   nodeExecutable,
   checkFiles = [],
   allowProjectScripts = false,
-  npmCliPath,
 } = {}) {
   const canonicalRoot = canonicalDirectory(workspaceRoot, 'Workspace root');
   if (authorizedWorkspaceRoot !== undefined) {
@@ -175,12 +137,11 @@ export function buildWorkspaceCommandRecipes({
     checkFiles: [],
     projectScriptsAllowed: allowProjectScripts === true,
     projectScriptsExposed: false,
-    npmCliPath: null,
     reasons: [],
     npmHurdles: [
-      'Windows empty env:{} execution in command.ts may lack necessary PATH/ComSpec variables for complex scripts.',
+      'Windows empty env:{} execution in command.ts lacks PATH/ComSpec variables for complex build/test scripts.',
       'child.kill("SIGKILL") in command.ts only terminates the direct node.exe process, leaving child process trees orphaned on Windows.',
-      'Project scripts execute arbitrary project code and are not sandboxed.',
+      'Project scripts execute arbitrary project code and are not sandboxed; packages/coding-tools/README.md requires verified process and filesystem isolation.',
     ],
   };
 
@@ -212,54 +173,11 @@ export function buildWorkspaceCommandRecipes({
     });
   }
 
-  // 2. Process npm project scripts if explicitly allowed
+  // 2. Project scripts policy: do NOT expose npm recipes regardless of switch
   if (allowProjectScripts === true) {
-    const pkgPath = path.join(canonicalRoot, 'package.json');
-    if (!existsSync(pkgPath)) {
-      diagnostics.reasons.push('package.json not found in workspace root');
-    } else if (lstatSync(pkgPath).isSymbolicLink()) {
-      diagnostics.reasons.push('package.json is a symbolic link (rejected)');
-    } else if (!statSync(pkgPath).isFile()) {
-      diagnostics.reasons.push('package.json is not a regular file');
-    } else {
-      let pkg;
-      try {
-        pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
-      } catch {
-        diagnostics.reasons.push('package.json is not valid JSON');
-      }
-
-      if (pkg) {
-        const hasBuild = typeof pkg.scripts?.build === 'string';
-        const hasTest = typeof pkg.scripts?.test === 'string';
-
-        if (!hasBuild && !hasTest) {
-          diagnostics.reasons.push('package.json contains neither "build" nor "test" script');
-        } else {
-          const resolvedNpmCli = resolveNpmCliPath(canonicalRoot, canonicalNode, npmCliPath);
-          if (!resolvedNpmCli) {
-            diagnostics.reasons.push('Trusted npm-cli.js was not found outside the workspace');
-          } else {
-            diagnostics.npmCliPath = resolvedNpmCli;
-            if (hasBuild) {
-              recipes.push({
-                id: 'npm-build',
-                executable: canonicalNode,
-                args: [resolvedNpmCli, 'run', 'build'],
-              });
-            }
-            if (hasTest) {
-              recipes.push({
-                id: 'npm-test',
-                executable: canonicalNode,
-                args: [resolvedNpmCli, 'test'],
-              });
-            }
-            diagnostics.projectScriptsExposed = true;
-          }
-        }
-      }
-    }
+    diagnostics.reasons.push(
+      'npm project scripts are not exposed: coding-tools command.ts uses env:{} and direct child termination, risking orphaned process trees on Windows; separate process and filesystem isolation is required per packages/coding-tools/README.md before project scripts can be safely enabled'
+    );
   }
 
   return {
@@ -284,9 +202,9 @@ export function createWorkspaceCommandRecipeTool(options = {}) {
     };
   }
 
-  const factory = options.createWorkspaceCommandTool ?? defaultCommandToolFactory;
+  const factory = options.createWorkspaceCommandTool;
   if (typeof factory !== 'function') {
-    throw Error('Public createWorkspaceCommandTool factory is unavailable');
+    throw Error('Public createWorkspaceCommandTool factory is required from host');
   }
 
   const tool = factory({
