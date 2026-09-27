@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {createDesktopVoiceInputCore} from '../electron/voice-input-core.js';
+import {VoiceSessionManager, createVoicePcmBuffer} from '@personal-agent/voice';
 
 function deferred() {
   let resolve, reject;
@@ -8,7 +9,7 @@ function deferred() {
   return {promise, resolve, reject};
 }
 
-function fixture({recognizeError} = {}) {
+function fixture({recognizeError, speakError, autoPlay = false} = {}) {
   const calls = [];
   const fixedNow = Date.parse('2026-09-25T00:00:00.000Z');
   const ready = deferred();
@@ -29,7 +30,11 @@ function fixture({recognizeError} = {}) {
       return {transcriptId: 'transcript-1'};
     }
     async consumeTranscript(_id, receipt, consumer) { calls.push(['consume', receipt, consumer]); return {replyId: 'reply-1'}; }
-    async speakReply(_id, receipt) { calls.push(['speak', receipt]); return {completed: true, interrupted: false}; }
+    async speakReply(_id, receipt) {
+      calls.push(['speak', receipt]);
+      if (speakError) throw speakError;
+      return {completed: true, interrupted: false};
+    }
     async stop() { calls.push('session-stop'); }
     async stopSpeaking() { calls.push('stop-speaking'); return {playbackStopped: true, resourcesReleased: true}; }
   }
@@ -46,7 +51,7 @@ function fixture({recognizeError} = {}) {
     },
     VoiceSessionManager: Manager, createConsumer: () => ({kind: 'consumer'}),
     createSpeechPorts: () => ({recognition: {}, output: {}, dispose: async () => { calls.push('dispose-ports'); }}),
-    enabled: true, now: () => fixedNow});
+    enabled: true, autoPlay, now: () => fixedNow});
   return {input, calls, ready, closed, get options() { return options; }};
 }
 
@@ -77,6 +82,23 @@ test('explicit voice path waits for physical ready and release before ASR; playb
   assert.equal(f.calls.some(call => call === 'task.cancel'), false);
 });
 
+test('cloud voice conversation automatically speaks after recognition and Runtime completion', async () => {
+  const f = fixture({autoPlay: true});
+  const started = f.input.beginCapture(3);
+  f.ready.resolve();
+  await started;
+  f.options.onFrame({data: Uint8Array.of(1, 2)});
+  const finished = f.input.finishCapture(3);
+  f.closed.resolve();
+  const result = await finished;
+  assert.equal(result.completed, true);
+  assert.equal(f.input.hasActive(), false);
+  const ordered = f.calls.filter(Array.isArray).map(call => call[0]);
+  assert.ok(ordered.indexOf('recognize') < ordered.indexOf('consume'));
+  assert.ok(ordered.indexOf('consume') < ordered.indexOf('speak'));
+  assert.equal(f.calls.includes('revoke'), true);
+});
+
 test('unconfirmed PCM release blocks recognition and reports failure', async () => {
   const f = fixture();
   const pending = f.input.beginCapture(4);
@@ -90,6 +112,45 @@ test('unconfirmed PCM release blocks recognition and reports failure', async () 
   assert.deepEqual(f.input.snapshot().failure, {
     stage: 'pcm_release', code: 'EXTERNAL_FAILURE', message: '麦克风释放未确认',
   });
+});
+
+test('automatic playback failure retains its stage without provider secrets', async () => {
+  const f = fixture({autoPlay: true, speakError: Object.assign(Error('private token response'), {code: 'TIMEOUT'})});
+  const started = f.input.beginCapture(3);
+  f.ready.resolve();
+  await started;
+  f.options.onFrame({data: Uint8Array.of(1, 2)});
+  const finished = f.input.finishCapture(3);
+  f.closed.resolve();
+  await assert.rejects(finished, /语音操作已超时/);
+  assert.equal(f.input.hasActive(), false);
+  assert.deepEqual(f.input.snapshot().failure, {stage: 'playback', code: 'TIMEOUT', message: '语音操作已超时'});
+  assert.equal(JSON.stringify(f.input.snapshot()).includes('private'), false);
+});
+
+test('dictation delivers an editable transcript without a Runtime task or speech reply', async () => {
+  let subscribed, draft, revoked = false;
+  const closed = deferred();
+  const input = createDesktopVoiceInputCore({
+    source: {subscribe(options) { subscribed = options; return {ready: Promise.resolve(),
+      closed: closed.promise, unsubscribe: () => closed.resolve()}; }},
+    microphoneHost: {authorize() {}, snapshot: () => ({subscriberCount: 0}), revoke: async () => {revoked = true;}},
+    client: {call: () => assert.fail('dictation must not submit a task')},
+    createConsumer: () => ({consume: () => assert.fail('dictation must not consume through Runtime')}),
+    createBuffer: createVoicePcmBuffer, VoiceSessionManager,
+    createSpeechPorts: () => ({recognition: {recognize: () => ({
+      result: Promise.resolve({text: '请帮我整理今天的计划。', locale: 'zh-CN'}), stop: async () => {},
+    })}, output: {speak: () => assert.fail('dictation must not speak')}, dispose: async () => {}}),
+    enabled: true, inputMode: 'dictation', onTranscript: result => {draft = result;},
+  });
+  await input.beginCapture(9);
+  subscribed.onFrame({data: new Uint8Array(3200)});
+  const result = await input.finishCapture(9);
+  assert.equal(result.text, '请帮我整理今天的计划。');
+  assert.deepEqual(draft, {senderId: 9, text: result.text});
+  assert.equal(input.hasActive(), false);
+  assert.equal(revoked, true);
+  await input.dispose();
 });
 
 test('capture deadline finalizes audio while the session keeps time for ASR and Runtime', async () => {

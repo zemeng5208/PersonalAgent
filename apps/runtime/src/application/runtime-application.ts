@@ -6,6 +6,7 @@ import {ToolGateway, toolArgumentsDigest} from '@personal-agent/tool-gateway';
 import {TaskRuntime} from '../index.js';
 import {createTextApplication, type TextApplication, type TextApplicationOptions} from './text.js';
 import type {ModelMessage} from '@personal-agent/models';
+import {QwenRealtimeModelGateway} from '@personal-agent/models';
 import {parseCoordinationRepairCandidate} from '@personal-agent/coordination';
 import type {CoordinationPort, CoordinationRequest, CoordinationRepairCandidateResult} from '@personal-agent/coordination';
 import {startCoordinationTask, assertCompetitionExportAllowed, type CompetitionToolExport} from './coordination.js';
@@ -19,6 +20,11 @@ import type {EvidenceReaderOptions} from './evidence-reader.js';
 import {createCompetitionFactHost} from './competition-fact-host.js';
 import type {CompetitionFactHost, CompetitionFactHostOptions} from './competition-fact-host.js';
 import {resolve} from 'node:path';
+import {SystemObservationSessions, SYSTEM_OBSERVATION_SESSION_CHECKPOINT,
+  SYSTEM_OBSERVATION_NAME, SYSTEM_OBSERVATION_VERSION, SYSTEM_OBSERVATION_SCOPE} from './system-observation-session.js';
+import type {StartSystemObservationSessionRequest, SystemObservationSession} from './system-observation-session.js';
+import {MailReadSessions, MAIL_READ_SESSION_CHECKPOINT, MAIL_READ_TOOL, MAIL_READ_VERSION} from './mail-read-session.js';
+import type {StartMailReadSessionRequest, MailReadSession} from './mail-read-session.js';
 type SuccessfulResponse = Extract<Response, {outcome: 'ok'}>;
 
 export interface RevokeHostAuthorizationRequest {
@@ -83,6 +89,8 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   private readonly now: () => Date;
   private readonly competitionToolCatalog?: RuntimeCompetitionToolCatalog;
   private readonly storagePath: string;
+  private readonly observationSessions: SystemObservationSessions;
+  private readonly mailReadSessions: MailReadSessions;
 
   constructor(options: RuntimeApplicationOptions) {
     this.storagePath = resolve(options.path);
@@ -125,11 +133,39 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       ...(options.now ? {now: options.now} : {}),
       ...(options.idFactory ? {idFactory: options.idFactory} : {}),
       ...(options.tools || this.localRepair ? {createToolGateway: (policy: import('@personal-agent/policy').AuthorizationPolicy) => {
-        gateway = new ToolGateway({policy, now: () => (options.now?.() ?? new Date()).getTime()});
+        gateway = new ToolGateway({policy: {authorize: request => {
+          // Gate even the generic tool.invoke wire path: a persisted sample
+          // grant alone cannot survive its process-local consent lease.
+          const session = this.runtime.loadCheckpoint(request.taskId, SYSTEM_OBSERVATION_SESSION_CHECKPOINT);
+          if (session !== undefined) {
+            if (typeof session !== 'string' || request.toolName !== SYSTEM_OBSERVATION_NAME
+              || request.authorizationRef !== `host-tool-${request.taskId}`) {
+              throw new ProtocolError('UNAUTHORIZED', 'Invalid observation authorization');
+            }
+            this.observationSessions.assertSample(session, request.taskId);
+          }
+          const mailSession = this.runtime.loadCheckpoint(request.taskId, MAIL_READ_SESSION_CHECKPOINT);
+          if (mailSession !== undefined) {
+            if (typeof mailSession !== 'string' || request.toolName !== MAIL_READ_TOOL
+              || request.authorizationRef !== `host-tool-${request.taskId}`) {
+              throw new ProtocolError('UNAUTHORIZED', 'Invalid inbox read authorization');
+            }
+            this.mailReadSessions.assertPage(mailSession, request.taskId);
+          }
+          return policy.authorize(request);
+        }}, now: () => (options.now?.() ?? new Date()).getTime()});
         for (const tool of options.tools ?? []) gateway.register(tool);
         if (this.localRepair) gateway.register(createLocalRepairTool(() => this.runtime, this.localRepair));
         return gateway;
       }} : {}),
+    });
+    this.observationSessions = new SystemObservationSessions(() => this.now().getTime(), taskId => {
+      this.runtime.policy.revoke(`host-tool-${taskId}`);
+      this.runtime.requestCancel(taskId, 'System observation consent ended');
+    });
+    this.mailReadSessions = new MailReadSessions(() => this.now().getTime(), taskId => {
+      this.runtime.policy.revoke(`host-tool-${taskId}`);
+      this.runtime.requestCancel(taskId, 'Inbox read consent ended');
     });
     if (gateway) {
       const descriptors = gateway.list();
@@ -138,6 +174,21 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
         const tool = descriptors.find(item => item.name === invocation.toolName && item.version === invocation.toolVersion);
         if (!tool) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Tool is not registered');
         validateToolValue(tool.inputSchema, invocation.arguments);
+        const observationSession = this.runtime.loadCheckpoint(invocation.taskId, SYSTEM_OBSERVATION_SESSION_CHECKPOINT);
+        if (observationSession !== undefined) {
+          if (typeof observationSession !== 'string' || invocation.toolName !== SYSTEM_OBSERVATION_NAME
+            || invocation.toolVersion !== SYSTEM_OBSERVATION_VERSION
+            || !isDeepStrictEqual(invocation.arguments, {})) {
+            throw new ProtocolError('UNAUTHORIZED', 'Invalid observation session invocation');
+          }
+          this.observationSessions.assertSample(observationSession, invocation.taskId);
+        }
+        const mailSession = this.runtime.loadCheckpoint(invocation.taskId, MAIL_READ_SESSION_CHECKPOINT);
+        if (mailSession !== undefined) {
+          if (typeof mailSession !== 'string' || invocation.toolName !== MAIL_READ_TOOL
+            || invocation.toolVersion !== MAIL_READ_VERSION) throw new ProtocolError('UNAUTHORIZED', 'Invalid inbox invocation');
+          this.mailReadSessions.assertPage(mailSession, invocation.taskId);
+        }
         const ref = invocation.runId;
         if (!this.runtime.policy.get(ref)) {
           const expiresAt = new Date((options.now?.() ?? new Date()).getTime() + 600_000).toISOString();
@@ -160,6 +211,15 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   get deployment(): TextApplication['deployment'] { this.requireLocalText(); return structuredClone(this.textApplication.deployment); }
   get activeTaskCount(): number { return this.activeTextTasks.size; }
 
+  /** Trusted composition only. Native audio never replaces AgentArts task coordination. */
+  createLiveVoiceModel(config: {workspaceId: string; apiKey: string}): Pick<QwenRealtimeModelGateway, 'connect'> {
+    if (this.profile !== 'huawei_ict_agentarts') {
+      throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Live voice requires Competition Profile');
+    }
+    const gateway = new QwenRealtimeModelGateway(config);
+    return {connect: request => gateway.connect(request)};
+  }
+
   async send(request: Request, signal: AbortSignal): Promise<Response> {
     const response = await this.runtime.send(request, signal);
     if (request.operation === 'task.submit' && response.outcome === 'ok') this.dispatchSubmittedTextTask(request, response);
@@ -173,6 +233,58 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
 
   /** Trusted-host entrypoint. The task and original arguments commit atomically. */
   submitHostToolTask(request: SubmitHostToolTaskRequest): HostToolTaskReadback {
+    return this.submitBoundHostToolTask(request);
+  }
+
+  /** Trusted UI consent only; no wire operation or generic tool permission. */
+  startSystemObservationSession(request: StartSystemObservationSessionRequest): SystemObservationSession {
+    if (this.profile !== 'huawei_ict_agentarts' || !this.hostUserNamespace) {
+      throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'System observation is not configured');
+    }
+    const descriptor = this.hostToolDescriptor(SYSTEM_OBSERVATION_NAME, SYSTEM_OBSERVATION_VERSION);
+    if (descriptor.sideEffect !== 'read' || descriptor.requiresPresence
+      || descriptor.requiredScopes.length !== 1 || descriptor.requiredScopes[0] !== SYSTEM_OBSERVATION_SCOPE) {
+      throw new ProtocolError('UNAUTHORIZED', 'System observation must retain its fixed read-only scope');
+    }
+    return this.observationSessions.start(request);
+  }
+
+  sampleSystemObservationSession(sessionId: string): {state: 'sampled' | 'busy' | 'not_due'; sessionId: string; sample?: HostToolTaskReadback} {
+    const next = this.observationSessions.next(sessionId, taskId =>
+      this.activeTextTasks.has(taskId) || !['succeeded', 'failed', 'cancelled'].includes(this.runtime.getTask(taskId).state));
+    if (next.state !== 'ready') return {state: next.state, sessionId,
+      ...(next.taskId ? {sample: this.readHostToolTask(next.taskId)} : {})};
+    return {state: 'sampled', sessionId, sample: this.submitBoundHostToolTask({
+      commandId: next.commandId, toolName: SYSTEM_OBSERVATION_NAME,
+      toolVersion: SYSTEM_OBSERVATION_VERSION, arguments: {}, deadline: next.deadline,
+    }, sessionId)};
+  }
+
+  stopSystemObservationSession(sessionId: string): {stopped: boolean} {
+    return this.observationSessions.stop(sessionId);
+  }
+
+  startMailReadSession(request: StartMailReadSessionRequest): MailReadSession {
+    if (this.profile !== 'huawei_ict_agentarts' || !this.hostUserNamespace) {
+      throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Inbox session is not configured');
+    }
+    const descriptor = this.hostToolDescriptor(MAIL_READ_TOOL, MAIL_READ_VERSION);
+    if (descriptor.sideEffect !== 'read' || descriptor.requiresPresence
+      || descriptor.requiredScopes.length !== 1 || descriptor.requiredScopes[0] !== 'mail:read') {
+      throw new ProtocolError('UNAUTHORIZED', 'Inbox session requires the fixed read-only tool');
+    }
+    return this.mailReadSessions.start(request);
+  }
+  nextMailReadSession(sessionId: string) {
+    const next = this.mailReadSessions.next(sessionId, taskId => this.readHostToolTask(taskId));
+    if (next.state !== 'ready') return next;
+    return {state: 'submitted' as const, page: this.submitBoundHostToolTask({commandId: next.commandId,
+      toolName: MAIL_READ_TOOL, toolVersion: MAIL_READ_VERSION, arguments: next.arguments,
+      deadline: next.deadline}, undefined, sessionId)};
+  }
+  stopMailReadSession(sessionId: string): {stopped: boolean} {return this.mailReadSessions.stop(sessionId);}
+
+  private submitBoundHostToolTask(request: SubmitHostToolTaskRequest, observationSession?: string, mailSession?: string): HostToolTaskReadback {
     if (!this.hostUserNamespace || !this.tools) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Host tool tasks are not configured');
     if (!HOST_ID.test(request.commandId)) throw new ProtocolError('INVALID_ARGUMENT', 'Invalid host command ID');
     const descriptor = this.hostToolDescriptor(request.toolName, request.toolVersion);
@@ -198,6 +310,20 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       goal: `Host tool ${descriptor.name}`, conversationId: `host-tool:${this.hostUserNamespace}`,
       idempotencyKey: `host-tool:${this.hostUserNamespace}:${request.commandId}`,
     }, HOST_TOOL_CHECKPOINT, intent);
+    if (observationSession !== undefined) {
+      this.observationSessions.bind(observationSession, task.taskId);
+      this.runtime.saveCheckpoint(task.taskId, SYSTEM_OBSERVATION_SESSION_CHECKPOINT, observationSession);
+      this.runtime.policy.grant({authorizationRef: `host-tool-${task.taskId}`, taskId: task.taskId,
+        toolName: SYSTEM_OBSERVATION_NAME, scopes: [SYSTEM_OBSERVATION_SCOPE],
+        expiresAt: request.deadline, maxUses: 1, argumentsDigest: intent.argumentsDigest});
+    }
+    if (mailSession !== undefined) {
+      this.mailReadSessions.bind(mailSession, task.taskId);
+      this.runtime.saveCheckpoint(task.taskId, MAIL_READ_SESSION_CHECKPOINT, mailSession);
+      this.runtime.policy.grant({authorizationRef: `host-tool-${task.taskId}`, taskId: task.taskId,
+        toolName: MAIL_READ_TOOL, scopes: ['mail:read'], expiresAt: request.deadline,
+        maxUses: 1, argumentsDigest: intent.argumentsDigest});
+    }
     if (task.state === 'created') this.dispatchHostToolTask(task.taskId);
     else if (['planning', 'running', 'verifying'].includes(task.state) && !this.activeTextTasks.has(task.taskId)) {
       this.runtime.transitionTask(task.taskId, 'waiting_reconciliation', {
@@ -384,7 +510,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   }
 
   testTextConnection(options?: Parameters<TextApplication['testConnection']>[0]) { this.requireLocalText(); return this.textApplication.testConnection(options); }
-  close(): void { this.runtime.close(); }
+  close(): void { this.observationSessions.stopAll(); this.mailReadSessions.stopAll(); this.runtime.close(); }
 
   resumeTask(taskId: string): void {
     if (this.activeTextTasks.has(taskId)) return;

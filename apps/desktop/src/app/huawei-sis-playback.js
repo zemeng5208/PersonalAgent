@@ -5,6 +5,7 @@ export function mountHuaweiSisPlayback(bridge) {
   async function finish(operation, type) {
     if (operation.finished) return;
     operation.finished = true;
+    clearTimeout(operation.timer);
     try { operation.source?.stop(); } catch {}
     operation.source?.disconnect();
     if (operation.context && operation.context.state !== 'closed') {
@@ -14,6 +15,13 @@ export function mountHuaweiSisPlayback(bridge) {
     operation.audio?.fill(0);
     if (current === operation) current = undefined;
     bridge.report({type, id: operation.id});
+  }
+
+  async function readyWithin(promise, milliseconds = 5_000) {
+    let timer;
+    try { return await Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(Error('Audio device readiness timed out')), milliseconds);
+    })]); } finally { clearTimeout(timer); }
   }
 
   async function start(command) {
@@ -28,8 +36,10 @@ export function mountHuaweiSisPlayback(bridge) {
     try {
       operation.context = new AudioContext();
       const bytes = operation.audio.slice().buffer;
-      const decoded = await operation.context.decodeAudioData(bytes);
+      bridge.report({type: 'decoding', id: operation.id});
+      const decoded = await readyWithin(operation.context.decodeAudioData(bytes));
       operation.audio.fill(0);
+      if (operation.finished) return;
       if (operation.stopping || current !== operation) return void await finish(operation, 'stopped');
       operation.source = operation.context.createBufferSource();
       operation.source.buffer = decoded;
@@ -37,9 +47,13 @@ export function mountHuaweiSisPlayback(bridge) {
       operation.source.onended = () => {
         void finish(operation, operation.stopping ? 'stopped' : 'completed');
       };
-      await operation.context.resume();
+      bridge.report({type: 'resuming', id: operation.id});
+      await readyWithin(operation.context.resume());
+      if (operation.finished) return;
       if (operation.stopping || current !== operation) return void await finish(operation, 'stopped');
       operation.source.start();
+      bridge.report({type: 'started', id: operation.id});
+      operation.timer=setTimeout(() => { void finish(operation, 'error'); }, Math.ceil(decoded.duration * 1_000) + 5_000);
     } catch { await finish(operation, operation.stopping ? 'stopped' : 'error'); }
   }
 

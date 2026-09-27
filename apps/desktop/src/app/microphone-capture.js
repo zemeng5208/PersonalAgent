@@ -28,8 +28,8 @@ export function mountMicrophoneCapture(bridge) {
     current = session;
     try {
       session.acquire = navigator.mediaDevices.getUserMedia({video: false, audio: {
-        channelCount: 1, sampleRate: 16_000, echoCancellation: false,
-        noiseSuppression: false, autoGainControl: false,
+        channelCount: 1, sampleRate: 16_000, echoCancellation: true,
+        noiseSuppression: true, autoGainControl: true,
       }});
       session.stream = await session.acquire;
       if (session.cancelled) return void await stop(session);

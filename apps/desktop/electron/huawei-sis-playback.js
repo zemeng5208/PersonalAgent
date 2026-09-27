@@ -12,10 +12,11 @@ function deferred() {
 }
 
 /** One SIS WAV playback at a time, owned by the trusted panel and main process. */
-export function createDesktopSisPlaybackHost({getPanel, now = Date.now}) {
+export function createDesktopSisPlaybackHost({getPanel, now = Date.now, onDiagnostic = () => {}}) {
   let current;
   let disposed = false;
   let releaseUnknown = false;
+  const report = phase => { try { onDiagnostic(phase); } catch {} };
 
   function finish(operation, kind) {
     if (operation.finished) return;
@@ -25,6 +26,7 @@ export function createDesktopSisPlaybackHost({getPanel, now = Date.now}) {
     operation.signal.removeEventListener('abort', operation.onAbort);
     operation.audio.fill(0);
     if (current === operation) current = undefined;
+    report(kind);
     if (kind === 'completed') operation.result.resolve();
     else operation.result.reject(Error(kind === 'stopped'
       ? '语音播报已停止' : '语音播报未能确认完成'));
@@ -74,7 +76,7 @@ export function createDesktopSisPlaybackHost({getPanel, now = Date.now}) {
     }, Math.max(1, Date.parse(deadline) - now()));
     operation.deadlineTimer.unref?.();
     try { operation.contents.send('desktop:voice-playback-command',
-      {type: 'start', id: operation.id, audio: operation.audio}); }
+      {type: 'start', id: operation.id, audio: operation.audio}); report('dispatched'); }
     catch { releaseUnknown = true; finish(operation, 'release_failed'); }
     if (signal.aborted && !operation.finished) operation.onAbort();
     return {result: operation.result.promise,
@@ -87,6 +89,10 @@ export function createDesktopSisPlaybackHost({getPanel, now = Date.now}) {
       || event.senderFrame !== operation.contents.mainFrame
       || !message || Object.keys(message).length !== 2
       || message.id !== operation.id || operation.finished) return false;
+    if (['decoding','resuming','started'].includes(message.type)) {
+      report(message.type);
+      return true;
+    }
     if (message.type === 'completed') {
       finish(operation, 'completed');
       return true;

@@ -25,12 +25,15 @@ export function createMicrophoneCaptureHost({permissionGate, getPanel, now = Dat
       ? panel : null;
   }
 
-  function authorize() {
+  function authorize({deadline} = {}) {
     if (releaseUnknown) throw Error('上次麦克风释放未确认，不能重新开启');
     if (capture || authorization) throw Error('麦克风会话已存在');
     const panel = validPanel();
     if (!panel) throw Error('请先显示可信面板');
-    authorization = {contents: panel.webContents, expiresAt: now() + 10 * 60_000};
+    // Only the trusted host supplies a longer Live lease; Renderer cannot extend it.
+    const expiresAt = deadline === undefined ? now() + 10 * 60_000 : Date.parse(deadline);
+    if (!Number.isFinite(expiresAt) || expiresAt <= now() || expiresAt - now() > 120 * 60_000) throw Error('麦克风授权期限无效');
+    authorization = {contents: panel.webContents, expiresAt};
     return {authorized: true, expiresAt: new Date(authorization.expiresAt).toISOString()};
   }
 

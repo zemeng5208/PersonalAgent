@@ -66,7 +66,7 @@ export class LayaDecisionModel implements BoundedDecisionModel {
   }
 }
 
-async function readSmallJson(response: Response): Promise<unknown> {
+export async function readSmallJson(response: Response): Promise<unknown> {
   if (!response.body) throw new Error('Empty Laya response');
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];

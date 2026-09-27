@@ -1,4 +1,4 @@
-import {app, BrowserWindow, clipboard, ipcMain, Menu, nativeImage, safeStorage, screen, session, Tray} from 'electron';
+import {app, BrowserWindow, clipboard, globalShortcut, ipcMain, Menu, nativeImage, safeStorage, screen, session, Tray} from 'electron';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import path from 'node:path';
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
@@ -14,6 +14,15 @@ import {createDesktopEvidenceHost} from './evidence-host.js';
 import {createDesktopCompetitionFactBridge} from './competition-fact-bridge.js';
 import {createDesktopSisPlaybackHost} from './huawei-sis-playback.js';
 import {createDesktopSisConfigHost} from './huawei-sis-config.js';
+import {acquireHuaweiSisToken} from './huawei-iam-login.js';
+import {createLiveVoiceConfig} from './live-voice-config.js';
+import {createLiveVoiceHost} from './live-voice-host.js';
+import {createDesktopProactiveHost} from './proactive-host.js';
+import {createProductToolsComposition} from './product-tools-composition.js';
+import {createMailConfig} from './mail-config.js';
+import {createMailMetadataStorage} from './mail-metadata-storage.js';
+import {createLocalLayaHost} from './laya-local-host.js';
+import {resultText} from '../src/features/conversation/result-text.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -43,6 +52,7 @@ let runtime;
 let desktopHost;
 let runtimeConnection;
 let client;
+let voiceConfigurationPending = false;
 let eventCursor;
 let eventPoll;
 let eventBusy = false;
@@ -103,6 +113,10 @@ let voicePcmSource;
 let voiceInput;
 let sisPlaybackHost;
 let sisConfigHost;
+let liveConfig;
+let liveVoice;
+let liveShortcut = {key: 'F8', registered: false, reason: ''};
+let lastLiveShortcutAt = 0;
 let voiceInitializationFailure = null;
 let voiceDisposed = false;
 let voiceDisposal;
@@ -110,6 +124,47 @@ let voiceDisposalFailed = false;
 let goalHost;
 let competitionCatalog;
 let competitionFactBridge;
+let proactiveHost;
+let productTools;
+let mailConfig;
+let mailHost;
+let mailFailure = '';
+let localLaya;
+let localServicesStopping = false;
+let localServicesStopped = false;
+let nextMailRefresh = 0;
+
+function mailSnapshot() {
+  const config = mailConfig?.snapshot() ?? {configured:false, status:'unconfigured', sessionAllowed:false};
+  const host = mailHost?.snapshot();
+  return {...host, ...config, status:host?.status === 'stop_unconfirmed' ? 'stop_unconfirmed'
+    : mailFailure ? 'unavailable' : config.sessionAllowed ? host?.status ?? config.status : config.status,
+    counts:host?.counts, localModelReady:localLaya?.snapshot().ready === true,
+    reason:host?.status === 'stop_unconfirmed' ? '已撤销新读取；现有邮箱连接退出尚未确认'
+      : mailFailure || (config.sessionAllowed ? host?.reason ?? config.reason : config.reason)};
+}
+
+async function refreshMail() {
+  if (!mailHost || Date.now() < nextMailRefresh) return;
+  nextMailRefresh = Date.now() + 1000;
+  const before = JSON.stringify(mailSnapshot());
+  try {await mailHost.refresh();}
+  catch {await mailHost.cancel(); mailFailure = '邮箱处理未完成，已停止读取；请重新配置或重启后恢复';}
+  if (JSON.stringify(mailSnapshot()) !== before) publish();
+}
+
+function taskSurface(task) {
+  const registered = conversations?.turns.get(task.taskId)?.surface;
+  if (registered) return registered;
+  if (task.conversationId === 'desktop-panel') return 'panel';
+  if (task.conversationId === 'desktop-workspace') return 'workspace';
+  return undefined;
+}
+
+function orderedTasks() {
+  return [...tasks.values()].sort((a, b) => String(conversations?.turns.get(a.taskId)?.createdAt ?? a.createdAt ?? a.updatedAt ?? '')
+    .localeCompare(String(conversations?.turns.get(b.taskId)?.createdAt ?? b.createdAt ?? b.updatedAt ?? '')));
+}
 
 function snapshot(surface) {
   return {
@@ -121,7 +176,10 @@ function snapshot(surface) {
     adminNavigation: {...adminNavigation},
     audioLevel,
     orbStateOverride,
-    tasks: [...tasks.values()].filter(task => !surface || conversations?.surface(task.taskId) === surface).map(task => ({...structuredClone(task), userMessage: taskGoals.get(task.taskId) ?? conversations?.goal(task.taskId)})),
+    tasks: orderedTasks().filter(task => !surface || taskSurface(task) === surface).map(task => ({...structuredClone(task),
+      createdAt: conversations?.turns.get(task.taskId)?.createdAt ?? task.createdAt ?? task.updatedAt,
+      userMessage: taskGoals.get(task.taskId) ?? conversations?.goal(task.taskId)})),
+    messages: conversations?.messagesFor(surface) ?? [],
     conversation: surface ?? 'all',
     capabilities: structuredClone(capabilities),
     health: structuredClone(health),
@@ -129,6 +187,10 @@ function snapshot(surface) {
     notifications: [...notifications.values()],
     model: structuredClone(model),
     thinking: structuredClone(thinking),
+    live: {...(liveVoice?.snapshot() ?? liveConfig?.snapshot()), shortcut: {...liveShortcut}},
+    proactive: proactiveHost?.snapshot() ?? {enabled: false, cloudAnalysis: false, status: 'disabled', reason: '主动观察尚未装配', suggestions: []},
+    mail: mailSnapshot(),
+    laya: localLaya?.snapshot() ?? {state:'unavailable', ready:false, reason:'本地模型尚未装配'},
     voice: voiceInput ? {...voiceInput.snapshot(), experimental: sisConfigHost?.snapshot().configured,
       configuration: sisConfigHost?.snapshot()} : {available: false, status: voiceInitializationFailure ? 'error' : 'unconfigured',
       reason: voiceInitializationFailure?.message ?? sisConfigHost?.snapshot().reason ?? 'SIS 尚未配置',
@@ -146,7 +208,8 @@ function publish() {
 
 function windowFor(mode, bounds, options = {}) {
   const win = new BrowserWindow({...desktopHost.restore(mode, bounds), show: false, backgroundColor: '#00000000',
-    webPreferences: {preload: path.join(dir, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true}, ...options});
+    webPreferences: {preload: path.join(dir, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true,
+      ...(mode === 'panel' ? {autoplayPolicy: 'no-user-gesture-required'} : {})}, ...options});
   win.setMenuBarVisibility(false);
   desktopHost.attach(win, mode);
   win.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
@@ -568,14 +631,36 @@ async function initializeRuntime() {
       competitionCatalog = createDesktopCompetitionToolCatalog({
         rootPath: path.resolve(dir, '../fixtures/agentarts'), createWorkspaceReadTool,
       });
+      productTools = createProductToolsComposition({systemObservation: true,
+        modules: {windows: {createSystemObservationTool: runtimeModule.createSystemObservationTool}}});
+      localLaya = createLocalLayaHost({projectRoot:path.resolve(dir, '../../..'),
+        createService:runtimeModule.createLocalInboxClassifier, onUpdate:publish});
+      mailConfig = createMailConfig({userData:app.getPath('userData'), safeStorage,
+        onRevoke:async () => {await mailHost?.cancel();}});
+      const configuredMail = mailConfig.current();
+      if (configuredMail) {
+        try {
+          const {user, authCode, revision} = configuredMail;
+          mailHost = runtimeModule.createQQMailTriageHost({user, authCode, accountRef:'desktop-qq-inbox',
+            storage:createMailMetadataStorage({userData:app.getPath('userData'), safeStorage}),
+            namespace:`${namespace}:qq-inbox:${user.toLowerCase()}`, triage:localLaya,
+            labels:{meeting:'Meeting invitations, rescheduling and appointment notices',
+              work:'Work, project, technical discussions and documents',
+              subscription:'Subscribed newsletters, news digests and product updates',
+              transaction:'Receipts, invoices, order and delivery notices',
+              personal:'Personal conversations and social notifications',
+              other:'Other or unclear subject; review manually'}, meetingLabels:['meeting'],
+            isSessionAllowed:() => mailConfig.isSessionAllowed(revision)});
+        } catch {mailFailure = '邮箱本地分类状态无法装配；其他功能可继续使用';}
+      }
       runtimeApplication = runtimeModule.createAgentArtsRuntimeApplication({
         path: dbPath,
         hostUserNamespace: namespace,
-        tools: [...goalHost.tools, competitionCatalog.tool],
+        tools: [...goalHost.tools, competitionCatalog.tool, ...productTools.tools, ...(mailHost?.tools ?? [])],
         responseMode: 'tool-proposal-json',
         initialRequestMode: 'goal-with-tools-json',
-        competitionToolAvailability: [competitionCatalog.availability],
-        competitionToolExports: [competitionCatalog.export],
+        competitionToolAvailability: [competitionCatalog.availability, ...productTools.competitionToolAvailability],
+        competitionToolExports: [competitionCatalog.export, ...productTools.competitionToolExports],
         gatewayUrl: process.env.PA_AGENTARTS_GATEWAY_URL ?? '',
         runtimeName: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
         invokeMode: agentArtsInvokeMode,
@@ -589,6 +674,7 @@ async function initializeRuntime() {
           },
         },
       });
+      if (mailHost) {mailHost.bindApplication(runtimeApplication); mailConfig.markBound(configuredMail.revision);}
       goalHost.bind(runtimeApplication);
       goalHost.resumeApproved();
       competitionFactBridge = createDesktopCompetitionFactBridge({
@@ -621,8 +707,15 @@ async function initializeRuntime() {
   eventCursor = new EventCursor('tasks');
   await syncCapabilities();
   await syncRuntimeSnapshots();
+  if (competitionMode) proactiveHost = createDesktopProactiveHost({application: runtimeApplication,
+    client, userData: app.getPath('userData'), namespace: desktopHost.userNamespace, onUpdate: publish,
+    onAnalysisTask: ({taskId, goal}) => {
+      if (!conversations.turns.has(taskId)) conversations.add(taskId, 'panel', goal);
+      taskGoals.set(taskId, goal);
+    },
+  });
   await pumpEvents();
-  eventPoll = setInterval(() => void pumpEvents(), 120);
+  eventPoll = setInterval(() => {void pumpEvents(); void proactiveHost?.tick(); void refreshMail();}, 120);
 }
 
 async function action(event, name, payload) {
@@ -662,16 +755,45 @@ async function action(event, name, payload) {
   }
   if (name === 'panel.dragEnd' && sender === panel) { dragging = false; panelDragOrigin = undefined; away = Date.now() + 400; return; }
   if (name === 'app.quit') { app.quit(); return; }
+  if (['mail.configure','mail.enable','mail.read','mail.disable','laya.start','laya.stop'].includes(name)) {
+    if (sender !== admin || !competitionMode || !mailConfig || !localLaya) throw Error('此操作仅允许从本项目设置调用');
+    if (name === 'laya.start') {localServicesStopped = false; return localLaya.start();}
+    if (name === 'laya.stop') {await mailHost?.cancel(); const result = await localLaya.stop(); publish(); return result;}
+    if (name === 'mail.configure') {await mailConfig.configure(payload); mailFailure = '';}
+    if (name === 'mail.enable') mailConfig.enableSession(payload);
+    if (name === 'mail.disable') await mailConfig.revoke();
+    if (name === 'mail.read') {
+      if (!mailHost || mailConfig.snapshot().requiresRestart) throw Error('邮箱配置将在下次启动应用时接入');
+      if (!localLaya.snapshot().ready) throw Error('请先启动本地 Laya');
+      if (mailHost.snapshot().status === 'classification_unavailable') mailHost.retryClassification();
+      else mailHost.startBatch({expiresAt:new Date(Date.now() + 8 * 60 * 60_000).toISOString()});
+      localServicesStopped = false;
+    }
+    publish(); return mailSnapshot();
+  }
+  if (name === 'proactive.configure' || name === 'proactive.analyze') {
+    if ((sender !== panel && sender !== admin) || !competitionMode || !proactiveHost) throw Error('主动观察仅允许可信设置或面板调用');
+    if (name === 'proactive.configure') return proactiveHost.configure(payload);
+    if (!payload || Object.keys(payload).some(key => key !== 'id') || typeof payload.id !== 'string') throw Error('主动分析请求无效');
+    return proactiveHost.analyze(payload.id);
+  }
   if (name === 'voice.stop') {
     if (sender !== panel) throw Error('语音操作只能从面板调用');
+    if (liveVoice?.hasActive()) {liveVoice.interrupt(); return {stopped: true};}
     return voiceInput ? voiceInput.stopSpeaking(sender.webContents.id)
       : {available: false, stopped: false, reason: '语音供应商尚未连接'};
   }
-  if (name === 'voice.configure') {
+  if (name === 'voice.configure' || name === 'voice.login') {
     if (sender !== panel || !competitionMode) throw Error('SIS 配置只能从 Competition 可信面板提交');
+    if (voiceConfigurationPending) throw Error('语音配置正在更新，请稍候');
     if (!voiceInput && sisPlaybackHost) throw Error('旧语音播放资源释放未确认，无法重新装配');
+    if (voiceInput?.hasActive() || liveVoice?.hasActive()) throw Error('请先结束当前语音会话再更新 SIS 配置');
+    voiceConfigurationPending = true;
+    try {
+    const configuration = name === 'voice.login' ? await acquireHuaweiSisToken(payload) : payload;
+    // A voice capture may have started while the IAM request was in flight.
     if (voiceInput?.hasActive()) throw Error('请先结束当前语音会话再更新 SIS 配置');
-    sisConfigHost.configure(payload ?? {});
+    sisConfigHost.configure(configuration ?? {});
     if (voiceInput) {
       try { await voiceInput.dispose(); }
       catch {
@@ -695,15 +817,28 @@ async function action(event, name, payload) {
     }
     publish();
     return {...sisConfigHost.snapshot(), connected: Boolean(voiceInput)};
+    } finally { voiceConfigurationPending = false; }
   }
   if (name.startsWith('voice.record.') || name === 'voice.play') {
     if (sender !== panel || !voiceInput) throw Error('语音试用只允许从 Competition 可信面板调用');
+    if (voiceConfigurationPending) throw Error('语音配置正在更新，请稍候');
+    if (liveVoice?.hasActive()) throw Error('请先关闭 Live 再使用语音转文字');
     const senderId = sender.webContents.id;
     if (name === 'voice.record.start') return voiceInput.beginCapture(senderId);
     if (name === 'voice.record.finish') return voiceInput.finishCapture(senderId);
     if (name === 'voice.record.cancel') return voiceInput.cancelCapture(senderId);
     if (name === 'voice.play') return voiceInput.playReply(senderId);
     throw Error('Unsupported voice action');
+  }
+  if (name === 'live.configure') {
+    if ((sender !== panel && sender !== admin) || !competitionMode) throw Error('Live 配置只能从可信面板或设置提交');
+    if (liveVoice?.hasActive() || voiceInput?.hasActive()) throw Error('请先结束语音再修改配置');
+    const result = liveConfig.configure(payload);
+    registerLiveShortcut(); publish(); return result;
+  }
+  if (name === 'live.toggle') {
+    if (sender !== panel || !competitionMode) throw Error('Live 只能从可信面板开启');
+    return toggleLive();
   }
   if (name === 'voice.capture.authorize') {
     if (sender !== panel || !competitionMode) throw Error('麦克风只允许 Competition 可信面板启用');
@@ -715,6 +850,7 @@ async function action(event, name, payload) {
   }
   if (name === 'voice.capture.revoke') {
     if (sender !== panel) throw Error('麦克风只能从可信面板关闭');
+    await liveVoice?.stop();
     await microphoneCaptureHost.revoke();
     publish();
     return microphoneCaptureHost.snapshot();
@@ -785,7 +921,7 @@ async function action(event, name, payload) {
     if (typeof payload !== 'string' || !payload.trim()) throw Error('请输入有效任务');
     if (!fakeMode && model.enabled === false) throw Error('模型已停用，请先在模型设置中启用');
     const surface = sender === workspace ? 'workspace' : 'panel';
-    if (submitting.has(surface) || [...tasks.values()].some(task => conversations.surface(task.taskId) === surface && !terminalTaskStates.has(task.state))) throw Error('请等待当前回答完成，或先停止当前任务');
+    if (submitting.has(surface) || [...tasks.values()].some(task => taskSurface(task) === surface && !terminalTaskStates.has(task.state))) throw Error('请等待当前回答完成，或先停止当前任务');
     submitting.add(surface);
     try {
     const goal = payload.trim();
@@ -799,12 +935,12 @@ async function action(event, name, payload) {
   }
   if (name === 'task.cancel') {
     if (typeof payload !== 'string' || !tasks.has(payload)) throw Error('Unknown task');
-    if (sender !== admin && conversations.surface(payload) !== (sender === workspace ? 'workspace' : 'panel')) throw Error('无法停止其他工作区的任务');
+    if (sender !== admin && taskSurface(tasks.get(payload)) !== (sender === workspace ? 'workspace' : 'panel')) throw Error('无法停止其他工作区的任务');
     return requestTaskCancellation(client, payload, refresh);
   }
   if (name === 'task.refresh') {
     if (!tasks.has(payload)) throw Error('Unknown task');
-    if (sender !== admin && conversations.surface(payload) !== (sender === workspace ? 'workspace' : 'panel')) throw Error('无法读取其他工作区的任务');
+    if (sender !== admin && taskSurface(tasks.get(payload)) !== (sender === workspace ? 'workspace' : 'panel')) throw Error('无法读取其他工作区的任务');
     return refresh(payload);
   }
   if (name === 'capability.list') { await syncCapabilities(); publish(); return {manifests: capabilities, health}; }
@@ -857,7 +993,8 @@ async function initializeSisVoice() {
     return selected.token;
   }};
   const speechConfig = {region, projectId, tokenPort};
-  const playback = createDesktopSisPlaybackHost({getPanel: () => panel});
+  const playback = createDesktopSisPlaybackHost({getPanel: () => panel,
+    onDiagnostic: phase => desktopHost.logVoicePlayback(phase)});
   let source;
   try {
     const speechPorts = {
@@ -867,7 +1004,16 @@ async function initializeSisVoice() {
     };
     source = createVoicePcmFrameSourcePort(microphoneCaptureHost.binding);
     voiceInput = createDesktopVoiceInput({source, microphoneHost: microphoneCaptureHost,
-      client, onUpdate: publish, enabled: true, speechPorts});
+      client, onUpdate: publish, enabled: true, inputMode: 'dictation', speechPorts,
+      onTranscript: ({senderId, text}) => {
+        if (panel && !panel.isDestroyed() && panel.webContents.id === senderId) {
+          panel.webContents.send('desktop:dictation-result', {text});
+        }
+      },
+      onTaskSubmitted: ({taskId, goal}) => {
+        conversations.add(taskId, 'panel', goal);
+        taskGoals.set(taskId, goal);
+      }});
     voicePcmSource = source;
     sisPlaybackHost = playback;
     voiceInitializationFailure = null;
@@ -876,6 +1022,47 @@ async function initializeSisVoice() {
     await playback.dispose();
     throw error;
   }
+}
+
+async function toggleLive() {
+  if (!liveVoice) throw Error('Live 服务尚未装配');
+  if (liveVoice.hasActive()) return liveVoice.stop();
+  if (voiceConfigurationPending || voiceInput?.hasActive()) throw Error('请先结束语音转文字或配置更新');
+  pinned = true; openPanel(true); publish();
+  return liveVoice.start();
+}
+
+function registerLiveShortcut() {
+  if (liveShortcut.registered) globalShortcut.unregister(liveShortcut.key);
+  const key = liveConfig.snapshot().hotkey;
+  const registered = globalShortcut.register(key, () => {
+    if (Date.now() - lastLiveShortcutAt < 400) return;
+    lastLiveShortcutAt = Date.now();
+    void toggleLive().catch(error => {
+      liveShortcut.reason = error instanceof Error ? error.message : 'Live 开关失败';
+      pinned = true; openPanel(true); publish();
+    });
+  });
+  liveShortcut = {key, registered, reason: registered ? '' : `${key} 已被占用，请在 Live 设置中更换快捷键`};
+}
+
+async function initializeLiveVoice() {
+  if (!competitionMode || !client) return;
+  const {createVoicePcmFrameSourcePort, createRuntimeClientTranscriptConsumer} = await import('@personal-agent/voice');
+  liveVoice = createLiveVoiceHost({getPanel: () => panel, config: liveConfig, microphoneHost: microphoneCaptureHost,
+    createSource: () => createVoicePcmFrameSourcePort(microphoneCaptureHost.binding),
+    createGateway: config => runtimeApplication.createLiveVoiceModel(config),
+    createConsumer: createRuntimeClientTranscriptConsumer, client, onUpdate: publish,
+    onTranscript: message => conversations.addLiveMessage(message),
+    onTaskSubmitted: ({taskId, goal}) => {conversations.add(taskId, 'panel', goal); taskGoals.set(taskId, goal);},
+    readContext: () => JSON.stringify({profile: 'huawei_ict_agentarts',
+      tasks: orderedTasks().filter(task => taskSurface(task) === 'panel').slice(-10)
+        .map(task => ({taskId: task.taskId, goal: (taskGoals.get(task.taskId) ?? conversations.goal(task.taskId) ?? '').slice(0, 800),
+          state: task.state, result: resultText(task.resultSummary).slice(0, 1600)})),
+      messages: conversations.messagesFor('panel').slice(-20).map(({role, text}) => ({role, text: text.slice(0, 1600)})),
+      capabilities: capabilities.map(item => ({name: item.name ?? item.id, version: item.version})),
+      note: '目录声明不代表真实执行成功，任务成功以 Runtime 返回为准。'}),
+  });
 }
 
 app.whenReady().then(async () => {
@@ -893,6 +1080,8 @@ app.whenReady().then(async () => {
     if (microphoneCaptureHost.receive(event, message)) publish();
   });
   sisConfigHost = createDesktopSisConfigHost({userData: app.getPath('userData'), safeStorage});
+  liveConfig = createLiveVoiceConfig({userData: app.getPath('userData'), safeStorage});
+  ipcMain.on('desktop:live-event', (event, message) => {liveVoice?.receive(event, message);});
   ipcMain.on('desktop:voice-playback-event', (event, message) => {
     if (sisPlaybackHost?.receive(event, message)) publish();
   });
@@ -910,6 +1099,8 @@ app.whenReady().then(async () => {
         voiceInitializationFailure = {stage: 'initialization', code: 'EXTERNAL_FAILURE',
           message: '语音适配器启动失败'};
       }
+      try {await initializeLiveVoice();}
+      catch {runtimeError = 'Live 适配器启动失败；文字与听写仍可使用';}
     }
   } catch (error) {
     runtimeError = error instanceof Error ? error.message : 'Runtime 初始化失败';
@@ -922,13 +1113,14 @@ app.whenReady().then(async () => {
   panel = windowFor('panel', panelBounds(orb.getBounds(), area),
     {frame: false, transparent: true, alwaysOnTop: true, skipTaskbar: true, resizable: false, hasShadow: false, backgroundMaterial: 'none', roundedCorners: true});
   panel.on('close', event => { if (!app.isQuitting) { event.preventDefault(); pinned = false; panel.hide(); publish(); } });
-  panel.on('hide', () => { void sisPlaybackHost?.stop().catch(() => {
+  panel.on('hide', () => { void liveVoice?.stop(); void sisPlaybackHost?.stop().catch(() => {
     runtimeError = '语音播放资源释放未确认'; publish();
   }); void microphoneCaptureHost.revoke().catch(error => {
     runtimeError = error instanceof Error ? error.message : '麦克风释放未确认';
     publish();
   }); publish(); });
   createTray();
+  if (liveVoice) registerLiveShortcut();
 
   ipcMain.handle('desktop:action', async (...args) => {
     try { return {ok: true, value: await action(...args)}; }
@@ -957,6 +1149,26 @@ app.whenReady().then(async () => {
     else if (panel.isVisible()) { if (!away) away = Date.now(); else if (Date.now() - away > 520) { panel.hide(); away = 0; } }
   }, 80);
   app.on('before-quit', event => {
+    proactiveHost?.stop();
+    if (!localServicesStopped && (mailHost || localLaya)) {
+      event.preventDefault();
+      if (!localServicesStopping) {
+        localServicesStopping = true;
+        void (async () => {
+          await mailConfig?.revoke();
+          const result = await localLaya?.stop();
+          if (result?.state === 'stop_unconfirmed') throw Error('本地模型退出尚未确认');
+          localServicesStopped = true; app.quit();
+        })().catch(() => {runtimeError = '本地分类服务退出尚未确认，请稍后再退出'; publish();})
+          .finally(() => {localServicesStopping = false;});
+      }
+      return;
+    }
+    if (liveVoice?.hasActive()) {
+      event.preventDefault();
+      void liveVoice.stop().then(() => app.quit());
+      return;
+    }
     if (voiceInput && !voiceDisposed) {
       event.preventDefault();
       if (!voiceDisposal && !voiceDisposalFailed) {
@@ -987,16 +1199,19 @@ app.whenReady().then(async () => {
       return;
     }
     app.isQuitting = true;
+    globalShortcut.unregisterAll();
     microphonePermissionGate?.revoke();
     clearInterval(poll);
     clearInterval(eventPoll);
     tray?.destroy();
     runtimeConnection?.dispose?.();
     try {
+      proactiveHost?.close();
       competitionFactBridge?.close();
       if (runtimeApplication) runtimeApplication.close();
       else runtime?.close?.();
       competitionCatalog?.close();
+      productTools?.close();
     } catch (error) {
       event.preventDefault();
       runtimeError = error instanceof Error ? error.message : 'Runtime 仍有活动任务，无法安全退出';

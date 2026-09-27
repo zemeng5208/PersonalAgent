@@ -14,10 +14,17 @@ function safeFailure(error) {
 /** Host-only explicit capture → ASR → Runtime consumer → playback workflow. */
 export function createDesktopVoiceInputCore({source, microphoneHost, client, createBuffer,
   VoiceSessionManager, createConsumer, createSpeechPorts, onUpdate = () => {},
-  enabled = false, now = Date.now}) {
+  enabled = false, autoPlay = false, inputMode = 'conversation', onTranscript = () => {},
+  onTaskSubmitted = () => {}, now = Date.now}) {
+  if (!['conversation', 'dictation'].includes(inputMode)) throw Error('无效的语音输入模式');
   const ports = createSpeechPorts();
   const manager = new VoiceSessionManager({recognition: ports.recognition, output: ports.output});
-  const consumer = createConsumer({client, conversationId: 'desktop-voice-panel'});
+  const voiceClient = {async call(operation, payload, options) {
+    const result = await client.call(operation, payload, options);
+    if (operation === 'task.submit') onTaskSubmitted({taskId: result.taskId, goal: payload.goal});
+    return result;
+  }};
+  const consumer = createConsumer({client: voiceClient, conversationId: 'desktop-voice-panel'});
   let active;
   let lastError = '';
   let lastFailure = null;
@@ -138,6 +145,20 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
       stage = 'recognition';
       const transcript = await manager.recognizeAudio(record.sessionId, clip);
       clip.data.fill(0);
+      if (inputMode === 'dictation') {
+        let text;
+        stage = 'dictation';
+        await manager.consumeTranscript(record.sessionId, transcript.transcriptId, {
+          consume(request) {
+            text = request.text;
+            return {result: Promise.resolve({replyText: text, locale: request.locale}), stop: async () => {}};
+          },
+        });
+        if (record.controller.signal.aborted || active !== record) throw Error('语音输入已取消');
+        await cleanup(record);
+        onTranscript({senderId, text});
+        return {text, voice: snapshot()};
+      }
       record.phase = 'consuming';
       publish();
       stage = 'consumption';
@@ -147,7 +168,6 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
       lastError = '';
       lastFailure = null;
       publish();
-      return snapshot();
     } catch (error) {
       clip?.data.fill(0);
       recordFailure(stage, error, stage === 'pcm_release' ? '麦克风释放未确认' : safeFailure(error));
@@ -157,6 +177,7 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
       }
       throw Error(lastError);
     }
+    return autoPlay ? playReply(senderId) : snapshot();
   }
 
   async function playReply(senderId) {
@@ -174,8 +195,9 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
       lastFailure = null;
       return {completed: result.completed, interrupted: result.interrupted, voice: snapshot()};
     } catch (error) {
-      lastError = safeFailure(error);
-      try { await cleanup(record); } catch { lastError = '语音资源释放未确认'; }
+      recordFailure('playback', error);
+      try { await cleanup(record); }
+      catch (releaseError) { recordFailure('cleanup', releaseError, '语音资源释放未确认'); }
       throw Error(lastError);
     }
   }
