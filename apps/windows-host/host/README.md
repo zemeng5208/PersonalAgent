@@ -21,6 +21,9 @@ session；收到并校验 `hello` 后、发送 `hello_ack` 前，以该已读取
 
 `observe` 只接受本会话建立后新增、身份可信、当前前台、全局唯一且单标签的
 Notepad 顶层窗口；跨会话进程、旧 HWND 中的新标签、多标签及无法核验来源的窗口均明确拒绝。
+窗口基线在 `hello_ack` 前建立，可信 Desktop 可在握手完成后通过 Runtime adapter
+的可选 `prepareObservation` 等待用户创建和确认新窗口，再发送 `observe`。
+准备过程不授予执行权限；取消或期限到达会关闭本次连接，不消耗短期 targetRef 的有效期。
 Host 只返回短期随机 `targetRef`，不返回或记录标题、正文、HWND/PID。
 无法观察时使用 Schema 中的 `observation_refused`（包含 `UNAUTHORIZED`、`TARGET_AMBIGUOUS`、
 `TARGET_STALE`、`TIMEOUT`），不会用断连伪造拒绝。断连后目标引用立即失去执行效力。

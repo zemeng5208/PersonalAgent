@@ -17,7 +17,7 @@ const base = frame => ({protocolVersion: frame.protocolVersion, requestId: frame
   sessionId: frame.sessionId});
 
 function fixture({executeState = 'verified', statusState = 'not_found', mismatchedResult = false,
-  presence = true, onRecord, observationError, now, taskId = 'task-1', attemptStore} = {}) {
+  presence = true, onRecord, observationError, now, taskId = 'task-1', attemptStore, prepareObservation} = {}) {
   const sent = [];
   const attempts = new Map();
   let sessions = 0;
@@ -50,7 +50,7 @@ function fixture({executeState = 'verified', statusState = 'not_found', mismatch
       };
     },
   };
-  const adapter = createWindowsHostNotepadAdapter({transport, now,
+  const adapter = createWindowsHostNotepadAdapter({transport, now, prepareObservation,
     attempts: attemptStore ?? {
       async record(identity) {
         if (attempts.has(identity.runId)) throw Error('duplicate run');
@@ -69,6 +69,29 @@ function fixture({executeState = 'verified', statusState = 'not_found', mismatch
   });
   return {adapter, sent, attempts, get closes() {return closes;}};
 }
+
+test('trusted target preparation runs after binding and before target lifetime starts', async () => {
+  const f = fixture({prepareObservation: async ({taskId, signal}) => {
+    assert.equal(taskId, 'task-1');
+    assert.equal(signal.aborted, false);
+    assert.deepEqual(f.sent.map(frame => frame.kind), ['hello', 'bind']);
+  }});
+  await f.adapter.observe('task-1', deadline(), new AbortController().signal);
+  assert.equal(f.sent.at(-1).kind, 'observe');
+  await f.adapter.releaseObservation('task-1');
+});
+
+test('cancelling target preparation closes the bound session without observing or writing', async () => {
+  const controller = new AbortController();
+  const f = fixture({prepareObservation: async ({signal}) => {
+    controller.abort();
+    assert.equal(signal.aborted, true);
+    await new Promise(() => {}); // A stalled UI cannot retain the Host session.
+  }});
+  await assert.rejects(f.adapter.observe('task-1', deadline(), controller.signal), {code: 'CANCELLED'});
+  assert.deepEqual(f.sent.map(frame => frame.kind), ['hello', 'bind']);
+  assert.equal(f.closes, 1);
+});
 
 test('registered Notepad tool binds observed target and run identity to Host UIA readback receipt', async () => {
   const f = fixture();
