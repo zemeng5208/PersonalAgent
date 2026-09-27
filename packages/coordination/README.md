@@ -116,6 +116,12 @@ may forward this receipt to its existing private diagnostic outlet. Observer err
 do not change the invocation result; the callback does not authorize retry or change
 Runtime task state. Request validation failures before an invocation starts do not
 produce a receipt.
+For `provider_failure`, the receipt may additionally identify the first matching
+fixed field path (`event`, `type`, `status`, or one of those under `data`) and the
+matched `error`/`failed`/`failure` token. It includes `providerErrorCode` only when
+an `error_code` field is a short service prefix followed by a numeric code, such as
+`SERVICE.1234`; arbitrary provider text is discarded. These hints do not change
+response acceptance or establish which cloud node failed.
 
 Ports are not frozen. The real adapter's confirmed-result continuation is a separate
 invocation, not a native AgentArts run resume. Its bounded projection needs host
