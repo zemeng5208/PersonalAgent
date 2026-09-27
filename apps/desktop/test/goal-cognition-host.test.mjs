@@ -21,10 +21,10 @@ async function terminal(application,id) {
   }
   throw Error('Synthetic task did not settle');
 }
-async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCredentialRead=false,uncertain=false}={}) {
+async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCredentialRead=false,uncertain=false,unavailableInitially=false}={}) {
   const root=fileURLToPath(new URL('../../../.cache/desktop-goal-cognition/',import.meta.url));
   await mkdir(root,{recursive:true});const directory=await mkdtemp(path.join(root,'case-'));
-  let host,layaCalls=0,time=Date.now();const sent=[],announced=[];
+  let host,layaCalls=0,time=Date.now(),unavailable=unavailableInitially;const sent=[],announced=[];
   const application=createAgentArtsRuntimeApplication({path:path.join(directory,'runtime.sqlite'),
     gatewayUrl:'https://agentarts.example.test',runtimeName:'synthetic',
     beforeCompetitionSend:request=>host.assertCloudSend(request),
@@ -54,17 +54,18 @@ async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCred
   const client=new Client(application,Date.now);await client.connect();
   const chooser=new LayaActionChoiceService({infer:async payload=>{
     layaCalls++;
+    if(unavailable) throw Error('Synthetic temporary Laya outage');
     const keys=Object.keys(payload.questions.action.criteria),selected=keys.at(-1);
     const probability=uncertain?1/keys.length:0.98;
     return {answers:{action:{choice:selected,probabilities:Object.fromEntries(keys.map(key=>[key,key===selected?probability:(1-probability)/(keys.length-1)])),
       answer_confidence:probability,confidence:0.5}}};
   }});
   const options={application,client,facts,namespace,goalHost,chooser,ready:()=>true,
-    createHost:createProactiveCognitionHost,onTask:item=>announced.push(item),now:()=>time};
+    createHost:input=>createProactiveCognitionHost({...input,now:()=>time}),onTask:item=>announced.push(item),now:()=>time};
   host=createDesktopGoalCognitionHost(options);
   t.after(async()=>{host.close();facts.close();application.close();await rm(directory,{recursive:true,force:true});});
-  return {application,sent,announced,store,host:()=>host,layaCalls:()=>layaCalls,
-    advance:()=>{time+=1100;},restart:()=>{host.close();host=createDesktopGoalCognitionHost(options);return host;}};
+  return {application,sent,announced,store,sourceTaskId:sourceTask.taskId,host:()=>host,layaCalls:()=>layaCalls,
+    restoreLaya:()=>{unavailable=false;},advance:(ms=1100)=>{time+=ms;},restart:()=>{host.close();host=createDesktopGoalCognitionHost(options);return host;}};
 }
 
 test('goal change chooses locally; explicit cloud grant sends one minimized task and restart cannot reuse its grant',async t=>{
@@ -113,4 +114,24 @@ test('uncertain Laya selection hands off one explicit machine review without cla
   assert.equal(payload.eligibleForRuntime,false);assert.equal(payload.executed,false);
   f.advance();await f.host().tick();assert.equal(f.sent.length,1);assert.equal(f.layaCalls(),1);
   assert.equal(f.store.read().revision,5);
+});
+
+test('legacy Goal marker resumes after a transient Laya outage without reopening the old terminal task',async t=>{
+  const f=await fixture(t,{unavailableInitially:true});
+  f.host().configure({enabled:true,cloudAllowed:true});await f.host().tick();
+  assert.equal(f.host().snapshot().status,'error');assert.equal(f.layaCalls(),1);
+  const old=f.application.runtime.listTasks({}).items.find(task=>
+    f.application.runtime.loadCheckpoint(task.taskId,'proactive-cognition-review-v1')?.selection?.reason==='unavailable');
+  assert.ok(old);assert.equal(old.state,'succeeded');
+  // Emulate the marker saved by older Desktop versions before unavailable propagation was fixed.
+  f.application.runtime.saveCheckpoint(f.sourceTaskId,'desktop-goal-cognition-review',old.taskId);
+  f.restoreLaya();f.restart().configure({enabled:true,cloudAllowed:true});await f.host().tick();
+  assert.equal(f.layaCalls(),1,'persisted cooldown survives Desktop restart');
+  f.advance(31_000);await f.host().tick();
+  const taskId=f.announced[0]?.taskId;assert.ok(taskId);
+  assert.equal((await terminal(f.application,taskId)).state,'succeeded');
+  assert.equal(f.sent.length,1);assert.equal(f.layaCalls(),2);
+  assert.notEqual(f.application.runtime.loadCheckpoint(f.sourceTaskId,'desktop-goal-cognition-review'),old.taskId);
+  assert.equal(f.application.runtime.getTask(old.taskId).state,'succeeded');
+  f.advance();await f.host().tick();assert.equal(f.sent.length,1);
 });

@@ -190,6 +190,10 @@ existing session grant, graph revision and final HTTP-send checks remain in plac
 The Desktop integration's four focused tests passed, including uncertain handoff,
 grant revocation during credential loading, graph revision changes and duplicate
 suppression. These use Fake cloud responses; real AgentArts acceptance is pending.
+Desktop also recognizes legacy Goal markers whose saved choice is unavailable and
+re-enters the existing review API. One additional targeted integration test passed:
+the persisted cooldown survives a Desktop restart, a recovered Laya provider creates
+a successor review and one cloud handoff, and the old terminal task stays unchanged.
 
 Verification uses synthetic SQLite sources, Fake Laya and Fake AgentArts. No real
 model process, cloud, mailbox, microphone, Electron or installer is started.

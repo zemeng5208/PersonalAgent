@@ -128,7 +128,9 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
             const readback=cognition.readReview(prior);
             if (cloudAllowed && canHandoff(readback.review) && readback.review.graphRevision===store.read().revision
               && !['submitted','expired'].includes(reviews.get(prior)?.handoff?.state)) record(await cognition.handoffReview(prior,current));
-            continue;
+            // Old Desktop versions persisted this marker even when Laya was temporarily unavailable.
+            // Re-enter the existing Runtime review API, which owns backoff and successor idempotency.
+            if (readback.review?.selection?.state!=='abstain' || readback.review.selection.reason!=='unavailable') continue;
           }
           const graph=store.read();
           const latest=graph.history.findLast(node=>node.id===item.result.currentGoal.id);
