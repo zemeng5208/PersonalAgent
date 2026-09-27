@@ -50,33 +50,35 @@ export interface CompetitionFactHost extends SqliteFactProjectionHost {
 export function createCompetitionFactHost(
   application: RuntimeApplication, options: CompetitionFactHostOptions
 ): CompetitionFactHost {
+  // Capture the host scope once; later caller config mutation cannot redirect
+  // source reads or writes away from the already-bound projection.
+  const {memoryPath, memoryNamespace, graphNamespace, consumerKey} = options;
   if (application.profile !== 'huawei_ict_agentarts'
-    || !isAbsolute(options.memoryPath)
-    || !options.memoryNamespace?.trim() || !options.graphNamespace?.trim() || !options.consumerKey?.trim()) {
+    || !isAbsolute(memoryPath)
+    || !memoryNamespace?.trim() || !graphNamespace?.trim() || !consumerKey?.trim()) {
     throw new ProtocolError('INVALID_ARGUMENT', 'Invalid Competition Fact host configuration');
   }
-  const memory = openSqliteMemoryHost(options.memoryPath);
+  const memory = openSqliteMemoryHost(memoryPath);
   let closed = false;
   const active = () => {
     if (closed) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition Fact host is closed');
   };
   try {
-    memory.provision(options.memoryNamespace);
+    memory.provision(memoryNamespace);
     const projection = createSqliteFactProjectionHost({memory, runtime: application.runtime,
-      memoryNamespace: options.memoryNamespace, graphNamespace: options.graphNamespace,
-      consumerKey: options.consumerKey});
+      memoryNamespace, graphNamespace, consumerKey});
     return Object.freeze({
       readPublicSourceHead: (key: PublicSourceKey) => {
         active();
-        return memory.readPublicSourceHead(options.memoryNamespace, key);
+        return memory.readPublicSourceHead(memoryNamespace, key);
       },
       recordPublicSource: (source: TrustedPublicSource, context: MemoryReadContext) => {
         active();
-        return memory.appendPublicSource(options.memoryNamespace, {...source, ...context});
+        return memory.appendPublicSource(memoryNamespace, {...source, ...context});
       },
       withdrawPublicSource: (source: TrustedPublicWithdrawal, context: MemoryReadContext) => {
         active();
-        return memory.withdrawPublicSource(options.memoryNamespace, {...source, ...context});
+        return memory.withdrawPublicSource(memoryNamespace, {...source, ...context});
       },
       consume: (request: Parameters<SqliteFactProjectionHost['consume']>[0]) => {
         active();
