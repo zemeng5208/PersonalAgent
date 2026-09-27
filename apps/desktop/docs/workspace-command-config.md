@@ -1,0 +1,11 @@
+# Desktop workspace command configuration
+
+The Competition Desktop keeps the selected workspace in the existing encrypted `coding-workspace.json` version 1 record. Two optional encrypted fields now hold a user-selected Node executable and one workspace-relative JavaScript file for syntax checking. Older version 1 records remain readable and retain their read and patch abilities. A new selection revokes the current session grant; the tool catalog is rebound after a Desktop restart.
+
+Trusted Main injects `selectNodeExecutable()`, `selectCheckFile(workspaceRoot)`, and `createCommandRecipeTool(options)` into `createWorkspaceConfigHost`. The first two callbacks use native file dialogs and return absolute paths to Main only. Renderer invokes `coding.selectNode` and `coding.selectCheckFile` without a path argument. The host requires the Node executable to be a regular `node.exe` outside the writable workspace and the selected `.js`, `.mjs`, or `.cjs` file to be a regular file inside it. The recipe helper verifies the fixed canonical executable and relative target again. The model sees `workspace.node_check` with an empty input object and cannot choose an executable, path, arguments, or working directory.
+
+`workspace.node_check` wraps the public `workspace.run_allowed_command` recipe with fixed `node --check` arguments. It is available only after this session's cloud export and separate command permission are enabled; workspace write permission remains independent. Runtime Policy and ToolGateway still gate each execution. Only `{recipeId, exitCode, passed}` is projected to AgentArts; raw stdout, stderr, source excerpts, and paths remain local.
+
+Project `npm build` and `npm test` are not registered. They execute project code and are not a system sandbox. The settings checkbox remains unavailable until a controlled process tree implementation is integrated and the user grants a distinct `projectCodeAllowed` session permission. This host rejects `projectCodeAllowed:true` today.
+
+The focused tests cover legacy configuration, encrypted option persistence, an actual fixed Node syntax check, separate write and command permissions, redacted export, revocation, and invalid file selection. They do not establish real Electron dialog or AgentArts acceptance.
