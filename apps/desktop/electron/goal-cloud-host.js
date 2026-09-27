@@ -1,0 +1,168 @@
+import {randomUUID} from 'node:crypto';
+import {isDeepStrictEqual} from 'node:util';
+import {GOAL_CREATE_TOOL,GOAL_REVISE_TOOL,GOAL_TOOL_VERSION} from '@personal-agent/goals/tool';
+
+const CHECKPOINT='desktop-goal-cloud-scope-v1';
+const CATALOG='competition-tool-catalog';
+const LOOP='competition-loop';
+const POLICY='desktop-goal-cloud-projection-v1';
+const CONVERSATIONS=new Set(['desktop-panel','desktop-workspace']);
+const WRITE_NAMES=new Set([GOAL_CREATE_TOOL,GOAL_REVISE_TOOL]);
+const READ_NAMES=new Set(['goals.list','goals.get']);
+const ALL_NAMES=new Set([...WRITE_NAMES,...READ_NAMES]);
+const blockedText=value=>typeof value!=='string' || /(?:[A-Za-z]:[\\/]|\\\\[^\\\s]+\\|(?:^|[\s"'(])\/(?:[^\s/]+\/)*[^\s/]+|(?:api[_-]?key|password|secret|authorization|bearer)\s*[:=]|\bsk-[A-Za-z0-9_-]{12,})/i.test(value);
+
+const goalViewSchema={type:'object',required:['id','revision','summary','validFrom','validUntil','sensitivity','state','reason'],
+  additionalProperties:false,properties:{id:{type:'string',minLength:1},revision:{type:'integer',minimum:1},
+    summary:{type:'string'},validFrom:{type:'string'},validUntil:{type:'string'},
+    sensitivity:{enum:['public','private']},state:{enum:['active','withdrawn']},reason:{type:'string'}}};
+const listDescriptor={name:'goals.list',version:GOAL_TOOL_VERSION,sideEffect:'read',requiredScopes:['goals:read'],
+  idempotencySupport:true,recoverySupport:true,requiresPresence:false,
+  inputSchema:{type:'object',additionalProperties:false,properties:{afterId:{type:'string',minLength:1},
+    limit:{type:'integer',minimum:1,maximum:20}}},
+  outputSchema:{type:'object',required:['graphRevision','goals','nextAfterId'],additionalProperties:false,
+    properties:{graphRevision:{type:'integer',minimum:0},goals:{type:'array',items:goalViewSchema},
+      nextAfterId:{anyOf:[{type:'string',minLength:1},{type:'null'}]}}}};
+const getDescriptor={name:'goals.get',version:GOAL_TOOL_VERSION,sideEffect:'read',requiredScopes:['goals:read'],
+  idempotencySupport:true,recoverySupport:true,requiresPresence:false,
+  inputSchema:{type:'object',required:['id'],additionalProperties:false,properties:{id:{type:'string',minLength:1}}},
+  outputSchema:{type:'object',required:['graphRevision','goal'],additionalProperties:false,
+    properties:{graphRevision:{type:'integer',minimum:0},goal:{anyOf:[goalViewSchema,{type:'null'}]}}}};
+
+function projectedGoal(node) {
+  if(!node || node.sensitivity==='restricted' || !['public','private'].includes(node.sensitivity)
+    || blockedText(node.id) || blockedText(node.summary) || blockedText(node.reason)) return null;
+  return {id:node.id,revision:node.revision,summary:node.summary.slice(0,512),
+    validFrom:node.validFrom,validUntil:node.validUntil,sensitivity:node.sensitivity,
+    state:node.state,reason:node.reason.slice(0,512)};
+}
+
+/** Trusted Desktop adapter. Goal writes still use the public Goal tools and Runtime Policy. */
+export function createDesktopGoalCloudHost({goalHost}) {
+  if(!goalHost || !Array.isArray(goalHost.tools) || typeof goalHost.list!=='function'
+    || typeof goalHost.get!=='function') throw Error('Goal host is unavailable');
+  const writes=goalHost.tools.filter(tool=>WRITE_NAMES.has(tool.descriptor?.name)
+    && tool.descriptor.version===GOAL_TOOL_VERSION);
+  if(writes.length!==2 || new Set(writes.map(tool=>tool.descriptor.name)).size!==2) throw Error('Goal write tools are unavailable');
+  let application,allowed=false,active=true,generation=randomUUID();
+  const snapshot=()=>({available:Boolean(application)&&active,sessionAllowed:allowed&&active,
+    reason:allowed?'本会话可向 AgentArts 提供目标内容；目标写入仍需单独审批':'本会话目标云访问未开启'});
+  const permitted=()=>active&&allowed&&Boolean(application);
+  function bound(taskId,claim=false) {
+    if(!permitted() || typeof taskId!=='string') return false;
+    let task;
+    try {task=application.runtime.getTask(taskId);} catch {return false;}
+    if(!CONVERSATIONS.has(task.conversationId)) return false;
+    const saved=application.runtime.loadCheckpoint(taskId,CHECKPOINT);
+    if(claim&&saved===undefined) application.runtime.saveCheckpoint(taskId,CHECKPOINT,generation);
+    return application.runtime.loadCheckpoint(taskId,CHECKPOINT)===generation;
+  }
+  function readable(taskId,signal) {
+    if(signal?.aborted || !bound(taskId)) throw Error('Goal cloud session is unavailable');
+  }
+  function authorizedLocalHostTool(input,context,toolName) {
+    if(!application || context?.signal?.aborted || typeof context.taskId!=='string') return false;
+    const runId=`host-tool-${context.taskId}`;
+    if(context.runId!==runId || context.authorizationRef!==runId) return false;
+    try {
+      const intent=application.runtime.loadCheckpoint(context.taskId,'host-tool-intent');
+      const readback=application.readHostToolTask(context.taskId);
+      return intent?.toolName===toolName && intent.toolVersion===GOAL_TOOL_VERSION
+        && intent.commandId===readback.commandId && intent.namespace
+        && readback.task.conversationId===`host-tool:${intent.namespace}`
+        && readback.toolName===toolName && readback.toolVersion===GOAL_TOOL_VERSION
+        && input?.goal?.sourceRef===`desktop-goal:${intent.commandId}`
+        && isDeepStrictEqual(intent.arguments,input)
+        && application.runtime.getApproval(runId).state==='allowed';
+    } catch {return false;}
+  }
+  function writeArguments(input,toolName) {
+    const goal=input?.goal;
+    if(!goal || typeof goal!=='object' || Array.isArray(goal) || goal.sensitivity==='restricted'
+      || !['public','private'].includes(goal.sensitivity) || blockedText(goal.id)
+      || blockedText(goal.summary) || blockedText(goal.reason) || Object.hasOwn(goal,'sourceRef')
+      || !Array.isArray(goal.dependencies) || goal.dependencies.some(ref=>blockedText(ref?.id))) return false;
+    if(toolName===GOAL_REVISE_TOOL) {
+      const previous=goalHost.get(goal.id).goal;
+      if(previous && !projectedGoal(previous)) return false;
+    }
+    return true;
+  }
+  function readList(input={}) {
+    if(!input || typeof input!=='object' || Array.isArray(input)) throw Error('Goal list arguments are invalid');
+    const {graphRevision,goals}=goalHost.list();
+    const limit=input.limit??20;
+    const visible=goals.map(projectedGoal).filter(Boolean).sort((a,b)=>a.id.localeCompare(b.id));
+    const remaining=visible.filter(goal=>input.afterId===undefined || goal.id.localeCompare(input.afterId)>0);
+    const page=remaining.slice(0,limit);
+    return {graphRevision,goals:page,nextAfterId:remaining.length>page.length?page.at(-1).id:null};
+  }
+  function readOne(input) {
+    if(!input || typeof input.id!=='string' || blockedText(input.id)) throw Error('Goal ID is unavailable');
+    const {graphRevision,goal}=goalHost.get(input.id);
+    return {graphRevision,goal:projectedGoal(goal)};
+  }
+  const tools=[...writes.map(tool=>{
+    const schema=structuredClone(tool.descriptor.inputSchema);
+    schema.properties.goal.required=schema.properties.goal.required.filter(key=>key!=='sourceRef');
+    return {descriptor:{...tool.descriptor,inputSchema:schema},execute:async(input,context)=>{
+      if(authorizedLocalHostTool(input,context,tool.descriptor.name)) return tool.execute(input,context);
+      readable(context.taskId,context.signal);
+      if(!writeArguments(input,tool.descriptor.name)) throw Error('Goal cannot be sent to the cloud');
+      const goal={...structuredClone(input.goal),sourceRef:`desktop-goal-cloud:${context.taskId}:${context.runId}`};
+      return tool.execute({...structuredClone(input),goal},context);
+    }};
+  }),{descriptor:listDescriptor,execute:async(input,context)=>{
+    readable(context.taskId,context.signal);return readList(input);
+  }},{descriptor:getDescriptor,execute:async(input,context)=>{
+    readable(context.taskId,context.signal);return readOne(input);
+  }}];
+  const competitionToolAvailability=tools.map(tool=>({toolName:tool.descriptor.name,
+    toolVersion:tool.descriptor.version,available:({taskId,signal})=>!signal?.aborted&&bound(taskId,true)}));
+  const competitionToolExports=tools.map(tool=>({toolName:tool.descriptor.name,
+    toolVersion:tool.descriptor.version,exportPolicyVersion:POLICY,
+    accepts:({taskId,arguments:args})=>bound(taskId)
+      && (!WRITE_NAMES.has(tool.descriptor.name) || writeArguments(args,tool.descriptor.name)),
+    project:({taskId,result,signal})=>{
+      readable(taskId,signal);
+      let value;
+      if(tool.descriptor.name==='goals.list') {
+        value={graphRevision:result.graphRevision,goals:result.goals.map(projectedGoal).filter(Boolean),
+          nextAfterId:result.nextAfterId};
+      } else if(tool.descriptor.name==='goals.get') {
+        value={graphRevision:result.graphRevision,goal:projectedGoal(result.goal)};
+      } else if(result?.kind==='applied') {
+        const current=goalHost.get(result.currentGoal.id).goal;
+        if(!projectedGoal(current) || current.revision!==result.currentGoal.revision) throw Error('Goal result is no longer exportable');
+        value={kind:'applied',graphRevision:result.graphRevision,
+          previousGoal:result.previousGoal,currentGoal:result.currentGoal};
+      } else if(result?.kind==='conflict'||result?.kind==='rejected') {
+        value={kind:result.kind,graphRevision:result.graphRevision};
+      } else throw Error('Goal result is invalid');
+      if(Buffer.byteLength(JSON.stringify(value),'utf8')>7_500) throw Error('Goal result exceeds cloud projection limit');
+      return structuredClone(value);
+    }}));
+  const revoke=()=>{allowed=false;generation=randomUUID();return snapshot();};
+  return Object.freeze({tools,competitionToolAvailability,competitionToolExports,snapshot,
+    bindApplication(value) {
+      if(application || !active || value?.profile!=='huawei_ict_agentarts' || !value.runtime) throw Error('Goal cloud binding is invalid');
+      application=value;
+    },
+    authorize(input) {
+      if(!application || !active || !input || Object.keys(input).length!==1
+        || input.goalCloudConsent!==true) throw Error('请明确允许本会话目标内容用于云端');
+      revoke();allowed=true;return snapshot();
+    },revoke,
+    /** Call from the trusted AgentArts pre-send hook for every cloud request. */
+    assertCloudSend(request) {
+      if(!application || !request?.taskId) return;
+      const catalog=application.runtime.loadCheckpoint(request.taskId,CATALOG);
+      const offered=catalog?.entries?.some(entry=>ALL_NAMES.has(entry.name));
+      const receipts=application.runtime.loadCheckpoint(request.taskId,LOOP)?.receipts;
+      const receipt=receipts?.find(item=>item.proposal.proposalId===request.continuation?.proposalId);
+      if((offered || ALL_NAMES.has(receipt?.proposal?.toolName))
+        && (request.signal?.aborted || !bound(request.taskId))) throw Error('Goal cloud session was revoked');
+    },
+    close(){active=false;revoke();},
+  });
+}
