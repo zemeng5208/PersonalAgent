@@ -1411,7 +1411,8 @@ app.whenReady().then(async () => {
   if (liveVoice) registerLiveShortcut();
   console.info('PersonalAgent startup',JSON.stringify({runtime:runtimeStartup.snapshot().state,
     agentArtsConfigured:agentArtsConfig.snapshot().configured,liveConfigured:liveConfig.snapshot().configured,
-    liveReady:Boolean(liveVoice),liveShortcutRegistered:liveShortcut.registered}));
+    liveReady:Boolean(liveVoice),liveShortcutRegistered:liveShortcut.registered,
+    sisConfigured:sisConfigHost.snapshot().configured,sisReady:Boolean(voiceInput)}));
 
   ipcMain.handle('desktop:action', async (...args) => {
     try { return {ok: true, value: await action(...args)}; }

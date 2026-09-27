@@ -66,6 +66,7 @@ export function createDesktopSisConfigHost({userData, safeStorage, env = process
       const selected = current();
       const expired = Boolean(selected?.tokenExpiresAt && Date.parse(selected.tokenExpiresAt) <= Date.now());
       return {configured: Boolean(selected) && !expired,
+        region: selected?.region ?? 'cn-north-4', projectId: selected?.projectId ?? '',
         tokenStatus: expired ? 'expired' : selected?.tokenExpiresAt ? 'expires_at' : 'unknown',
         tokenExpiresAt: selected?.tokenExpiresAt ?? '',
         reason: expired ? 'SIS IAM Token 已过期，请更新'

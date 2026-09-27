@@ -143,8 +143,11 @@ else {
     proactiveControls.render(data.proactive);
     sisSettings.hidden=data.model?.provider!=='agentarts';
     const sisConfiguration=data.voice?.configuration;
+    sisSettings.querySelector('summary').textContent=sisConfiguration?.configured?'华为云语音设置 · 已配置':'华为云语音设置';
     sisSettings.querySelector('#sis-reason').textContent=sisConfiguration?.reason??'SIS 尚未配置';
-    if(!sisSettings.open){sisRegion.value='cn-north-4';sisProject.value='';
+    sisToken.placeholder=sisConfiguration?.configured?'已安全保存；仅更换令牌时填写':'填写独立 IAM Token';
+    sisSettings.querySelector('#sis-password').placeholder=sisConfiguration?.configured?'已连接，无需重新填写密码':'填写 IAM 用户密码';
+    if(!sisSettings.open){sisRegion.value=sisConfiguration?.region??'cn-north-4';sisProject.value=sisConfiguration?.projectId??'';
       sisExpiry.value=sisConfiguration?.tokenExpiresAt||'';}
     const voiceFailure=data.voice?.status==='error'?data.voice.failure:null;
     const voiceFailureStage=voiceFailureStages[voiceFailure?.stage]??'处理';

@@ -27,8 +27,10 @@ export function mountLiveVoiceControls(root, invoke) {
       catch (error) {result.textContent = error.message; settings.open = true;}
     },
     render(live = {}) {
+      settings.querySelector('summary').textContent=live.configured?'Live 实时语音设置 · 已配置':'Live 实时语音设置';
+      key.placeholder=live.configured?'已安全保存；留空保留现有密钥':'仅在本机加密保存';
       if (!editing) {workspace.value = live.workspaceId ?? ''; hotkey.value = live.hotkey ?? 'F8'; consent.checked = Boolean(live.configured);}
-      const names = {connecting:'正在连接',reconnecting:'正在续接',listening:'正在聆听',speaking:'正在回答',working:'主智能体正在处理任务',stopping:'正在关闭',idle:'已关闭',error:'连接失败'};
+      const names = {connecting:'正在连接',reconnecting:'正在续接',listening:'正在聆听',speaking:'正在回答',working:'主智能体正在处理任务',stopping:'正在关闭',idle:live.configured?'已就绪，未开启麦克风':'未配置',error:'连接失败'};
       status.textContent = `Live：${names[live.status] ?? '未配置'} · ${live.shortcut?.key ?? 'F8'} 开启 / 关闭`;
       if (live.status === 'error' || !live.configured) status.textContent += ` · ${live.reason ?? '请先配置'}`;
       if (live.shortcut?.reason) status.textContent += ` · ${live.shortcut.reason}`;
