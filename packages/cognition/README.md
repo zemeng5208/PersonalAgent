@@ -292,3 +292,95 @@ Production composition must replay them before advancing the feed and only
 advance its existing task checkpoint after accounting for each handoff.
 `drain()` alone reports only a batch count and watermark. The module has not
 been connected to a real source trigger or restart flow yet.
+
+## Bounded local inbox triage
+
+`LayaTriageService(inference, options).classify({messages, labels, deadline, signal})`
+classifies host-approved local projections. Each message provides `source`,
+`messageId`, `sourceRevision`, `text` (up to 4000 characters), and optional trusted
+`highImpact`. `labels` is a caller-defined whitelist of 2–16 labels with meanings.
+The service does not fetch mail, parse a connector's concatenated header into
+invented structured fields, or modify the original source.
+
+Results preserve input identity and order. `label` may be grouped as local metadata;
+`route` is `group`, `review`, or `main_agent`. Meeting/deadline/commitment changes
+route to the main agent for source-backed analysis, never directly to calendar
+writes. `unavailable`, `invalid_response`, `cancelled`, and `deadline` mark unfinished
+items; callers must not advance ingestion cursors past them. `uncertain` is a valid
+review-queue outcome, with retained scores. Neither result creates authorization.
+
+The existing `LocalLayaHttpTransport` supports `batching: 'multi_question'` (default):
+at most four messages share one state and multiple choice questions. This is not
+SDK multi-state batching. For the project-owned batch server, explicitly inject
+`LocalLayaBatchHttpTransport(port, getApiKey)` with `batching: 'multi_state'`.
+It uses `/v1/systemone/batch`, keeps each message in its own state, and validates
+every echoed request identity before attaching results. A missing batch endpoint
+fails visibly; no implicit per-message fallback occurs. Both modes process chunks
+serially, with deadline/cancellation and isolated per-item malformed-result handling.
+
+Choice `confidence` from the installed SDK is normalized entropy concentration.
+`answer_confidence` is maximum class probability. The service retains both under
+explicit names and retains the probability distribution and top-two margin.
+`calibrated: false` always applies: no project-specific email calibration dataset
+has established correctness probabilities. The default probability/margin gates
+(0.7/0.15, configurable) are routing rules, not a claimed accuracy guarantee.
+Do not use these labels to silently delete, move, send mail or suppress important
+messages. Locally visible grouping is permitted; original content remains intact.
+
+Each result includes a local correction receipt containing source/version linkage,
+candidate label IDs, fixed prompt version, context and criteria digests, and the
+score/reason fields. No original text or private headers enter the receipt. The
+source owner can link user corrections to the same version without publishing
+private training data. No training pipeline or measured model improvement is claimed.
+
+The existing intervention service still offers seven genuine labels, including
+defer, merge, remind, request decision and AgentArts escalation. These are advisory
+intervention choices; no runtime executable-action candidate set is created by
+triage, and an uncalibrated `EXECUTE` choice still escalates.
+
+See [`scripts/laya/README.md`](../../scripts/laya/README.md) for the optional local
+batch adapter. Compilation and one combined Fake test cover batching, attribution,
+partial failures, cancellation and redacted receipts. No model was loaded for this
+increment; throughput and real mailbox classification quality remain unverified.
+
+## Concrete action selection
+
+`LayaActionChoiceService(inference).choose({context, candidates, deadline, signal})`
+compares 2–16 concrete host-owned candidates. Each supplies stable `id/revision`,
+`kind` (`tool/noop/defer/escalate`), approved description, exact source/goal refs,
+scope, expiry and risk. Tool candidates include the actual tool name/version and
+arguments, their canonical SHA-256 `argumentsDigest`, and a host-provided grant
+summary (state, reference digest, same scope/argument digest, expiry). Raw arguments
+and authorization references never enter the model payload. `actionArgumentsDigest`
+uses the existing ToolGateway canonical JSON convention.
+
+Duplicate IDs, mismatched argument or authorization bindings are rejected. Expired
+or unauthorized candidates are excluded; fewer than two valid alternatives yields
+`insufficient_candidates` without calling the model. A model chooses an opaque
+candidate key which is mapped back to the original ID/revision. All candidates
+remain in the receipt; excluded or unavailable scores are `null`, never invented
+probabilities. Low-score/low-margin answers and high-risk candidates route to review.
+These thresholds are conservative routing rules, not task-specific calibration.
+
+`state: 'selected'` and `eligibleForRuntime: true` mean a low-risk selection can be
+considered by the host under its existing permission. They are **not authorization**.
+The host resolves the exact selected revision in its immutable candidate registry,
+rechecks the real grant and current source/goal revisions, and passes the original
+tool/arguments through Runtime/ToolGateway. Runtime is still responsible for
+task/run identities, Policy consumption, cancellation and Evidence. A `noop`,
+`defer` or `escalate` candidate likewise needs its host-defined handler; this module
+does not create schedules or cloud calls from a label.
+
+The receipt includes every candidate reference and digest, context digest, prompt
+version, distribution and reason. It can be joined to later local user corrections;
+it contains no private source text, tool arguments or usable grant. This provides
+traceable decision metadata, not an implemented training pipeline or verified
+execution loop. The existing seven-label intervention API remains compatible.
+
+## Interest and knowledge freshness
+
+`decideInterest` and `decideKnowledgeFreshness` provide pure, evidence-bound host
+advice. They do not start tracking, grant permission or fetch sources. See
+[`docs/interest-policy.md`](docs/interest-policy.md) for revocation, source validation
+and cache expiry semantics. No real model, background watcher or next-day freshness
+acceptance is claimed.

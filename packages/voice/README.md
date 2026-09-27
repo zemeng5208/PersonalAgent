@@ -215,8 +215,61 @@ npm.cmd run test --workspace=@personal-agent/voice
 npm.cmd run typecheck --workspace=@personal-agent/voice
 ```
 
-The root build now runs this workspace immediately after client, and the single root
-lock file registers only the voice workspace/link; no external dependency was added or
+The root build now runs this workspace after its registered dependencies, and the single
+root lock file registers the voice workspace/link; no external dependency was added or
 upgraded. A trusted integration owner must still wire the Desktop/Runtime composition
 and keep the public wire capability unavailable until production adapters and
 real-device acceptance exist.
+
+## Authorized PCM Frame Source Port
+
+`createVoicePcmFrameSourcePort(binding)` provides bounded, authorized PCM delivery
+using a trusted host's pre-authorized microphone capture source. The voice module
+never opens a microphone or grants OS permission itself.
+
+**Shared-source contract:** `VoicePcmCaptureBinding.start(sink)` attaches to one
+physical host capture with refcount/fanout, allowing simultaneous wake and ASR
+subscribers. It must not open a separate microphone per subscription.
+
+`subscription.ready` resolves only after `start(sink)` returns a valid release
+handle and the subscription is still active, unrevoked and before its deadline.
+Async readiness, new frames and queued frame delivery each recheck that lifecycle;
+a delayed deadline timer cannot extend capture delivery. The subscription is
+registered before host start, so synchronous reentrant disposal includes it.
+
+`closed` proves only that this subscription's attachment was released. Other
+subscribers may keep the physical capture active. Whole-source shutdown requires
+`port.dispose()` to await every attachment and the host to confirm the last track's
+release. Release failure remains `EXTERNAL_FAILURE`, not a false success receipt.
+Frames are 16 kHz mono PCM S16LE, at most 3200 bytes each, with at most four queued
+frames/12800 queued bytes. Delivered and discarded local copies are zeroed; this
+port neither submits nor cancels Runtime tasks. Real device acceptance is separate.
+
+## Speech Keyword Detector
+
+`createWindowsSystemSpeechKeywordDetector({keyword})` consumes the same authorized
+PCM frames through `SpeechKeywordSession.accept(frame)`. The fixed native host
+uses a single trusted, control-free phrase as grammar data; it opens no second
+microphone, uploads no audio, and never returns recognition text. Its `ready`
+resolves only after the installed zh-CN recognizer, restricted grammar and streaming
+recognition have started. Missing language components remain explicitly unavailable.
+Only the empty `onDetected()` callback and a detection count leave the detector.
+
+Frames use the existing 16 kHz mono PCM S16LE format, monotonically increasing
+sequence numbers and at most 3200 bytes per frame. The queue is bounded to four
+frames/12800 bytes with one in-flight packet. Overflow, malformed host envelopes,
+unexpected child exit, cancellation or expiry stop further delivery and clear
+owned queued/in-flight data. `stop()` and `dispose()` wait for the exact child to
+close; requesting a stop is not itself release confirmation.
+
+Sessions are registered before the host spawner runs, so synchronous reentrant
+disposal includes the newly started child. Close/error handlers are installed
+before delivering a pending stop, and parent cancellation is rechecked after
+spawn. Readiness, detection and queued PCM dispatch independently recheck the
+current deadline; delayed timers cannot extend the authorized lifetime.
+
+Fake keyword sessions and an explicit unavailable port support local tests.
+Controlled-child tests and C# compilation do not establish real microphone capture,
+Chinese keyword accuracy, false-positive rates, echo suppression or Desktop
+acceptance. This remains a provisional local adapter; public voice capability is
+not enabled by importing it.
