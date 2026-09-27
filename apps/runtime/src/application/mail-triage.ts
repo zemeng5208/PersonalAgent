@@ -4,6 +4,7 @@ import {QQMailProvider, register as registerMail} from '@personal-agent/mail';
 import {LayaTriageService, LocalLayaBatchHttpTransport} from '@personal-agent/cognition';
 import type {RuntimeApplication} from './runtime-application.js';
 import {createInboxTriagePipeline} from './inbox-triage.js';
+import type {InboxAnalysisAcceptance, InboxTriageContext} from './inbox-triage.js';
 
 export function createLocalInboxClassifier(options: {port: number; getApiKey: () => string}) {
   return new LayaTriageService(new LocalLayaBatchHttpTransport(options.port, options.getApiKey), {batching:'multi_state'});
@@ -29,6 +30,7 @@ export function createQQMailTriageHost(options: QQMailTriageHostOptions) {
   let controller = new AbortController();
   let closed = false, refreshing = false, reading = 0, status = options.triage ? 'ready' : 'unavailable';
   let taskId: string | undefined, cursor: string | undefined, deadline = '';
+  let analysisSessionId: string | undefined;
   const allowed = () => !closed && options.isSessionAllowed();
   const pipeline = options.triage ? createInboxTriagePipeline({storage: options.storage,
     namespace: options.namespace, triage: options.triage, labels: options.labels,
@@ -80,14 +82,43 @@ export function createQQMailTriageHost(options: QQMailTriageHostOptions) {
   };
   const cancel = async () => {
     controller.abort();
+    analysisSessionId = undefined;
     if (application && sessionId) application.stopMailReadSession(sessionId);
     sessionId = undefined;
     status = reading > 0 ? 'stop_unconfirmed' : 'disabled';
     await provider.dispose();
     return snapshot();
   };
+  const analysisContext = (context: InboxTriageContext) => {
+    if (!context || !(context.signal instanceof AbortSignal) || !Number.isFinite(Date.parse(context.deadline))) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Invalid inbox analysis context');
+    }
+    if (!allowed() || controller.signal.aborted || !analysisSessionId || Date.now() >= Date.parse(deadline)) {
+      throw new ProtocolError('UNAUTHORIZED', 'Local inbox analysis session is no longer valid');
+    }
+    return {deadline: new Date(Math.min(Date.parse(context.deadline), Date.parse(deadline))).toISOString(),
+      signal: AbortSignal.any([context.signal, controller.signal])};
+  };
   return Object.freeze({
     tools: Object.freeze([...tools]), snapshot,
+    /** Local-only projections. Root must separately authorize every cloud send. */
+    pendingAnalyses(context: InboxTriageContext) {
+      const current = analysisContext(context);
+      return (pipeline?.pendingAnalyses(current) ?? []).map(item => ({...item, sessionId: analysisSessionId!}));
+    },
+    /** Synchronous current-head read, including accepted items, for beforeCompetitionSend. */
+    readAnalysis(workKey: string, context: InboxTriageContext) {
+      const current = analysisContext(context);
+      const item = pipeline?.readAnalysis(workKey, current);
+      return item ? {...item, sessionId: analysisSessionId!} : undefined;
+    },
+    confirmAnalysisAccepted(input: InboxAnalysisAcceptance & {readonly sessionId: string}, context: InboxTriageContext) {
+      const current = analysisContext(context);
+      if (!input || input.sessionId !== analysisSessionId || !pipeline) {
+        throw new ProtocolError('UNAUTHORIZED', 'Inbox analysis belongs to a different session');
+      }
+      return {...pipeline.confirmAnalysisAccepted(input, current), sessionId: analysisSessionId!};
+    },
     bindApplication(value: RuntimeApplication) {
       if (application && application !== value) throw Error('Inbox host is already bound');
       application = value;
@@ -97,22 +128,28 @@ export function createQQMailTriageHost(options: QQMailTriageHostOptions) {
       if (!allowed()) throw new ProtocolError('UNAUTHORIZED', 'Inbox read consent is absent');
       if (sessionId || reading > 0) throw new ProtocolError('REVISION_CONFLICT', 'Inbox batch is already active');
       const session = application.startMailReadSession({accountRef: options.accountRef, folder: 'INBOX', expiresAt});
-      sessionId = session.sessionId; deadline = expiresAt; cursor = undefined; controller = new AbortController();
+      sessionId = session.sessionId; analysisSessionId = session.sessionId;
+      deadline = expiresAt; cursor = undefined; controller = new AbortController();
       next();
       return snapshot();
     },
     async refresh() {
       if (!application || !sessionId || !taskId || !pipeline || refreshing || status === 'classification_unavailable') return snapshot();
       if (!allowed() || Date.now() >= Date.parse(deadline)) return cancel();
-      const read = application.readHostToolTask(taskId);
+      let read;
+      try { read = application.readHostToolTask(taskId); }
+      catch (error) { await cancel(); throw error; }
       if (!read.confirmed) {
         status = read.task.state;
-        if (['failed', 'cancelled'].includes(status)) {application.stopMailReadSession(sessionId); sessionId = undefined;}
+        if (['failed', 'cancelled'].includes(status)) return cancel();
         return snapshot();
       }
       const page = read.confirmed.result as {account: string; folder: string; items: ProtocolContracts['connectorItem'][];
         nextCursor: string; hasMore: boolean};
-      if (!page || page.account !== options.accountRef || page.folder !== 'INBOX') throw Error('Confirmed inbox scope mismatch');
+      if (!page || page.account !== options.accountRef || page.folder !== 'INBOX') {
+        await cancel();
+        throw new ProtocolError('EXTERNAL_FAILURE', 'Confirmed inbox scope mismatch');
+      }
       refreshing = true; status = 'classifying';
       try {
         const result = await pipeline.processPage({accountRef: options.accountRef, folder: 'INBOX',

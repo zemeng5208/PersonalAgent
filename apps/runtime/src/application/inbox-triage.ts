@@ -1,7 +1,8 @@
 import {createHash} from 'node:crypto';
 import {ProtocolError, validateContract} from '@personal-agent/contracts';
 import type {ProtocolContracts, StoragePort} from '@personal-agent/contracts';
-import type {LayaTriageService} from '@personal-agent/cognition';
+import {prepareTriageDispatch} from '@personal-agent/cognition';
+import type {LayaTriageService, LayaTriageResult, TriageDispatchRef} from '@personal-agent/cognition';
 
 export interface InboxTriageContext {readonly deadline: string; readonly signal: AbortSignal;}
 export interface InboxTriagePage extends InboxTriageContext {
@@ -24,12 +25,37 @@ export interface InboxTriageMetadata {
   readonly highImpactCandidate: boolean;
   /** A classifier hint only: no confirmed meeting identity, time or Fact is created. */
   readonly meetingCandidate: boolean;
+  readonly receiptId?: string;
 }
+export interface InboxPendingAnalysis {
+  readonly workKey: string;
+  readonly messageId: string;
+  readonly sourceRevision: string;
+  readonly mailboxId: string;
+  readonly receipt: LayaTriageResult['receipt'];
+  readonly route: 'main_agent' | 'review';
+  readonly state: 'pending' | 'deferred' | 'accepted';
+  readonly reason?: string;
+  readonly projection: {readonly headersOnly: true; readonly sensitivity: 'private'; readonly text: string};
+  readonly projectionDigest: string;
+  readonly taskId?: string;
+}
+export interface InboxAnalysisAcceptance {
+  readonly workKey: string;
+  readonly sourceRevision: string;
+  readonly receiptId: string;
+  readonly projectionDigest: string;
+  readonly taskId: string;
+}
+interface StoredAnalysis extends InboxPendingAnalysis {accountRef: string; folder: string;}
 interface State {
-  version: 1;
+  version: 2;
   records: Record<string, InboxTriageMetadata>;
   latest: Record<string, string>;
   cursors: Record<string, string>;
+  heads: Record<string, {sourceRevision: string; fetchedAt: string}>;
+  observed: Record<string, true>;
+  analyses: Record<string, StoredAnalysis>;
 }
 export interface InboxTriageOptions {
   readonly storage: StoragePort;
@@ -46,7 +72,7 @@ const unfinished = new Set(['unavailable', 'invalid_response', 'cancelled', 'dea
 function reject(message: string): never {throw new ProtocolError('INVALID_ARGUMENT', message);}
 function text(value: unknown): value is string {return typeof value === 'string' && value.trim().length > 0;}
 
-/** Local derived metadata only. Single owner per namespace; no mail writes, Fact writes or task store. */
+/** Local encrypted derived metadata/outbox. Single owner per namespace; no mail or Fact writes. */
 export function createInboxTriagePipeline(options: InboxTriageOptions) {
   if (!text(options.namespace) || !options.storage || typeof options.triage?.classify !== 'function'
     || typeof options.authorizeRead !== 'function') reject('Inbox triage host configuration is invalid');
@@ -60,29 +86,65 @@ export function createInboxTriagePipeline(options: InboxTriageOptions) {
   let busy = false;
   const load = (): State => {
     const saved = options.storage.get(storageKey);
-    if (saved === undefined || saved === null) return {version: 1, records: {}, latest: {}, cursors: {}};
+    if (saved === undefined || saved === null) return {version: 2, records: {}, latest: {}, cursors: {}, heads: {}, observed: {}, analyses: {}};
     const state = structuredClone(saved) as State;
-    if (!state || state.version !== 1 || !state.records || !state.latest || !state.cursors
+    // Keep old classifications/cursors. A newly read page reclassifies legacy rows
+    // without receipt IDs; old metadata alone cannot create an analysis envelope.
+    if ((state as {version: number})?.version === 1) {
+      state.version = 2; state.heads = {}; state.analyses = {};
+      state.observed = Object.fromEntries(Object.keys(state.records ?? {}).map(key => [key, true as const]));
+    }
+    if (!state || state.version !== 2 || !state.records || !state.latest || !state.cursors || !state.heads || !state.analyses || !state.observed
       || Array.isArray(state.records) || Array.isArray(state.latest) || Array.isArray(state.cursors)
+      || Array.isArray(state.heads) || Array.isArray(state.analyses) || Array.isArray(state.observed)
+      || Object.values(state.observed).some(value => value !== true)
       || Object.values(state.records).some(item => !item || item.sensitivity !== 'private' || item.headersOnly !== true)
       || Object.values(state.latest).some(key => typeof key !== 'string' || !state.records[key])
-      || Object.values(state.cursors).some(value => typeof value !== 'string')) {
+      || Object.values(state.cursors).some(value => typeof value !== 'string')
+      || Object.values(state.heads).some(head => !head || !text(head.sourceRevision) || !Number.isFinite(Date.parse(head.fetchedAt)))
+      || Object.entries(state.analyses).some(([key, item]) => !item || item.workKey !== key
+        || !text(item.messageId) || !text(item.sourceRevision) || !text(item.accountRef) || !text(item.folder)
+        || !['pending', 'deferred', 'accepted'].includes(item.state) || !['review', 'main_agent'].includes(item.route)
+        || !item.receipt || !text(item.receipt.id) || item.projection?.headersOnly !== true
+        || item.projection.sensitivity !== 'private' || !text(item.projection.text)
+        || item.projectionDigest !== hash(item.projection)
+        || (item.state === 'accepted' && !text(item.taskId)))) {
       throw new ProtocolError('INVALID_ARGUMENT', 'Inbox triage state needs recovery');
     }
     return state;
   };
   const save = (state: State): void => options.storage.set(storageKey, structuredClone(state));
-  const check = (page: InboxTriagePage): void => {
+  const checkContext = (page: InboxTriageContext): void => {
+    if (!page || !(page.signal instanceof AbortSignal) || !Number.isFinite(Date.parse(page.deadline))) reject('Invalid inbox context');
     if (page.signal.aborted) throw new ProtocolError('CANCELLED', 'Inbox triage cancelled');
     if (Date.now() >= Date.parse(page.deadline)) throw new ProtocolError('TIMEOUT', 'Inbox triage deadline expired');
+  };
+  const check = (page: InboxTriageContext & {accountRef: string; folder: string}): void => {
+    checkContext(page);
     if (options.authorizeRead({accountRef: page.accountRef, folder: page.folder,
       deadline: page.deadline, signal: page.signal}) !== true) {
       throw new ProtocolError('UNAUTHORIZED', 'Local inbox processing is not authorized');
     }
   };
+  const currentAnalysis = (state: State, key: string): StoredAnalysis | undefined => {
+    const item = state.analyses[key];
+    return item && state.heads[item.messageId]?.sourceRevision === item.sourceRevision ? item : undefined;
+  };
+  const publicAnalysis = (item: StoredAnalysis): InboxPendingAnalysis => {
+    const {accountRef: _accountRef, folder: _folder, ...result} = item;
+    return structuredClone(result);
+  };
+  const readAnalysis = (workKey: string, context: InboxTriageContext): InboxPendingAnalysis | undefined => {
+    checkContext(context);
+    const item = currentAnalysis(load(), workKey);
+    if (!item) return undefined;
+    check({...context, accountRef: item.accountRef, folder: item.folder});
+    return publicAnalysis(item);
+  };
   const snapshot = () => {
     const state = load();
-    const records = Object.values(state.latest).map(key => state.records[key]!);
+    const records = Object.values(state.latest).map(key => state.records[key]!)
+      .filter(row => !state.heads[row.messageId] || state.heads[row.messageId]!.sourceRevision === row.sourceRevision);
     const groups: Record<string, number> = Object.create(null) as Record<string, number>;
     for (const row of records) if (row.label !== null) groups[row.label] = (groups[row.label] ?? 0) + 1;
     return structuredClone({records, groups, total: records.length,
@@ -92,6 +154,36 @@ export function createInboxTriagePipeline(options: InboxTriageOptions) {
   };
   return Object.freeze({
     snapshot,
+    /** Trusted local host only. Contents have no implicit cloud export permission. */
+    pendingAnalyses(context: InboxTriageContext): readonly InboxPendingAnalysis[] {
+      checkContext(context);
+      const state = load();
+      return Object.keys(state.analyses).sort().flatMap(key => {
+        const item = currentAnalysis(state, key);
+        if (!item || item.state === 'accepted' || !options.authorizeRead({accountRef: item.accountRef,
+          folder: item.folder, ...context})) return [];
+        return [publicAnalysis(item)];
+      });
+    },
+    readAnalysis,
+    confirmAnalysisAccepted(input: InboxAnalysisAcceptance, context: InboxTriageContext): InboxPendingAnalysis {
+      checkContext(context);
+      if (busy) throw new ProtocolError('REVISION_CONFLICT', 'Inbox page is still processing');
+      if (!input || ![input.workKey, input.sourceRevision, input.receiptId, input.projectionDigest, input.taskId].every(text)) {
+        reject('Invalid inbox analysis acceptance');
+      }
+      const state = load(), item = currentAnalysis(state, input.workKey);
+      if (!item || item.sourceRevision !== input.sourceRevision || item.receipt.id !== input.receiptId
+        || item.projectionDigest !== input.projectionDigest || item.state === 'deferred'
+        || (item.taskId !== undefined && item.taskId !== input.taskId)) {
+        throw new ProtocolError('REVISION_CONFLICT', 'Inbox analysis is stale or not ready');
+      }
+      check({...context, accountRef: item.accountRef, folder: item.folder});
+      if (item.state !== 'accepted') {
+        state.analyses[input.workKey] = {...item, state: 'accepted', taskId: input.taskId}; save(state);
+      }
+      return publicAnalysis(state.analyses[input.workKey]!);
+    },
     cursor: (accountRef: string, folder: string): string | undefined => load().cursors[hash([accountRef, folder])],
     async processPage(input: InboxTriagePage) {
       if (busy) throw new ProtocolError('REVISION_CONFLICT', 'Inbox triage is already processing a page');
@@ -133,7 +225,28 @@ export function createInboxTriagePipeline(options: InboxTriageOptions) {
           throw new ProtocolError('REVISION_CONFLICT', 'Inbox page does not match the persisted cursor');
         }
         const unique = [...new Map(messages.map(message => [message.messageId, message])).values()];
-        const pending = unique.filter(message => !state.records[hash([message.messageId, message.sourceRevision])]);
+        const fetchedAt = new Map(messages.map((message, index) => [message.messageId, page.items[index]!.fetchedAt]));
+        const current = unique.filter(message => {
+          const key = hash([message.messageId, message.sourceRevision]);
+          const head = state.heads[message.messageId];
+          const priorRevision = head?.sourceRevision ?? state.records[state.latest[message.messageId]!]?.sourceRevision;
+          const observedAt = fetchedAt.get(message.messageId)!;
+          // A replay of a known historical revision never reactivates an old analysis.
+          if (priorRevision && priorRevision !== message.sourceRevision
+            && (state.observed[key] || (head && Date.parse(observedAt) < Date.parse(head.fetchedAt)))) return false;
+          state.heads[message.messageId] = {sourceRevision: message.sourceRevision,
+            fetchedAt: head && Date.parse(head.fetchedAt) > Date.parse(observedAt) ? head.fetchedAt : observedAt};
+          state.observed[key] = true;
+          if (priorRevision !== message.sourceRevision) {
+            for (const [workKey, item] of Object.entries(state.analyses)) {
+              if (item.messageId === message.messageId) delete state.analyses[workKey];
+            }
+          }
+          return true;
+        });
+        // Invalidate superseded work before inference can yield to a cloud sender.
+        check(page); save(state);
+        const pending = current.filter(message => !state.records[hash([message.messageId, message.sourceRevision])]?.receiptId);
         let classified = 0;
         let incomplete = false;
         // The public Laya service bounds each batch; persist completed chunks before proceeding.
@@ -146,6 +259,22 @@ export function createInboxTriagePipeline(options: InboxTriageOptions) {
           if (!Array.isArray(results) || results.length !== batch.length) {
             throw new ProtocolError('EXTERNAL_FAILURE', 'Inbox classifier returned an invalid batch');
           }
+          let dispatch;
+          try { dispatch = prepareTriageDispatch({namespace: options.namespace, messages: batch, labels, results}); }
+          catch { throw new ProtocolError('EXTERNAL_FAILURE', 'Inbox classifier receipt validation failed'); }
+          const queue = (ref: TriageDispatchRef, route: 'main_agent' | 'review', deferredReason?: string) => {
+            const message = batch.find(item => item.messageId === ref.messageId)!;
+            const projection = {headersOnly: true as const, sensitivity: 'private' as const, text: message.text};
+            for (const [key, item] of Object.entries(state.analyses)) {
+              if (item.messageId === message.messageId && key !== ref.workKey) delete state.analyses[key];
+            }
+            state.analyses[ref.workKey] ??= {...ref, accountRef: page.accountRef, folder: page.folder, mailboxId,
+              route, state: deferredReason ? 'deferred' : 'pending',
+              ...(deferredReason ? {reason: deferredReason} : {}), projection, projectionDigest: hash(projection)};
+          };
+          dispatch.mainAgent.forEach(ref => queue(ref, 'main_agent'));
+          dispatch.review.forEach(ref => queue(ref, 'review'));
+          dispatch.deferred.forEach(ref => queue(ref, ref.requiredRoute, ref.reason));
           for (let offset = 0; offset < batch.length; offset++) {
             const message = batch[offset]!;
             const result = results[offset]!;
@@ -162,14 +291,20 @@ export function createInboxTriagePipeline(options: InboxTriageOptions) {
               needsReview: result.route !== 'group' || result.abstained
                 || (result.label !== null && meetingLabels.has(result.label)),
               highImpactCandidate: result.route === 'main_agent',
-              meetingCandidate: result.label !== null && meetingLabels.has(result.label)};
+              meetingCandidate: result.label !== null && meetingLabels.has(result.label), receiptId: result.receipt.id};
+            // A successful ordinary group has no pending machine analysis.
+            if (result.route === 'group') {
+              for (const [workKey, item] of Object.entries(state.analyses)) {
+                if (item.messageId === message.messageId) delete state.analyses[workKey];
+              }
+            }
             state.latest[message.messageId] = key;
             classified++;
           }
-          save(state);
+          check(page); save(state);
         }
         // Cached revisions must also become the latest visible observation after replay.
-        for (const message of unique) {
+        for (const message of current) {
           const key = hash([message.messageId, message.sourceRevision]);
           if (state.records[key]) state.latest[message.messageId] = key;
           else incomplete = true;
@@ -177,7 +312,7 @@ export function createInboxTriagePipeline(options: InboxTriageOptions) {
         check(page);
         if (!incomplete && !historical) state.cursors[mailboxId] = page.nextCursor;
         save(state);
-        return {classified, reused: unique.length - pending.length, complete: !incomplete,
+        return {classified, reused: current.length - pending.length, ignoredStale: unique.length - current.length, complete: !incomplete,
           cursorAdvanced: !incomplete && !historical, nextCursor: state.cursors[mailboxId], hasMore: page.hasMore,
           summary: snapshot()};
       } finally {busy = false;}
