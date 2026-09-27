@@ -80,7 +80,7 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
 
   function setAvailable(next, message = '') {
     available = next;
-    button.textContent = next ? '持续目标（待验收）' : '持续目标（未接通）';
+    button.textContent = next ? '持续目标' : '持续目标（未接通）';
     form.hidden = !next;
     list.hidden = !next;
     newGoal.hidden = !next;
