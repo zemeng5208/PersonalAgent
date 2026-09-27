@@ -3,7 +3,7 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 import path from 'node:path';
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
 import {EventCursor} from '@personal-agent/client';
-import {register, requestTaskCancellation} from './runtime.js';
+import {register, requestTaskCancellation, submitConversationTask} from './runtime.js';
 import {panelBounds, clampOrb, draggedGroupBounds} from './placement.js';
 import {Conversations} from './conversations.js';
 import {createDesktopHost} from './desktop-host.js';
@@ -789,7 +789,7 @@ async function action(event, name, payload) {
     submitting.add(surface);
     try {
     const goal = payload.trim();
-    const result = await client.call('task.submit', {goal, conversationId: `desktop-${surface}`}, {idempotencyKey: crypto.randomUUID()});
+    const result = await submitConversationTask(client, {goal, conversationId: `desktop-${surface}`}, {competition: competitionMode});
     conversations.add(result.taskId, surface, goal);
     taskGoals.set(result.taskId, goal);
     if (sender === panel) pinned = true;

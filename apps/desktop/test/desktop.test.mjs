@@ -4,6 +4,24 @@ import {Client} from '@personal-agent/client';
 import {FakeRuntime} from '@personal-agent/testkit';
 import {panelBounds,clampOrb,draggedGroupBounds} from '../electron/placement.js';
 import {orbState} from '../src/features/conversation/state.js';
+import {submitConversationTask} from '../electron/runtime.js';
+
+test('competition conversation gives Runtime a cloud execution deadline without changing query deadlines', async () => {
+  const runtime = new FakeRuntime({mode: 'test', scenario: 'cancel'});
+  const requests = [];
+  const client = new Client({send(request, signal) {
+    requests.push(request);
+    return runtime.send(request, signal);
+  }}, () => runtime.clock.now());
+  await client.connect();
+  const {taskId} = await submitConversationTask(client,
+    {goal: '输出九九乘法表', conversationId: 'desktop-panel'}, {competition: true});
+  const submitted = requests.at(-1);
+  assert.equal(Date.parse(submitted.deadline) - runtime.clock.now(), 120_000);
+  assert.ok(submitted.idempotencyKey);
+  await client.call('task.get', {taskId});
+  assert.equal(Date.parse(requests.at(-1).deadline) - runtime.clock.now(), 10_000);
+});
 test('panel stays within negative-origin and small display work areas',()=>{
   for(const area of [{x:-1920,y:0,width:1920,height:1080},{x:0,y:-800,width:1280,height:800},{x:0,y:0,width:320,height:480}]) {
     const orb=clampOrb({x:area.x+area.width-112,y:area.y+area.height-112,width:112,height:112},area);
