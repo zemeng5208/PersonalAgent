@@ -33,9 +33,34 @@ export function createDesktopHost() {
     try {
       mkdirSync(path.dirname(logFile), {recursive: true});
       if (statSync(logFile, {throwIfNoEntry: false})?.size > 256 * 1024) renameSync(logFile, logFile + '.previous');
-      // Only host-owned event labels and Chromium reason codes; never page messages or task text.
+      // Only host-owned event labels and allowlisted diagnostic fields; never page messages or task text.
       appendFileSync(logFile, JSON.stringify({time: new Date().toISOString(), event, window: mode, detail}) + '\n');
     } catch { /* Diagnostics must not take down desktop windows. */ }
+  }
+  function logAgentArtsFailure(receipt) {
+    const stages = new Set(['authorization', 'catalog_guard', 'export_guard', 'transport',
+      'http_response', 'response_body', 'response_schema', 'application_schema']);
+    const codes = new Set(['INVALID_ARGUMENT', 'UNSUPPORTED_CAPABILITY', 'UNAUTHORIZED',
+      'EXTERNAL_FAILURE', 'CANCELLED', 'TIMEOUT']);
+    if (!receipt || !stages.has(receipt.stage) || !codes.has(receipt.code)) return;
+    const detail = {stage: receipt.stage, code: receipt.code};
+    if (typeof receipt.requestId === 'string'
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(receipt.requestId)) {
+      detail.requestId = receipt.requestId;
+    }
+    if (Number.isInteger(receipt.httpStatus) && receipt.httpStatus >= 100
+      && receipt.httpStatus <= 599) detail.httpStatus = receipt.httpStatus;
+    if (['json', 'sse', 'missing', 'other'].includes(receipt.contentType)) detail.contentType = receipt.contentType;
+    if (typeof receipt.terminalEvents?.taskEnd === 'boolean'
+      && typeof receipt.terminalEvents?.end === 'boolean') {
+      detail.terminalEvents = {taskEnd: receipt.terminalEvents.taskEnd, end: receipt.terminalEvents.end};
+    }
+    if (['body_limit', 'body_shape', 'utf8', 'content_type', 'event_order', 'event_shape',
+      'provider_failure', 'no_text', 'json_shape', 'application_json',
+      'application_contract', 'other'].includes(receipt.schemaCategory)) {
+      detail.schemaCategory = receipt.schemaCategory;
+    }
+    log('agentarts-failure', 'runtime', JSON.stringify(detail));
   }
   function area(bounds) { return screen.getDisplayMatching(bounds).workArea; }
   function restore(mode, fallback) {
@@ -134,7 +159,8 @@ export function createDesktopHost() {
   screen.on('display-removed', reposition);
   screen.on('display-metrics-changed', reposition);
   try { shortcut(state.value.settings.shortcut); } catch { state.update({shortcut:false}); log('shortcut-unavailable','desktop-settings'); }
-  return {attach, restore, openSettings, get settings() { return state.value.settings; },
+  return {attach, restore, openSettings, logAgentArtsFailure,
+    get settings() { return state.value.settings; },
     get userNamespace() { return state.ensureHostUserNamespace(); },
     snap(win) { if (state.value.settings.snap) { const bounds = snapBounds(win.getBounds(), area(win.getBounds())); win.setPosition(bounds.x, bounds.y); } },
   };

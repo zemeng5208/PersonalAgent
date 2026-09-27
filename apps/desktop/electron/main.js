@@ -579,6 +579,8 @@ async function initializeRuntime() {
         gatewayUrl: process.env.PA_AGENTARTS_GATEWAY_URL ?? '',
         runtimeName: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
         invokeMode: agentArtsInvokeMode,
+        onDiagnostic: process.env.PA_AGENTARTS_SAFE_DIAGNOSTICS === '1'
+          ? receipt => desktopHost.logAgentArtsFailure(receipt) : undefined,
         authorizationProvider: {
           read: async () => {
             const authorization = process.env.PA_AGENTARTS_AUTHORIZATION;
