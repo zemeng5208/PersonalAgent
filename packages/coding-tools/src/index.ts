@@ -8,6 +8,14 @@ import {
   MAX_WORKSPACE_PATCH_PREVIEW_BYTES,
 } from './patch-preview.js';
 import {createWorkspacePatchStageToolFromReader} from './patch-stage.js';
+import {createWorkspacePatchApplyToolFromPreview} from './patch-apply.js';
+import type {WorkspacePatchApplyHostOptions} from './patch-apply.js';
+export {
+  WORKSPACE_PATCH_APPLY_SCOPE,
+  WORKSPACE_PATCH_APPLY_TOOL_NAME,
+  WORKSPACE_PATCH_APPLY_TOOL_VERSION,
+} from './patch-apply.js';
+export type {WorkspacePatchApplyHostOptions, WorkspacePatchApplyResult} from './patch-apply.js';
 export {
   createWorkspaceCommandTool,
   registerWorkspaceCommand,
@@ -530,6 +538,19 @@ export function createWorkspacePatchStageTool(options: WorkspacePatchPreviewOpti
   });
 }
 
+export function createWorkspacePatchApplyTool(
+  options: WorkspacePatchPreviewOptions & WorkspacePatchApplyHostOptions,
+): RegisteredTool {
+  const preview = createWorkspacePatchPreviewTool(options);
+  return createWorkspacePatchApplyToolFromPreview({
+    rootPath: options.rootPath,
+    recoveryRootPath: options.recoveryRootPath,
+    powerShellPath: options.powerShellPath,
+    preview,
+    now: options.now ?? Date.now,
+  });
+}
+
 export function createWorkspaceListTool(options: WorkspaceListOptions): RegisteredTool {
   const root = canonicalRoot(options?.rootPath);
   const maxEntries = boundedInteger(
@@ -659,4 +680,11 @@ export function registerWorkspacePatchPreview(
 
 export function registerWorkspacePatchStage(host: ToolHost, options: WorkspacePatchPreviewOptions): () => void {
   return host.register(createWorkspacePatchStageTool(options));
+}
+
+export function registerWorkspacePatchApply(
+  host: ToolHost,
+  options: WorkspacePatchPreviewOptions & WorkspacePatchApplyHostOptions,
+): () => void {
+  return host.register(createWorkspacePatchApplyTool(options));
 }

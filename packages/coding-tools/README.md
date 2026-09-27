@@ -1,12 +1,47 @@
 # 编程工具：可信工作区能力（MOD-18）
 
-`@personal-agent/coding-tools` 为 `huawei_ict_agentarts` Competition Profile 提供两个受限只读工具、一个须由可信宿主显式注册的固定命令工具，以及授权后创建文本补丁候选文件的工具。它不接受自由 shell/argv，不把候选文件应用到原文件，不自动发布，也不提供 Artifact/Evidence 服务。
+`@personal-agent/coding-tools` 为 `huawei_ict_agentarts` Competition Profile 提供两个受限只读工具、一个须由可信宿主显式注册的固定命令工具，以及独立授权的补丁候选和原文件应用工具。它不接受自由 shell/argv，不自动把候选文件应用到原文件，不自动发布，也不提供 Artifact/Evidence 服务。
 
-## 当前增量：授权后的文本补丁候选文件
+## 当前增量：独占句柄内应用文本补丁
+
+`createWorkspacePatchApplyTool(options)` / `registerWorkspacePatchApply(host, options)`
+显式提供 `workspace.apply_text_patch@1.0.0`。它复用现有只读 preview 的严格
+相对路径、原 SHA-256、唯一精确编辑和有界 UTF-8 候选字节；额外要求
+`workspace:apply`，不能把 stage 的 `workspace:write` 授权升级为源文件应用。
+可信宿主提供工作区根、工作区外且已限权的恢复目录、受信 PowerShell 可执行文件；
+helper 脚本和可执行文件也必须位于授权工作区外，模型和工具输入都不能改变
+这些位置。当前仅支持 Windows，默认不注册到产品。
+
+固定的 `scripts/locked-apply.ps1` 不使用 `ExecutionPolicy Bypass`，通过 stdin
+接收本次 preview 生成、SHA 绑定的候选字节，不信任可由其他进程修改的 stage
+文件。它用 .NET `FileStream` 的 `FileShare.None` 在同一独占句柄内核对源 SHA、
+最终路径和单硬链接身份；首写前在受信恢复目录排他创建备份并 `Flush(true)`、
+读回备份，之后才原位写入、截断、`Flush(true)` 并在仍持锁时读回目标 SHA。
+打开文件时已有其他句柄或原 SHA 不符时不写。成功结果只证明独占读回的那个
+时刻，锁释放后的用户编辑仍可继续。写入开始后故障、超时或进程终止可能留下
+部分文件与备份，必须以任务/运行标识查找备份并重新核对当前源文件及授权，
+不自动重试或盲目回滚。恢复目录还按源文件保留 `.inflight` 标记及 helper PID：
+候选字节发送前持久创建，只有进程 `close` 确认后才删除；2 秒停止等待超时
+可以先向上层返回未知，但标记未消失前不得对账或再次 apply 同一源文件。
+进程/宿主崩溃留下的标记只能由受信恢复流程确认 PID 已退出、核对备份和
+当前源文件后处理。原位写入不是断电/崩溃时始终原子旧或新的替换。
+
+此工具仍不构成任意路径的 OS 沙箱；Node 先拒绝链接、硬链接和越界路径，
+helper 再对已打开句柄核对最终路径和链接数，无法证明时不写。恢复目录必须由
+可信宿主预先创建并限制访问；本包不把备份当作 Artifact，也不允许其内容自动
+送往云端。当前 factory 只确认恢复目录位于工作区外且存在，不能证明 Windows
+ACL 已限权；正式组合在核验目录访问控制前不得注册 apply。合成临时目录测试
+不构成该核验。现有 ToolGateway 对所有 `local_write` 异常保守映射
+`RESULT_UNKNOWN`，包括可以证明首写前安全拒绝的冲突，需由公共 owner 后续
+明确分阶段错误；本包不越界修改 Gateway。真实用户工作区验收须与命令工具
+共用编程链的一次联合回执。
+
+## 既有增量：授权后的文本补丁候选文件
+
 
 `createWorkspacePatchStageTool(options)` 提供显式注册的 `workspace.stage_text_patch@1.0.0`。可信宿主提供工作区根；现有 ToolGateway/Policy 按任务、工具、参数和 `workspace:read` + `workspace:write` 授权，本包不签发授权。输入沿用预览的规范路径、`expectedSha256` 和有界 `edits`。它拒绝链接、硬链接、目录逃逸、敏感文件和过期哈希，在可信根下排他创建 `.pa-stage-*.patch` 候选文件，读回摘要并复核原文件。返回的 `stagedPath` 是相对路径；原文件始终不打开写入、不重命名、不覆盖。`registerWorkspacePatchStage(host, options)` 沿用现有 ToolHost 生命周期，默认不在产品中注册。
 
-候选文件创建属于 `local_write`，不支持自动幂等重试与恢复；失败时尝试删除本次候选，无法确认清理则报告 `RESULT_UNKNOWN`。候选文件不是已应用补丁或最终 Artifact。真正修改原文件需要独立的可信写入和读回验收。
+候选文件创建属于 `local_write`，不支持自动幂等重试与恢复；失败时尝试删除本次候选，无法确认清理则报告 `RESULT_UNKNOWN`。候选文件不是已应用补丁或最终 Artifact。上述 apply 是独立的独占句柄原位应用路径，不把 stage 的哈希检查或 rename 冒充原子 CAS。
 
 ## 公开入口
 
@@ -52,7 +87,7 @@
 
 本包消费 `@personal-agent/contracts@0.1.0-alpha.1` 的 provisional `RegisteredTool`、`ToolContext` 与 `ToolHost`，并按现有 Gateway/Policy scope 机制工作。它没有私设仍为 unavailable 的 `ToolExecutionPort`、ArtifactPort 或 EvidencePort。
 
-已合并的只读工具验收不证明候选文件工具已进入 Runtime 或真实 AgentArts。`workspace.list_entries`、固定命令和候选文件工具均不会自动进入生产 composition。根 `package.json` build 编排与 `package-lock.json` workspace 记录随 PR #83 从 `main@1e3b56b6` 重建；旧 Draft #63 已关闭。
+已合并的只读工具验收不证明候选或 apply 工具已进入 Runtime 或真实 AgentArts。`workspace.list_entries`、固定命令、候选文件和 apply 工具均不会自动进入生产 composition。根 `package.json` build 编排与 `package-lock.json` workspace 记录随 PR #83 从 `main@1e3b56b6` 重建；旧 Draft #63 已关闭。
 
 ## 定向验证
 
