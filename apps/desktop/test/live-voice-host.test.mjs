@@ -75,3 +75,56 @@ test('normal turns remain listening, transcripts persist, lease renews and expli
   assert.equal(host.snapshot().active,false);
   assert.equal(schedules.size,0);
 });
+
+test('empty transcript is ignored and persistence failure degrades gracefully without dropping audio', async () => {
+  let host, request, token;
+  let throwOnSave = false;
+  const saved = [];
+  const contents = {mainFrame:{},isDestroyed:()=>false,send(_channel,message) {
+    token = message.token;
+    if (['start','stop'].includes(message.type)) queueMicrotask(()=>host.receive(
+      {sender:contents,senderFrame:contents.mainFrame},{token:message.token,type:message.type==='start'?'ready':'stopped'}));
+  }};
+  host = createLiveVoiceHost({
+    getPanel:()=>({webContents:contents,isDestroyed:()=>false,isVisible:()=>true}),
+    config:{snapshot:()=>({configured:true,reason:'就绪'}),current:()=>({})},
+    microphoneHost:{authorize(){},revoke:async()=>{}},
+    createSource:()=>({subscribe:()=>({ready:Promise.resolve(),closed:Promise.resolve(),unsubscribe(){}}),dispose:async()=>{}}),
+    createGateway:()=>({async connect(value) {request=value;return {sendAudio(){},interrupt(){},close:async()=>{}};}}),
+    createConsumer:()=>({}),client:{},readContext:()=>'',onTaskSubmitted(){},
+    onTranscript:message => {
+      if (throwOnSave) throw Error('模拟磁盘写入异常');
+      saved.push(message);
+    },
+  });
+  await host.start();
+  assert.equal(host.snapshot().status,'listening');
+
+  // Empty or whitespace transcript must not crash or drop audio
+  request.onEvent({type:'transcript',id:'empty1',role:'user',text:''});
+  request.onEvent({type:'transcript',id:'empty2',role:'user',text:'   '});
+  assert.equal(host.snapshot().status,'listening');
+  assert.equal(saved.length,0);
+
+  // Persistence failure must degrade gracefully without terminating live audio
+  throwOnSave = true;
+  request.onEvent({type:'transcript',id:'u1',role:'user',text:'遇到磁盘异常的话语'});
+  assert.equal(host.snapshot().status,'listening');
+  assert.equal(host.hasActive(),true);
+  assert.match(host.snapshot().reason,/对话记录保存异常/);
+  assert.equal(host.snapshot().transcripts.length,1);
+  assert.equal(host.snapshot().transcripts[0].text,'遇到磁盘异常的话语');
+
+  // Next successful save clears degraded flag
+  throwOnSave = false;
+  request.onEvent({type:'transcript',id:'a1',role:'assistant',text:'回答依然继续'});
+  assert.equal(host.snapshot().status,'listening');
+  assert.equal(host.snapshot().reason,'就绪');
+  assert.equal(saved.length,1);
+  assert.equal(saved[0].text,'回答依然继续');
+
+  // Updated transcript with same id updates in-memory transcript text
+  request.onEvent({type:'transcript',id:'a1',role:'assistant',text:'回答依然继续（修订补充）'});
+  assert.equal(host.snapshot().transcripts.find(t=>t.id===saved[0].id).text,'回答依然继续（修订补充）');
+  await host.stop();
+});

@@ -1,4 +1,4 @@
-import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {resultText} from '../src/features/conversation/result-text.js';
 
@@ -36,14 +36,22 @@ export class Conversations {
       !['user','assistant'].includes(message.role) || typeof message.text !== 'string' || !message.text.trim() || message.text.length > 100000 ||
       typeof message.createdAt !== 'string' || !Number.isFinite(Date.parse(message.createdAt)) ||
       (message.surface !== undefined && message.surface !== 'panel')) throw Error('Live 对话消息格式无效');
-    return {id:message.id,sessionId:message.sessionId,role:message.role,text:message.text,createdAt:new Date(message.createdAt).toISOString(),surface:'panel'};
+    return {id:message.id,sessionId:message.sessionId,role:message.role,text:message.text.trim(),createdAt:new Date(message.createdAt).toISOString(),surface:'panel'};
   }
   addLiveMessage(message) {
     const valid = this.validateLiveMessage(message);
     const prior = this.messages.get(valid.id);
     if (prior) {
-      if (['sessionId','role','text','surface'].some(key => prior[key] !== valid[key])) throw Error('Live 对话消息标识冲突');
-      return {...prior};
+      if (prior.sessionId !== valid.sessionId || prior.role !== valid.role || prior.surface !== valid.surface) {
+        throw Error('Live 对话消息标识冲突');
+      }
+      if (prior.text === valid.text) return {...prior};
+      const updated = {...prior, text: valid.text};
+      const messages = new Map(this.messages);
+      messages.set(valid.id, updated);
+      this.save(this.turns, messages);
+      this.messages = messages;
+      return {...updated};
     }
     const messages = new Map(this.messages);
     messages.set(valid.id, valid);
@@ -58,9 +66,20 @@ export class Conversations {
   save(turns, messages) {
     if (!this.file) return;
     mkdirSync(path.dirname(this.file), {recursive:true});
-    const temporary = `${this.file}.tmp-${process.pid}`;
-    writeFileSync(temporary, JSON.stringify({version:2,turns:[...turns.values()],messages:[...messages.values()]}), 'utf8');
-    renameSync(temporary, this.file);
+    const temporary = `${this.file}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const content = JSON.stringify({version:2,turns:[...turns.values()],messages:[...messages.values()]});
+    writeFileSync(temporary, content, 'utf8');
+    try {
+      renameSync(temporary, this.file);
+    } catch (err) {
+      try {
+        writeFileSync(this.file, content, 'utf8');
+        try { unlinkSync(temporary); } catch {}
+      } catch {
+        try { unlinkSync(temporary); } catch {}
+        throw err;
+      }
+    }
   }
   history(tasks, taskId) {
     const surface = this.surface(taskId);

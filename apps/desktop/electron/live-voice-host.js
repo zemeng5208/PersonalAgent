@@ -27,7 +27,7 @@ export function createLiveVoiceHost({getPanel, config, microphoneHost, createSou
   let transcripts = [];
   const publish = () => {try {onUpdate();} catch {}};
   const snapshot = () => ({...config.snapshot(), active: enabled || Boolean(active), status: active?.phase ?? (enabled ? 'reconnecting' : lastError ? 'error' : 'idle'),
-    reason: lastError || config.snapshot().reason, verification: 'unverified', transcripts: [...transcripts]});
+    reason: lastError || (active?.persistenceDegraded ? '对话记录保存异常，正在以内存状态保持通话' : config.snapshot().reason), verification: 'unverified', transcripts: [...transcripts]});
   const command = (record, value) => {
     if (record.panel.isDestroyed() || record.panel.webContents.isDestroyed()) throw Error('Live 面板已关闭');
     record.panel.webContents.send('desktop:live-command', {token: record.id, ...value});
@@ -104,10 +104,19 @@ export function createLiveVoiceHost({getPanel, config, microphoneHost, createSou
           if (event.type === 'interrupted') {record.phase = 'listening'; command(record, {type: 'clear'});}
           if (event.type === 'turn_complete') command(record, {type: 'drain'});
           if (event.type === 'transcript') {
+            const trimmed = typeof event.text === 'string' ? event.text.trim() : '';
+            if (!trimmed) return;
             const message = {id: `${record.id}:${createHash('sha256').update(`${event.role}:${event.id}`).digest('hex')}`, sessionId: record.id,
-              role: event.role, text: event.text, createdAt: new Date(now()).toISOString()};
-            try {onTranscript(message);} catch {fail('Live 对话记录保存失败，请检查本机存储'); return;}
-            if (!transcripts.some(item => item.id === message.id)) transcripts.push(message);
+              role: event.role, text: trimmed, createdAt: new Date(now()).toISOString()};
+            try {
+              onTranscript(message);
+              record.persistenceDegraded = false;
+            } catch {
+              record.persistenceDegraded = true;
+            }
+            const existingIndex = transcripts.findIndex(item => item.id === message.id);
+            if (existingIndex >= 0) transcripts[existingIndex] = message;
+            else transcripts.push(message);
             transcripts = transcripts.slice(-20);
           }
           if (event.type !== 'audio') publish();

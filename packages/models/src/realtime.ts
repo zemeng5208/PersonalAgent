@@ -159,9 +159,14 @@ export class QwenRealtimeModelGateway {
         } else if (message.type === 'conversation.item.input_audio_transcription.completed'
           || message.type === 'response.audio_transcript.done') {
           if (typeof message.transcript !== 'string' || message.transcript.length > 24000) throw Error();
-          const id = message.item_id ?? message.response_id ?? message.event_id;
-          if (typeof id !== 'string' || !/^[\w-]{1,256}$/.test(id)) throw Error();
-          emit({type: 'transcript', id, role: message.type.startsWith('conversation.') ? 'user' : 'assistant', text: message.transcript});
+          const trimmed = message.transcript.trim();
+          if (!trimmed) return;
+          const baseId = message.item_id ?? message.response_id ?? message.event_id;
+          if (typeof baseId !== 'string') throw Error();
+          const suffix = message.content_index !== undefined ? `_${message.content_index}` : (message.output_index !== undefined ? `_${message.output_index}` : '');
+          const id = `${baseId}${suffix}`;
+          if (!/^[\w-]{1,256}$/.test(id)) throw Error();
+          emit({type: 'transcript', id, role: message.type.startsWith('conversation.') ? 'user' : 'assistant', text: trimmed});
         } else if (message.type === 'response.function_call_arguments.done') {void toolCall(message);}
         else if (message.type === 'response.done') {
           currentResponse = '';
