@@ -589,13 +589,16 @@ export function createWorkspaceCommandRecipeTool(options = {}) {
     }
   }
 
+  const execute = async (input, context) => {
+    assertPinnedState();
+    return await tool.execute(input, context);
+  };
+  const guardedTool = {...tool, execute};
+
   return {
-    tool,
-    descriptor: tool.descriptor,
-    execute: async (input, context) => {
-      assertPinnedState();
-      return await tool.execute(input, context);
-    },
+    tool: guardedTool,
+    descriptor: guardedTool.descriptor,
+    execute,
     recipes,
     diagnostics,
     workspaceRoot,

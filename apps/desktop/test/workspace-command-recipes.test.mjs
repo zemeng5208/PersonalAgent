@@ -499,6 +499,7 @@ test('runtime pinning in createWorkspaceCommandRecipeTool: any mutation of execu
   writeFileSync(pkgJsonPath, JSON.stringify({name: 'pin-test', scripts: {build: 'echo mutated'}}));
   assert.equal(toolWrapper.available(), false);
   await assert.rejects(toolWrapper.execute({recipeId: 'npm-build'}, {}), /mutated after registration/i);
+  await assert.rejects(toolWrapper.tool.execute({recipeId: 'npm-build'}, {}), /mutated after registration/i);
 
   // Restore package.json -> available() returns true again
   writeFileSync(pkgJsonPath, initialPkg);
