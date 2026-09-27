@@ -172,6 +172,7 @@ let mailHost;
 let mailAnalysisHost;
 let mailFailure = '';
 let localLaya;
+let knowledgeStatus = {configured: false, available: false, reason: '知识库尚未装配'};
 let localServicesStopping = false;
 let localServicesStopped = false;
 let nextMailRefresh = 0;
@@ -242,6 +243,7 @@ function snapshot(surface) {
     coding: codingWorkspace?.snapshot() ?? {configured:false,reason:'编程工作区尚未装配'},
     agentArts: agentArtsConfig?.snapshot(),
     laya: localLaya?.snapshot() ?? {state:'unavailable', ready:false, reason:'本地模型尚未装配'},
+    knowledge: structuredClone(knowledgeStatus),
     voice: voiceInput ? {...voiceInput.snapshot(), experimental: sisConfigHost?.snapshot().configured,
       configuration: sisConfigHost?.snapshot()} : {available: false, status: voiceInitializationFailure ? 'error' : 'unconfigured',
       reason: voiceInitializationFailure?.message ?? sisConfigHost?.snapshot().reason ?? 'SIS 尚未配置',
@@ -844,8 +846,11 @@ async function initializeRuntime() {
             isSessionAllowed:() => mailConfig.isSessionAllowed(revision)});
         } catch {mailFailure = '邮箱本地分类状态无法装配；其他功能可继续使用';}
       }
-      const {createSubagentDispatchTool, SUBAGENT_DISPATCH_TOOL_NAME, SUBAGENT_DISPATCH_TOOL_VERSION} = await import('@personal-agent/agents');
-      const subagentTool = createSubagentDispatchTool();
+      const {SUBAGENT_DISPATCH_TOOL_NAME, SUBAGENT_DISPATCH_TOOL_VERSION} = await import('@personal-agent/agents');
+      const subagentTool = runtimeModule.createRuntimeSubagentDispatchTool({
+        getRuntime: () => runtimeApplication.runtime,
+        getTools: () => runtimeApplication.tools,
+      });
       const subagentAvailability = {
         toolName: SUBAGENT_DISPATCH_TOOL_NAME,
         toolVersion: SUBAGENT_DISPATCH_TOOL_VERSION,
@@ -855,32 +860,93 @@ async function initializeRuntime() {
         toolName: SUBAGENT_DISPATCH_TOOL_NAME,
         toolVersion: SUBAGENT_DISPATCH_TOOL_VERSION,
         exportPolicyVersion: '1.0.0',
-        accepts: () => true,
-        project: async ({output}) => output,
+        accepts: ({arguments: args}) => Array.isArray(args?.subtasks) && args.subtasks.length > 0 && args.subtasks.length <= 10,
+        project: async ({result, signal}) => {
+          if (signal?.aborted) throw Error('次级智能体结果导出已取消');
+          if (!result || typeof result !== 'object') throw Error('次级智能体结果无效');
+          const r = result;
+          const projected = {
+            total: Number(r.total ?? 0),
+            succeeded: Number(r.succeeded ?? 0),
+            failed: Number(r.failed ?? 0),
+            cancelled: Number(r.cancelled ?? 0),
+            summary: String(r.summary ?? r.aggregatedSummary ?? '').slice(0, 16384),
+            subtasks: Array.isArray(r.subtasks) ? r.subtasks.map(s => ({
+              subtaskId: String(s.subtaskId ?? ''),
+              role: String(s.role ?? ''),
+              roleLabel: String(s.roleLabel ?? ''),
+              state: String(s.state ?? ''),
+              result: typeof s.result === 'string' ? s.result.slice(0, 4096) : undefined,
+              error: typeof s.error === 'string' ? s.error.slice(0, 1024) : undefined,
+            })) : [],
+          };
+          if (Buffer.byteLength(JSON.stringify(projected), 'utf8') > 64 * 1024) {
+            throw Error('次级智能体汇总结果超出 64KB 上限');
+          }
+          return projected;
+        },
       };
-      const knowledgeDir = path.join(app.getPath('userData'), 'knowledge');
-      mkdirSync(knowledgeDir, {recursive: true});
+
+      const configuredKnowledgeDir = process.env.PERSONAL_AGENT_KNOWLEDGE_DIR
+        || process.env.PERSONAL_AGENT_OBSIDIAN_VAULT
+        || path.join(app.getPath('userData'), 'knowledge');
       const {openReadOnlyVault} = await import('@personal-agent/knowledge/filesystem');
       const {createKnowledgeSearchTool, KNOWLEDGE_SEARCH_TOOL_NAME, KNOWLEDGE_SEARCH_TOOL_VERSION} = await import('@personal-agent/knowledge/tool');
       let knowledgeTool = null;
       let knowledgeAvailability = null;
       let knowledgeExport = null;
       try {
-        const vault = await openReadOnlyVault({vaultId: 'desktop-notes', rootPath: knowledgeDir});
+        if (!existsSync(configuredKnowledgeDir)) {
+          mkdirSync(configuredKnowledgeDir, {recursive: true});
+        }
+        const vault = await openReadOnlyVault({vaultId: 'desktop-notes', rootPath: configuredKnowledgeDir});
         knowledgeTool = createKnowledgeSearchTool(vault);
         knowledgeAvailability = {
           toolName: KNOWLEDGE_SEARCH_TOOL_NAME,
           toolVersion: KNOWLEDGE_SEARCH_TOOL_VERSION,
           available: async () => true,
         };
+        knowledgeStatus = {
+          configured: true,
+          available: true,
+          rootPath: configuredKnowledgeDir,
+          reason: '知识库已连接（只读）',
+        };
         knowledgeExport = {
           toolName: KNOWLEDGE_SEARCH_TOOL_NAME,
           toolVersion: KNOWLEDGE_SEARCH_TOOL_VERSION,
           exportPolicyVersion: '1.0.0',
-          accepts: () => true,
-          project: async ({output}) => output,
+          accepts: ({arguments: args}) => typeof args?.query === 'string' && args.query.trim().length > 0,
+          project: async ({result, signal}) => {
+            if (signal?.aborted) throw Error('知识库检索结果导出已取消');
+            if (!result || typeof result !== 'object') throw Error('知识库检索结果无效');
+            const r = result;
+            const projected = {
+              hits: Array.isArray(r.hits) ? r.hits.slice(0, 5).map(h => ({
+                source: {
+                  vaultId: String(h.source?.vaultId ?? ''),
+                  path: path.basename(String(h.source?.path ?? '')),
+                  line: Number(h.source?.line ?? 1),
+                  revision: String(h.source?.revision ?? ''),
+                },
+                excerpt: String(h.excerpt ?? '').slice(0, 200),
+              })) : [],
+              truncated: Boolean(r.truncated || (Array.isArray(r.hits) && r.hits.length > 5)),
+            };
+            if (Buffer.byteLength(JSON.stringify(projected), 'utf8') > 16 * 1024) {
+              throw Error('知识库检索投影超出 16KB 上限');
+            }
+            return projected;
+          },
         };
-      } catch {}
+      } catch (err) {
+        knowledgeStatus = {
+          configured: true,
+          available: false,
+          rootPath: configuredKnowledgeDir,
+          reason: `知识库初始化失败：${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
       runtimeApplication = runtimeModule.createAgentArtsRuntimeApplication({
         path: dbPath,
         hostUserNamespace: namespace,

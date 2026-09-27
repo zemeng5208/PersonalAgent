@@ -108,3 +108,29 @@ test('createSubagentDispatchTool provides valid ToolDescriptor and execute bridg
   assert.equal(invoked, true);
   assert.deepEqual(result, {total: 1, succeeded: 1, failed: 0, cancelled: 0, summary: 'all good'});
 });
+
+test('createSubagentDispatchTool rejects missing handler', () => {
+  assert.throws(() => createSubagentDispatchTool(), {code: 'INVALID_ARGUMENT'});
+});
+
+test('dispatchSubtasks rejects duplicate subtaskId', async () => {
+  const ctx = mockContext();
+  await assert.rejects(dispatchSubtasks(ctx, [
+    {subtaskId: 'dup-1', role: 'planner', goal: 'step 1'},
+    {subtaskId: 'dup-1', role: 'coder', goal: 'step 2'},
+  ], async () => 'ok'), {code: 'INVALID_ARGUMENT'});
+});
+
+test('dispatchSubtasks rejects reusing completed result if subtask input changed', async () => {
+  const ctx = mockContext();
+  // First run
+  await dispatchSubtasks(ctx, [
+    {subtaskId: 'task-a', role: 'researcher', goal: '原始目标'},
+  ], async () => '原始结果');
+
+  // Second run with changed goal for same subtaskId
+  await assert.rejects(dispatchSubtasks(ctx, [
+    {subtaskId: 'task-a', role: 'researcher', goal: '改变后的目标'},
+  ], async () => '新结果'), {code: 'REVISION_CONFLICT'});
+});
+

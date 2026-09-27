@@ -257,6 +257,25 @@ export const DEFAULT_ROLE_LABELS: Record<SubtaskRole, string> = {
   coordinator: '多智能体协作与汇总',
 };
 
+export interface SubtaskProgressRecord {
+  parentTaskId: string;
+  subtaskId: string;
+  inputDigest: string;
+  state: SubtaskProgress['state'];
+  result?: string;
+  error?: string;
+}
+
+export function computeSubtaskInputDigest(subtask: SubtaskDefinition): string {
+  return JSON.stringify({
+    subtaskId: subtask.subtaskId.trim(),
+    role: subtask.role,
+    goal: subtask.goal.trim(),
+    ...(subtask.model ? {model: subtask.model.trim()} : {}),
+    ...(subtask.thinkingDepth !== undefined ? {thinkingDepth: subtask.thinkingDepth} : {}),
+  });
+}
+
 export async function dispatchSubtasks(
   context: AgentWorkerContext,
   subtasks: readonly SubtaskDefinition[],
@@ -265,12 +284,22 @@ export async function dispatchSubtasks(
   if (!Array.isArray(subtasks) || subtasks.length === 0) {
     throw new ProtocolError('INVALID_ARGUMENT', 'Subtasks must be a non-empty array');
   }
-  if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Task was cancelled');
+
+  const seenIds = new Set<string>();
+  for (let i = 0; i < subtasks.length; i++) {
+    const subtask = subtasks[i];
+    if (!subtask.subtaskId?.trim()) throw new ProtocolError('INVALID_ARGUMENT', `Subtask ${i} missing subtaskId`);
+    if (!subtask.goal?.trim()) throw new ProtocolError('INVALID_ARGUMENT', `Subtask ${subtask.subtaskId} missing goal`);
+    if (seenIds.has(subtask.subtaskId.trim())) {
+      throw new ProtocolError('INVALID_ARGUMENT', `Duplicate subtaskId: ${subtask.subtaskId}`);
+    }
+    seenIds.add(subtask.subtaskId.trim());
+  }
 
   const progressList: SubtaskProgress[] = [];
   const checkpointKey = 'subtask-progress-records';
-  const saved = context.loadCheckpoint(checkpointKey) as Record<string, {state: SubtaskProgress['state']; result?: string; error?: string}> | undefined;
-  const progressMap = new Map<string, {state: SubtaskProgress['state']; result?: string; error?: string}>(
+  const saved = context.loadCheckpoint(checkpointKey) as Record<string, SubtaskProgressRecord> | undefined;
+  const progressMap = new Map<string, SubtaskProgressRecord>(
     saved ? Object.entries(saved) : [],
   );
 
@@ -279,23 +308,30 @@ export async function dispatchSubtasks(
 
   for (let i = 0; i < subtasks.length; i++) {
     const subtask = subtasks[i];
-    if (!subtask.subtaskId?.trim()) throw new ProtocolError('INVALID_ARGUMENT', `Subtask ${i} missing subtaskId`);
-    if (!subtask.goal?.trim()) throw new ProtocolError('INVALID_ARGUMENT', `Subtask ${subtask.subtaskId} missing goal`);
     const roleLabel = subtask.roleLabel?.trim() || (DEFAULT_ROLE_LABELS as Record<string, string>)[subtask.role] || String(subtask.role);
+    const inputDigest = computeSubtaskInputDigest(subtask);
 
     // Check if already finished in saved checkpoint
     const previous = progressMap.get(subtask.subtaskId);
-    if (previous && (previous.state === 'succeeded' || previous.state === 'failed' || previous.state === 'cancelled')) {
-      progressList.push({
-        subtaskId: subtask.subtaskId,
-        role: subtask.role,
-        roleLabel,
-        state: previous.state,
-        ...(previous.result !== undefined ? {result: previous.result} : {}),
-        ...(previous.error !== undefined ? {error: previous.error} : {}),
-      });
-      completedCount++;
-      continue;
+    if (previous) {
+      if (previous.parentTaskId && previous.parentTaskId !== context.taskId) {
+        throw new ProtocolError('REVISION_CONFLICT', `Subtask ${subtask.subtaskId} belongs to parent task ${previous.parentTaskId}, not ${context.taskId}`);
+      }
+      if (previous.inputDigest && previous.inputDigest !== inputDigest) {
+        throw new ProtocolError('REVISION_CONFLICT', `Subtask ${subtask.subtaskId} input changed from prior execution; cannot reuse old result`);
+      }
+      if (previous.state === 'succeeded' || previous.state === 'failed' || previous.state === 'cancelled') {
+        progressList.push({
+          subtaskId: subtask.subtaskId,
+          role: subtask.role,
+          roleLabel,
+          state: previous.state,
+          ...(previous.result !== undefined ? {result: previous.result} : {}),
+          ...(previous.error !== undefined ? {error: previous.error} : {}),
+        });
+        completedCount++;
+        continue;
+      }
     }
 
     if (context.signal.aborted) {
@@ -306,7 +342,14 @@ export async function dispatchSubtasks(
         state: 'cancelled',
         error: 'Cancelled before execution',
       });
-      progressMap.set(subtask.subtaskId, {state: 'cancelled', error: 'Cancelled before execution'});
+      progressMap.set(subtask.subtaskId, {
+        parentTaskId: context.taskId,
+        subtaskId: subtask.subtaskId,
+        inputDigest,
+        state: 'cancelled',
+        error: 'Cancelled before execution',
+      });
+      context.saveCheckpoint(checkpointKey, Object.fromEntries(progressMap.entries()));
       continue;
     }
 
@@ -327,7 +370,13 @@ export async function dispatchSubtasks(
         state: 'succeeded',
         result,
       });
-      progressMap.set(subtask.subtaskId, {state: 'succeeded', result});
+      progressMap.set(subtask.subtaskId, {
+        parentTaskId: context.taskId,
+        subtaskId: subtask.subtaskId,
+        inputDigest,
+        state: 'succeeded',
+        result,
+      });
       context.reportProgress({
         stepId: `subtask-${subtask.subtaskId}`,
         label: `[${roleLabel}] 执行完成: ${subtask.goal}`,
@@ -343,7 +392,13 @@ export async function dispatchSubtasks(
           state: 'cancelled',
           error: err instanceof Error ? err.message : 'Cancelled',
         });
-        progressMap.set(subtask.subtaskId, {state: 'cancelled', error: err instanceof Error ? err.message : 'Cancelled'});
+        progressMap.set(subtask.subtaskId, {
+          parentTaskId: context.taskId,
+          subtaskId: subtask.subtaskId,
+          inputDigest,
+          state: 'cancelled',
+          error: err instanceof Error ? err.message : 'Cancelled',
+        });
       } else {
         completedCount++;
         progressList.push({
@@ -353,7 +408,13 @@ export async function dispatchSubtasks(
           state: 'failed',
           error: err instanceof Error ? err.message : 'Subtask execution failed',
         });
-        progressMap.set(subtask.subtaskId, {state: 'failed', error: err instanceof Error ? err.message : 'Subtask execution failed'});
+        progressMap.set(subtask.subtaskId, {
+          parentTaskId: context.taskId,
+          subtaskId: subtask.subtaskId,
+          inputDigest,
+          state: 'failed',
+          error: err instanceof Error ? err.message : 'Subtask execution failed',
+        });
         context.reportProgress({
           stepId: `subtask-${subtask.subtaskId}`,
           label: `[${roleLabel}] 执行失败: ${err instanceof Error ? err.message : '执行失败'}`,
@@ -397,6 +458,9 @@ export const SUBAGENT_DISPATCH_TOOL_VERSION = '1.0.0';
 export function createSubagentDispatchTool(
   handler: (input: {subtasks: readonly SubtaskDefinition[]}, context: ToolContext) => Promise<unknown>,
 ): RegisteredTool {
+  if (typeof handler !== 'function') {
+    throw new ProtocolError('INVALID_ARGUMENT', 'Subagent dispatch handler is required');
+  }
   return {
     descriptor: {
       name: SUBAGENT_DISPATCH_TOOL_NAME,

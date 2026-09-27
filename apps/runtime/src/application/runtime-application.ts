@@ -25,6 +25,7 @@ import {SystemObservationSessions, SYSTEM_OBSERVATION_SESSION_CHECKPOINT,
 import type {StartSystemObservationSessionRequest, SystemObservationSession} from './system-observation-session.js';
 import {MailReadSessions, MAIL_READ_SESSION_CHECKPOINT, MAIL_READ_TOOL, MAIL_READ_VERSION} from './mail-read-session.js';
 import type {StartMailReadSessionRequest, MailReadSession} from './mail-read-session.js';
+import {createRuntimeSubagentDispatchTool} from './subagent-host.js';
 type SuccessfulResponse = Extract<Response, {outcome: 'ok'}>;
 
 export interface RevokeHostAuthorizationRequest {
@@ -91,6 +92,16 @@ export interface ThinkingState extends ThinkingConfig {
   maxSteps: number;
   applied: boolean;
   reason: string;
+  stepBudget: {
+    maxSteps: number;
+    fast: boolean;
+    description: string;
+  };
+  modelReasoning: {
+    supported: boolean;
+    effort: 'none' | 'low' | 'medium' | 'high';
+    reason: string;
+  };
 }
 
 export interface RuntimeApplicationOptions { path: string; now?: () => Date; idFactory?: () => string; text?: TextApplicationOptions; tools?: readonly RegisteredTool[]; profile?: 'local' | 'huawei_ict_agentarts'; coordination?: CoordinationPort; competitionToolExports?: readonly CompetitionToolExport[]; competitionToolAvailability?: readonly CompetitionToolAvailability[]; competitionMaxSteps?: number; repairCandidateVersion?: '1.0'; localRepair?: LocalRepairHostOptions; hostUserNamespace?: string;
@@ -277,12 +288,29 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     this.thinkingConfig = {depth, fast};
     this.competitionMaxSteps = this.calculateThinkingMaxSteps(depth, fast);
     const labels = ['最低', '低', '平衡', '深入', '高', '最高'];
+    const effortLevels: ('none' | 'low' | 'medium' | 'high')[] = ['none', 'low', 'low', 'medium', 'high', 'high'];
+    const effort = effortLevels[depth] ?? 'low';
+    const isReasoningSupported = false;
+    const reasoningReason = isReasoningSupported
+      ? `模型推理思考已配置（effort: ${effort}）`
+      : `主模型当前未开放原生 reasoning 参数，思考深度作为任务步骤预算（maxSteps: ${this.competitionMaxSteps}）独立生效；若使用支持 reasoning 的子模型将透传推理参数`;
+
     return {
       depth,
       fast,
       maxSteps: this.competitionMaxSteps,
       applied: true,
-      reason: `思考深度已传入 Runtime：深度 ${labels[depth]}（${fast ? '快速模式' : '标准模式'}，最大步数 ${this.competitionMaxSteps}）`,
+      reason: `思考深度已传入 Runtime：深度 ${labels[depth]}（${fast ? '快速模式' : '标准模式'}，最大步数 ${this.competitionMaxSteps}）。${reasoningReason}`,
+      stepBudget: {
+        maxSteps: this.competitionMaxSteps,
+        fast,
+        description: `最大编排执行步数：${this.competitionMaxSteps} 步`,
+      },
+      modelReasoning: {
+        supported: isReasoningSupported,
+        effort,
+        reason: reasoningReason,
+      },
     };
   }
 
@@ -290,18 +318,43 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     const {depth, fast} = this.thinkingConfig;
     const maxSteps = this.calculateThinkingMaxSteps(depth, fast);
     const labels = ['最低', '低', '平衡', '深入', '高', '最高'];
+    const effortLevels: ('none' | 'low' | 'medium' | 'high')[] = ['none', 'low', 'low', 'medium', 'high', 'high'];
+    const effort = effortLevels[depth] ?? 'low';
+    const isReasoningSupported = false;
+    const reasoningReason = isReasoningSupported
+      ? `模型推理思考已配置（effort: ${effort}）`
+      : `主模型当前未开放原生 reasoning 参数，思考深度作为任务步骤预算（maxSteps: ${maxSteps}）独立生效；若使用支持 reasoning 的子模型将透传推理参数`;
+
     return {
       depth,
       fast,
       maxSteps,
       applied: true,
-      reason: `思考深度已传入 Runtime：深度 ${labels[depth]}（${fast ? '快速模式' : '标准模式'}，最大步数 ${maxSteps}）`,
+      reason: `思考深度已传入 Runtime：深度 ${labels[depth]}（${fast ? '快速模式' : '标准模式'}，最大步数 ${maxSteps}）。${reasoningReason}`,
+      stepBudget: {
+        maxSteps,
+        fast,
+        description: `最大编排执行步数：${maxSteps} 步`,
+      },
+      modelReasoning: {
+        supported: isReasoningSupported,
+        effort,
+        reason: reasoningReason,
+      },
     };
   }
 
   private calculateThinkingMaxSteps(depth: number, fast: boolean): number {
     const baseSteps = Math.max(2, (depth + 1) * 2);
     return fast ? Math.max(2, baseSteps - 2) : baseSteps;
+  }
+
+  /** Trusted Runtime-managed subagent dispatch tool. Creates and tracks real child tasks. */
+  createSubagentDispatchTool(): RegisteredTool {
+    return createRuntimeSubagentDispatchTool({
+      getRuntime: () => this.runtime,
+      getTools: () => this.tools,
+    });
   }
 
   /** Trusted composition only. Native audio never replaces AgentArts task coordination. */
