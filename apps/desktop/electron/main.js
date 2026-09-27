@@ -1,6 +1,6 @@
 import {app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, safeStorage, screen, session, Tray} from 'electron';
 import {fileURLToPath, pathToFileURL} from 'node:url';
-import {createHash} from 'node:crypto';
+import {createHash, randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import path from 'node:path';
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
@@ -173,6 +173,8 @@ let mailAnalysisHost;
 let mailFailure = '';
 let localLaya;
 let knowledgeStatus = {configured: false, available: false, reason: '知识库尚未装配'};
+let activeKnowledgeTool = null;
+let activeKnowledgeVault = null;
 let localServicesStopping = false;
 let localServicesStopped = false;
 let nextMailRefresh = 0;
@@ -928,6 +930,8 @@ async function initializeRuntime() {
         }
         const vault = await openReadOnlyVault({vaultId: 'desktop-notes', rootPath: configuredKnowledgeDir});
         knowledgeTool = createKnowledgeSearchTool(vault);
+        activeKnowledgeVault = vault;
+        activeKnowledgeTool = knowledgeTool;
         knowledgeAvailability = {
           toolName: KNOWLEDGE_SEARCH_TOOL_NAME,
           toolVersion: KNOWLEDGE_SEARCH_TOOL_VERSION,
@@ -936,6 +940,7 @@ async function initializeRuntime() {
         knowledgeStatus = {
           configured: true,
           available: true,
+          name: path.basename(configuredKnowledgeDir) || '本地知识与笔记',
           rootPath: configuredKnowledgeDir,
           reason: '知识库已连接（只读）',
         };
@@ -1214,6 +1219,21 @@ async function action(event, name, payload) {
     }
     publish(); return mailSnapshot();
   }
+  if (name === 'knowledge.search') {
+    if (!activeKnowledgeTool) throw Error('知识库尚未装配');
+    const query = typeof payload?.query === 'string' ? payload.query.trim() : '';
+    if (!query) throw Error('检索词不能为空');
+    const limit = Math.min(20, Math.max(1, Number(payload.limit) || 5));
+    return activeKnowledgeTool.execute({query, limit}, {
+      taskId: 'knowledge-direct-query',
+      runId: randomUUID(),
+      deadline: new Date(Date.now() + 30_000).toISOString(),
+      signal: new AbortController().signal,
+      scopes: ['knowledge:read'],
+      authorizationRef: 'desktop-internal',
+    });
+  }
+  if (name === 'knowledge.status') return snapshot(sender === workspace ? 'workspace' : sender === admin ? undefined : 'panel').knowledge;
   if (name === 'proactive.configure' || name === 'proactive.analyze') {
     if ((sender !== panel && sender !== admin) || !competitionMode || !proactiveHost) throw Error('主动观察仅允许可信设置或面板调用');
     if (name === 'proactive.configure') return proactiveHost.configure(payload);
