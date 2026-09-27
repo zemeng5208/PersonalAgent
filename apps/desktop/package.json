@@ -20,7 +20,6 @@
     "test:text-smoke": "node test/text-chat-smoke.cjs"
   },
   "dependencies": {
-    "@personal-agent/agents": "0.1.0-alpha.1",
     "@personal-agent/client": "0.1.0-alpha.1",
     "@personal-agent/cognition": "0.1.0-alpha.1",
     "@personal-agent/coding-tools": "0.1.0-alpha.1",

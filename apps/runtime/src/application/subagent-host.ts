@@ -4,14 +4,25 @@ import {
   createSubagentDispatchTool,
   dispatchSubtasks,
   DEFAULT_ROLE_LABELS,
+  SUBAGENT_DISPATCH_TOOL_NAME,
+  SUBAGENT_DISPATCH_TOOL_VERSION,
   type AgentWorkerContext,
   type AgentToolPort,
   type SubtaskDefinition,
   type SubtaskExecutionSummary,
 } from '@personal-agent/agents';
 import {runAgent} from '@personal-agent/agents';
-import type {ModelGateway, ModelMessage} from '@personal-agent/models';
+import {
+  ModelGateway,
+  FakeModelProvider,
+  PanguModelProvider,
+  type ModelMessage,
+  type ModelRequest,
+  type PanguModelProviderOptions,
+} from '@personal-agent/models';
 import type {TaskRuntime, WorkerContext, SubmitTaskInput} from '../index.js';
+
+export {SUBAGENT_DISPATCH_TOOL_NAME, SUBAGENT_DISPATCH_TOOL_VERSION};
 
 export interface SubagentHostOptions {
   getRuntime: () => TaskRuntime;
@@ -219,4 +230,58 @@ export function createRuntimeSubagentDispatchTool(options: SubagentHostOptions):
   };
 
   return createSubagentDispatchTool(handler);
+}
+
+export interface DesktopSubagentDispatchToolOptions {
+  getRuntime: () => TaskRuntime;
+  getTools?: (() => AgentToolPort | undefined) | undefined;
+  fakeModelMode?: boolean;
+  modelConfig?: {
+    baseUrl?: string;
+    model?: string;
+    deployment?: string;
+    apiKey?: string;
+  };
+  now?: (() => number) | undefined;
+  maxRecursionDepth?: number | undefined;
+}
+
+export function createDesktopSubagentDispatchTool(options: DesktopSubagentDispatchToolOptions): RegisteredTool {
+  const {getRuntime, getTools, fakeModelMode, modelConfig, now, maxRecursionDepth} = options;
+  return createRuntimeSubagentDispatchTool({
+    getRuntime,
+    getTools,
+    now,
+    maxRecursionDepth,
+    getModelGateway: (modelName?: string) => {
+      if (fakeModelMode) {
+        return new ModelGateway(new FakeModelProvider(
+          Array.from({length: 16}, () => (req: ModelRequest) => ({
+            kind: 'final',
+            text: `[次级智能体 ${modelName || 'default'}] 完成分析与执行：${req.messages.at(-1)?.content || ''}`,
+          })),
+          {
+            provider: 'fake',
+            deployment: 'desktop-subagent-fake',
+            model: modelName || 'fake-subagent-model',
+            verification: 'mock',
+            capabilities: {text: true, streaming: false, toolCalling: true, structuredOutput: true, vision: false},
+          },
+        ));
+      }
+      if (modelConfig?.baseUrl && modelConfig?.apiKey && (modelName === 'pangu' || !modelName)) {
+        const apiKey = modelConfig.apiKey;
+        const panguOptions: PanguModelProviderOptions = {
+          baseUrl: modelConfig.baseUrl,
+          model: modelConfig.model ?? 'default',
+          apiKey: () => apiKey,
+        };
+        if (modelConfig.deployment !== undefined) {
+          panguOptions.deployment = modelConfig.deployment;
+        }
+        return new ModelGateway(new PanguModelProvider(panguOptions));
+      }
+      return undefined;
+    },
+  });
 }

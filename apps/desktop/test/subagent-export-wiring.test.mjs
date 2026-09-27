@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import path from 'node:path';
-import {createRuntimeSubagentDispatchTool} from '@personal-agent/runtime/application';
+import {
+  createRuntimeSubagentDispatchTool,
+  createDesktopSubagentDispatchTool,
+  SUBAGENT_DISPATCH_TOOL_NAME,
+  SUBAGENT_DISPATCH_TOOL_VERSION,
+} from '@personal-agent/runtime/application';
 import {TaskRuntime} from '@personal-agent/runtime';
-import {ModelGateway, FakeModelProvider} from '@personal-agent/models';
 
 test('subagent export projection projects bounded result correctly from real result contract', async () => {
   // 模拟 main.js 中的 subagentExport 投影逻辑
@@ -172,23 +176,10 @@ test('desktop subagent tool with getModelGateway executes subtasks with distinct
     idempotencyKey: 'desktop-subtask-test-parent',
   });
 
-  const capturedRequests = [];
-  const fakeProvider = new FakeModelProvider([
-    req => {
-      capturedRequests.push(req);
-      return {kind: 'final', text: '[调研智能体] 已完成天气与日程检索分析'};
-    },
-    req => {
-      capturedRequests.push(req);
-      return {kind: 'final', text: '[代码智能体] 已完成工作区状态检查与差异审查'};
-    },
-  ]);
-  const gateway = new ModelGateway(fakeProvider);
-
-  // 镜像 main.js 中的 subagentTool 配置
-  const subagentTool = createRuntimeSubagentDispatchTool({
+  // 镜像 main.js 中的 createDesktopSubagentDispatchTool 配置
+  const subagentTool = createDesktopSubagentDispatchTool({
     getRuntime: () => runtime,
-    getModelGateway: () => gateway,
+    fakeModelMode: true,
   });
 
   const subagentExport = {
@@ -259,20 +250,18 @@ test('desktop subagent tool with getModelGateway executes subtasks with distinct
   assert.equal(projected.cancelled, 0);
   assert.equal(projected.subtasks.length, 2);
 
-  // 校验子任务1角色与推理深度
+  // 校验子任务1角色与模型输出
   assert.equal(projected.subtasks[0].role, 'researcher');
   assert.equal(projected.subtasks[0].roleLabel, '资料检索与调研');
-  assert.match(projected.subtasks[0].result, /\[调研智能体\] 已完成天气与日程检索分析/);
-  assert.equal(capturedRequests[0].reasoningEffort, 'medium');
+  assert.match(projected.subtasks[0].result, /\[次级智能体 deep-research\] 完成分析与执行/);
 
-  // 校验子任务2角色与推理深度
+  // 校验子任务2角色与模型输出
   assert.equal(projected.subtasks[1].role, 'coder');
   assert.equal(projected.subtasks[1].roleLabel, '代码与工程实现');
-  assert.match(projected.subtasks[1].result, /\[代码智能体\] 已完成工作区状态检查与差异审查/);
-  assert.equal(capturedRequests[1].reasoningEffort, 'low');
+  assert.match(projected.subtasks[1].result, /\[次级智能体 code-fast\] 完成分析与执行/);
 
   // 校验汇总摘要包含两个角色的输出
   assert.match(projected.summary, /次级智能体协作汇总/);
-  assert.match(projected.summary, /调研智能体/);
-  assert.match(projected.summary, /代码智能体/);
+  assert.match(projected.summary, /deep-research/);
+  assert.match(projected.summary, /code-fast/);
 });

@@ -38,5 +38,10 @@ export type {ProactiveCognitionHost, ProactiveCognitionHostOptions, ProactiveCog
 export type {QQMailTriageHostOptions} from './application/mail-triage.js';
 export type {StartMailReadSessionRequest, MailReadSession} from './application/mail-read-session.js';
 export {createReminderDeliveryHost} from './application/reminder-delivery.js';
-export {createRuntimeSubagentDispatchTool} from './application/subagent-host.js';
-export type {SubagentHostOptions} from './application/subagent-host.js';
+export {
+  createRuntimeSubagentDispatchTool,
+  createDesktopSubagentDispatchTool,
+  SUBAGENT_DISPATCH_TOOL_NAME,
+  SUBAGENT_DISPATCH_TOOL_VERSION,
+} from './application/subagent-host.js';
+export type {SubagentHostOptions, DesktopSubagentDispatchToolOptions} from './application/subagent-host.js';

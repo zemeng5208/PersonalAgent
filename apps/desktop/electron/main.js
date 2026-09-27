@@ -848,37 +848,21 @@ async function initializeRuntime() {
             isSessionAllowed:() => mailConfig.isSessionAllowed(revision)});
         } catch {mailFailure = '邮箱本地分类状态无法装配；其他功能可继续使用';}
       }
-      const {SUBAGENT_DISPATCH_TOOL_NAME, SUBAGENT_DISPATCH_TOOL_VERSION} = await import('@personal-agent/agents');
-      const {ModelGateway, FakeModelProvider, PanguModelProvider} = await import('@personal-agent/models');
-      const subagentTool = runtimeModule.createRuntimeSubagentDispatchTool({
+      const {
+        createDesktopSubagentDispatchTool,
+        SUBAGENT_DISPATCH_TOOL_NAME,
+        SUBAGENT_DISPATCH_TOOL_VERSION,
+      } = runtimeModule;
+      const subagentTool = createDesktopSubagentDispatchTool({
         getRuntime: () => runtimeApplication.runtime,
         getTools: () => runtimeApplication.tools,
-        getModelGateway: modelName => {
-          if (fakeModelMode) {
-            return new ModelGateway(new FakeModelProvider(
-              Array.from({length: 16}, () => req => ({
-                kind: 'final',
-                text: `[次级智能体 ${modelName || 'default'}] 完成分析与执行：${req.messages.at(-1)?.content || ''}`,
-              })),
-              {
-                provider: 'fake',
-                deployment: 'desktop-subagent-fake',
-                model: modelName || 'fake-subagent-model',
-                verification: 'mock',
-                capabilities: {text: true, streaming: false, toolCalling: true, structuredOutput: true, vision: false},
-              },
-            ));
-          }
-          if (modelConfig?.baseUrl && modelConfig?.apiKey && (modelName === 'pangu' || !modelName)) {
-            return new ModelGateway(new PanguModelProvider({
-              baseUrl: modelConfig.baseUrl,
-              model: modelConfig.model,
-              deployment: modelConfig.deployment,
-              apiKey: () => modelConfig.apiKey,
-            }));
-          }
-          return undefined;
-        },
+        fakeModelMode,
+        modelConfig: modelConfig ? {
+          baseUrl: modelConfig.baseUrl,
+          model: modelConfig.model,
+          deployment: modelConfig.deployment,
+          apiKey: modelConfig.apiKey,
+        } : undefined,
       });
       const subagentAvailability = {
         toolName: SUBAGENT_DISPATCH_TOOL_NAME,
