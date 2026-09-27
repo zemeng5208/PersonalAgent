@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {statSync} from 'node:fs';
+import {existsSync, statSync} from 'node:fs';
 import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -13,6 +13,13 @@ import {
   WORKSPACE_COMMAND_TOOL_NAME,
   WORKSPACE_COMMAND_TOOL_VERSION,
 } from '../dist/index.js';
+
+function resolveJobHostExe() {
+  if (process.env.PA_TEST_JOB_HOST_EXE && existsSync(process.env.PA_TEST_JOB_HOST_EXE)) return process.env.PA_TEST_JOB_HOST_EXE;
+  const release = join(import.meta.dirname, '..', 'native', 'bin', 'Release', 'net8.0-windows', 'WindowsJobProcessHost.exe');
+  if (existsSync(release)) return release;
+  return join(import.meta.dirname, '..', 'native', 'bin', 'Debug', 'net8.0-windows', 'WindowsJobProcessHost.exe');
+}
 
 async function fixture(t) {
   const base = await mkdtemp(join(tmpdir(), 'personal-agent-command-'));
@@ -189,7 +196,7 @@ test('WindowsJobProcessHost terminates grandchild process tree on abort', {
   skip: process.platform !== 'win32' ? 'Windows only test' : false,
 }, async t => {
   const root = await fixture(t);
-  const jobHostExe = join(import.meta.dirname, '..', 'native', 'bin', 'Debug', 'net8.0-windows', 'WindowsJobProcessHost.exe');
+  const jobHostExe = resolveJobHostExe();
   let jobHostFound = false;
   try {
     const s = statSync(jobHostExe);
@@ -261,7 +268,7 @@ test('WindowsJobProcessHost runs fixed command successfully and returns complete
   skip: process.platform !== 'win32' ? 'Windows only test' : false,
 }, async t => {
   const root = await fixture(t);
-  const jobHostExe = join(import.meta.dirname, '..', 'native', 'bin', 'Debug', 'net8.0-windows', 'WindowsJobProcessHost.exe');
+  const jobHostExe = resolveJobHostExe();
   let jobHostFound = false;
   try {
     const s = statSync(jobHostExe);
@@ -300,7 +307,7 @@ test('WindowsJobProcessHost terminates grandchild process tree on deadline timeo
   skip: process.platform !== 'win32' ? 'Windows only test' : false,
 }, async t => {
   const root = await fixture(t);
-  const jobHostExe = join(import.meta.dirname, '..', 'native', 'bin', 'Debug', 'net8.0-windows', 'WindowsJobProcessHost.exe');
+  const jobHostExe = resolveJobHostExe();
   let jobHostFound = false;
   try {
     const s = statSync(jobHostExe);
