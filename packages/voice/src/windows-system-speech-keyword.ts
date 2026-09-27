@@ -217,6 +217,7 @@ class KeywordSessionImpl implements SpeechKeywordSession {
   private currentInFlightPacket: Buffer | undefined;
   private deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   private child: SpeechHostProcess | undefined;
+  private childStopRequested = false;
 
   private resolveReady!: () => void;
   private rejectReady!: (error: VoiceSessionError) => void;
@@ -252,7 +253,10 @@ class KeywordSessionImpl implements SpeechKeywordSession {
       return;
     }
 
-    this.initProcess();
+  }
+
+  start(): void {
+    if (!this.settled) this.initProcess();
   }
 
   private terminateImmediately(reason: SpeechKeywordCloseReason, readyError: VoiceSessionError): void {
@@ -279,13 +283,6 @@ class KeywordSessionImpl implements SpeechKeywordSession {
       this.terminate('cancelled');
     };
 
-    try {
-      this.options.signal.addEventListener('abort', onParentAbort, {once: true});
-    } catch {
-      this.terminate('external_failure');
-      return;
-    }
-
     child.stdin.on('error', () => {
       this.terminate('external_failure');
     });
@@ -304,7 +301,6 @@ class KeywordSessionImpl implements SpeechKeywordSession {
       this.deadlineTimer = setTimeout(scheduleDeadline, Math.min(remaining, MAX_TIMER_MS));
       this.deadlineTimer.unref?.();
     };
-    scheduleDeadline();
 
     let lineBuffer = '';
     let stderrBytes = 0;
@@ -371,10 +367,31 @@ class KeywordSessionImpl implements SpeechKeywordSession {
         detections: this.detections,
       }));
     });
+
+    // Install close/error listeners before cancellation can stop this child.
+    // The trusted spawner may synchronously reenter disposal or revoke its parent.
+    if (this.terminalReason !== undefined) {
+      this.stopChild();
+      return;
+    }
+    try {
+      this.options.signal.addEventListener('abort', onParentAbort, {once: true});
+    } catch {
+      this.terminate('external_failure');
+      return;
+    }
+    if (this.isActive()) scheduleDeadline();
+  }
+
+  private isActive(): boolean {
+    if (this.settled || this.terminalReason !== undefined) return false;
+    if (this.options.signal.aborted) this.terminate('cancelled');
+    else if (this.deadlineMs <= Date.now()) this.terminate('deadline');
+    return !this.settled && this.terminalReason === undefined;
   }
 
   private handleChildLine(line: string): void {
-    if (this.settled) return;
+    if (!this.isActive()) return;
     const parsed = parseHostStdoutEnvelope(line);
     if (parsed.type === 'invalid') {
       this.terminate('external_failure');
@@ -447,7 +464,12 @@ class KeywordSessionImpl implements SpeechKeywordSession {
     this.queue.length = 0;
     this.queuedBytes = 0;
 
-    if (this.child !== undefined) {
+    this.stopChild();
+  }
+
+  private stopChild(): void {
+    if (this.child !== undefined && !this.childStopRequested) {
+      this.childStopRequested = true;
       try {
         this.child.stdin.destroy();
       } catch {
@@ -510,7 +532,7 @@ class KeywordSessionImpl implements SpeechKeywordSession {
       invalid('Invalid voice PCM frame data');
     }
 
-    if (this.terminalReason !== undefined || this.settled) {
+    if (!this.isActive()) {
       return;
     }
 
@@ -530,8 +552,8 @@ class KeywordSessionImpl implements SpeechKeywordSession {
   }
 
   private pumpQueue(): void {
+    if (!this.isActive()) return;
     if (this.isWriting || this.isPausedForDrain) return;
-    if (this.terminalReason !== undefined || this.settled) return;
     if (!this.isReady || this.child === undefined) return;
     if (this.queue.length === 0) return;
 
@@ -643,6 +665,8 @@ class WindowsSystemSpeechKeywordDetector implements SpeechKeywordDetectorPort {
       })
       .catch(() => {});
 
+    // Include this session in reentrant disposal before invoking the host.
+    session.start();
     return session;
   }
 

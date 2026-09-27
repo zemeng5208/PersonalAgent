@@ -34,6 +34,7 @@
     "@personal-agent/cognition": "0.1.0-alpha.1",
     "@personal-agent/models": "0.1.0-alpha.1",
     "@personal-agent/memory": "0.1.0-alpha.1",
+    "@personal-agent/knowledge": "0.1.0-alpha.1",
     "@personal-agent/policy": "0.1.0-alpha.1",
     "@personal-agent/storage": "0.0.0",
     "@personal-agent/tool-gateway": "0.1.0-alpha.1",

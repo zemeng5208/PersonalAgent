@@ -172,7 +172,18 @@ class SubscriptionSession {
     }
 
     this.scheduleDeadline();
-    this.initUpstream();
+  }
+
+  start(): void {
+    if (this.isActive()) this.initUpstream();
+    else this.resolveUpstreamSub(undefined);
+  }
+
+  private isActive(): boolean {
+    if (this.state !== 'active') return false;
+    if (this.options.signal.aborted) this.close('cancelled');
+    else if (this.deadlineMs <= Date.now()) this.close('deadline');
+    return this.state === 'active';
   }
 
   private scheduleDeadline(): void {
@@ -213,7 +224,7 @@ class SubscriptionSession {
     const handleSub = (sub: unknown): void => {
       if (sub !== null && typeof sub === 'object' && typeof (sub as VoicePcmCaptureSubscription).release === 'function') {
         this.resolveUpstreamSub(sub as VoicePcmCaptureSubscription);
-        if (this.state === 'active' && !this.readySettled) {
+        if (this.isActive() && !this.readySettled) {
           this.readySettled = true;
           this.resolveReady();
         }
@@ -242,7 +253,7 @@ class SubscriptionSession {
   }
 
   private handleUpstreamFrame(chunk: unknown): void {
-    if (this.state !== 'active') return;
+    if (!this.isActive()) return;
 
     let rawData: Uint8Array;
     let length: number;
@@ -283,7 +294,7 @@ class SubscriptionSession {
     if (this.isDraining || this.state !== 'active') return;
     this.isDraining = true;
     try {
-      while (this.state === 'active' && this.queue.length > 0) {
+      while (this.isActive() && this.queue.length > 0) {
         const frame = this.queue.shift()!;
         this.queuedBytes -= frame.data.byteLength;
         this.currentInFlightFrame = frame;
@@ -433,6 +444,8 @@ export function createVoicePcmFrameSourcePort(
         })
         .catch(() => {});
 
+      // Register before calling the host: start may synchronously reenter dispose.
+      session.start();
       return {
         ready: session.ready,
         unsubscribe(): void {

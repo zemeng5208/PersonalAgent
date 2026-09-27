@@ -3,6 +3,8 @@ import test from 'node:test';
 import {validateToolValue} from '@personal-agent/contracts';
 import {
   createSystemObservationTool,
+  describeSystemObservationCapabilities,
+  register,
   SYSTEM_OBSERVATION_SCOPE,
   SYSTEM_OBSERVATION_TOOL_NAME,
   SYSTEM_OBSERVATION_TOOL_VERSION,
@@ -17,6 +19,22 @@ const context = overrides => ({
   authorizationRef: 'authorization-1',
   scopes: [SYSTEM_OBSERVATION_SCOPE],
   ...overrides,
+});
+
+test('register exposes the provider through ToolHost and disposal removes it', () => {
+  let registered;
+  let removed = false;
+  const host = {register(tool) {
+    registered = tool;
+    return () => { removed = true; registered = undefined; };
+  }};
+  const dispose = register(host, {probe: probe(), now: () => observedAt, sampleWindowMs: 1});
+  assert.equal(registered.descriptor.name, SYSTEM_OBSERVATION_TOOL_NAME);
+  assert.deepEqual(registered.descriptor.requiredScopes, [SYSTEM_OBSERVATION_SCOPE]);
+  assert.equal(removed, false);
+  dispose();
+  assert.equal(removed, true);
+  assert.equal(registered, undefined);
 });
 
 function probe(overrides = {}) {
@@ -51,20 +69,30 @@ test('factory exposes one minimal read-only descriptor with exact schemas', () =
   assert.equal(tool.descriptor.requiresPresence, false);
   assert.doesNotThrow(() => validateToolValue(tool.descriptor.inputSchema, {}));
   assert.throws(() => validateToolValue(tool.descriptor.inputSchema, {path: 'private'}), {code: 'INVALID_ARGUMENT'});
+  assert.deepEqual(describeSystemObservationCapabilities(), {
+    toolName: SYSTEM_OBSERVATION_TOOL_NAME,
+    requiredScope: SYSTEM_OBSERVATION_SCOPE,
+    supported: ['cpu', 'memory', 'uptime'],
+    unavailable: ['process_breakdown', 'disk_io', 'thermal', 'network_activity'],
+  });
 });
 
 test('synthetic CPU, memory and uptime become a bounded aggregate observation', async () => {
   const tool = createSystemObservationTool({probe: probe(), now: () => observedAt, sampleWindowMs: 1});
   const result = await tool.execute({}, context({deadline: '2026-09-17T12:00:01.000Z'}));
-  assert.deepEqual(result, {
+  assert.deepEqual({...result, actualSampleWindowMs: 0}, {
     source: 'injected',
     capturedAt: '2026-09-17T12:00:00.000Z',
+    sampledFrom: '2026-09-17T12:00:00.000Z',
+    sampledUntil: '2026-09-17T12:00:00.000Z',
+    actualSampleWindowMs: 0,
     requestedSampleWindowMs: 1,
     cpu: {logicalProcessorCount: 2, utilizationPercent: 50},
     memory: {totalBytes: 1_000, freeBytes: 250, usedBytes: 750, utilizationPercent: 75},
     uptimeSeconds: 1_234,
     unavailable: ['process_breakdown', 'disk_io', 'thermal', 'network_activity'],
   });
+  assert.ok(Number.isFinite(result.actualSampleWindowMs) && result.actualSampleWindowMs >= 0);
   assert.doesNotThrow(() => validateToolValue(tool.descriptor.outputSchema, result));
   assert.doesNotMatch(JSON.stringify(result), /hostname|username|processName|commandLine|path|address|credential/i);
 });

@@ -2,6 +2,7 @@ import {spawn, type ChildProcessWithoutNullStreams} from 'node:child_process';
 import {existsSync, statSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {types} from 'node:util';
 
 import {VoiceSessionError} from './errors.js';
 import {
@@ -139,7 +140,7 @@ function captureRecognition(request: SpeechRecognitionRequest): {
   if (format.encoding !== VOICE_AUDIO_FORMAT.encoding
     || format.sampleRateHz !== VOICE_AUDIO_FORMAT.sampleRateHz
     || format.channels !== VOICE_AUDIO_FORMAT.channels) invalid('Unsupported Windows speech audio format');
-  if (byteLengthOf === undefined) invalid('Invalid Windows speech audio');
+  if (!types.isUint8Array(record.audio) || byteLengthOf === undefined) invalid('Invalid Windows speech audio');
   let byteLength: number;
   try {
     byteLength = byteLengthOf.call(record.audio) as number;
@@ -376,6 +377,11 @@ class WindowsSystemSpeechAdapter {
     child.once('error', () => terminate(fixedFailure()));
     child.once('close', code => {
       if (settled) return;
+      // The close event may run before an already-due deadline timer.
+      if (terminalError === undefined) {
+        if (signal.aborted) terminalError = fixedCancelled();
+        else if (deadlineMs <= Date.now()) terminalError = fixedTimeout();
+      }
       settled = true;
       cleanup();
       resolveClosed();
