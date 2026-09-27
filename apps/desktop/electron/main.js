@@ -22,7 +22,7 @@ import {acquireHuaweiSisToken} from './huawei-iam-login.js';
 import {createLiveVoiceConfig} from './live-voice-config.js';
 import {createLiveVoiceHost} from './live-voice-host.js';
 import {createDesktopProactiveHost} from './proactive-host.js';
-import {createProductToolsComposition} from './product-tools-composition.js';
+import {createPublicConnectorHost} from './public-connector-host.js';
 import {createMailConfig} from './mail-config.js';
 import {createMailMetadataStorage} from './mail-metadata-storage.js';
 import {createLocalLayaHost} from './laya-local-host.js';
@@ -716,8 +716,7 @@ async function initializeRuntime() {
       competitionCatalog = createDesktopCompetitionToolCatalog({
         rootPath: path.resolve(dir, '../fixtures/agentarts'), createWorkspaceReadTool,
       });
-      productTools = createProductToolsComposition({systemObservation: true,
-        modules: {windows: {createSystemObservationTool: runtimeModule.createSystemObservationTool}}});
+      productTools = createPublicConnectorHost({systemObservationFactory:runtimeModule.createSystemObservationTool});
       localLaya = createLocalLayaHost({projectRoot:path.resolve(dir, '../../..'),
         createService:runtimeModule.createLocalInboxClassifier, onUpdate:publish});
       mailConfig = createMailConfig({userData:app.getPath('userData'), safeStorage,
