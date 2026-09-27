@@ -500,9 +500,9 @@ type WorkflowIdentity = {id: string | undefined; name: string | undefined};
 interface TerminalDiagnosticState {
   taskEnd: boolean;
   end: boolean;
-  providerFailureField?: AgentArtsFailureDiagnostic['providerFailureField'];
-  providerFailureToken?: AgentArtsFailureDiagnostic['providerFailureToken'];
-  providerErrorCode?: string;
+  providerFailureField: AgentArtsFailureDiagnostic['providerFailureField'] | undefined;
+  providerFailureToken: AgentArtsFailureDiagnostic['providerFailureToken'] | undefined;
+  providerErrorCode: string | undefined;
 }
 
 function diagnosticProviderErrorCode(event: Record<string, unknown>, data: Record<string, unknown> | undefined): string | undefined {
@@ -934,7 +934,10 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
     let httpStatus: number | undefined;
     let contentType: AgentArtsFailureDiagnostic['contentType'];
     let schemaCategory: AgentArtsSchemaCategory | undefined;
-    const terminalEvents: TerminalDiagnosticState = {taskEnd: false, end: false};
+    const terminalEvents: TerminalDiagnosticState = {
+      taskEnd: false, end: false,
+      providerFailureField: undefined, providerFailureToken: undefined, providerErrorCode: undefined,
+    };
     try {
       const initialAbort = currentAbortError(combined);
       if (initialAbort) throw initialAbort;
@@ -1064,7 +1067,9 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
           ...(stage === 'response_schema' || stage === 'application_schema'
             ? {terminalEvents: Object.freeze({taskEnd: terminalEvents.taskEnd, end: terminalEvents.end})} : {}),
           ...(schemaCategory === undefined ? {} : {schemaCategory}),
-          ...(schemaCategory === 'provider_failure' && terminalEvents.providerFailureField !== undefined
+          ...(schemaCategory === 'provider_failure'
+            && terminalEvents.providerFailureField !== undefined
+            && terminalEvents.providerFailureToken !== undefined
             ? {providerFailureField: terminalEvents.providerFailureField,
               providerFailureToken: terminalEvents.providerFailureToken,
               ...(terminalEvents.providerErrorCode === undefined ? {} : {providerErrorCode: terminalEvents.providerErrorCode})}
