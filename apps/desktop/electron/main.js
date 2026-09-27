@@ -785,7 +785,9 @@ async function initializeRuntime() {
         rootPath: path.resolve(dir, '../fixtures/agentarts'), createWorkspaceReadTool,
       });
       productTools = createPublicConnectorHost({systemObservationFactory:runtimeModule.createSystemObservationTool});
+      const commandHelper=path.join(app.getPath('userData'),'native-tools','workspace-command','WindowsJobProcessHost.exe');
       codingWorkspace = createWorkspaceConfigHost({userData:app.getPath('userData'),safeStorage,
+        jobHelperExecutable:existsSync(commandHelper)?commandHelper:undefined,
         selectDirectory:async () => {
           const result = await dialog.showOpenDialog(admin, {title:'选择允许 PersonalAgent 使用的编程工作区',
             properties:['openDirectory']});
@@ -1407,6 +1409,9 @@ app.whenReady().then(async () => {
   }); publish(); });
   createTray();
   if (liveVoice) registerLiveShortcut();
+  console.info('PersonalAgent startup',JSON.stringify({runtime:runtimeStartup.snapshot().state,
+    agentArtsConfigured:agentArtsConfig.snapshot().configured,liveConfigured:liveConfig.snapshot().configured,
+    liveReady:Boolean(liveVoice),liveShortcutRegistered:liveShortcut.registered}));
 
   ipcMain.handle('desktop:action', async (...args) => {
     try { return {ok: true, value: await action(...args)}; }
