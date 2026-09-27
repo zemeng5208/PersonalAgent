@@ -48,7 +48,13 @@ export function createDesktopMailAnalysisHost({application, client, mail, config
       busy = true;
       const ctx = context();
       try {
-        const pending = mail.pendingAnalyses(ctx);
+        let pending;
+        try {pending = mail.pendingAnalyses(ctx);}
+        catch (error) {
+          // The user may enable cloud analysis before starting the first local batch.
+          if (error?.code === 'UNAUTHORIZED') return;
+          throw error;
+        }
         const item = pending.find(value => value.state === 'pending' && ['main_agent','review'].includes(value.route));
         if (!item) return;
         if (lease !== config.cloudLease() || ctx.signal.aborted) return;
