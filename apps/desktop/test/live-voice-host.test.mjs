@@ -153,6 +153,113 @@ test('Live initial startup includes recent context from readContext in instructi
   assert.ok(request.instructions.includes('今天天气如何'));
   assert.ok(request.instructions.includes('今天北京晴转多云'));
   assert.ok(request.instructions.includes('这是之前的语音回答'));
+  assert.ok(request.instructions.includes('绝对不要重复执行或重新提交这些历史任务'));
   await host.stop();
 });
+
+test('Live request_work returns accurate failure, cancellation, and waiting_approval status without false completion', async () => {
+  let host, request;
+  const contents = {id: 8, mainFrame: {}, isDestroyed: () => false, send(_ch, msg) {
+    if (['start', 'stop'].includes(msg.type)) queueMicrotask(() => host.receive(
+      {sender: contents, senderFrame: contents.mainFrame}, {token: msg.token, type: msg.type === 'start' ? 'ready' : 'stopped'}));
+  }};
+  const panel = {webContents: contents, isDestroyed: () => false, isVisible: () => true};
+  const source = {subscribe: () => ({ready: Promise.resolve(), closed: Promise.resolve(), unsubscribe() {}}), dispose: async () => {}};
+
+  let taskState = 'failed';
+  let failureReason = '网络连接超时';
+  const client = {
+    async call(op, args) {
+      if (op === 'task.submit') return {taskId: 'task-test-status'};
+      if (op === 'task.get') return {taskId: args.taskId, state: taskState, failureReason, error: {message: failureReason}};
+      return {};
+    },
+  };
+
+  host = createLiveVoiceHost({
+    getPanel: () => panel,
+    config: {snapshot: () => ({configured: true}), current: () => ({})},
+    microphoneHost: {authorize() {}, revoke: async () => {}},
+    createSource: () => source,
+    createGateway: () => ({async connect(val) {request = val; return {sendAudio() {}, interrupt() {}, close: async () => {}};}}),
+    client,
+    readContext: () => '',
+    onTaskSubmitted() {},
+    createConsumer: options => ({
+      consume(val) {
+        return {
+          result: options.client.call('task.submit', {goal: val.text}).then(() => {
+            throw Error('Runtime transcript consumption failed');
+          }),
+          stop: async () => {},
+        };
+      },
+    }),
+  });
+
+  await host.start();
+
+  // 1. Task failed
+  taskState = 'failed';
+  failureReason = '网络连接超时';
+  const failResult = await request.onTool('request_work', {goal: '测试失败任务'}, 'call_f');
+  assert.match(failResult, /任务执行失败：网络连接超时/);
+
+  // 2. Task cancelled
+  taskState = 'cancelled';
+  const cancelResult = await request.onTool('request_work', {goal: '测试取消任务'}, 'call_c');
+  assert.match(cancelResult, /任务已被取消/);
+
+  // 3. Task waiting approval
+  taskState = 'waiting_approval';
+  const approvalResult = await request.onTool('request_work', {goal: '测试审批任务'}, 'call_a');
+  assert.match(approvalResult, /正在等待用户审批授权/);
+
+  await host.stop();
+});
+
+test('Live initial startup interleaves tasks and messages in chronological order and deduplicates', async () => {
+  let host, request;
+  const contents = {mainFrame: {}, isDestroyed: () => false, send(_ch, msg) {
+    if (['start', 'stop'].includes(msg.type)) queueMicrotask(() => host.receive(
+      {sender: contents, senderFrame: contents.mainFrame}, {token: msg.token, type: msg.type === 'start' ? 'ready' : 'stopped'}));
+  }};
+  host = createLiveVoiceHost({
+    getPanel: () => ({webContents: contents, isDestroyed: () => false, isVisible: () => true}),
+    config: {snapshot: () => ({configured: true}), current: () => ({})},
+    microphoneHost: {authorize() {}, revoke: async () => {}},
+    createSource: () => ({subscribe: () => ({ready: Promise.resolve(), closed: Promise.resolve(), unsubscribe() {}}), dispose: async () => {}}),
+    createGateway: () => ({async connect(val) {request = val; return {sendAudio() {}, interrupt() {}, close: async () => {}};}}),
+    createConsumer: () => ({}),
+    client: {},
+    readContext: () => JSON.stringify({
+      tasks: [
+        {taskId: 't1', goal: '第一个文字问题', state: 'succeeded', result: '第一个回答', createdAt: '2026-09-27T10:00:00.000Z'},
+        {taskId: 't2', goal: '第三个文字问题', state: 'failed', failureReason: '模型故障', createdAt: '2026-09-27T10:02:00.000Z'},
+      ],
+      messages: [
+        {role: 'user', text: '第二个语音问题', createdAt: '2026-09-27T10:01:00.000Z'},
+        {role: 'assistant', text: '第二个语音回答', createdAt: '2026-09-27T10:01:05.000Z'},
+        {role: 'assistant', text: '第二个语音回答', createdAt: '2026-09-27T10:01:06.000Z'}, // duplicate
+      ],
+    }),
+    onTaskSubmitted() {},
+    onTranscript() {},
+  });
+
+  await host.start();
+  const inst = request.instructions;
+  const pos1 = inst.indexOf('第一个文字问题');
+  const pos2 = inst.indexOf('第二个语音问题');
+  const pos3 = inst.indexOf('第三个文字问题');
+  assert.ok(pos1 > 0 && pos2 > 0 && pos3 > 0, 'all entries must be present');
+  assert.ok(pos1 < pos2, 'chronology: task 1 before message 2');
+  assert.ok(pos2 < pos3, 'chronology: message 2 before task 3');
+  assert.ok(inst.includes('任务执行失败：模型故障'), 'failed task status is included');
+  // Check deduplication
+  const occurrences = (inst.match(/第二个语音回答/g) || []).length;
+  assert.equal(occurrences, 1, 'duplicate voice answer must be deduplicated');
+  await host.stop();
+});
+
 

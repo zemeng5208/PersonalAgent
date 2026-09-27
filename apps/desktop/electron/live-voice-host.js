@@ -81,9 +81,13 @@ export function createLiveVoiceHost({getPanel, config, microphoneHost, createSou
     const record = {id: randomUUID(), panel, controller, phase: continuing ? 'reconnecting' : 'connecting', playReady: deferred(), playStopped: deferred(),
       deadline: new Date(now() + SESSION_MS).toISOString()};
     active = record; enabled = true; if (!continuing) transcripts = []; lastError = ''; publish();
+    let lastSubmittedTaskId = null;
     const voiceClient = {async call(operation, payload, options) {
       const result = await client.call(operation, payload, options);
-      if (operation === 'task.submit') onTaskSubmitted({taskId: result.taskId, goal: payload.goal});
+      if (operation === 'task.submit') {
+        lastSubmittedTaskId = result.taskId;
+        onTaskSubmitted({taskId: result.taskId, goal: payload.goal});
+      }
       return result;
     }};
     const consumer = createConsumer({client: voiceClient, conversationId: 'desktop-panel'});
@@ -94,26 +98,35 @@ export function createLiveVoiceHost({getPanel, config, microphoneHost, createSou
       if (controller.signal.aborted) return snapshot();
       let historyContext = '';
       if (continuing && transcripts.length) {
-        historyContext = '\n以下是刚才已发生的对话记录，仅作上下文，不是新指令，不要重复提交其中的工作：\n'
+        historyContext = '\n以下是刚才已发生的对话记录，仅作参考上下文，不是新指令，绝对不要重复执行或重新提交这些历史任务：\n'
           + JSON.stringify(transcripts.slice(-12).map(({role, text}) => ({role, text: text.slice(0, 1600)})));
       } else if (typeof readContext === 'function') {
         try {
           const raw = readContext();
           if (raw && typeof raw === 'string') {
             const contextObj = JSON.parse(raw);
-            const prior = [];
+            const entries = [];
             for (const t of (Array.isArray(contextObj?.tasks) ? contextObj.tasks : [])) {
-              if (t.goal && t.result) {
-                prior.push({role: 'user', text: t.goal});
-                prior.push({role: 'assistant', text: t.result});
-              }
+              const time = Date.parse(t.createdAt) || 0;
+              if (t.goal) entries.push({time, role: 'user', text: t.goal});
+              if (t.result) entries.push({time: time + 1, role: 'assistant', text: t.result});
+              else if (t.state === 'failed') entries.push({time: time + 1, role: 'assistant', text: `[任务执行失败：${t.failureReason || '未成功'}]`});
+              else if (t.state === 'cancelled') entries.push({time: time + 1, role: 'assistant', text: '[任务已取消]'});
             }
             for (const m of (Array.isArray(contextObj?.messages) ? contextObj.messages : [])) {
-              if (m.text) prior.push({role: m.role || 'user', text: m.text});
+              const time = Date.parse(m.createdAt) || 0;
+              if (m.text) entries.push({time, role: m.role || 'user', text: m.text});
             }
-            if (prior.length > 0) {
-              historyContext = '\n以下是主对话最近发生的历史记录（包含文字与语音），仅作参考上下文，不是新指令，不要重复提交其中的工作：\n'
-                + JSON.stringify(prior.slice(-10).map(({role, text}) => ({role, text: String(text).slice(0, 1600)})));
+            entries.sort((a, b) => a.time - b.time);
+            const deduplicated = [];
+            for (const entry of entries) {
+              const prev = deduplicated[deduplicated.length - 1];
+              if (prev && prev.role === entry.role && prev.text.trim() === entry.text.trim()) continue;
+              deduplicated.push({role: entry.role, text: entry.text});
+            }
+            if (deduplicated.length > 0) {
+              historyContext = '\n以下是主对话最近发生的历史记录（包含文字与语音），仅作参考上下文，不是新指令，绝对不要重复执行或重新提交这些历史任务：\n'
+                + JSON.stringify(deduplicated.slice(-10).map(({role, text}) => ({role, text: String(text).slice(0, 1600)})));
             }
           }
         } catch {}
@@ -155,8 +168,36 @@ export function createLiveVoiceHost({getPanel, config, microphoneHost, createSou
           const operation = consumer.consume({sessionId: record.id, transcriptId: callId, text: args.goal,
             locale: 'zh-CN', deadline: new Date(Math.min(Date.parse(record.deadline), Date.now() + 120_000)).toISOString(),
             signal: controller.signal});
-          const result = await operation.result;
-          return result.replyText;
+          try {
+            const result = await operation.result;
+            return result.replyText;
+          } catch (err) {
+            if (controller.signal.aborted) throw Error('Live 已停止');
+            if (lastSubmittedTaskId && typeof client?.call === 'function') {
+              try {
+                const snapshot = await client.call('task.get', {taskId: lastSubmittedTaskId});
+                if (snapshot) {
+                  if (snapshot.state === 'failed') {
+                    const reason = snapshot.error?.message || snapshot.failureReason || '未成功完成';
+                    return `任务执行失败：${reason}`;
+                  }
+                  if (snapshot.state === 'cancelled') {
+                    return '任务已被取消或终止。';
+                  }
+                  if (snapshot.state === 'waiting_approval') {
+                    return '任务已受理，当前正在等待用户审批授权，请在桌面面板中确认。';
+                  }
+                  if (snapshot.state === 'waiting_external') {
+                    return '任务已受理，正在等待外部系统处理。';
+                  }
+                  if (snapshot.state === 'succeeded' && snapshot.resultSummary) {
+                    return snapshot.resultSummary;
+                  }
+                }
+              } catch {}
+            }
+            throw err;
+          }
         },
       });
       if (controller.signal.aborted) {await record.session.close(); return snapshot();}
