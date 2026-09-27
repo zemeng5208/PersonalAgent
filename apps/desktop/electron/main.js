@@ -25,6 +25,7 @@ import {createLiveVoiceHost} from './live-voice-host.js';
 import {createDesktopProactiveHost} from './proactive-host.js';
 import {createPublicConnectorHost} from './public-connector-host.js';
 import {createWorkspaceConfigHost} from './workspace-config-host.js';
+import {createWorkspaceCommandRecipeTool} from './workspace-command-recipes.js';
 import {createAgentArtsConfig} from './agentarts-config.js';
 import {createDeferredRuntimeStartup} from './runtime-startup.js';
 import {createMailConfig} from './mail-config.js';
@@ -745,7 +746,7 @@ async function initializeRuntime() {
           path.join(path.dirname(dbPath), 'mvp-synthetic-memory.sqlite'), {decision});
       }
       const {createGoalHost} = await import('./goal-host.js');
-      const {createWorkspaceReadTool} = await import('@personal-agent/coding-tools');
+      const {createWorkspaceReadTool,createWorkspaceCommandTool} = await import('@personal-agent/coding-tools');
       const {createDesktopCompetitionToolCatalog} = await import('./competition-tool-catalog.js');
       const namespace = desktopHost.userNamespace;
       goalHost = createGoalHost(namespace);
@@ -788,7 +789,18 @@ async function initializeRuntime() {
           const result = await dialog.showOpenDialog(admin, {title:'选择允许 PersonalAgent 使用的编程工作区',
             properties:['openDirectory']});
           return result.canceled ? undefined : result.filePaths[0];
-        }});
+        },
+        selectNodeExecutable:async () => {
+          const result=await dialog.showOpenDialog(admin,{title:'选择可信安装目录中的 Node 可执行文件',
+            properties:['openFile'],filters:[{name:'Node executable',extensions:['exe']}]});
+          return result.canceled?undefined:result.filePaths[0];
+        },
+        selectCheckFile:async workspaceRoot => {
+          const result=await dialog.showOpenDialog(admin,{title:'选择此工作区内需要语法检查的文件',
+            defaultPath:workspaceRoot,properties:['openFile'],filters:[{name:'JavaScript',extensions:['js','mjs','cjs']}]});
+          return result.canceled?undefined:result.filePaths[0];
+        },
+        createCommandRecipeTool:options=>createWorkspaceCommandRecipeTool({...options,createWorkspaceCommandTool})});
       const {LayaActionChoiceService, LocalLayaHttpTransport} = await import('@personal-agent/cognition');
       localLaya = createLocalLayaHost({projectRoot:path.resolve(dir, '../../..'),
         createService:runtimeModule.createLocalInboxClassifier,
@@ -1003,10 +1015,12 @@ async function action(event, name, payload) {
     }
     const result = feedsHost[name.slice('feeds.'.length)](payload); publish(); return result;
   }
-  if (['coding.select','coding.authorize','coding.revoke'].includes(name)) {
+  if (['coding.select','coding.selectNode','coding.selectCheckFile','coding.authorize','coding.revoke'].includes(name)) {
     if (sender !== admin || !competitionMode || syntheticMvp || !codingWorkspace) throw Error('请从正式应用设置配置编程工作区');
     if (name !== 'coding.revoke' && runtimeApplication.activeTaskCount > 0) throw Error('请等待当前任务结束后更改工作区');
     if (name === 'coding.select') await codingWorkspace.select();
+    if (name === 'coding.selectNode') await codingWorkspace.selectNode();
+    if (name === 'coding.selectCheckFile') await codingWorkspace.selectCheckFile();
     if (name === 'coding.authorize') codingWorkspace.authorize(payload);
     if (name === 'coding.revoke') codingWorkspace.revoke();
     publish();return {coding:codingWorkspace.snapshot()};
