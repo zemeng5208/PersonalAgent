@@ -67,7 +67,8 @@ export function createWindowsHostBridgeTransport(options: {
       child.once('close', () => children.delete(child));
       try {
         await new Promise<void>((resolve, reject) => {
-          let ready = '';
+          let ready = Buffer.alloc(0);
+          const verified = Buffer.from('VERIFIED\n', 'ascii');
           const timer = setTimeout(() => finish(new ProtocolError('TIMEOUT', 'Windows Host bridge timed out')), timeout);
           const finish = (error?: Error): void => {
             clearTimeout(timer);
@@ -77,10 +78,10 @@ export function createWindowsHostBridgeTransport(options: {
             error ? reject(error) : resolve();
           };
           const onData = (chunk: Buffer): void => {
-            ready += chunk.toString('ascii');
-            if (ready.length > 32 || ready.includes('\r') || (ready.includes('\n') && ready !== 'VERIFIED\n')) {
+            ready = Buffer.concat([ready, chunk]);
+            if (ready.length > verified.length || !ready.equals(verified.subarray(0, ready.length))) {
               finish(new ProtocolError('UNAUTHORIZED', 'Windows Host bridge refused peer verification'));
-            } else if (ready === 'VERIFIED\n') finish();
+            } else if (ready.length === verified.length) finish();
           };
           const onError = (): void => finish(new ProtocolError('EXTERNAL_FAILURE', 'Windows Host bridge failed to start'));
           const onClose = (): void => finish(new ProtocolError('UNAUTHORIZED', 'Windows Host bridge exited before verification'));
