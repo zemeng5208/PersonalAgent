@@ -54,7 +54,7 @@ else {
   const form=root.querySelector('form'),input=root.querySelector('textarea'),thread=root.querySelector('.thread'),tasksNode=root.querySelector('#tasks');
   const sisSettings=document.createElement('details');
   sisSettings.className='sis-settings';
-  sisSettings.innerHTML='<summary>华为 SIS 语音配置</summary><div class="sis-fields"><label>区域<select id="sis-region"><option value="cn-north-4">华北-北京四</option><option value="cn-east-3">华东-上海一</option></select></label><label>项目 ID<input id="sis-project" autocomplete="off" maxlength="128"></label><label>独立 IAM Token<input id="sis-token" type="password" autocomplete="off" maxlength="16384"></label><label>Token 到期时间（UTC，可选）<input id="sis-expiry" autocomplete="off" placeholder="YYYY-MM-DDTHH:mm:ssZ"></label><button type="button" id="sis-save">保存并接入语音</button><p class="notice" id="sis-reason"></p></div>';
+  sisSettings.innerHTML='<summary>华为 SIS 语音配置</summary><div class="sis-fields"><label>区域<select id="sis-region"><option value="cn-north-4">华北-北京四</option><option value="cn-east-3">华东-上海一</option></select></label><label>项目 ID<input id="sis-project" autocomplete="off" maxlength="128"></label><label>独立 IAM Token<input id="sis-token" type="password" autocomplete="off" maxlength="16384"></label><label>Token 到期时间（UTC，可选）<input id="sis-expiry" autocomplete="off" placeholder="YYYY-MM-DDTHH:mm:ssZ"></label><button type="button" id="sis-save">保存 SIS 配置</button><p class="notice" id="sis-reason"></p></div>';
   root.querySelector('#error').before(sisSettings);
   const sisRegion=sisSettings.querySelector('#sis-region');
   const sisProject=sisSettings.querySelector('#sis-project');
@@ -63,9 +63,9 @@ else {
   sisSettings.querySelector('#sis-save').onclick=async()=>{
     const save=sisSettings.querySelector('#sis-save');
     save.disabled=true;
-    try { await invoke('voice.configure',{region:sisRegion.value,projectId:sisProject.value.trim(),
+    try { const result=await invoke('voice.configure',{region:sisRegion.value,projectId:sisProject.value.trim(),
       iamToken:sisToken.value,tokenExpiresAt:sisExpiry.value.trim()});
-      sisToken.value='';sisSettings.open=false;root.querySelector('#error').textContent=''; }
+      sisToken.value='';sisSettings.open=false;root.querySelector('#error').textContent=result.connected?'':'SIS 配置已保存；等待 Competition Runtime 接通后启用语音'; }
     catch(err){sisToken.value='';report(err);}
     finally{save.disabled=false;}
   };

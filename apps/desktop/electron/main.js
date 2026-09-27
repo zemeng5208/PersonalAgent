@@ -694,7 +694,7 @@ async function action(event, name, payload) {
       throw Error('SIS 配置已保存，但语音适配器启动失败');
     }
     publish();
-    return {configured: true, ...sisConfigHost.snapshot()};
+    return {...sisConfigHost.snapshot(), connected: Boolean(voiceInput)};
   }
   if (name.startsWith('voice.record.') || name === 'voice.play') {
     if (sender !== panel || !voiceInput) throw Error('语音试用只允许从 Competition 可信面板调用');
