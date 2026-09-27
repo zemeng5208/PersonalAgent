@@ -16,13 +16,23 @@ internal sealed class NotepadTargets
 
     internal NotepadTargets()
     {
+        var currentSession = Process.GetCurrentProcess().SessionId;
         foreach (var process in Process.GetProcessesByName("notepad"))
         {
             using (process)
             {
-                var start = process.StartTime.ToUniversalTime();
-                foreach (var handle in WindowsForProcess(process.Id, visibleUnownedOnly: false))
-                    _existing.Add((handle, process.Id, start));
+                try
+                {
+                    if (process.SessionId != currentSession) continue;
+                    var start = process.StartTime.ToUniversalTime();
+                    foreach (var handle in WindowsForProcess(process.Id, visibleUnownedOnly: false))
+                        _existing.Add((handle, process.Id, start));
+                }
+                catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or
+                                           System.ComponentModel.Win32Exception)
+                {
+                    // Skip unqueryable processes in baseline snapshot.
+                }
             }
         }
     }
@@ -31,25 +41,39 @@ internal sealed class NotepadTargets
     {
         var now = DateTime.UtcNow;
         if (deadlineUtc <= now) return (null, "TIMEOUT");
+        var currentSession = Process.GetCurrentProcess().SessionId;
         var candidates = new List<(nint Window, int Pid, DateTime StartUtc)>();
+        var unverifiable = false;
         foreach (var process in Process.GetProcessesByName("notepad"))
         {
             using (process)
             {
-                var start = process.StartTime.ToUniversalTime();
-                foreach (var handle in WindowsForProcess(process.Id, visibleUnownedOnly: true))
+                try
                 {
-                    if (!_existing.Contains((handle, process.Id, start)))
-                        candidates.Add((handle, process.Id, start));
+                    if (process.SessionId != currentSession) continue;
+                    var start = process.StartTime.ToUniversalTime();
+                    foreach (var handle in WindowsForProcess(process.Id, visibleUnownedOnly: true))
+                    {
+                        if (_existing.Contains((handle, process.Id, start))) continue;
+                        if (!NotepadAction.IsTrustedNotepadProcess(process)) unverifiable = true;
+                        else candidates.Add((handle, process.Id, start));
+                    }
+                }
+                catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or
+                                           System.ComponentModel.Win32Exception)
+                {
+                    unverifiable = true;
                 }
             }
         }
+        if (unverifiable) return (null, "UNAUTHORIZED");
         if (candidates.Count == 0) return (null, "NOT_FOUND");
         if (candidates.Count != 1) return (null, "TARGET_AMBIGUOUS");
         if (candidates[0].Window != GetForegroundWindow()) return (null, "TARGET_STALE");
         var candidate = candidates[0];
-        if (!NotepadAction.HasSingleTabForManualProbe(
-                candidate.Window, candidate.Pid, candidate.StartUtc)) return (null, "TARGET_STALE");
+        var (singleTab, errorCode) = NotepadAction.CheckSingleTabTarget(
+            candidate.Window, candidate.Pid, candidate.StartUtc);
+        if (!singleTab) return (null, errorCode ?? "TARGET_STALE");
         var expires = deadlineUtc < now.AddSeconds(30) ? deadlineUtc : now.AddSeconds(30);
         var target = new ObservedNotepadTarget(
             Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant(),

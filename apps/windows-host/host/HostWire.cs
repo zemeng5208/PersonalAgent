@@ -104,6 +104,16 @@ internal sealed class HostWire
                 DateTime.Parse(frame.GetProperty("startedAt").GetString()!, CultureInfo.InvariantCulture))
                 throw new InvalidDataException("Invalid Windows Host result evidence or time");
         }
+
+        if (kindElement.GetString() == "target_ready_result")
+        {
+            var ready = frame.GetProperty("ready").GetBoolean();
+            if (ready && (!frame.TryGetProperty("expiresAt", out _) ||
+                          frame.TryGetProperty("errorCode", out _)) ||
+                !ready && (!frame.TryGetProperty("errorCode", out _) ||
+                           frame.TryGetProperty("expiresAt", out _)))
+                throw new InvalidDataException("Invalid Windows Host target ready result");
+        }
     }
 
     private static void ValidateUtc(string value)
@@ -116,6 +126,13 @@ internal sealed class HostWire
 
     private static void ValidateValue(JsonElement value, JsonElement constraint)
     {
+        if (constraint.TryGetProperty("type", out var typeElement) && typeElement.GetString() == "boolean")
+        {
+            if (value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                throw new InvalidDataException("Windows Host field must be a boolean");
+            return;
+        }
+
         if (value.ValueKind != JsonValueKind.String)
             throw new InvalidDataException("Windows Host field must be a string");
         var text = value.GetString()!;

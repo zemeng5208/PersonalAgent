@@ -23,7 +23,7 @@ public sealed record ConfirmedNotepadTarget(
 
 public enum ActionState { Rejected, Verified, ResultUnknown }
 
-public sealed record ActionResult(ActionState State, string Reason);
+public sealed record ActionResult(ActionState State, string Reason, string? ErrorCode = null);
 
 public static class NotepadAction
 {
@@ -38,13 +38,13 @@ public static class NotepadAction
             target.ExpectedText is null || target.ReplacementText is null ||
             target.ExpectedText.Length > MaxTextLength || target.ReplacementText.Length > MaxTextLength ||
             target.ExpectedText == target.ReplacementText)
-            return new(ActionState.Rejected, "Invalid or unchanged bounded request");
+            return new(ActionState.Rejected, "Invalid or unchanged bounded request", "INVALID_ARGUMENT");
 
         if (cancellationToken.IsCancellationRequested)
-            return new(ActionState.Rejected, "Cancelled before execution");
+            return new(ActionState.Rejected, "Cancelled before execution", "CANCELLED");
 
         try { await InputLock.WaitAsync(cancellationToken).ConfigureAwait(false); }
-        catch (OperationCanceledException) { return new(ActionState.Rejected, "Cancelled while waiting for input lock"); }
+        catch (OperationCanceledException) { return new(ActionState.Rejected, "Cancelled while waiting for input lock", "CANCELLED"); }
 
         var mutationStarted = false;
         try
@@ -52,32 +52,35 @@ public static class NotepadAction
             // Reject an elevated host: ordinary user authority is an invariant, not a fallback.
             using var identity = WindowsIdentity.GetCurrent();
             if (new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator))
-                return new(ActionState.Rejected, "Elevated host is not supported");
+                return new(ActionState.Rejected, "Elevated host is not supported", "UNAUTHORIZED");
 
             // Baseline precedes all UIA reads: a user edit during discovery must not
             // become the new baseline for an otherwise matching expected value.
             var inputTick = LastInputTick();
             if (!IsSameForegroundTarget(target))
-                return new(ActionState.Rejected, "Confirmed target is no longer foreground");
+                return new(ActionState.Rejected, "Confirmed target is no longer foreground", "TARGET_STALE");
 
             var root = AutomationElement.FromHandle(target.WindowHandle);
             if (root.Current.ProcessId != target.ProcessId)
-                return new(ActionState.Rejected, "Window identity changed");
+                return new(ActionState.Rejected, "Window identity changed", "TARGET_STALE");
             if (!TryGetOnlyTab(root, target.ProcessId, out var selectedTab))
-                return new(ActionState.Rejected, "Exactly one Notepad tab is required");
+                return new(ActionState.Rejected, "Exactly one Notepad tab is required", "TARGET_AMBIGUOUS");
             var edits = root.FindAll(TreeScope.Descendants,
                 new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
             if (edits.Count != 1 || !edits[0].TryGetCurrentPattern(ValuePattern.Pattern, out var pattern))
-                return new(ActionState.Rejected, "Exactly one editable UIA text control is required");
+                return new(ActionState.Rejected, "Exactly one editable UIA text control is required", "TARGET_AMBIGUOUS");
             var edit = edits[0];
             var value = (ValuePattern)pattern;
             if (!edit.Current.IsEnabled || value.Current.IsReadOnly)
-                return new(ActionState.Rejected, "Target text changed or is not editable");
+                return new(ActionState.Rejected, "Target text changed or is not editable", "TARGET_STALE");
 
             cancellationToken.ThrowIfCancellationRequested();
+            if (LastInputTick() != inputTick)
+                return new(ActionState.Rejected, "User input detected before execution", "USER_TAKEOVER");
             if (!PrewriteStable(inputTick, target.ExpectedText, () => value.Current.Value,
                     LastInputTick, () => IsSameForegroundTarget(target)))
-                return new(ActionState.Rejected, "User input or target text changed before execution");
+                return new(ActionState.Rejected, "User input or target text changed before execution",
+                    LastInputTick() != inputTick ? "USER_TAKEOVER" : "TARGET_STALE");
             cancellationToken.ThrowIfCancellationRequested();
             // Rebind the selected tab and edit immediately before SetValue. UIA has
             // no atomic compare-and-set; this only narrows the remaining race.
@@ -85,14 +88,18 @@ public static class NotepadAction
             if (prewriteRoot.Current.ProcessId != target.ProcessId ||
                 !TryGetOnlyTab(prewriteRoot, target.ProcessId, out var prewriteTab) ||
                 !SameElement(selectedTab, prewriteTab))
-                return new(ActionState.Rejected, "Target tab changed before execution");
+                return new(ActionState.Rejected, "Target tab changed before execution", "TARGET_STALE");
             var prewriteEdits = prewriteRoot.FindAll(TreeScope.Descendants,
                 new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
             if (prewriteEdits.Count != 1 || !prewriteEdits[0].Equals(edit) ||
-                !edit.Current.IsEnabled || value.Current.IsReadOnly ||
-                !PrewriteStable(inputTick, target.ExpectedText, () => value.Current.Value,
+                !edit.Current.IsEnabled || value.Current.IsReadOnly)
+                return new(ActionState.Rejected, "Target editor changed before execution", "TARGET_STALE");
+            if (LastInputTick() != inputTick)
+                return new(ActionState.Rejected, "User input detected before execution", "USER_TAKEOVER");
+            if (!PrewriteStable(inputTick, target.ExpectedText, () => value.Current.Value,
                     LastInputTick, () => IsSameForegroundTarget(target)))
-                return new(ActionState.Rejected, "Target editor changed before execution");
+                return new(ActionState.Rejected, "Target editor changed before execution",
+                    LastInputTick() != inputTick ? "USER_TAKEOVER" : "TARGET_STALE");
             cancellationToken.ThrowIfCancellationRequested();
 
             // SetValue can mutate before returning or throwing. Any subsequent failure is unknown.
@@ -100,36 +107,38 @@ public static class NotepadAction
             value.SetValue(target.ReplacementText);
             if (cancellationToken.IsCancellationRequested || !IsSameForegroundTarget(target) ||
                 LastInputTick() != inputTick)
-                return new(ActionState.ResultUnknown, "Interrupted after text mutation; read back before retry");
+                return new(ActionState.ResultUnknown, "Interrupted after text mutation; read back before retry", "RESULT_UNKNOWN");
 
             // Read the target again. A successful UIA call alone is never proof of the result.
             var reread = AutomationElement.FromHandle(target.WindowHandle);
             if (reread.Current.ProcessId != target.ProcessId ||
                 !TryGetOnlyTab(reread, target.ProcessId, out var readbackTab) ||
                 !SameElement(selectedTab, readbackTab))
-                return new(ActionState.ResultUnknown, "Target tab changed during readback");
+                return new(ActionState.ResultUnknown, "Target tab changed during readback", "RESULT_UNKNOWN");
             var currentEdits = reread.FindAll(TreeScope.Descendants,
                 new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
             if (currentEdits.Count != 1 || !currentEdits[0].Equals(edit) ||
                 !currentEdits[0].TryGetCurrentPattern(ValuePattern.Pattern, out var currentPattern) ||
                 ((ValuePattern)currentPattern).Current.Value != target.ReplacementText)
-                return new(ActionState.ResultUnknown, "Target readback did not confirm replacement");
+                return new(ActionState.ResultUnknown, "Target readback did not confirm replacement", "RESULT_UNKNOWN");
             if (!IsSameForegroundTarget(target) || LastInputTick() != inputTick ||
                 cancellationToken.IsCancellationRequested)
-                return new(ActionState.ResultUnknown, "Target or user input changed during readback");
+                return new(ActionState.ResultUnknown, "Target or user input changed during readback", "RESULT_UNKNOWN");
             return new(ActionState.Verified, "Target UIA text readback confirmed");
         }
         catch (OperationCanceledException)
         {
             return new(mutationStarted ? ActionState.ResultUnknown : ActionState.Rejected,
-                mutationStarted ? "Cancelled after mutation; reconcile before retry" : "Cancelled before mutation");
+                mutationStarted ? "Cancelled after mutation; reconcile before retry" : "Cancelled before mutation",
+                mutationStarted ? "RESULT_UNKNOWN" : "CANCELLED");
         }
         catch (Exception)
         {
             // UIA and process APIs may throw COM, Win32 or provider-specific exceptions.
             // Never leak target text, process path, window title or exception messages.
             return new(mutationStarted ? ActionState.ResultUnknown : ActionState.Rejected,
-                mutationStarted ? "UIA failure after mutation; reconcile before retry" : "Target validation failed");
+                mutationStarted ? "UIA failure after mutation; reconcile before retry" : "Target validation failed",
+                mutationStarted ? "RESULT_UNKNOWN" : "EXTERNAL_FAILURE");
         }
         finally { InputLock.Release(); }
     }
@@ -196,13 +205,35 @@ public static class NotepadAction
 
     // Manual probe checks only target identity and tab structure before asking for consent.
     // No window title, tab label or editor value is read here.
-    internal static bool HasSingleTabForManualProbe(nint window, int pid, DateTime startUtc)
+    internal static bool HasSingleTabForManualProbe(nint window, int pid, DateTime startUtc) =>
+        CheckSingleTabTarget(window, pid, startUtc).Success;
+
+    internal static (bool Success, string? ErrorCode) CheckSingleTabTarget(nint window, int pid, DateTime startUtc)
     {
-        if (GetWindowThreadProcessId(window, out var owner) == 0 || owner != pid) return false;
-        using var process = Process.GetProcessById(pid);
-        if (process.StartTime.ToUniversalTime() != startUtc || !IsTrustedNotepadProcess(process)) return false;
-        var root = AutomationElement.FromHandle(window);
-        return root.Current.ProcessId == pid && TryGetOnlyTab(root, pid, out _);
+        if (GetWindowThreadProcessId(window, out var owner) == 0 || owner != pid)
+            return (false, "TARGET_STALE");
+        Process process;
+        try { process = Process.GetProcessById(pid); }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or
+                                   System.ComponentModel.Win32Exception)
+        { return (false, "TARGET_STALE"); }
+        using (process)
+        {
+            try
+            {
+                if (process.StartTime.ToUniversalTime() != startUtc) return (false, "TARGET_STALE");
+                if (!IsTrustedNotepadProcess(process)) return (false, "UNAUTHORIZED");
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or
+                                       System.ComponentModel.Win32Exception)
+            { return (false, "TARGET_STALE"); }
+        }
+        AutomationElement root;
+        try { root = AutomationElement.FromHandle(window); }
+        catch { return (false, "TARGET_STALE"); }
+        if (root.Current.ProcessId != pid) return (false, "TARGET_STALE");
+        if (!TryGetOnlyTab(root, pid, out _)) return (false, "TARGET_AMBIGUOUS");
+        return (true, null);
     }
 
     private static bool TryGetOnlyTab(AutomationElement root, int pid, out AutomationElement? selectedTab)
