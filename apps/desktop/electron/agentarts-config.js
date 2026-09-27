@@ -1,4 +1,4 @@
-import {existsSync,mkdirSync,readFileSync,renameSync,writeFileSync} from 'node:fs';
+import {existsSync,mkdirSync,readFileSync,renameSync,writeFileSync,unlinkSync} from 'node:fs';
 import path from 'node:path';
 
 function endpoint(value) {
@@ -55,6 +55,13 @@ export function createAgentArtsConfig({userData,safeStorage,environment=process.
       mkdirSync(userData,{recursive:true});
       writeFileSync(file+'.tmp',JSON.stringify({version:1,encrypted}),'utf8');renameSync(file+'.tmp',file);
       saved=value;failure='';return snapshot();
+    },
+    revoke() {
+      saved=undefined;failure='';
+      if (existsSync(file)) {
+        try { unlinkSync(file); } catch {}
+      }
+      return snapshot();
     },
   };
 }

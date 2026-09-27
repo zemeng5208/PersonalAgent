@@ -27,6 +27,10 @@ test('AgentArts credential persists through host storage without snapshot disclo
   assert.throws(()=>config.configure({...input,authorization:'x\r\nAuthorization: y'}));
   config.configure({...input,authorization:'Bearer replacement',runtimeName:'other-runtime'});
   assert.throws(()=>config.readAuthorization(binding));
+  const revoked = config.revoke();
+  assert.equal(revoked.configured, false);
+  assert.equal(existsSync(path.join(userData,'agentarts-config.json')), false);
+  assert.throws(()=>config.binding());
 });
 
 test('known AgentArts destination permits Runtime and Live construction without inventing or overwriting a credential',async()=>{

@@ -1159,6 +1159,13 @@ async function action(event, name, payload) {
       ? '配置已加密保存，请重启应用完成连接。'
       : '配置已加密保存，Runtime 已连接；云端可用性以实际任务结果为准。'};
   }
+  if (name === 'agentarts.revoke') {
+    if (sender !== admin || !competitionMode || runtimeApplication?.activeTaskCount || liveVoice?.hasActive()
+      || runtimeStartup.snapshot().state === 'starting') throw Error('请在任务、通话及启动结束后从设置撤销 AgentArts');
+    const result = agentArtsConfig.revoke();
+    publish();
+    return {...result, reason: '已清除保存在本机的 AgentArts 凭据与绑定配置。'};
+  }
   if (['todo.authorize','todo.revoke','todo.configureNotifications','todo.dismiss','todo.create','todo.update'].includes(name)) {
     if ((sender !== admin && sender !== workspace && sender !== panel) || !competitionMode || syntheticMvp || !todoHost) throw Error('请从正式应用待办设置操作');
     const result = await todoHost[name.slice(5)](payload); publish(); return result;
