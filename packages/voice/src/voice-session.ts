@@ -552,7 +552,11 @@ export class VoiceSessionManager {
   async stopSpeaking(sessionId: string): Promise<StopSpeakingResult> {
     const record = this.requireSession(sessionId, true);
     if (terminalStates.has(record.state)) {
-      return {sessionId: record.sessionId, playbackStopped: false, resourcesReleased: true};
+      // Terminal state is published before cleanup completes. Reuse its actual
+      // release result instead of treating termination as release confirmation.
+      const stopped = await this.terminate(record, record.terminalReason ?? 'user');
+      return {sessionId: record.sessionId, playbackStopped: false,
+        resourcesReleased: stopped.resourcesReleased};
     }
     const playback = [...record.operations].find(operation => operation.kind === 'playback');
     if (playback === undefined) {
