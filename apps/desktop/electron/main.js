@@ -727,8 +727,11 @@ async function initializeRuntime() {
             properties:['openDirectory']});
           return result.canceled ? undefined : result.filePaths[0];
         }});
+      const {LayaActionChoiceService, LocalLayaHttpTransport} = await import('@personal-agent/cognition');
       localLaya = createLocalLayaHost({projectRoot:path.resolve(dir, '../../..'),
-        createService:runtimeModule.createLocalInboxClassifier, onUpdate:publish});
+        createService:runtimeModule.createLocalInboxClassifier,
+        createChooser:({port,getApiKey}) => new LayaActionChoiceService(new LocalLayaHttpTransport(port,getApiKey)),
+        onUpdate:publish});
       mailConfig = createMailConfig({userData:app.getPath('userData'), safeStorage,
         onRevoke:async () => {await mailHost?.cancel();}});
       const configuredMail = mailConfig.current();

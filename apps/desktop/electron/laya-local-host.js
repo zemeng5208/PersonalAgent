@@ -38,17 +38,17 @@ export function discoverLocalLaya(projectRoot) {
 }
 
 /** One explicitly started, owned child. No microphone, cloud call or background restart. */
-export function createLocalLayaHost({projectRoot, createService, onUpdate = () => {}, port = 8766,
+export function createLocalLayaHost({projectRoot, createService, createChooser, onUpdate = () => {}, port = 8766,
   discover = discoverLocalLaya, launch = spawn, request = fetch, freeMemory = os.freemem,
   startupTimeoutMs = 90_000, now = Date.now, sleep = delay}) {
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw Error('Invalid Laya loopback port');
-  let child, service, controller, starting, stopping;
+  let child, service, chooser, controller, starting, stopping;
   let state = 'stopped', reason = '本地分类尚未启动；启动时才加载现有模型';
   const snapshot = () => ({state, ready:state === 'ready', reason, localOnly:true, calibrated:false});
   const publish = () => {try {onUpdate();} catch {}};
   const stop = async () => {
     if (stopping) return stopping;
-    controller?.abort(); service = undefined;
+    controller?.abort(); service = undefined; chooser = undefined;
     const owned = child;
     state = owned ? 'stopping' : 'stopped'; reason = owned ? '正在释放本地模型' : '本地模型已停止'; publish();
     if (!owned) return snapshot();
@@ -84,7 +84,7 @@ export function createLocalLayaHost({projectRoot, createService, onUpdate = () =
         child = owned;
         const exited = () => {
           if (child !== owned) return;
-          child = undefined; service = undefined;
+          child = undefined; service = undefined; chooser = undefined;
           if (!signal.aborted) {controller.abort(); state = 'error'; reason = '本地模型进程已退出，请检查安装后重新启动'; publish();}
         };
         owned.once('exit', exited); owned.once('error', exited);
@@ -98,6 +98,7 @@ export function createLocalLayaHost({projectRoot, createService, onUpdate = () =
               if (value.status === 'ok' && value.model === 'multilingual'
                 && value.capabilities?.includes('multi_state') && value.maxStates === 4 && !signal.aborted && child === owned) {
                 service = createService({port, getApiKey:() => key});
+                chooser = createChooser?.({port, getApiKey:() => key});
                 state = 'ready'; reason = '本机 Laya 已连接；批量分类结果仍需结合来源核对'; publish(); return snapshot();
               }
             } else await response.body?.cancel();
@@ -117,6 +118,10 @@ export function createLocalLayaHost({projectRoot, createService, onUpdate = () =
     async classify(input) {
       if (!service || state !== 'ready' || controller.signal.aborted) throw Error('本地 Laya 尚未就绪');
       return service.classify({...input, signal:AbortSignal.any([input.signal, controller.signal])});
+    },
+    async choose(input) {
+      if (!chooser || state !== 'ready' || controller.signal.aborted) throw Error('本地 Laya 决策尚未就绪');
+      return chooser.choose({...input, signal:AbortSignal.any([input.signal, controller.signal])});
     },
   };
 }
