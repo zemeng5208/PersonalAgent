@@ -374,3 +374,76 @@ test('terminal cleanup and operation finally share one release and stop waits fo
   assert.equal(result.resourcesReleased, true);
   assert.deepEqual(stopReasons, ['user']);
 });
+
+test('stopSpeaking and operation finally share one interrupted release and repeated stop does not re-release', async () => {
+  let finishPlayback;
+  let playbackStarted;
+  const ready = new Promise(resolve => { playbackStarted = resolve; });
+  let release;
+  const releaseGate = new Promise(resolve => { release = resolve; });
+  const stopReasons = [];
+  const recognition = new FakeSpeechRecognitionPort(() => ({text: '播放并打断'}));
+  let consumerSignal;
+  const consumer = new FakeTranscriptConsumerPort(request => {
+    consumerSignal = request.signal;
+    return {replyText: '可打断的回复'};
+  });
+  const output = {
+    speak() {
+      playbackStarted();
+      return {
+        result: new Promise(resolve => { finishPlayback = resolve; }),
+        async stop(reason) {
+          stopReasons.push(reason);
+          await releaseGate;
+        },
+      };
+    },
+  };
+  const manager = new VoiceSessionManager({recognition, output, idFactory: ids()});
+  const session = await manager.start({deadline: futureDeadline(), signal: new AbortController().signal});
+  const transcript = await manager.recognizeAudio(session.sessionId, clip());
+  const reply = await manager.consumeTranscript(session.sessionId, transcript.transcriptId, consumer);
+  const speaking = manager.speakReply(session.sessionId, reply.replyId);
+  await ready;
+
+  let stopSpeakingSettled = false;
+  const stopping = manager.stopSpeaking(session.sessionId).then(result => {
+    stopSpeakingSettled = true;
+    return result;
+  });
+
+  await new Promise(resolve => setImmediate(resolve));
+
+  const duplicateStopping = manager.stopSpeaking(session.sessionId);
+  const terminating = manager.stop(session.sessionId);
+
+  assert.deepEqual(stopReasons, ['interrupted']);
+  assert.equal(stopSpeakingSettled, false);
+
+  release();
+  const [stopResult, duplicateStopResult, terminateResult, speakResult] = await Promise.all([
+    stopping,
+    duplicateStopping,
+    terminating,
+    speaking,
+  ]);
+
+  assert.equal(stopResult.playbackStopped, true);
+  assert.equal(stopResult.resourcesReleased, true);
+  assert.equal(duplicateStopResult.playbackStopped, true);
+  assert.equal(duplicateStopResult.resourcesReleased, true);
+  assert.equal(terminateResult.stopped, true);
+  assert.equal(terminateResult.resourcesReleased, true);
+  assert.deepEqual(speakResult, {sessionId: session.sessionId, completed: false, interrupted: true});
+
+  const lateStop = await manager.stopSpeaking(session.sessionId);
+  assert.deepEqual(lateStop, {sessionId: session.sessionId, playbackStopped: false, resourcesReleased: true});
+  const lateTerminate = await manager.stop(session.sessionId);
+  assert.deepEqual(lateTerminate, terminateResult);
+
+  assert.deepEqual(stopReasons, ['interrupted']);
+  assert.equal(consumer.calls.length, 1);
+  assert.equal(consumerSignal.aborted, false);
+  finishPlayback?.();
+});

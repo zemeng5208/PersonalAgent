@@ -21,11 +21,18 @@ export type {
   VoiceOperation,
   VoiceOperationStopReason,
 } from './ports.js';
+export {createVoicePcmBuffer} from './pcm-buffer.js';
+export type {VoicePcmBuffer, VoicePcmBufferOptions} from './pcm-buffer.js';
 export {
   UnavailableSpeechOutputPort,
   UnavailableSpeechRecognitionPort,
   UnavailableTranscriptConsumerPort,
 } from './unavailable.js';
+export {
+  RuntimeClientTranscriptConsumer,
+  createRuntimeClientTranscriptConsumer,
+} from './runtime-consumer.js';
+export type {RuntimeClientTranscriptConsumerOptions} from './runtime-consumer.js';
 export {createWindowsSystemSpeechPorts} from './windows-system-speech.js';
 export type {WindowsSystemSpeechPorts} from './windows-system-speech.js';
 export {VoiceSessionManager} from './voice-session.js';
