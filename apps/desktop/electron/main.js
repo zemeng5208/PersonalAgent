@@ -841,21 +841,22 @@ async function initializeSisVoice() {
   if (!competitionMode || !client || voiceInput) return;
   if (sisPlaybackHost) throw Error('旧语音播放资源释放未确认');
   if (!sisConfigHost.snapshot().configured) return;
-  const config = sisConfigHost.current();
-  if (!config) return;
+  const selectedConfig = sisConfigHost.current();
+  if (!selectedConfig) return;
+  const {region, projectId} = selectedConfig;
   const {createVoicePcmFrameSourcePort, createHuaweiSisRecognitionPort,
     createHuaweiSisOutputPort} = await import('@personal-agent/voice');
   const {createDesktopVoiceInput} = await import('./voice-input.js');
   const tokenPort = {getSisToken: async ({region, signal}) => {
-    if (signal.aborted || region !== config.region) throw Error('SIS 凭据不可用');
+    if (signal.aborted || region !== speechConfig.region) throw Error('SIS 凭据不可用');
     const selected = sisConfigHost.current();
-    if (!selected || selected.region !== region || selected.projectId !== config.projectId
+    if (!selected || selected.region !== region || selected.projectId !== speechConfig.projectId
       || selected.tokenExpiresAt && Date.parse(selected.tokenExpiresAt) <= Date.now() + 10_000) {
       throw Error('SIS 凭据不可用');
     }
     return selected.token;
   }};
-  const speechConfig = {region: config.region, projectId: config.projectId, tokenPort};
+  const speechConfig = {region, projectId, tokenPort};
   const playback = createDesktopSisPlaybackHost({getPanel: () => panel});
   let source;
   try {
