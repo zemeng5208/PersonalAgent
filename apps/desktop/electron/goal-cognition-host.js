@@ -24,7 +24,8 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
     if (!allowed() || !canHandoff(review)) return;
     const snapshot=store.read();
     if (snapshot.revision!==review.graphRevision) return;
-    const strategies={recheck:'先复核变化来源与依赖，再决定是否调整计划',
+    const strategies={plan:'目标已登记；请制定第一步计划、所需工具与待确认事项，尚未创建 Plan 或执行目标',
+      recheck:'先复核变化来源与依赖，再决定是否调整计划',
       defer:'保留当前计划，安排后续复核，不执行已经失效的步骤',
       revise:'评估最小影响范围，并按新事实修订相关计划的内容'};
     const needsMachineReview=machineReview(review);
@@ -32,6 +33,11 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
     if (!strategy) throw Error('此决策方案尚无云端投影');
     const refs=new Map();
     const add=ref=>{if(ref) refs.set(JSON.stringify([ref.id,ref.revision]),ref);};
+    if (review.subjectGoal) {
+      add(review.subjectGoal);
+      const subject=snapshot.history.find(node=>sameRef(node,review.subjectGoal));
+      for (const dependency of subject?.dependencies??[]) add(dependency);
+    }
     for (const item of review.affected) {
       add(item.node);
       for (const cause of item.causes) {add(cause.reference);if(cause.currentRevision) add({id:cause.reference.id,revision:cause.currentRevision});}
@@ -122,7 +128,7 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
         cursor=batch.nextGraphRevision;batch.reviews.forEach(record);
         for (const item of goalHost.listTasks()) {
           if (current.signal.aborted) break;
-          if (item.state!=='succeeded'||item.result?.kind!=='applied'||!item.result.previousGoal) continue;
+          if (item.state!=='succeeded'||item.result?.kind!=='applied') continue;
           const prior=application.runtime.loadCheckpoint(item.taskId,MARKER);
           if (typeof prior==='string') {
             const readback=cognition.readReview(prior);
@@ -135,8 +141,11 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
           const graph=store.read();
           const latest=graph.history.findLast(node=>node.id===item.result.currentGoal.id);
           if (!sameRef(latest,item.result.currentGoal)) continue;
-          const result=await cognition.reviewGoalRevision({expectedGraphRevision:graph.revision,
-            previousGoal:item.result.previousGoal,currentGoal:item.result.currentGoal},{...current,at:new Date(now()).toISOString()});
+          const result=item.result.previousGoal
+            ? await cognition.reviewGoalRevision({expectedGraphRevision:graph.revision,
+              previousGoal:item.result.previousGoal,currentGoal:item.result.currentGoal},{...current,at:new Date(now()).toISOString()})
+            : await cognition.reviewGoalCreated({expectedGraphRevision:graph.revision,
+              currentGoal:item.result.currentGoal},{...current,at:new Date(now()).toISOString()});
           application.runtime.saveCheckpoint(item.taskId,MARKER,result.task.taskId);record(result);
         }
       } catch {if(!current.signal.aborted){nextTick=now()+30_000;status='error';reason='主动分析暂未完成，保留原任务；稍后按原任务核实恢复';}}

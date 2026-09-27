@@ -21,7 +21,7 @@ async function terminal(application,id) {
   }
   throw Error('Synthetic task did not settle');
 }
-async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCredentialRead=false,uncertain=false,unavailableInitially=false}={}) {
+async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCredentialRead=false,uncertain=false,unavailableInitially=false,newGoal=false}={}) {
   const root=fileURLToPath(new URL('../../../.cache/desktop-goal-cognition/',import.meta.url));
   await mkdir(root,{recursive:true});const directory=await mkdtemp(path.join(root,'case-'));
   let host,layaCalls=0,time=Date.now(),unavailable=unavailableInitially;const sent=[],announced=[];
@@ -41,21 +41,23 @@ async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCred
   const store=application.runtime.provisionCoordinationStore(namespace);
   store.append(0,node('private-source','fact',[],'PRIVATE_SOURCE_SENTINEL','private'));
   store.append(1,node('goal','goal',[ref('private-source')],'原目标','private'));
-  store.append(2,node('decision','decision',[ref('goal')],'关联决策'));
-  store.append(3,node('plan','plan',[ref('decision')],'关联计划'));
-  store.append(4,node('goal','goal',[ref('private-source')],'修改后的目标','private'));
+  if(!newGoal) {
+    store.append(2,node('decision','decision',[ref('goal')],'关联决策'));
+    store.append(3,node('plan','plan',[ref('decision')],'关联计划'));
+    store.append(4,node('goal','goal',[ref('private-source')],'修改后的目标','private'));
+  }
   const sourceTask=application.runtime.submitTask({goal:'Synthetic completed goal edit',conversationId:'host-fixture',idempotencyKey:'synthetic-goal-edit'});
   await application.runtime.runTask(sourceTask.taskId,async()=>({resultSummary:'Synthetic goal receipt'}),
     {deadline:new Date(Date.now()+60_000).toISOString(),sideEffect:'read'});
   const goalHost={listTasks:()=>[{taskId:sourceTask.taskId,state:'succeeded',result:{kind:'applied',
-    graphRevision:5,previousGoal:ref('goal'),currentGoal:ref('goal',2)}}]};
+    graphRevision:newGoal?2:5,...(newGoal?{}:{previousGoal:ref('goal')}),currentGoal:ref('goal',newGoal?1:2)}}]};
   const facts=application.createCompetitionFactHost({memoryPath:path.join(directory,'memory.sqlite'),
     memoryNamespace:'synthetic-public-memory',graphNamespace:namespace,consumerKey:'fixture'});
   const client=new Client(application,Date.now);await client.connect();
   const chooser=new LayaActionChoiceService({infer:async payload=>{
     layaCalls++;
     if(unavailable) throw Error('Synthetic temporary Laya outage');
-    const keys=Object.keys(payload.questions.action.criteria),selected=keys.at(-1);
+    const keys=Object.keys(payload.questions.action.criteria),selected=newGoal?keys[0]:keys.at(-1);
     const probability=uncertain?1/keys.length:0.98;
     return {answers:{action:{choice:selected,probabilities:Object.fromEntries(keys.map(key=>[key,key===selected?probability:(1-probability)/(keys.length-1)])),
       answer_confidence:probability,confidence:0.5}}};
@@ -134,4 +136,17 @@ test('legacy Goal marker resumes after a transient Laya outage without reopening
   assert.notEqual(f.application.runtime.loadCheckpoint(f.sourceTaskId,'desktop-goal-cognition-review'),old.taskId);
   assert.equal(f.application.runtime.getTask(old.taskId).state,'succeeded');
   f.advance();await f.host().tick();assert.equal(f.sent.length,1);
+});
+
+test('a newly registered Goal supplies its real subject to the first planning handoff',async t=>{
+  const f=await fixture(t,{newGoal:true});
+  f.host().configure({enabled:true,cloudAllowed:true});await f.host().tick();
+  const taskId=f.announced[0]?.taskId;assert.ok(taskId);
+  assert.equal((await terminal(f.application,taskId)).state,'succeeded');
+  assert.equal(f.sent.length,1);assert.match(f.sent[0].query,/目标已登记/);
+  const payload=JSON.parse(f.sent[0].query.slice(f.sent[0].query.indexOf('\n')+1));
+  assert.equal(payload.action,'RECHECK');assert.equal(payload.executed,false);
+  assert.ok(payload.nodes.some(node=>node.kind==='goal'&&node.summary==='原目标'));
+  assert.doesNotMatch(f.sent[0].query,/PRIVATE_SOURCE_SENTINEL|private-source/);
+  f.advance();await f.host().tick();assert.equal(f.sent.length,1);assert.equal(f.store.read().revision,2);
 });
