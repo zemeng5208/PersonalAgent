@@ -82,16 +82,30 @@
 
 ---
 
-## 4. npm-build 与 npm-test 的 5 项严格门禁
+## 4. npm-build 与 npm-test 的严格门禁与运行时不可变性 Pinning
 
+### 4.1 五项严格安全门禁
 在 `apps/desktop/electron/workspace-command-recipes.js` 中，只有当**下列 5 项安全门禁全部满足**时，才会生成并暴露 `npm-build` 与 `npm-test` 配方：
 1. `allowProjectScripts === true`：宿主显式选择开启；
 2. **受信 Job Helper 注入**：宿主显式提供 `jobHelperExecutable`（通过 `resolveJobHelperExecutable` 校验为工作区外、规范化普通文件、非 symlink，Windows 下为 `.exe`）；
-3. **受信 npm-cli 路径注入**：宿主显式提供 `npmCliPath`（通过 `resolveNpmCliPath` 校验为工作区外、规范化普通文件、非 symlink，为 `npm-cli.js`）；
+3. **受信 npm-cli 路径注入或确定性推导**：宿主显式提供 `npmCliPath`（校验为工作区外、规范化普通文件、非 symlink），或在宿主未提供时通过 `inferNpmCliFromNodeExecutable` 从受信 `nodeExecutable` 目录结构确定性推导（`<nodeDir>/node_modules/npm/bin/npm-cli.js`），并严格核实推导文件位于工作区外、为非符号链接实体文件；
 4. **package.json 声明脚本**：工作区根目录存在非符号链接的 `package.json`，且声明了 `build` 或 `test` 脚本（只核验脚本名称存在，绝不读取、存储或泄露脚本正文）；
 5. **本地依赖存在性门禁**：工作区根目录必须已经存在合法的实体 `node_modules/` 目录（非指向外部的 symlink/junction）；若不存在，诊断记录 `dependencies_missing`，**坚决不自动执行 `npm install` 或联网下载包**。
 
 若上述任一条件不满足，诊断信息记录明确原因，配方中仅包含合规的 `node --check`，绝不暴露未准备好的 npm 配方。
+
+### 4.2 运行时不可变性 Pinning（防替换与防篡改）
+为防止工具在构造后其底层可执行文件、配置文件或工作区被动态替换或篡改，`createWorkspaceCommandRecipeTool` 实现了严格的运行时动态 Pinning：
+1. **快照 Pin 捕获**：在工厂构造时，捕获 `workspaceRoot` 目录身份、`nodeExecutable`（规范路径/文件大小/mtime/inode）、`jobHelperExecutable`（规范路径/大小/SHA-256 哈希）、`npmCliPath`（规范路径/大小/SHA-256 哈希）以及 `package.json`（规范路径/SHA-256 哈希/mtime）；
+2. **动态复核与 Fail Closed**：
+   - 在每次 `available()` 被调用时，动态复核所有 Pin 项及 `node_modules` 存在性；任一要素被修改、被替换为符号链接或删除时，立即返回 `false`；
+   - 在每次 `execute()` 被调用前，严格断言 Pin 状态；若检测到任何篡改或替换，立即拒绝执行并抛出明确错误（`Workspace command executable or configuration was mutated after registration; reassembly required`），强制要求宿主重新装配，绝不盲目放行。
+
+### 4.3 专属开发构建脚本（build-helper.mjs）
+在 `packages/coding-tools/native/` 下提供了原生助手的构建与发布脚本：
+- **外部目标目录强制要求**：调用方必须显式传入 `--target-dir`（例如 Desktop 宿主 app `userData/native-helper` 目录），脚本严密拒绝仓库或工作区内部目录作为输出目标；
+- **系统环境与无旁路**：依赖系统预装的 .NET 8 SDK（`dotnet --version` 核验），不下载外部未知二进制，不使用 PowerShell `ExecutionPolicy Bypass`；
+- **轻量编译与验证**：调用 `dotnet publish` 输出紧凑发布版 `WindowsJobProcessHost.exe` 并返回 canonical path，并在测试中通过 probe 验证其原生可执行有效性。
 
 ---
 
@@ -112,31 +126,40 @@
 运行结果：
 ```powershell
 node --test packages/coding-tools/test/workspace-command.test.mjs
-# 7 tests, 7 pass, 0 fail (耗时 ~1.6s).
+# 7 tests, 7 pass, 0 fail (耗时 ~1.3s).
 ```
 
 ### 5.2 Desktop 配方工具与门禁测试
 在 `apps/desktop/test/workspace-command-recipes.test.mjs` 中执行：
 - 验证缺省关闭（`allowProjectScripts: false`）时不暴露 npm 配方；
 - 验证缺 helper、缺 npmCli、缺 package.json、缺 node_modules 各自的 Fail Closed 诊断记录；
+- 验证 `inferNpmCliFromNodeExecutable` 在未显式传 npmCliPath 时自动安全推导；
 - 验证 5 项条件全部满足时，正确生成并暴露 `npm-build` 与 `npm-test` 配方；
 - 验证生成配方的参数结构（`--cwd`, `--exe`, `--`, `npm-cli.js`, `run`, `build`）；
 - 验证安全环境变量白名单过滤与敏感 token 阻断；
 - 验证 helper 与 npmCli 位于工作区内时的逃逸拦截报错；
 - **防符号链接逃逸验证**：
   - 验证 `package.json` 为指向外部文件的符号链接时，严密拦截并不予读取（`package_json_invalid: package.json must not be a symbolic link`）；
-  - 验证 `node_modules` 为指向外部目录的符号链接/junction 时，拒绝算作有效依赖（`dependencies_missing`）。
+  - 验证 `node_modules` 为指向外部目录的符号链接/junction 时，拒绝算作有效依赖（`dependencies_missing`）；
+- **动态 Pinning 篡改拦截验证**：
+  - 验证修改 `package.json` 内容后，`available()` 立即返回 `false`，`execute()` 拒绝并报错；内容恢复后状态复原；
+  - 验证修改 `jobHelperExecutable` 内容后，`available()` 立即返回 `false`，`execute()` 拒绝并报错；内容恢复后状态复原；
+  - 验证删除 `node_modules` 后，`available()` 立即返回 `false`，`execute()` 拒绝并报错；
+- **Native Helper 构建脚本验证**：
+  - 验证 `buildNativeHelper` 拒绝仓库内部目标目录；
+  - 验证编译至外部临时目录成功，产物存在且可通过参数探测正常执行。
 
 运行结果：
 ```powershell
 node --test apps/desktop/test/workspace-command-recipes.test.mjs
-# 6 tests, 6 pass, 0 fail (耗时 ~100ms).
+# 8 tests, 8 pass, 0 fail (耗时 ~1.6s).
 ```
 
 ### 5.3 语法与类型校验
 ```powershell
 node --check apps/desktop/electron/workspace-command-recipes.js
 node --check apps/desktop/test/workspace-command-recipes.test.mjs
+node --check packages/coding-tools/native/build-helper.mjs
 npm run build --workspace=@personal-agent/coding-tools
 npm run typecheck --workspace=@personal-agent/coding-tools
 git diff --check

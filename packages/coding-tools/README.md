@@ -71,6 +71,7 @@ ACL 已限权；正式组合在核验目录访问控制前不得注册 apply。�
   - 在宿主进程被杀、超时、取消或句柄关闭时，由 Windows 内核原子终止整棵子进程树，防止后台孤儿编译/脚本进程残留；
   - 仅用于受信 Desktop 宿主构造的受控命令（如 npm-build / npm-test），严禁向模型暴露任意 shell/argv。
   - 受信宿主可在 recipe 或 options 中注入受控只读环境变量（key 必须满足正则、严禁包含 TOKEN/KEY/SECRET/PASSWORD/CREDENTIAL/AUTH 等敏感词、value 限制长度且不含 NUL）；未指定时默认空环境，绝不继承外部 `process.env` 私人凭据。
+  - 提供了专属开发构建脚本 `packages/coding-tools/native/build-helper.mjs`，调用者必须显式传入工作区外的目标目录（例如 app `userData/native-helper`）并通过 `dotnet publish` 输出二进制；脚本严禁将发布目标设在仓库或工作区内部，要求系统预装 .NET 8 SDK，不执行 `ExecutionPolicy Bypass`，不自动下载外部 SDK。
 
 ## 安全边界
 

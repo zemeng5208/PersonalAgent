@@ -1,13 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync} from 'node:fs';
+import {spawnSync} from 'node:child_process';
+import {existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, rmSync, realpathSync} from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import {
   buildWorkspaceCommandRecipes,
   createWorkspaceCommandRecipeTool,
+  inferNpmCliFromNodeExecutable,
   sanitizeRecipeId,
 } from '../electron/workspace-command-recipes.js';
+import {buildNativeHelper, resolveRepoRoot} from '../../../packages/coding-tools/native/build-helper.mjs';
 
 function createTempDir(prefix) {
   return mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -220,11 +223,13 @@ test('project scripts gatekeeping: npm build/test recipes require all conditions
     assert.ok(diagnostics.reasons.some(r => r.startsWith('job_helper_missing')));
   }
 
-  // Case 3: helper provided, but no npmCliPath -> npm_cli_missing
+  // Case 3: helper provided, but no npmCliPath and cannot be inferred -> npm_cli_missing
   {
+    const externalFakeNode = path.join(externalDir, process.platform === 'win32' ? 'node.exe' : 'node');
+    writeFileSync(externalFakeNode, 'fake-node-binary');
     const {recipes, diagnostics} = buildWorkspaceCommandRecipes({
       workspaceRoot: root,
-      nodeExecutable: process.execPath,
+      nodeExecutable: externalFakeNode,
       jobHelperExecutable: externalHelper,
       checkFiles: ['index.js'],
       allowProjectScripts: true,
@@ -232,6 +237,24 @@ test('project scripts gatekeeping: npm build/test recipes require all conditions
     assert.equal(recipes.length, 1);
     assert.equal(diagnostics.projectScriptsExposed, false);
     assert.ok(diagnostics.reasons.some(r => r.startsWith('npm_cli_missing')));
+  }
+
+  // Case 3b: inferNpmCliFromNodeExecutable infers npm-cli if present in installation
+  {
+    const inferred = inferNpmCliFromNodeExecutable(process.execPath);
+    if (inferred) {
+      assert.ok(path.isAbsolute(inferred));
+      assert.ok(existsSync(inferred));
+      const {diagnostics} = buildWorkspaceCommandRecipes({
+        workspaceRoot: root,
+        nodeExecutable: process.execPath,
+        jobHelperExecutable: externalHelper,
+        checkFiles: ['index.js'],
+        allowProjectScripts: true,
+      });
+      assert.equal(diagnostics.inferredNpmCli, true);
+      assert.equal(diagnostics.npmCliPath, inferred);
+    }
   }
 
   // Case 4: helper and npmCli provided, but no package.json -> package_json_missing
@@ -420,4 +443,105 @@ test('public command contract validation: recipe limits and properties', async t
     assert.ok(recipe.args.length <= 32);
     assert.ok(recipe.args.every(arg => typeof arg === 'string' && arg.length <= 4096 && !arg.includes('\0')));
   }
+});
+
+test('runtime pinning in createWorkspaceCommandRecipeTool: any mutation of executables, package.json, or workspace fails closed', async t => {
+  const root = createTempDir('pa-cmd-pin-root-');
+  const externalDir = createTempDir('pa-cmd-pin-ext-');
+  t.after(() => {
+    rmSync(root, {recursive: true, force: true});
+    rmSync(externalDir, {recursive: true, force: true});
+  });
+
+  const validFile = path.join(root, 'index.js');
+  writeFileSync(validFile, 'console.log("hello");\n');
+
+  const pkgJsonPath = path.join(root, 'package.json');
+  const initialPkg = JSON.stringify({name: 'pin-test', scripts: {build: 'echo 1', test: 'echo 2'}});
+  writeFileSync(pkgJsonPath, initialPkg);
+
+  mkdirSync(path.join(root, 'node_modules'));
+
+  const fakeHelperName = process.platform === 'win32' ? 'WindowsJobProcessHost.exe' : 'job-helper';
+  const helperPath = path.join(externalDir, fakeHelperName);
+  writeFileSync(helperPath, 'initial-helper-binary');
+
+  const npmCliPath = path.join(externalDir, 'npm-cli.js');
+  writeFileSync(npmCliPath, 'console.log("initial npm cli");');
+
+  const fakeFactory = options => ({
+    descriptor: {
+      name: 'workspace.run_allowed_command',
+      version: '1.0.0',
+      sideEffect: 'local_write',
+      requiredScopes: ['workspace:execute'],
+      inputSchema: {type: 'object', required: ['recipeId'], properties: {recipeId: {type: 'string'}}},
+    },
+    execute: async ({recipeId}) => ({recipeId, exitCode: 0, stdout: 'ok', stderr: ''}),
+  });
+
+  const toolWrapper = createWorkspaceCommandRecipeTool({
+    workspaceRoot: root,
+    nodeExecutable: process.execPath,
+    jobHelperExecutable: helperPath,
+    npmCliPath: npmCliPath,
+    checkFiles: ['index.js'],
+    allowProjectScripts: true,
+    createWorkspaceCommandTool: fakeFactory,
+  });
+
+  // Initially all pins are valid
+  assert.equal(toolWrapper.available(), true);
+  const initialExec = await toolWrapper.execute({recipeId: 'npm-build'}, {});
+  assert.equal(initialExec.exitCode, 0);
+
+  // 1. Mutate package.json -> available() returns false and execute rejects
+  writeFileSync(pkgJsonPath, JSON.stringify({name: 'pin-test', scripts: {build: 'echo mutated'}}));
+  assert.equal(toolWrapper.available(), false);
+  await assert.rejects(toolWrapper.execute({recipeId: 'npm-build'}, {}), /mutated after registration/i);
+
+  // Restore package.json -> available() returns true again
+  writeFileSync(pkgJsonPath, initialPkg);
+  assert.equal(toolWrapper.available(), true);
+
+  // 2. Mutate jobHelper executable -> available() returns false and execute rejects
+  writeFileSync(helperPath, 'mutated-helper-binary');
+  assert.equal(toolWrapper.available(), false);
+  await assert.rejects(toolWrapper.execute({recipeId: 'npm-build'}, {}), /mutated after registration/i);
+
+  // Restore jobHelper
+  writeFileSync(helperPath, 'initial-helper-binary');
+  assert.equal(toolWrapper.available(), true);
+
+  // 3. Remove node_modules -> available() returns false and execute rejects
+  rmSync(path.join(root, 'node_modules'), {recursive: true, force: true});
+  assert.equal(toolWrapper.available(), false);
+  await assert.rejects(toolWrapper.execute({recipeId: 'npm-build'}, {}), /mutated after registration/i);
+});
+
+test('buildNativeHelper compiles WindowsJobProcessHost to external directory and rejects repo-internal targets', {
+  skip: process.platform !== 'win32' ? 'Windows only test' : false,
+}, async t => {
+  const repoRoot = resolveRepoRoot();
+  const buildTempDir = createTempDir('pa-native-build-');
+  t.after(() => rmSync(buildTempDir, {recursive: true, force: true}));
+
+  // 1. Target directory inside repository is rejected
+  assert.throws(() => buildNativeHelper({
+    targetDir: path.join(repoRoot, 'some-internal-dir'),
+  }), /must reside outside the PersonalAgent repository root/i);
+
+  // 2. Build to external directory succeeds
+  const {helperPath, targetDir} = buildNativeHelper({targetDir: buildTempDir});
+  assert.equal(targetDir, realpathSync.native(buildTempDir));
+  assert.ok(existsSync(helperPath));
+  assert.equal(path.basename(helperPath).toLowerCase(), 'windowsjobprocesshost.exe');
+
+  // 3. Verify the published executable is runnable (not just a dummy file)
+  const probe = spawnSync(helperPath, ['--exe', 'nonexistent_test_exe_path'], {
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  assert.equal(probe.status, 1);
+  assert.match(probe.stderr, /Target executable does not exist/i);
 });

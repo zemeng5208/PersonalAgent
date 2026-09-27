@@ -11,7 +11,8 @@
  * 2. Trusted Desktop Main MUST explicitly inject fixed, absolute executable paths:
  *    - nodeExecutable: path to node.exe (or node on non-Windows).
  *    - jobHelperExecutable: path to WindowsJobProcessHost.exe (outside workspace, regular file, non-symlink).
- *    - npmCliPath: path to npm-cli.js (outside workspace, regular file, non-symlink).
+ *    - npmCliPath: path to npm-cli.js (outside workspace, regular file, non-symlink). Can be inferred
+ *      from a trusted nodeExecutable installation directory if omitted.
  *    No automatic PATH/where.exe search or process.execPath defaulting is permitted.
  * 3. All host executables must reside strictly outside the writable workspace, be canonical regular files,
  *    and cannot be symbolic links or junctions.
@@ -20,15 +21,22 @@
  * 5. Project scripts (npm-build, npm-test) are exposed ONLY when ALL of the following criteria are met:
  *    - allowProjectScripts === true (explicit opt-in).
  *    - jobHelperExecutable is injected and verified outside workspace.
- *    - npmCliPath is injected and verified outside workspace.
+ *    - npmCliPath is injected or inferred from nodeExecutable and verified outside workspace.
  *    - package.json exists in workspace root and declares 'build' or 'test' scripts (only script names inspected,
- *      script bodies are never leaked).
- *    - node_modules directory exists in workspace root (if absent, reports dependencies_missing; never runs npm install).
+ *      script bodies are never leaked; package.json must not be a symbolic link).
+ *    - node_modules directory exists in workspace root (if absent, reports dependencies_missing; never runs npm install;
+ *      node_modules must not be an external junction or symlink).
  *    - Safe minimal OS environment whitelist (APPDATA, LOCALAPPDATA, ComSpec, PATH, SystemRoot, TEMP, TMP, etc.)
  *      is injected, with all token/key/secret variables strictly blocked.
- * 6. Caller must explicitly pass createWorkspaceCommandTool factory; missing/invalid factory fails closed.
+ * 6. Runtime Pinning & Immutability:
+ *    - createWorkspaceCommandRecipeTool captures pinned canonical paths, sizes, mtimes, and hashes of
+ *      nodeExecutable, jobHelperExecutable, npmCliPath, package.json, and workspace directory.
+ *    - available() and execute() verify pins dynamically on every call; any mutation or replacement fails closed
+ *      and requires re-assembly.
+ * 7. Caller must explicitly pass createWorkspaceCommandTool factory; missing/invalid factory fails closed.
  */
 
+import {createHash} from 'node:crypto';
 import {existsSync, lstatSync, readFileSync, realpathSync, statSync} from 'node:fs';
 import path from 'node:path';
 
@@ -119,6 +127,38 @@ export function resolveNpmCliPath(workspaceRoot, explicitNpmCli) {
     throw Error('npm-cli path must reside outside the writable workspace');
   }
   return canonical;
+}
+
+export function inferNpmCliFromNodeExecutable(explicitNode) {
+  if (typeof explicitNode !== 'string' || !path.isAbsolute(explicitNode)) {
+    return null;
+  }
+  const resolved = path.resolve(explicitNode);
+  if (!existsSync(resolved)) return null;
+  try {
+    if (lstatSync(resolved).isSymbolicLink()) return null;
+    const canonical = realpathSync.native(resolved);
+    const nodeDir = path.dirname(canonical);
+    const candidates = [
+      path.join(nodeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+      path.join(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    ];
+    for (const candidate of candidates) {
+      if (existsSync(candidate)) {
+        const lstat = lstatSync(candidate);
+        if (!lstat.isSymbolicLink()) {
+          const canonicalCandidate = realpathSync.native(candidate);
+          const stat = statSync(canonicalCandidate);
+          if (stat.isFile()) {
+            return canonicalCandidate;
+          }
+        }
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 const ALLOWED_ENV_VARS_WIN32 = [
@@ -266,6 +306,9 @@ export function buildWorkspaceCommandRecipes({
   const diagnostics = {
     workspaceRoot: canonicalRoot,
     nodeExecutable: canonicalNode,
+    jobHelperExecutable: null,
+    npmCliPath: null,
+    inferredNpmCli: false,
     checkFiles: [],
     projectScriptsAllowed: allowProjectScripts === true,
     projectScriptsExposed: false,
@@ -309,12 +352,22 @@ export function buildWorkspaceCommandRecipes({
       diagnostics.reasons.push('job_helper_missing: Trusted jobHelperExecutable was not provided by host');
     } else {
       canonicalJobHelper = resolveJobHelperExecutable(canonicalRoot, jobHelperExecutable);
+      diagnostics.jobHelperExecutable = canonicalJobHelper;
     }
 
     if (!npmCliPath) {
-      diagnostics.reasons.push('npm_cli_missing: Trusted npmCliPath was not provided by host');
+      const inferred = inferNpmCliFromNodeExecutable(canonicalNode);
+      if (inferred && isOutsideWorkspace(canonicalRoot, inferred)) {
+        canonicalNpmCli = inferred;
+        diagnostics.inferredNpmCli = true;
+        diagnostics.npmCliPath = canonicalNpmCli;
+      } else {
+        diagnostics.reasons.push('npm_cli_missing: Trusted npmCliPath was not provided by host and could not be inferred from nodeExecutable');
+      }
     } else {
       canonicalNpmCli = resolveNpmCliPath(canonicalRoot, npmCliPath);
+      diagnostics.inferredNpmCli = false;
+      diagnostics.npmCliPath = canonicalNpmCli;
     }
 
     const pkg = inspectPackageJson(canonicalRoot);
@@ -372,6 +425,111 @@ export function buildWorkspaceCommandRecipes({
   };
 }
 
+function captureFilePin(canonicalPath, shouldHash = false) {
+  const lstat = lstatSync(canonicalPath);
+  if (lstat.isSymbolicLink()) throw Error(`Pinned target cannot be a link: ${canonicalPath}`);
+  const stat = statSync(canonicalPath);
+  let hash = null;
+  if (shouldHash) {
+    hash = createHash('sha256').update(readFileSync(canonicalPath)).digest('hex');
+  }
+  return {
+    canonicalPath,
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    ino: stat.ino,
+    dev: stat.dev,
+    hash,
+    shouldHash,
+  };
+}
+
+function verifyFilePin(pin) {
+  if (!pin || !existsSync(pin.canonicalPath)) return false;
+  try {
+    const lstat = lstatSync(pin.canonicalPath);
+    if (lstat.isSymbolicLink()) return false;
+    const canonical = realpathSync.native(pin.canonicalPath);
+    if (canonical !== pin.canonicalPath) return false;
+    const stat = statSync(canonical);
+    if (!stat.isFile()) return false;
+    if (stat.size !== pin.size) return false;
+    if (pin.shouldHash) {
+      const currentHash = createHash('sha256').update(readFileSync(canonical)).digest('hex');
+      if (currentHash !== pin.hash) return false;
+    } else {
+      if (stat.mtimeMs !== pin.mtimeMs) return false;
+      if (pin.ino !== 0 && stat.ino !== pin.ino) return false;
+      if (pin.dev !== 0 && stat.dev !== pin.dev) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function captureDirectoryPin(canonicalDir) {
+  const lstat = lstatSync(canonicalDir);
+  if (lstat.isSymbolicLink()) throw Error(`Pinned directory cannot be a link: ${canonicalDir}`);
+  const stat = statSync(canonicalDir);
+  return {
+    canonicalPath: canonicalDir,
+    ino: stat.ino,
+    dev: stat.dev,
+    mtimeMs: stat.mtimeMs,
+  };
+}
+
+function verifyDirectoryPin(pin) {
+  if (!pin || !existsSync(pin.canonicalPath)) return false;
+  try {
+    const lstat = lstatSync(pin.canonicalPath);
+    if (lstat.isSymbolicLink()) return false;
+    const canonical = realpathSync.native(pin.canonicalPath);
+    if (canonical !== pin.canonicalPath) return false;
+    const stat = statSync(canonical);
+    return stat.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function capturePackageJsonPin(canonicalRoot) {
+  const pkgPath = path.join(canonicalRoot, 'package.json');
+  if (!existsSync(pkgPath)) return null;
+  try {
+    const lstat = lstatSync(pkgPath);
+    if (lstat.isSymbolicLink()) return null;
+    const canonical = realpathSync.native(pkgPath);
+    const content = readFileSync(canonical, 'utf8');
+    const hash = createHash('sha256').update(content).digest('hex');
+    return {
+      canonicalPath: canonical,
+      hash,
+      mtimeMs: statSync(canonical).mtimeMs,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function verifyPackageJsonPin(pin, canonicalRoot) {
+  if (!pin || !existsSync(pin.canonicalPath)) return false;
+  try {
+    const lstat = lstatSync(pin.canonicalPath);
+    if (lstat.isSymbolicLink()) return false;
+    const canonical = realpathSync.native(pin.canonicalPath);
+    if (canonical !== pin.canonicalPath) return false;
+    const fromRoot = path.relative(canonicalRoot, canonical);
+    if (fromRoot === '' || fromRoot.startsWith('..') || path.isAbsolute(fromRoot)) return false;
+    const content = readFileSync(canonical, 'utf8');
+    const currentHash = createHash('sha256').update(content).digest('hex');
+    return currentHash === pin.hash;
+  } catch {
+    return false;
+  }
+}
+
 export function createWorkspaceCommandRecipeTool(options = {}) {
   const {recipes, diagnostics, workspaceRoot} = buildWorkspaceCommandRecipes(options);
   if (!recipes.length) {
@@ -400,13 +558,47 @@ export function createWorkspaceCommandRecipeTool(options = {}) {
     now: options.now,
   });
 
+  // Pin immutable identities of executables and configuration
+  const pinnedWorkspace = captureDirectoryPin(workspaceRoot);
+  const pinnedNode = captureFilePin(diagnostics.nodeExecutable, false);
+  const pinnedJobHelper = diagnostics.jobHelperExecutable
+    ? captureFilePin(diagnostics.jobHelperExecutable, true)
+    : null;
+  const pinnedNpmCli = diagnostics.npmCliPath
+    ? captureFilePin(diagnostics.npmCliPath, true)
+    : null;
+  const pinnedPackageJson = diagnostics.projectScriptsExposed
+    ? capturePackageJsonPin(workspaceRoot)
+    : null;
+
+  function isPinnedStateValid() {
+    if (!verifyDirectoryPin(pinnedWorkspace)) return false;
+    if (!verifyFilePin(pinnedNode)) return false;
+    if (diagnostics.projectScriptsExposed) {
+      if (!pinnedJobHelper || !verifyFilePin(pinnedJobHelper)) return false;
+      if (!pinnedNpmCli || !verifyFilePin(pinnedNpmCli)) return false;
+      if (!pinnedPackageJson || !verifyPackageJsonPin(pinnedPackageJson, workspaceRoot)) return false;
+      if (!checkNodeModules(workspaceRoot)) return false;
+    }
+    return true;
+  }
+
+  function assertPinnedState() {
+    if (!isPinnedStateValid()) {
+      throw Error('Workspace command executable or configuration was mutated after registration; reassembly required');
+    }
+  }
+
   return {
     tool,
     descriptor: tool.descriptor,
-    execute: tool.execute,
+    execute: async (input, context) => {
+      assertPinnedState();
+      return await tool.execute(input, context);
+    },
     recipes,
     diagnostics,
     workspaceRoot,
-    available: () => true,
+    available: () => isPinnedStateValid(),
   };
 }
