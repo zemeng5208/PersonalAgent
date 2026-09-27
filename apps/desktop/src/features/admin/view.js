@@ -111,15 +111,7 @@ export function mountAdmin(root, invoke, escape) {
   localSettingsButton.textContent = '桌面设置与恢复';
   localSettingsButton.addEventListener('click', () => window.desktop.openSettings().catch(error => { root.querySelector('#error').textContent = error.message; }));
   root.querySelector('.admin-bar').insertBefore(localSettingsButton, root.querySelector('#admin-close'));
-  const liveControls = mountLiveVoiceControls(root, invoke);
-  const proactiveControls = mountProactiveControls(root.querySelector('.main'), invoke, {settings:true});
-  proactiveControls.show(false);
-  const mailControls = mountMailControls(root.querySelector('.main'), invoke);
-  const layaControls = mountLayaControls(root.querySelector('.main'), invoke);
-  const codingControls = mountWorkspaceControls(root.querySelector('.main'), invoke);
-  codingControls.show(false);
-  const agentArtsControls=mountAgentArtsControls(root.querySelector('.main'),invoke);agentArtsControls.show(false);
-  mailControls.showSettings(false); layaControls.show(false);
+  let liveControls,proactiveControls,mailControls,layaControls,codingControls,agentArtsControls;
 
   function capabilityTable(data) {
     const status = data.capabilityDirectory ?? {state: 'unavailable', reason: '可信宿主尚未报告能力目录状态'};
@@ -253,14 +245,22 @@ export function mountAdmin(root, invoke, escape) {
     }
     if (root.querySelector('#profile-dialog')?.open) return;
     root.querySelector('.main').dataset.section = section;
-    liveControls.render(data.live);
-    liveControls.showSettings(section === 'voice', section === 'voice');
-    proactiveControls.render(data.proactive);
-    proactiveControls.show(section === 'computer');
-    mailControls.render(data.mail); mailControls.showSettings(section === 'connections');
-    layaControls.render(data.laya); layaControls.show(section === 'connections' || section === 'memory');
-    codingControls.render(data); codingControls.show(section === 'worktrees' || section === 'environment');
-    agentArtsControls.render(data.agentArts);agentArtsControls.show(section==='models' && data.model?.provider==='agentarts');
+    if (section==='voice') liveControls ??= mountLiveVoiceControls(root,invoke);
+    liveControls?.render(data.live);liveControls?.showSettings(section==='voice',section==='voice');
+    if (section==='computer') proactiveControls ??= mountProactiveControls(root.querySelector('.main'),invoke,{settings:true});
+    proactiveControls?.render(data.proactive);proactiveControls?.show(section==='computer');
+    if (section==='connections' && data.mail) mailControls ??= mountMailControls(root.querySelector('.main'),invoke);
+    mailControls?.render(data.mail);mailControls?.showSettings(section==='connections');
+    if ((section==='connections' || section==='memory') && data.laya) layaControls ??= mountLayaControls(root.querySelector('.main'),invoke);
+    layaControls?.render(data.laya);layaControls?.show(section==='connections' || section==='memory');
+    if (section==='worktrees' || section==='environment') codingControls ??= mountWorkspaceControls(root.querySelector('.main'),invoke);
+    codingControls?.render(data);codingControls?.show(section==='worktrees' || section==='environment');
+    const showAgentArts=section==='models' && data.model?.provider==='agentarts';
+    if (showAgentArts) {
+      agentArtsControls ??= mountAgentArtsControls(root.querySelector('.main'),invoke);
+      agentArtsControls.render(data.agentArts);
+    }
+    agentArtsControls?.show(showAgentArts);
     root.querySelector('.main').dataset.cloudConfig=String(section==='models' && data.model?.provider==='agentarts');
     const directSettings = {settings: 'general', appearance: 'appearance', voice: 'voice', shortcuts: 'shortcuts'};
     const featureSections = ['import', 'profile', 'configuration', 'personalization', 'pets', 'usage', 'analytics', 'account', 'computer', 'browser', 'hooks', 'git', 'environment', 'worktrees', 'archive', 'memory'];
