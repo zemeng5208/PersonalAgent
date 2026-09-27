@@ -164,6 +164,17 @@ another graph append during advice causes a revision conflict. Production
 composition and joint acceptance are still pending. Module tests use synthetic
 data only.
 
+`previewDurableFactRepair(boundStore, scopedHost, at, {graphNamespace,
+projection, changes})` uses the same durable completion and historical report
+check for an explicit candidate after advice. It reuses `previewProjectedRepair`
+on the current graph, so unrelated graph revisions can advance without losing
+the affected subset. The projected Fact must still be the current version;
+candidate targets must be the current affected node versions and retain their
+original dependency IDs. A changed Fact or target is a revision conflict, and
+an unrelated dependency replacement is not applicable. This remains a read-only
+preview; approval, source Evidence and graph CAS are enforced by the existing
+local repair task before any write.
+
 The entry first calls that exact scoped durable read. A pending batch gives `NOT_APPLICABLE`;
 another consumer's batch remains the host's `NOT_FOUND`. The trusted caller
 must recover the original projection receipt and batch token across restart.

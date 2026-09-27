@@ -17,3 +17,5 @@
 目前测试只覆盖合成公共 Fact 更正、批次不匹配、伪造报告、积压批次重算和建议期间图谱变化。DEP02 #162 已在 `readCompletedImpact(batchToken)` 提供固定消费方作用域的持久完成回执；生产组合、真实来源撤回证明和一次联合验收不在本工作包内。单纯搜索不到来源不能触发撤回。
 
 `decideDurableFactProjection` 直接调用上述固定作用域的持久读回；未处理批次不给建议，其他消费方批次保留宿主 `NOT_FOUND`。积压批次先按原图谱 revision 校验持久报告，再用调用方显式 `at` 重算当前图谱的局部 RECHECK；若关联 Fact 已被后续版本取代则不给旧版本建议，建议期间图谱再变化则拒绝返回。DEP02 的 `listImpactReceipts({afterGraphRevision,limit})` 现在可从现有持久记录按固定作用域列出待处理和已完成批次。生产组合须先恢复这些批次，再推进 feed 和现有 task checkpoint；本包不另建状态库或事实流。
+
+`previewDurableFactRepair` 让同一已完成批次的显式候选在当前图谱上复用 `previewProjectedRepair`：无关图谱前进允许预览，原 Fact 被替代、目标版本变化或候选改换原依赖身份则拒绝。它不接受模型自报的完成状态，不确认 feed、不执行 Laya、不提交图谱；真正写入继续由本地修复任务校验同源 Evidence、Policy、审批和当前 CAS。合成测试不等于正式来源、云候选及设备联合验收。

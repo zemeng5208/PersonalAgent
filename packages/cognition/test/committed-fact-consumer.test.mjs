@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {FakeCoordinationStoreHost} from '@personal-agent/goals/store';
-import {analyzeImpact, decideDurableFactProjection} from '../dist/index.js';
+import {analyzeImpact, decideDurableFactProjection, previewDurableFactRepair} from '../dist/index.js';
 
 const at = '2026-09-25T09:00:00.000Z';
 const ref = (id, revision = 1) => ({id, revision});
@@ -81,14 +81,47 @@ test('graph advance during advice invalidates the returned current scope', async
   }, reader(processed), request), {code: 'REVISION_CONFLICT'});
 });
 
-test('a superseded projected Fact cannot advise from its old node revision', async () => {
+test('a superseded projected Fact is stale for advice and repair preview', async () => {
   const {store, input} = fixture();
   const {processed, ...request} = input;
   store.append(store.read().revision, node('memory-fact:meeting', 'fact', [], 'newer correction'));
   const forbidden = {decide() { throw new Error('must not run'); }};
-  const actual = await decideDurableFactProjection(store, forbidden, reader(processed), request);
-  assert.deepEqual(actual.scope.items, []);
-  assert.deepEqual(actual.suggestions, []);
+  await assert.rejects(() => decideDurableFactProjection(store, forbidden,
+    reader(processed), request), {code: 'REVISION_CONFLICT'});
+  assert.throws(() => previewDurableFactRepair(store, reader(processed), at, {
+    graphNamespace: request.graphNamespace, projection: request.projection,
+    changes: [{node: ref('goal'), summary: 'new goal', reason: 'candidate',
+      dependencies: [ref('memory-fact:meeting', 2)]}]
+  }), {code: 'REVISION_CONFLICT'});
+});
+
+test('durable preview accepts unrelated graph advance but rejects changed dependency identity', () => {
+  const {store, input} = fixture();
+  const before = store.read().revision;
+  const {processed, ...request} = input;
+  store.append(store.read().revision, node('other', 'fact'));
+  const candidate = {graphNamespace: request.graphNamespace, projection: request.projection,
+    changes: [{node: ref('goal'), summary: 'goal after correction', reason: 'explicit candidate',
+      dependencies: [ref('memory-fact:meeting', 2)]}]};
+  const preview = previewDurableFactRepair(store, reader(processed), at, candidate);
+  assert.equal(preview.scope.graphRevision, before + 1);
+  assert.deepEqual(preview.scope.items.map(item => item.node.id), ['goal', 'plan']);
+  assert.equal(store.read().revision, before + 1, 'preview must not write');
+  assert.throws(() => previewDurableFactRepair(store, reader(processed), at, {
+    ...candidate, changes: [{...candidate.changes[0], dependencies: [ref('other')]}]
+  }), {code: 'NOT_APPLICABLE'});
+});
+
+test('durable preview rejects a candidate for a superseded target version', () => {
+  const {store, input} = fixture();
+  const {processed, ...request} = input;
+  store.append(store.read().revision, node('goal', 'goal',
+    [ref('memory-fact:meeting', 2)], 'newer goal'));
+  assert.throws(() => previewDurableFactRepair(store, reader(processed), at, {
+    graphNamespace: request.graphNamespace, projection: request.projection,
+    changes: [{node: ref('goal'), summary: 'stale candidate', reason: 'candidate',
+      dependencies: [ref('memory-fact:meeting', 2)]}]
+  }), {code: 'REVISION_CONFLICT'});
 });
 
 test('current evaluation cannot precede the durable impact time', async () => {

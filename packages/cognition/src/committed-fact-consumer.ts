@@ -5,8 +5,9 @@ import type {ImpactReport} from './impact.js';
 import {DecisionError} from './proactive-decision.js';
 import type {DecisionPort, DecisionSuggestion} from './proactive-decision.js';
 import {decideProjectedFactImpact} from './projected-fact-decision.js';
-import {selectProjectedRepairScope} from './projected-repair.js';
-import type {ProjectedRepairInput, ProjectedRepairScope} from './projected-repair.js';
+import {previewProjectedRepair, selectProjectedRepairScope} from './projected-repair.js';
+import type {ProjectedRepairInput, ProjectedRepairRequest,
+  ProjectedRepairPreview, ProjectedRepairScope} from './projected-repair.js';
 
 /** Local host handoff after its batch-scoped durable impact completion. */
 export interface DurableFactProjectionInput extends ProjectedRepairInput {
@@ -14,10 +15,6 @@ export interface DurableFactProjectionInput extends ProjectedRepairInput {
   at: string;
   deadline: string;
   signal: AbortSignal;
-}
-
-interface CompletedFactProjectionInput extends DurableFactProjectionInput {
-  processed: {batchToken: string; report: ImpactReport};
 }
 
 export interface CompletedFactProjectionDecision {
@@ -30,39 +27,20 @@ export interface CompletedFactImpactReader {
   readCompletedImpact(batchToken: string): {batchToken: string; report: ImpactReport} | undefined;
 }
 
-/** Read the exact completed batch from the trusted host before any advice. */
-export async function decideDurableFactProjection(
+/** Validate the durable original and derive a current-graph view of its links. */
+function completedScope(
   store: CoordinationStorePort,
-  decision: DecisionPort,
   completion: CompletedFactImpactReader,
-  input: DurableFactProjectionInput
-): Promise<CompletedFactProjectionDecision> {
+  input: ProjectedRepairInput,
+  at: string
+) {
   if (!completion || typeof completion.readCompletedImpact !== 'function'
     || !input?.projection || typeof input.projection.batchToken !== 'string'
     || !input.projection.batchToken.trim()) throw new CognitionError('INVALID_ARGUMENT');
   const processed = completion.readCompletedImpact(input.projection.batchToken);
   if (!processed) throw new CognitionError('NOT_APPLICABLE');
-  return decideCompletedFactProjection(store, decision, {...input, processed});
-}
-
-/**
- * Consume one already-completed public Fact projection. The trusted host must
- * supply the report with its original batch token; an unscoped report array is
- * not evidence that this batch completed. No feed ack, write or cloud action.
- */
-async function decideCompletedFactProjection(
-  store: CoordinationStorePort,
-  decision: DecisionPort,
-  input: CompletedFactProjectionInput
-): Promise<CompletedFactProjectionDecision> {
-  if (!input || !(input.signal instanceof AbortSignal)) throw new DecisionError('INVALID_ARGUMENT');
-  if (input.signal.aborted) throw new DecisionError('CANCELLED');
-  if (typeof input.deadline !== 'string' || !Number.isFinite(Date.parse(input.deadline))) {
-    throw new DecisionError('INVALID_ARGUMENT');
-  }
-  if (Date.now() >= Date.parse(input.deadline)) throw new DecisionError('TIMEOUT');
-  if (!input.processed || typeof input.processed.batchToken !== 'string'
-    || !input.processed.batchToken || input.processed.batchToken !== input.projection?.batchToken) {
+  if (typeof processed.batchToken !== 'string' || !processed.batchToken
+    || processed.batchToken !== input.projection.batchToken) {
     throw new CognitionError('INVALID_ARGUMENT');
   }
   if (!Number.isSafeInteger(input.projection.graphRevision)
@@ -71,14 +49,14 @@ async function decideCompletedFactProjection(
   if (historical.revision !== input.projection.graphRevision) {
     throw new CognitionError('REVISION_CONFLICT');
   }
-  const completedReport = analyzeImpact(historical, input.processed.report?.evaluatedAt);
-  if (!isDeepStrictEqual(completedReport, input.processed.report)) {
+  const completedReport = analyzeImpact(historical, processed.report?.evaluatedAt);
+  if (!isDeepStrictEqual(completedReport, processed.report)) {
     throw new CognitionError('INVALID_ARGUMENT');
   }
   const snapshot = structuredClone(store.read());
   if (snapshot.revision < input.projection.graphRevision) throw new CognitionError('REVISION_CONFLICT');
-  const report = analyzeImpact(snapshot, input.at);
-  if (Date.parse(input.at) < Date.parse(completedReport.evaluatedAt)) {
+  const report = analyzeImpact(snapshot, at);
+  if (Date.parse(at) < Date.parse(completedReport.evaluatedAt)) {
     throw new CognitionError('INVALID_ARGUMENT');
   }
   // A local current-graph view of the original links; it is not a new receipt.
@@ -86,6 +64,29 @@ async function decideCompletedFactProjection(
   const scope = selectProjectedRepairScope(snapshot, report.evaluatedAt, {
     graphNamespace: input.graphNamespace, projection: currentProjection
   });
+  for (const link of input.projection.links) {
+    const current = snapshot.history.findLast(node => node.id === link.node.id);
+    if (!current || current.kind !== 'fact' || current.revision !== link.node.revision) {
+      throw new CognitionError('REVISION_CONFLICT');
+    }
+  }
+  return {snapshot, report, currentProjection, scope};
+}
+
+/** Read exact durable completion before advice; never acknowledge or write. */
+export async function decideDurableFactProjection(
+  store: CoordinationStorePort,
+  decision: DecisionPort,
+  completion: CompletedFactImpactReader,
+  input: DurableFactProjectionInput
+): Promise<CompletedFactProjectionDecision> {
+  if (!input || !(input.signal instanceof AbortSignal)) throw new DecisionError('INVALID_ARGUMENT');
+  if (input.signal.aborted) throw new DecisionError('CANCELLED');
+  if (typeof input.deadline !== 'string' || !Number.isFinite(Date.parse(input.deadline))) {
+    throw new DecisionError('INVALID_ARGUMENT');
+  }
+  if (Date.now() >= Date.parse(input.deadline)) throw new DecisionError('TIMEOUT');
+  const {snapshot, report, currentProjection, scope} = completedScope(store, completion, input, input.at);
   const suggestions = await decideProjectedFactImpact(decision, {
     graphNamespace: input.graphNamespace,
     projection: currentProjection,
@@ -95,4 +96,29 @@ async function decideCompletedFactProjection(
   });
   if (store.read().revision !== snapshot.revision) throw new CognitionError('REVISION_CONFLICT');
   return {scope, suggestions};
+}
+
+/** Preview only explicit changes in the current affected subset of a completed batch. */
+export function previewDurableFactRepair(
+  store: CoordinationStorePort,
+  completion: CompletedFactImpactReader,
+  at: string,
+  request: ProjectedRepairRequest
+): ProjectedRepairPreview {
+  const {snapshot, currentProjection} = completedScope(store, completion, request, at);
+  const preview = previewProjectedRepair(store, at, {
+    graphNamespace: request.graphNamespace, projection: currentProjection, changes: request.changes
+  });
+  // Match the existing local repair gate: keep each target's dependency IDs.
+  for (const change of request.changes) {
+    const original = snapshot.history.findLast(node => node.id === change.node.id);
+    if (!original || original.revision !== change.node.revision) {
+      throw new CognitionError('REVISION_CONFLICT');
+    }
+    if (original.dependencies.length !== change.dependencies.length
+      || original.dependencies.some(ref => !change.dependencies.some(next => next.id === ref.id))) {
+      throw new CognitionError('NOT_APPLICABLE');
+    }
+  }
+  return preview;
 }
