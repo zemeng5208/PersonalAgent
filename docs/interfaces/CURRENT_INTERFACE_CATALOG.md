@@ -192,7 +192,7 @@ PR #36、#49 已进入 main，提供文字 Coordination/CloudAgent 与 Runtime �
 
 main 已包含版本化 CoordinationStore、SQLite/Fake `AtomicCoordinationStorePort.appendBatch`、事务 revision 校验与 rollback，以及通过该原子端口执行的显式修复预览/提交；PR #89～#91 已合并 provisional Memory 端口/Fake、SQLite 查询与 delivery checkpoint、Goal 侧未生效暂存及确认后原子激活投影。生产自动消费、真实事实来源、删除和 AgentArts/Evidence 闭环仍未交付。
 
-堆叠 Draft PR #203 的 MOD-09G 仅增加受信宿主的删除恢复路径；`MemoryQueryErrorCode`
+堆叠 Draft PR #203 的 MOD-09G 增加受信宿主的删除发起、预检和恢复路径；`MemoryQueryErrorCode`
 增补 `STORAGE_UNAVAILABLE` 表示 WAL 截断未完成。无 wire operation/capability，
 Goal 稀疏 revision 仍需非作者语义评审，Memory/Goal/Runtime 均不因此冻结。
 

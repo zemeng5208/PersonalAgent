@@ -38,6 +38,9 @@ export interface TrustedPublicWithdrawal extends PublicSourceKey {
 }
 
 export interface CompetitionFactHost extends SqliteFactProjectionHost {
+  /** Host-only first phase after an independently authorized deletion decision. */
+  beginFactErasure(request: MemoryReadContext & {readonly factId: string;
+    readonly expectedRevision: number; readonly operationId: string}): void;
   readPublicSourceHead(key: PublicSourceKey): number | null;
   recordPublicSource(source: TrustedPublicSource, context: MemoryReadContext):
     {readonly fact: FactVersion; readonly appended: boolean};
@@ -68,6 +71,11 @@ export function createCompetitionFactHost(
     const projection = createSqliteFactProjectionHost({memory, runtime: application.runtime,
       memoryNamespace, graphNamespace, consumerKey});
     return Object.freeze({
+      beginFactErasure: (request: MemoryReadContext & {readonly factId: string;
+        readonly expectedRevision: number; readonly operationId: string}) => {
+        active();
+        memory.beginFactErasure(memoryNamespace, request);
+      },
       preflightErasure: (factId: string, request: MemoryReadContext) => {
         active();
         return projection.preflightErasure(factId, request);
