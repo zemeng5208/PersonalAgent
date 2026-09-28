@@ -1,10 +1,11 @@
-import {app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, safeStorage, screen, session, Tray} from 'electron';
+import {app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, safeStorage, screen, session, Tray} from 'electron';
 import {fileURLToPath, pathToFileURL} from 'node:url';
-import {createHash} from 'node:crypto';
+import {createHash, randomUUID} from 'node:crypto';
+import {spawn} from 'node:child_process';
 import path from 'node:path';
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
 import {EventCursor} from '@personal-agent/client';
-import {register, requestTaskCancellation} from './runtime.js';
+import {register, requestTaskCancellation, submitConversationTask} from './runtime.js';
 import {panelBounds, clampOrb, draggedGroupBounds} from './placement.js';
 import {Conversations} from './conversations.js';
 import {createDesktopHost} from './desktop-host.js';
@@ -13,6 +14,29 @@ import {restoreSyntheticRepairSubmission} from './competition-repair-submission.
 import {readCapabilityDirectory} from './capability-directory.js';
 import {createMicrophonePermissionGate} from './microphone-permission.js';
 import {readApprovalPage} from './approval-history.js';
+import {createMicrophoneCaptureHost} from './microphone-capture-host.js';
+import {createDesktopEvidenceHost} from './evidence-host.js';
+import {createDesktopCompetitionFactBridge} from './competition-fact-bridge.js';
+import {createDesktopSisPlaybackHost} from './huawei-sis-playback.js';
+import {createDesktopSisConfigHost} from './huawei-sis-config.js';
+import {acquireHuaweiSisToken} from './huawei-iam-login.js';
+import {createLiveVoiceConfig} from './live-voice-config.js';
+import {createLiveVoiceHost} from './live-voice-host.js';
+import {createDesktopProactiveHost} from './proactive-host.js';
+import {createPublicConnectorHost} from './public-connector-host.js';
+import {createWorkspaceConfigHost} from './workspace-config-host.js';
+import {createWorkspaceCommandRecipeTool} from './workspace-command-recipes.js';
+import {createAgentArtsConfig} from './agentarts-config.js';
+import {createDeferredRuntimeStartup} from './runtime-startup.js';
+import {createMailConfig} from './mail-config.js';
+import {createDesktopMailAnalysisHost} from './mail-analysis-host.js';
+import {createDesktopFeedsHost} from './feeds-host.js';
+import {createDesktopNotepadHost} from './notepad-host.js';
+import {createDesktopTodoHost} from './todo-host.js';
+import {createDesktopGoalCloudHost} from './goal-cloud-host.js';
+import {createMailMetadataStorage} from './mail-metadata-storage.js';
+import {createLocalLayaHost} from './laya-local-host.js';
+import {resultText} from '../src/features/conversation/result-text.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -24,11 +48,11 @@ const agentArtsInvokeMode = process.env.PA_AGENTARTS_INVOKE_MODE === undefined
   : process.env.PA_AGENTARTS_INVOKE_MODE;
 const competitionMode = !fakeMode && runtimeProfile === 'huawei_ict_agentarts';
 const syntheticMvp = process.env.PA_DESKTOP_SYNTHETIC_MVP === '1';
+const syntheticFactSource = process.env.PA_DESKTOP_SYNTHETIC_FACT_SOURCE === '1';
 const agentArtsResponseMode = process.env.PA_AGENTARTS_RESPONSE_MODE;
 const repairCandidateVersion = process.env.PA_AGENTARTS_REPAIR_CANDIDATE_VERSION;
 const layaPort = process.env.PA_DESKTOP_LAYA_PORT;
 const layaKey = process.env.PA_DESKTOP_LAYA_API_KEY;
-const taskSubmitOptions = competitionMode ? {timeoutMs: 180_000} : {};
 if (fakeMode || fakeModelMode) app.setPath('userData', app.isPackaged
   ? path.join(app.getPath('temp'), `personal-agent-fake-${process.pid}`)
   : path.resolve(dir, '../.cache/user-data'));
@@ -48,6 +72,7 @@ let runtime;
 let desktopHost;
 let runtimeConnection;
 let client;
+let voiceConfigurationPending = false;
 let eventCursor;
 let eventPoll;
 let eventBusy = false;
@@ -107,6 +132,85 @@ let runtimeApplication;
 let syntheticRepairHost;
 const repairPrompts = new Set();
 let microphonePermissionGate;
+let microphoneCaptureHost;
+let voicePcmSource;
+let voiceInput;
+let sisPlaybackHost;
+let sisConfigHost;
+let liveConfig;
+let agentArtsConfig;
+let activeCloudBinding;
+const runtimeStartup = createDeferredRuntimeStartup({
+  isConfigured: () => !competitionMode || agentArtsConfig?.snapshot().runtimeReady === true,
+  initialize: initializeProductServices,
+});
+let liveVoice;
+let liveShortcut = {key: 'F8', registered: false, reason: ''};
+let lastLiveShortcutAt = 0;
+let voiceInitializationFailure = null;
+let voiceDisposed = false;
+let voiceDisposal;
+let voiceDisposalFailed = false;
+let goalHost;
+let goalCloudHost;
+let competitionCatalog;
+let competitionFactBridge;
+let proactiveHost;
+let productTools;
+let codingWorkspace;
+let competitionToolAvailabilityList = [];
+let mailConfig;
+let feedsHost;
+let todoHost;
+let todoFailure = '';
+let todoClosing;
+let todoClosed = false;
+let notepadHost;
+let notepadClosing;
+let notepadClosed = false;
+let mailHost;
+let mailAnalysisHost;
+let mailFailure = '';
+let localLaya;
+let knowledgeStatus = {configured: false, available: false, reason: '知识库尚未装配'};
+let activeKnowledgeTool = null;
+let activeKnowledgeVault = null;
+let localServicesStopping = false;
+let localServicesStopped = false;
+let nextMailRefresh = 0;
+
+function mailSnapshot() {
+  const config = mailConfig?.snapshot() ?? {configured:false, status:'unconfigured', sessionAllowed:false};
+  const host = mailHost?.snapshot();
+  return {...host, ...config, status:host?.status === 'stop_unconfirmed' ? 'stop_unconfirmed'
+    : mailFailure ? 'unavailable' : config.sessionAllowed ? host?.status ?? config.status : config.status,
+    counts:host?.counts, analyses:mailAnalysisHost?.snapshot(), localModelReady:localLaya?.snapshot().ready === true,
+    reason:host?.status === 'stop_unconfirmed' ? '已撤销新读取；现有邮箱连接退出尚未确认'
+      : mailFailure || (config.sessionAllowed ? host?.reason ?? config.reason : config.reason)};
+}
+
+async function refreshMail() {
+  if (!mailHost || Date.now() < nextMailRefresh) return;
+  nextMailRefresh = Date.now() + 1000;
+  const before = JSON.stringify(mailSnapshot());
+  try {await mailHost.refresh();}
+  catch {await mailHost.cancel(); mailFailure = '邮箱处理未完成，已停止读取；请重新配置或重启后恢复';}
+  await mailAnalysisHost?.tick();
+  if (JSON.stringify(mailSnapshot()) !== before) publish();
+}
+
+function taskSurface(task) {
+  const registered = conversations?.turns.get(task.taskId)?.surface;
+  if (registered) return registered;
+  if (task.conversationId === 'desktop-panel') return 'panel';
+  if (task.conversationId === 'desktop-workspace') return 'workspace';
+  return undefined;
+}
+
+function orderedTasks() {
+  return [...tasks.values()].sort((a, b) => String(conversations?.turns.get(a.taskId)?.createdAt ?? a.createdAt ?? a.updatedAt ?? '')
+    .localeCompare(String(conversations?.turns.get(b.taskId)?.createdAt ?? b.createdAt ?? b.updatedAt ?? '')));
+}
 
 function snapshot(surface) {
   return {
@@ -118,16 +222,36 @@ function snapshot(surface) {
     adminNavigation: {...adminNavigation},
     audioLevel,
     orbStateOverride,
-    tasks: [...tasks.values()].filter(task => !surface || conversations?.surface(task.taskId) === surface).map(task => ({...structuredClone(task), userMessage: taskGoals.get(task.taskId) ?? conversations?.goal(task.taskId)})),
+    tasks: orderedTasks().filter(task => !surface || taskSurface(task) === surface).map(task => ({...structuredClone(task),
+      createdAt: conversations?.turns.get(task.taskId)?.createdAt ?? task.createdAt ?? task.updatedAt,
+      userMessage: taskGoals.get(task.taskId) ?? conversations?.goal(task.taskId)})),
+    messages: conversations?.messagesFor(surface) ?? [],
     conversation: surface ?? 'all',
     capabilities: structuredClone(capabilities),
     health: structuredClone(health),
     capabilityDirectory: {...capabilityDirectory},
     approvals: [...approvals.values()],
-    notifications: [...notifications.values()],
+    notifications: [...notifications.values(),...(todoHost?.snapshot().notifications ?? [])],
     model: structuredClone(model),
     thinking: structuredClone(thinking),
-    voice: {available: false, status: 'unavailable', reason: '语音供应商尚未连接'},
+    live: {...(liveVoice?.snapshot() ?? liveConfig?.snapshot()), shortcut: {...liveShortcut}},
+    proactive: proactiveHost?.snapshot() ?? {enabled: false, cloudAnalysis: false, status: 'disabled', reason: '主动观察尚未装配', suggestions: []},
+    mail: mailSnapshot(),
+    feeds: feedsHost?.snapshot(),
+    todo: todoHost?.snapshot() ?? {available:false,items:[],notifications:[],reason:todoFailure || '待办将在 Runtime 连接后可用'},
+    goalCloud:goalCloudHost?.snapshot() ?? {available:false,sessionAllowed:false,reason:'目标工具将在 Runtime 连接后可用'},
+    notepad: notepadHost?.snapshot() ?? {available:false,busy:false,state:'unavailable',
+      reason:'本机执行组件尚未就绪，记事本操作暂不可用。'},
+    coding: codingWorkspace?.snapshot() ?? {configured:false,reason:'编程工作区尚未装配'},
+    agentArts: agentArtsConfig?.snapshot(),
+    laya: localLaya?.snapshot() ?? {state:'unavailable', ready:false, reason:'本地模型尚未装配'},
+    knowledge: structuredClone(knowledgeStatus),
+    voice: voiceInput ? {...voiceInput.snapshot(), experimental: sisConfigHost?.snapshot().configured,
+      configuration: sisConfigHost?.snapshot()} : {available: false, status: voiceInitializationFailure ? 'error' : 'unconfigured',
+      reason: voiceInitializationFailure?.message ?? sisConfigHost?.snapshot().reason ?? 'SIS 尚未配置',
+      failure: voiceInitializationFailure, configuration: sisConfigHost?.snapshot(),
+      capture: microphoneCaptureHost?.snapshot() ?? {authorized: false, active: false, busy: false,
+        subscriberCount: 0, lastRelease: {stopped: true, verified: false, reason: 'never_started'}}},
   };
 }
 
@@ -139,7 +263,8 @@ function publish() {
 
 function windowFor(mode, bounds, options = {}) {
   const win = new BrowserWindow({...desktopHost.restore(mode, bounds), show: false, backgroundColor: '#00000000',
-    webPreferences: {preload: path.join(dir, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true}, ...options});
+    webPreferences: {preload: path.join(dir, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true,
+      ...(mode === 'panel' ? {autoplayPolicy: 'no-user-gesture-required'} : {})}, ...options});
   win.setMenuBarVisibility(false);
   desktopHost.attach(win, mode);
   win.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
@@ -408,28 +533,35 @@ function toggleModel(input) {
 function updateThinking(input) {
   const depth = Number(input?.depth);
   if (!Number.isInteger(depth) || depth < 0 || depth > 5) throw Error('思考深度必须是 0 到 5');
-  thinking = {depth, fast: Boolean(input?.fast), applied: false, reason: '已保存桌面测试设置，等待 Runtime 思考参数契约'};
+  const fast = Boolean(input?.fast);
+  if (runtimeApplication?.configureThinking) {
+    const state = runtimeApplication.configureThinking({depth, fast});
+    thinking = {depth: state.depth, fast: state.fast, applied: true, maxSteps: state.maxSteps, reason: state.reason};
+  } else {
+    thinking = {depth, fast, applied: false, reason: '已保存桌面测试设置，等待 Runtime 思考参数契约'};
+  }
   publish();
   return structuredClone(thinking);
 }
 
 async function initializeModelFromEnvironment() {
   if (competitionMode) {
+    const cloudSettings=agentArtsConfig.snapshot();
     model = {
       ...model,
       provider: 'agentarts',
       label: 'AgentArts · Competition Profile',
-      status: 'configured',
+      status: cloudSettings.configured?'configured':'unconfigured',
       verification: 'unverified',
-      baseUrl: process.env.PA_AGENTARTS_GATEWAY_URL ?? '',
+      baseUrl: cloudSettings.gatewayUrl,
       model: 'AgentArts Runtime',
-      deployment: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
-      configured: true,
-      keyConfigured: Boolean(process.env.PA_AGENTARTS_AUTHORIZATION),
+      deployment: cloudSettings.runtimeName,
+      configured: cloudSettings.configured,
+      keyConfigured: cloudSettings.configured,
       persisted: false,
       enabled: true,
       capabilities: {text: true, streaming: false, toolCalling: false, structuredOutput: false, vision: false},
-      reason: 'Competition Profile 已装配；云端结果仍需真实调用和本地读回验证',
+      reason: cloudSettings.configured?'Competition Profile 已装配；云端结果仍需真实调用和本地读回验证':cloudSettings.reason,
       lastTestAt: null,
       latencyMs: null,
     };
@@ -610,14 +742,19 @@ async function initializeRuntime() {
       path: dataPaths.runtime,
       text: {mode: 'unavailable', model: modelConfig.model},
     });
+    if (runtimeApplication?.configureThinking) {
+      const state = runtimeApplication.configureThinking({depth: thinking.depth, fast: thinking.fast});
+      thinking = {depth: state.depth, fast: state.fast, applied: true, maxSteps: state.maxSteps, reason: state.reason};
+    }
     readEvents = after => runtime.readEvents('tasks', after);
   } else {
     const dbPath = dataPaths.runtime;
     mkdirSync(path.dirname(dbPath), {recursive: true});
     if (competitionMode) {
-      if (!process.env.PA_AGENTARTS_AUTHORIZATION) {
-        throw Error('PA_AGENTARTS_AUTHORIZATION 未配置；Competition Runtime 不会启动');
-      }
+      const cloudBinding=agentArtsConfig.runtimeBinding();
+      if (!cloudBinding) throw Error(agentArtsConfig.snapshot().reason);
+      activeCloudBinding = cloudBinding;
+      feedsHost?.prepare();
       const syntheticTools = syntheticMvp
         ? (await import('./competition-synthetic-workspace.js')).createSyntheticMeetingToolset(
           path.resolve(dir, '../../../tests/manual/agentarts/fixtures/mvp-meeting'),
@@ -633,27 +770,274 @@ async function initializeRuntime() {
         syntheticRepairHost = (await import('./competition-repair-host.js')).createSyntheticRepairHost(
           path.join(path.dirname(dbPath), 'mvp-synthetic-memory.sqlite'), {decision});
       }
+      const {createGoalHost} = await import('./goal-host.js');
+      const {createWorkspaceReadTool,createWorkspaceCommandTool} = await import('@personal-agent/coding-tools');
+      const {createDesktopCompetitionToolCatalog} = await import('./competition-tool-catalog.js');
+      const namespace = desktopHost.userNamespace;
+      goalHost = createGoalHost(namespace);
+      if (!syntheticMvp) goalCloudHost = createDesktopGoalCloudHost({goalHost});
+      if (!syntheticMvp) {
+        try {todoHost = createDesktopTodoHost({userData:app.getPath('userData'),safeStorage,namespace,
+          createDeliveryHost:runtimeModule.createReminderDeliveryHost,onUpdate:publish,
+          onNotification:item=>{
+            if(!Notification.isSupported()) return;
+            const notification=new Notification({title:'PersonalAgent 待办提醒',body:item.summary});
+            notification.on('click',()=>openPanel());notification.show();
+          }});}
+        catch {todoFailure = '待办存储无法读取，原数据已保留，请恢复本机安全存储';}
+      }
+      const hostPath = path.resolve(dir, '../../windows-host/host/bin/Release/net8.0-windows/WindowsHost.Host.exe');
+      const bridgePath = path.resolve(dir, '../../windows-host/host/bridge/bin/Release/net8.0-windows/WindowsHost.PipeBridge.exe');
+      if (!syntheticMvp && process.platform === 'win32' && existsSync(hostPath) && existsSync(bridgePath)) {
+        notepadHost = createDesktopNotepadHost({
+          createAdapter:runtimeModule.createWindowsHostNotepadAdapter,
+          createAttempts:runtimeModule.createRuntimeWindowsHostAttemptStore,
+          transport:runtimeModule.createWindowsHostBridgeTransport({hostPath,bridgePath}),
+          registerConfirmation:handler => globalShortcut.register('F9',handler)
+            ? () => globalShortcut.unregister('F9') : undefined,
+          openNotepad:() => new Promise((resolve,reject) => {
+            const child=spawn(path.join(process.env.SystemRoot ?? 'C:\\Windows','System32','notepad.exe'),[],
+              {windowsHide:false,stdio:'ignore'});
+            child.once('spawn',()=>{child.unref();resolve();});child.once('error',reject);
+          }),
+          respond:payload => client.call('authorization.respond',payload),
+          cancelTask:taskId => client.call('task.cancel',{taskId,reason:'用户停止记事本操作'}),
+          onUpdate:publish,
+        });
+      }
+      if (syntheticFactSource) competitionCatalog = createDesktopCompetitionToolCatalog({
+        rootPath: path.resolve(dir, '../fixtures/agentarts'), createWorkspaceReadTool,
+      });
+      productTools = createPublicConnectorHost({systemObservationFactory:runtimeModule.createSystemObservationTool});
+      const commandHelper=path.join(app.getPath('userData'),'native-tools','workspace-command','WindowsJobProcessHost.exe');
+      codingWorkspace = createWorkspaceConfigHost({userData:app.getPath('userData'),safeStorage,
+        jobHelperExecutable:existsSync(commandHelper)?commandHelper:undefined,
+        selectDirectory:async () => {
+          const result = await dialog.showOpenDialog(admin, {title:'选择允许 PersonalAgent 使用的编程工作区',
+            properties:['openDirectory']});
+          return result.canceled ? undefined : result.filePaths[0];
+        },
+        selectNodeExecutable:async () => {
+          const result=await dialog.showOpenDialog(admin,{title:'选择可信安装目录中的 Node 可执行文件',
+            properties:['openFile'],filters:[{name:'Node executable',extensions:['exe']}]});
+          return result.canceled?undefined:result.filePaths[0];
+        },
+        selectNpmCli:async () => {
+          const result=await dialog.showOpenDialog(admin,{title:'选择可信 Node 安装目录中的 npm-cli.js',
+            properties:['openFile'],filters:[{name:'npm CLI',extensions:['js']}]});
+          return result.canceled?undefined:result.filePaths[0];
+        },
+        selectCheckFile:async workspaceRoot => {
+          const result=await dialog.showOpenDialog(admin,{title:'选择此工作区内需要语法检查的文件',
+            defaultPath:workspaceRoot,properties:['openFile'],filters:[{name:'JavaScript',extensions:['js','mjs','cjs']}]});
+          return result.canceled?undefined:result.filePaths[0];
+        },
+        createCommandRecipeTool:options=>createWorkspaceCommandRecipeTool({...options,createWorkspaceCommandTool})});
+      const {LayaActionChoiceService, LocalLayaHttpTransport} = await import('@personal-agent/cognition');
+      localLaya = createLocalLayaHost({projectRoot:path.resolve(dir, '../../..'),
+        createService:runtimeModule.createLocalInboxClassifier,
+        createChooser:({port,getApiKey}) => new LayaActionChoiceService(new LocalLayaHttpTransport(port,getApiKey)),
+        onUpdate:publish});
+      mailConfig = createMailConfig({userData:app.getPath('userData'), safeStorage,
+        onRevoke:async () => {await mailHost?.cancel();},
+        onCloudRevoke:async () => {await mailAnalysisHost?.revoke();}});
+      const configuredMail = mailConfig.current();
+      if (configuredMail) {
+        try {
+          const {user, authCode, revision} = configuredMail;
+          mailHost = runtimeModule.createQQMailTriageHost({user, authCode, accountRef:'desktop-qq-inbox',
+            storage:createMailMetadataStorage({userData:app.getPath('userData'), safeStorage}),
+            namespace:`${namespace}:qq-inbox:${user.toLowerCase()}`, triage:localLaya,
+            labels:{meeting:'Meeting invitations, rescheduling and appointment notices',
+              work:'Work, project, technical discussions and documents',
+              subscription:'Subscribed newsletters, news digests and product updates',
+              transaction:'Receipts, invoices, order and delivery notices',
+              personal:'Personal conversations and social notifications',
+              other:'Other or unclear subject; review manually'}, meetingLabels:['meeting'],
+            isSessionAllowed:() => mailConfig.isSessionAllowed(revision)});
+        } catch {mailFailure = '邮箱本地分类状态无法装配；其他功能可继续使用';}
+      }
+      const {
+        createDesktopSubagentDispatchTool,
+        SUBAGENT_DISPATCH_TOOL_NAME,
+        SUBAGENT_DISPATCH_TOOL_VERSION,
+      } = runtimeModule;
+      const subagentTool = createDesktopSubagentDispatchTool({
+        getRuntime: () => runtimeApplication.runtime,
+        getTools: () => runtimeApplication.tools,
+        fakeModelMode,
+        modelConfig: modelConfig ? {
+          baseUrl: modelConfig.baseUrl,
+          model: modelConfig.model,
+          deployment: modelConfig.deployment,
+          apiKey: modelConfig.apiKey,
+        } : undefined,
+      });
+      const subagentAvailability = {
+        toolName: SUBAGENT_DISPATCH_TOOL_NAME,
+        toolVersion: SUBAGENT_DISPATCH_TOOL_VERSION,
+        available: async () => true,
+      };
+      const subagentExport = {
+        toolName: SUBAGENT_DISPATCH_TOOL_NAME,
+        toolVersion: SUBAGENT_DISPATCH_TOOL_VERSION,
+        exportPolicyVersion: '1.0.0',
+        accepts: ({arguments: args}) => Array.isArray(args?.subtasks) && args.subtasks.length > 0 && args.subtasks.length <= 10,
+        project: async ({result, signal}) => {
+          if (signal?.aborted) throw Error('次级智能体结果导出已取消');
+          if (!result || typeof result !== 'object') throw Error('次级智能体结果无效');
+          const r = result;
+          const projected = {
+            total: Number(r.total ?? 0),
+            succeeded: Number(r.succeeded ?? 0),
+            failed: Number(r.failed ?? 0),
+            cancelled: Number(r.cancelled ?? 0),
+            summary: String(r.summary ?? r.aggregatedSummary ?? '').slice(0, 16384),
+            subtasks: Array.isArray(r.subtasks) ? r.subtasks.map(s => ({
+              subtaskId: String(s.subtaskId ?? ''),
+              role: String(s.role ?? ''),
+              roleLabel: String(s.roleLabel ?? ''),
+              state: String(s.state ?? ''),
+              result: typeof s.result === 'string' ? s.result.slice(0, 4096) : undefined,
+              error: typeof s.error === 'string' ? s.error.slice(0, 1024) : undefined,
+            })) : [],
+          };
+          if (Buffer.byteLength(JSON.stringify(projected), 'utf8') > 64 * 1024) {
+            throw Error('次级智能体汇总结果超出 64KB 上限');
+          }
+          return projected;
+        },
+      };
+
+      const configuredKnowledgeDir = process.env.PERSONAL_AGENT_KNOWLEDGE_DIR
+        || process.env.PERSONAL_AGENT_OBSIDIAN_VAULT
+        || path.join(app.getPath('userData'), 'knowledge');
+      const {openReadOnlyVault} = await import('@personal-agent/knowledge/filesystem');
+      const {createKnowledgeSearchTool, KNOWLEDGE_SEARCH_TOOL_NAME, KNOWLEDGE_SEARCH_TOOL_VERSION} = await import('@personal-agent/knowledge/tool');
+      let knowledgeTool = null;
+      let knowledgeAvailability = null;
+      let knowledgeExport = null;
+      try {
+        if (!existsSync(configuredKnowledgeDir)) {
+          mkdirSync(configuredKnowledgeDir, {recursive: true});
+        }
+        const vault = await openReadOnlyVault({vaultId: 'desktop-notes', rootPath: configuredKnowledgeDir});
+        knowledgeTool = createKnowledgeSearchTool(vault);
+        activeKnowledgeVault = vault;
+        activeKnowledgeTool = knowledgeTool;
+        knowledgeAvailability = {
+          toolName: KNOWLEDGE_SEARCH_TOOL_NAME,
+          toolVersion: KNOWLEDGE_SEARCH_TOOL_VERSION,
+          available: async () => true,
+        };
+        knowledgeStatus = {
+          configured: true,
+          available: true,
+          name: path.basename(configuredKnowledgeDir) || '本地知识与笔记',
+          rootPath: configuredKnowledgeDir,
+          reason: '知识库已连接（只读）',
+        };
+        knowledgeExport = {
+          toolName: KNOWLEDGE_SEARCH_TOOL_NAME,
+          toolVersion: KNOWLEDGE_SEARCH_TOOL_VERSION,
+          exportPolicyVersion: '1.0.0',
+          accepts: ({arguments: args}) => typeof args?.query === 'string' && args.query.trim().length > 0,
+          project: async ({result, signal}) => {
+            if (signal?.aborted) throw Error('知识库检索结果导出已取消');
+            if (!result || typeof result !== 'object') throw Error('知识库检索结果无效');
+            const r = result;
+            const projected = {
+              hits: Array.isArray(r.hits) ? r.hits.slice(0, 5).map(h => ({
+                source: {
+                  vaultId: String(h.source?.vaultId ?? ''),
+                  path: path.basename(String(h.source?.path ?? '')),
+                  line: Number(h.source?.line ?? 1),
+                  revision: String(h.source?.revision ?? ''),
+                },
+                excerpt: String(h.excerpt ?? '').slice(0, 200),
+              })) : [],
+              truncated: Boolean(r.truncated || (Array.isArray(r.hits) && r.hits.length > 5)),
+            };
+            if (Buffer.byteLength(JSON.stringify(projected), 'utf8') > 16 * 1024) {
+              throw Error('知识库检索投影超出 16KB 上限');
+            }
+            return projected;
+          },
+        };
+      } catch (err) {
+        knowledgeStatus = {
+          configured: true,
+          available: false,
+          rootPath: configuredKnowledgeDir,
+          reason: `知识库初始化失败：${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
       runtimeApplication = runtimeModule.createAgentArtsRuntimeApplication({
         path: dbPath,
-        ...syntheticTools,
+        hostUserNamespace: namespace,
+        // Match the existing text tool workflow budget; preserve room for the final answer.
+        competitionMaxSteps: 8,
+        // Module availability/consent, input validation and ToolGateway still run.
+        // Explicit names prevent future destructive tools inheriting this policy.
+        automaticTools: [...productTools.tools,...codingWorkspace.tools,...(goalCloudHost?.tools??[]),...(subagentTool?[subagentTool]:[]),...(knowledgeTool?[knowledgeTool]:[]),
+          ...(todoHost?.tools??[]),...(feedsHost?.tools??[])].filter(tool=>[
+            'weather.forecast','research.search','feeds.collect','feeds.subscriptions',
+            'todo.list','todo.create','todo.update','notifications.status',
+            'goals.list','goals.get','goals.create','goals.revise',
+            'workspace.read_text','workspace.list_entries','workspace.preview_text_patch',
+            'workspace.stage_text_patch','workspace.apply_text_patch','workspace.git_diff_check',
+            'workspace.node_check','workspace.npm_build','workspace.npm_test',SUBAGENT_DISPATCH_TOOL_NAME,KNOWLEDGE_SEARCH_TOOL_NAME,
+          ].includes(tool.descriptor.name))
+          .map(tool=>({toolName:tool.descriptor.name,toolVersion:tool.descriptor.version})),
+        beforeCompetitionSend:request=> {
+          if (!proactiveHost && runtimeApplication.runtime.getTask(request.taskId).conversationId?.startsWith('desktop-proactive-goals:')) {
+            throw Error('目标主动分析宿主尚未就绪');
+          }
+          proactiveHost?.assertCognitionCloudSend(request);
+          goalCloudHost?.assertCloudSend(request);
+          if (!mailAnalysisHost && runtimeApplication.runtime.getTask(request.taskId).conversationId?.startsWith('desktop-mail-analysis:')) {
+            throw Error('邮件分析宿主尚未就绪');
+          }
+          mailAnalysisHost?.assertCloudSend(request);
+        },
+        tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...(goalCloudHost?.tools ?? goalHost.tools), ...productTools.tools, ...(mailHost?.tools ?? []), ...(feedsHost?.tools ?? []), ...(notepadHost?.tools ?? []), ...(todoHost?.tools ?? []), ...(subagentTool ? [subagentTool] : []), ...(knowledgeTool ? [knowledgeTool] : [])],
         ...(syntheticMvp ? {localRepair: syntheticRepairHost.localRepair} : {}),
-        ...(agentArtsResponseMode === undefined ? {} : {responseMode: agentArtsResponseMode}),
         ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
-        gatewayUrl: process.env.PA_AGENTARTS_GATEWAY_URL ?? '',
-        runtimeName: process.env.PA_AGENTARTS_RUNTIME_NAME ?? '',
-        invokeMode: agentArtsInvokeMode,
-        ...(process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT === undefined ? {} : {
-          workflowGoalInput: process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT,
+        ...(process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT === undefined ? {} : {workflowGoalInput: process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT}),
+        responseMode: agentArtsResponseMode ?? 'tool-proposal-json',
+        ...(syntheticMvp ? {competitionToolExports: syntheticTools.competitionToolExports} : {
+          initialRequestMode: 'goal-with-tools-json',
+          competitionToolAvailability: (competitionToolAvailabilityList = [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolAvailability : competitionCatalog ? [competitionCatalog.availability] : []), ...productTools.competitionToolAvailability, ...feedsHost.competitionToolAvailability, ...(todoHost?.competitionToolAvailability ?? []), ...(goalCloudHost?.competitionToolAvailability ?? []), ...(subagentAvailability ? [subagentAvailability] : []), ...(knowledgeAvailability ? [knowledgeAvailability] : [])]),
+          competitionToolExports: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolExports : competitionCatalog ? [competitionCatalog.export] : []), ...productTools.competitionToolExports, ...feedsHost.competitionToolExports, ...(todoHost?.competitionToolExports ?? []), ...(goalCloudHost?.competitionToolExports ?? []), ...(subagentExport ? [subagentExport] : []), ...(knowledgeExport ? [knowledgeExport] : [])],
         }),
+        ...cloudBinding,
+        invokeMode: agentArtsInvokeMode,
+        onDiagnostic: process.env.PA_AGENTARTS_SAFE_DIAGNOSTICS === '1'
+          ? receipt => desktopHost.logAgentArtsFailure(receipt) : undefined,
         authorizationProvider: {
           read: async () => {
-            const authorization = process.env.PA_AGENTARTS_AUTHORIZATION;
-            if (!authorization) throw Error('AgentArts authorization is unavailable');
-            return authorization;
+            return agentArtsConfig.readAuthorization(cloudBinding);
           },
         },
       });
+      if (runtimeApplication?.configureThinking) {
+        const state = runtimeApplication.configureThinking({depth: thinking.depth, fast: thinking.fast});
+        thinking = {depth: state.depth, fast: state.fast, applied: true, maxSteps: state.maxSteps, reason: state.reason};
+      }
       if (syntheticRepairHost) await syntheticRepairHost.initialize(runtimeApplication.runtime);
+      if (mailHost) {mailHost.bindApplication(runtimeApplication); mailConfig.markBound(configuredMail.revision);}
+      codingWorkspace.bindApplication(runtimeApplication);
+      feedsHost?.bindApplication(runtimeApplication);
+      todoHost?.bindApplication(runtimeApplication);
+      goalHost.bind(runtimeApplication);
+      goalCloudHost?.bindApplication(runtimeApplication);
+      notepadHost?.bind(runtimeApplication);
+      goalHost.resumeApproved();
+      if (!syntheticMvp && competitionCatalog && !codingWorkspace.tools.length) competitionFactBridge = createDesktopCompetitionFactBridge({
+        application: runtimeApplication, catalog: competitionCatalog,
+        runtimePath: dbPath, userNamespace: namespace,
+      });
+      await competitionFactBridge?.recover();
     } else {
       const createApplication = process.argv.includes('--weather-tools')
         ? (await import('@personal-agent/runtime/weather')).createOpenMeteoApplication
@@ -662,6 +1046,10 @@ async function initializeRuntime() {
         path: dbPath,
         text: {mode: 'unavailable', model: modelConfig.model},
       });
+      if (runtimeApplication?.configureThinking) {
+        const state = runtimeApplication.configureThinking({depth: thinking.depth, fast: thinking.fast});
+        thinking = {depth: state.depth, fast: state.fast, applied: true, maxSteps: state.maxSteps, reason: state.reason};
+      }
     }
     runtime = runtimeApplication.runtime;
     readEvents = after => runtimeApplication.readEvents(after);
@@ -677,15 +1065,52 @@ async function initializeRuntime() {
     ? 'Fake Runtime · 联调模式'
     : competitionMode ? '本地 Runtime · AgentArts Competition' : '本地 Runtime · 已连接';
   eventCursor = new EventCursor('tasks');
+  if (competitionMode && mailHost) mailAnalysisHost = createDesktopMailAnalysisHost({
+    application:runtimeApplication,client,mail:mailHost,config:mailConfig,namespace:desktopHost.userNamespace,
+    onUpdate:publish,onTask:({taskId,goal})=>{
+      if (!conversations.turns.has(taskId)) conversations.add(taskId,'panel',goal);
+      taskGoals.set(taskId,goal);
+    },
+  });
   await syncCapabilities();
   await syncRuntimeSnapshots();
+  if (competitionMode) proactiveHost = createDesktopProactiveHost({application: runtimeApplication,
+    client, userData: app.getPath('userData'), namespace: desktopHost.userNamespace, onUpdate: publish,
+    goalHost,chooser:localLaya,cognitionReady:()=>localLaya.snapshot().state==='ready',
+    createCognitionHost:runtimeModule.createProactiveCognitionHost,
+    onAnalysisTask: ({taskId, goal}) => {
+      if (!conversations.turns.has(taskId)) conversations.add(taskId, 'panel', goal);
+      taskGoals.set(taskId, goal);
+    },
+  });
   await pumpEvents();
   if (syntheticRepairHost && repairCandidateVersion === '1.0') {
     for (const task of tasks.values()) {
       if (task.state === 'succeeded') void promptSyntheticRepairCandidate(task.taskId).catch(() => {});
     }
   }
-  eventPoll = setInterval(() => void pumpEvents(), 120);
+  eventPoll = setInterval(() => {void pumpEvents(); void proactiveHost?.tick(); void refreshMail(); void notepadHost?.refresh(); void todoHost?.tick();}, 120);
+}
+
+async function initializeProductServices() {
+  try {
+    runtimeError = '';
+    await initializeRuntime();
+    await initializeModelFromEnvironment();
+    if (competitionMode) {
+      try {await initializeSisVoice();}
+      catch {
+        voiceInput = undefined;
+        voiceInitializationFailure = {stage:'initialization',code:'EXTERNAL_FAILURE',message:'语音适配器启动失败'};
+      }
+      try {await initializeLiveVoice();}
+      catch {runtimeError = 'Live 适配器启动失败；文字与听写仍可使用';}
+    }
+  } catch (error) {
+    runtimeError = error instanceof Error ? error.message : 'Runtime 初始化失败';
+    connectionLabel = 'Runtime 未连接';
+    throw error;
+  }
 }
 
 async function action(event, name, payload) {
@@ -695,6 +1120,10 @@ async function action(event, name, payload) {
     throw Error('Competition Profile 的 AgentArts 配置只允许由可信主进程提供；盘古配置操作不可用');
   }
   if (name === 'snapshot') return snapshot(sender === workspace ? 'workspace' : sender === admin ? undefined : 'panel');
+  if (name === 'notepad.start' || name === 'notepad.cancel') {
+    if ((sender !== admin && sender !== workspace) || !notepadHost || notepadClosing) throw Error('请从电脑操控设置操作记事本');
+    return name === 'notepad.start' ? notepadHost.start(payload) : notepadHost.cancel();
+  }
   if (name === 'admin.open') { openAdmin(payload?.page); return; }
   if (name === 'workspace.open' && sender === panel) { openWorkspace(); return; }
   if (name === 'workspace.close' && sender === workspace) { workspace.close(); return; }
@@ -725,9 +1154,174 @@ async function action(event, name, payload) {
   }
   if (name === 'panel.dragEnd' && sender === panel) { dragging = false; panelDragOrigin = undefined; away = Date.now() + 400; return; }
   if (name === 'app.quit') { app.quit(); return; }
+  if (name === 'agentarts.configure') {
+    if (sender!==admin || !competitionMode || runtimeApplication?.activeTaskCount || liveVoice?.hasActive()
+      || runtimeStartup.snapshot().state==='starting') throw Error('请在任务、通话及启动结束后从设置配置 AgentArts');
+    const result=agentArtsConfig.configure(payload);
+    const startup = await runtimeStartup.start();
+    if (liveVoice && !liveShortcut.registered) registerLiveShortcut();
+    const requiresRestart = startup.state !== 'ready' || result.gatewayUrl !== activeCloudBinding?.gatewayUrl
+      || result.runtimeName !== activeCloudBinding?.runtimeName;
+    if (!requiresRestart) await initializeModelFromEnvironment();
+    publish();
+    return {...result, requiresRestart, reason: requiresRestart
+      ? '配置已加密保存，请重启应用完成连接。'
+      : '配置已加密保存，Runtime 已连接；云端可用性以实际任务结果为准。'};
+  }
+  if (name === 'agentarts.revoke') {
+    if (sender !== admin || !competitionMode || runtimeApplication?.activeTaskCount || liveVoice?.hasActive()
+      || runtimeStartup.snapshot().state === 'starting') throw Error('请在任务、通话及启动结束后从设置撤销 AgentArts');
+    const result = agentArtsConfig.revoke();
+    publish();
+    return {...result, reason: '已清除保存在本机的 AgentArts 凭据与绑定配置。'};
+  }
+  if (['todo.authorize','todo.revoke','todo.configureNotifications','todo.dismiss','todo.create','todo.update'].includes(name)) {
+    if ((sender !== admin && sender !== workspace && sender !== panel) || !competitionMode || syntheticMvp || !todoHost) throw Error('请从正式应用待办设置操作');
+    const result = await todoHost[name.slice(5)](payload); publish(); return result;
+  }
+  if (['goalCloud.authorize','goalCloud.revoke'].includes(name)) {
+    if(sender!==admin || !competitionMode || syntheticMvp || !goalCloudHost) throw Error('请从正式应用目标管理设置操作');
+    const result=goalCloudHost[name.slice('goalCloud.'.length)](payload);publish();return result;
+  }
+  if (['feeds.add','feeds.remove','feeds.authorize','feeds.revoke','feeds.refresh'].includes(name)) {
+    if (sender !== admin || !competitionMode || syntheticMvp || !feedsHost) throw Error('请从正式应用订阅设置操作');
+    if (name !== 'feeds.revoke' && name !== 'feeds.refresh' && (runtimeApplication?.activeTaskCount || runtimeStartup.snapshot().state==='starting')) {
+      throw Error('请等待当前任务和启动结束后修改订阅');
+    }
+    const result = name === 'feeds.refresh' ? feedsHost.snapshot() : feedsHost[name.slice('feeds.'.length)](payload); publish(); return result;
+  }
+  if (['coding.select','coding.selectNode','coding.selectNpmCli','coding.selectCheckFile','coding.authorize','coding.revoke'].includes(name)) {
+    if ((sender !== admin && sender !== workspace) || !competitionMode || syntheticMvp || !codingWorkspace) throw Error('请从正式应用设置配置编程工作区');
+    if (name !== 'coding.revoke' && runtimeApplication.activeTaskCount > 0) throw Error('请等待当前任务结束后更改工作区');
+    if (name === 'coding.select') await codingWorkspace.select();
+    if (name === 'coding.selectNode') await codingWorkspace.selectNode();
+    if (name === 'coding.selectNpmCli') await codingWorkspace.selectNpmCli();
+    if (name === 'coding.selectCheckFile') await codingWorkspace.selectCheckFile();
+    if (name === 'coding.authorize') codingWorkspace.authorize(payload);
+    if (name === 'coding.revoke') codingWorkspace.revoke();
+    publish();return {coding:codingWorkspace.snapshot()};
+  }
+  if (['mail.configure','mail.enable','mail.read','mail.disable','mail.enableCloud','mail.disableCloud','laya.start','laya.stop'].includes(name)) {
+    if (sender !== admin || !competitionMode || !mailConfig || !localLaya) throw Error('此操作仅允许从本项目设置调用');
+    if (name === 'laya.start') {localServicesStopped = false; return localLaya.start();}
+    if (name === 'laya.stop') {await mailHost?.cancel(); const result = await localLaya.stop(); publish(); return result;}
+    if (name === 'mail.configure') {await mailConfig.configure(payload); mailFailure = '';}
+    if (name === 'mail.enable') mailConfig.enableSession(payload);
+    if (name === 'mail.disable') await mailConfig.revoke();
+    if (name === 'mail.enableCloud') mailConfig.enableCloudAnalysis(payload);
+    if (name === 'mail.disableCloud') await mailConfig.revokeCloudAnalysis();
+    if (name === 'mail.read') {
+      if (!mailHost || mailConfig.snapshot().requiresRestart) throw Error('邮箱配置将在下次启动应用时接入');
+      if (!localLaya.snapshot().ready) throw Error('请先启动本地 Laya');
+      if (mailHost.snapshot().status === 'classification_unavailable') mailHost.retryClassification();
+      else mailHost.startBatch({expiresAt:new Date(Date.now() + 8 * 60 * 60_000).toISOString()});
+      localServicesStopped = false;
+    }
+    publish(); return mailSnapshot();
+  }
+  if (name === 'knowledge.search') {
+    if (!activeKnowledgeTool) throw Error('知识库尚未装配');
+    const query = typeof payload?.query === 'string' ? payload.query.trim() : '';
+    if (!query) throw Error('检索词不能为空');
+    const limit = Math.min(20, Math.max(1, Number(payload.limit) || 5));
+    return activeKnowledgeTool.execute({query, limit}, {
+      taskId: 'knowledge-direct-query',
+      runId: randomUUID(),
+      deadline: new Date(Date.now() + 30_000).toISOString(),
+      signal: new AbortController().signal,
+      scopes: ['knowledge:read'],
+      authorizationRef: 'desktop-internal',
+    });
+  }
+  if (name === 'knowledge.status') return snapshot(sender === workspace ? 'workspace' : sender === admin ? undefined : 'panel').knowledge;
+  if (name === 'proactive.configure' || name === 'proactive.analyze' || name === 'proactive.cognition.apply') {
+    if ((sender !== panel && sender !== admin) || !competitionMode || !proactiveHost) throw Error('主动观察仅允许可信设置或面板调用');
+    if (name === 'proactive.configure') return proactiveHost.configure(payload);
+    if (name === 'proactive.cognition.apply') {
+      const reviewTaskId = typeof payload?.reviewTaskId === 'string' ? payload.reviewTaskId.trim() : '';
+      if (!reviewTaskId) throw Error('审阅记录标识不能为空');
+      return proactiveHost.applyCognitionDecision(reviewTaskId);
+    }
+    if (!payload || Object.keys(payload).some(key => key !== 'id') || typeof payload.id !== 'string') throw Error('主动分析请求无效');
+    return proactiveHost.analyze(payload.id);
+  }
   if (name === 'voice.stop') {
     if (sender !== panel) throw Error('语音操作只能从面板调用');
-    return {available: false, stopped: false, reason: '语音供应商尚未连接'};
+    if (liveVoice?.hasActive()) {liveVoice.interrupt(); return {stopped: true};}
+    return voiceInput ? voiceInput.stopSpeaking(sender.webContents.id)
+      : {available: false, stopped: false, reason: '语音供应商尚未连接'};
+  }
+  if (name === 'voice.configure' || name === 'voice.login') {
+    if (sender !== panel || !competitionMode) throw Error('SIS 配置只能从 Competition 可信面板提交');
+    if (voiceConfigurationPending) throw Error('语音配置正在更新，请稍候');
+    if (!voiceInput && sisPlaybackHost) throw Error('旧语音播放资源释放未确认，无法重新装配');
+    if (voiceInput?.hasActive() || liveVoice?.hasActive()) throw Error('请先结束当前语音会话再更新 SIS 配置');
+    voiceConfigurationPending = true;
+    try {
+    const configuration = name === 'voice.login' ? await acquireHuaweiSisToken(payload) : payload;
+    // A voice capture may have started while the IAM request was in flight.
+    if (voiceInput?.hasActive()) throw Error('请先结束当前语音会话再更新 SIS 配置');
+    sisConfigHost.configure(configuration ?? {});
+    if (voiceInput) {
+      try { await voiceInput.dispose(); }
+      catch {
+        voiceInput = undefined;
+        voicePcmSource = undefined;
+        voiceInitializationFailure = {stage: 'cleanup', code: 'EXTERNAL_FAILURE',
+          message: '旧语音资源释放未确认'};
+        publish();
+        throw Error('SIS 配置已保存，但旧语音资源释放未确认');
+      }
+      voiceInput = undefined;
+      voicePcmSource = undefined;
+      sisPlaybackHost = undefined;
+    }
+    try { await initializeSisVoice(); }
+    catch {
+      voiceInitializationFailure = {stage: 'initialization', code: 'EXTERNAL_FAILURE',
+        message: 'SIS 语音适配器启动失败'};
+      publish();
+      throw Error('SIS 配置已保存，但语音适配器启动失败');
+    }
+    publish();
+    return {...sisConfigHost.snapshot(), connected: Boolean(voiceInput)};
+    } finally { voiceConfigurationPending = false; }
+  }
+  if (name.startsWith('voice.record.') || name === 'voice.play') {
+    if (sender !== panel || !voiceInput) throw Error('语音试用只允许从 Competition 可信面板调用');
+    if (voiceConfigurationPending) throw Error('语音配置正在更新，请稍候');
+    if (liveVoice?.hasActive()) throw Error('请先关闭 Live 再使用语音转文字');
+    const senderId = sender.webContents.id;
+    if (name === 'voice.record.start') return voiceInput.beginCapture(senderId);
+    if (name === 'voice.record.finish') return voiceInput.finishCapture(senderId);
+    if (name === 'voice.record.cancel') return voiceInput.cancelCapture(senderId);
+    if (name === 'voice.play') return voiceInput.playReply(senderId);
+    throw Error('Unsupported voice action');
+  }
+  if (name === 'live.configure') {
+    if ((sender !== panel && sender !== admin) || !competitionMode) throw Error('Live 配置只能从可信面板或设置提交');
+    if (liveVoice?.hasActive() || voiceInput?.hasActive()) throw Error('请先结束语音再修改配置');
+    const result = liveConfig.configure(payload);
+    registerLiveShortcut(); publish(); return result;
+  }
+  if (name === 'live.toggle') {
+    if (sender !== panel || !competitionMode) throw Error('Live 只能从可信面板开启');
+    return toggleLive();
+  }
+  if (name === 'voice.capture.authorize') {
+    if (sender !== panel || !competitionMode) throw Error('麦克风只允许 Competition 可信面板启用');
+    if (!client) throw Error('Runtime 未连接，麦克风采集尚不可用');
+    if (!voicePcmSource) throw Error('Voice PCM 来源尚未接入');
+    const result = microphoneCaptureHost.authorize();
+    publish();
+    return result;
+  }
+  if (name === 'voice.capture.revoke') {
+    if (sender !== panel) throw Error('麦克风只能从可信面板关闭');
+    await liveVoice?.stop();
+    await microphoneCaptureHost.revoke();
+    publish();
+    return microphoneCaptureHost.snapshot();
   }
   if (name === 'clipboard.writeText') {
     if ((sender !== panel && sender !== workspace) || typeof payload !== 'string' || payload.length > 50000) throw Error('剪贴板内容无效');
@@ -752,16 +1346,55 @@ async function action(event, name, payload) {
   }
   if (sender === orb) throw Error('Action unavailable from orb');
   if (!client) throw Error('Runtime 未连接，此操作尚不可用');
+  if (['evidence.list', 'evidence.get', 'authorization.revoke'].includes(name)) {
+    if (sender !== admin) throw Error('Evidence 操作仅允许可信后台窗口');
+    const namespace = desktopHost.userNamespace;
+    const evidenceHost = createDesktopEvidenceHost({
+      application: runtimeApplication,
+      subjectRef: namespace,
+      isAdminSession: () => admin === sender && !sender.isDestroyed()
+        && sender.webContents === event.sender && !sender.webContents.isDestroyed(),
+      ownsTask: task => {
+        const turn = conversations?.turns.get(task.taskId);
+        if (turn && ['panel', 'workspace'].includes(turn.surface)
+          && task.conversationId === `desktop-${turn.surface}`) return true;
+        if (goalHost && task.conversationId === `host-tool:${namespace}`) {
+          try { goalHost.readTask(task.taskId); return true; } catch { return false; }
+        }
+        return false;
+      },
+    });
+    if (name === 'evidence.list') return evidenceHost.list(payload);
+    if (name === 'evidence.get') return evidenceHost.get(payload);
+    return evidenceHost.revoke(payload);
+  }
+  if (name.startsWith('goal.')) {
+    if (sender !== panel && sender !== workspace) throw Error('Goal 操作只能从面板或工作区调用');
+    if (!goalHost) throw Error('Goal 写入仅在 Competition Profile 的可信宿主中可用');
+    if (name === 'goal.list') return goalHost.list();
+    if (name === 'goal.get') return goalHost.get(payload);
+    if (name === 'goal.create') return goalHost.create(payload);
+    if (name === 'goal.revise') return goalHost.revise(payload);
+    if (name === 'goal.readTask') return goalHost.readTask(payload);
+    if (name === 'goal.listTasks') return goalHost.listTasks();
+    if (name === 'goal.cancel') {
+      goalHost.readTask(payload);
+      const result = await client.call('task.cancel', {taskId: payload, reason: '用户取消 Goal 任务'});
+      return {...result, task: goalHost.readTask(payload)};
+    }
+    throw Error('Unsupported Goal action');
+  }
   if (name === 'task.submit') {
     if (sender !== panel && sender !== workspace) throw Error('请在对话工作区发送消息');
     if (typeof payload !== 'string' || !payload.trim()) throw Error('请输入有效任务');
+    if (competitionMode && !agentArtsConfig.snapshot().configured) throw Error('请先在设置 → 模型中保存 AgentArts Authorization；Live 语音配置无需重新填写');
     if (!fakeMode && model.enabled === false) throw Error('模型已停用，请先在模型设置中启用');
     const surface = sender === workspace ? 'workspace' : 'panel';
-    if (submitting.has(surface) || [...tasks.values()].some(task => conversations.surface(task.taskId) === surface && !terminalTaskStates.has(task.state))) throw Error('请等待当前回答完成，或先停止当前任务');
+    if (submitting.has(surface) || [...tasks.values()].some(task => taskSurface(task) === surface && !terminalTaskStates.has(task.state))) throw Error('请等待当前回答完成，或先停止当前任务');
     submitting.add(surface);
     try {
     const goal = payload.trim();
-    const result = await client.call('task.submit', {goal, conversationId: `desktop-${surface}`}, {...taskSubmitOptions, idempotencyKey: crypto.randomUUID()});
+    const result = await submitConversationTask(client, {goal, conversationId: `desktop-${surface}`}, {competition: competitionMode});
     conversations.add(result.taskId, surface, goal);
     taskGoals.set(result.taskId, goal);
     if (sender === panel) pinned = true;
@@ -771,12 +1404,12 @@ async function action(event, name, payload) {
   }
   if (name === 'task.cancel') {
     if (typeof payload !== 'string' || !tasks.has(payload)) throw Error('Unknown task');
-    if (sender !== admin && conversations.surface(payload) !== (sender === workspace ? 'workspace' : 'panel')) throw Error('无法停止其他工作区的任务');
+    if (sender !== admin && taskSurface(tasks.get(payload)) !== (sender === workspace ? 'workspace' : 'panel')) throw Error('无法停止其他工作区的任务');
     return requestTaskCancellation(client, payload, refresh);
   }
   if (name === 'task.refresh') {
     if (!tasks.has(payload)) throw Error('Unknown task');
-    if (sender !== admin && conversations.surface(payload) !== (sender === workspace ? 'workspace' : 'panel')) throw Error('无法读取其他工作区的任务');
+    if (sender !== admin && taskSurface(tasks.get(payload)) !== (sender === workspace ? 'workspace' : 'panel')) throw Error('无法读取其他工作区的任务');
     return refresh(payload);
   }
   if (name === 'capability.list') { await syncCapabilities(); publish(); return {manifests: capabilities, health}; }
@@ -813,6 +1446,108 @@ app.on('second-instance', () => {
   if (desktopHost && orb && panel && !orb.isDestroyed() && !panel.isDestroyed()) { pinned = true; openPanel(true); publish(); }
 });
 
+async function initializeSisVoice() {
+  if (!competitionMode || !client || voiceInput) return;
+  if (sisPlaybackHost) throw Error('旧语音播放资源释放未确认');
+  if (!sisConfigHost.snapshot().configured) return;
+  const selectedConfig = sisConfigHost.current();
+  if (!selectedConfig) return;
+  const {region, projectId} = selectedConfig;
+  const {createVoicePcmFrameSourcePort, createHuaweiSisRecognitionPort,
+    createHuaweiSisOutputPort} = await import('@personal-agent/voice');
+  const {createDesktopVoiceInput} = await import('./voice-input.js');
+  const tokenPort = {getSisToken: async ({region, signal}) => {
+    if (signal.aborted || region !== speechConfig.region) throw Error('SIS 凭据不可用');
+    const selected = sisConfigHost.current();
+    if (!selected || selected.region !== region || selected.projectId !== speechConfig.projectId
+      || selected.tokenExpiresAt && Date.parse(selected.tokenExpiresAt) <= Date.now() + 10_000) {
+      throw Error('SIS 凭据不可用');
+    }
+    return selected.token;
+  }};
+  const speechConfig = {region, projectId, tokenPort};
+  const playback = createDesktopSisPlaybackHost({getPanel: () => panel,
+    onDiagnostic: phase => desktopHost.logVoicePlayback(phase)});
+  let source;
+  try {
+    const speechPorts = {
+      recognition: createHuaweiSisRecognitionPort(speechConfig),
+      output: createHuaweiSisOutputPort({...speechConfig, playback}),
+      dispose: () => playback.dispose(),
+    };
+    source = createVoicePcmFrameSourcePort(microphoneCaptureHost.binding);
+    voiceInput = createDesktopVoiceInput({source, microphoneHost: microphoneCaptureHost,
+      client, onUpdate: publish, enabled: true, inputMode: 'dictation', speechPorts,
+      onTranscript: ({senderId, text}) => {
+        if (panel && !panel.isDestroyed() && panel.webContents.id === senderId) {
+          panel.webContents.send('desktop:dictation-result', {text});
+        }
+      },
+      onTaskSubmitted: ({taskId, goal}) => {
+        conversations.add(taskId, 'panel', goal);
+        taskGoals.set(taskId, goal);
+      }});
+    voicePcmSource = source;
+    sisPlaybackHost = playback;
+    voiceInitializationFailure = null;
+  } catch (error) {
+    await source?.dispose?.();
+    await playback.dispose();
+    throw error;
+  }
+}
+
+async function toggleLive() {
+  if (!liveVoice) throw Error('Live 服务尚未装配');
+  if (liveVoice.hasActive()) return liveVoice.stop();
+  if (voiceConfigurationPending || voiceInput?.hasActive()) throw Error('请先结束语音转文字或配置更新');
+  pinned = true; openPanel(true); publish();
+  return liveVoice.start();
+}
+
+function registerLiveShortcut() {
+  if (liveShortcut.registered) globalShortcut.unregister(liveShortcut.key);
+  const key = liveConfig.snapshot().hotkey;
+  const registered = globalShortcut.register(key, () => {
+    if (Date.now() - lastLiveShortcutAt < 400) return;
+    lastLiveShortcutAt = Date.now();
+    void toggleLive().catch(error => {
+      liveShortcut.reason = error instanceof Error ? error.message : 'Live 开关失败';
+      pinned = true; openPanel(true); publish();
+    });
+  });
+  liveShortcut = {key, registered, reason: registered ? '' : `${key} 已被占用，请在 Live 设置中更换快捷键`};
+}
+
+async function initializeLiveVoice() {
+  if (!competitionMode || !client) return;
+  const {createVoicePcmFrameSourcePort, createRuntimeClientTranscriptConsumer} = await import('@personal-agent/voice');
+  liveVoice = createLiveVoiceHost({getPanel: () => panel, config: liveConfig, microphoneHost: microphoneCaptureHost,
+    createSource: () => createVoicePcmFrameSourcePort(microphoneCaptureHost.binding),
+    createGateway: config => runtimeApplication.createLiveVoiceModel(config),
+    createConsumer: createRuntimeClientTranscriptConsumer, client, onUpdate: publish,
+    onTranscript: message => conversations.addLiveMessage(message),
+    onTaskSubmitted: ({taskId, goal}) => {conversations.add(taskId, 'panel', goal); taskGoals.set(taskId, goal);},
+    readContext: () => JSON.stringify({profile: 'huawei_ict_agentarts',
+      agentArts:{configured:agentArtsConfig.snapshot().configured,reason:agentArtsConfig.snapshot().reason},
+      tasks: orderedTasks().filter(task => taskSurface(task) === 'panel').slice(-10)
+        .map(task => ({taskId: task.taskId, goal: (taskGoals.get(task.taskId) ?? conversations.goal(task.taskId) ?? '').slice(0, 800),
+          state: task.state, failureReason: task.error?.message, result: resultText(task.resultSummary).slice(0, 1600),
+          createdAt: conversations?.turns.get(task.taskId)?.createdAt ?? task.createdAt ?? task.updatedAt})),
+      messages: conversations.messagesFor('panel').slice(-20).map(({role, text, createdAt}) => ({role, text: text.slice(0, 1600), createdAt})),
+      capabilities: capabilities.map(item => ({name: item.name ?? item.id, version: item.version})),
+      tools: (competitionToolAvailabilityList.length ? competitionToolAvailabilityList : [
+        ...(codingWorkspace?.competitionToolAvailability ?? []),
+        ...(productTools?.competitionToolAvailability ?? []),...(feedsHost?.competitionToolAvailability ?? []),
+        ...(todoHost?.competitionToolAvailability ?? []),...(goalCloudHost?.competitionToolAvailability ?? [])])
+        .map(({toolName,toolVersion})=>({name:toolName,version:toolVersion,state:'registered_requires_task_authorization'})),
+      sessionPermissions:{goals:goalCloudHost?.snapshot().sessionAllowed===true,
+        coding: codingWorkspace?.snapshot().cloudExportAllowed===true,
+        mailAnalysis:mailConfig?.snapshot().cloudAnalysisAllowed===true},
+      note: '工具名称来自与文字任务相同的宿主目录；注册不代表本次已授权或已执行。需要工作时调用 request_work，由 Runtime 为实际任务检查目录、权限和参数；不能将注册列表冒充当前全部可用。任务成功以 Runtime 返回为准。'}),
+  });
+}
+
 app.whenReady().then(async () => {
   if (!ownsDesktopInstance) return;
   desktopHost = createDesktopHost();
@@ -822,11 +1557,27 @@ app.whenReady().then(async () => {
   });
   session.defaultSession.setPermissionRequestHandler(microphonePermissionGate.request);
   session.defaultSession.setPermissionCheckHandler(microphonePermissionGate.check);
+  microphoneCaptureHost = createMicrophoneCaptureHost({permissionGate: microphonePermissionGate,
+    getPanel: () => panel});
+  ipcMain.on('desktop:microphone-event', (event, message) => {
+    if (microphoneCaptureHost.receive(event, message)) publish();
+  });
+  sisConfigHost = createDesktopSisConfigHost({userData: app.getPath('userData'), safeStorage});
+  liveConfig = createLiveVoiceConfig({userData: app.getPath('userData'), safeStorage});
+  agentArtsConfig = createAgentArtsConfig({userData: app.getPath('userData'), safeStorage});
+  if (competitionMode && !syntheticMvp) feedsHost = createDesktopFeedsHost({userData:app.getPath('userData'),safeStorage});
+  ipcMain.on('desktop:live-event', (event, message) => {liveVoice?.receive(event, message);});
+  ipcMain.on('desktop:voice-playback-event', (event, message) => {
+    if (sisPlaybackHost?.receive(event, message)) publish();
+  });
   try {
     conversations = new Conversations(dataPaths.conversations);
     if (!competitionMode) restoreModelConfig();
-    await initializeRuntime();
-    await initializeModelFromEnvironment();
+    const startup = await runtimeStartup.start();
+    if (startup.state === 'configuration_required') {
+      runtimeError = agentArtsConfig.snapshot().reason;
+      connectionLabel = 'Runtime 等待配置';
+    }
   } catch (error) {
     runtimeError = error instanceof Error ? error.message : 'Runtime 初始化失败';
     connectionLabel = 'Runtime 未连接';
@@ -838,12 +1589,25 @@ app.whenReady().then(async () => {
   panel = windowFor('panel', panelBounds(orb.getBounds(), area),
     {frame: false, transparent: true, alwaysOnTop: true, skipTaskbar: true, resizable: false, hasShadow: false, backgroundMaterial: 'none', roundedCorners: true});
   panel.on('close', event => { if (!app.isQuitting) { event.preventDefault(); pinned = false; panel.hide(); publish(); } });
+  panel.on('hide', () => { void liveVoice?.stop(); void sisPlaybackHost?.stop().catch(() => {
+    runtimeError = '语音播放资源释放未确认'; publish();
+  }); void microphoneCaptureHost.revoke().catch(error => {
+    runtimeError = error instanceof Error ? error.message : '麦克风释放未确认';
+    publish();
+  }); publish(); });
   createTray();
+  if (liveVoice) registerLiveShortcut();
+  console.info('PersonalAgent startup',JSON.stringify({runtime:runtimeStartup.snapshot().state,
+    agentArtsConfigured:agentArtsConfig.snapshot().configured,liveConfigured:liveConfig.snapshot().configured,
+    liveReady:Boolean(liveVoice),liveShortcutRegistered:liveShortcut.registered,
+    sisConfigured:sisConfigHost.snapshot().configured,sisReady:Boolean(voiceInput)}));
 
   ipcMain.handle('desktop:action', async (...args) => {
     try { return {ok: true, value: await action(...args)}; }
     catch (error) { return {ok: false, error: error instanceof Error ? error.message : '操作失败'}; }
   });
+  // First-run configuration must be reachable even when cloud credentials prevent Runtime startup.
+  if (competitionMode && !agentArtsConfig.snapshot().configured) openAdmin('models');
 
   function reposition() {
     const bounds = orb.getBounds();
@@ -870,6 +1634,64 @@ app.whenReady().then(async () => {
     else if (panel.isVisible()) { if (!away) away = Date.now(); else if (Date.now() - away > 520) { panel.hide(); away = 0; } }
   }, 80);
   app.on('before-quit', event => {
+    if (runtimeStartup.snapshot().state === 'starting') {
+      event.preventDefault(); runtimeError = 'Runtime 正在连接，请稍后退出'; publish(); return;
+    }
+    proactiveHost?.stop();
+    if(todoHost && !todoClosed) {
+      event.preventDefault();
+      todoClosing ??= todoHost.close().then(()=>{todoClosed=true;app.quit();})
+        .catch(()=>{todoClosing=undefined;runtimeError='提醒队列尚未结束，请稍后退出';publish();});
+      return;
+    }
+    if (notepadHost && !notepadClosed) {
+      event.preventDefault();
+      if (!notepadClosing) notepadClosing = notepadHost.close().then(() => {
+        notepadClosed = true; app.quit();
+      }).catch(() => {notepadClosing = undefined;runtimeError = '本机操作停止尚未确认，请稍后退出';publish();});
+      return;
+    }
+    if (!localServicesStopped && (mailHost || localLaya)) {
+      event.preventDefault();
+      if (!localServicesStopping) {
+        localServicesStopping = true;
+        void (async () => {
+          await mailConfig?.revoke();
+          const result = await localLaya?.stop();
+          if (result?.state === 'stop_unconfirmed') throw Error('本地模型退出尚未确认');
+          localServicesStopped = true; app.quit();
+        })().catch(() => {runtimeError = '本地分类服务退出尚未确认，请稍后再退出'; publish();})
+          .finally(() => {localServicesStopping = false;});
+      }
+      return;
+    }
+    if (liveVoice?.hasActive()) {
+      event.preventDefault();
+      void liveVoice.stop().then(() => app.quit());
+      return;
+    }
+    if (voiceInput && !voiceDisposed) {
+      event.preventDefault();
+      if (!voiceDisposal && !voiceDisposalFailed) {
+        voiceDisposal = voiceInput.dispose().then(() => {
+          voiceDisposed = true;
+          app.quit();
+        }).catch(error => {
+          voiceDisposalFailed = true;
+          runtimeError = '语音资源释放未确认';
+          publish();
+        });
+      }
+      return;
+    }
+    if (microphoneCaptureHost?.snapshot().busy) {
+      event.preventDefault();
+      void microphoneCaptureHost.revoke().then(() => app.quit()).catch(error => {
+        runtimeError = error instanceof Error ? error.message : '麦克风释放未确认';
+        publish();
+      });
+      return;
+    }
     if ((runtimeApplication?.activeTaskCount ?? 0) > 0) {
       event.preventDefault();
       app.isQuitting = false;
@@ -877,9 +1699,19 @@ app.whenReady().then(async () => {
       publish();
       return;
     }
+    globalShortcut.unregisterAll();
     try {
+      proactiveHost?.close();
+      goalCloudHost?.close();
+      mailAnalysisHost?.close();
+      competitionFactBridge?.close();
       if (runtimeApplication) runtimeApplication.close();
       else runtime?.close?.();
+      competitionCatalog?.close();
+      productTools?.close();
+      codingWorkspace?.close();
+      feedsHost?.close();
+      void todoHost?.close();
     } catch (error) {
       event.preventDefault();
       app.isQuitting = false;

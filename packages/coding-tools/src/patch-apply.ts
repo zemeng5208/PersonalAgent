@@ -123,9 +123,19 @@ async function invokeHelper(
       }
       child.once('error', () => {});
       child.stdin?.on('error', () => {});
+      // No candidate bytes were sent, but the spawned process can still hold cwd.
+      // Preserve any pre-existing marker and wait for this unused helper to exit.
+      let rejected = false;
+      const fail = (): void => {
+        if (rejected) return;
+        rejected = true;
+        clearTimeout(stopTimer);
+        reject(new ProtocolError('RESULT_UNKNOWN', 'Workspace patch in-flight record could not be persisted'));
+      };
+      const stopTimer = setTimeout(fail, STOP_GRACE_MS);
+      child.once('close', fail);
       try { child.kill('SIGKILL'); } catch { /* no request was sent */ }
       child.stdin?.destroy();
-      reject(new ProtocolError('RESULT_UNKNOWN', 'Workspace patch in-flight record could not be persisted'));
       return;
     }
     let finished = false;

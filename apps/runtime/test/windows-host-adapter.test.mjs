@@ -17,12 +17,14 @@ const base = frame => ({protocolVersion: frame.protocolVersion, requestId: frame
   sessionId: frame.sessionId});
 
 function fixture({executeState = 'verified', statusState = 'not_found', mismatchedResult = false,
-  presence = true, onPresence, onRecord, observationError, targetExpiresAt,
+  presence = true, onPresence, onRecord, observationError, targetExpiresAt, targetReady = true,
+  prepareObservation,
   now, taskId = 'task-1', attemptStore} = {}) {
   const sent = [];
   const attempts = new Map();
   let sessions = 0;
   let closes = 0;
+  let observedExpiresAt;
   const transport = {
     async openVerifiedConnection() {
       const sessionId = 'session_' + ++sessions;
@@ -33,10 +35,17 @@ function fixture({executeState = 'verified', statusState = 'not_found', mismatch
           if (frame.kind === 'hello') return {kind: 'hello_ack', protocolVersion: frame.protocolVersion,
             requestId: frame.requestId, clientNonce: frame.clientNonce,
             hostNonce: 'a'.repeat(32), sessionId};
-          if (frame.kind === 'observe') return observationError
-            ? {kind: 'observation_refused', ...base(frame), errorCode: observationError}
-            : {kind: 'observed', ...base(frame), targetRef,
-              expiresAt: targetExpiresAt?.() ?? deadline(), source: 'windows-uia'};
+          if (frame.kind === 'observe') {
+            if (observationError) return {kind: 'observation_refused', ...base(frame), errorCode: observationError};
+            observedExpiresAt = targetExpiresAt?.() ?? deadline();
+            return {kind: 'observed', ...base(frame), targetRef,
+              expiresAt: observedExpiresAt, source: 'windows-uia'};
+          }
+          if (frame.kind === 'target_ready') return targetReady
+            ? {kind: 'target_ready_result', ...base(frame), targetRef: frame.targetRef,
+              ready: true, expiresAt: observedExpiresAt}
+            : {kind: 'target_ready_result', ...base(frame), targetRef: frame.targetRef,
+              ready: false, errorCode: 'TARGET_STALE'};
           if (frame.kind === 'execute') return {kind: 'result', ...base(frame), taskId: frame.taskId,
             runId: frame.runId, toolName: frame.toolName, toolVersion: frame.toolVersion,
             argumentsDigest: frame.argumentsDigest,
@@ -51,7 +60,7 @@ function fixture({executeState = 'verified', statusState = 'not_found', mismatch
       };
     },
   };
-  const adapter = createWindowsHostNotepadAdapter({transport, now,
+  const adapter = createWindowsHostNotepadAdapter({transport, now, prepareObservation,
     attempts: attemptStore ?? {
       async record(identity) {
         if (attempts.has(identity.runId)) throw Error('duplicate run');
@@ -77,7 +86,9 @@ test('registered Notepad tool binds observed target and run identity to Host UIA
   assert.equal(f.adapter.tool.descriptor.name, 'computer.notepad.replace_text');
   assert.equal(f.adapter.tool.descriptor.sideEffect, 'local_write');
   assert.equal(f.adapter.tool.descriptor.requiresPresence, false);
-  await f.adapter.observe('task-1', deadline(), new AbortController().signal);
+  const target = await f.adapter.observe('task-1', deadline(), new AbortController().signal);
+  assert.deepEqual(await f.adapter.checkObservationReady('task-1', deadline(), new AbortController().signal),
+    {taskId: 'task-1', ...target});
   const result = await f.adapter.tool.execute(input, context());
   assert.deepEqual(result, {state: 'verified', hostEvidenceRef: 'host-evidence'});
   const execute = f.sent.find(frame => frame.kind === 'execute');
@@ -87,7 +98,58 @@ test('registered Notepad tool binds observed target and run identity to Host UIA
   assert.equal(execute.argumentsDigest, toolArgumentsDigest(input));
   assert.equal(execute.targetRef, targetRef);
   assert.equal(f.attempts.get('run-1').argumentsDigest, execute.argumentsDigest);
-  assert.deepEqual(f.sent.slice(0, 4).map(frame => frame.kind), ['hello', 'bind', 'observe', 'execute']);
+  assert.deepEqual(f.sent.slice(0, 5).map(frame => frame.kind),
+    ['hello', 'bind', 'observe', 'target_ready', 'execute']);
+});
+
+test('trusted target preparation runs before a Host session is opened', async () => {
+  let f;
+  f = fixture({prepareObservation: async ({taskId, signal}) => {
+    assert.equal(taskId, 'task-1');
+    assert.equal(signal.aborted, false);
+    assert.deepEqual(f.sent, []);
+  }});
+  await f.adapter.observe('task-1', deadline(), new AbortController().signal);
+  assert.deepEqual(f.sent.slice(0, 3).map(frame => frame.kind), ['hello', 'bind', 'observe']);
+  await f.adapter.releaseObservation('task-1');
+});
+
+test('cancelling target preparation opens no Host session', async () => {
+  const controller = new AbortController();
+  const f = fixture({prepareObservation: async ({signal}) => {
+    controller.abort();
+    assert.equal(signal.aborted, true);
+    await new Promise(() => {});
+  }});
+  await assert.rejects(f.adapter.observe('task-1', deadline(), controller.signal), {code: 'CANCELLED'});
+  assert.deepEqual(f.sent, []);
+  assert.equal(f.closes, 0);
+});
+
+test('closing the adapter cancels target preparation before opening a Host session', async () => {
+  let entered;
+  let signal;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  const f = fixture({prepareObservation: async input => {
+    signal = input.signal;
+    entered();
+    await new Promise(resolve => signal.addEventListener('abort', resolve, {once: true}));
+  }});
+  const observation = f.adapter.observe('task-1', deadline(), new AbortController().signal);
+  await waiting;
+  await f.adapter.close();
+  await assert.rejects(observation, {code: 'CANCELLED'});
+  assert.deepEqual(f.sent, []);
+});
+
+test('stale Host target readiness releases the observation before authorization', async () => {
+  const f = fixture({targetReady: false});
+  await f.adapter.observe('task-1', deadline(), new AbortController().signal);
+  await assert.rejects(f.adapter.checkObservationReady('task-1', deadline(), new AbortController().signal),
+    {code: 'UNAUTHORIZED'});
+  assert.equal(f.sent.filter(frame => frame.kind === 'target_ready').length, 1);
+  assert.equal(f.sent.filter(frame => frame.kind === 'execute').length, 0);
+  assert.equal(f.closes, 1);
 });
 
 test('trusted presence callback is mandatory and denial prevents observation or execution', async () => {

@@ -7,7 +7,7 @@ import type {TaskRuntime} from '../index.js';
 import {isDeepStrictEqual} from 'node:util';
 import type {CompetitionAvailableTool, RuntimeCompetitionToolCatalog} from './tool-catalog.js';
 
-const MAX_COMPETITION_STEPS = 4;
+const DEFAULT_COMPETITION_STEPS = 4;
 
 /** Trusted composition only. This permits result export, never tool execution. */
 export interface CompetitionToolExport {
@@ -159,18 +159,24 @@ export function startCoordinationTask(
 ): Promise<TaskSnapshot> {
   return runtime.runTask(taskId, async context => {
     if (!port) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition coordination is unavailable');
+    // Persisted by trusted Runtime composition at submission, never by the model.
+    // Legacy tasks keep their original four-round budget when resumed.
+    const maxSteps = context.loadCheckpoint('competition-max-steps') ?? DEFAULT_COMPETITION_STEPS;
+    if (typeof maxSteps !== 'number' || !Number.isSafeInteger(maxSteps) || maxSteps < 1) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Invalid persisted Competition step budget');
+    }
     const saved = context.loadCheckpoint('competition-loop') as CompetitionCheckpoint | undefined;
     let evidenceRefs = saved?.evidenceRefs ?? [];
     let continuation = saved?.continuation;
     let pending = saved?.pending;
     const receipts = saved?.receipts ?? [];
 
-    for (let step = saved?.step ?? 1; step <= MAX_COMPETITION_STEPS; step++) {
+    for (let step = saved?.step ?? 1; step <= maxSteps; step++) {
       context.reportProgress({
         stepId: `competition-${step}`,
         label: pending ? `awaiting approval for ${pending.toolName}` : 'cloud coordination',
         completedUnits: step - 1,
-        totalUnits: MAX_COMPETITION_STEPS,
+        totalUnits: maxSteps,
       });
       const availableTools = !pending && continuation === undefined && options.toolCatalog
         ? await options.toolCatalog.prepare({taskId, deadline: context.deadline, signal: context.signal}) : undefined;
@@ -223,7 +229,7 @@ export function startCoordinationTask(
 
       // A new execution needs one further exchange to deliver its result. Do
       // not consume approval or perform a tool action that cannot be continued.
-      if (step >= MAX_COMPETITION_STEPS) {
+      if (step >= maxSteps) {
         throw new ProtocolError('TIMEOUT', 'Competition has no remaining tool continuation step');
       }
 
@@ -256,7 +262,6 @@ export function startCoordinationTask(
           // values and oversized projections must never reach the cloud adapter.
           const projected = parseCoordinationContinuation({proposalId: result.proposalId,
             state: 'confirmed', result: exportedResult});
-          if (Buffer.byteLength(JSON.stringify(projected), 'utf8') > 8192) throw Error();
           exportedResult = projected.result;
         } catch {
           throw new ProtocolError('UNAUTHORIZED', 'Competition result export denied');
@@ -273,7 +278,7 @@ export function startCoordinationTask(
       pending = undefined;
       context.saveCheckpoint('competition-loop', {step: step + 1, continuation, evidenceRefs, receipts});
     }
-    throw new ProtocolError('TIMEOUT', `Competition coordination reached maxSteps=${MAX_COMPETITION_STEPS}`);
+    throw new ProtocolError('TIMEOUT', `Competition coordination reached maxSteps=${maxSteps}`);
   }, {deadline, sideEffect: options.toolCatalog?.sideEffect ?? 'read',
     ...(options.resume ? {resume: true} : {})});
 }

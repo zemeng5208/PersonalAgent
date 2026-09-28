@@ -3,14 +3,13 @@ import type {ToolDescriptor} from '@personal-agent/contracts';
 import type {AgentToolPort} from '@personal-agent/agents';
 import {Buffer} from 'node:buffer';
 import {isDeepStrictEqual} from 'node:util';
+import {MAX_AVAILABLE_TOOLS, MAX_AVAILABLE_TOOLS_JSON_BYTES} from '@personal-agent/coordination';
 import type {TaskRuntime} from '../index.js';
 import type {CompetitionToolExport} from './coordination.js';
 
 const CHECKPOINT = 'competition-tool-catalog';
 const NAME = /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/;
 const VERSION = /^[0-9A-Za-z][0-9A-Za-z_.-]{0,63}$/;
-const MAX_ENTRIES = 16;
-const MAX_CATALOG_BYTES = 8_192;
 
 export interface CompetitionToolAvailability {
   toolName: string;
@@ -165,7 +164,8 @@ export class RuntimeCompetitionToolCatalog {
         || !this.exports.some(item => item.toolName === binding.toolName && item.toolVersion === binding.toolVersion)) continue;
       if (!await this.ready(binding, {...input, revision})) continue;
       selected.push({name: descriptor.name, version: descriptor.version, inputSchema: projectedSchema(descriptor, binding)});
-      if (selected.length > MAX_ENTRIES || Buffer.byteLength(JSON.stringify(selected), 'utf8') > MAX_CATALOG_BYTES) {
+      if (selected.length > MAX_AVAILABLE_TOOLS
+        || Buffer.byteLength(JSON.stringify(selected), 'utf8') > MAX_AVAILABLE_TOOLS_JSON_BYTES) {
         throw new ProtocolError('INVALID_ARGUMENT', 'Competition tool catalog exceeds its limit');
       }
     }
