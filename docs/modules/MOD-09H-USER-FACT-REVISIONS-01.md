@@ -32,5 +32,6 @@
 - `npm.cmd run check`：架构、契约、生成类型、全部 workspace 构建/类型/测试和根集成通过。
 - feed 更正/撤回增量测试随后通过；`git diff --check` 通过。
 - Runtime 定向集成 `node --test apps/runtime/test/sqlite-fact-projection.test.mjs`：6/6 通过；
-  其中新增合成用户更正/撤回跨 feed→Goal 精确版本、同节点和重启幂等断言。
+  其中新增合成用户更正/撤回跨 feed→Goal 精确版本、同节点和重启幂等断言；
+  已激活事实删除后再读回 Goal 历史、Memory 历史和用户修订回执均为空，原操作重试幂等。
 - 仅合成数据与本地 SQLite；非作者评审、真实授权入口和私人来源仍未验证。
