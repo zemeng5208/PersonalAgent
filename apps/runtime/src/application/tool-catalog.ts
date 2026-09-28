@@ -15,6 +15,8 @@ const MAX_CATALOG_BYTES = 8_192;
 export interface CompetitionToolAvailability {
   toolName: string;
   toolVersion: string;
+  /** Explicit host-approved input paths whose scalar enum values are public, e.g. /units. */
+  publicEnumPaths?: readonly string[];
   /** Trusted host health and scope check; registration alone never means ready. */
   available(input: {taskId: string; revision: number; deadline: string; signal: AbortSignal}): boolean | Promise<boolean>;
 }
@@ -31,16 +33,28 @@ interface CatalogCheckpoint {
   entries: CompetitionAvailableTool[];
 }
 
-function safeSchema(value: unknown, depth = 0): Record<string, unknown> {
+function safeSchema(value: unknown, depth = 0, publicEnums: ReadonlySet<string> = new Set(), parameterPath = ''): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value) || depth > 8) {
     throw new ProtocolError('INVALID_ARGUMENT', 'Tool input Schema cannot be projected');
   }
   const schema = value as Record<string, unknown>;
-  const type = schema.type;
+  // Public connector schemas may express scalar types using enum alone.
+  // Infer the shape without publishing values unless the host approves their path.
+  const enumTypes = Array.isArray(schema.enum) && schema.enum.length
+    ? new Set(schema.enum.map(item => item === null ? 'null' : typeof item)) : undefined;
+  const inferredType = enumTypes?.size === 1 ? [...enumTypes][0] : undefined;
+  const type = schema.type ?? inferredType;
   if (!['object', 'array', 'string', 'integer', 'number', 'boolean'].includes(type as string)) {
     throw new ProtocolError('INVALID_ARGUMENT', 'Tool input Schema type is unavailable');
   }
   const result: Record<string, unknown> = {type};
+  if (publicEnums.has(parameterPath) && Array.isArray(schema.enum)) {
+    if (schema.enum.some(item => !['string','number','boolean'].includes(typeof item)
+      || (typeof item === 'number' && !Number.isFinite(item)))) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Public tool enums must be scalar values');
+    }
+    result.enum = structuredClone(schema.enum);
+  }
   if (type === 'object') {
     const properties = schema.properties;
     if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {
@@ -49,7 +63,7 @@ function safeSchema(value: unknown, depth = 0): Record<string, unknown> {
     const projected: Record<string, unknown> = {};
     for (const [name, child] of Object.entries(properties)) {
       if (!NAME.test(name)) throw new ProtocolError('INVALID_ARGUMENT', 'Unsafe tool parameter name');
-      projected[name] = safeSchema(child, depth + 1);
+      projected[name] = safeSchema(child, depth + 1, publicEnums, `${parameterPath}/${name}`);
     }
     result.properties = projected;
     const required = schema.required ?? [];
@@ -59,13 +73,17 @@ function safeSchema(value: unknown, depth = 0): Record<string, unknown> {
     result.required = [...required];
     result.additionalProperties = false;
   } else if (type === 'array') {
-    result.items = safeSchema(schema.items, depth + 1);
+    result.items = safeSchema(schema.items, depth + 1, publicEnums, `${parameterPath}/*`);
   }
   for (const key of ['minLength', 'maxLength', 'minimum', 'maximum', 'minItems', 'maxItems']) {
     const number = schema[key];
     if (typeof number === 'number' && Number.isFinite(number) && number >= 0) result[key] = number;
   }
   return result;
+}
+
+function projectedSchema(descriptor: ToolDescriptor, binding: CompetitionToolAvailability): Record<string, unknown> {
+  return safeSchema(descriptor.inputSchema, 0, new Set(binding.publicEnumPaths ?? []));
 }
 
 export class RuntimeCompetitionToolCatalog {
@@ -81,7 +99,10 @@ export class RuntimeCompetitionToolCatalog {
     for (const entry of availability) {
       const key = JSON.stringify([entry.toolName, entry.toolVersion]);
       if (!NAME.test(entry.toolName) || !VERSION.test(entry.toolVersion)
-        || typeof entry.available !== 'function' || names.has(key)) {
+        || typeof entry.available !== 'function' || names.has(key)
+        || (entry.publicEnumPaths !== undefined && (!Array.isArray(entry.publicEnumPaths)
+          || entry.publicEnumPaths.some(value => typeof value !== 'string'
+            || !/^\/(?:[A-Za-z][A-Za-z0-9_.:-]*|\*)(?:\/(?:[A-Za-z][A-Za-z0-9_.:-]*|\*))*$/.test(value))))) {
         throw new ProtocolError('INVALID_ARGUMENT', 'Invalid Competition tool availability binding');
       }
       names.add(key);
@@ -143,7 +164,7 @@ export class RuntimeCompetitionToolCatalog {
       if (!descriptor || descriptor.requiresPresence
         || !this.exports.some(item => item.toolName === binding.toolName && item.toolVersion === binding.toolVersion)) continue;
       if (!await this.ready(binding, {...input, revision})) continue;
-      selected.push({name: descriptor.name, version: descriptor.version, inputSchema: safeSchema(descriptor.inputSchema)});
+      selected.push({name: descriptor.name, version: descriptor.version, inputSchema: projectedSchema(descriptor, binding)});
       if (selected.length > MAX_ENTRIES || Buffer.byteLength(JSON.stringify(selected), 'utf8') > MAX_CATALOG_BYTES) {
         throw new ProtocolError('INVALID_ARGUMENT', 'Competition tool catalog exceeds its limit');
       }
@@ -166,7 +187,7 @@ export class RuntimeCompetitionToolCatalog {
     if (!entry || !binding || !descriptor || descriptor.requiresPresence
       || (input.firstCloudRequest && saved?.revision !== revision)
       || (saved !== undefined && saved.revision > revision) || saved?.deadline !== input.deadline
-      || !isDeepStrictEqual(safeSchema(descriptor.inputSchema), entry.inputSchema)
+      || !isDeepStrictEqual(projectedSchema(descriptor, binding), entry.inputSchema)
       || !await this.ready(binding, {...input, revision})) {
       throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition tool is unavailable for this task');
     }
@@ -187,7 +208,7 @@ export class RuntimeCompetitionToolCatalog {
       const binding = this.availability.find(entry => entry.toolName === item.name && entry.toolVersion === item.version);
       const descriptor = this.tools.list().find(entry => entry.name === item.name && entry.version === item.version);
       if (!binding || !descriptor || descriptor.requiresPresence
-        || !isDeepStrictEqual(safeSchema(descriptor.inputSchema), item.inputSchema)
+        || !isDeepStrictEqual(projectedSchema(descriptor, binding), item.inputSchema)
         || !await this.ready(binding, input)) {
         throw new ProtocolError('UNAUTHORIZED', 'Competition tool became unavailable before export');
       }

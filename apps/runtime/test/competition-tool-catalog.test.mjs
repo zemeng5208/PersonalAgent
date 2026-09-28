@@ -11,7 +11,8 @@ const descriptor = {
   inputSchema: {type: 'object', required: ['path'], additionalProperties: false,
     description: 'private C:\\Users\\example',
     properties: {path: {type: 'string', minLength: 1, maxLength: 32,
-      description: 'private file name', enum: ['secret-path']}}},
+      description: 'private file name', enum: ['secret-path']},
+      units: {enum: ['metric', 'imperial']}}},
   outputSchema: {type: 'object', required: ['value'], additionalProperties: false,
     properties: {value: {type: 'string'}}},
   sideEffect: 'read', requiredScopes: ['fixture:read'],
@@ -60,7 +61,7 @@ test('task catalog projects only public Schema fields and rechecks before export
     assert.ok(availabilityCalls >= 2);
     assert.deepEqual(observed, [{name: 'fixture.read', version: '1.0.0', inputSchema: {
       type: 'object', required: ['path'], additionalProperties: false,
-      properties: {path: {type: 'string', minLength: 1, maxLength: 32}},
+      properties: {path: {type: 'string', minLength: 1, maxLength: 32}, units:{type:'string'}},
     }}]);
     assert.doesNotMatch(JSON.stringify(observed), /private|secret-path|Users/);
   } finally {
@@ -68,6 +69,28 @@ test('task catalog projects only public Schema fields and rechecks before export
     app.close();
     await rm(directory, {recursive: true, force: true});
   }
+});
+
+test('only host-approved enum paths are published and narrowing is rechecked before export', async () => {
+  const binding={toolName:descriptor.name,toolVersion:descriptor.version,publicEnumPaths:['/units'],available:()=>true};
+  let observed;
+  const app=createRuntimeApplication({path:':memory:',profile:'huawei_ict_agentarts',
+    tools:[{descriptor,execute:async()=>({value:'fixture'})}],competitionToolExports:[toolExport],
+    competitionToolAvailability:[binding],coordination:{execute:async request=>{
+      observed=request.availableTools;
+      assert.deepEqual(observed[0].inputSchema.properties.units,{type:'string',enum:['metric','imperial']});
+      assert.doesNotMatch(JSON.stringify(observed),/secret-path|private|Users/);
+      await app.assertCompetitionToolCatalogAllowed({...request,availableTools:observed});
+      binding.publicEnumPaths=[];
+      await assert.rejects(app.assertCompetitionToolCatalogAllowed({...request,availableTools:observed}),{code:'UNAUTHORIZED'});
+      return {kind:'text',text:'Public enum checked',verification:'mock'};
+    }}});
+  try {
+    const client=new Client(app,Date.now);await client.connect();
+    const {taskId}=await client.call('task.submit',{goal:'Use public unit options',conversationId:'enum'}, {idempotencyKey:'enum'});
+    assert.equal((await waitFor(app,taskId,['succeeded','failed'])).state,'succeeded');
+    assert.ok(observed);
+  } finally {app.close();}
 });
 
 test('empty trusted catalog stops an opt-in first cloud request', async () => {
