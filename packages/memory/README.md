@@ -89,7 +89,10 @@ mixed deliveries entry by entry, and keeps unrelated checkpoints. The fact's
   graph cleanup, checks that no target feed entry survives, and deletes all
   target versions and public-source mapping in one Memory transaction. Its
   `completed` marker describes the active Memory database, not user-level
-  deletion. Retention/backup policy, real ingestion and production cognition/Runtime
+  deletion. The SQLite host verifies `secure_delete=ON` and requires a successful
+  `TRUNCATE` WAL checkpoint after the purge; a busy checkpoint is retryable with
+  `STORAGE_UNAVAILABLE`. Older free-page traces and backup copies remain outside
+  this guarantee. Retention/backup policy, real ingestion and production cognition/Runtime
 projection remain unavailable. See
 [ADR-0008](../../docs/adr/0008-fact-feed-consumption.md) (proposed) and
 [ADR-0010](../../docs/adr/0010-memory-erasure.md) (proposed) and

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdtemp, rm} from 'node:fs/promises';
+import {mkdtemp, rm, stat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
@@ -215,7 +215,21 @@ test('Runtime erasure transaction preserves a mixed activated receipt and replay
     } finally {
       fault.close();
     }
-    await erasure();
+    const complete = () => host.resumeFactErasure({factId: 'a-target', expectedRevision: 1,
+      operationId: 'synthetic-delete-commit', expectedGraphRevision: 2, ...context()});
+    const runtimeReader = new DatabaseSync(runtimePath);
+    let reading = false;
+    try {
+      runtimeReader.exec('BEGIN');
+      reading = true;
+      runtimeReader.prepare('SELECT snapshot_json FROM coordination_graphs WHERE namespace = ?')
+        .get(graph);
+      await erasure();
+      await assert.rejects(complete(), {code: 'STORAGE_UNAVAILABLE'});
+    } finally {
+      if (reading) runtimeReader.exec('ROLLBACK');
+      runtimeReader.close();
+    }
     const graphAfter = runtime.bindCoordinationStore(graph).read();
     assert.equal(graphAfter.revision, 2);
     assert.deepEqual(graphAfter.erasedGraphRevisions, [1]);
@@ -248,8 +262,6 @@ test('Runtime erasure transaction preserves a mixed activated receipt and replay
       expectedGraphRevision: 2, ...context(), readDelivery: () => { throw new Error('unused'); },
       readVersion: () => { throw new Error('unused'); },
     }), {code: 'INTEGRITY_CONFLICT'});
-    const complete = () => host.resumeFactErasure({factId: 'a-target', expectedRevision: 1,
-      operationId: 'synthetic-delete-commit', expectedGraphRevision: 2, ...context()});
     const memoryFault = new DatabaseSync(memoryPath);
     const checkpoint = memoryFault.prepare('SELECT checkpoint FROM memory_feed_bindings WHERE namespace = ? AND consumer_id = ?')
       .get(namespace, consumerKey).checkpoint;
@@ -271,6 +283,13 @@ test('Runtime erasure transaction preserves a mixed activated receipt and replay
       memoryNamespace: namespace, graphNamespace: graph, consumerKey});
     await complete();
     await complete();
+    for (const path of [runtimePath, memoryPath]) {
+      const wal = await stat(`${path}-wal`).catch(error => {
+        if (error.code === 'ENOENT') return undefined;
+        throw error;
+      });
+      assert.equal(wal?.size ?? 0, 0);
+    }
     const memoryReadback = new DatabaseSync(memoryPath);
     try {
       assert.deepEqual(memoryReadback.prepare('SELECT fact_id FROM memory_facts WHERE namespace = ? ORDER BY fact_id')

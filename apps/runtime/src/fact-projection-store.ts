@@ -102,6 +102,8 @@ export interface FactProjectionStore {
   /** Trusted host only; Runtime-side commit, not Memory finalization or a wire operation. */
   commitErasure(request: FactErasureCommitRequest): Promise<void>;
   readErasureReceipt(memoryNamespace: string, factId: string): FactErasureReceipt | undefined;
+  /** Post-commit WAL truncation; a busy result must be retried. */
+  checkpointErasureWal(): void;
   stage(request: FactProjectionRequest): void;
   readStaged(consumerKey: string, memoryNamespace: string): StagedFactProjection | undefined;
   reviseStaged(request: FactProjectionRequest): void;
@@ -541,6 +543,10 @@ export function bindFactProjectionStore(db: DatabaseSync, graphNamespace: string
       }
       storage(() => {
         checkpoint(context);
+        db.exec('PRAGMA secure_delete = ON');
+        const setting = db.prepare('PRAGMA secure_delete').get() as
+          {secure_delete?: number} | undefined;
+        if (setting?.secure_delete !== 1) throw new FactProjectionError('STORAGE_UNAVAILABLE');
         db.exec('BEGIN IMMEDIATE');
         try {
           checkpoint(context);
@@ -673,6 +679,15 @@ export function bindFactProjectionStore(db: DatabaseSync, graphNamespace: string
         expectedGraphRevision: row.expected_graph_revision as number,
         committedAt: row.committed_at as string};
     },
+    checkpointErasureWal: (): void => storage(() => {
+      const mode = db.prepare('PRAGMA journal_mode').get() as {journal_mode?: string} | undefined;
+      const result = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as
+        {busy?: number; log?: number; checkpointed?: number} | undefined;
+      if (mode?.journal_mode !== 'wal' || result?.busy !== 0
+        || result.log !== 0 || result.checkpointed !== 0) {
+        throw new FactProjectionError('STORAGE_UNAVAILABLE');
+      }
+    }),
     stage: (request: FactProjectionRequest): void => {
       const input = validateRequest(request);
       const handledKey = digest({batch: input.batch, facts: input.facts});

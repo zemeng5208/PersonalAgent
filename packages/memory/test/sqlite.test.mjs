@@ -474,6 +474,40 @@ test('host-only completion purges every target version and refuses a stale mixed
   }
 });
 
+test('a busy WAL checkpoint keeps the completed purge retryable', t => {
+  const path = databasePath(t);
+  const host = openSqliteMemoryHost(path);
+  const reader = new DatabaseSync(path);
+  let reading = false;
+  try {
+    host.provision('personal');
+    host.append('personal', version('erase-target', 1));
+    host.beginFactErasure('personal', request({factId: 'erase-target', expectedRevision: 1,
+      operationId: 'synthetic-wal-retry'}));
+    const completion = request({factId: 'erase-target', expectedRevision: 1,
+      operationId: 'synthetic-wal-retry', runtimeReceipt: {graphNamespace: 'synthetic-graph',
+        memoryNamespace: 'personal', factId: 'erase-target', operationId: 'synthetic-wal-retry',
+        expectedGraphRevision: 1, committedAt: at}});
+    reader.exec('BEGIN');
+    reading = true;
+    assert.equal(reader.prepare('SELECT count(*) AS total FROM memory_facts WHERE namespace = ?')
+      .get('personal').total, 1);
+    assert.throws(() => host.completeFactErasure('personal', completion),
+      {code: 'STORAGE_UNAVAILABLE'});
+    reader.exec('ROLLBACK');
+    reading = false;
+    assert.equal(reader.prepare('SELECT phase FROM memory_erasure_intents WHERE namespace = ? AND fact_id = ?')
+      .get('personal', 'erase-target').phase, 'completed');
+    assert.equal(reader.prepare('SELECT count(*) AS total FROM memory_facts WHERE namespace = ? AND fact_id = ?')
+      .get('personal', 'erase-target').total, 0);
+    assert.doesNotThrow(() => host.completeFactErasure('personal', completion));
+  } finally {
+    if (reading) reader.exec('ROLLBACK');
+    reader.close();
+    host.close();
+  }
+});
+
 test('SQLite feed invalidates a binding when a visible fact becomes hidden', async t => {
   const path = databasePath(t);
   const host = openSqliteMemoryHost(path);

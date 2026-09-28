@@ -91,6 +91,7 @@ export function createSqliteFactProjectionHost(options: SqliteFactProjectionHost
         || receipt.expectedGraphRevision !== request.expectedGraphRevision) {
         throw new FactProjectionError('INTEGRITY_CONFLICT');
       }
+      projection.checkpointErasureWal();
       memory.completeFactErasure(memoryNamespace, {factId: request.factId,
         expectedRevision: request.expectedRevision, operationId: request.operationId,
         runtimeReceipt: receipt, deadline: request.deadline, signal: request.signal});

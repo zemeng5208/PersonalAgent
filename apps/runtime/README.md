@@ -124,8 +124,11 @@ requires `initialRequestMode: 'goal-with-tools-json'` whenever a catalog is conf
   `resumeFactErasure` host path reads back that receipt and then removes the
   pending fact's active Memory history and public-source mapping in a second
   transaction. A failure between commits stays pending and can be retried after
-  restart with the same operation ID. This is not a public deletion capability
-  and does not clear WAL or backups.
+  restart with the same operation ID. The deletion path verifies SQLite
+  `secure_delete=ON` before writes and requires successful `TRUNCATE` checkpoints
+  of both WAL files before returning; a busy reader keeps the operation retryable.
+  This is not a public deletion capability and does not clear older free-page
+  traces or backups.
   A trusted host must trigger it after verified source
   changes and on startup recovery; it does not poll private sources or publish to
   AgentArts. Source correction and withdrawal remain append-only Fact revisions.

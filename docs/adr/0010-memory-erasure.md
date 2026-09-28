@@ -65,9 +65,11 @@ revision/游标和备份已满足最终删除门槛；提交清理前须重新�
 操作回执。末端写入失败整体回滚；同一操作 ID 重启重试读取回执。受信组合入口
 `resumeFactErasure` 读回该回执后，调用 Memory 的 `completeFactErasure`，在第二个
 事务中核对幸存交付并删除全部目标事实版本与公开来源映射。Runtime 已提交而 Memory
-事务失败时，待删意图仍为 `pending`，重启后同操作 ID 可继续。Memory 的
-`completed` 仅表示活动 Memory 库清理成功；用户授权入口、其他活动图库、未追踪
-自由文本、WAL 与备份尚未完成，因此不返回用户级删除完成。
+事务失败时，待删意图仍为 `pending`，重启后同操作 ID 可继续。删除路径在写入前
+验证 `secure_delete=ON`，并在两库提交后读取 `TRUNCATE` WAL checkpoint 结果；
+checkpoint 被旧读者阻塞时返回可重试的存储错误。Memory 的 `completed` 仅表示
+活动 Memory 表已清理；用户授权入口、其他活动图库、未追踪自由文本、旧空闲页与
+备份尚未完成，因此不返回用户级删除完成。
 
 ## 混合批次的保留门槛
 
@@ -84,8 +86,11 @@ revision/游标和备份已满足最终删除门槛；提交清理前须重新�
 - 在 Memory 与 Runtime 的提交边界注入中断，并用读回核验不丢无关事件、不重复外部
   副作用。若无法证明混合批次可重写，保持删除请求待对账，不报告完成。
 
-SQLite 活动库须验证 WAL、释放页和备份副本的处理方式。仓库当前没有统一备份生命周期，
-因此在该策略和真实宿主授权接入前，不宣称私人数据已经被彻底清除。
+SQLite 合成测试已验证：旧读者使 WAL 截断返回 busy，释放后重试成功，两个活动库的
+WAL 文件均为零字节。`secure_delete` 只保证启用后普通表删除/更新的覆写；启用前已产生的
+旧空闲页及仓库外备份没有统一生命周期。该策略和真实宿主授权接入前，不宣称私人数据
+已经被彻底清除。参见 [SQLite secure_delete](https://www.sqlite.org/pragma.html#pragma_secure_delete)
+和 [WAL checkpoint](https://www.sqlite.org/pragma.html#pragma_wal_checkpoint) 官方说明。
 
 ## 兼容与验收
 
