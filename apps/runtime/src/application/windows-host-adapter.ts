@@ -8,11 +8,12 @@ import {toolArgumentsDigest} from '@personal-agent/tool-gateway';
 import {
   WINDOWS_HOST_PROTOCOL_VERSION, WINDOWS_HOST_TOOL_NAME, encodeWindowsHostFrame, parseWindowsHostFrame,
   validateWindowsHostHandshake, validateWindowsHostObservation, validateWindowsHostResult,
-  validateWindowsHostStatus,
+  validateWindowsHostStatus, validateWindowsHostTargetReady,
 } from '@personal-agent/contracts/windows-host';
 import type {
   WindowsHostBind, WindowsHostExecute, WindowsHostHello,
   WindowsHostResult, WindowsHostStatus, WindowsHostStatusReply, WindowsHostFrame,
+  WindowsHostTargetReady,
 } from '@personal-agent/contracts/windows-host';
 
 /** The trusted native bridge must verify the connected pipe server's OS process identity
@@ -49,17 +50,33 @@ export function createWindowsHostBridgeTransport(options: {
   const timeout = options.timeoutMs ?? 5000;
   const children = new Set<ChildProcessWithoutNullStreams>();
   let closed = false;
+  let releaseFailed = false;
+  const stops = new WeakMap<ChildProcessWithoutNullStreams, Promise<void>>();
   const stop = async (child: ChildProcessWithoutNullStreams): Promise<void> => {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    await new Promise<void>(resolve => {
-      const timer = setTimeout(resolve, timeout);
-      child.once('close', () => { clearTimeout(timer); resolve(); });
-      child.kill();
+    const previous = stops.get(child);
+    if (previous) return previous;
+    if (!children.has(child)) return;
+    const stopping = new Promise<void>((resolve, reject) => {
+      const finish = (error?: Error): void => {
+        clearTimeout(timer);
+        child.off('close', onClose);
+        if (error) { releaseFailed = true; reject(error); }
+        else resolve();
+      };
+      const onClose = (): void => finish();
+      const timer = setTimeout(() => finish(new ProtocolError('EXTERNAL_FAILURE',
+        'Windows Host bridge release is unconfirmed')), timeout);
+      child.once('close', onClose);
+      try { child.kill(); }
+      catch { finish(new ProtocolError('EXTERNAL_FAILURE', 'Windows Host bridge release failed')); }
     });
+    stops.set(child, stopping);
+    return stopping;
   };
   return {
     async openVerifiedConnection() {
       if (closed) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Windows Host transport is closed');
+      if (releaseFailed) throw new ProtocolError('EXTERNAL_FAILURE', 'Windows Host bridge release is unconfirmed');
       const child = spawn(bridgePath, ['--host', hostPath],
         {windowsHide: true, stdio: ['pipe', 'pipe', 'pipe']});
       children.add(child);
@@ -90,6 +107,10 @@ export function createWindowsHostBridgeTransport(options: {
           child.once('close', onClose);
         });
       } catch (error) { await stop(child); throw error; }
+      if (closed || releaseFailed) {
+        await stop(child);
+        throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Windows Host transport is closed');
+      }
       let pending: ((value: unknown) => void) | undefined;
       let rejectPending: ((error: Error) => void) | undefined;
       let buffer = Buffer.alloc(0);
@@ -130,6 +151,9 @@ export function createWindowsHostBridgeTransport(options: {
         async exchange(frame: WindowsHostFrame): Promise<unknown> {
           if (pending) throw new ProtocolError('REVISION_CONFLICT', 'Windows Host request already pending');
           const answer = new Promise<unknown>((resolve, reject) => { pending = resolve; rejectPending = reject; });
+          // A failed send can reject the response before it is awaited below.
+          // Keep that rejection handled without changing the caller's failure.
+          void answer.catch(() => undefined);
           const deadline = 'deadline' in frame ? Date.parse(frame.deadline) - Date.now() : timeout;
           responseTimer = setTimeout(() => { child.kill(); fail(new Error('Windows Host response timed out')); },
             Math.min(Math.max(1, deadline), 300_000));
@@ -139,7 +163,13 @@ export function createWindowsHostBridgeTransport(options: {
         async close() { await stop(child); },
       };
     },
-    async close() { closed = true; await Promise.all([...children].map(stop)); },
+    async close() {
+      closed = true;
+      const results = await Promise.allSettled([...children].map(stop));
+      const failed = results.find(result => result.status === 'rejected');
+      if (failed?.status === 'rejected') throw failed.reason;
+      if (releaseFailed) throw new ProtocolError('EXTERNAL_FAILURE', 'Windows Host bridge release is unconfirmed');
+    },
   };
 }
 
@@ -157,8 +187,8 @@ export interface WindowsHostAdapterOptions {
   attempts: WindowsHostAttemptStore;
   now?: () => number;
   /** Trusted Desktop may open a new target and wait for a local confirmation gesture.
-   * Runs after Host readiness/binding, before the short-lived target is observed.
-   * This is not a tool authorization and must not inspect or select private windows. */
+   * Runs before opening the pipe so confirmation does not retain a Host session.
+   * This is not tool authorization and must not inspect or select private windows. */
   prepareObservation?(input: {taskId: string; deadline: string; signal: AbortSignal}): Promise<void>;
   /** Desktop derives live local presence for this task. Checked at observation and again before execution. */
   authorizePresence(input: {taskId: string; targetRef?: string; deadline: string;
@@ -208,6 +238,7 @@ async function open(transport: WindowsHostTransport): Promise<Bound> {
 export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptions): {
   tool: RegisteredTool;
   observe(taskId: string, deadline: string, signal: AbortSignal): Promise<ObservedNotepad>;
+  checkObservationReady(taskId: string, deadline: string, signal: AbortSignal): Promise<ObservedNotepad & {taskId: string}>;
   releaseObservation(taskId: string): Promise<void>;
   recover(taskId: string, runId: string): Promise<WindowsHostRecovery>;
   close(): Promise<void>;
@@ -218,11 +249,27 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
   }
   const observed = new Map<string, {bound: Bound; target: ObservedNotepad}>();
   const now = options.now ?? Date.now;
-  let closed = false;
   const lifetime = new AbortController();
+  let closed = false;
   let occupied = false;
+  let checking = false;
+  let releaseFailed = false;
+  let closePromise: Promise<void> | undefined;
+  const closures = new WeakMap<VerifiedWindowsHostConnection, Promise<void>>();
+  const closeConnection = (connection: VerifiedWindowsHostConnection): Promise<void> => {
+    let closing = closures.get(connection);
+    if (!closing) {
+      closing = Promise.resolve().then(() => connection.close()).catch(() => {
+        releaseFailed = true;
+        throw new ProtocolError('EXTERNAL_FAILURE', 'Windows Host connection release is unconfirmed');
+      });
+      closures.set(connection, closing);
+    }
+    return closing;
+  };
   const ensureOpen = () => {
     if (closed) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Windows Host adapter is closed');
+    if (releaseFailed) throw new ProtocolError('EXTERNAL_FAILURE', 'Windows Host connection release is unconfirmed');
   };
   const presenceAllowed = async (input: Parameters<WindowsHostAdapterOptions['authorizePresence']>[0]): Promise<boolean> => {
     try { return await options.authorizePresence(input) === true; }
@@ -233,16 +280,13 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
     ensureOpen();
     active({deadline, signal}, now);
     if (occupied) throw new ProtocolError('REVISION_CONFLICT', 'Windows Host session is occupied');
-    if (!await presenceAllowed({taskId, deadline, signal})) {
-      throw new ProtocolError('UNAUTHORIZED', 'Local user presence was not authorized');
-    }
-    active({deadline, signal}, now);
+    // Reserve before the first asynchronous presence check, not after it.
     occupied = true;
-    let bound: Bound;
-    try { bound = await open(options.transport); }
-    catch (error) { occupied = false; throw error; }
+    let bound: Bound | undefined;
     try {
-      active({deadline, signal}, now);
+      if (!await presenceAllowed({taskId, deadline, signal})) {
+        throw new ProtocolError('UNAUTHORIZED', 'Local user presence was not authorized');
+      }
       if (options.prepareObservation) {
         const preparation = new AbortController();
         const abort = () => preparation.abort();
@@ -267,6 +311,9 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
       }
       ensureOpen();
       active({deadline, signal}, now);
+      bound = await open(options.transport);
+      ensureOpen();
+      active({deadline, signal}, now);
       const request = {kind: 'observe' as const, ...frameBase(bound.sessionId), deadline,
         capability: 'notepad.replace_text' as const};
       const reply = parseWindowsHostFrame(await bound.connection.exchange(request));
@@ -274,6 +321,7 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
         throw new ProtocolError('PROTOCOL_MISMATCH', 'Windows Host observation reply mismatch');
       }
       validateWindowsHostObservation(request, reply);
+      ensureOpen();
       active({deadline, signal}, now);
       if (reply.kind === 'observation_refused') {
         throw new ProtocolError(observationCode(reply.errorCode), 'Windows Host refused Notepad observation');
@@ -281,9 +329,9 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
       if (Date.parse(reply.expiresAt) <= now()) throw new ProtocolError('TIMEOUT', 'Notepad target already expired');
       const target = {targetRef: reply.targetRef, expiresAt: reply.expiresAt};
       observed.set(taskId, {bound, target});
-      return target;
+      return {...target};
     } catch (error) {
-      try { await bound.connection.close(); } finally { occupied = false; }
+      try { if (bound) await closeConnection(bound.connection); } finally { occupied = false; }
       throw error;
     }
   }
@@ -293,7 +341,48 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
     const entry = observed.get(taskId);
     if (!entry) return;
     observed.delete(taskId);
-    try { await entry.bound.connection.close(); } finally { occupied = false; }
+    try { await closeConnection(entry.bound.connection); } finally { occupied = false; }
+  }
+
+  /** Fresh Host-side check before Desktop submits allow_once; this neither renews nor authorizes the target. */
+  async function checkObservationReady(taskId: string, deadline: string,
+    signal: AbortSignal): Promise<ObservedNotepad & {taskId: string}> {
+    ensureOpen();
+    const entry = observed.get(taskId);
+    if (!entry || checking) throw new ProtocolError('UNAUTHORIZED', 'Notepad observation is unavailable');
+    checking = true;
+    try {
+      active({deadline, signal}, now);
+      if (now() >= Date.parse(entry.target.expiresAt)) {
+        throw new ProtocolError('TIMEOUT', 'Notepad observation expired');
+      }
+      const request: WindowsHostTargetReady = {kind: 'target_ready',
+        ...frameBase(entry.bound.sessionId), targetRef: entry.target.targetRef, deadline};
+      const reply = parseWindowsHostFrame(await entry.bound.connection.exchange(request));
+      if (reply.kind !== 'target_ready_result') {
+        throw new ProtocolError('PROTOCOL_MISMATCH', 'Windows Host target readiness reply mismatch');
+      }
+      validateWindowsHostTargetReady(request, reply);
+      active({deadline, signal}, now);
+      if (observed.get(taskId) !== entry || closed) {
+        throw new ProtocolError('UNAUTHORIZED', 'Notepad observation was released');
+      }
+      if (!reply.ready) {
+        throw new ProtocolError(reply.errorCode === 'TIMEOUT' ? 'TIMEOUT' : 'UNAUTHORIZED',
+          'Windows Host target is not ready');
+      }
+      if (reply.expiresAt !== entry.target.expiresAt || now() >= Date.parse(reply.expiresAt)) {
+        throw new ProtocolError('UNAUTHORIZED', 'Windows Host target readiness expired or changed');
+      }
+      return {taskId, ...entry.target};
+    } catch (error) {
+      if (observed.get(taskId) === entry) {
+        observed.delete(taskId);
+        try { await closeConnection(entry.bound.connection); } finally { occupied = false; }
+      }
+      throw error instanceof ProtocolError ? error
+        : new ProtocolError('UNAUTHORIZED', 'Windows Host target readiness unavailable');
+    } finally { checking = false; }
   }
 
   async function poll(bound: Bound, identity: WindowsHostRunIdentity): Promise<WindowsHostResult | WindowsHostStatusReply> {
@@ -313,7 +402,7 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
       return reply.kind === 'result' ? {state: 'unknown', reason: 'host_result', hostResult: reply}
         : {state: 'unknown', reason: reply.state};
     }
-    finally { await bound.connection.close(); }
+    finally { await closeConnection(bound.connection); }
     // A Host not_found reply means unknown, never permission to execute again.
   }
 
@@ -348,44 +437,54 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
     },
     async execute(raw, context) {
       ensureOpen();
+      if (checking) throw new ProtocolError('REVISION_CONFLICT', 'Windows Host target readiness is pending');
       const input = raw as Input;
       const entry = observed.get(context.taskId);
-      if (!entry || input.targetRef !== entry.target.targetRef
-        || now() >= Date.parse(entry.target.expiresAt)) {
-        throw new ProtocolError('UNAUTHORIZED', 'Notepad target is absent, stale or belongs to another task');
-      }
+      if (!entry) throw new ProtocolError('UNAUTHORIZED', 'Notepad target is absent for this task');
       observed.delete(context.taskId); // one observation, one attempt
       const {bound} = entry;
-      const identity: WindowsHostRunIdentity = {taskId: context.taskId, runId: context.runId,
-        toolName: WINDOWS_HOST_TOOL_NAME, toolVersion: VERSION,
-        argumentsDigest: toolArgumentsDigest(input), targetRef: input.targetRef};
-      let started = false;
-      try {
+      const requireLiveTarget = (): void => {
+        ensureOpen();
         active(context, now);
+        if (input.targetRef !== entry.target.targetRef
+          || now() >= Date.parse(entry.target.expiresAt)) {
+          throw new ProtocolError('UNAUTHORIZED', 'Notepad target is stale or belongs to another task');
+        }
+      };
+      let identity: WindowsHostRunIdentity | undefined;
+      let exchangeAttempted = false;
+      try {
+        requireLiveTarget();
+        identity = {taskId: context.taskId, runId: context.runId,
+          toolName: WINDOWS_HOST_TOOL_NAME, toolVersion: VERSION,
+          argumentsDigest: toolArgumentsDigest(input), targetRef: input.targetRef};
+        const runIdentity = identity;
         if (!await presenceAllowed({taskId: context.taskId, targetRef: input.targetRef,
           deadline: context.deadline, signal: context.signal})) {
           throw new ProtocolError('UNAUTHORIZED', 'Local user presence was not authorized');
         }
-        active(context, now);
+        requireLiveTarget();
         if (input.expectedText === input.replacementText) {
           throw new ProtocolError('INVALID_ARGUMENT', 'Notepad replacement must change text');
         }
         if (await options.attempts.read(context.taskId, context.runId)) {
           unknown('Windows Host run already exists; reconcile it without replay');
         }
-        await options.attempts.record(identity);
-        active(context, now);
+        requireLiveTarget();
+        await options.attempts.record(runIdentity);
+        requireLiveTarget();
         const execute: WindowsHostExecute = {kind: 'execute', ...frameBase(bound.sessionId),
-          ...identity, authorizationRef: context.authorizationRef, deadline: context.deadline,
+          ...runIdentity, authorizationRef: context.authorizationRef, deadline: context.deadline,
           expectedText: input.expectedText, replacementText: input.replacementText};
-        started = true;
         const onAbort = (): void => {
-          const cancel = {kind: 'cancel' as const, ...frameBase(bound.sessionId), ...identity};
-          void bound.connection.send(cancel).finally(() => bound.connection.close()).catch(() => undefined);
+          if (!exchangeAttempted) return;
+          const cancel = {kind: 'cancel' as const, ...frameBase(bound.sessionId), ...runIdentity};
+          void bound.connection.send(cancel).finally(() => closeConnection(bound.connection)).catch(() => undefined);
         };
+        requireLiveTarget(); // final local gate before a Host execute can be sent
         context.signal.addEventListener('abort', onAbort, {once: true});
         try {
-          active(context, now); // no Host execute after a late abort or expired deadline
+          exchangeAttempted = true;
           const reply = parseWindowsHostFrame(await bound.connection.exchange(execute));
           if (reply.kind !== 'result') unknown('Windows Host did not return a terminal result');
           validateWindowsHostResult(execute, reply);
@@ -397,25 +496,34 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
           return {state: 'verified', hostEvidenceRef: reply.evidenceRef};
         } finally { context.signal.removeEventListener('abort', onAbort); }
       } catch (error) {
-        if (!started) throw error;
+        if (!exchangeAttempted || !identity) throw error;
         // Never replay execute. A new authenticated Host session may query the journal.
-        await bound.connection.close();
+        await closeConnection(bound.connection);
         try { await reconcile(identity); } catch { /* original unknown remains */ }
-        throw error;
+        unknown('Windows Host execution outcome requires reconciliation');
       } finally {
-        try { await bound.connection.close(); } finally { occupied = false; }
+        try { await closeConnection(bound.connection); } finally { occupied = false; }
       }
     },
   };
 
-  return {tool, observe, releaseObservation, recover, async close() {
-    if (closed) return;
+  return {tool, observe, checkObservationReady, releaseObservation, recover, close() {
+    if (closePromise) return closePromise;
     closed = true;
     lifetime.abort();
-    occupied = false;
     const pending = [...observed.values()];
     observed.clear();
-    await Promise.all(pending.map(item => item.bound.connection.close()));
-    await options.transport.close?.();
+    closePromise = (async () => {
+      const results = await Promise.allSettled([
+        ...pending.map(item => closeConnection(item.bound.connection)),
+        Promise.resolve().then(() => options.transport.close?.()),
+      ]);
+      const failed = results.find(result => result.status === 'rejected');
+      if (failed?.status === 'rejected' || releaseFailed) {
+        releaseFailed = true;
+        throw new ProtocolError('EXTERNAL_FAILURE', 'Windows Host connection release is unconfirmed');
+      }
+    })();
+    return closePromise;
   }};
 }

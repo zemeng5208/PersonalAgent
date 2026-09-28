@@ -38,7 +38,7 @@ function safeSchema(value: unknown, depth = 0, publicEnums: ReadonlySet<string> 
   }
   const schema = value as Record<string, unknown>;
   // Public connector schemas may express scalar types using enum alone.
-  // Infer the shape without publishing enum values, which may contain private IDs.
+  // Infer the shape without publishing values unless the host approves their path.
   const enumTypes = Array.isArray(schema.enum) && schema.enum.length
     ? new Set(schema.enum.map(item => item === null ? 'null' : typeof item)) : undefined;
   const inferredType = enumTypes?.size === 1 ? [...enumTypes][0] : undefined;
@@ -164,7 +164,8 @@ export class RuntimeCompetitionToolCatalog {
         || !this.exports.some(item => item.toolName === binding.toolName && item.toolVersion === binding.toolVersion)) continue;
       if (!await this.ready(binding, {...input, revision})) continue;
       selected.push({name: descriptor.name, version: descriptor.version, inputSchema: projectedSchema(descriptor, binding)});
-      if (selected.length > MAX_AVAILABLE_TOOLS || Buffer.byteLength(JSON.stringify(selected), 'utf8') > MAX_AVAILABLE_TOOLS_JSON_BYTES) {
+      if (selected.length > MAX_AVAILABLE_TOOLS
+        || Buffer.byteLength(JSON.stringify(selected), 'utf8') > MAX_AVAILABLE_TOOLS_JSON_BYTES) {
         throw new ProtocolError('INVALID_ARGUMENT', 'Competition tool catalog exceeds its limit');
       }
     }

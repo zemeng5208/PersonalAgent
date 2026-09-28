@@ -92,7 +92,15 @@ export function createDesktopNotepadHost({createAdapter, createAttempts, transpo
       const readback = application.readHostToolTask(operation.taskId);
       if (readback.approval?.state === 'pending' && !operation.approvalSent) {
         operation.approvalSent = true;
-        const allow = belongs(operation.taskId) && operation.confirmedUntil > now();
+        let allow = belongs(operation.taskId) && operation.confirmedUntil > now();
+        if (allow) {
+          try {
+            const ready = await adapter.checkObservationReady(operation.taskId, operation.deadline,
+              operation.controller.signal);
+            allow = ready.taskId === operation.taskId && ready.targetRef === operation.targetRef
+              && operation.confirmedUntil > now();
+          } catch { allow = false; }
+        }
         await respond({approvalId: readback.approval.approvalId,
           expectedRevision: readback.approval.revision, decision: allow ? 'allow_once' : 'deny'});
         return;

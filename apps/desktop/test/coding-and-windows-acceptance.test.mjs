@@ -183,6 +183,7 @@ test('Windows Notepad capability: synthetic window verification, physical confir
   const framesSent = [];
   let confirmationCallback;
   let client;
+  let observedExpiresAt;
 
   t.after(async () => {
     await host.close();
@@ -206,13 +207,18 @@ test('Windows Notepad capability: synthetic window verification, physical confir
               return {...base, kind: 'hello_ack', clientNonce: frame.clientNonce, hostNonce: 'c'.repeat(32), sessionId: 'notepad-test-sess'};
             }
             if (frame.kind === 'observe') {
+              observedExpiresAt = new Date(Date.now() + 30_000).toISOString();
               return {
                 ...base,
                 kind: 'observed',
                 targetRef: 'target-synth-notepad-456',
-                expiresAt: new Date(Date.now() + 30_000).toISOString(),
+                expiresAt: observedExpiresAt,
                 source: 'windows-uia',
               };
+            }
+            if (frame.kind === 'target_ready') {
+              return {...base, kind: 'target_ready_result', targetRef: frame.targetRef,
+                ready: true, expiresAt: observedExpiresAt};
             }
             if (frame.kind === 'execute') {
               return {
