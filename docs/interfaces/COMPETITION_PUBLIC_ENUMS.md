@@ -1,6 +1,6 @@
 # Competition 公共枚举投影
 
-状态：provisional，待 goo122 非作者评审。仅服务 huawei_ict_agentarts。
+状态：provisional。仅服务 huawei_ict_agentarts。
 
 `CompetitionToolAvailability.publicEnumPaths?: readonly string[]` 是受信宿主配置，不是 Renderer / 模型输入或执行授权。默认不公开任何枚举值；显式路径（如 `/units`、`/goal/state`，数组元素用 `/*`）允许投影对应的标量枚举。描述、示例、默认值和未获声明的枚举仍不出云。
 
