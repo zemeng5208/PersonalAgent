@@ -196,6 +196,11 @@ main 已包含版本化 CoordinationStore、SQLite/Fake `AtomicCoordinationStore
 增补 `STORAGE_UNAVAILABLE` 表示 WAL 截断未完成。无 wire operation/capability，
 Goal 稀疏 revision 仍需非作者语义评审，Memory/Goal/Runtime 均不因此冻结。
 
+MOD-09H 继续在可信 `SqliteMemoryHost` 增加 `reviseUserFact` 与迁移 4：用户确认的更正或
+撤回通过精确头版本和操作 ID 在同一事务写入事实、feed 事件及无正文回执；重试幂等，
+来源拥有权冲突及待删除事实拒绝。它未注册 Desktop/wire capability，也不承担用户认证与
+授权校验；真实私人来源和用户侧验收仍 `unavailable`。
+
 ### 6.3 桌面、语音、工具与通知增量（provisional）
 
 PR #54、#77、#81 已进入 main，分别补充取消受理、过期审批展示和通知时间精度；PR #83 已集成受限 `workspace.list` 与 `workspace.read_text`。旧 #63、#65 已关闭且未直接进入 main；语音/唤醒、转写消费和合成语音记录仍只存在于 #61 及其堆叠分支。

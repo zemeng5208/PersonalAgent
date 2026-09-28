@@ -535,3 +535,117 @@ test('SQLite feed invalidates a binding when a visible fact becomes hidden', asy
   );
   host.close();
 });
+
+test('user correction and withdrawal are durable, idempotent and retain exact history', async t => {
+  const path = databasePath(t);
+  let host = openSqliteMemoryHost(path);
+  host.provision('personal');
+  host.append('personal', version('preference', 1));
+  let feed = host.bindFeed('personal', {
+    consumerId: 'cognition', allowedSensitivities: ['public', 'private'],
+  });
+  const initial = await feed.read(request({limit: 10}));
+  host.confirmFeedBatch('personal', 'cognition', request({
+    batchToken: initial.batchToken, expectedCheckpoint: initial.baseCheckpoint,
+    handled: initial.entries,
+  }));
+  const correction = request({
+    factId: 'preference', expectedRevision: 1, operationId: 'user-correction-1',
+    summary: 'Corrected preference', sourceRef: 'user-action-1',
+    observedAt: '2026-09-22T08:00:00.000Z',
+    validFrom: '2026-09-22T00:00:00.000Z', validUntil: '2027-09-22T00:00:00.000Z',
+    sensitivity: 'private', state: 'active',
+  });
+  assert.equal(host.reviseUserFact('personal', correction).appended, true);
+  host.close();
+
+  host = openSqliteMemoryHost(path);
+  feed = host.bindFeed('personal', {
+    consumerId: 'cognition', allowedSensitivities: ['public', 'private'],
+  });
+  const changed = await feed.read(request({limit: 10}));
+  assert.deepEqual(changed.entries.map(entry => entry.fact), [{id: 'preference', revision: 2}]);
+  host.confirmFeedBatch('personal', 'cognition', request({
+    batchToken: changed.batchToken, expectedCheckpoint: changed.baseCheckpoint,
+    handled: changed.entries,
+  }));
+  assert.deepEqual(host.reviseUserFact('personal', correction), {
+    fact: {...version('preference', 2, {summary: 'Corrected preference',
+      sourceRef: 'user-action-1', sensitivity: 'private'}),
+      observedAt: correction.observedAt},
+    appended: false,
+  });
+  assert.throws(() => host.reviseUserFact('personal', {...correction, summary: 'Changed retry'}),
+    {code: 'REVISION_CONFLICT'});
+  assert.throws(() => host.reviseUserFact('personal', {...correction, operationId: 'stale-operation'}),
+    {code: 'REVISION_CONFLICT'});
+
+  const withdrawal = {...correction, expectedRevision: 2, operationId: 'user-withdrawal-1',
+    summary: 'User withdrew preference', sourceRef: 'user-action-2', state: 'withdrawn'};
+  assert.equal(host.reviseUserFact('personal', withdrawal).fact.ref.revision, 3);
+  assert.deepEqual((await feed.read(request({limit: 10}))).entries.map(entry => entry.fact),
+    [{id: 'preference', revision: 3}]);
+  const memory = host.bind('personal', {allowedSensitivities: ['private']});
+  assert.deepEqual((await memory.listCurrent(request({at, limit: 10}))).facts, []);
+  const history = await memory.listHistory(request({factId: 'preference', limit: 10}));
+  assert.deepEqual(history.facts.map(item => [item.ref.revision, item.state, item.confirmation]), [
+    [2, 'active', 'user_confirmed'], [3, 'withdrawn', 'user_confirmed'],
+  ]);
+  const db = new DatabaseSync(path);
+  assert.equal(db.prepare('SELECT sequence FROM memory_namespaces WHERE namespace = ?')
+    .get('personal').sequence, 3);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM memory_user_revisions').get().count, 2);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM memory_facts WHERE namespace = ?')
+    .get('personal').count, 3);
+  db.close();
+  host.close();
+});
+
+test('user revision receipt failure rolls back fact, event and sequence', t => {
+  const path = databasePath(t);
+  const host = openSqliteMemoryHost(path);
+  const db = new DatabaseSync(path);
+  host.provision('personal');
+  host.append('personal', version('preference', 1));
+  const correction = request({
+    factId: 'preference', expectedRevision: 1, operationId: 'user-correction-failed',
+    summary: 'Corrected preference', sourceRef: 'user-action-1',
+    observedAt: '2026-09-22T08:00:00.000Z',
+    validFrom: '2026-09-22T00:00:00.000Z', validUntil: '2027-09-22T00:00:00.000Z',
+    sensitivity: 'public', state: 'active',
+  });
+  db.exec(`CREATE TRIGGER fail_user_receipt BEFORE INSERT ON memory_user_revisions
+    BEGIN SELECT RAISE(ABORT, 'injected receipt failure'); END`);
+  assert.throws(() => host.reviseUserFact('personal', correction), {code: 'INVALID_ARGUMENT'});
+  assert.equal(db.prepare('SELECT sequence FROM memory_namespaces WHERE namespace = ?')
+    .get('personal').sequence, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM memory_facts').get().count, 1);
+  db.exec('DROP TRIGGER fail_user_receipt');
+  assert.equal(host.reviseUserFact('personal', correction).appended, true);
+  assert.equal(db.prepare('SELECT sequence FROM memory_namespaces WHERE namespace = ?')
+    .get('personal').sequence, 2);
+  db.close();
+  host.close();
+});
+
+test('unbound erasure purges user revision receipts with the fact', t => {
+  const path = databasePath(t);
+  const host = openSqliteMemoryHost(path);
+  const db = new DatabaseSync(path);
+  host.provision('personal');
+  host.append('personal', version('preference', 1));
+  host.reviseUserFact('personal', request({
+    factId: 'preference', expectedRevision: 1, operationId: 'user-correction-erase',
+    summary: 'Corrected preference', sourceRef: 'user-action-1',
+    observedAt: '2026-09-22T08:00:00.000Z',
+    validFrom: '2026-09-22T00:00:00.000Z', validUntil: '2027-09-22T00:00:00.000Z',
+    sensitivity: 'public', state: 'active',
+  }));
+  host.eraseUnboundFact('personal', request({
+    factId: 'preference', expectedRevision: 2, operationId: 'erase-user-correction',
+  }));
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM memory_user_revisions').get().count, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM memory_facts').get().count, 0);
+  db.close();
+  host.close();
+});
