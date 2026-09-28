@@ -13,6 +13,8 @@ export type {CompetitionFactHost, CompetitionFactHostOptions, PublicSourceKey,
   TrustedPublicSource, TrustedPublicWithdrawal} from './application/competition-fact-host.js';
 export type {FactImpactReceipt, FactProjectionReceipt, CompletedFactImpact} from './fact-projection-store.js';
 export {ingestPublicSource} from './application/public-source.js';
+export {ingestConfirmedPrivateCitation} from './application/private-source.js';
+export type {ConfirmedPrivateFact} from './application/private-source.js';
 export {ScopedEvidenceReader} from './application/evidence-reader.js';
 export type {EvidenceReadScope, EvidenceReaderOptions, EvidencePage} from './application/evidence-reader.js';
 export type {

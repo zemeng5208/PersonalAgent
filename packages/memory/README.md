@@ -73,6 +73,12 @@ fail. Public-source-owned facts require a separate source ownership decision and
 rejected here. Physical fact erasure removes these receipts with the fact. This port
 does not authenticate a user or expose a Desktop/Runtime capability.
 
+Migration 5 adds a content-free operation receipt for host-only `createUserFact`.
+After the trusted caller confirms one private excerpt, this method appends its first
+`user_confirmed` fact and feed event atomically. Exact retries return revision 1;
+altered operation IDs or existing fact IDs cannot overwrite a fact. Physical fact
+erasure removes the creation receipt. No Vault text is imported automatically.
+
 `withdrawPublicSource` records an append-only public tombstone with an expected Fact
 revision and an idempotent withdrawal ID. The caller must first verify source removal
 through its trusted source adapter and obtain authorization for that source; search
