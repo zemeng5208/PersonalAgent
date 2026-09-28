@@ -38,7 +38,7 @@ internal sealed class HostLaunchBinding
         return new HostLaunchBinding(args[1], pid);
     }
 
-    internal void Verify(NamedPipeServerStream pipe)
+    internal void VerifyProcess(NamedPipeServerStream pipe)
     {
         if (!GetNamedPipeClientProcessId(pipe.SafePipeHandle.DangerousGetHandle(), out var pid) ||
             pid != _clientPid)
@@ -46,10 +46,34 @@ internal sealed class HostLaunchBinding
         using var client = Process.GetProcessById(_clientPid);
         if (client.StartTime.ToUniversalTime() != _clientStartUtc || client.SessionId != _sessionId)
             throw new UnauthorizedAccessException("Windows Host pipe peer identity changed");
+    }
+
+    // Named-pipe impersonation uses the last message read from this pipe. Call
+    // only after reading and validating hello, before acknowledging the client.
+    internal void VerifyUser(NamedPipeServerStream pipe)
+    {
         SecurityIdentifier? peerSid = null;
         pipe.RunAsClient(() => { using var peer = WindowsIdentity.GetCurrent(); peerSid = peer.User; });
         if (peerSid is null || !_userSid.Equals(peerSid))
             throw new UnauthorizedAccessException("Windows Host pipe peer is not the current user");
+    }
+
+    // A killed bridge must not leave this Host waiting forever with the
+    // single-user input mutex held. The Process handle tracks the original
+    // process even if its numeric PID is later reused.
+    internal async Task MonitorClientExitAsync(CancellationTokenSource lifetime)
+    {
+        try
+        {
+            using var client = Process.GetProcessById(_clientPid);
+            if (client.StartTime.ToUniversalTime() != _clientStartUtc ||
+                client.SessionId != _sessionId)
+                throw new UnauthorizedAccessException("Windows Host client process changed");
+            await client.WaitForExitAsync(lifetime.Token).ConfigureAwait(false);
+            lifetime.Cancel();
+        }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+        catch { lifetime.Cancel(); } // A missing or unobservable client fails closed.
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]

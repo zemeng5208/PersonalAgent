@@ -14,34 +14,39 @@ internal sealed class HostService(HostLaunchBinding launch, HostWire wire, RunJo
 
     internal async Task RunAsync(CancellationToken stop)
     {
-        while (!stop.IsCancellationRequested)
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(stop);
+        var monitor = launch.MonitorClientExitAsync(lifetime);
+        try
         {
-            using var pipe = new NamedPipeServerStream(launch.PipeName, PipeDirection.InOut, 1,
-                PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
-            await pipe.WaitForConnectionAsync(stop).ConfigureAwait(false);
-            launch.Verify(pipe);
-            var targets = new NotepadTargets();
-            using var connection = CancellationTokenSource.CreateLinkedTokenSource(stop);
-            try { await ServeConnectionAsync(pipe, targets, connection.Token).ConfigureAwait(false); }
-            finally
+            while (!lifetime.IsCancellationRequested)
             {
-                connection.Cancel();
-                targets.Clear(); // Target refs are never executable after disconnect.
-                foreach (var active in _active.Values)
+                using var pipe = new NamedPipeServerStream(launch.PipeName, PipeDirection.InOut, 1,
+                    PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+                await pipe.WaitForConnectionAsync(lifetime.Token).ConfigureAwait(false);
+                launch.VerifyProcess(pipe);
+                using var connection = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+                try { await ServeConnectionAsync(pipe, connection.Token).ConfigureAwait(false); }
+                finally
                 {
-                    try { active.Cancel(); }
-                    catch (ObjectDisposedException) { /* Completion won the disconnect race. */ }
+                    connection.Cancel();
+                    foreach (var active in _active.Values)
+                    {
+                        try { active.Cancel(); }
+                        catch (ObjectDisposedException) { /* Completion won the disconnect race. */ }
+                    }
                 }
             }
         }
+        finally { lifetime.Cancel(); await monitor.ConfigureAwait(false); }
     }
 
-    private async Task ServeConnectionAsync(NamedPipeServerStream pipe, NotepadTargets targets,
-        CancellationToken connected)
+    private async Task ServeConnectionAsync(NamedPipeServerStream pipe, CancellationToken connected)
     {
         var reader = new BoundedJsonlReader(pipe);
         using var hello = await ReadRequiredAsync(reader, connected).ConfigureAwait(false);
         if (Kind(hello.RootElement) != "hello") throw new InvalidDataException("Expected Windows Host hello");
+        launch.VerifyProcess(pipe);
+        launch.VerifyUser(pipe);
         var first = hello.RootElement;
         var helloRequest = Field(first, "requestId");
         var clientNonce = Field(first, "clientNonce");
@@ -58,32 +63,37 @@ internal sealed class HostService(HostLaunchBinding launch, HostWire wire, RunJo
             Field(bound, "sessionId") != sessionId || Field(bound, "hostNonce") != hostNonce)
             throw new InvalidDataException("Windows Host handshake did not bind");
 
-        while (!connected.IsCancellationRequested)
+        var targets = new NotepadTargets();
+        try
         {
-            var bytes = await reader.ReadAsync(connected).ConfigureAwait(false);
-            if (bytes is null) return;
-            using var message = wire.Parse(bytes);
-            var frame = message.RootElement;
-            if (Field(frame, "sessionId") != sessionId)
-                throw new InvalidDataException("Windows Host session changed");
-            switch (Kind(frame))
+            while (!connected.IsCancellationRequested)
             {
-                case "observe":
-                    await ObserveAsync(pipe, targets, frame, connected).ConfigureAwait(false);
-                    break;
-                case "execute":
-                    await StartExecuteAsync(pipe, targets, frame, connected).ConfigureAwait(false);
-                    break;
-                case "cancel":
-                    Cancel(frame);
-                    break;
-                case "status":
-                    await StatusAsync(pipe, frame, connected).ConfigureAwait(false);
-                    break;
-                default:
-                    throw new InvalidDataException("Unexpected Windows Host client frame");
+                var bytes = await reader.ReadAsync(connected).ConfigureAwait(false);
+                if (bytes is null) return;
+                using var message = wire.Parse(bytes);
+                var frame = message.RootElement;
+                if (Field(frame, "sessionId") != sessionId)
+                    throw new InvalidDataException("Windows Host session changed");
+                switch (Kind(frame))
+                {
+                    case "observe":
+                        await ObserveAsync(pipe, targets, frame, connected).ConfigureAwait(false);
+                        break;
+                    case "execute":
+                        await StartExecuteAsync(pipe, targets, frame, connected).ConfigureAwait(false);
+                        break;
+                    case "cancel":
+                        Cancel(frame);
+                        break;
+                    case "status":
+                        await StatusAsync(pipe, frame, connected).ConfigureAwait(false);
+                        break;
+                    default:
+                        throw new InvalidDataException("Unexpected Windows Host client frame");
+                }
             }
         }
+        finally { targets.Clear(); } // Target refs never execute after disconnect.
     }
 
     private async Task ObserveAsync(NamedPipeServerStream pipe, NotepadTargets targets,
