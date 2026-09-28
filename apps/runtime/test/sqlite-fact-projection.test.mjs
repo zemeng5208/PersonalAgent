@@ -98,6 +98,21 @@ test('user-confirmed correction and withdrawal project exact versions without re
     runtime = new TaskRuntime(runtimePath);
     assert.equal(host().listImpactReceipts({afterGraphRevision: 0, limit: 10}).length, 3);
     assert.equal(memory.reviseUserFact(namespace, correction).appended, false);
+    const erasure = {factId: 'synthetic-preference', expectedRevision: 3,
+      operationId: 'synthetic-user-erasure', ...context()};
+    memory.beginFactErasure(namespace, erasure);
+    const inspection = await host().preflightErasure(erasure.factId, context());
+    assert.equal(inspection.targetVersions, 3);
+    await host().resumeFactErasure({...erasure,
+      expectedGraphRevision: inspection.graphRevision});
+    await host().resumeFactErasure({...erasure,
+      expectedGraphRevision: inspection.graphRevision});
+    assert.deepEqual(runtime.bindCoordinationStore(graph).read().history, []);
+    assert.deepEqual((await memory.bind(namespace, {allowedSensitivities: ['public']})
+      .listHistory({factId: erasure.factId, limit: 10, ...context()})).facts, []);
+    const db = new DatabaseSync(memoryPath);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM memory_user_revisions').get().count, 0);
+    db.close();
   } finally {
     memory.close(); runtime.close();
     await rm(directory, {recursive: true, force: true});
