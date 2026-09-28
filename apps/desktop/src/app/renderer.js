@@ -198,7 +198,7 @@ else {
       article?.insertAdjacentHTML('beforeend',approvalCards(task,data.approvals));
     }
     setSendMode(Boolean(input.value.trim()));
-    if(taskSignature!==lastTaskSignature){lastTaskSignature=taskSignature;requestAnimationFrame(()=>{if(wasAtBottom)thread.scrollTop=thread.scrollHeight;updateRail();});}};
+    if(taskSignature!==lastTaskSignature){lastTaskSignature=taskSignature;updateRail();requestAnimationFrame(()=>{if(wasAtBottom)thread.scrollTop=thread.scrollHeight;});}};
 }
 if(bridge){const unsubscribe=bridge.subscribe(render);invoke('snapshot').then(render).catch(e=>{root.textContent=e.message;});window.addEventListener('unload',()=>{unsubscribe();orb?.dispose();});}
 else root.textContent='桌面桥未连接，请从 PersonalAgent 桌面应用启动。';
