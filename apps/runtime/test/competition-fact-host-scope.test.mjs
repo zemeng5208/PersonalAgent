@@ -54,3 +54,41 @@ test('mutable caller inputs cannot redirect a bound Competition Fact host', asyn
     await rm(directory, {recursive: true, force: true});
   }
 });
+
+test('trusted Competition host starts and resumes an authorized fact erasure', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'personal-agent-fact-erasure-host-'));
+  let app;
+  let host;
+  try {
+    app = createRuntimeApplication({path: join(directory, 'runtime.sqlite'),
+      profile: 'huawei_ict_agentarts'});
+    const options = {memoryPath: join(directory, 'memory.sqlite'),
+      memoryNamespace: 'synthetic-user', graphNamespace: 'synthetic-user-graph',
+      consumerKey: 'synthetic-user-consumer'};
+    host = app.createCompetitionFactHost(options);
+    const source = {vaultId: 'synthetic-vault', path: 'note.md', factId: 'synthetic-note',
+      sourceRevision: 'a'.repeat(64), line: 1, summary: 'Synthetic fact',
+      observedAt: '2026-09-25T00:00:00.000Z', validFrom: '2026-09-25T00:00:00.000Z',
+      validUntil: '2027-01-01T00:00:00.000Z', expectedFactRevision: null};
+    host.recordPublicSource(source, context());
+    await host.drain({limit: 10, maxBatches: 2, ...context()});
+    const erasure = {factId: source.factId, expectedRevision: 1,
+      operationId: 'synthetic-erasure', ...context()};
+    assert.throws(() => host.beginFactErasure({...erasure, memoryNamespace: 'other'}),
+      {code: 'INVALID_ARGUMENT'});
+    host.beginFactErasure(erasure);
+    const inspection = await host.preflightErasure(source.factId, context());
+    assert.equal(inspection.targetVersions, 1);
+    await host.resumeFactErasure({...erasure,
+      expectedGraphRevision: inspection.graphRevision});
+    assert.equal(host.readPublicSourceHead({vaultId: source.vaultId,
+      path: source.path, factId: source.factId}), null);
+    assert.deepEqual(app.runtime.bindCoordinationStore(options.graphNamespace).read().history, []);
+    host.beginFactErasure(erasure);
+    await host.resumeFactErasure({...erasure,
+      expectedGraphRevision: inspection.graphRevision});
+  } finally {
+    host?.close(); app?.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});
