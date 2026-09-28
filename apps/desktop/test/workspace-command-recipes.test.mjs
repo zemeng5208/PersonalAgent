@@ -78,7 +78,7 @@ test('host-fixed recipes and factory delegation: helper generates bounded recipe
     // The public command.ts contract enforces that input is strictly constrained to recipeId.
     const enumValues = tool.descriptor.inputSchema.properties.recipeId.enum;
     assert.deepEqual(enumValues, ['node-check-index.js', 'node-check-src-app.js']);
-    assert.equal(capturedOptions.rootPath, root);
+    assert.equal(capturedOptions.rootPath, realpathSync.native(root));
   } finally {
     rmSync(root, {recursive: true, force: true});
   }
@@ -325,7 +325,7 @@ test('project scripts gatekeeping: npm build/test recipes require all conditions
     assert.ok(buildRecipe, 'npm-build recipe created');
     assert.ok(path.isAbsolute(buildRecipe.executable));
     assert.deepEqual(buildRecipe.args.slice(-2), ['run', 'build']);
-    assert.equal(buildRecipe.args[buildRecipe.args.length - 3], externalNpmCli);
+    assert.equal(buildRecipe.args[buildRecipe.args.length - 3], realpathSync.native(externalNpmCli));
     assert.equal(buildRecipe.args[buildRecipe.args.length - 4], '--');
     assert.equal(buildRecipe.args[0], '--cwd');
     assert.equal(buildRecipe.args[2], '--exe');
@@ -333,7 +333,7 @@ test('project scripts gatekeeping: npm build/test recipes require all conditions
     const testRecipe = recipes.find(r => r.id === 'npm-test');
     assert.ok(testRecipe, 'npm-test recipe created');
     assert.deepEqual(testRecipe.args.slice(-2), ['run', 'test']);
-    assert.equal(testRecipe.args[testRecipe.args.length - 3], externalNpmCli);
+    assert.equal(testRecipe.args[testRecipe.args.length - 3], realpathSync.native(externalNpmCli));
     assert.equal(testRecipe.args[testRecipe.args.length - 4], '--');
 
     // Check safe environment filtering:
