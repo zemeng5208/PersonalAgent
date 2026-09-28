@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdirSync, mkdtempSync} from 'node:fs';
+import {mkdirSync, mkdtempSync, readFileSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {test} from 'node:test';
@@ -310,6 +310,45 @@ test('timed out external writes stay unknown and are never invoked again automat
     assert.equal(calls, 1);
   } finally {
     runtime.close();
+  }
+});
+
+test('timed out local writes preserve an already applied effect for reconciliation', async () => {
+  const setup = fixture();
+  const effectPath = `${setup.path}.effect`;
+  const runtime = setup.open();
+  let applied = 0;
+  let taskId;
+  try {
+    taskId = runtime.submitTask(submission).taskId;
+    const result = await runtime.runTask(taskId, async ({signal}) => {
+      writeFileSync(effectPath, 'applied', 'utf8');
+      applied++;
+      await new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')), {once: true}));
+      return {resultSummary: 'unreachable'};
+    }, {deadline: '2026-09-06T02:00:00.010Z', sideEffect: 'local_write'});
+    assert.equal(applied, 1);
+    assert.equal(readFileSync(effectPath, 'utf8'), 'applied');
+    assert.equal(result.state, 'waiting_reconciliation');
+    assert.equal(result.error.code, 'RESULT_UNKNOWN');
+  } finally {
+    runtime.close();
+  }
+
+  const reopened = setup.open();
+  try {
+    assert.equal(reopened.getTask(taskId).state, 'waiting_reconciliation');
+    await assert.rejects(
+      reopened.runTask(taskId, async () => {
+        applied++;
+        return {resultSummary: 'must not repeat the write'};
+      }, {deadline: '2026-09-06T02:01:00.000Z', sideEffect: 'local_write'}),
+      error => error instanceof RuntimeError && error.code === 'REVISION_CONFLICT'
+    );
+    assert.equal(applied, 1);
+    assert.equal(readFileSync(effectPath, 'utf8'), 'applied');
+  } finally {
+    reopened.close();
   }
 });
 

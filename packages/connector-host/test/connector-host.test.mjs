@@ -112,3 +112,48 @@ test('concurrent connect calls share one factory and one lifecycle transition', 
   assert.equal(creates, 1);
   assert.equal(connects, 1);
 });
+
+test('cancellation during secret read rejects connect and prevents factory from receiving credentials or creating instances', async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let readStarted;
+  const started = new Promise(resolve => { readStarted = resolve; });
+  let observedSecret;
+  let factoryCreated = false;
+  let connectorConnected = false;
+
+  const host = new ConnectorHost({
+    read: async (_ref, _signal) => {
+      readStarted();
+      await gate;
+      return 'synthetic-secret';
+    },
+  });
+
+  host.register({
+    manifest,
+    create: async context => {
+      observedSecret = await context.readSecret('fixture-token');
+      factoryCreated = true;
+      const connector = new FixtureConnector();
+      connector.connect = () => {
+        connectorConnected = true;
+        return {sessionRef: 'fixture-session', interactionRequired: false};
+      };
+      return connector;
+    },
+  }, {secretRefs: ['fixture-token']});
+
+  const controller = new AbortController();
+  const connectPromise = host.connect('fixture', controller.signal);
+  await started;
+  controller.abort();
+  release();
+
+  await assert.rejects(connectPromise, {code: 'CANCELLED', message: 'Connector connection was cancelled'});
+  assert.equal(observedSecret, undefined);
+  assert.equal(factoryCreated, false);
+  assert.equal(connectorConnected, false);
+  assert.deepEqual(host.list(), [{manifest, health: {state: 'disconnected'}}]);
+  assert.deepEqual(host.getCapabilities('fixture'), ['search']);
+});

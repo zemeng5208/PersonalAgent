@@ -56,6 +56,22 @@ query snapshots/cursors, pending feed batches, checkpoints and idempotent receip
 in a dedicated SQLite database. It uses `@personal-agent/storage` migrations and
 must not share a database file with another independent migration sequence.
 
+Migration 2 adds a trusted-host mapping for explicitly imported public-demo sources.
+`readPublicSourceHead` and `appendPublicSource` bind a stable source identity to the
+current exact FactRef. The append, feed event, sequence and mapping share one SQLite
+transaction; repeated current revisions return the stored fact without a new event.
+Stale proposals fail with `REVISION_CONFLICT`. Source-owned facts cannot be changed
+through ordinary `append`. These host methods do not register a Runtime capability
+or authorize private data or cloud transfer.
+
+`withdrawPublicSource` records an append-only public tombstone with an expected Fact
+revision and an idempotent withdrawal ID. The caller must first verify source removal
+through its trusted source adapter and obtain authorization for that source; search
+failure or an unavailable vault is not withdrawal evidence. The tombstone, feed event
+and source mapping commit together. A later verified source revision may reactivate
+the same Fact ID as a correction. The method is host-only, not a connector or wire
+operation.
+
 This adapter is not registered as a Runtime capability and does not make the ports
 `frozen`. Its confirmation transaction covers only the memory-owned delivery journal;
 Goal/cognition projection and feed confirmation are not yet one atomic host

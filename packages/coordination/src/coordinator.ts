@@ -1,11 +1,13 @@
 import {ProtocolError} from '@personal-agent/contracts';
-import {parseCoordinationContinuation, parseCoordinationResult} from './index.js';
+import {parseCoordinationAvailableTools, parseCoordinationContinuation, parseCoordinationResult} from './index.js';
 import type {
-  CloudAgentPort, CoordinationContinuation, CoordinationPort, CoordinationRequest, CoordinationResult,
+  CloudAgentPort, CoordinationAvailableTool, CoordinationContinuation, CoordinationPort, CoordinationRequest,
+  CoordinationResult,
 } from './index.js';
 
 const requestFields = ['taskId', 'revision', 'goal', 'deadline', 'signal'];
 const continuationRequestFields = [...requestFields, 'continuation'];
+const availableToolsRequestFields = [...requestFields, 'availableTools'];
 const isoDeadline = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 
 interface ValidatedRequest {
@@ -16,6 +18,7 @@ interface ValidatedRequest {
   readonly signal: AbortSignal;
   readonly expiresAt: number;
   readonly continuation?: CoordinationContinuation;
+  readonly availableTools?: readonly CoordinationAvailableTool[];
 }
 
 function invalidRequest(): never {
@@ -78,17 +81,24 @@ function validateRequest(request: CoordinationRequest): ValidatedRequest {
   let deadline: unknown;
   let signal: unknown;
   let continuationValue: unknown;
+  let availableToolsValue: unknown;
+  let hasAvailableTools = false;
   try {
     const hasContinuation = request !== null && typeof request === 'object'
       && Object.prototype.hasOwnProperty.call(request, 'continuation');
+    hasAvailableTools = request !== null && typeof request === 'object'
+      && Object.prototype.hasOwnProperty.call(request, 'availableTools');
     if (request === null || typeof request !== 'object' || Array.isArray(request)
-      || !hasExactEnumerableKeys(request, hasContinuation ? continuationRequestFields : requestFields)) invalidRequest();
+      || (hasContinuation && hasAvailableTools)
+      || !hasExactEnumerableKeys(request, hasContinuation ? continuationRequestFields
+        : hasAvailableTools ? availableToolsRequestFields : requestFields)) invalidRequest();
     taskId = request.taskId;
     revision = request.revision;
     goal = request.goal;
     deadline = request.deadline;
     signal = request.signal;
     continuationValue = hasContinuation ? request.continuation : undefined;
+    availableToolsValue = hasAvailableTools ? request.availableTools : undefined;
   } catch {
     // Request getters and proxies are untrusted input; never echo their errors.
     throw new ProtocolError('INVALID_ARGUMENT', 'Invalid coordination request');
@@ -105,8 +115,10 @@ function validateRequest(request: CoordinationRequest): ValidatedRequest {
   if (readSignalAborted(signal)) throw new ProtocolError('CANCELLED', 'Coordination cancelled');
   if (expiresAt <= Date.now()) throw new ProtocolError('TIMEOUT', 'Coordination deadline expired');
   const continuation = continuationValue === undefined ? undefined : parseCoordinationContinuation(continuationValue);
+  const availableTools = hasAvailableTools ? parseCoordinationAvailableTools(availableToolsValue) : undefined;
   return {taskId, revision, goal, deadline, signal, expiresAt,
-    ...(continuation === undefined ? {} : {continuation})};
+    ...(continuation === undefined ? {} : {continuation}),
+    ...(availableTools === undefined ? {} : {availableTools})};
 }
 
 function sanitizeProviderError(error: unknown): never {
@@ -178,6 +190,7 @@ export class CompetitionCoordinator implements CoordinationPort {
         deadline: validated.deadline,
         signal: controller.signal,
         ...(validated.continuation === undefined ? {} : {continuation: validated.continuation}),
+        ...(validated.availableTools === undefined ? {} : {availableTools: validated.availableTools}),
       });
       const invocation = Promise.resolve().then(() => {
         if (controller.signal.aborted) throw new ProtocolError('CANCELLED', 'Coordination cancelled');

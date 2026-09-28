@@ -271,6 +271,12 @@ function canonical(value: unknown): string {
   return '{' + Object.keys(record).sort().map(key => JSON.stringify(key) + ':' + canonical(record[key])).join(',') + '}';
 }
 
+function toolInputDigest(taskId: string, payload: {
+  toolName: string; toolVersion: string; arguments: Record<string, unknown>; scopeRef: string;
+}): string {
+  return createHash('sha256').update(canonical({taskId, payload})).digest('hex');
+}
+
 function requireText(value: string, name: string): string {
   if (!value.trim()) throw new RuntimeError('INVALID_ARGUMENT', name + ' must not be empty');
   return value;
@@ -622,7 +628,7 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
             throw new RuntimeError('REVISION_CONFLICT', 'Tools can only be invoked for a running task');
           }
           const runId = request.idempotencyKey ?? this.idFactory();
-          const inputDigest = createHash('sha256').update(canonical({taskId: request.taskId, payload: request.payload})).digest('hex');
+          const inputDigest = toolInputDigest(request.taskId, request.payload);
           const previousRow = this.db.prepare('SELECT record_json FROM tool_execution_records WHERE evidence_id = ?').get(runId);
           if (previousRow) {
             const previous = JSON.parse(previousRow.record_json as string) as ToolExecutionRecord;
@@ -768,6 +774,45 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     return structuredClone(this.transaction(() => this.submitInTransaction(input)));
   }
 
+  /** Trusted host operation: task/idempotency and its launch intent commit together. */
+  submitTaskWithCheckpoint(input: SubmitTaskInput, checkpointKey: string, value: unknown): TaskSnapshot {
+    const key = requireText(checkpointKey, 'checkpoint key');
+    const encoded = JSON.stringify(value);
+    if (encoded === undefined) throw new RuntimeError('INVALID_ARGUMENT', 'Checkpoint must be JSON serializable');
+    return structuredClone(this.transaction(() => {
+      const task = this.submitInTransaction(input);
+      const existing = this.loadCheckpoint(task.taskId, key);
+      if (existing !== undefined) {
+        if (canonical(existing) !== canonical(JSON.parse(encoded))) {
+          throw new RuntimeError('REVISION_CONFLICT', 'Task checkpoint identity conflict');
+        }
+        return task;
+      }
+      if (task.state !== 'created') {
+        throw new RuntimeError('REVISION_CONFLICT', 'Task checkpoint is missing after execution started');
+      }
+      this.saveCheckpoint(task.taskId, key, JSON.parse(encoded));
+      return task;
+    }));
+  }
+
+  /** Trusted host read for binding an existing task before checking mutable state. */
+  findTaskByIdempotencyKey(idempotencyKey: string): TaskSnapshot | undefined {
+    const row = this.db.prepare('SELECT task_id FROM task_idempotency WHERE idempotency_key = ?')
+      .get(requireText(idempotencyKey, 'idempotencyKey')) as {task_id: string} | undefined;
+    return row ? this.getTask(row.task_id) : undefined;
+  }
+
+  /** Compare the persisted request with the exact trusted source invocation. */
+  matchesToolExecutionInput(record: ToolExecutionRecord, input: {
+    arguments: Record<string, unknown>; scopeRef: string;
+  }): boolean {
+    return record.inputDigest === toolInputDigest(record.taskId, {
+      toolName: record.toolName, toolVersion: record.toolVersion,
+      arguments: input.arguments, scopeRef: input.scopeRef,
+    });
+  }
+
   private writeSnapshot(snapshot: TaskSnapshot): void {
     this.db.prepare('UPDATE tasks SET state = ?, revision = ?, updated_at = ?, steps_json = ?, evidence_refs_json = ?, result_summary = ?, error_json = ?, cancel_requested = ? WHERE task_id = ?').run(
       snapshot.state,
@@ -851,6 +896,48 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     );
   }
 
+  /** Freeze a trusted host intent only while its prepared task is still at the observed revision. */
+  saveCheckpointOnceForCreatedTask(taskId: string, key: string, value: unknown,
+    expectedRevision: number): boolean {
+    requireText(key, 'checkpoint key');
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
+      throw new RuntimeError('INVALID_ARGUMENT', 'Invalid expected task revision');
+    }
+    const encoded = JSON.stringify(value);
+    if (encoded === undefined) throw new RuntimeError('INVALID_ARGUMENT', 'Checkpoint must be JSON serializable');
+    return this.transaction(() => {
+      const task = this.getTask(taskId);
+      if (task.state !== 'created' || task.revision !== expectedRevision) {
+        throw new RuntimeError('REVISION_CONFLICT', 'Prepared host task changed before finalization');
+      }
+      const result = this.db.prepare('INSERT INTO task_checkpoints (task_id, checkpoint_key, value_json, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(task_id, checkpoint_key) DO NOTHING').run(
+        taskId, key, encoded, this.timestamp()
+      );
+      return result.changes === 1;
+    });
+  }
+
+  /** Cancel a prepared task only if no intent was frozen at the observed revision. */
+  cancelCreatedTaskWithoutCheckpoint(taskId: string, absentKey: string,
+    expectedRevision: number): TaskSnapshot {
+    requireText(absentKey, 'checkpoint key');
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
+      throw new RuntimeError('INVALID_ARGUMENT', 'Invalid expected task revision');
+    }
+    return structuredClone(this.transaction(() => {
+      const task = this.getTask(taskId);
+      if (this.loadCheckpoint(taskId, absentKey) !== undefined) {
+        throw new RuntimeError('REVISION_CONFLICT', 'Prepared host task intent was already finalized');
+      }
+      if (task.state === 'cancelled') return task;
+      if (task.state !== 'created' || task.revision !== expectedRevision) {
+        throw new RuntimeError('REVISION_CONFLICT', 'Prepared host task changed before cancellation');
+      }
+      this.updateTask(taskId, 'cancelling', {cancelRequested: true}, true);
+      return this.updateTask(taskId, 'cancelled', {cancelRequested: true}, true);
+    }));
+  }
+
   loadCheckpoint(taskId: string, key: string): unknown {
     const row = this.db.prepare('SELECT value_json FROM task_checkpoints WHERE task_id = ? AND checkpoint_key = ?').get(taskId, requireText(key, 'checkpoint key')) as unknown as {value_json: string} | undefined;
     return row ? structuredClone(JSON.parse(row.value_json)) : undefined;
@@ -926,10 +1013,11 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     } catch (error) {
       const current = this.getTask(taskId);
       if (terminal.has(current.state)) return current;
+      if (current.state === 'waiting_reconciliation') return current;
       if (timedOut) {
-        if (options.sideEffect === 'external_write') {
+        if (options.sideEffect !== 'read') {
           return this.transitionTask(taskId, 'waiting_reconciliation', {
-            error: {code: 'RESULT_UNKNOWN', message: 'External write exceeded its deadline; verify before retrying', retryable: false}
+            error: {code: 'RESULT_UNKNOWN', message: `${options.sideEffect === 'local_write' ? 'Local' : 'External'} write exceeded its deadline; verify before retrying`, retryable: false}
           });
         }
         return this.transitionTask(taskId, 'failed', {
@@ -937,7 +1025,6 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
         });
       }
       if (controller.signal.aborted && current.state === 'cancelling') return this.confirmCancellation(taskId);
-      if (current.state === 'waiting_reconciliation') return current;
       return this.transitionTask(taskId, 'failed', {
         error: {
           code: error instanceof RuntimeError || error instanceof ProtocolError ? error.code as TaskError['code'] : 'EXTERNAL_FAILURE',

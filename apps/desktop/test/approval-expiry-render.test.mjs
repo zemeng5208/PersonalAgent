@@ -52,7 +52,10 @@ const escape = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<'
     const root = {innerHTML: '', querySelector: key => nodes.get(key) ?? null,
       querySelectorAll: key => key === '[data-approval]' ? buttons : []};
     const calls = [];
-    const render = mountAdmin(root, async (...args) => { calls.push(args); }, escape);
+    const render = mountAdmin(root, async (...args) => {
+      if (args[0] === 'approval.history') return {items: []};
+      calls.push(args);
+    }, escape);
     const data = {tasks: [], capabilities: [], health: [], connection: 'fixture',
       adminNavigation: {page: 'authorizations', revision: 1}, approvals: [{
         approvalId: 'a', taskId: 't', revision: 1, state: 'pending', action: 'fixture.read',
