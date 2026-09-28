@@ -253,6 +253,9 @@ export const RUNTIME_MIGRATIONS: readonly Migration[] = [{
 }, {
   version: 7,
   sql: 'CREATE TABLE coordination_projection_staging (graph_namespace TEXT NOT NULL, memory_namespace TEXT NOT NULL, consumer_key TEXT NOT NULL, batch_token TEXT NOT NULL, handled_key TEXT NOT NULL, payload_json TEXT NOT NULL, staged_at TEXT NOT NULL, PRIMARY KEY (graph_namespace, memory_namespace, consumer_key, batch_token)) STRICT;'
+}, {
+  version: 8,
+  sql: 'CREATE TABLE coordination_fact_erasure_receipts (graph_namespace TEXT NOT NULL, memory_namespace TEXT NOT NULL, fact_id TEXT NOT NULL, operation_id TEXT NOT NULL, expected_graph_revision INTEGER NOT NULL CHECK (expected_graph_revision >= 0), committed_at TEXT NOT NULL, PRIMARY KEY (graph_namespace, memory_namespace, fact_id), UNIQUE (graph_namespace, operation_id)) STRICT;'
 }];
 
 export class RuntimeError extends Error {

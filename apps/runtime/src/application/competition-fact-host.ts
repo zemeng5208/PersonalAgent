@@ -68,6 +68,14 @@ export function createCompetitionFactHost(
     const projection = createSqliteFactProjectionHost({memory, runtime: application.runtime,
       memoryNamespace, graphNamespace, consumerKey});
     return Object.freeze({
+      preflightErasure: (factId: string, request: MemoryReadContext) => {
+        active();
+        return projection.preflightErasure(factId, request);
+      },
+      resumeFactErasure: (request: Parameters<SqliteFactProjectionHost['resumeFactErasure']>[0]) => {
+        active();
+        return projection.resumeFactErasure(request);
+      },
       readPublicSourceHead: (key: PublicSourceKey) => {
         active();
         return memory.readPublicSourceHead(memoryNamespace, key);

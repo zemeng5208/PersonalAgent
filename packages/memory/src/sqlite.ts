@@ -517,6 +517,79 @@ export class SqliteMemoryHost {
     }
   }
 
+  /** Host-only second phase after a durable Runtime receipt has been read back. */
+  completeFactErasure(namespaceValue: unknown, value: unknown): void {
+    try {
+      const namespace = text(namespaceValue);
+      const record = exact(value, ['factId', 'expectedRevision', 'operationId', 'runtimeReceipt',
+        'deadline', 'signal']);
+      const factId = text(record.factId);
+      const operationId = text(record.operationId, 128);
+      const expectedRevision = record.expectedRevision;
+      const proof = exact(record.runtimeReceipt, ['graphNamespace', 'memoryNamespace', 'factId',
+        'operationId', 'expectedGraphRevision', 'committedAt']);
+      text(proof.graphNamespace);
+      time(proof.committedAt);
+      if (!/^[A-Za-z0-9_.-]+$/.test(operationId)
+        || !Number.isSafeInteger(expectedRevision) || (expectedRevision as number) < 1
+        || proof.memoryNamespace !== namespace
+        || proof.factId !== factId || proof.operationId !== operationId
+        || !Number.isSafeInteger(proof.expectedGraphRevision)
+        || (proof.expectedGraphRevision as number) < 0) return queryFail();
+      const operation = context(record, queryFail);
+      transaction(this.db, () => {
+        active(operation, queryFail);
+        const intent = this.db.prepare(
+          'SELECT operation_id, expected_revision, phase FROM memory_erasure_intents WHERE namespace = ? AND fact_id = ?',
+        ).get(namespace, factId) as Row | undefined;
+        if (intent === undefined) return queryFail('NOT_FOUND');
+        if (intent.operation_id !== operationId || intent.expected_revision !== expectedRevision) {
+          return queryFail('REVISION_CONFLICT');
+        }
+        if (intent.phase === 'completed') {
+          if (this.db.prepare('SELECT 1 FROM memory_facts WHERE namespace = ? AND fact_id = ? LIMIT 1')
+            .get(namespace, factId) !== undefined
+            || this.db.prepare('SELECT 1 FROM memory_public_sources WHERE namespace = ? AND fact_id = ? LIMIT 1')
+              .get(namespace, factId) !== undefined) return queryFail('SCOPE_DENIED');
+          return;
+        }
+        if (intent.phase !== 'pending') return queryFail();
+        const head = this.db.prepare('SELECT MAX(revision) AS revision FROM memory_facts WHERE namespace = ? AND fact_id = ?')
+          .get(namespace, factId) as Row;
+        if (head.revision !== expectedRevision) return queryFail('REVISION_CONFLICT');
+        const bindings = this.db.prepare('SELECT bootstrap_entries_json FROM memory_feed_bindings WHERE namespace = ?')
+          .all(namespace) as Row[];
+        for (const binding of bindings) {
+          if (binding.bootstrap_entries_json !== null
+            && parseJson<FactChangeEntry[]>(rowText(binding, 'bootstrap_entries_json'))
+              .some(entry => entry.fact.id === factId)) return queryFail('SCOPE_DENIED');
+        }
+        const deliveries = this.db.prepare(
+          'SELECT batch_json, confirmed, confirmed_handled_key FROM memory_feed_deliveries WHERE namespace = ?',
+        ).all(namespace) as Row[];
+        for (const delivery of deliveries) {
+          const batch = parseJson<FactChangeBatch>(rowText(delivery, 'batch_json'));
+          if (batch.entries.some(entry => entry.fact.id === factId)
+            || (delivery.confirmed === 1
+              && delivery.confirmed_handled_key !== handledKey(batch.entries))) {
+            return queryFail('SCOPE_DENIED');
+          }
+        }
+        this.db.prepare('DELETE FROM memory_public_sources WHERE namespace = ? AND fact_id = ?')
+          .run(namespace, factId);
+        const removed = this.db.prepare('DELETE FROM memory_facts WHERE namespace = ? AND fact_id = ?')
+          .run(namespace, factId);
+        if (Number(removed.changes) !== expectedRevision) return queryFail('SCOPE_DENIED');
+        this.db.prepare("UPDATE memory_erasure_intents SET phase = 'completed' WHERE namespace = ? AND fact_id = ?")
+          .run(namespace, factId);
+        active(operation, queryFail);
+      }, () => active(operation, queryFail));
+    } catch (error) {
+      if (error instanceof MemoryQueryError) throw error;
+      return queryFail();
+    }
+  }
+
   private appendFact(namespace: string, next: FactVersion): FactVersion {
     if (this.db.prepare('SELECT 1 FROM memory_erasure_intents WHERE namespace = ? AND fact_id = ?')
       .get(namespace, next.ref.id) !== undefined) return queryFail('SCOPE_DENIED');
