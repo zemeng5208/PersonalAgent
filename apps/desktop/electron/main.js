@@ -184,10 +184,19 @@ function applyShape(win, radius) {
   win.setShape(roundedRects(bounds.width, bounds.height, radius));
 }
 
+function placePanel(bounds) {
+  const current = panel.getBounds();
+  if (current.width === bounds.width && current.height === bounds.height) {
+    panel.setPosition(bounds.x, bounds.y);
+  } else {
+    panel.setBounds(bounds);
+  }
+}
+
 function openPanel(focus = false) {
   if (!orb || !panel || orb.isDestroyed() || panel.isDestroyed()) return;
   if (!focus && workspace && !workspace.isDestroyed() && workspace.isVisible()) return;
-  panel.setBounds(panelBounds(orb.getBounds(), screen.getDisplayMatching(orb.getBounds()).workArea));
+  placePanel(panelBounds(orb.getBounds(), screen.getDisplayMatching(orb.getBounds()).workArea));
   applyShape(panel, 20);
   if (focus) panel.show(); else panel.showInactive();
   away = 0;
@@ -201,7 +210,7 @@ function movePanelGroup(point) {
   // native minimum tracking size, leaving an invisible click-blocking area.
   // Dragging the orb must only change its position and preserve 112x112.
   orb.setPosition(next.orb.x, next.orb.y);
-  panel.setBounds(next.panel);
+  placePanel(next.panel);
   applyShape(panel, 20);
 }
 
@@ -837,7 +846,9 @@ app.whenReady().then(async () => {
   });
 
   function reposition() {
-    orb.setBounds(clampOrb(orb.getBounds(), screen.getDisplayMatching(orb.getBounds()).workArea));
+    const bounds = orb.getBounds();
+    const next = clampOrb(bounds, screen.getDisplayMatching(bounds).workArea);
+    orb.setPosition(next.x, next.y);
     if (panel.isVisible()) openPanel();
   }
   screen.on('display-removed', reposition);
@@ -847,7 +858,8 @@ app.whenReady().then(async () => {
     const point = screen.getCursorScreenPoint();
     const bounds = orb.getBounds();
     if (dragging === true) {
-      orb.setBounds(clampOrb({...bounds, x: point.x - dragOffset.x, y: point.y - dragOffset.y}, screen.getDisplayNearestPoint(point).workArea));
+      const next = clampOrb({...bounds, x: point.x - dragOffset.x, y: point.y - dragOffset.y}, screen.getDisplayNearestPoint(point).workArea);
+      orb.setPosition(next.x, next.y);
       return;
     }
     if (away > Date.now()) return;
