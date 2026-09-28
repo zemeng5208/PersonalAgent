@@ -103,6 +103,10 @@ export function createDesktopProactiveHost({application, client, userData, names
     composition.stop(); status = 'disabled'; reason = '已停止观察';
   }
   return {snapshot, configure, analyze, tick, stop,
+    applyCognitionDecision: id => {
+      if (!cognition) throw Error('目标分析尚未装配');
+      return cognition.applyDecision(id);
+    },
     assertCognitionCloudSend:request=>cognition?.assertCloudSend(request),
     close() {stop(); cognition?.close(); unsubscribe(); factHost.close();},
   };

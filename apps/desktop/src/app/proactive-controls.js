@@ -30,6 +30,26 @@ export function mountProactiveControls(container, invoke, {settings = false} = {
   const fields=['enabled','cloudAnalysis','goalAnalysis','goalCloudAnalysis'];
   let current, dirty = false, saving = false;
   const rows = new Map(), pending = new Set();
+  if (reviewsList) {
+    reviewsList.addEventListener('click', async event => {
+      const button = event.target.closest('button[data-action="apply-cognition"]');
+      if (!button || button.disabled) return;
+      const reviewTaskId = button.dataset.reviewId;
+      if (!reviewTaskId) return;
+      button.disabled = true;
+      const card = button.closest('.cognition-review-card');
+      const cardNotice = card?.querySelector('[data-feedback-id]');
+      if (cardNotice) cardNotice.textContent = '正在采纳并执行方案…';
+      try {
+        const result = await invoke('proactive.cognition.apply', {reviewTaskId});
+        if (cardNotice) cardNotice.textContent = result?.status === 'applied' ? '方案已执行，目标图谱已更新' : '执行完成';
+        button.textContent = '已在本地执行';
+      } catch (err) {
+        if (cardNotice) cardNotice.textContent = err.message;
+        button.disabled = false;
+      }
+    });
+  }
   if (form) {
     form.addEventListener('change', () => {dirty = true; feedback.textContent = '有未保存的设置';});
     form.addEventListener('submit', async event => {
@@ -99,13 +119,22 @@ export function mountProactiveControls(container, invoke, {settings = false} = {
     }
     if (reviewsList) {
       if (cognitionReviews.length > 0) {
-        reviewsList.innerHTML = '<h3 style="margin-top:12px;font-size:14px;color:var(--text-secondary)">目标与计划决策</h3>' + cognitionReviews.map(r => `
+        reviewsList.innerHTML = '<h3 style="margin-top:12px;font-size:14px;color:var(--text-secondary)">目标与计划决策</h3>' + cognitionReviews.map(r => {
+          const isApplied = r.executionStatus?.includes('已在本地执行') || r.state === 'applied';
+          return `
           <article class="task cognition-review-card" data-review-id="${escape(r.reviewTaskId || '')}">
             <p class="cognition-trigger"><strong>触发原因：</strong>${escape(r.trigger || '事实或目标变更')}</p>
             <p class="cognition-choice"><strong>Laya 方案：</strong>${escape(r.choice || '本地决策建议')}</p>
             <p class="notice cognition-status"><strong>执行状态：</strong>${escape(r.executionStatus || r.state || '已记录')}</p>
+            <div class="cognition-actions" style="margin-top:8px">
+              <button class="btn btn-sm" type="button" data-action="apply-cognition" data-review-id="${escape(r.reviewTaskId || '')}" ${isApplied ? 'disabled' : ''}>
+                ${isApplied ? '已在本地执行' : '采纳并执行方案'}
+              </button>
+              <span class="notice" data-feedback-id="${escape(r.reviewTaskId || '')}" style="margin-left:8px"></span>
+            </div>
           </article>
-        `).join('');
+        `;
+        }).join('');
       } else {
         reviewsList.innerHTML = '';
       }

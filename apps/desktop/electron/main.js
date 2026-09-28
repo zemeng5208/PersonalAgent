@@ -1225,9 +1225,14 @@ async function action(event, name, payload) {
     });
   }
   if (name === 'knowledge.status') return snapshot(sender === workspace ? 'workspace' : sender === admin ? undefined : 'panel').knowledge;
-  if (name === 'proactive.configure' || name === 'proactive.analyze') {
+  if (name === 'proactive.configure' || name === 'proactive.analyze' || name === 'proactive.cognition.apply') {
     if ((sender !== panel && sender !== admin) || !competitionMode || !proactiveHost) throw Error('主动观察仅允许可信设置或面板调用');
     if (name === 'proactive.configure') return proactiveHost.configure(payload);
+    if (name === 'proactive.cognition.apply') {
+      const reviewTaskId = typeof payload?.reviewTaskId === 'string' ? payload.reviewTaskId.trim() : '';
+      if (!reviewTaskId) throw Error('审阅记录标识不能为空');
+      return proactiveHost.applyCognitionDecision(reviewTaskId);
+    }
     if (!payload || Object.keys(payload).some(key => key !== 'id') || typeof payload.id !== 'string') throw Error('主动分析请求无效');
     return proactiveHost.analyze(payload.id);
   }

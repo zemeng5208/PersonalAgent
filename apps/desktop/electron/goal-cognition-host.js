@@ -121,8 +121,8 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
         '事实或目标变更';
       const choice = r?.selectedOption ? `${r.selectedOption.id} · ${r.selectedOption.description}` :
         machineReview(r) ? 'Laya 置信不足，转人工复核 (RECHECK)' : (r?.action === 'KEEP' ? '保持现状 (KEEP)' : '本地建议方案');
-      const executionStatus = value.handoff?.state === 'submitted' ? '已提交 AgentArts 编排' :
-        value.review?.selection?.state === 'review' ? '等待复核' : '本地决策建议';
+      const executionStatus = value.executionStatus || (value.handoff?.state === 'submitted' ? '已提交 AgentArts 编排' :
+        value.review?.selection?.state === 'review' ? '等待复核' : '本地决策建议');
       return {
         reviewTaskId: value.task.taskId,
         action: r?.action,
@@ -130,8 +130,8 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
         trigger,
         choice,
         executionStatus,
-        taskId: value.handoff?.state === 'submitted' ? value.handoff.task.taskId : undefined,
-        state: value.handoff?.state ?? value.review?.selection?.state ?? 'local',
+        taskId: value.handoff?.state === 'submitted' ? value.handoff.task.taskId : value.appliedTaskId,
+        state: value.state ?? value.handoff?.state ?? value.review?.selection?.state ?? 'local',
       };
     })}),
     async tick() {
@@ -166,6 +166,59 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
         }
       } catch {if(!current.signal.aborted){nextTick=now()+30_000;status='error';reason='主动分析暂未完成，保留原任务；稍后按原任务核实恢复';}}
       finally {busy=false;onUpdate();}
+    },
+    async applyDecision(reviewTaskId) {
+      const value = reviews.get(reviewTaskId);
+      if (!value?.review) throw Error('未找到对应决策记录');
+      const r = value.review;
+      if (!r.selectedOption && !machineReview(r)) throw Error('当前决策没有可执行的确定方案');
+      const graph = store.read();
+      let targetId = r.subjectGoal?.id;
+      if (!targetId && Array.isArray(r.affected)) {
+        for (const item of r.affected) {
+          if (item.node?.kind === 'goal') { targetId = item.node.id; break; }
+          const causeGoal = item.causes?.find(c => {
+            const n = graph.history.find(node => node.id === c.reference?.id);
+            return n?.kind === 'goal';
+          });
+          if (causeGoal) { targetId = causeGoal.reference.id; break; }
+        }
+        if (!targetId && r.affected[0]?.node?.id) {
+          const nodeInGraph = graph.history.findLast(n => n.id === r.affected[0].node.id);
+          if (nodeInGraph?.kind === 'goal') targetId = nodeInGraph.id;
+        }
+      }
+      if (!targetId) {
+        const lastGoal = graph.history.findLast(n => n.kind === 'goal');
+        if (lastGoal) targetId = lastGoal.id;
+      }
+      if (!targetId) throw Error('无法定位目标节点');
+      const existing = graph.history.findLast(node => node.id === targetId && node.kind === 'goal');
+      if (!existing) throw Error('本地图谱中未找到目标节点');
+
+      const newSummary = r.selectedOption?.description || existing.summary;
+      if (typeof goalHost?.revise !== 'function') throw Error('目标更新服务不可用');
+      const task = goalHost.revise({
+        expectedGraphRevision: graph.revision,
+        expectedGoalRevision: existing.revision,
+        goal: {
+          id: existing.id,
+          summary: newSummary,
+          sourceRef: existing.sourceRef || 'desktop/cognition-host',
+          validFrom: existing.validFrom,
+          validUntil: existing.validUntil,
+          sensitivity: existing.sensitivity,
+          state: 'active',
+          reason: `已按决策方案【${r.selectedOption?.id || 'RECHECK'}】执行调整：${newSummary}`,
+          dependencies: existing.dependencies ?? [],
+        },
+      });
+      value.executionStatus = `已在本地执行更新：${newSummary}`;
+      value.state = 'applied';
+      value.appliedTaskId = task.taskId;
+      record(value);
+      onUpdate();
+      return {status: 'applied', reviewTaskId, taskId: task.taskId};
     },
     close(){closed=true;enabled=false;cloudAllowed=false;controller.abort();cognition.close();},
   };

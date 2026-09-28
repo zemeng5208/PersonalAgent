@@ -50,7 +50,8 @@ async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCred
   await application.runtime.runTask(sourceTask.taskId,async()=>({resultSummary:'Synthetic goal receipt'}),
     {deadline:new Date(Date.now()+60_000).toISOString(),sideEffect:'read'});
   const goalHost={listTasks:()=>[{taskId:sourceTask.taskId,state:'succeeded',result:{kind:'applied',
-    graphRevision:newGoal?2:5,...(newGoal?{}:{previousGoal:ref('goal')}),currentGoal:ref('goal',newGoal?1:2)}}]};
+    graphRevision:newGoal?2:5,...(newGoal?{}:{previousGoal:ref('goal')}),currentGoal:ref('goal',newGoal?1:2)}}],
+    revise:(input)=>{store.append(input.expectedGraphRevision,{...input.goal,kind:'goal'});return {taskId:'synthetic-revision-task'};}};
   const facts=application.createCompetitionFactHost({memoryPath:path.join(directory,'memory.sqlite'),
     memoryNamespace:'synthetic-public-memory',graphNamespace:namespace,consumerKey:'fixture'});
   const client=new Client(application,Date.now);await client.connect();
@@ -173,4 +174,20 @@ test('goal cognition snapshot exposes trigger, Laya choice, and executionStatus 
   const updated = f.host().snapshot().reviews[0];
   assert.equal(updated.executionStatus, '已提交 AgentArts 编排');
 });
+
+test('goal cognition applyDecision executes the chosen revision locally', async t => {
+  const f = await fixture(t);
+  f.host().configure({enabled: true, cloudAllowed: false});
+  await f.host().tick();
+  const snapshot = f.host().snapshot();
+  assert.equal(snapshot.reviews.length, 1);
+  const reviewTaskId = snapshot.reviews[0].reviewTaskId;
+  const result = await f.host().applyDecision(reviewTaskId);
+  assert.equal(result.status, 'applied');
+  assert.equal(result.taskId, 'synthetic-revision-task');
+  const updatedSnapshot = f.host().snapshot();
+  assert.equal(updatedSnapshot.reviews[0].state, 'applied');
+  assert.match(updatedSnapshot.reviews[0].executionStatus, /已在本地执行更新/);
+});
+
 
