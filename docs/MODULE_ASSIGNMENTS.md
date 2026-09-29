@@ -1,8 +1,32 @@
 # 模块分工与独立交付清单
 
-版本：0.6 · 日期：2026-09-09 · 状态：只实施 Huawei ICT AgentArts Competition Profile；Local Profile 可选留存
+版本：0.7 · 日期：2026-09-29 · 状态：只实施 Huawei ICT AgentArts Competition Profile；Local Profile 可选留存
 
 本文件是未来工作负责人、文件所有权和交付边界的唯一登记处。[Competition Profile](competition/HUAWEI_ICT_AGENTARTS_PROFILE.md) 定义当前优先参赛路径，[PRD](PRD.md) 定义需求，[公共开发协议](DEVELOPMENT_PROTOCOL.md) 定义互通语义，[当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md) 决定接口是否冻结或可用，[ROADMAP](ROADMAP.md) 维护执行状态。
+
+## 0. 首版 MVP 本轮执行权调整（2026-09-29，优先于下文历史分工）
+
+产品负责人明确要求将所有不涉及线上 AgentArts 的剩余 MVP 工作交给 `Potatos498`。
+本轮任务、已核对基线、PR 状态和接手回执集中在 [Issue #212](https://github.com/zemeng5208/PersonalAgent/issues/212)，不另复制进度表。
+这是明确的跨模块实施委派；下文原归属保留作为历史及技术评审依据，不再限制 Potatos 只能开发 MOD-20～26。
+
+| 边界 | 当前实现负责人 | 说明 |
+| --- | --- | --- |
+| 所有非线上 AgentArts 的剩余 MVP 实现、接线、返修、PR收拢和本地验收组织 | Potatos498 | 包括MOD-01～18、20～28的既定MVP范围，以及29～32中的本地适配、离线评估和非云材料；不扩展未承诺的P2能力 |
+| 线上 AgentArts 控制台、工作流提示词修改、发布、实例绑定、云凭据与真实云运行 | zemeng | 保持唯一云配置写入者；本地AgentArts客户端代码可以交给Potatos，真实云验证由zemeng完成 |
+| goo122 已进行的 #209 → #210 → #211 私人记忆/删除恢复PR内部返修 | goo122（限在途范围） | Potatos先评审、按依赖接线；goo122在#212声明交接头与占用文件后，其余新工作由Potatos承接，不双写 |
+| MOD-19 Windows打包安装 | 暂停 | 不因本轮扩大分工恢复打包安装；已排除的TraceGuard治理也不重新加入 |
+
+### 单一写入与交接规则
+
+- Potatos 可将互不重叠的工作包分给自己的执行Agent；每包声明身份、MOD、拥有路径、基线、依赖和最小交付。保留所有协作者修改。
+- `apps/desktop/electron/main.js`、Admin共享入口、Runtime根装配、根配置/锁文件、公共Schema/迁移只由一个集成工作包串行写入。Potatos组织本轮集成，goo122负责公共语义兼容评审；在途#209～211占用部分先收尾再交接。模块工作不必等待共享文件，可以先通过公开端口独立实现。
+- 原PR作者保留历史归属；Potatos可接手未完成的非线上返修，但修改前在#212或对应PR登记当前head及范围，不覆盖原作者仍在进行的改动。
+- `codex/mvp-assembly` 的集成内容已通过#206进入main。新工作从最新main确认基线；旧PR先检查等效覆盖，不重复实现、重复合并或因CI绿灯就关闭。
+- Potatos可提交/推送/创建小PR并联系协作者提供接口。本人新增代码仍需另一位登记协作者评审；替他人返修后不能把自己的评审当作对该新增代码的独立批准。
+- Gemini及其他zemeng执行者不再与Potatos并发开发上述非线上目录；线上AgentArts消费者需要本地改动时，向#212提交精确接口需求，由Potatos的唯一写入者实现。
+- 保留原有用户数据、加密凭据、工作流及配置，不将私人数据或本机路径放到GitHub。首次真实账号/设备操作仍按已有授权范围，不能把本次开发委派解释为任意账号副作用授权。
+- 实现优先，验证限于受影响关键路径。已有真实/离线证据分别复用，完整MVP仍需约定功能与对应真实验收；不通过降低验收口径或全套重复测试制造完成。
 
 ## 1. 人员与决策权
 
