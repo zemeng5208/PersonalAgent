@@ -443,6 +443,23 @@ export class MeetingRescheduleCoordinator {
     if (!execPort) throw new CognitionError('NOT_APPLICABLE');
 
     const currentGraph = this.store.read();
+    if (currentGraph.revision !== record.receipt.graphRevisionBefore) {
+      const conflictReceipt: MeetingDecisionReceipt = {
+        ...record.receipt,
+        status: 'conflict',
+        reason: '提案生成后图谱版本已变化，需要重新评估',
+        graphRevisionAfter: currentGraph.revision,
+        evaluatedAt: new Date(this.now()).toISOString(),
+      };
+      await this.receiptStore.saveReceipt({
+        ...record,
+        status: 'conflict',
+        receipt: conflictReceipt,
+        updatedAt: new Date(this.now()).toISOString(),
+      });
+      return conflictReceipt;
+    }
+
     const execResult = await execPort.executeBatch({
       expectedRevision: currentGraph.revision,
       inputs: record.receipt.proposedModifications,
