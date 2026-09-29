@@ -89,7 +89,7 @@ async function invokeHelper(
   context: ToolContext,
   now: () => number,
 ): Promise<HelperResponse> {
-  const remaining = check(context, now);
+  check(context, now);
   let child: ReturnType<typeof spawn>;
   try {
     child = spawn(executable, ['-NoProfile', '-NonInteractive', '-File', script], {
@@ -118,11 +118,11 @@ async function invokeHelper(
       throw new ProtocolError('RESULT_UNKNOWN', 'Workspace patch helper identity is unavailable');
     }
     processIdentity = await captureWorkspacePatchProcessIdentity(pid, executable);
-    // Identity lookup is async; recheck cancellation and deadline before persisting the marker or sending bytes.
-    check(context, now);
     if (earlyChildError || child.exitCode !== null) {
       throw new ProtocolError('RESULT_UNKNOWN', 'Workspace patch helper identity is unavailable');
     }
+    // Identity lookup is asynchronous; do not dispatch an expired or cancelled write.
+    check(context, now);
   } catch (error) {
     child.removeListener('error', onEarlyChildError);
     try { child.kill('SIGKILL'); } catch { /* identity failure is already unknown */ }
@@ -228,6 +228,15 @@ async function invokeHelper(
       }
     });
     context.signal.addEventListener('abort', onAbort, {once: true});
+    let remaining: number;
+    try {
+      // Marker persistence can also consume the remaining budget. Recheck at
+      // the actual side-effect boundary, before any candidate bytes leave stdin.
+      remaining = check(context, now);
+    } catch {
+      stop(new ProtocolError('RESULT_UNKNOWN', 'Workspace patch apply preconditions changed before dispatch'));
+      return;
+    }
     deadlineTimer = setTimeout(() => stop(new ProtocolError('RESULT_UNKNOWN', 'Workspace patch apply deadline expired')), Math.min(remaining, 2_147_483_647));
     child.stdin?.end(JSON.stringify(request));
     if (context.signal.aborted) onAbort();
