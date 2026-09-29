@@ -1,0 +1,55 @@
+name: Scoped PR source review snapshot
+
+on:
+  push:
+    branches:
+      - codex/zemeng/pr-source-review-20260929
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          submodules: false
+      - name: Collect scoped Git objects without executing PR code
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "zemeng5208/PersonalAgent"
+          out="$RUNNER_TEMP/personalagent-pr-source-review"
+          mkdir -p "$out"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" \
+            | jq 'add | map({number, title, author: .user.login, draft, base_ref: .base.ref, base_sha: .base.sha, head_ref: .head.ref, head_sha: .head.sha, html_url, updated_at})' \
+            > "$out/open-prs.json"
+          refspecs=('refs/heads/main:refs/review/main')
+          while IFS=$'\t' read -r number base_sha; do
+            [[ "$number" =~ ^[1-9][0-9]*$ ]]
+            [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]
+            refspecs+=("refs/pull/$number/head:refs/review/pr-$number")
+            refspecs+=("$base_sha:refs/review/base-$number")
+          done < <(jq -r '.[] | [.number, .base_sha] | @tsv' "$out/open-prs.json")
+          git fetch --quiet --no-tags origin "${refspecs[@]}"
+          git for-each-ref --format='%(refname) %(objectname)' refs/review > "$out/refs.txt"
+          git rev-parse refs/review/main > "$out/MAIN_SHA.txt"
+          date -u +%Y-%m-%dT%H:%M:%SZ > "$out/SNAPSHOT_UTC.txt"
+          mapfile -t bundle_refs < <(git for-each-ref --format='%(refname)' refs/review)
+          git bundle create "$out/PersonalAgent-review.bundle" "${bundle_refs[@]}"
+          git bundle verify "$out/PersonalAgent-review.bundle"
+          (cd "$out" && sha256sum PersonalAgent-review.bundle > SHA256SUMS)
+          # Only Git objects/metadata above are uploaded, not .git/config or any credential.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: personalagent-pr-source-review
+          path: ${{ runner.temp }}/personalagent-pr-source-review/
+          retention-days: 1
+          if-no-files-found: error
