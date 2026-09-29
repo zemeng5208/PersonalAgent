@@ -19,7 +19,7 @@ export interface TriageDispatchRef {
 }
 
 export interface TriageDeferredRef extends TriageDispatchRef {
-  readonly reason: 'invalid_response' | 'unavailable' | 'cancelled' | 'deadline';
+  readonly reason: 'invalid_response' | 'unavailable' | 'cancelled' | 'deadline' | 'insufficient_input';
   /** Preserve the classifier's host-impact route without dispatching unfinished work. */
   readonly requiredRoute: 'main_agent' | 'review';
 }
@@ -110,15 +110,17 @@ export function prepareTriageDispatch(input: TriageDispatchInput): TriageDispatc
       ])) || result.calibrated !== false
       || !['multi_question', 'multi_state'].includes(result.batching)) invalid();
 
-    const failed = ['invalid_response', 'unavailable', 'cancelled', 'deadline'].includes(result.reason);
+    const failed = ['invalid_response', 'unavailable', 'cancelled', 'deadline', 'insufficient_input'].includes(result.reason);
     if (failed) {
       if (result.label !== null || result.abstained !== true
         || result.route !== (message.highImpact ? 'main_agent' : 'review')
         || result.scores !== undefined || result.impactScores !== undefined) invalid();
     } else {
       if (!validScores(result.scores, keys)
-        || !validScores(result.impactScores, ['routine', 'high_impact'])) invalid();
-      const highImpact = message.highImpact === true || result.impactScores.choice === 'high_impact';
+        || !validScores(result.impactScores, ['routine', 'high_impact'])
+        || result.candidateLabel !== result.scores.choice) invalid();
+      const highImpact = message.highImpact === true || result.impactScores.choice === 'high_impact'
+        || result.candidateLabel === 'meeting';
       if (result.reason === 'classified') {
         if (highImpact || result.route !== 'group' || result.abstained !== false
           || result.label !== result.scores.choice) invalid();
