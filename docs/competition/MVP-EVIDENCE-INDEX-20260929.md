@@ -11,12 +11,12 @@
 
 ## 1. 协作职责与当前边界声明
 
-根据 2026-09-29 协作决议（GitHub Issue #212/#213）：
+按 GitHub Issue #212/#213 当前记录的分工边界：
 
-1. **Potatos498**：担任全部非线上 MVP 实现、接线、连接器与本地集成的唯一负责人（覆盖 P0～P8 队列，包括真实 CalDAV 日历、语音宿主、Desktop 完整接线、Windows 宿主与 Laya 本地消费）。
-2. **GPT-6 Luna Max**：唯一负责线上 AgentArts 控制台、工作流设计与提示词、云端发布、实例绑定、云凭据与真实云端运行/评估的执行者（证据存放于 `.cache/luna-agentarts/STATUS.md`，待交接）。
-3. **goo122**：负责公共协议基线、锁文件与 PR #209～#211（在途私人记忆控制器、事实删除与跨库恢复）的返修收尾。
-4. **Gemini (zemeng)**：负责建立各模块与交付链的真实证据索引与演示操作指南，明确“已约定功能 → 代码提交 → 真实证据 → 缺口 → 负责人”的映射矩阵；**不越权编写产品代码、不侵占音频/Windows设备、不操作云端，严格基于已提交代码与可查证事实编写**。
+1. **Potatos498**：当前负责 P0～P4；P5～P8 委派已撤回。业务连接器、语音与通用 Desktop 接线仍按各包边界推进。
+2. **zemeng**：统筹 P5、P6、P8 和线上 AgentArts；P5～P7 的新执行者须先登记。云凭据及真实云运行仍需单独授权。
+3. **goo122**：负责公共协议兼容及在途 PR #209～#211；P7 剩余工作在明确交接前不转派。
+4. **Gemini（代表 zemeng）**：维护证据索引与演示脚本；只把可查证的代码、测试和真实运行记录分别标注，不以提交或 CI 代替外部验收。
 
 ---
 
@@ -46,27 +46,27 @@
 
 | 约定功能 | 对应实现与关键提交 | 当前证据状态 | 实际证据来源与位置 | 剩余缺口 | 责任人 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Desktop 桌面面板与工作区** | `apps/desktop/src/`、`apps/desktop/electron/main.js`；提交 `717af33`、`9164259`、`ea8e9b8` (#206) | `verified` | Panel 悬浮球拖拽、双栏布局、历史消息轨道同步均已通过真实 Electron 启动与 UI 渲染验证 | 工作区最小化/最大化在部分多屏分辨率下的边界适配 | Potatos498 |
-| **AgentArts 真实文字请求** | `packages/coordination/src/agentarts.ts`、`apps/desktop/electron/main.js`；提交 `ea8e9b8` | `verified` | [competition-text-deadline-20260927.md](../../apps/desktop/docs/competition-text-deadline-20260927.md)；自我介绍问答通过网关成功返回真实回答并落盘 `runtime.sqlite`（任务 `9d142d7c-8bbf`，耗时 18s） | 高并发下 SSE 流式字级别实时渲染优化 | GPT-6 Luna Max (云端) / Potatos498 (本地) |
-| **任务状态与持久执行历史** | `apps/runtime/src/domain/runtime.ts`、`conversations.json`；提交 `ea8e9b8` | `verified` | `runtime.sqlite` 保存完整任务检查点；`conversations.json` 持久化记录 37+ 轮主会话数据 | 跨机器迁移数据库的自动校验机制 | Potatos498 |
-| **AgentArts 凭据管理与安全撤销** | `apps/desktop/electron/agentarts-config.js`；提交 `37da0c3` | `verified` | [agentarts-settings.md](../../apps/desktop/docs/agentarts-settings.md)；DPAPI 保护的 API 密钥读写与安全撤销 IPC | 密钥失效后的 UI 主动告警提示 | Potatos498 |
+| **Desktop 桌面面板与工作区** | `apps/desktop/src/`、`apps/desktop/electron/main.js`；提交 `717af33`、`9164259`、`ea8e9b8` (#206) | `provisional` | 源码与自动化检查覆盖面板、工作区和历史视图；本索引未附可复现的实机 UI 记录 | 多屏分辨率适配及人工桌面验收 | Potatos498 |
+| **AgentArts 文字请求** | `packages/coordination/src/agentarts.ts`、`apps/desktop/electron/main.js`；提交 `ea8e9b8` | `unverified` | 真实部署的 trace 与本地任务读回记录尚未随此索引提供；凭据已配置不代表请求成功 | 经授权完成一次真实请求、trace 核验和本地持久读回 | zemeng（云端）/ goo122（本地） |
+| **任务状态与持久执行历史** | Runtime SQLite 与 Desktop 数据路径实现；提交 `ea8e9b8` | `provisional` | Runtime 与 Desktop 自动化测试覆盖持久化及重启读回；不记录个人会话轮数 | 跨版本数据库迁移读回验收 | Potatos498 |
+| **AgentArts 凭据管理与撤销** | `apps/desktop/electron/agentarts-config.js`；提交 `37da0c3` | `provisional` | 源码与测试覆盖安全存储接口和撤销状态；此处没有真实凭据读回记录 | 经授权在目标 Windows 系统验证安全存储与撤销 | Potatos498 |
 
 ### 3.2 语音与 Live 实时音频交付链 (Voice & Live)
 
 | 约定功能 | 对应实现与关键提交 | 当前证据状态 | 实际证据来源与位置 | 剩余缺口 | 责任人 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **SIS 听写转文字 (Dictation)** | `apps/desktop/electron/voice-input.js`；提交 `ea8e9b8` | `verified` | 麦克风音频录制后通过华为云 SIS 识别为文字并填入输入框，不自动提交；单元测试通过 | 实体麦克风在无声/噪声环境下的 VAD 鲁棒性实机演练 | Potatos498 |
-| **原生 Live 实时双向语音** | `packages/voice`、`apps/desktop/electron/live-voice-host.js`；提交 `ea8e9b8` | `verified` (局域/离线) / `provisional` (实机) | [live-proactive-20260927.md](../../apps/desktop/docs/live-proactive-20260927.md)；WebSocket 协议、PCM 分帧与 F8 切换逻辑已通过自动化测试；阿里云 Live 双向音频链路已调通 | 实体机器声卡与外放环境下，全双工打断的回声消除（AEC）效果集中验收 | Potatos498 |
-| **文字与 Live 共享对话历史** | `apps/desktop/electron/conversations.js`；提交 `ea8e9b8` | `verified` | Live 对话转写文本与文字输入均存入同一 `conversations.json`，在 Panel 对话流实时回显 | 长文本大音频时的会话压缩与摘要展示 | Potatos498 |
+| **SIS 听写转文字 (Dictation)** | `apps/desktop/electron/voice-input.js`；提交 `ea8e9b8` | `provisional` | 自动化测试覆盖录音输入边界；真实 SIS 请求与麦克风读回未在此处提供 | 经授权完成 SIS 请求及实体麦克风验收 | Potatos498 |
+| **原生 Live 实时双向语音** | `packages/voice`、`apps/desktop/electron/live-voice-host.js`；提交 `ea8e9b8` | `provisional` | [live-proactive-20260927.md](../../apps/desktop/docs/live-proactive-20260927.md) 与自动化测试覆盖协议、分帧和切换逻辑；本索引未附真实服务或声卡闭环记录 | 经授权验收真实服务、双向音频与打断恢复 | Potatos498 |
+| **文字与 Live 共享对话历史** | `apps/desktop/electron/conversations.js`；提交 `ea8e9b8` | `provisional` | 自动化测试覆盖共享会话读写；本索引未附真实 Live 服务的转写记录 | 真实 Live 会话的持久读回 | Potatos498 |
 
 ### 3.3 业务能力与连接器交付链 (Connectors)
 
 | 约定功能 | 对应实现与关键提交 | 当前证据状态 | 实际证据来源与位置 | 剩余缺口 | 责任人 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **天气查询 (`weather.forecast`)** | `packages/connectors/weather`、`public-connector-host.js`；提交 `ea8e9b8` | `verified` | Open-Meteo 真实免费 API 请求，自动执行无需审批，成功返回城市天气与投影数据 | 极端地理编码重名时的备选推荐 UI | Potatos498 |
-| **文献检索 (`research.search`)** | `packages/connectors/research`、`public-connector-host.js`；提交 `ea8e9b8` | `verified` | OpenAlex 真实 API 请求，返回学术文献标题、引用、发布时间及 DOI 索引 | 检索结果分页加载与详情阅读器集成 | Potatos498 |
-| **待办与提醒 (`todo.*`)** | `packages/productivity`、`todo-host.js`；提交 `ea8e9b8` | `verified` | [todo-reminders.md](../../apps/desktop/docs/todo-reminders.md)；SQLite 待办增删改查与 Windows 本地 Toast 通知弹窗 | 与系统日程日历的双向关联同步 | Potatos498 |
-| **订阅源收集 (`feeds.*`)** | `apps/desktop/electron/feeds-host.js`；提交 `ea8e9b8` | `verified` | [feeds-settings.md](../../apps/desktop/docs/feeds-settings.md)；Atom/RSS 订阅源解析、更新检测与桌面摘要卡片展示 | 部分带有防爬反向代理 RSS 的重试策略 | Potatos498 |
+| **天气查询 (`weather.forecast`)** | `packages/connectors/weather`、`public-connector-host.js`；提交 `ea8e9b8` | `provisional` | Provider 与自动化测试已在仓库；此索引未附真实 Open-Meteo 请求回执 | 经授权核验真实响应及桌面读回 | Potatos498 |
+| **文献检索 (`research.search`)** | `packages/connectors/research`、`public-connector-host.js`；提交 `ea8e9b8` | `provisional` | Provider 与自动化测试已在仓库；此索引未附真实 OpenAlex 请求回执 | 经授权核验真实响应及结果展示 | Potatos498 |
+| **待办与提醒 (`todo.*`)** | `packages/productivity`、`todo-host.js`；提交 `ea8e9b8` | `provisional` | [todo-reminders.md](../../apps/desktop/docs/todo-reminders.md) 与自动化测试；本索引未附真实 Windows Toast 读回 | 实机通知及日历关联验收 | Potatos498 |
+| **订阅源收集 (`feeds.*`)** | `apps/desktop/electron/feeds-host.js`；提交 `ea8e9b8` | `provisional` | [feeds-settings.md](../../apps/desktop/docs/feeds-settings.md) 与自动化测试；未附真实来源同步记录 | 经授权核验真实订阅源与更新读回 | Potatos498 |
 | **邮件处理 (`mail.*`)** | `apps/desktop/electron/mail-config.js`；提交 `ea8e9b8` | `provisional` | [mail-analysis.md](../../apps/desktop/docs/mail-analysis.md)；IMAP 配置与离线邮件提取框架就绪 | 真实企业/个人邮箱（QQ/163/Outlook）在线连接与大批量拉取 | Potatos498 |
 | **日历与会议 (Calendar/CalDAV)** | `packages/connectors/calendar`（待扩展） | `unavailable` | 契约存在，但尚无完整生产 CalDAV Provider 实现与在线同步（已在 Issue #212 提出 P1） | 完整实现生产 CalDAV 协议连接器与会议变更通知 | Potatos498 |
 
@@ -74,55 +74,45 @@
 
 | 约定功能 | 对应实现与关键提交 | 当前证据状态 | 实际证据来源与位置 | 剩余缺口 | 责任人 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **受限工作区补丁操作** | `packages/coding-tools`；提交 `ea8e9b8` | `verified` | [workspace-command-config.md](../../apps/desktop/docs/workspace-command-config.md)；受限目录的只读检查、patch 预览与应用、Git diff 审计 | 冲突检测时交互式手动三方合并 UI | Potatos498 |
-| **受限命令执行** | `packages/coding-tools`；提交 `ea8e9b8` | `verified` | 执行预置 Node/npm 检查命令，超限或高危参数严格拒绝 | 允许用户自定义白名单命令的配置入口 | Potatos498 |
-| **Windows Host 记事本操作** | `apps/windows-host`、`apps/desktop/electron/notepad-host.js`；提交 `6264d19`、`ea8e9b8` | `provisional` (生产代码) / `verified` (离线管道) | [notepad-operation.md](../../apps/desktop/docs/notepad-operation.md)；Named Pipe IPC 契约、F9 实体快捷键物理确认、Policy 授权流 | 需在配置有 .NET 8 SDK 的真实 Windows 系统编译 Native Host 二进制并实操验证 | Potatos498 |
-| **系统状态只读观测** | `packages/windows-client`；提交 `ea8e9b8` | `verified` | CPU/GPU/内存只读采集工具，在 Desktop 系统状态中可被调用 | 针对更多异构显卡驱动的数据适配 | Potatos498 |
+| **受限工作区补丁操作** | `packages/coding-tools`；提交 `ea8e9b8` | `provisional` | [workspace-command-config.md](../../apps/desktop/docs/workspace-command-config.md) 与自动化测试覆盖检查、预览和应用边界；未附独立实机记录 | 在隔离的真实工作区完成读回验收 | Potatos498 |
+| **受限命令执行** | `packages/coding-tools`；提交 `ea8e9b8` | `provisional` | 自动化测试覆盖命令白名单与参数拒绝；未附用户工作区执行记录 | 目标 Windows 环境的受限执行读回 | Potatos498 |
+| **Windows Host 记事本操作** | `apps/windows-host`、`apps/desktop/electron/notepad-host.js`；提交 `6264d19`、`ea8e9b8` | `provisional` | [notepad-operation.md](../../apps/desktop/docs/notepad-operation.md) 与离线管道测试；当前尚无真实 UIA 读回证据 | 在具备 .NET 8 的 Windows 上编译并完成隔离实机验收 | zemeng 侧统筹，执行者待登记 |
+| **系统状态只读观测** | `packages/windows-client`；提交 `ea8e9b8` | `provisional` | 源码与自动化测试覆盖只读采集边界；未附异构设备的读回记录 | 目标 Windows 设备验收 | zemeng 侧统筹，执行者待登记 |
 
 ### 3.5 创新机制与主动认知交付链 (Cognition & Laya)
 
 | 约定功能 | 对应实现与关键提交 | 当前证据状态 | 实际证据来源与位置 | 剩余缺口 | 责任人 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **版本化目标图谱 (Goal Graph)** | `packages/goals`；提交 `ea8e9b8` | `verified` | 基于 CAS 的 `appendVersion` 机制，目标节点依赖追踪与冲突拒绝通过单元测试与桌面集成 | 复杂 DAG 图形化可视化渲染组件 | Potatos498 |
-| **事实变化流 (Fact Feed)** | `packages/memory`；提交 `ea8e9b8` | `verified` | SQLite 存储并记录变化水位（watermark），支持断点续传与重放 | 与外部系统事件总线的实时 WebSocket 广播对接 | Potatos498 |
-| **Laya 主动决策与计划修复** | `packages/cognition`、`apps/desktop/electron/goal-cognition-host.js`；提交 `717af33`、`ea8e9b8` | `verified` (宿主接线) / `provisional` (本地推理) | [proactive-composition.md](../../apps/desktop/docs/proactive-composition.md)；Laya 方案决策生成、桌面一键“采纳并执行”、CAS 版本安全写回 | 本地启动独立的实际 Laya HTTP 服务模型（端口与密钥）进行真机连续推理测试 | Potatos498 |
+| **版本化目标图谱 (Goal Graph)** | `packages/goals`；提交 `ea8e9b8` | `provisional` | CAS、依赖追踪与冲突拒绝由自动化测试覆盖；未附真实比赛流程证据 | 复杂 DAG 展示及目标写回实机读回 | zemeng 侧统筹，执行者待登记 |
+| **事实变化流 (Fact Feed)** | `packages/memory`；提交 `ea8e9b8` | `provisional` | SQLite 水位、续传与重放由自动化测试覆盖；未附真实来源同步记录 | 真实来源变更的端到端读回 | goo122（在途记忆工作）；其余 P7 工作待登记 |
+| **Laya 主动决策与计划修复** | `packages/cognition`、`apps/desktop/electron/goal-cognition-host.js`；提交 `717af33`、`ea8e9b8` | `provisional` (Fake/离线宿主) / `unverified` (真实 Laya) | [proactive-composition.md](../../apps/desktop/docs/proactive-composition.md) 与自动化测试；未附真实 Laya 推理或恢复读回 | 接通已授权的真实 Laya 服务后完成连续推理与持久恢复验收 | zemeng 侧统筹，执行者待登记 |
 
 ### 3.6 产品内多 Agent 分配交付链 (Multi-Agent Dispatch)
 
 | 约定功能 | 对应实现与关键提交 | 当前证据状态 | 实际证据来源与位置 | 剩余缺口 | 责任人 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **次级智能体分派 (`subagent.dispatch`)** | `packages/agents`、`apps/runtime/src/application/subagents.ts`；提交 `890c195`、`717af33`、`ea8e9b8` | `verified` | 支持分派 `researcher`、`coder`、`reviewer` 等角色，配置独立模型与步骤限制，执行结果聚合汇报 | 角色自定义提示词在管理后台的可视化配置编辑 | Potatos498 |
-| **多 Agent 状态与证据隔离** | `apps/desktop/electron/main.js`；提交 `ea8e9b8` | `verified` | 严格遵守架构门禁，次级智能体结果做 64KB 投影边界保护，父任务统一管理终态 | 针对子任务单独取消的粒度细化 | Potatos498 |
+| **次级智能体分派 (`subagent.dispatch`)** | `packages/agents`、`apps/runtime/src/application/subagents.ts`；提交 `890c195`、`717af33`、`ea8e9b8` | `provisional` | Fake/自动化测试覆盖角色分派、预算和结果聚合；真实模型与比赛闭环未验证 | 经授权完成真实模型与用户可见结果读回 | Potatos498 |
+| **多 Agent 状态与证据隔离** | `apps/desktop/electron/main.js`；提交 `ea8e9b8` | `provisional` | 架构门禁与自动化测试覆盖投影边界；未附真实子任务流程记录 | 目标运行环境中的状态与证据读回 | Potatos498 |
 
 ### 3.7 知识库与记忆管理交付链 (Knowledge & Memory)
 
 | 约定功能 | 对应实现与关键提交 | 当前证据状态 | 实际证据来源与位置 | 剩余缺口 | 责任人 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **本地只读知识库搜索** | `packages/knowledge`、`apps/desktop/src/app/knowledge-controls.js`；提交 `717af33`、`ea8e9b8` | `verified` | 本地 Markdown / Obsidian 库全文检索，关键词匹配，16KB 严格脱敏投影输出 | 向量化语义相似度检索增强 (RAG) | Potatos498 |
-| **私人记忆安全控制器与擦除** | `packages/memory`；在途 PR #209～#211 | `provisional` | 代码与单元测试就绪，支持记忆溯源、用户确认授权与合规擦除 | 等待 goo122 交付并在 main 完成集成 | goo122 / Potatos498 |
+| **本地只读知识库搜索** | `packages/knowledge`、`apps/desktop/src/app/knowledge-controls.js`；提交 `717af33`、`ea8e9b8` | `provisional` | 自动化测试覆盖本地检索与投影限制；未附真实 Obsidian 库的授权读回 | 目标用户目录的只读检索验收 | zemeng 侧统筹，执行者待登记 |
+| **私人记忆控制器与擦除** | `packages/memory`；在途 PR #209～#211 | `provisional` (分支实现) / `unverified` (生产 UI 与真实来源) | 部分受信 Runtime 擦除能力已并入 main；私人控制器仍在 PR 中，真实来源与完整 UI 不可据此宣称可用 | 完成评审合并后，再做授权来源、UI 与恢复读回验收 | goo122（在途范围）；交接后由 P7 登记执行者承接 |
 
 ### 3.8 华为云 AgentArts 比赛主链路 (Competition Profile)
 
 | 约定功能 | 对应实现与关键提交 | 当前证据状态 | 实际证据来源与位置 | 剩余缺口 | 责任人 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **AgentArts 云端构建与编排** | 华为云 AgentArts 控制台；MOD-30 Workflow | `provisional` (云端已就绪) / `unverified` (trace 证据待归档) | 网关地址已绑定至 `defaultgw-gztdqobzmm.cn-southwest-2.huaweicloud-agentarts.com` | Luna 需提供线上发布版本 ID、工作流调试快照及评估报告并记录于 `.cache/luna-agentarts/STATUS.md` | GPT-6 Luna Max |
-| **本地 Coordination 协议交互** | `packages/coordination`；提交 `ea8e9b8` | `verified` | 安全请求信封封装、脱敏诊断回执、双向协议握手 | 线上复杂多轮工具闭环的云端 trace 读回 | GPT-6 Luna Max (云端) / Potatos498 (本地) |
+| **AgentArts 云端构建与编排** | 华为云 AgentArts 控制台；MOD-30 Workflow | `unverified` | 本索引未附可核验的部署版本、trace、工具闭环或评估读回；配置状态不等于已发布或可运行 | 按授权完成部署版本、trace、工具闭环和评估读回 | zemeng |
+| **本地 Coordination 协议交互** | `packages/coordination`；提交 `ea8e9b8` | `provisional` | Fake/自动化测试覆盖安全信封与诊断解析；云端多轮工具闭环尚无 trace 证据 | 单独核验真实云端 trace 与本地任务结果 | goo122（本地协议）/ zemeng（云端） |
 
 ---
 
 ## 4. 交付总结与各方交接建议
 
-1. **对于 Potatos498**：
-   - 核心基础架构、Desktop 界面接线、Laya 决策采纳、多 Agent 分派与知识库检索（PR #206）已全部合入主线并验证。
-   - **最高优先级缺口**：
-     - 实现生产级真实 CalDAV 日历连接器（P1）；
-     - 在配置有 .NET 8 的实体机编译并演练 WindowsHost 桥接（P6）；
-     - 本地启动真实的 Laya HTTP 进程进行推理闭环测试（P5）。
-2. **对于 GPT-6 Luna Max**：
-   - 桌面端已证实能够通过安全凭据成功向西南-贵阳二网关发起调用并返回问答结果。
-   - **最高优先级任务**：
-     - 在 AgentArts 控制台完成工具提案（Tool Proposal）与多 Agent 节点的编排与发布；
-     - 导出端到端运行 trace 诊断记录与评估报告至 `.cache/luna-agentarts/STATUS.md`。
-3. **对于 Gemini (zemeng)**：
-   - 本证据索引与后续演示脚本已严格核对事实并完成编写；
-   - 持续跟进两方交付物并实时同步状态矩阵。
+1. **Potatos498**：按 Issue #212 负责 P0～P4；日历、Desktop、语音与多 Agent 的真实验收按各自证据行推进。P5～P8 不属于当前委派。
+2. **zemeng**：统筹 P5、P6、P8 及线上 AgentArts。日历、Windows、Laya 等真实设备或服务结果在取得授权并完成读回前保持未验证。
+3. **goo122**：继续收尾明确登记的 #209～#211 私人记忆在途范围；其他 P7 工作须在交接后登记执行者。
+4. **Gemini（代表 zemeng）**：更新索引前逐条附上可复现来源；状态变化后重新核对 main、CI、真实运行记录与责任人。
