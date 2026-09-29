@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto';
-import {buildInterestOptions, LayaInterestDecisionService, planKnowledgeReevaluation} from '@personal-agent/cognition';
+import {buildInterestOptions, decideKnowledgeFreshness, LayaInterestDecisionService,
+  planKnowledgeReevaluation} from '@personal-agent/cognition';
 
 const PROFILE = 'huawei_ict_agentarts';
 const KEY_PREFIX = 'knowledge-watch:v1:';
@@ -305,16 +306,111 @@ export function createKnowledgeWatchHost({
       ? 'expired' : watch.state;
     return {...clone(watch), state, label: LABELS[state]};
   }
+  function sourceFreshness(binding) {
+    const head = document.sources[binding.sourceId];
+    const sourceState = head?.availability === 'withdrawn' ? 'withdrawn'
+      : head?.availability === 'unavailable' ? 'unavailable' : 'available';
+    const input = {at: iso(clock()), maxAgeMs: knowledgeMaxAgeMs, requestedVersion: binding.cacheVersion,
+      sourceState, cache: {version: binding.cacheVersion, sourceId: binding.sourceId,
+        sourceRevision: binding.revision, contentSha256: binding.contentSha256,
+        lastSuccessfulCheck: binding.lastSuccessfulCheck, validUntil: binding.validUntil}};
+    if (sourceState === 'available' && text(head?.revision) && sha(head?.contentSha256)
+      && Number.isFinite(instant(head.observedAt))) {
+      input.check = {outcome: head.revision === binding.revision && head.contentSha256 === binding.contentSha256
+        ? 'unchanged' : 'changed', checkedAt: head.observedAt, sourceId: binding.sourceId,
+        sourceRevision: binding.revision, cachedContentSha256: binding.contentSha256};
+    }
+    try {
+      const decision = decideKnowledgeFreshness(input);
+      return {action: decision.action, reason: decision.reason, sourceRevision: decision.sourceRevision,
+        contentSha256: decision.contentSha256, lastSuccessfulCheck: decision.lastSuccessfulCheck};
+    } catch {
+      return {action: 'last_verified_only', reason: 'freshness_unknown'};
+    }
+  }
+  function dialogueView() {
+    if (!document) return null;
+    const items = Object.values(document.watches).map(watch => {
+      const projected = projectWatch(watch);
+      const binding = projected.boundSource;
+      const bound = binding && text(binding.sourceId) && text(binding.revision) && sha(binding.contentSha256)
+        && text(binding.cacheVersion) && Number.isFinite(instant(binding.lastSuccessfulCheck))
+        && Number.isFinite(instant(binding.validUntil));
+      const freshness = projected.state === 'revoked'
+        ? {action: 'unavailable', reason: 'user_revoked'}
+        : projected.state === 'expired' ? {action: 'last_verified_only', reason: 'watch_expired'}
+        : projected.state === 'suggested' || !bound
+          ? {action: 'not_bound', reason: projected.state === 'suggested' ? 'suggested_only' : 'no_source_binding'}
+          : sourceFreshness(binding);
+      const head = bound ? document.sources[binding.sourceId] : null;
+      const same = !!(head && head.revision === binding.revision && head.contentSha256 === binding.contentSha256);
+      const citation = same && text(head?.citation) ? head.citation : null;
+      const unknown = bound && Object.values(document.submissions).some(item =>
+        item.sourceId === binding.sourceId && item.state === 'unknown');
+      const usableAsCurrentFact = projected.state === 'tracked' && freshness.action === 'use_cache'
+        && text(citation) && !unknown;
+      const notice = Object.values(document.notices)
+        .filter(item => Array.isArray(item.topicIds) && item.topicIds.includes(projected.topicId))
+        .sort((left, right) => instant(right.latest?.fetchedAt) - instant(left.latest?.fetchedAt))[0] ?? null;
+      const latestObservation = head ? {availability: head.availability, revision: head.revision ?? null,
+        contentSha256: head.contentSha256 ?? null, fetchedAt: head.observedAt ?? null,
+        citation: text(head.citation) ? head.citation : null, sameAsBinding: same} : null;
+      const update = notice ? {noticeId: notice.id, knowledgeAction: notice.knowledge?.action ?? null,
+        knowledgeReason: notice.knowledge?.reason ?? null, citation: text(notice.citation) ? notice.citation : null,
+        sourceRevision: notice.latest?.revision ?? null, contentSha256: notice.latest?.contentSha256 ?? null,
+        fetchedAt: notice.latest?.fetchedAt ?? null, availability: notice.latest?.availability ?? null,
+        delivered: notice.delivered === true, deliveryReason: notice.deliveryReason ?? null,
+        usableAsLatestObservation: bound && projected.state === 'tracked'
+          && text(notice.citation) && notice.latest?.availability === 'available' && !unknown,
+        dataClass: 'untrusted_source_text',
+        untrustedExcerpt: projected.state === 'revoked' ? null : notice.untrustedExcerpt ?? null} : null;
+      let answer;
+      if (projected.state === 'revoked') answer = {kind: 'withheld', reason: 'user_revoked'};
+      else if (projected.state === 'expired') answer = {kind: 'withheld', reason: 'watch_expired'};
+      else if (projected.state === 'suggested') answer = {kind: 'withheld', reason: 'suggested_only'};
+      else if (projected.state === 'paused') answer = {kind: 'withheld', reason: 'user_paused'};
+      else if (projected.state === 'authorization_required') answer = {kind: 'withheld', reason: projected.reason};
+      else if (projected.state === 'source_unavailable') answer = {kind: 'withheld', reason: freshness.reason};
+      else if (unknown) answer = {kind: 'withheld', reason: 'submission_unknown'};
+      else if (usableAsCurrentFact) answer = {kind: 'current_fact', sourceId: binding.sourceId,
+        sourceRevision: binding.revision, contentSha256: binding.contentSha256,
+        fetchedAt: head.observedAt, citation};
+      else if (update?.usableAsLatestObservation) answer = {kind: 'latest_observation',
+        sourceId: binding.sourceId, sourceRevision: update.sourceRevision,
+        contentSha256: update.contentSha256, fetchedAt: update.fetchedAt, citation: update.citation,
+        boundRevision: binding.revision, boundContentSha256: binding.contentSha256};
+      else if (latestObservation && !latestObservation.sameAsBinding && !text(latestObservation.citation)) {
+        answer = {kind: 'withheld', reason: 'citation_missing'};
+      } else if (freshness.action === 'use_cache' && !text(citation)) {
+        answer = {kind: 'withheld', reason: 'citation_missing'};
+      } else answer = {kind: 'withheld', reason: freshness.reason};
+      return {topicId: projected.topicId, state: projected.state, label: projected.label,
+        reason: projected.reason, authorization: clone(projected.authorization ?? null),
+        modelReceiptId: text(projected.modelReceiptId) ? projected.modelReceiptId : null,
+        revocable: projected.state !== 'revoked', tombstoneId: projected.tombstoneId ?? null,
+        usableAsCurrentFact, freshness, citation, answer,
+        boundSource: bound ? {sourceId: binding.sourceId, revision: binding.revision,
+          contentSha256: binding.contentSha256, validUntil: binding.validUntil,
+          lastSuccessfulCheck: binding.lastSuccessfulCheck} : null,
+        latestObservation, update};
+    }).sort((left, right) => left.topicId < right.topicId ? -1 : left.topicId > right.topicId ? 1 : 0);
+    return {namespace, generatedAt: iso(clock()), dataClass: 'knowledge_watch_dialogue', items};
+  }
   function snapshot() {
     const base = {namespace, running, disposed, health: clone(health), wiring: wiring(),
       checkpointKey, mountedInMain: false};
-    if (!document) return {...base, watches: null, notices: null, submissions: null, sources: null};
+    if (!document) return {...base, watches: null, notices: null, submissions: null, sources: null, dialogue: null};
     return {...base,
       watches: Object.values(document.watches).map(projectWatch)
         .sort((a, b) => a.topicId < b.topicId ? -1 : a.topicId > b.topicId ? 1 : 0),
       notices: Object.values(document.notices).map(clone),
       submissions: clone(document.submissions),
-      sources: clone(document.sources)};
+      sources: clone(document.sources),
+      dialogue: dialogueView()};
+  }
+  function dialogueProjection() {
+    if (!document) fail('CHECKPOINT_UNREADABLE');
+    return dialogueView();
   }
   function listPending() {
     const view = snapshot();
@@ -1220,7 +1316,7 @@ export function createKnowledgeWatchHost({
   }
 
   load();
-  return Object.freeze({start, stop, dispose, snapshot, listPending, listWatches,
+  return Object.freeze({start, stop, dispose, snapshot, listPending, listWatches, dialogueProjection,
     consumeInterestSignal, consumeSourceUpdate, refreshSource, refreshSubscribedFeed,
     registerFeedCheck, cancelFeedChecks, restoreFeedChecks, observeNotificationAcknowledgement,
     revoke, pause, resume, enable});

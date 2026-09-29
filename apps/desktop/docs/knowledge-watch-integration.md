@@ -2,7 +2,7 @@
 
 Profile：`huawei_ict_agentarts`。本文只说明 Desktop 消费宿主。`snapshot().mountedInMain` 恒为 `false`。导入本模块或跑测试都不等于桌面进程已经挂上。
 
-总装写入者是 Gemini。本文不再把接线交给 Luna。宿主不修改 `apps/desktop/electron/main.js`。
+总装写入者是 Gemini。宿主不修改 `apps/desktop/electron/main.js`。
 
 拥有文件：
 
@@ -135,9 +135,21 @@ knowledgeWatch.start();
 
 来源摘要只放进带“不可信数据”字样的提醒，不改变授权、模型或工具。私人笔记和邮件不在这条 RSS 路径里，宿主不因为关注更新而发送它们。
 
+## 主对话结果投影
+
+`dialogueProjection()` 与 `snapshot().dialogue` 是同一份只读投影。检查点不可读时，`dialogueProjection()` 抛 `CHECKPOINT_UNREADABLE`，`snapshot().dialogue` 为 `null`。它不写检查点，也不把来源正文当成授权。
+
+每条 `items[]` 里，主对话只消费 `answer`：
+
+- `kind: "current_fact"`：`decideKnowledgeFreshness` 的动作是 `use_cache`，绑定版本和来源头一致，引用定位符存在，且该来源没有 `unknown` 提交。字段是 `sourceId`、`sourceRevision`、`contentSha256`、`fetchedAt`、`citation`。
+- `kind: "latest_observation"`：来源已经读到新版本，旧绑定不能再当成当前事实。`boundRevision` 是仍绑定的旧版本，`sourceRevision` 与 `citation` 属于这次观察。
+- `kind: "withheld"`：`reason` 为 `suggested_only`、`citation_missing`、`submission_unknown`、`user_revoked`、`user_paused`、`watch_expired`，或新鲜性决策自己的 `reason`（例如 `source_unavailable`、`content_changed`）。
+
+`usableAsCurrentFact === true` 只出现在 `current_fact`。`update.untrustedExcerpt` 的 `dataClass` 是 `untrusted_source_text`，不要放进 `task.submit` 的 `goal`。现有主对话入口是 `apps/desktop/electron/main.js` 的 `task.submit`，它调用 `submitConversationTask(client, {goal, conversationId})`，没有单独的上下文字段。
+
 ## 状态投影
 
-`snapshot()` 含 `namespace`、`running`、`disposed`、`health`、`wiring`、`checkpointKey`、`mountedInMain`、`watches`、`notices`、`submissions`、`sources`。损坏时后四项为 `null`。
+`snapshot()` 含 `namespace`、`running`、`disposed`、`health`、`wiring`、`checkpointKey`、`mountedInMain`、`watches`、`notices`、`submissions`、`sources`、`dialogue`。损坏时后五项为 `null`。
 
 关注状态：`suggested` 待建议、`tracked` 已跟踪、`paused` 暂停、`revoked` 撤销、`expired` 过期、`source_unavailable` 来源不可用、`authorization_required` 待授权。
 
@@ -145,9 +157,39 @@ knowledgeWatch.start();
 
 `wiring.source` 为 `feeds`、`injected` 或 `unavailable`。`wiring.layaChooser` 表示宿主自己包了 `LayaInterestDecisionService`。`wiring.main` 恒为 `false`。
 
+## 总装分支上的当前调用
+
+分支 `codex/zemeng/p8-shared-assembly` 的 `apps/desktop/electron/main.js` 用幂等键 `` `knowledge-watch-root:${namespace}` `` 创建任务，然后这样构造宿主：
+
+- `interestDecider: { choose: req => localLaya.choose(req) }`。宿主会调用 `choose(input, {deadline, signal})`，并要求返回 `outcome`、`requiresHostRevalidation` 和 `receipt.modelReceiptId`。`localLaya.choose` 只接收一个 `LayaActionChoiceRequest`，未就绪时抛 `本地 Laya 决策尚未就绪`。
+- `sourcePort: createUnavailableSourcePort('source_connector_pending')`。这是测试夹具，生产读取会停在不可用。
+- `notificationPort.send` 固定返回 `{delivered: true, receiptId}`。宿主会据此把提醒标成已投递。
+- `workPort.submit` 丢掉 `work`，目标写成 `Knowledge Reevaluation`，对话 id 用 `knowledge-reevaluation:`。宿主自带的 Runtime 适配会先 `findTaskByIdempotencyKey`，再 `submitTask({goal: "RECHECK <workKey>", conversationId: "knowledge-watch:<namespace>", idempotencyKey: workKey})`。
+- 该分支里的 `knowledge-watch-host.js` 还是旧副本，没有 `layaChooser`、`feedCollect` 和 `dialogueProjection`。
+
+最小替换是删掉 `createUnavailableSourcePort` 的生产导入、`interestDecider`、`sourcePort`、`workPort` 和上述 `notificationPort`，改成：
+
+```js
+const collectTool = feedsHost?.tools.find(tool => tool.descriptor.name === 'feeds.collect');
+knowledgeWatchHost = createKnowledgeWatchHost({
+  profile: 'huawei_ict_agentarts',
+  namespace,
+  checkpointTaskId: knowledgeWatchTask.taskId,
+  checkpoints: runtimeApplication.runtime,
+  now: () => Date.now(),
+  layaChooser: localLaya,
+  runtime: runtimeApplication.runtime,
+  feedCollect: collectTool
+    ? (query, signal) => collectTool.execute(query, {taskId: knowledgeWatchTask.taskId, signal})
+    : null,
+});
+```
+
+已存在的 `knowledge-watch-root:` 任务可以继续作为 `checkpointTaskId`，不必改键。请使用本 PR 的宿主文件，不要保留总装分支里的旧副本。主对话读 `dialogueProjection().items[].answer`。有真实 `NotificationService` 时再接入；`acknowledge` 返回 `state: "delivered"` 后调用 `observeNotificationAcknowledgement`。
+
 ## 已验证和未验证
 
-已在 `node --test apps/desktop/test/knowledge-watch-host.test.mjs` 验证，14 项通过。其中原有 9 项仍覆盖偶然提问、持续跟踪、撤销、重复与乱序、损坏检查点、丢失提交和停止。本轮新增：
+已在 `node --test apps/desktop/test/knowledge-watch-host.test.mjs` 验证，15 项通过。其中原有 9 项仍覆盖偶然提问、持续跟踪、撤销、重复与乱序、损坏检查点、丢失提交和停止。此前端口适配覆盖：
 
 - 真实 `LayaInterestDecisionService` 包住一个选择器双份：持续兴趣才调用模型形态的 `choose`，弃权不跟踪。没有启动 Laya 进程。
 - 合成的 `FeedService.collect` 结果：只影响绑定该来源的关注；`unchanged` 不重复提交；`TIMEOUT` 不把文档当成首次运行。这不是真实网络变化。
@@ -157,7 +199,8 @@ knowledgeWatch.start();
 - 撤销发生在 `read` 返回之前时，`submit` 不会被调用。
 - `createSchedule` 相同输入不产生第二条；`stop` 通过 `reconcileSchedules` 取消本对话的 pending 调度。
 - `AuthorizationPolicy.authorize` 覆盖范围时记录 `authorized`；抛 `UNAUTHORIZED` 时 `allowed` 为 false。
+- 主对话投影：一次提问的 `answer.kind` 是 `withheld` / `suggested_only`。跟踪建立后、还没有引用时是 `citation_missing`。合成 `FeedService.collect` 结果变成 `latest_observation`，`usableAsCurrentFact` 为 false，旧 `boundRevision` 仍是 `source-v1`。同一版本再读不增加 `submitTask`。撤销后投影保持 `user_revoked`，重启读回同样状态。来源摘录里的指令文本没有进入 `answer`，也没有改变 `authorization.basis`。
 
-另有一次公开只读：`HttpFeedProvider.fetchFeed({url: "https://hnrss.org/frontpage"})`。`verification` 为 `conditional`，`source` 为 `http-feeds`，结果 `state` 为 `fetched`，没有 ETag，有 Last-Modified，正文 16437 字节。没有先前版本，因此没有观察到变化，也没有把这次正文送进宿主。没有修改订阅、没有发消息、没有上传私人数据。
+一次真实公开来源读并读回：用已构建的 `HttpFeedProvider` 和 `FeedService` 读取 `https://hnrss.org/frontpage`，经 `refreshSubscribedFeed` 进入宿主。兴趣选择器是双份，没有启动 Laya；检查点在内存，不是 Runtime sqlite。一次提问为 `suggested`，持续兴趣为 `tracked`。一页收集返回 `observed` / `available`，`notified` 为 true，`submitTask` 1 次。`answer.kind` 为 `latest_observation`，`usableAsCurrentFact` 为 false，`boundRevision` 为 `interest-binding`，`citation` 是该页条目的公开 `contentRef`。新建宿主读同一检查点后，引用和 `tracked` 状态一致。没有修改订阅，没有发通知，没有上传私人数据。这不是桌面会话授权后的 `feeds.collect`。
 
 尚未验证：`main.js` 挂载、真实 Laya 进程、桌面会话授权后的 `feeds.collect`、Runtime sqlite、以及用户界面上的 `acknowledge`。这些属于 Gemini 的总装和现有进程，不在本宿主测试里启动。
