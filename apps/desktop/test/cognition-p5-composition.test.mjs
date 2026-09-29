@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdir, mkdtemp, rm} from 'node:fs/promises';
-import {existsSync, readFileSync} from 'node:fs';
+import {existsSync, readFileSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {FakeCoordinationStoreHost} from '@personal-agent/goals/store';
@@ -164,4 +164,84 @@ test('cognition-p5-composition: wires durable stores, policy execution, mail pip
     samplingIntervalMs: 5000,
   });
   assert.equal(anomalyReceipt.status, 'monitoring'); // 1st elevated sample
+});
+
+test('cognition-p5-composition: missing policy outputs proposal without mutating graph, missing notificationPort does not claim delivery', async t => {
+  const root = fileURLToPath(new URL('../../../.cache/cognition-p5-test/', import.meta.url));
+  await mkdir(root, {recursive: true});
+  const userData = await mkdtemp(path.join(root, 'case-unconfigured-'));
+
+  t.after(async () => {
+    await rm(userData, {recursive: true, force: true});
+  });
+
+  const storeHost = new FakeCoordinationStoreHost();
+  const graphNamespace = 'test-p5-unconfigured';
+  const store = storeHost.provision(graphNamespace);
+
+  store.append(0, {
+    id: 'meeting-p5-unconf',
+    kind: 'fact',
+    summary: '周五技术方案讨论',
+    sourceRef: 'calendar:work',
+    sensitivity: 'private',
+    state: 'active',
+    validFrom: '2026-09-29T10:00:00.000Z',
+    validUntil: '2026-09-30T00:00:00.000Z',
+    reason: '初始日程',
+    dependencies: [],
+  });
+
+  const application = {
+    runtime: {
+      bindCoordinationStore: ns => storeHost.bind(ns),
+    },
+  };
+
+  const mockInference = createMockLayaInference(0);
+
+  // Explicitly omit policyEvaluator and notificationPort
+  const composition = createCognitionP5Composition({
+    application,
+    userData,
+    namespace: graphNamespace,
+    inference: mockInference,
+  });
+
+  const snap = composition.snapshot();
+  assert.equal(snap.hasExecutionPort, false);
+  assert.equal(snap.hasPolicyEvaluator, false);
+  assert.equal(snap.hasNotificationPort, false);
+
+  // 1. Process Meeting Event: must produce proposal, NOT applied, and graph revision unchanged!
+  const event = {
+    eventId: 'evt-unconf-1',
+    source: 'calendar:work',
+    meetingFactId: 'meeting-p5-unconf',
+    originalSummary: '周五技术方案讨论',
+    newSummary: '周五技术方案讨论 (推迟至17:00)',
+    sourceRevision: 'v-1',
+    detectedAt: '2026-09-29T11:00:00.000Z',
+    deadline: new Date(Date.now() + 60_000).toISOString(),
+    signal: new AbortController().signal,
+  };
+
+  const meetingReceipt = await composition.processMeetingEvent(event);
+  assert.equal(meetingReceipt.status, 'proposal');
+  assert.match(meetingReceipt.reason, /待受信执行端口/);
+  assert.equal(store.read().revision, 1); // Graph untouched!
+
+  // 2. Corrupt checkpoint file handling: must throw, not swallow as empty
+  const checkpointFile = path.join(userData, 'mail-triage-checkpoint.json');
+  writeFileSync(checkpointFile, 'CORRUPTED_JSON_CONTENT{{{', 'utf8');
+  await assert.rejects(async () => {
+    await composition.triageMails([
+      {
+        source: 'mail:work',
+        messageId: 'msg-p5-corrupt',
+        sourceRevision: 'rev-1',
+        text: '发件人：测试\n主题：测试\n正文：测试',
+      },
+    ]);
+  }, /Mail triage checkpoint file corrupt or unavailable/);
 });

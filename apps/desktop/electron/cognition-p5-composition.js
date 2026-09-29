@@ -37,16 +37,18 @@ export function createCognitionP5Composition({
   // 1. Durable meeting decision receipt store
   const receiptStore = new FileMeetingDecisionReceiptStore({storageDir: receiptsDir});
 
-  // 2. Policy-guarded execution port: enforces policy checks before CAS appendBatch
-  const executionPort = createPolicyGuardedExecutionPort({
+  // 2. Policy-guarded execution port: enforces policy checks before CAS appendBatch.
+  // Requires explicit, trusted policyEvaluator. When missing, executionPort is undefined
+  // and the coordinator outputs structured proposals (status: 'proposal') without mutating the graph.
+  const executionPort = policyEvaluator ? createPolicyGuardedExecutionPort({
     store,
-    policy: policyEvaluator ?? {
-      evaluateExecution: () => ({allowed: true}),
-    },
+    policy: policyEvaluator,
+    receiptStore,
+    namespace,
     onExecuted: () => {
       try { onUpdate(); } catch {}
     },
-  });
+  }) : undefined;
 
   // 3. Meeting Reschedule Coordinator
   const meetingInference = inference ?? chooser?.inference;
@@ -66,8 +68,8 @@ export function createCognitionP5Composition({
       if (!existsSync(mailCheckpointFile)) return {};
       try {
         return JSON.parse(readFileSync(mailCheckpointFile, 'utf8'));
-      } catch {
-        return {};
+      } catch (err) {
+        throw new Error(`Mail triage checkpoint file corrupt or unavailable (${mailCheckpointFile}): ${err.message}`);
       }
     },
     save(results) {
@@ -85,16 +87,15 @@ export function createCognitionP5Composition({
     now,
   }) : undefined;
 
-  // 5. Device Anomaly Decision Service with confirmed delivery
+  // 5. Device Anomaly Decision Service with confirmed delivery.
+  // When notificationPort is missing, alerts do not claim delivery or lock cooldown.
   const deviceAnomalyService = meetingInference ? new DeviceAnomalyDecisionService(meetingInference, {
     cpuThresholdPercent: 90,
     memoryThresholdPercent: 90,
     recoveryThresholdPercent: 80,
     sustainedSampleCount: 3,
     cooldownMs: 300_000,
-    notificationPort: notificationPort ?? {
-      sendAdvisoryNotification: async () => ({delivered: true}),
-    },
+    notificationPort,
     now,
   }) : undefined;
 
@@ -110,6 +111,9 @@ export function createCognitionP5Composition({
         hasMeetingCoordinator: Boolean(meetingCoordinator),
         hasMailPipeline: Boolean(mailPipeline),
         hasDeviceAnomalyService: Boolean(deviceAnomalyService),
+        hasExecutionPort: Boolean(executionPort),
+        hasPolicyEvaluator: Boolean(policyEvaluator),
+        hasNotificationPort: Boolean(notificationPort),
         namespace,
       };
     },
@@ -139,6 +143,22 @@ export function createCognitionP5Composition({
     async evaluateDeviceSample(sample, layaRequest) {
       if (!deviceAnomalyService) throw new Error('Device anomaly service unavailable: Laya inference not connected');
       return deviceAnomalyService.evaluateSample(sample, layaRequest);
+    },
+
+    async getPendingProposals() {
+      if (!meetingCoordinator) return [];
+      const proposals = await meetingCoordinator.listReceipts({status: 'proposal'});
+      const reviews = await meetingCoordinator.listReceipts({status: 'requires_review'});
+      return [...proposals, ...reviews];
+    },
+
+    async listMeetingReceipts(filter) {
+      if (!meetingCoordinator) return [];
+      return meetingCoordinator.listReceipts(filter);
+    },
+
+    dispose() {
+      // Clean up any composition listeners or resources
     },
   };
 }

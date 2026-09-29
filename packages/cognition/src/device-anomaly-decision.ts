@@ -264,7 +264,8 @@ export class DeviceAnomalyDecisionService {
         const selectedCandidate = candidates.find(c => c.id === selection.selected?.id);
         const safeAdvice = this.formatAdvice(selectedCandidate, selection);
 
-        let deliveryConfirmed = true;
+        let deliveryConfirmed = false;
+        let notificationDelivered: boolean | undefined = undefined;
         if (this.notificationPort) {
           try {
             const deliveryResult = await this.notificationPort.sendAdvisoryNotification({
@@ -277,14 +278,26 @@ export class DeviceAnomalyDecisionService {
               timestamp: sample.timestamp,
             });
             deliveryConfirmed = deliveryResult.delivered === true;
+            notificationDelivered = deliveryConfirmed;
           } catch {
             deliveryConfirmed = false;
+            notificationDelivered = false;
           }
+        } else {
+          deliveryConfirmed = false;
+          notificationDelivered = false;
         }
 
         state.isAlertActive = true;
         if (deliveryConfirmed) {
           state.lastAlertTimestampMs = sampleTimeMs;
+        }
+
+        let adviceText = safeAdvice;
+        if (!this.notificationPort) {
+          adviceText = `${safeAdvice} (未配置通知端口，通知未投递，未锁定冷却窗口)`;
+        } else if (!deliveryConfirmed) {
+          adviceText = `${safeAdvice} (桌面通知投递失败，未锁定冷却窗口以待后续重试)`;
         }
 
         return {
@@ -297,10 +310,8 @@ export class DeviceAnomalyDecisionService {
           selection,
           selectedCandidate,
           candidates,
-          safeAdvice: deliveryConfirmed
-            ? safeAdvice
-            : `${safeAdvice} (桌面通知投递失败，未锁定冷却窗口以待后续重试)`,
-          ...(this.notificationPort ? { notificationDelivered: deliveryConfirmed } : {}),
+          safeAdvice: adviceText,
+          notificationDelivered,
         };
       }
 

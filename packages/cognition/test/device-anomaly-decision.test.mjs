@@ -375,3 +375,38 @@ test('DeviceAnomalyDecisionService only locks cooldown when notification deliver
   });
   assert.equal(res4.status, 'cooldown_suppressed');
 });
+
+test('DeviceAnomalyDecisionService: missing notificationPort does not claim delivery or lock cooldown', async () => {
+  const inference = createMockLayaChoiceInference(0);
+  const service = new DeviceAnomalyDecisionService(inference, {
+    cpuThresholdPercent: 90,
+    sustainedSampleCount: 1,
+    cooldownMs: 60_000,
+    // notificationPort explicitly omitted
+  });
+
+  const baseTime = Date.parse('2026-09-29T19:00:00.000Z');
+
+  // Sample 1: Triggers alert without notificationPort
+  const res1 = await service.evaluateSample({
+    source: 'sys:metric-unconfigured',
+    timestamp: new Date(baseTime).toISOString(),
+    cpuPercent: 95,
+    memoryPercent: 50,
+    samplingIntervalMs: 5000,
+  });
+  assert.equal(res1.status, 'alert_triggered');
+  assert.equal(res1.notificationDelivered, false);
+  assert.match(res1.safeAdvice, /未配置通知端口/);
+
+  // Sample 2 (5s later): Cooldown was NOT locked, so it triggers again!
+  const res2 = await service.evaluateSample({
+    source: 'sys:metric-unconfigured',
+    timestamp: new Date(baseTime + 5000).toISOString(),
+    cpuPercent: 95,
+    memoryPercent: 50,
+    samplingIntervalMs: 5000,
+  });
+  assert.equal(res2.status, 'alert_triggered');
+  assert.equal(res2.notificationDelivered, false);
+});

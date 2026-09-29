@@ -83,6 +83,7 @@ export interface MeetingReceiptQuery {
 export interface MeetingDecisionReceiptStorePort {
   loadReceipt(query: string | MeetingReceiptQuery): MeetingReceiptRecord | undefined | Promise<MeetingReceiptRecord | undefined>;
   saveReceipt(record: MeetingReceiptRecord): void | Promise<void>;
+  listReceipts?(filter?: { readonly status?: string; readonly namespace?: string; readonly source?: string }): MeetingReceiptRecord[] | Promise<MeetingReceiptRecord[]>;
 }
 
 export class InMemoryMeetingDecisionReceiptStore implements MeetingDecisionReceiptStorePort {
@@ -118,6 +119,17 @@ export class InMemoryMeetingDecisionReceiptStore implements MeetingDecisionRecei
     const key = this.makeKey(record.namespace, record.source, record.eventId);
     this.records.set(key, structuredClone(record));
   }
+
+  listReceipts(filter?: { readonly status?: string; readonly namespace?: string; readonly source?: string }): MeetingReceiptRecord[] {
+    const results: MeetingReceiptRecord[] = [];
+    for (const record of this.records.values()) {
+      if (filter?.namespace && record.namespace !== filter.namespace) continue;
+      if (filter?.source && record.source !== filter.source) continue;
+      if (filter?.status && record.status !== filter.status) continue;
+      results.push(structuredClone(record));
+    }
+    return results;
+  }
 }
 
 export interface FileMeetingDecisionReceiptStoreOptions {
@@ -148,27 +160,35 @@ export class FileMeetingDecisionReceiptStore implements MeetingDecisionReceiptSt
       const file = this.getFilePath(query.namespace, query.source, query.eventId);
       if (!existsSync(file)) return undefined;
       try {
-        return JSON.parse(readFileSync(file, 'utf8'));
-      } catch {
-        return undefined;
+        const raw = readFileSync(file, 'utf8');
+        return JSON.parse(raw) as MeetingReceiptRecord;
+      } catch (err) {
+        throw new Error(`Receipt file corrupt or unreadable (${file}): ${err instanceof Error ? err.message : String(err)}`);
       }
     }
     const targetEventId = typeof query === 'string' ? query : query.eventId;
+    let files: string[];
     try {
-      const files = readdirSync(this.storageDir).filter(f => f.startsWith('receipt-') && f.endsWith('.json'));
-      for (const f of files) {
-        try {
-          const record = JSON.parse(readFileSync(path.join(this.storageDir, f), 'utf8')) as MeetingReceiptRecord;
-          if (record && record.eventId === targetEventId) {
-            if (typeof query === 'object') {
-              if (query.namespace && record.namespace !== query.namespace) continue;
-              if (query.source && record.source !== query.source) continue;
-            }
-            return record;
-          }
-        } catch {}
+      files = readdirSync(this.storageDir).filter(f => f.startsWith('receipt-') && f.endsWith('.json'));
+    } catch (err) {
+      throw new Error(`Failed to read receipt storage directory (${this.storageDir}): ${err instanceof Error ? err.message : String(err)}`);
+    }
+    for (const f of files) {
+      const fullPath = path.join(this.storageDir, f);
+      let record: MeetingReceiptRecord;
+      try {
+        record = JSON.parse(readFileSync(fullPath, 'utf8')) as MeetingReceiptRecord;
+      } catch (err) {
+        throw new Error(`Corrupted receipt file detected (${fullPath}): ${err instanceof Error ? err.message : String(err)}`);
       }
-    } catch {}
+      if (record && record.eventId === targetEventId) {
+        if (typeof query === 'object') {
+          if (query.namespace && record.namespace !== query.namespace) continue;
+          if (query.source && record.source !== query.source) continue;
+        }
+        return record;
+      }
+    }
     return undefined;
   }
 
@@ -177,6 +197,28 @@ export class FileMeetingDecisionReceiptStore implements MeetingDecisionReceiptSt
     const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
     writeFileSync(tmp, JSON.stringify(record, null, 2), 'utf8');
     renameSync(tmp, file);
+  }
+
+  listReceipts(filter?: { readonly status?: string; readonly namespace?: string; readonly source?: string }): MeetingReceiptRecord[] {
+    let files: string[];
+    try {
+      files = readdirSync(this.storageDir).filter(f => f.startsWith('receipt-') && f.endsWith('.json'));
+    } catch {
+      return [];
+    }
+    const results: MeetingReceiptRecord[] = [];
+    for (const f of files) {
+      try {
+        const fullPath = path.join(this.storageDir, f);
+        const record = JSON.parse(readFileSync(fullPath, 'utf8')) as MeetingReceiptRecord;
+        if (!record) continue;
+        if (filter?.namespace && record.namespace !== filter.namespace) continue;
+        if (filter?.source && record.source !== filter.source) continue;
+        if (filter?.status && record.status !== filter.status) continue;
+        results.push(record);
+      } catch {}
+    }
+    return results;
   }
 }
 
@@ -189,7 +231,12 @@ export interface MeetingPlanExecutionPort {
     readonly sourceRevision: string;
     readonly deadline?: string | undefined;
     readonly signal?: AbortSignal | undefined;
-  }): Promise<{ readonly applied: boolean; readonly snapshot: GraphSnapshot; readonly error?: string }>;
+  }): Promise<{
+    readonly applied: boolean;
+    readonly snapshot: GraphSnapshot;
+    readonly error?: string | undefined;
+    readonly notificationError?: string | undefined;
+  }>;
 }
 
 export function createStoreExecutionPort(store: AtomicCoordinationStorePort): MeetingPlanExecutionPort {
@@ -216,12 +263,15 @@ export interface MeetingExecutionPolicyPort {
 
 export interface PolicyGuardedExecutionPortOptions {
   readonly store: AtomicCoordinationStorePort;
-  readonly policy?: MeetingExecutionPolicyPort | undefined;
+  readonly policy: MeetingExecutionPolicyPort;
+  readonly receiptStore?: MeetingDecisionReceiptStorePort | undefined;
+  readonly namespace?: string | undefined;
   readonly onExecuted?: ((snapshot: GraphSnapshot) => void) | undefined;
 }
 
 export function createPolicyGuardedExecutionPort(options: PolicyGuardedExecutionPortOptions): MeetingPlanExecutionPort {
-  if (!options || !options.store || typeof options.store.appendBatch !== 'function') {
+  if (!options || !options.store || typeof options.store.appendBatch !== 'function'
+    || !options.policy || typeof options.policy.evaluateExecution !== 'function') {
     throw new CognitionError('INVALID_ARGUMENT');
   }
   return {
@@ -229,33 +279,68 @@ export function createPolicyGuardedExecutionPort(options: PolicyGuardedExecution
       if (request.signal?.aborted) {
         return { applied: false, snapshot: options.store.read(), error: '执行前已取消' };
       }
-      if (request.deadline && Date.now() >= Date.parse(request.deadline)) {
-        return { applied: false, snapshot: options.store.read(), error: '执行已超过截止时间' };
-      }
-      if (options.policy) {
-        const policyDecision = await options.policy.evaluateExecution({
-          eventId: request.eventId,
-          source: request.source,
-          inputs: request.inputs,
-          risk: 'low',
-        });
-        if (!policyDecision.allowed) {
-          return { applied: false, snapshot: options.store.read(), error: `Policy 拒绝执行: ${policyDecision.reason ?? '未获授权'}` };
+      if (request.deadline !== undefined) {
+        const parsed = Date.parse(request.deadline);
+        if (!Number.isFinite(parsed) || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(request.deadline)) {
+          return { applied: false, snapshot: options.store.read(), error: '非法截止时间' };
+        }
+        if (Date.now() >= parsed) {
+          return { applied: false, snapshot: options.store.read(), error: '执行已超过截止时间' };
         }
       }
+
+      const policyDecision = await options.policy.evaluateExecution({
+        eventId: request.eventId,
+        source: request.source,
+        inputs: request.inputs,
+        risk: 'low',
+      });
+      if (!policyDecision.allowed) {
+        return { applied: false, snapshot: options.store.read(), error: `Policy 拒绝执行: ${policyDecision.reason ?? '未获授权'}` };
+      }
+
+      // Re-verify cancellation and deadline after asynchronous policy evaluation
+      if (request.signal?.aborted) {
+        return { applied: false, snapshot: options.store.read(), error: '执行前已取消（异步授权后中止）' };
+      }
+      if (request.deadline !== undefined) {
+        const parsed = Date.parse(request.deadline);
+        if (Date.now() >= parsed) {
+          return { applied: false, snapshot: options.store.read(), error: '执行已超过截止时间（异步授权后超时）' };
+        }
+      }
+
+      let next: GraphSnapshot;
       try {
-        const next = options.store.appendBatch(request.expectedRevision, request.inputs);
-        options.onExecuted?.(next);
-        return { applied: true, snapshot: next };
+        next = options.store.appendBatch(request.expectedRevision, request.inputs);
       } catch (err) {
-        const current = options.store.read();
-        const alreadyCommitted = current.history.some(n => n.reason?.includes(`[eventId: ${request.eventId}]`));
-        if (alreadyCommitted) {
-          return { applied: true, snapshot: current };
+        if (options.receiptStore) {
+          try {
+            const record = await options.receiptStore.loadReceipt({
+              eventId: request.eventId,
+              source: request.source,
+              namespace: options.namespace,
+            });
+            if (record && record.status === 'applied' && record.sourceRevision === request.sourceRevision) {
+              return { applied: true, snapshot: options.store.read() };
+            }
+          } catch {}
         }
-        return { applied: false, snapshot: current, error: err instanceof Error ? err.message : String(err) };
+        return { applied: false, snapshot: options.store.read(), error: err instanceof Error ? err.message : String(err) };
       }
-    }
+
+      let notificationError: string | undefined;
+      try {
+        options.onExecuted?.(next);
+      } catch (notifyErr) {
+        notificationError = notifyErr instanceof Error ? notifyErr.message : String(notifyErr);
+      }
+      return {
+        applied: true,
+        snapshot: next,
+        ...(notificationError ? { notificationError } : {}),
+      };
+    },
   };
 }
 
@@ -304,6 +389,18 @@ export class MeetingRescheduleCoordinator {
       ...(source ? {source} : {}),
     });
     return record?.receipt;
+  }
+
+  /** List receipts by optional status or source from receipt store. */
+  async listReceipts(filter?: { readonly status?: string; readonly source?: string }): Promise<readonly MeetingReceiptRecord[]> {
+    if (typeof this.receiptStore.listReceipts === 'function') {
+      return this.receiptStore.listReceipts({
+        namespace: this.namespace,
+        ...(filter?.source ? { source: filter.source } : {}),
+        ...(filter?.status ? { status: filter.status } : {}),
+      });
+    }
+    return [];
   }
 
   /**
@@ -456,12 +553,20 @@ export class MeetingRescheduleCoordinator {
     const initialSnapshot = this.store.read();
     const graphRevisionBefore = initialSnapshot.revision;
 
-    // 2. Crash window recovery: check if graph was already updated with this event in a prior crash
+    // 2. Crash window recovery: check if graph was already updated with this exact event in a prior crash
     const alreadyCommittedFact = initialSnapshot.history.findLast(
-      node => node.id === event.meetingFactId && node.kind === 'fact' && node.reason?.includes(`[eventId: ${event.eventId}]`)
+      node => node.id === event.meetingFactId
+        && node.kind === 'fact'
+        && node.sourceRef === event.source
+        && node.summary === event.newSummary
+        && node.reason?.includes(`[eventId: ${event.eventId}]`)
+        && node.reason?.includes(`[sourceRevision: ${event.sourceRevision}]`)
     );
     if (alreadyCommittedFact) {
-      const committedNodes = initialSnapshot.history.filter(node => node.reason?.includes(`[eventId: ${event.eventId}]`));
+      const committedNodes = initialSnapshot.history.filter(
+        node => node.reason?.includes(`[eventId: ${event.eventId}]`)
+          && node.reason?.includes(`[sourceRevision: ${event.sourceRevision}]`)
+      );
       const recoveredReceipt: MeetingDecisionReceipt = {
         eventId: event.eventId,
         source: event.source,

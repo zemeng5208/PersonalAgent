@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync, rmSync} from 'node:fs';
+import {mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {FakeCoordinationStoreHost} from '@personal-agent/goals/store';
@@ -10,6 +10,7 @@ import {
   createPolicyGuardedExecutionPort,
   InMemoryMeetingDecisionReceiptStore,
   FileMeetingDecisionReceiptStore,
+  CognitionError,
 } from '../dist/index.js';
 
 function createMeetingFixture() {
@@ -549,4 +550,137 @@ test('MeetingRescheduleCoordinator: createPolicyGuardedExecutionPort evaluates p
   const receipt2 = await coordinator.processEvent(event2);
   assert.equal(receipt2.status, 'applied');
   assert.equal(store.read().revision, 9); // Committed
+});
+
+test('MeetingRescheduleCoordinator: createPolicyGuardedExecutionPort requires policy and validates deadline & cancellation', async () => {
+  const {store} = createMeetingFixture();
+
+  // 1. Missing policy throws INVALID_ARGUMENT
+  assert.throws(() => {
+    createPolicyGuardedExecutionPort({store});
+  }, (err) => err instanceof CognitionError && err.code === 'INVALID_ARGUMENT');
+
+  // 2. Invalid deadline string rejected
+  const policy = { evaluateExecution: () => ({allowed: true}) };
+  const port = createPolicyGuardedExecutionPort({store, policy});
+  const resInvalidDeadline = await port.executeBatch({
+    expectedRevision: store.read().revision,
+    inputs: [],
+    eventId: 'evt-bad-deadline',
+    source: 'calendar:work',
+    sourceRevision: 'v-1',
+    deadline: 'not-a-date',
+  });
+  assert.equal(resInvalidDeadline.applied, false);
+  assert.equal(resInvalidDeadline.error, '非法截止时间');
+
+  // 3. Cancelled during async policy evaluation
+  let abortController;
+  const slowPolicy = {
+    async evaluateExecution() {
+      // Simulate aborting signal during policy evaluation
+      abortController.abort();
+      return {allowed: true};
+    },
+  };
+  const slowPort = createPolicyGuardedExecutionPort({store, policy: slowPolicy});
+  abortController = new AbortController();
+  const resAbortedDuring = await slowPort.executeBatch({
+    expectedRevision: store.read().revision,
+    inputs: [],
+    eventId: 'evt-abort-during',
+    source: 'calendar:work',
+    sourceRevision: 'v-1',
+    signal: abortController.signal,
+  });
+  assert.equal(resAbortedDuring.applied, false);
+  assert.match(resAbortedDuring.error, /异步授权后中止/);
+
+  // 4. onExecuted throwing does NOT cause applied batch to be marked as failed
+  let notifyCalled = false;
+  const throwingPort = createPolicyGuardedExecutionPort({
+    store,
+    policy,
+    onExecuted: () => {
+      notifyCalled = true;
+      throw new Error('desktop notification crashed');
+    },
+  });
+  const resNotifyError = await throwingPort.executeBatch({
+    expectedRevision: store.read().revision,
+    inputs: [{
+      id: 'test-node-exec',
+      kind: 'fact',
+      summary: '测试写入',
+      sourceRef: 'test',
+      sensitivity: 'public',
+      state: 'active',
+      validFrom: '2026-09-29T10:00:00.000Z',
+      validUntil: '2026-09-30T00:00:00.000Z',
+      reason: '测试',
+      dependencies: [],
+    }],
+    eventId: 'evt-notify-fail',
+    source: 'calendar:work',
+    sourceRevision: 'v-1',
+  });
+  assert.equal(resNotifyError.applied, true); // Still applied!
+  assert.equal(notifyCalled, true);
+  assert.match(resNotifyError.notificationError, /desktop notification crashed/);
+});
+
+test('FileMeetingDecisionReceiptStore: throws error on corrupted receipt file', () => {
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'receipt-corrupt-test-'));
+  try {
+    const store = new FileMeetingDecisionReceiptStore({storageDir: tmpDir});
+    // Create a corrupted JSON file
+    writeFileSync(path.join(tmpDir, 'receipt-bad.json'), 'CORRUPTED_JSON_NOT_VALID{', 'utf8');
+
+    // Scanning directory should detect corrupt file and throw, NOT swallow as undefined
+    assert.throws(() => {
+      store.loadReceipt('any-event-id');
+    }, /Corrupted receipt file detected/);
+  } finally {
+    rmSync(tmpDir, {recursive: true, force: true});
+  }
+});
+
+test('MeetingRescheduleCoordinator: crash recovery does not match node with different sourceRef or summary', async () => {
+  const {store} = createMeetingFixture();
+  const mockLaya = createMockLaya(0, 0.95);
+
+  // Append a fact node that has eventId in reason, but sourceRef is calendar:personal (not calendar:work)
+  store.append(store.read().revision, {
+    id: 'meeting-sync-1',
+    kind: 'fact',
+    summary: '周四下午 15:00 别的会议',
+    sourceRef: 'calendar:personal',
+    sensitivity: 'private',
+    state: 'active',
+    validFrom: '2026-09-29T10:00:00.000Z',
+    validUntil: '2026-09-30T00:00:00.000Z',
+    reason: '外部会议改期通知 [eventId: evt-foreign-1] [sourceRevision: v-1]',
+    dependencies: [],
+  });
+
+  const coordinator = new MeetingRescheduleCoordinator({
+    store,
+    inference: mockLaya,
+  });
+
+  const event = {
+    eventId: 'evt-foreign-1',
+    source: 'calendar:work', // different source!
+    meetingFactId: 'meeting-sync-1',
+    originalSummary: '周四下午 15:00 项目架构同步会',
+    newSummary: '周四下午 16:00 项目架构同步会',
+    sourceRevision: 'v-1',
+    detectedAt: '2026-09-29T11:00:00.000Z',
+    deadline: new Date(Date.now() + 60_000).toISOString(),
+    signal: new AbortController().signal,
+  };
+
+  const receipt = await coordinator.processEvent(event);
+  // Must NOT be already_processed because source and summary did not match!
+  assert.notEqual(receipt.status, 'already_processed');
 });
