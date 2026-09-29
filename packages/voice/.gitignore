@@ -1,0 +1,4 @@
+# Local Windows System.Speech native host compilation artifacts
+host/*.exe
+host/bin/
+host/obj/

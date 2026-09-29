@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {test} from 'node:test';
 import {Client} from '@personal-agent/client';
+import {parseCoordinationAvailableTools, MAX_AVAILABLE_TOOLS} from '@personal-agent/coordination';
 import {createRuntimeApplication} from '../dist/application.js';
 
 const descriptor = {
@@ -11,7 +12,8 @@ const descriptor = {
   inputSchema: {type: 'object', required: ['path'], additionalProperties: false,
     description: 'private C:\\Users\\example',
     properties: {path: {type: 'string', minLength: 1, maxLength: 32,
-      description: 'private file name', enum: ['secret-path']}}},
+      description: 'private file name', enum: ['secret-path']},
+      units: {enum: ['metric', 'imperial']}}},
   outputSchema: {type: 'object', required: ['value'], additionalProperties: false,
     properties: {value: {type: 'string'}}},
   sideEffect: 'read', requiredScopes: ['fixture:read'],
@@ -100,7 +102,7 @@ test('task catalog projects only public Schema fields and rechecks before export
     assert.ok(availabilityCalls >= 2);
     assert.deepEqual(observed, [{name: 'fixture.read', version: '1.0.0', inputSchema: {
       type: 'object', required: ['path'], additionalProperties: false,
-      properties: {path: {type: 'string', minLength: 1, maxLength: 32}},
+      properties: {path: {type: 'string', minLength: 1, maxLength: 32}, units:{type:'string'}},
     }}]);
     assert.doesNotMatch(JSON.stringify(observed), /private|secret-path|Users/);
   } finally {
@@ -108,6 +110,28 @@ test('task catalog projects only public Schema fields and rechecks before export
     app.close();
     await rm(directory, {recursive: true, force: true});
   }
+});
+
+test('only host-approved enum paths are published and narrowing is rechecked before export', async () => {
+  const binding={toolName:descriptor.name,toolVersion:descriptor.version,publicEnumPaths:['/units'],available:()=>true};
+  let observed;
+  const app=createRuntimeApplication({path:':memory:',profile:'huawei_ict_agentarts',
+    tools:[{descriptor,execute:async()=>({value:'fixture'})}],competitionToolExports:[toolExport],
+    competitionToolAvailability:[binding],coordination:{execute:async request=>{
+      observed=request.availableTools;
+      assert.deepEqual(observed[0].inputSchema.properties.units,{type:'string',enum:['metric','imperial']});
+      assert.doesNotMatch(JSON.stringify(observed),/secret-path|private|Users/);
+      await app.assertCompetitionToolCatalogAllowed({...request,availableTools:observed});
+      binding.publicEnumPaths=[];
+      await assert.rejects(app.assertCompetitionToolCatalogAllowed({...request,availableTools:observed}),{code:'UNAUTHORIZED'});
+      return {kind:'text',text:'Public enum checked',verification:'mock'};
+    }}});
+  try {
+    const client=new Client(app,Date.now);await client.connect();
+    const {taskId}=await client.call('task.submit',{goal:'Use public unit options',conversationId:'enum'}, {idempotencyKey:'enum'});
+    assert.equal((await waitFor(app,taskId,['succeeded','failed'])).state,'succeeded');
+    assert.ok(observed);
+  } finally {app.close();}
 });
 
 test('empty trusted catalog stops an opt-in first cloud request', async () => {
@@ -338,10 +362,62 @@ test('catalog binding rejects versions beyond the cloud adapter limit', () => {
   }), {code: 'INVALID_ARGUMENT'});
 });
 
+test('routine queries and scoped local work execute without prompting while other tools still wait', async () => {
+  for (const [automatic,sideEffect] of [[true,'read'],[true,'local_write'],[false,'read']]) {
+    let executions=0;
+    const app=createRuntimeApplication({path:':memory:',profile:'huawei_ict_agentarts',
+      tools:[{descriptor:{...descriptor,sideEffect},execute:async()=>{executions++;return {value:'public forecast'};}}],
+      automaticTools:automatic?[{toolName:descriptor.name,toolVersion:descriptor.version}]:[],
+      competitionToolExports:[toolExport],
+      competitionToolAvailability:[{toolName:descriptor.name,toolVersion:descriptor.version,available:()=>true}],
+      coordination:{execute:async request=>request.continuation
+        ? {kind:'text',text:'Public query completed',verification:'unverified'}
+        : {kind:'tool_proposal',proposalId:'public-query',toolName:descriptor.name,
+          toolVersion:descriptor.version,arguments:{path:'secret-path'},verification:'unverified'}}});
+    try {
+      const client=new Client(app,Date.now);await client.connect();
+      const {taskId}=await client.call('task.submit',{goal:'Read public forecast',conversationId:'public'},
+        {idempotencyKey:'public-query'});
+      const task=await waitFor(app,taskId,['succeeded','failed','waiting_approval']);
+      assert.equal(task.state,automatic?'succeeded':'waiting_approval');
+      assert.equal(executions,automatic?1:0);
+      const approvals=(await client.call('approval.list',{taskId})).items;
+      assert.equal(approvals.length,automatic?0:1);
+      if(automatic) assert.ok(app.runtime.loadCheckpoint(taskId,`routine-tool-policy:competition-tool-${taskId}-1`));
+    }finally{app.close();}
+  }
+  assert.throws(()=>createRuntimeApplication({path:':memory:',profile:'huawei_ict_agentarts',
+    tools:[{descriptor:{...descriptor,sideEffect:'external_write'},execute:async()=>({value:'unused'})}],
+    automaticTools:[{toolName:descriptor.name,toolVersion:descriptor.version}]}),{code:'INVALID_ARGUMENT'});
+});
+
+test('combined module catalog survives Runtime projection and cloud parsing without truncation', async () => {
+  const names = Array.from({length: 24}, (_, i) => `module${i}.read`);
+  const tools = names.map(name => ({descriptor:{...descriptor,name},execute:async()=>({value:'unused'})}));
+  let observed;
+  const app = createRuntimeApplication({path:':memory:',profile:'huawei_ict_agentarts',tools,
+    competitionToolExports:names.map(toolName=>({...toolExport,toolName})),
+    competitionToolAvailability:names.map(toolName=>({toolName,toolVersion:descriptor.version,available:()=>true})),
+    coordination:{execute:async request=>{
+      observed=parseCoordinationAvailableTools(request.availableTools);
+      await app.assertCompetitionToolCatalogAllowed({...request,availableTools:observed});
+      return {kind:'text',text:'Catalog accepted',verification:'mock'};
+    }}});
+  try {
+    const client=new Client(app,Date.now);await client.connect();
+    const {taskId}=await client.call('task.submit',{goal:'Synthetic combined modules',conversationId:'catalog'},
+      {idempotencyKey:'combined-modules'});
+    assert.equal((await waitFor(app,taskId,['failed','succeeded'])).state,'succeeded');
+    assert.deepEqual(observed.map(tool=>tool.name),names);
+    assert.throws(()=>parseCoordinationAvailableTools(Array.from({length:MAX_AVAILABLE_TOOLS+1},(_,i)=>
+      ({name:`tool${i}`,version:'1',inputSchema:{type:'object',properties:{}}}))));
+  } finally {app.close();}
+});
+
 test('catalog exceeding the cloud adapter byte limit fails before export', async () => {
   const largeDescriptor = {...descriptor, inputSchema: {type: 'object', required: [],
     additionalProperties: false,
-    properties: Object.fromEntries(Array.from({length: 70}, (_, index) => [
+    properties: Object.fromEntries(Array.from({length: 200}, (_, index) => [
       `a${'x'.repeat(115)}${index}`, {type: 'string'},
     ]))}};
   let cloudCalls = 0;

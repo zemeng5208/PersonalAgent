@@ -11,7 +11,8 @@
     "@personal-agent/client": "0.1.0-alpha.1"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/build-host.mjs",
+    "build:host": "node scripts/build-host.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test test/*.test.mjs"
   }
