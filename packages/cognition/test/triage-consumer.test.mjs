@@ -21,6 +21,23 @@ const validFake = {async infer(payload) {
 }};
 const input = (results, selected = messages) => ({namespace: 'host/mail/account-1', messages: selected, labels, results});
 
+test('explicit other category is accepted as a review result', async () => {
+  const otherLabels = {work: 'Work', other: 'Other'};
+  const message = {source: 'mail', messageId: 'other', sourceRevision: '1', text: 'Unclear message'};
+  const service = new LayaTriageService({async infer() {
+    return {answers: {
+      category_0: answer('other', {work: 0.1, other: 0.9}),
+      impact_0: answer('routine', {routine: 0.9, high_impact: 0.1}),
+    }};
+  }});
+  const results = await service.classify({...request([message]), labels: otherLabels});
+  assert.equal(results[0].reason, 'unknown_category');
+  const dispatch = prepareTriageDispatch({namespace: 'host/mail/account-1',
+    messages: [message], labels: otherLabels, results});
+  assert.deepEqual(dispatch.review.map(ref => ref.messageId), ['other']);
+  assert.deepEqual(dispatch.groups, []);
+});
+
 test('same-call Fake results become stable metadata-only groups and reasoning routes', async () => {
   const results = await new LayaTriageService(validFake).classify(request(messages));
   const dispatch = prepareTriageDispatch(input(results));

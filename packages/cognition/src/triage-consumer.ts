@@ -124,6 +124,9 @@ export function prepareTriageDispatch(input: TriageDispatchInput): TriageDispatc
           || result.label !== result.scores.choice) invalid();
       } else if (result.reason === 'uncertain') {
         if (highImpact || result.route !== 'review' || result.abstained !== true || result.label !== null) invalid();
+      } else if (result.reason === 'unknown_category') {
+        if (highImpact || result.route !== 'review' || result.abstained !== true || result.label !== null
+          || result.candidateLabel !== 'other' || result.scores.choice !== 'other') invalid();
       } else if (result.reason === 'high_impact') {
         if (!highImpact || result.route !== 'main_agent'
           || (result.abstained === true ? result.label !== null
