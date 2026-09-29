@@ -255,3 +255,208 @@ test('MailTriagePipeline handles insufficient input and preserves candidateLabel
   assert.equal(uncertainResult?.label, null);
   assert.equal(uncertainResult?.candidateLabel, 'work');
 });
+
+test('MailTriagePipeline pre-filters all-blank chunk and never invokes model', async () => {
+  let inferCalled = false;
+  const inference = {
+    async infer() {
+      inferCalled = true;
+      return {answers: {}};
+    },
+  };
+
+  const pipeline = new MailTriagePipeline({inference});
+  const blankMessages = [
+    {source: 'mail', messageId: 'm-b1', sourceRevision: 'r1', text: ''},
+    {source: 'mail', messageId: 'm-b2', sourceRevision: 'r1', text: '   \t\n  '},
+  ];
+
+  const summary = await pipeline.processBatch({
+    messages: blankMessages,
+    deadline: new Date(Date.now() + 60_000).toISOString(),
+    signal: new AbortController().signal,
+  });
+
+  // Model must NOT be called for all-blank batch
+  assert.equal(inferCalled, false);
+  assert.equal(summary.total, 2);
+  assert.equal(summary.abstainedCount, 2);
+  assert.equal(summary.results[0].reason, 'insufficient_input');
+  assert.equal(summary.results[0].label, null);
+  assert.equal(summary.results[1].reason, 'insufficient_input');
+  assert.equal(summary.results[1].label, null);
+});
+
+test('MailTriagePipeline configDigest differentiates minimumAnswerProbability thresholds', async () => {
+  const inference = createMockInference();
+  const storage = {};
+  const checkpoint = {
+    load: () => ({...storage}),
+    save: (r) => { Object.assign(storage, r); },
+  };
+
+  const msg = [{source: 'mail', messageId: 'm-thresh', sourceRevision: 'r1', text: 'Quarterly financial report'}];
+
+  // Pipeline with default 0.70 threshold
+  const pipeline1 = new MailTriagePipeline({
+    inference,
+    checkpoint,
+    minimumAnswerProbability: 0.70,
+  });
+
+  await pipeline1.processBatch({
+    messages: msg,
+    deadline: new Date(Date.now() + 60_000).toISOString(),
+    signal: new AbortController().signal,
+  });
+  assert.equal(inference.calls.length, 1);
+
+  // Second pipeline with 0.85 threshold: config changed, so it must not reuse cache from 0.70
+  const pipeline2 = new MailTriagePipeline({
+    inference,
+    checkpoint,
+    minimumAnswerProbability: 0.85,
+  });
+
+  await pipeline2.processBatch({
+    messages: msg,
+    deadline: new Date(Date.now() + 60_000).toISOString(),
+    signal: new AbortController().signal,
+  });
+  assert.equal(inference.calls.length, 2);
+});
+
+test('MailTriagePipeline processPagedStream consumes pages with backpressure, progress and resumption', async () => {
+  const inference = createMockInference();
+  const storage = {};
+  const checkpoint = {
+    load: () => ({...storage}),
+    save: (r) => { Object.assign(storage, r); },
+  };
+
+  const pipeline = new MailTriagePipeline({
+    inference,
+    checkpoint,
+    chunkSize: 2,
+  });
+
+  // 3 pages of 2 messages each
+  const pagesData = [
+    {
+      messages: [
+        {source: 'mail:inbox', messageId: 'p1-m1', sourceRevision: 'r1', text: 'Work deliverable 1'},
+        {source: 'mail:inbox', messageId: 'p1-m2', sourceRevision: 'r1', text: 'URGENT: sync on delivery'},
+      ],
+      nextCursor: {uidValidity: 100, lastUid: 2},
+      hasMore: true,
+    },
+    {
+      messages: [
+        {source: 'mail:inbox', messageId: 'p2-m1', sourceRevision: 'r1', text: 'Work deliverable 3'},
+        {source: 'mail:inbox', messageId: 'p2-m2', sourceRevision: 'r1', text: 'Weekly newsletter 4'},
+      ],
+      nextCursor: {uidValidity: 100, lastUid: 4},
+      hasMore: true,
+    },
+    {
+      messages: [
+        {source: 'mail:inbox', messageId: 'p3-m1', sourceRevision: 'r1', text: 'Final signoff 5'},
+      ],
+      nextCursor: {uidValidity: 100, lastUid: 5},
+      hasMore: false,
+    },
+  ];
+
+  let fetchCalls = 0;
+  const progressUpdates = [];
+
+  const summary = await pipeline.processPagedStream({
+    async fetchPage(cursor) {
+      const idx = cursor ? (cursor.lastUid === 2 ? 1 : 2) : 0;
+      fetchCalls++;
+      return pagesData[idx];
+    },
+    deadline: new Date(Date.now() + 60_000).toISOString(),
+    signal: new AbortController().signal,
+    onProgress(p) {
+      progressUpdates.push({...p});
+    },
+  });
+
+  assert.equal(fetchCalls, 3);
+  assert.equal(summary.total, 5);
+  assert.equal(summary.pagesProcessed, 3);
+  assert.equal(summary.stoppedReason, 'completed');
+  assert.equal(summary.hasMore, false);
+  assert.equal(summary.lastCursor?.lastUid, 5);
+  assert.ok(progressUpdates.length >= 3);
+  assert.equal(progressUpdates[progressUpdates.length - 1].processedCount, 5);
+
+  // Checkpoint contains all 5 records
+  assert.equal(Object.keys(storage).length, 5);
+
+  // Now simulate resuming: fetch page 1 again. All messages must be served from cache with ZERO new inference calls!
+  const initialInferCalls = inference.calls.length;
+  const resumedSummary = await pipeline.processPagedStream({
+    async fetchPage() {
+      return {
+        messages: pagesData[0].messages,
+        nextCursor: {uidValidity: 100, lastUid: 2},
+        hasMore: false,
+      };
+    },
+    deadline: new Date(Date.now() + 60_000).toISOString(),
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(resumedSummary.total, 2);
+  assert.equal(resumedSummary.cachedCount, 2);
+  assert.equal(resumedSummary.newlyClassifiedCount, 0);
+  assert.equal(inference.calls.length, initialInferCalls); // Zero new inference calls on resumed data!
+});
+
+test('MailTriagePipeline processPagedStream stops immediately on cancellation without corrupting checkpoint', async () => {
+  const inference = createMockInference();
+  const storage = {};
+  const checkpoint = {
+    load: () => ({...storage}),
+    save: (r) => { Object.assign(storage, r); },
+  };
+
+  const pipeline = new MailTriagePipeline({
+    inference,
+    checkpoint,
+    chunkSize: 2,
+  });
+
+  const abortController = new AbortController();
+
+  let fetchedPages = 0;
+  const summary = await pipeline.processPagedStream({
+    async fetchPage() {
+      fetchedPages++;
+      if (fetchedPages === 1) {
+        return {
+          messages: [
+            {source: 'mail', messageId: 'c1', sourceRevision: 'r1', text: 'Task 1'},
+            {source: 'mail', messageId: 'c2', sourceRevision: 'r1', text: 'Task 2'},
+          ],
+          nextCursor: {uidValidity: 1, lastUid: 2},
+          hasMore: true,
+        };
+      }
+      assert.fail('Should not fetch subsequent pages after cancellation');
+    },
+    onPageCompleted() {
+      // Abort after first page finishes processing and saving
+      abortController.abort();
+    },
+    deadline: new Date(Date.now() + 60_000).toISOString(),
+    signal: abortController.signal,
+  });
+
+  assert.equal(fetchedPages, 1);
+  assert.equal(summary.stoppedReason, 'cancelled');
+  // First page was processed and saved
+  assert.equal(Object.keys(storage).length, 2);
+});

@@ -61,9 +61,10 @@ export type {
   PolicyGuardedExecutionPortOptions,
   FileMeetingDecisionReceiptStoreOptions,
 } from './meeting-decision.js';
-export {MailTriagePipeline, DEFAULT_MAIL_LABELS, DEFAULT_MEETING_LABELS} from './mail-triage-pipeline.js';
+export {MailTriagePipeline, DEFAULT_MAIL_LABELS, DEFAULT_MEETING_LABELS, MAIL_TRIAGE_STRATEGY_VERSION} from './mail-triage-pipeline.js';
 export type {MailClassifierPort, MailTriageCheckpointPort, MailTriagePipelineOptions, MailBatchTriageRequest,
-  MailHighImpactNotice, MailBatchTriageSummary} from './mail-triage-pipeline.js';
+  MailHighImpactNotice, MailBatchTriageSummary, MailTriageProgress, MailCursorRef, MailPageBatch,
+  MailPagedTriageRequest, MailPagedTriageSummary} from './mail-triage-pipeline.js';
 export {DeviceAnomalyDecisionService} from './device-anomaly-decision.js';
 export type {
   DeviceSample,

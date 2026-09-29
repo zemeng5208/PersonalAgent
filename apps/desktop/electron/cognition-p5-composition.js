@@ -326,7 +326,16 @@ export function createCognitionP5Composition({
       if (!mailPipeline) throw new Error('Mail pipeline unavailable: Laya inference/classifier not connected');
       const deadline = options.deadline ?? new Date(now() + 60_000).toISOString();
       const signal = options.signal ?? new AbortController().signal;
-      return mailPipeline.processBatch({messages, deadline, signal});
+      return mailPipeline.processBatch({messages, deadline, signal, onProgress: options.onProgress});
+    },
+
+    async triagePagedMails(pagedRequest) {
+      if (state === 'disposed') throw new Error('Cognition P5 composition has been disposed');
+      if (state !== 'running') throw new Error(`Cognition P5 composition is not running (state: ${state})`);
+      if (!mailPipeline) throw new Error('Mail pipeline unavailable: Laya inference/classifier not connected');
+      const deadline = pagedRequest.deadline ?? new Date(now() + 60_000).toISOString();
+      const signal = pagedRequest.signal ?? new AbortController().signal;
+      return mailPipeline.processPagedStream({...pagedRequest, deadline, signal});
     },
 
     async evaluateDeviceSample(sample, layaRequest) {

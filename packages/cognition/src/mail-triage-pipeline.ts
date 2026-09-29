@@ -26,10 +26,51 @@ export interface MailTriagePipelineOptions extends LayaTriageOptions {
   readonly now?: (() => number) | undefined;
 }
 
+export interface MailTriageProgress {
+  readonly processedCount: number;
+  readonly totalCount: number;
+  readonly cachedCount: number;
+  readonly newlyClassifiedCount: number;
+  readonly classifiedCount: number;
+  readonly needsReviewCount: number;
+  readonly highImpactCount: number;
+  readonly uncertainCount: number;
+  readonly abstainedCount: number;
+  readonly highImpactNotices: readonly MailHighImpactNotice[];
+}
+
 export interface MailBatchTriageRequest {
   readonly messages: readonly LayaTriageMessage[];
   readonly deadline: string;
   readonly signal: AbortSignal;
+  readonly onProgress?: ((progress: MailTriageProgress) => void) | undefined;
+}
+
+export interface MailCursorRef {
+  readonly uidValidity: number;
+  readonly lastUid: number;
+}
+
+export interface MailPageBatch {
+  readonly messages: readonly LayaTriageMessage[];
+  readonly nextCursor?: MailCursorRef | undefined;
+  readonly hasMore: boolean;
+}
+
+export interface MailPagedTriageRequest {
+  /** Supplies one page at a time with backpressure. */
+  readonly fetchPage: (cursor?: MailCursorRef | undefined) => Promise<MailPageBatch>;
+  readonly initialCursor?: MailCursorRef | undefined;
+  /** Maximum pages to consume in this run (bounds execution). */
+  readonly maxPages?: number | undefined;
+  readonly deadline: string;
+  readonly signal: AbortSignal;
+  readonly onProgress?: ((progress: MailTriageProgress) => void) | undefined;
+  readonly onPageCompleted?: ((pageInfo: {
+    readonly cursor?: MailCursorRef | undefined;
+    readonly hasMore: boolean;
+    readonly processedCount: number;
+  }) => void | Promise<void>) | undefined;
 }
 
 export interface MailHighImpactNotice {
@@ -62,6 +103,20 @@ export interface MailBatchTriageSummary {
   };
 }
 
+export interface MailPagedTriageSummary extends MailBatchTriageSummary {
+  readonly pagesProcessed: number;
+  readonly lastCursor?: MailCursorRef | undefined;
+  readonly hasMore: boolean;
+  readonly stoppedReason: 'completed' | 'cancelled' | 'deadline' | 'max_pages';
+}
+
+export const MAIL_TRIAGE_STRATEGY_VERSION = 'mail-triage-strategy-v2';
+
+/**
+ * Note: A 'meeting' label indicates that the message requires main-agent inspection
+ * for potential calendar relevance. It does NOT represent a confirmed reschedule event,
+ * nor does it constitute authorization to mutate the coordination graph or calendar.
+ */
 export const DEFAULT_MAIL_LABELS: Readonly<Record<string, string>> = Object.freeze({
   meeting: 'Meeting invitations, rescheduling, calendar events, agenda coordination, and appointments',
   work: 'Engineering development, code reviews, pull requests, tasks, and deliverables',
@@ -75,9 +130,28 @@ export const DEFAULT_MEETING_LABELS: readonly string[] = Object.freeze(['meeting
 
 const hash = (value: string): string => createHash('sha256').update(value).digest('hex');
 
+function compileNotices(results: readonly LayaTriageResult[]): MailHighImpactNotice[] {
+  const notices: MailHighImpactNotice[] = [];
+  for (const res of results) {
+    if (res.route === 'main_agent' || res.reason === 'high_impact') {
+      notices.push({
+        messageId: res.messageId,
+        source: res.source,
+        sourceRevision: res.sourceRevision,
+        label: res.label,
+        candidateLabel: res.candidateLabel,
+        route: res.route === 'group' ? 'main_agent' : res.route,
+        reason: res.reason,
+        confidence: res.scores?.answerConfidence ?? null,
+      });
+    }
+  }
+  return notices;
+}
+
 /**
  * Bounded mail triage pipeline using real Laya SLM classification.
- * - Structured key binding source, messageId, revision, and label/model fingerprint
+ * - Structured key binding source, messageId, revision, and label/model/strategy fingerprint
  * - Transactional checkpointing: cache is updated only AFTER durable save succeeds
  * - In-batch duplicate message deduplication
  * - Strictly separated model inference throughput calculation from cache hits
@@ -88,6 +162,8 @@ export class MailTriagePipeline {
   private readonly checkpointPort?: MailTriageCheckpointPort | undefined;
   private readonly labels: Readonly<Record<string, string>>;
   private readonly chunkSize: number;
+  private readonly minimum: number;
+  private readonly margin: number;
   private readonly now: () => number;
   private readonly configDigest: string;
   private cache = new Map<string, LayaTriageResult>();
@@ -99,10 +175,18 @@ export class MailTriagePipeline {
     this.checkpointPort = options.checkpoint;
     this.labels = options.labels ?? DEFAULT_MAIL_LABELS;
     this.chunkSize = Math.max(1, Math.min(options.chunkSize ?? 4, 16));
+    this.minimum = options.minimumAnswerProbability ?? 0.7;
+    this.margin = options.minimumMargin ?? 0.15;
     this.now = options.now ?? Date.now;
 
     const sortedLabels = Object.entries(this.labels).sort(([a], [b]) => a.localeCompare(b));
-    this.configDigest = hash(JSON.stringify({labels: sortedLabels, model: 'multilingual'}));
+    this.configDigest = hash(JSON.stringify({
+      strategyVersion: MAIL_TRIAGE_STRATEGY_VERSION,
+      model: 'multilingual',
+      minimumAnswerProbability: this.minimum,
+      minimumMargin: this.margin,
+      labels: sortedLabels,
+    }));
   }
 
   private makeKey(source: string, messageId: string, revision: string): string {
@@ -118,7 +202,8 @@ export class MailTriagePipeline {
       throw new CognitionError('INVALID_ARGUMENT');
     }
     if (request.signal.aborted) throw new CognitionError('INVALID_ARGUMENT');
-    if (this.now() >= Date.parse(request.deadline)) throw new CognitionError('INVALID_ARGUMENT');
+    const deadlineMs = Date.parse(request.deadline);
+    if (this.now() >= deadlineMs) throw new CognitionError('INVALID_ARGUMENT');
 
     const startTime = this.now();
 
@@ -167,10 +252,61 @@ export class MailTriagePipeline {
     let cumulativeInferenceMs = 0;
     const newlyClassified: LayaTriageResult[] = [];
 
+    const emitProgress = () => {
+      if (typeof request.onProgress !== 'function') return;
+      const currentClassified = allResults.filter(r => Boolean(r.label)).length;
+      const currentReview = allResults.filter(r => r.route === 'review').length;
+      const currentHighImpact = allResults.filter(r => r.route === 'main_agent' || r.reason === 'high_impact').length;
+      const currentUncertain = allResults.filter(r => r.reason === 'uncertain').length;
+      const currentAbstained = allResults.filter(r => r.abstained).length;
+      request.onProgress({
+        processedCount: allResults.length,
+        totalCount: uniqueMessages.length,
+        cachedCount,
+        newlyClassifiedCount: newlyClassified.length,
+        classifiedCount: currentClassified,
+        needsReviewCount: currentReview,
+        highImpactCount: currentHighImpact,
+        uncertainCount: currentUncertain,
+        abstainedCount: currentAbstained,
+        highImpactNotices: compileNotices(allResults),
+      });
+    };
+
+    if (cachedCount > 0) {
+      emitProgress();
+    }
+
     // Process pending messages in bounded chunks
     for (let i = 0; i < pendingMessages.length; i += this.chunkSize) {
-      if (request.signal.aborted) throw new CognitionError('INVALID_ARGUMENT');
-      if (this.now() >= Date.parse(request.deadline)) throw new CognitionError('INVALID_ARGUMENT');
+      if (request.signal.aborted || this.now() >= deadlineMs) {
+        const remaining = pendingMessages.slice(i);
+        const abortedReason = request.signal.aborted ? 'cancelled' : 'deadline';
+        for (const msg of remaining) {
+          allResults.push({
+            source: msg.source,
+            messageId: msg.messageId,
+            sourceRevision: msg.sourceRevision,
+            label: null,
+            candidateLabel: null,
+            route: msg.highImpact ? 'main_agent' : 'review',
+            abstained: true,
+            reason: abortedReason,
+            calibrated: false,
+            batching: 'multi_question',
+            receipt: {
+              id: hash(JSON.stringify([msg.source, msg.messageId, msg.sourceRevision, this.configDigest, msg.text])),
+              promptVersion: 'mail-triage-v1',
+              model: 'multilingual',
+              candidateLabels: Object.keys(this.labels),
+              criteriaDigest: hash(JSON.stringify(this.labels)),
+              contextDigest: hash(msg.text),
+            },
+          });
+        }
+        emitProgress();
+        break;
+      }
 
       const chunk = pendingMessages.slice(i, i + this.chunkSize);
       const triageRequest: LayaTriageRequest = {
@@ -186,11 +322,14 @@ export class MailTriagePipeline {
       cumulativeInferenceMs += Math.max(1, inferenceEnd - inferenceStart);
 
       // Persist to checkpoint BEFORE committing to in-memory cache
+      // Only persist non-transient determinations (do NOT persist cancelled/deadline/unavailable)
       if (this.checkpointPort) {
         const snapshot: Record<string, LayaTriageResult> = {};
         for (const [k, v] of this.cache) snapshot[k] = v;
         for (const res of chunkResults) {
-          snapshot[this.makeKey(res.source, res.messageId, res.sourceRevision)] = res;
+          if (res.reason !== 'cancelled' && res.reason !== 'deadline' && res.reason !== 'unavailable') {
+            snapshot[this.makeKey(res.source, res.messageId, res.sourceRevision)] = res;
+          }
         }
         // If save fails, this.cache is preserved without partial unpersisted entries
         await this.checkpointPort.save(snapshot);
@@ -198,11 +337,15 @@ export class MailTriagePipeline {
 
       // Safe to update cache now
       for (const res of chunkResults) {
-        const key = this.makeKey(res.source, res.messageId, res.sourceRevision);
-        this.cache.set(key, res);
+        if (res.reason !== 'cancelled' && res.reason !== 'deadline' && res.reason !== 'unavailable') {
+          const key = this.makeKey(res.source, res.messageId, res.sourceRevision);
+          this.cache.set(key, res);
+        }
         newlyClassified.push(res);
         allResults.push(res);
       }
+
+      emitProgress();
     }
 
     const totalDurationMs = Math.max(1, this.now() - startTime);
@@ -271,6 +414,174 @@ export class MailTriagePipeline {
         inferenceDurationMs: cumulativeInferenceMs,
         messagesPerSecond,
       },
+    };
+  }
+
+  /**
+   * Consumes a paged stream of mail messages with backpressure, progressive checkpoints,
+   * cancellation and resumption.
+   * - Does not load all messages into memory at once.
+   * - Saves durable checkpoints after each chunk.
+   * - Stops receiving new pages immediately when signal is aborted.
+   * - Preserves already completed results on failure.
+   */
+  async processPagedStream(request: MailPagedTriageRequest): Promise<MailPagedTriageSummary> {
+    if (!request || typeof request.fetchPage !== 'function' || !(request.signal instanceof AbortSignal)
+      || !Number.isFinite(Date.parse(request.deadline))) {
+      throw new CognitionError('INVALID_ARGUMENT');
+    }
+    if (request.signal.aborted) throw new CognitionError('INVALID_ARGUMENT');
+    const deadlineMs = Date.parse(request.deadline);
+    if (this.now() >= deadlineMs) throw new CognitionError('INVALID_ARGUMENT');
+
+    const startTime = this.now();
+
+    if (this.checkpointPort && !this.checkpointLoaded) {
+      const persisted = await this.checkpointPort.load();
+      if (persisted && typeof persisted === 'object') {
+        for (const [key, val] of Object.entries(persisted)) {
+          this.cache.set(key, val);
+        }
+      }
+      this.checkpointLoaded = true;
+    }
+
+    let currentCursor: MailCursorRef | undefined = request.initialCursor;
+    let hasMore = true;
+    let pagesProcessed = 0;
+    let stoppedReason: MailPagedTriageSummary['stoppedReason'] = 'completed';
+
+    const allResults: LayaTriageResult[] = [];
+    let cachedCount = 0;
+    let newlyClassifiedCount = 0;
+    let cumulativeInferenceMs = 0;
+    const maxPages = request.maxPages ?? Number.POSITIVE_INFINITY;
+
+    while (hasMore && pagesProcessed < maxPages) {
+      if (request.signal.aborted) {
+        stoppedReason = 'cancelled';
+        break;
+      }
+      if (this.now() >= deadlineMs) {
+        stoppedReason = 'deadline';
+        break;
+      }
+
+      const page = await request.fetchPage(currentCursor);
+      if (request.signal.aborted) {
+        stoppedReason = 'cancelled';
+        break;
+      }
+
+      currentCursor = page?.nextCursor;
+      hasMore = Boolean(page?.hasMore);
+      pagesProcessed++;
+
+      const pageMessages = Array.isArray(page?.messages) ? page.messages : [];
+      if (pageMessages.length > 0) {
+        const pageSummary = await this.processBatch({
+          messages: pageMessages,
+          deadline: request.deadline,
+          signal: request.signal,
+          onProgress: request.onProgress ? (p) => {
+            request.onProgress!({
+              processedCount: allResults.length + p.processedCount,
+              totalCount: allResults.length + p.totalCount,
+              cachedCount: cachedCount + p.cachedCount,
+              newlyClassifiedCount: newlyClassifiedCount + p.newlyClassifiedCount,
+              classifiedCount: allResults.filter(r => Boolean(r.label)).length + p.classifiedCount,
+              needsReviewCount: allResults.filter(r => r.route === 'review').length + p.needsReviewCount,
+              highImpactCount: allResults.filter(r => r.route === 'main_agent' || r.reason === 'high_impact').length + p.highImpactCount,
+              uncertainCount: allResults.filter(r => r.reason === 'uncertain').length + p.uncertainCount,
+              abstainedCount: allResults.filter(r => r.abstained).length + p.abstainedCount,
+              highImpactNotices: [...compileNotices(allResults), ...p.highImpactNotices],
+            });
+          } : undefined,
+        });
+
+        allResults.push(...pageSummary.results);
+        cachedCount += pageSummary.cachedCount;
+        newlyClassifiedCount += pageSummary.newlyClassifiedCount;
+        cumulativeInferenceMs += pageSummary.throughput.inferenceDurationMs;
+      }
+
+      await request.onPageCompleted?.({
+        cursor: currentCursor,
+        hasMore,
+        processedCount: allResults.length,
+      });
+
+      if (request.signal.aborted) {
+        stoppedReason = 'cancelled';
+        break;
+      }
+      if (this.now() >= deadlineMs) {
+        stoppedReason = 'deadline';
+        break;
+      }
+      if (pagesProcessed >= maxPages) {
+        stoppedReason = 'max_pages';
+        break;
+      }
+    }
+
+    const totalDurationMs = Math.max(1, this.now() - startTime);
+    const messagesPerSecond = newlyClassifiedCount > 0
+      ? Number(((newlyClassifiedCount / (cumulativeInferenceMs / 1000))).toFixed(2))
+      : 0;
+
+    let classifiedCount = 0;
+    let highImpactCount = 0;
+    let uncertainCount = 0;
+    let abstainedCount = 0;
+    let needsReviewCount = 0;
+    const categoryCounts: Record<string, number> = {};
+    const highImpactNotices: MailHighImpactNotice[] = [];
+
+    for (const res of allResults) {
+      if (res.abstained) abstainedCount++;
+      if (res.label) {
+        classifiedCount++;
+        categoryCounts[res.label] = (categoryCounts[res.label] ?? 0) + 1;
+      }
+      if (res.route === 'review') needsReviewCount++;
+      if (res.reason === 'uncertain') uncertainCount++;
+      if (res.route === 'main_agent' || res.reason === 'high_impact') {
+        highImpactCount++;
+        highImpactNotices.push({
+          messageId: res.messageId,
+          source: res.source,
+          sourceRevision: res.sourceRevision,
+          label: res.label,
+          candidateLabel: res.candidateLabel,
+          route: res.route === 'group' ? 'main_agent' : res.route,
+          reason: res.reason,
+          confidence: res.scores?.answerConfidence ?? null,
+        });
+      }
+    }
+
+    return {
+      total: allResults.length,
+      cachedCount,
+      newlyClassifiedCount,
+      classifiedCount,
+      highImpactCount,
+      uncertainCount,
+      abstainedCount,
+      needsReviewCount,
+      results: allResults,
+      highImpactNotices,
+      categoryCounts: Object.freeze(categoryCounts),
+      throughput: {
+        totalDurationMs,
+        inferenceDurationMs: cumulativeInferenceMs,
+        messagesPerSecond,
+      },
+      pagesProcessed,
+      lastCursor: currentCursor,
+      hasMore,
+      stoppedReason,
     };
   }
 }
