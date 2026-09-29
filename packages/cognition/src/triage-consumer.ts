@@ -79,7 +79,7 @@ export function prepareTriageDispatch(input: TriageDispatchInput): TriageDispatc
     if (message === null || typeof message !== 'object' || Array.isArray(message)
       || [message.source, message.messageId, message.sourceRevision].some(value =>
         typeof value !== 'string' || !value.trim() || value.length > 256)
-      || typeof message.text !== 'string' || !message.text.trim() || message.text.length > 4000
+      || typeof message.text !== 'string' || message.text.length > 4000
       || (message.highImpact !== undefined && typeof message.highImpact !== 'boolean')) invalid();
     const id = identity(message.source, message.messageId);
     if (messages.has(id)) invalid();
