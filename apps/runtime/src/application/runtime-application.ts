@@ -26,6 +26,8 @@ import type {StartSystemObservationSessionRequest, SystemObservationSession} fro
 import {MailReadSessions, MAIL_READ_SESSION_CHECKPOINT, MAIL_READ_TOOL, MAIL_READ_VERSION} from './mail-read-session.js';
 import type {StartMailReadSessionRequest, MailReadSession} from './mail-read-session.js';
 import {createRuntimeSubagentDispatchTool} from './subagent-host.js';
+import {WorkspacePatchReconciliationAdapter} from './workspace-patch-reconciliation.js';
+import type {WorkspacePatchReconciliationPort, WorkspacePatchReconciliationReadback} from './workspace-patch-reconciliation.js';
 type SuccessfulResponse = Extract<Response, {outcome: 'ok'}>;
 
 export interface RevokeHostAuthorizationRequest {
@@ -108,6 +110,8 @@ export interface RuntimeApplicationOptions { path: string; now?: () => Date; idF
   thinking?: ThinkingConfig;
   /** Trusted host policy for routine operations inside already enabled module scopes. */
   automaticTools?: readonly {toolName: string; toolVersion: string}[];
+  /** Trusted Desktop-only recovery port; paths and process identity stay in its closure. */
+  workspacePatchReconciliation?: WorkspacePatchReconciliationPort;
 }
 export interface RuntimeApplicationTransport { send(request: Request, signal: AbortSignal): Promise<Response>; }
 
@@ -129,6 +133,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   private readonly storagePath: string;
   private readonly observationSessions: SystemObservationSessions;
   private readonly mailReadSessions: MailReadSessions;
+  private readonly workspacePatchReconciliation?: WorkspacePatchReconciliationAdapter;
 
   constructor(options: RuntimeApplicationOptions) {
     this.storagePath = resolve(options.path);
@@ -155,6 +160,11 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       throw new ProtocolError('INVALID_ARGUMENT', 'Invalid trusted host user namespace');
     }
     this.hostUserNamespace = options.hostUserNamespace;
+    if (options.workspacePatchReconciliation !== undefined
+      && (this.profile !== 'huawei_ict_agentarts' || !this.hostUserNamespace
+        || typeof options.workspacePatchReconciliation.reconcile !== 'function')) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Workspace patch reconciliation needs the trusted Competition host');
+    }
     if (this.localRepair && (!this.localRepair.graphNamespace?.trim() || !this.localRepair.bindingVersion?.trim()
       || typeof this.localRepair.resolveBinding !== 'function' || typeof this.localRepair.matchesSource !== 'function'
       || typeof this.localRepair.withSourceLock !== 'function'
@@ -204,6 +214,10 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
         return gateway;
       }} : {}),
     });
+    if (options.workspacePatchReconciliation) {
+      this.workspacePatchReconciliation = new WorkspacePatchReconciliationAdapter(
+        this.runtime, options.workspacePatchReconciliation, this.hostUserNamespace);
+    }
     this.observationSessions = new SystemObservationSessions(() => this.now().getTime(), taskId => {
       this.runtime.policy.revoke(`host-tool-${taskId}`);
       this.runtime.requestCancel(taskId, 'System observation consent ended');
@@ -383,6 +397,14 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     return this.submitBoundHostToolTask(request);
   }
 
+  /** Trusted host recovery entry for one persisted workspace patch task. */
+  reconcileWorkspacePatchTask(taskId: string): Promise<WorkspacePatchReconciliationReadback> {
+    if (!this.workspacePatchReconciliation) {
+      throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Workspace patch reconciliation is not configured');
+    }
+    return this.workspacePatchReconciliation.reconcile(taskId);
+  }
+
   /** Trusted UI consent only; no wire operation or generic tool permission. */
   startSystemObservationSession(request: StartSystemObservationSessionRequest): SystemObservationSession {
     if (this.profile !== 'huawei_ict_agentarts' || !this.hostUserNamespace) {
@@ -556,6 +578,14 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
         error: {code: 'RESULT_UNKNOWN', message: 'Host tool was interrupted; reconcile its result before retrying', retryable: false},
       });
     } else if (task.state === 'waiting_approval') this.resumeHostToolTask(task.taskId);
+    else if (task.state === 'waiting_reconciliation' && this.workspacePatchReconciliation
+      && this.workspacePatchReconciliation.isPatchTask(task.taskId)) {
+      void this.reconcileWorkspacePatchTask(task.taskId).catch(() => {
+        // The task and original Evidence remain waiting_reconciliation. A
+        // trusted host may retry the same recovery entry after observing the
+        // persisted reason; no new tool invocation is scheduled here.
+      });
+    }
   }
 
   /** Call after restart for a persisted allowed approval that predated dispatch. */

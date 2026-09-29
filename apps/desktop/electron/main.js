@@ -1001,6 +1001,7 @@ async function initializeRuntime() {
           mailAnalysisHost?.assertCloudSend(request);
         },
         tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...(goalCloudHost?.tools ?? goalHost.tools), ...productTools.tools, ...(mailHost?.tools ?? []), ...(feedsHost?.tools ?? []), ...(notepadHost?.tools ?? []), ...(todoHost?.tools ?? []), ...(subagentTool ? [subagentTool] : []), ...(knowledgeTool ? [knowledgeTool] : [])],
+        ...(codingWorkspace.patchReconciliation ? {workspacePatchReconciliation: codingWorkspace.patchReconciliation} : {}),
         ...(syntheticMvp ? {localRepair: syntheticRepairHost.localRepair} : {}),
         ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
         ...(process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT === undefined ? {} : {workflowGoalInput: process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT}),

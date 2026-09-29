@@ -37,6 +37,16 @@ export type {ProactiveCognitionHost, ProactiveCognitionHostOptions, ProactiveCog
   ProactiveSelectionHandoff, ProactiveSelectionHandoffPort} from './application/proactive-cognition-host.js';
 export type {QQMailTriageHostOptions} from './application/mail-triage.js';
 export type {StartMailReadSessionRequest, MailReadSession} from './application/mail-read-session.js';
+export {
+  WORKSPACE_PATCH_APPLY_TOOL_NAME,
+  WORKSPACE_PATCH_APPLY_TOOL_VERSION,
+  WorkspacePatchReconciliationAdapter,
+} from './application/workspace-patch-reconciliation.js';
+export type {
+  WorkspacePatchReconciliationPort,
+  WorkspacePatchReconciliationResult,
+  WorkspacePatchReconciliationReadback,
+} from './application/workspace-patch-reconciliation.js';
 export {createReminderDeliveryHost} from './application/reminder-delivery.js';
 export {
   createRuntimeSubagentDispatchTool,

@@ -71,6 +71,7 @@ export function listPendingCodingHelpers(recoveryRootPath) {
  * Policy and ToolGateway still own every execution decision and result state. */
 export function createDesktopCodingToolHost({workspaceRoot, authorizedWorkspaceRoot,
   recoveryRootPath, powerShellPath, createWorkspacePatchApplyTool,
+  reconcileWorkspacePatchApply,
   inspectAcl = verifyWindowsRecoveryAcl}) {
   if (process.platform !== 'win32') throw Error('Coding patch host requires Windows');
   const root = canonicalDirectory(workspaceRoot, 'Workspace root');
@@ -119,10 +120,30 @@ export function createDesktopCodingToolHost({workspaceRoot, authorizedWorkspaceR
     if (!available()) throw Error('Coding patch host is closed or requires helper reconciliation');
     return implementation.execute(input, context);
   }};
+  const assertRecoveryBinding = () => {
+    if (!active) throw Error('Coding patch host is closed');
+    for (const entry of pinned) {
+      const current = entry.directory
+        ? canonicalDirectory(entry.source, 'Pinned coding directory')
+        : canonicalFile(entry.source, 'Pinned PowerShell executable');
+      if (current !== entry.canonical || !sameIdentity(entry.id, identity(current, !entry.directory))) {
+        throw Error('Coding patch host binding changed');
+      }
+    }
+    inspectAcl(recovery, powerShell);
+  };
+  const patchReconciliation = typeof reconcileWorkspacePatchApply === 'function'
+    ? {reconcile: async ({relativePath}) => {
+      assertRecoveryBinding();
+      return reconcileWorkspacePatchApply({rootPath: root, recoveryRootPath: recovery,
+        relativePath, powerShellPath: powerShell});
+    }}
+    : undefined;
   return {
     tools: [tool],
     pendingHelpers,
     available,
+    ...(patchReconciliation ? {patchReconciliation} : {}),
     close: () => { active = false; },
   };
 }
