@@ -14,6 +14,7 @@ import {
   WORKSPACE_PATCH_APPLY_TOOL_NAME,
   WORKSPACE_PATCH_APPLY_TOOL_VERSION,
 } from '../dist/index.js';
+import {createWorkspacePatchApplyToolFromPreview} from '../dist/patch-apply.js';
 
 const sha = text => createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex');
 const powerShellPath = process.env.PA_TEST_PWSH
@@ -36,6 +37,7 @@ async function fixture(t) {
 const context = (overrides = {}) => ({
   taskId: 'task-apply-synthetic',
   runId: 'run-apply-synthetic',
+  argumentsDigest: 'c'.repeat(64),
   authorizationRef: 'authorization-apply-synthetic',
   scopes: ['workspace:read', 'workspace:write', WORKSPACE_PATCH_APPLY_SCOPE],
   signal: new AbortController().signal,
@@ -142,4 +144,38 @@ test('an unresolved helper marker prevents another apply to the same source', {s
   await assert.rejects(tool.execute(request(sha('before\n')), context()), {code: 'RESULT_UNKNOWN'});
   assert.equal(await readFile(source, 'utf8'), 'before\n');
   assert.equal(await readFile(marker, 'utf8'), 'unresolved synthetic helper');
+});
+
+
+test('deadline expiring during process identity lookup stops before sending patch bytes', {skip: unavailable}, async t => {
+  const {root, recoveryRootPath, source} = await fixture(t);
+  const deadlineMs = Date.now() + 60_000;
+  let nowCalls = 0;
+  const preview = {
+    descriptor: {inputSchema: {type: 'object'}},
+    execute: async () => ({
+      path: 'src/note.txt',
+      previewText: 'after\n',
+      beforeSha256: sha('before\n'),
+      afterSha256: sha('after\n'),
+      changed: true,
+    }),
+  };
+  const tool = createWorkspacePatchApplyToolFromPreview({
+    rootPath: root,
+    recoveryRootPath,
+    powerShellPath,
+    preview,
+    now: () => {
+      nowCalls += 1;
+      return nowCalls >= 4 ? deadlineMs : deadlineMs - 1;
+    },
+  });
+  await assert.rejects(
+    tool.execute({}, context({deadline: new Date(deadlineMs).toISOString()})),
+    {code: 'TIMEOUT'},
+  );
+  assert.equal(nowCalls, 4);
+  assert.equal(await readFile(source, 'utf8'), 'before\n');
+  assert.deepEqual(await readdir(recoveryRootPath), []);
 });

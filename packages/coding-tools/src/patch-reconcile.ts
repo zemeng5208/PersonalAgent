@@ -346,8 +346,8 @@ export async function reconcileWorkspacePatchApply(
   }
 
   const current = await readCurrentSource(root, path);
-  const outcome = current.sha256 === marker.afterSha256 ? 'applied'
-    : current.sha256 === marker.beforeSha256 ? 'not_applied' : 'unknown';
+  const outcome = (current.sha256 === marker.afterSha256 ? 'applied'
+    : current.sha256 === marker.beforeSha256 ? 'not_applied' : 'unknown') as 'applied' | 'not_applied' | 'unknown';
   const reconciled = {path, state: 'reconciled' as const, runId: marker.runId,
     argumentsDigest: marker.argumentsDigest, outcome, beforeSha256: marker.beforeSha256,
     afterSha256: marker.afterSha256, currentSha256: current.sha256};
@@ -355,8 +355,7 @@ export async function reconcileWorkspacePatchApply(
   try { currentMarker = await lstat(markerPath); }
   catch (error) {
     if (errorCode(error) === 'ENOENT') {
-      return {path, state: 'reconciled', outcome, beforeSha256: marker.beforeSha256,
-        afterSha256: marker.afterSha256, currentSha256: current.sha256};
+      return reconciled;
     }
     unknown('Workspace patch in-flight record changed during reconciliation');
   }
