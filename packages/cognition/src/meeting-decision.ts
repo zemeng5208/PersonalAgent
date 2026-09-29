@@ -1,12 +1,17 @@
 import {createHash} from 'node:crypto';
 import {
-  parseGraph,
-  appendVersion,
+  currentNodes,
+  isEffective,
   type GraphSnapshot,
   type NodeRef,
   type NodeInput,
+  type NodeVersion,
 } from '@personal-agent/goals';
-import type {AtomicCoordinationStorePort, CoordinationStorePort} from '@personal-agent/goals/store';
+import {
+  appendVersions,
+  type AtomicCoordinationStorePort,
+  type CoordinationStorePort,
+} from '@personal-agent/goals/store';
 import {analyzeImpact, CognitionError, type ImpactReport} from './impact.js';
 import {
   LayaActionChoiceService,
@@ -34,88 +39,170 @@ export interface MeetingCandidate {
   readonly description: string;
   readonly risk: 'low' | 'high';
   readonly reason: string;
-  readonly proposedModifications?: readonly {
-    readonly id: string;
-    readonly kind: 'goal' | 'decision' | 'plan';
-    readonly summary: string;
-    readonly dependencies: readonly NodeRef[];
-  }[];
+  readonly proposedModifications?: readonly NodeInput[] | undefined;
 }
 
 export interface MeetingDecisionReceipt {
   readonly eventId: string;
   readonly source: string;
+  readonly sourceRevision: string;
   readonly meetingFactId: string;
   readonly selectedCandidateId: string;
   readonly actionId: string;
-  readonly status: 'applied' | 'requires_review' | 'deferred' | 'already_processed';
+  readonly status: 'applied' | 'proposal' | 'requires_review' | 'deferred' | 'already_processed' | 'conflict';
   readonly confidence: number | null;
   readonly reason: string;
   readonly graphRevisionBefore: number;
   readonly graphRevisionAfter: number;
   readonly evaluatedAt: string;
-  readonly appliedNodeRevisions?: readonly NodeRef[];
-  readonly selection?: LayaActionSelection;
+  readonly appliedNodeRevisions?: readonly NodeRef[] | undefined;
+  readonly selection?: LayaActionSelection | undefined;
+  readonly proposedModifications?: readonly NodeInput[] | undefined;
+}
+
+export interface MeetingReceiptRecord {
+  readonly eventId: string;
+  readonly namespace: string;
+  readonly source: string;
+  readonly sourceRevision: string;
+  readonly inputDigest: string;
+  readonly status: MeetingDecisionReceipt['status'];
+  readonly receipt: MeetingDecisionReceipt;
+  readonly updatedAt: string;
+}
+
+export interface MeetingDecisionReceiptStorePort {
+  loadReceipt(eventId: string): MeetingReceiptRecord | undefined | Promise<MeetingReceiptRecord | undefined>;
+  saveReceipt(record: MeetingReceiptRecord): void | Promise<void>;
+}
+
+export class InMemoryMeetingDecisionReceiptStore implements MeetingDecisionReceiptStorePort {
+  private readonly records = new Map<string, MeetingReceiptRecord>();
+  loadReceipt(eventId: string): MeetingReceiptRecord | undefined {
+    const record = this.records.get(eventId);
+    return record ? structuredClone(record) : undefined;
+  }
+  saveReceipt(record: MeetingReceiptRecord): void {
+    this.records.set(record.eventId, structuredClone(record));
+  }
+}
+
+export interface MeetingPlanExecutionPort {
+  executeBatch(request: {
+    readonly expectedRevision: number;
+    readonly inputs: readonly NodeInput[];
+    readonly eventId: string;
+    readonly source: string;
+    readonly sourceRevision: string;
+  }): Promise<{ readonly applied: boolean; readonly snapshot: GraphSnapshot; readonly error?: string }>;
+}
+
+export function createStoreExecutionPort(store: AtomicCoordinationStorePort): MeetingPlanExecutionPort {
+  return {
+    async executeBatch(request) {
+      try {
+        const next = store.appendBatch(request.expectedRevision, request.inputs);
+        return { applied: true, snapshot: next };
+      } catch (err) {
+        return { applied: false, snapshot: store.read(), error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+  };
 }
 
 export interface MeetingCoordinatorOptions {
   readonly store: CoordinationStorePort | AtomicCoordinationStorePort;
   readonly inference: LayaInferencePort;
-  readonly namespace?: string;
-  readonly now?: () => number;
+  readonly executionPort?: MeetingPlanExecutionPort | undefined;
+  readonly receiptStore?: MeetingDecisionReceiptStorePort | undefined;
+  readonly namespace?: string | undefined;
+  readonly now?: (() => number) | undefined;
 }
 
 const hash = (value: string): string => createHash('sha256').update(value).digest('hex');
 
 /**
- * End-to-end meeting reschedule decision loop.
- * Consumes meeting change facts, evaluates real graph impact, presents multiple candidates
- * to local Laya, safely writes back low-risk plans via CAS, and enforces replay deduplication.
+ * End-to-end meeting reschedule decision coordinator.
+ * Consumes meeting change facts, evaluates real graph impact without premature mutation,
+ * presents multiple candidates to local Laya without self-signing authorizations,
+ * and commits via a single atomic CAS batch through a trusted execution port if provided.
  */
 export class MeetingRescheduleCoordinator {
   private readonly store: CoordinationStorePort;
   private readonly choiceService: LayaActionChoiceService;
-  private readonly processed = new Map<string, MeetingDecisionReceipt>();
+  private readonly executionPort?: MeetingPlanExecutionPort | undefined;
+  private readonly receiptStore: MeetingDecisionReceiptStorePort;
+  private readonly namespace: string;
   private readonly now: () => number;
 
   constructor(options: MeetingCoordinatorOptions) {
-    if (!options || !options.store || typeof options.store.read !== 'function'
-      || typeof options.store.append !== 'function' || !options.inference) {
+    if (!options || !options.store || typeof options.store.read !== 'function' || !options.inference) {
       throw new CognitionError('INVALID_ARGUMENT');
     }
     this.store = options.store;
     this.choiceService = new LayaActionChoiceService(options.inference);
+    this.executionPort = options.executionPort;
+    this.receiptStore = options.receiptStore ?? new InMemoryMeetingDecisionReceiptStore();
+    this.namespace = options.namespace ?? 'default';
     this.now = options.now ?? Date.now;
   }
 
-  /** Readback existing processed decision by event ID. */
-  getReceipt(eventId: string): MeetingDecisionReceipt | undefined {
-    return this.processed.get(eventId);
+  /** Readback existing processed decision by event ID from durable receipt store. */
+  async getReceipt(eventId: string): Promise<MeetingDecisionReceipt | undefined> {
+    const record = await this.receiptStore.loadReceipt(eventId);
+    return record?.receipt;
   }
 
   /**
    * Main vertical execution:
-   * 1. Replay check (idempotency)
-   * 2. Append updated meeting fact
-   * 3. Evaluate impact across dependencies
-   * 4. Build multiple candidates
-   * 5. Invoke Laya for choice
-   * 6. Write back low-risk action or hold for review
+   * 1. Replay and conflict detection via durable receipt store
+   * 2. Pure in-memory preflight of prospective fact update & impact analysis
+   * 3. Kahn topological ordering for affected graph dependencies
+   * 4. Multi-candidate selection via LayaActionChoiceService (no self-signed authorization)
+   * 5. Execution through trusted port via atomic appendBatch or emission of proposal
    */
   async processEvent(event: MeetingRescheduleEvent): Promise<MeetingDecisionReceipt> {
     if (!event || typeof event.eventId !== 'string' || !event.eventId.trim()
       || typeof event.meetingFactId !== 'string' || !event.meetingFactId.trim()
       || typeof event.newSummary !== 'string' || !event.newSummary.trim()
+      || typeof event.sourceRevision !== 'string' || !event.sourceRevision.trim()
       || !(event.signal instanceof AbortSignal) || !Number.isFinite(Date.parse(event.deadline))) {
       throw new CognitionError('INVALID_ARGUMENT');
     }
     if (event.signal.aborted) throw new CognitionError('INVALID_ARGUMENT');
     if (this.now() >= Date.parse(event.deadline)) throw new CognitionError('INVALID_ARGUMENT');
 
-    // 1. Replay protection (deduplication)
-    const existing = this.processed.get(event.eventId);
-    if (existing) {
-      return {...existing, status: 'already_processed'};
+    const inputDigest = hash(JSON.stringify({
+      eventId: event.eventId,
+      source: event.source,
+      meetingFactId: event.meetingFactId,
+      originalSummary: event.originalSummary,
+      newSummary: event.newSummary,
+      sourceRevision: event.sourceRevision,
+    }));
+
+    // 1. Replay and conflict protection
+    const existingRecord = await this.receiptStore.loadReceipt(event.eventId);
+    if (existingRecord) {
+      if (existingRecord.inputDigest === inputDigest) {
+        return {...existingRecord.receipt, status: 'already_processed'};
+      }
+      // Same event ID with different content or revision is an explicit conflict
+      const conflictReceipt: MeetingDecisionReceipt = {
+        eventId: event.eventId,
+        source: event.source,
+        sourceRevision: event.sourceRevision,
+        meetingFactId: event.meetingFactId,
+        selectedCandidateId: 'cand-conflict',
+        actionId: 'conflict',
+        status: 'conflict',
+        confidence: null,
+        reason: '相同 eventId 包含冲突的输入内容或源版本',
+        graphRevisionBefore: this.store.read().revision,
+        graphRevisionAfter: this.store.read().revision,
+        evaluatedAt: event.detectedAt,
+      };
+      return conflictReceipt;
     }
 
     const initialSnapshot = this.store.read();
@@ -129,7 +216,7 @@ export class MeetingRescheduleCoordinator {
       throw new CognitionError('NOT_APPLICABLE');
     }
 
-    // 2. Append new fact version to graph
+    // 2. Pure in-memory preflight of updated fact (DO NOT mutate store yet)
     const updatedFactInput: NodeInput = {
       id: event.meetingFactId,
       kind: 'fact',
@@ -143,50 +230,33 @@ export class MeetingRescheduleCoordinator {
       dependencies: [],
     };
 
-    const graphAfterFact = this.store.append(initialSnapshot.revision, updatedFactInput);
-    const newMeetingFact = graphAfterFact.history.findLast(
+    let prospectiveGraph: GraphSnapshot;
+    try {
+      prospectiveGraph = appendVersions(initialSnapshot, initialSnapshot.revision, [updatedFactInput]);
+    } catch {
+      throw new CognitionError('REVISION_CONFLICT');
+    }
+
+    const prospectiveFact = prospectiveGraph.history.findLast(
       node => node.id === event.meetingFactId && node.kind === 'fact'
     )!;
 
-    // 3. Impact Analysis
-    const impactReport = analyzeImpact(graphAfterFact, event.detectedAt);
+    // 3. Impact analysis on prospective graph
+    const impactReport = analyzeImpact(prospectiveGraph, event.detectedAt);
     const recheckItems = impactReport.items.filter(item => item.action === 'RECHECK');
 
-    // 4. Generate multiple feasible candidates based on affected nodes
-    const candidates = this.buildCandidates(graphAfterFact, newMeetingFact, recheckItems, event);
+    // 4. Generate candidates with topological dependency preservation
+    const candidates = this.buildCandidates(prospectiveGraph, prospectiveFact, recheckItems, event);
 
-    // Map to LayaActionCandidate structure for Laya model choice
+    // Map to LayaActionCandidate (NO self-signed authorization)
     const actionCandidates: readonly LayaActionCandidate[] = candidates.map(cand => {
-      if (cand.actionId === 'adjust_schedule') {
-        const toolArgs = {action: cand.actionId, candidateId: cand.candidateId, eventId: event.eventId};
-        const argsDigest = actionArgumentsDigest(toolArgs);
-        return {
-          id: cand.candidateId,
-          revision: 1,
-          kind: 'tool',
-          tool: {name: 'goals.revise', version: '1.0.0', arguments: toolArgs},
-          description: cand.description,
-          sources: [{id: newMeetingFact.id, revision: newMeetingFact.revision}],
-          scopeRef: `meeting:${cand.actionId}`,
-          expiresAt: event.deadline,
-          risk: cand.risk,
-          argumentsDigest: argsDigest,
-          authorization: {
-            state: 'granted',
-            refDigest: hash(`${event.eventId}:${cand.candidateId}`),
-            scopeRef: `meeting:${cand.actionId}`,
-            argumentsDigest: argsDigest,
-            expiresAt: event.deadline,
-          },
-        };
-      }
       const emptyDigest = actionArgumentsDigest({});
       return {
         id: cand.candidateId,
         revision: 1,
-        kind: cand.actionId === 'defer_and_verify' ? 'defer' : 'escalate',
+        kind: cand.actionId === 'escalate_conflict' ? 'escalate' : 'defer',
         description: cand.description,
-        sources: [{id: newMeetingFact.id, revision: newMeetingFact.revision}],
+        sources: [{id: prospectiveFact.id, revision: prospectiveFact.revision}],
         scopeRef: `meeting:${cand.actionId}`,
         expiresAt: event.deadline,
         risk: cand.risk,
@@ -205,10 +275,11 @@ export class MeetingRescheduleCoordinator {
         signal: event.signal,
       });
     } catch (error) {
-      // Model failure or timeout leads to graceful review state without crashing
+      // Model failure or timeout leads to graceful review state without mutating graph
       const fallbackReceipt: MeetingDecisionReceipt = {
         eventId: event.eventId,
         source: event.source,
+        sourceRevision: event.sourceRevision,
         meetingFactId: event.meetingFactId,
         selectedCandidateId: 'cand-review-fallback',
         actionId: 'escalate_conflict',
@@ -216,67 +287,99 @@ export class MeetingRescheduleCoordinator {
         confidence: null,
         reason: error instanceof Error ? error.message : 'Laya 模型推理异常，降级等待人工确认',
         graphRevisionBefore,
-        graphRevisionAfter: graphAfterFact.revision,
+        graphRevisionAfter: initialSnapshot.revision,
         evaluatedAt: event.detectedAt,
       };
-      this.processed.set(event.eventId, fallbackReceipt);
+      await this.saveReceiptRecord(event, inputDigest, fallbackReceipt);
       return fallbackReceipt;
     }
 
-    // 6. Execute selected action or record review requirement
+    // 6. Handle chosen action
     let receipt: MeetingDecisionReceipt;
     const selectedCandidate = candidates.find(c => c.candidateId === selection.selected?.id);
 
     if (selection.state === 'selected' && selectedCandidate && selectedCandidate.risk === 'low'
       && selectedCandidate.actionId === 'adjust_schedule' && selectedCandidate.proposedModifications) {
-      // Low risk plan revision: perform atomic CAS write to Goal Store
-      let currentRev = graphAfterFact.revision;
-      const appliedRevisions: NodeRef[] = [];
+      const fullBatch: NodeInput[] = [updatedFactInput, ...selectedCandidate.proposedModifications];
 
-      for (const mod of selectedCandidate.proposedModifications) {
-        const existingNode = graphAfterFact.history.findLast(n => n.id === mod.id);
-        const nodeInput: NodeInput = {
-          id: mod.id,
-          kind: mod.kind,
-          summary: mod.summary,
-          sourceRef: existingNode?.sourceRef ?? event.source,
-          sensitivity: existingNode?.sensitivity ?? 'private',
-          state: 'active',
-          validFrom: existingNode?.validFrom ?? event.detectedAt,
-          validUntil: existingNode?.validUntil ?? event.deadline,
-          reason: `按 Laya 决策 [${selectedCandidate.candidateId}] 自动调整时间与依赖`,
-          dependencies: [...mod.dependencies],
+      if (this.executionPort) {
+        // Execute via trusted execution port
+        const execResult = await this.executionPort.executeBatch({
+          expectedRevision: initialSnapshot.revision,
+          inputs: fullBatch,
+          eventId: event.eventId,
+          source: event.source,
+          sourceRevision: event.sourceRevision,
+        });
+
+        if (execResult.applied) {
+          const finalGraph = this.store.read();
+          const finalImpact = analyzeImpact(finalGraph, event.detectedAt);
+          const remainingRechecks = finalImpact.items.filter(i => i.action === 'RECHECK'
+            && selectedCandidate.proposedModifications!.some(m => m.id === i.node.id));
+
+          const appliedRevisions: NodeRef[] = fullBatch.map(item => ({
+            id: item.id,
+            revision: finalGraph.history.findLast(n => n.id === item.id)!.revision,
+          }));
+
+          receipt = {
+            eventId: event.eventId,
+            source: event.source,
+            sourceRevision: event.sourceRevision,
+            meetingFactId: event.meetingFactId,
+            selectedCandidateId: selectedCandidate.candidateId,
+            actionId: selectedCandidate.actionId,
+            status: remainingRechecks.length === 0 ? 'applied' : 'requires_review',
+            confidence: selection.answerConfidence ?? null,
+            reason: `Laya 选定调整方案并经由受信执行端口完成原子批提交；后验校验已${remainingRechecks.length === 0 ? '完全解决' : '有部分需进一步复核'}`,
+            graphRevisionBefore,
+            graphRevisionAfter: finalGraph.revision,
+            evaluatedAt: event.detectedAt,
+            appliedNodeRevisions: appliedRevisions,
+            selection,
+          };
+        } else {
+          receipt = {
+            eventId: event.eventId,
+            source: event.source,
+            sourceRevision: event.sourceRevision,
+            meetingFactId: event.meetingFactId,
+            selectedCandidateId: selectedCandidate.candidateId,
+            actionId: selectedCandidate.actionId,
+            status: 'requires_review',
+            confidence: selection.answerConfidence ?? null,
+            reason: `执行端口提交失败: ${execResult.error ?? '未知错误'}`,
+            graphRevisionBefore,
+            graphRevisionAfter: initialSnapshot.revision,
+            evaluatedAt: event.detectedAt,
+            selection,
+          };
+        }
+      } else {
+        // No execution port: cognition layer emits proposal only, DOES NOT mutate store
+        receipt = {
+          eventId: event.eventId,
+          source: event.source,
+          sourceRevision: event.sourceRevision,
+          meetingFactId: event.meetingFactId,
+          selectedCandidateId: selectedCandidate.candidateId,
+          actionId: selectedCandidate.actionId,
+          status: 'proposal',
+          confidence: selection.answerConfidence ?? null,
+          reason: 'Laya 选定顺延调整方案，认知层已生成修复候选，待受信执行端口确认',
+          graphRevisionBefore,
+          graphRevisionAfter: initialSnapshot.revision,
+          evaluatedAt: event.detectedAt,
+          proposedModifications: fullBatch,
+          selection,
         };
-        const nextGraph = this.store.append(currentRev, nodeInput);
-        currentRev = nextGraph.revision;
-        appliedRevisions.push({id: mod.id, revision: nextGraph.history.findLast(n => n.id === mod.id)!.revision});
       }
-
-      // Verify that after application, impact is resolved
-      const finalImpact = analyzeImpact(this.store.read(), event.detectedAt);
-      const remainingRechecks = finalImpact.items.filter(i => i.action === 'RECHECK'
-        && appliedRevisions.some(a => a.id === i.node.id));
-
-      receipt = {
-        eventId: event.eventId,
-        source: event.source,
-        meetingFactId: event.meetingFactId,
-        selectedCandidateId: selectedCandidate.candidateId,
-        actionId: selectedCandidate.actionId,
-        status: remainingRechecks.length === 0 ? 'applied' : 'requires_review',
-        confidence: selection.answerConfidence ?? null,
-        reason: `Laya 选定调整方案并完成原子写入；后验依赖校验已${remainingRechecks.length === 0 ? '全部解决' : '有部分需进一步复核'}`,
-        graphRevisionBefore,
-        graphRevisionAfter: currentRev,
-        evaluatedAt: event.detectedAt,
-        appliedNodeRevisions: appliedRevisions,
-        selection,
-      };
     } else if (selection.state === 'selected' && selectedCandidate?.actionId === 'defer_and_verify') {
-      // Deferred action: fact is recorded, plan is held without unverified mutation
       receipt = {
         eventId: event.eventId,
         source: event.source,
+        sourceRevision: event.sourceRevision,
         meetingFactId: event.meetingFactId,
         selectedCandidateId: selectedCandidate.candidateId,
         actionId: selectedCandidate.actionId,
@@ -284,15 +387,15 @@ export class MeetingRescheduleCoordinator {
         confidence: selection.answerConfidence ?? null,
         reason: 'Laya 决定暂缓自动调整，保持原计划并等待协同方二次确认',
         graphRevisionBefore,
-        graphRevisionAfter: graphAfterFact.revision,
+        graphRevisionAfter: initialSnapshot.revision,
         evaluatedAt: event.detectedAt,
         selection,
       };
     } else {
-      // Uncertain, high-risk, or review state
       receipt = {
         eventId: event.eventId,
         source: event.source,
+        sourceRevision: event.sourceRevision,
         meetingFactId: event.meetingFactId,
         selectedCandidateId: selectedCandidate?.candidateId ?? 'cand-review',
         actionId: selectedCandidate?.actionId ?? 'escalate_conflict',
@@ -302,55 +405,101 @@ export class MeetingRescheduleCoordinator {
           selection.reason === 'high_risk' ? '方案涉及高风险日程冲突，需用户明确批准' :
           '决策状态为待复核',
         graphRevisionBefore,
-        graphRevisionAfter: graphAfterFact.revision,
+        graphRevisionAfter: initialSnapshot.revision,
         evaluatedAt: event.detectedAt,
         selection,
       };
     }
 
-    this.processed.set(event.eventId, receipt);
+    await this.saveReceiptRecord(event, inputDigest, receipt);
     return receipt;
   }
 
+  private async saveReceiptRecord(
+    event: MeetingRescheduleEvent,
+    inputDigest: string,
+    receipt: MeetingDecisionReceipt
+  ): Promise<void> {
+    await this.receiptStore.saveReceipt({
+      eventId: event.eventId,
+      namespace: this.namespace,
+      source: event.source,
+      sourceRevision: event.sourceRevision,
+      inputDigest,
+      status: receipt.status,
+      receipt,
+      updatedAt: new Date(this.now()).toISOString(),
+    });
+  }
+
   /**
-   * Generates multiple structured, feasible candidates based on affected nodes.
+   * Builds candidates using topological ordering and preserves all unmodified dependencies.
    */
   private buildCandidates(
     graph: GraphSnapshot,
-    meetingFact: NodeRef,
+    prospectiveFact: NodeRef,
     recheckItems: ImpactReport['items'],
     event: MeetingRescheduleEvent
   ): readonly MeetingCandidate[] {
-    const affectedGoals = recheckItems.filter(i => i.kind === 'goal');
-    const affectedDecisions = recheckItems.filter(i => i.kind === 'decision');
-    const affectedPlans = recheckItems.filter(i => i.kind === 'plan');
+    const nodes = new Map(currentNodes(graph).map(node => [node.id, node]));
+    const targetIds = new Set(recheckItems.map(item => item.node.id));
 
-    // Candidate 1: Adjust schedule (顺延日程与提醒)
-    const proposedAdjustments: {id: string; kind: 'goal' | 'decision' | 'plan'; summary: string; dependencies: NodeRef[]}[] = [];
-    for (const item of affectedGoals) {
-      proposedAdjustments.push({
-        id: item.node.id,
-        kind: 'goal',
-        summary: `参加改期后的会议 (${event.newSummary})`,
-        dependencies: [{id: meetingFact.id, revision: meetingFact.revision}],
-      });
+    // Kahn topological ordering among affected nodes
+    const pending = new Set(targetIds);
+    const ordered: NodeVersion[] = [];
+    while (pending.size > 0) {
+      const ready = [...pending].filter(id => {
+        const node = nodes.get(id);
+        if (!node) return false;
+        return node.dependencies.every(dep => !pending.has(dep.id));
+      }).sort();
+
+      if (ready.length === 0) break;
+      for (const id of ready) {
+        pending.delete(id);
+        ordered.push(nodes.get(id)!);
+      }
     }
-    for (const item of affectedDecisions) {
-      const parentGoal = affectedGoals[0] ?? {node: meetingFact};
-      proposedAdjustments.push({
-        id: item.node.id,
-        kind: 'decision',
-        summary: `配合新会议时间调整出发安排 (${event.newSummary})`,
-        dependencies: [{id: parentGoal.node.id, revision: parentGoal.node.revision + 1}],
+
+    // Build topological adjustments preserving existing unaffected dependencies
+    const newRevisions = new Map<string, number>();
+    newRevisions.set(prospectiveFact.id, prospectiveFact.revision);
+
+    const proposedModifications: NodeInput[] = [];
+    for (const node of ordered) {
+      if (!isEffective(node, event.detectedAt)) continue;
+
+      const nextRev = node.revision + 1;
+      newRevisions.set(node.id, nextRev);
+
+      const updatedDeps: NodeRef[] = node.dependencies.map(dep => {
+        const remappedRev = newRevisions.get(dep.id);
+        return {
+          id: dep.id,
+          revision: remappedRev ?? dep.revision,
+        };
       });
-    }
-    for (const item of affectedPlans) {
-      const parentDecision = affectedDecisions[0] ?? affectedGoals[0] ?? {node: meetingFact};
-      proposedAdjustments.push({
-        id: item.node.id,
-        kind: 'plan',
-        summary: `调整提前出发提醒时间以适配新会议 (${event.newSummary})`,
-        dependencies: [{id: parentDecision.node.id, revision: parentDecision.node.revision + 1}],
+
+      let updatedSummary = node.summary;
+      if (node.kind === 'goal') {
+        updatedSummary = `准时参加改期后的会议 (${event.newSummary})`;
+      } else if (node.kind === 'decision') {
+        updatedSummary = `配合新会议时间调整出发安排 (${event.newSummary})`;
+      } else if (node.kind === 'plan') {
+        updatedSummary = `调整提前出发提醒时间以适配新会议 (${event.newSummary})`;
+      }
+
+      proposedModifications.push({
+        id: node.id,
+        kind: node.kind,
+        summary: updatedSummary,
+        sourceRef: node.sourceRef,
+        sensitivity: node.sensitivity,
+        state: 'active',
+        validFrom: node.validFrom,
+        validUntil: node.validUntil,
+        reason: `按会议改期 [eventId: ${event.eventId}] 拓扑顺延`,
+        dependencies: updatedDeps,
       });
     }
 
@@ -360,10 +509,9 @@ export class MeetingRescheduleCoordinator {
       description: `自动顺延计划：依据会议推迟，同步调整行程、决策与出发提醒 (${event.newSummary})`,
       risk: 'low',
       reason: '会议改期时间明确，依赖链条清晰，调整计划可完全恢复有效状态',
-      proposedModifications: proposedAdjustments,
+      proposedModifications,
     };
 
-    // Candidate 2: Defer and verify (暂缓调整并核查)
     const candDefer: MeetingCandidate = {
       candidateId: 'cand-defer-verify',
       actionId: 'defer_and_verify',
@@ -372,15 +520,14 @@ export class MeetingRescheduleCoordinator {
       reason: '改期通知来源未经二次确认或处于待定状态，避免过早变更引发协同混乱',
     };
 
-    // Candidate 3: Escalate conflict (报告冲突并请求人工决策)
     const candEscalate: MeetingCandidate = {
       candidateId: 'cand-escalate-conflict',
       actionId: 'escalate_conflict',
-      description: '报告日程潜在冲突：新会议时间可能挤压晚间既定安排，生成决策卡片请求用户批准',
+      description: '报告日程潜在冲突：新会议时间可能挤压既定安排，生成决策卡片请求用户批准',
       risk: 'high',
       reason: '时间推迟存在日程跨段冲突风险，超出全自动处理安全边界',
     };
 
-    return [candAdjust, candDefer, candEscalate];
+    return Object.freeze([candAdjust, candDefer, candEscalate]);
   }
 }

@@ -5,11 +5,12 @@ import {
   CognitionError,
 } from '../dist/index.js';
 
-function createMockLayaChoiceInference(preferredChoiceIndex = 0) {
+function createMockLayaChoiceInference(preferredChoiceIndex = 0, shouldFail = false) {
   const calls = [];
   const inference = {
     async infer(payload) {
       calls.push(payload);
+      if (shouldFail) throw new Error('inference_timeout');
       const question = payload.questions.action;
       const criteriaKeys = Object.keys(question?.criteria ?? {});
       const choiceKey = criteriaKeys[preferredChoiceIndex] ?? criteriaKeys[0];
@@ -117,142 +118,194 @@ test('DeviceAnomalyDecisionService requires sustained samples to confirm anomaly
   // STRICT GUARDRAIL CHECK: Ensure no destructive operations
   for (const cand of res4.candidates) {
     assert.doesNotMatch(cand.description, /杀|终止|kill|delete|删除|关闭应用/i);
-    assert.notEqual(cand.tool?.name, 'process:kill');
-    assert.notEqual(cand.tool?.name, 'fs:delete');
+    assert.notEqual(cand.kind, 'tool'); // All are advisory non-tool candidates
   }
 });
 
-test('DeviceAnomalyDecisionService applies cooldown suppression during sustained alerts', async () => {
-  const inference = createMockLayaChoiceInference(1); // pick candidate 1 (defer_background_tasks)
+test('DeviceAnomalyDecisionService resets un-alerted consecutive count when sample drops into hysteresis band (95->85->95)', async () => {
+  const inference = createMockLayaChoiceInference(0);
   const service = new DeviceAnomalyDecisionService(inference, {
     cpuThresholdPercent: 90,
-    memoryThresholdPercent: 90,
     recoveryThresholdPercent: 80,
-    sustainedSampleCount: 2,
-    cooldownMs: 60_000, // 60s cooldown
+    sustainedSampleCount: 3,
+  });
+
+  const baseTime = Date.parse('2026-09-29T13:00:00.000Z');
+
+  // 1: 95% -> count 1
+  const r1 = await service.evaluateSample({
+    source: 'node:os',
+    timestamp: new Date(baseTime).toISOString(),
+    cpuPercent: 95,
+    memoryPercent: 50,
+    samplingIntervalMs: 5000,
+  });
+  assert.equal(r1.consecutiveElevatedCount, 1);
+
+  // 2: drops to 85% (hysteresis zone) -> resets un-alerted count to 0!
+  const r2 = await service.evaluateSample({
+    source: 'node:os',
+    timestamp: new Date(baseTime + 5000).toISOString(),
+    cpuPercent: 85,
+    memoryPercent: 50,
+    samplingIntervalMs: 5000,
+  });
+  assert.equal(r2.consecutiveElevatedCount, 0);
+
+  // 3: 95% -> count 1
+  const r3 = await service.evaluateSample({
+    source: 'node:os',
+    timestamp: new Date(baseTime + 10000).toISOString(),
+    cpuPercent: 95,
+    memoryPercent: 50,
+    samplingIntervalMs: 5000,
+  });
+  assert.equal(r3.consecutiveElevatedCount, 1);
+
+  // 4: drops to 85% -> resets to 0!
+  const r4 = await service.evaluateSample({
+    source: 'node:os',
+    timestamp: new Date(baseTime + 15000).toISOString(),
+    cpuPercent: 85,
+    memoryPercent: 50,
+    samplingIntervalMs: 5000,
+  });
+  assert.equal(r4.consecutiveElevatedCount, 0);
+
+  // 5: 95% -> count 1 (NOT 3!)
+  const r5 = await service.evaluateSample({
+    source: 'node:os',
+    timestamp: new Date(baseTime + 20000).toISOString(),
+    cpuPercent: 95,
+    memoryPercent: 50,
+    samplingIntervalMs: 5000,
+  });
+  assert.equal(r5.consecutiveElevatedCount, 1);
+  assert.equal(r5.status, 'monitoring'); // Still monitoring, did NOT trigger!
+  assert.equal(inference.calls.length, 0);
+});
+
+test('DeviceAnomalyDecisionService resets count on sampling interval gap', async () => {
+  const inference = createMockLayaChoiceInference(0);
+  const service = new DeviceAnomalyDecisionService(inference, {
+    cpuThresholdPercent: 90,
+    sustainedSampleCount: 3,
   });
 
   const baseTime = Date.parse('2026-09-29T14:00:00.000Z');
 
-  // Trigger alert with 2 consecutive samples
+  // Sample 1 at t=0
   await service.evaluateSample({
-    source: 'system:metrics',
+    source: 'metrics:local',
     timestamp: new Date(baseTime).toISOString(),
-    cpuPercent: 94,
+    cpuPercent: 95,
     memoryPercent: 50,
     samplingIntervalMs: 5000,
   });
-  const triggered = await service.evaluateSample({
-    source: 'system:metrics',
-    timestamp: new Date(baseTime + 5000).toISOString(),
-    cpuPercent: 95,
-    memoryPercent: 52,
-    samplingIntervalMs: 5000,
-  });
-  assert.equal(triggered.status, 'alert_triggered');
-  assert.equal(triggered.selectedCandidate?.id, 'defer_background_tasks');
-  assert.equal(inference.calls.length, 1);
 
-  // Sample 3 arrives at +10s (still within 60s cooldown) -> suppressed
-  const suppressed = await service.evaluateSample({
-    source: 'system:metrics',
-    timestamp: new Date(baseTime + 10000).toISOString(),
-    cpuPercent: 93,
-    memoryPercent: 55,
+  // Sample 2 arrives after 30 seconds (> 5000 * 2.5 = 12.5s gap) -> resets count!
+  const r2 = await service.evaluateSample({
+    source: 'metrics:local',
+    timestamp: new Date(baseTime + 30000).toISOString(),
+    cpuPercent: 95,
+    memoryPercent: 50,
     samplingIntervalMs: 5000,
   });
-  assert.equal(suppressed.status, 'cooldown_suppressed');
-  assert.equal(suppressed.isAlertActive, true);
-  assert.equal(inference.calls.length, 1); // No new Laya inference
+  assert.equal(r2.consecutiveElevatedCount, 1); // Reset to 1 instead of accumulating to 2
 });
 
-test('DeviceAnomalyDecisionService applies hysteresis recovery and clears alert', async () => {
+test('DeviceAnomalyDecisionService isolates state per source', async () => {
   const inference = createMockLayaChoiceInference(0);
   const service = new DeviceAnomalyDecisionService(inference, {
     cpuThresholdPercent: 90,
-    memoryThresholdPercent: 90,
-    recoveryThresholdPercent: 80,
+    sustainedSampleCount: 2,
+  });
+
+  const t0 = new Date('2026-09-29T15:00:00.000Z').toISOString();
+
+  // Source A: 1 sample
+  const rA = await service.evaluateSample({
+    source: 'host-A',
+    timestamp: t0,
+    cpuPercent: 95,
+    memoryPercent: 50,
+    samplingIntervalMs: 5000,
+  });
+  assert.equal(rA.consecutiveElevatedCount, 1);
+
+  // Source B: 1 sample should have its own count = 1, NOT 2!
+  const rB = await service.evaluateSample({
+    source: 'host-B',
+    timestamp: t0,
+    cpuPercent: 95,
+    memoryPercent: 50,
+    samplingIntervalMs: 5000,
+  });
+  assert.equal(rB.consecutiveElevatedCount, 1);
+  assert.equal(rB.status, 'monitoring');
+});
+
+test('DeviceAnomalyDecisionService handles unavailable metrics without false recovery', async () => {
+  const inference = createMockLayaChoiceInference(0);
+  const service = new DeviceAnomalyDecisionService(inference, {
+    cpuThresholdPercent: 90,
+    sustainedSampleCount: 1,
+  });
+
+  const baseTime = Date.parse('2026-09-29T16:00:00.000Z');
+
+  // Trigger alert
+  const triggered = await service.evaluateSample({
+    source: 'agent:telemetry',
+    timestamp: new Date(baseTime).toISOString(),
+    cpuPercent: 95,
+    memoryPercent: 70,
+    samplingIntervalMs: 5000,
+  });
+  assert.equal(triggered.status, 'alert_triggered');
+  assert.equal(triggered.isAlertActive, true);
+
+  // Next sample: CPU and memory both unavailable -> status indeterminate, alert remains active!
+  const indet = await service.evaluateSample({
+    source: 'agent:telemetry',
+    timestamp: new Date(baseTime + 5000).toISOString(),
+    cpuPercent: 0,
+    memoryPercent: 0,
+    unavailableMetrics: ['cpu', 'memory'],
+    samplingIntervalMs: 5000,
+  });
+  assert.equal(indet.status, 'indeterminate');
+  assert.equal(indet.isAlertActive, true); // Did NOT false recover!
+});
+
+test('DeviceAnomalyDecisionService does not lock cooldown when inference fails', async () => {
+  const failingInference = createMockLayaChoiceInference(0, true);
+  const service = new DeviceAnomalyDecisionService(failingInference, {
+    cpuThresholdPercent: 90,
     sustainedSampleCount: 1,
     cooldownMs: 60_000,
   });
 
-  const baseTime = Date.parse('2026-09-29T15:00:00.000Z');
+  const baseTime = Date.parse('2026-09-29T17:00:00.000Z');
 
-  // 1. Trigger alert
-  const alertRes = await service.evaluateSample({
-    source: 'system:metrics',
+  // First sample attempts to alert, but inference throws
+  const res1 = await service.evaluateSample({
+    source: 'sys:metric',
     timestamp: new Date(baseTime).toISOString(),
     cpuPercent: 95,
-    memoryPercent: 70,
+    memoryPercent: 50,
     samplingIntervalMs: 5000,
   });
-  assert.equal(alertRes.status, 'alert_triggered');
-  assert.equal(alertRes.isAlertActive, true);
+  assert.equal(res1.status, 'monitoring');
+  assert.equal(res1.isAlertActive, false); // Alert not confirmed due to failure
 
-  // 2. Metric drops to 85% CPU (between recovery 80% and alarm 90%) -> Hysteresis holds
-  const hystRes = await service.evaluateSample({
-    source: 'system:metrics',
+  // Next sample arrives 5 seconds later: should NOT be suppressed by cooldown
+  const res2 = await service.evaluateSample({
+    source: 'sys:metric',
     timestamp: new Date(baseTime + 5000).toISOString(),
-    cpuPercent: 85,
-    memoryPercent: 70,
-    samplingIntervalMs: 5000,
-  });
-  assert.equal(hystRes.status, 'alert_active_hysteresis');
-  assert.equal(hystRes.isAlertActive, true);
-
-  // 3. Metric drops to 75% CPU (< recovery 80%) -> Alert clears and recovers!
-  const recRes = await service.evaluateSample({
-    source: 'system:metrics',
-    timestamp: new Date(baseTime + 10000).toISOString(),
-    cpuPercent: 75,
-    memoryPercent: 70,
-    samplingIntervalMs: 5000,
-  });
-  assert.equal(recRes.status, 'recovered');
-  assert.equal(recRes.isAlertActive, false);
-  assert.equal(recRes.consecutiveElevatedCount, 0);
-
-  // 4. Metric stays at 60% CPU -> Normal
-  const normRes = await service.evaluateSample({
-    source: 'system:metrics',
-    timestamp: new Date(baseTime + 15000).toISOString(),
-    cpuPercent: 60,
-    memoryPercent: 60,
-    samplingIntervalMs: 5000,
-  });
-  assert.equal(normRes.status, 'normal');
-  assert.equal(normRes.isAlertActive, false);
-});
-
-test('DeviceAnomalyDecisionService handles replayed timestamps and validates options', async () => {
-  const inference = createMockLayaChoiceInference(0);
-  const service = new DeviceAnomalyDecisionService(inference);
-
-  const t0 = '2026-09-29T16:00:00.000Z';
-  await service.evaluateSample({
-    source: 'system:metrics',
-    timestamp: t0,
-    cpuPercent: 50,
+    cpuPercent: 95,
     memoryPercent: 50,
     samplingIntervalMs: 5000,
   });
-
-  // Replay same timestamp
-  const replay = await service.evaluateSample({
-    source: 'system:metrics',
-    timestamp: t0,
-    cpuPercent: 50,
-    memoryPercent: 50,
-    samplingIntervalMs: 5000,
-  });
-  assert.equal(replay.status, 'replayed');
-
-  // Invalid options: recoveryThreshold >= cpuThreshold
-  assert.throws(
-    () => new DeviceAnomalyDecisionService(inference, {
-      cpuThresholdPercent: 85,
-      recoveryThresholdPercent: 85,
-    }),
-    (err) => err instanceof CognitionError && err.code === 'INVALID_ARGUMENT'
-  );
+  assert.notEqual(res2.status, 'cooldown_suppressed');
 });

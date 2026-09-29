@@ -16,9 +16,9 @@ export interface MailTriageCheckpointPort {
 
 export interface MailTriagePipelineOptions extends LayaTriageOptions {
   readonly inference: LayaInferencePort;
-  readonly checkpoint?: MailTriageCheckpointPort;
-  readonly labels?: Readonly<Record<string, string>>;
-  readonly now?: () => number;
+  readonly checkpoint?: MailTriageCheckpointPort | undefined;
+  readonly labels?: Readonly<Record<string, string>> | undefined;
+  readonly now?: (() => number) | undefined;
 }
 
 export interface MailBatchTriageRequest {
@@ -39,6 +39,8 @@ export interface MailHighImpactNotice {
 
 export interface MailBatchTriageSummary {
   readonly total: number;
+  readonly cachedCount: number;
+  readonly newlyClassifiedCount: number;
   readonly classifiedCount: number;
   readonly highImpactCount: number;
   readonly uncertainCount: number;
@@ -47,7 +49,8 @@ export interface MailBatchTriageSummary {
   readonly highImpactNotices: readonly MailHighImpactNotice[];
   readonly categoryCounts: Readonly<Record<string, number>>;
   readonly throughput: {
-    readonly durationMs: number;
+    readonly totalDurationMs: number;
+    readonly inferenceDurationMs: number;
     readonly messagesPerSecond: number;
   };
 }
@@ -60,13 +63,15 @@ export const DEFAULT_MAIL_LABELS: Readonly<Record<string, string>> = Object.free
   promotional: '营销推广：活动推介、新闻资讯、产品宣传等低优先级邮件。',
 });
 
-const identity = (source: string, messageId: string, revision: string): string =>
-  `${source}:${messageId}:${revision}`;
+const hash = (value: string): string => createHash('sha256').update(value).digest('hex');
 
 /**
- * Bounded, backpressured mail triage pipeline using real Laya SLM classification.
- * Supports batching within 16GB limits (chunkSize: 1-4), persistent progress checkpointing,
- * real throughput measurement, and privacy-preserving high-impact notification summaries.
+ * Bounded mail triage pipeline using real Laya SLM classification.
+ * - Structured key binding source, messageId, revision, and label/model fingerprint
+ * - Transactional checkpointing: cache is updated only AFTER durable save succeeds
+ * - In-batch duplicate message deduplication
+ * - Strictly separated model inference throughput calculation from cache hits
+ * - High-impact notification summaries without text or header leakage
  */
 export class MailTriagePipeline {
   private readonly triageService: LayaTriageService;
@@ -74,7 +79,9 @@ export class MailTriagePipeline {
   private readonly labels: Readonly<Record<string, string>>;
   private readonly chunkSize: number;
   private readonly now: () => number;
+  private readonly configDigest: string;
   private cache = new Map<string, LayaTriageResult>();
+  private checkpointLoaded = false;
 
   constructor(options: MailTriagePipelineOptions) {
     if (!options || !options.inference) throw new CognitionError('INVALID_ARGUMENT');
@@ -83,6 +90,13 @@ export class MailTriagePipeline {
     this.labels = options.labels ?? DEFAULT_MAIL_LABELS;
     this.chunkSize = Math.max(1, Math.min(options.chunkSize ?? 4, 16));
     this.now = options.now ?? Date.now;
+
+    const sortedLabels = Object.entries(this.labels).sort(([a], [b]) => a.localeCompare(b));
+    this.configDigest = hash(JSON.stringify({labels: sortedLabels, model: 'multilingual'}));
+  }
+
+  private makeKey(source: string, messageId: string, revision: string): string {
+    return hash(JSON.stringify([source, messageId, revision, this.configDigest]));
   }
 
   /**
@@ -98,29 +112,50 @@ export class MailTriagePipeline {
 
     const startTime = this.now();
 
-    // Load durable progress if checkpoint port provided
-    if (this.checkpointPort && this.cache.size === 0) {
+    // Load durable progress once if checkpoint port provided
+    if (this.checkpointPort && !this.checkpointLoaded) {
       const persisted = await this.checkpointPort.load();
       if (persisted && typeof persisted === 'object') {
         for (const [key, val] of Object.entries(persisted)) {
           this.cache.set(key, val);
         }
       }
+      this.checkpointLoaded = true;
+    }
+
+    // Deduplicate duplicate messages within the batch request itself
+    const uniqueMessages: LayaTriageMessage[] = [];
+    const seenBatch = new Set<string>();
+    for (const msg of request.messages) {
+      if (!msg || typeof msg.source !== 'string' || typeof msg.messageId !== 'string'
+        || typeof msg.sourceRevision !== 'string' || typeof msg.text !== 'string') {
+        throw new CognitionError('INVALID_ARGUMENT');
+      }
+      const rawIdentity = `${msg.source}:${msg.messageId}:${msg.sourceRevision}`;
+      if (!seenBatch.has(rawIdentity)) {
+        seenBatch.add(rawIdentity);
+        uniqueMessages.push(msg);
+      }
     }
 
     const allResults: LayaTriageResult[] = [];
     const pendingMessages: LayaTriageMessage[] = [];
+    let cachedCount = 0;
 
-    // Filter out already processed messages (deduplication)
-    for (const msg of request.messages) {
-      const key = identity(msg.source, msg.messageId, msg.sourceRevision);
+    // Filter out already processed messages (deduplication from cache)
+    for (const msg of uniqueMessages) {
+      const key = this.makeKey(msg.source, msg.messageId, msg.sourceRevision);
       const cached = this.cache.get(key);
       if (cached) {
         allResults.push(cached);
+        cachedCount++;
       } else {
         pendingMessages.push(msg);
       }
     }
+
+    let cumulativeInferenceMs = 0;
+    const newlyClassified: LayaTriageResult[] = [];
 
     // Process pending messages in bounded chunks
     for (let i = 0; i < pendingMessages.length; i += this.chunkSize) {
@@ -135,24 +170,38 @@ export class MailTriagePipeline {
         signal: request.signal,
       };
 
+      const inferenceStart = this.now();
       const chunkResults = await this.triageService.classify(triageRequest);
-      for (const res of chunkResults) {
-        const key = identity(res.source, res.messageId, res.sourceRevision);
-        this.cache.set(key, res);
-        allResults.push(res);
-      }
+      const inferenceEnd = this.now();
+      cumulativeInferenceMs += Math.max(1, inferenceEnd - inferenceStart);
 
-      // Persist checkpoint after each chunk
+      // Persist to checkpoint BEFORE committing to in-memory cache
       if (this.checkpointPort) {
         const snapshot: Record<string, LayaTriageResult> = {};
         for (const [k, v] of this.cache) snapshot[k] = v;
+        for (const res of chunkResults) {
+          snapshot[this.makeKey(res.source, res.messageId, res.sourceRevision)] = res;
+        }
+        // If save fails, this.cache is preserved without partial unpersisted entries
         await this.checkpointPort.save(snapshot);
+      }
+
+      // Safe to update cache now
+      for (const res of chunkResults) {
+        const key = this.makeKey(res.source, res.messageId, res.sourceRevision);
+        this.cache.set(key, res);
+        newlyClassified.push(res);
+        allResults.push(res);
       }
     }
 
-    const endTime = this.now();
-    const durationMs = Math.max(1, endTime - startTime);
-    const messagesPerSecond = Number(((allResults.length / (durationMs / 1000))).toFixed(2));
+    const totalDurationMs = Math.max(1, this.now() - startTime);
+    const newlyClassifiedCount = newlyClassified.length;
+
+    // Pure model inference throughput: only newly classified messages divided by model inference time
+    const messagesPerSecond = newlyClassifiedCount > 0
+      ? Number(((newlyClassifiedCount / (cumulativeInferenceMs / 1000))).toFixed(2))
+      : 0;
 
     // Compile summary and high impact notices
     let classifiedCount = 0;
@@ -190,6 +239,8 @@ export class MailTriagePipeline {
 
     return {
       total: allResults.length,
+      cachedCount,
+      newlyClassifiedCount,
       classifiedCount,
       highImpactCount,
       uncertainCount,
@@ -198,7 +249,8 @@ export class MailTriagePipeline {
       highImpactNotices,
       categoryCounts: Object.freeze(categoryCounts),
       throughput: {
-        durationMs,
+        totalDurationMs,
+        inferenceDurationMs: cumulativeInferenceMs,
         messagesPerSecond,
       },
     };

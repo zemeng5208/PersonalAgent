@@ -13,9 +13,9 @@ export interface DeviceSample {
   readonly timestamp: string;
   readonly cpuPercent: number;
   readonly memoryPercent: number;
-  readonly diskPercent?: number;
+  readonly diskPercent?: number | undefined;
   readonly samplingIntervalMs: number;
-  readonly unavailableMetrics?: readonly string[];
+  readonly unavailableMetrics?: readonly string[] | undefined;
 }
 
 export interface DeviceAnomalyOptions {
@@ -29,6 +29,8 @@ export interface DeviceAnomalyOptions {
   readonly sustainedSampleCount?: number | undefined;
   /** Minimum interval in milliseconds between repeated alert notifications (default: 300,000 = 5 min). */
   readonly cooldownMs?: number | undefined;
+  /** Maximum sampling gap multiplier before consecutive counter resets (default: 2.5). */
+  readonly maxSamplingGapMultiplier?: number | undefined;
   readonly now?: (() => number) | undefined;
 }
 
@@ -39,10 +41,12 @@ export type DeviceAnomalyStatus =
   | 'alert_active_hysteresis'
   | 'cooldown_suppressed'
   | 'recovered'
+  | 'indeterminate'
   | 'replayed';
 
 export interface DeviceAnomalyDecisionReceipt {
   readonly receiptId: string;
+  readonly source: string;
   readonly status: DeviceAnomalyStatus;
   readonly isAlertActive: boolean;
   readonly consecutiveElevatedCount: number;
@@ -53,14 +57,24 @@ export interface DeviceAnomalyDecisionReceipt {
   readonly safeAdvice: string;
 }
 
+interface SourceState {
+  consecutiveElevatedCount: number;
+  isAlertActive: boolean;
+  lastAlertTimestampMs: number | null;
+  lastSampleTimestampMs: number | null;
+  sampleCounter: number;
+}
+
 const hash = (text: string): string => createHash('sha256').update(text).digest('hex');
 
 /**
- * Proactive decision service for system device anomaly evaluation.
- * Consumes telemetry projections, applies continuous sampling confirmation (3 samples),
- * hysteresis (recovery < 80%), notification deduplication (cooldown), and delegates
- * intervention selection to real Laya SLM across safe, reversible actions only.
- * STRICT GUARDRAIL: Never kills processes, shuts down applications, deletes files, or alters security settings.
+ * Proactive decision service for device anomaly evaluation.
+ * - Per-source state isolation
+ * - Strict sampling continuity (gap check resets un-alerted consecutive count)
+ * - Clear separation of threshold confirmation vs hysteresis hold
+ * - Indeterminate handling (unavailable metrics do not masquerade as recovery)
+ * - Cooldown updated strictly on confirmed Laya decision
+ * - Advisory-only candidates: NO self-signed authorization, NO destructive operations.
  */
 export class DeviceAnomalyDecisionService {
   private readonly choiceService: LayaActionChoiceService;
@@ -69,13 +83,9 @@ export class DeviceAnomalyDecisionService {
   private readonly recoveryThreshold: number;
   private readonly sustainedCount: number;
   private readonly cooldownMs: number;
+  private readonly maxGapMultiplier: number;
   private readonly now: () => number;
-
-  private consecutiveElevatedCount = 0;
-  private isAlertActive = false;
-  private lastAlertTimestampMs: number | null = null;
-  private lastProcessedTimestampMs: number | null = null;
-  private sampleRevisionCounter = 0;
+  private readonly sourceStates = new Map<string, SourceState>();
 
   constructor(
     inference: LayaInferencePort,
@@ -88,15 +98,33 @@ export class DeviceAnomalyDecisionService {
     this.recoveryThreshold = options.recoveryThresholdPercent ?? 80;
     this.sustainedCount = Math.max(1, options.sustainedSampleCount ?? 3);
     this.cooldownMs = options.cooldownMs ?? 300_000;
+    this.maxGapMultiplier = options.maxSamplingGapMultiplier ?? 2.5;
     this.now = options.now ?? Date.now;
 
-    if (this.recoveryThreshold >= this.cpuThreshold || this.recoveryThreshold >= this.memoryThreshold) {
+    if (!Number.isFinite(this.cpuThreshold) || !Number.isFinite(this.memoryThreshold)
+      || !Number.isFinite(this.recoveryThreshold) || this.cpuThreshold > 100 || this.memoryThreshold > 100
+      || this.recoveryThreshold >= this.cpuThreshold || this.recoveryThreshold >= this.memoryThreshold) {
       throw new CognitionError('INVALID_ARGUMENT');
     }
   }
 
+  private getSourceState(source: string): SourceState {
+    let state = this.sourceStates.get(source);
+    if (!state) {
+      state = {
+        consecutiveElevatedCount: 0,
+        isAlertActive: false,
+        lastAlertTimestampMs: null,
+        lastSampleTimestampMs: null,
+        sampleCounter: 0,
+      };
+      this.sourceStates.set(source, state);
+    }
+    return state;
+  }
+
   /**
-   * Evaluates an incoming device status sample against thresholds, hysteresis, and Laya action choice.
+   * Evaluates an incoming device sample per source.
    */
   async evaluateSample(
     sample: DeviceSample,
@@ -104,80 +132,132 @@ export class DeviceAnomalyDecisionService {
   ): Promise<DeviceAnomalyDecisionReceipt> {
     if (!sample || typeof sample.source !== 'string' || !sample.source.trim()
       || !Number.isFinite(Date.parse(sample.timestamp))
-      || typeof sample.cpuPercent !== 'number' || sample.cpuPercent < 0 || sample.cpuPercent > 100
-      || typeof sample.memoryPercent !== 'number' || sample.memoryPercent < 0 || sample.memoryPercent > 100
+      || !Number.isFinite(sample.cpuPercent) || sample.cpuPercent < 0 || sample.cpuPercent > 100
+      || !Number.isFinite(sample.memoryPercent) || sample.memoryPercent < 0 || sample.memoryPercent > 100
       || !Number.isSafeInteger(sample.samplingIntervalMs) || sample.samplingIntervalMs <= 0) {
       throw new CognitionError('INVALID_ARGUMENT');
     }
 
     const sampleTimeMs = Date.parse(sample.timestamp);
+    const state = this.getSourceState(sample.source);
 
-    // Replay / Monotonicity check
-    if (this.lastProcessedTimestampMs !== null && sampleTimeMs <= this.lastProcessedTimestampMs) {
+    // Monotonicity / Replay check for this source
+    if (state.lastSampleTimestampMs !== null && sampleTimeMs <= state.lastSampleTimestampMs) {
       return {
         receiptId: hash(`replay:${sample.source}:${sample.timestamp}`),
+        source: sample.source,
         status: 'replayed',
-        isAlertActive: this.isAlertActive,
-        consecutiveElevatedCount: this.consecutiveElevatedCount,
+        isAlertActive: state.isAlertActive,
+        consecutiveElevatedCount: state.consecutiveElevatedCount,
         sample,
-        safeAdvice: '忽略重放或非递增时间戳的旧采样数据',
+        safeAdvice: '忽略非递增时间戳或重复到达的旧采样数据',
       };
     }
-    this.lastProcessedTimestampMs = sampleTimeMs;
-    this.sampleRevisionCounter++;
 
-    const isCpuUnavailable = sample.unavailableMetrics?.includes('cpu');
-    const isMemoryUnavailable = sample.unavailableMetrics?.includes('memory');
+    // Sampling continuity check: if gap exceeds samplingInterval * multiplier, reset un-alerted consecutive count
+    if (state.lastSampleTimestampMs !== null) {
+      const gap = sampleTimeMs - state.lastSampleTimestampMs;
+      if (gap > sample.samplingIntervalMs * this.maxGapMultiplier) {
+        state.consecutiveElevatedCount = 0;
+      }
+    }
+    state.lastSampleTimestampMs = sampleTimeMs;
+    state.sampleCounter++;
+
+    const isCpuUnavailable = sample.unavailableMetrics?.includes('cpu') ?? false;
+    const isMemoryUnavailable = sample.unavailableMetrics?.includes('memory') ?? false;
+
+    // Both key metrics unavailable: indeterminate status
+    if (isCpuUnavailable && isMemoryUnavailable) {
+      return {
+        receiptId: hash(`indeterminate:${sample.source}:${sample.timestamp}:${state.sampleCounter}`),
+        source: sample.source,
+        status: 'indeterminate',
+        isAlertActive: state.isAlertActive,
+        consecutiveElevatedCount: state.consecutiveElevatedCount,
+        sample,
+        safeAdvice: 'CPU与内存监测指标均不可用，维持现有状态，不执行恢复或告警触发',
+      };
+    }
 
     const cpuExceeded = !isCpuUnavailable && sample.cpuPercent >= this.cpuThreshold;
     const memoryExceeded = !isMemoryUnavailable && sample.memoryPercent >= this.memoryThreshold;
     const isElevated = cpuExceeded || memoryExceeded;
 
     if (isElevated) {
-      this.consecutiveElevatedCount++;
+      state.consecutiveElevatedCount++;
 
-      // Check if elevated condition is sustained across samples
-      if (this.consecutiveElevatedCount >= this.sustainedCount) {
+      // Check if sustained sample requirement is reached
+      if (state.consecutiveElevatedCount >= this.sustainedCount) {
         // Sustained anomaly confirmed: check cooldown suppression
-        if (this.isAlertActive && this.lastAlertTimestampMs !== null
-          && (sampleTimeMs - this.lastAlertTimestampMs < this.cooldownMs)) {
+        if (state.isAlertActive && state.lastAlertTimestampMs !== null
+          && (sampleTimeMs - state.lastAlertTimestampMs < this.cooldownMs)) {
           return {
-            receiptId: hash(`cooldown:${sample.source}:${sample.timestamp}:${this.sampleRevisionCounter}`),
+            receiptId: hash(`cooldown:${sample.source}:${sample.timestamp}:${state.sampleCounter}`),
+            source: sample.source,
             status: 'cooldown_suppressed',
             isAlertActive: true,
-            consecutiveElevatedCount: this.consecutiveElevatedCount,
+            consecutiveElevatedCount: state.consecutiveElevatedCount,
             sample,
             safeAdvice: `系统资源持续高负荷（CPU: ${sample.cpuPercent}%, 内存: ${sample.memoryPercent}%），已在冷却窗口（${Math.round(this.cooldownMs / 1000)}s）内抑制重复通知。`,
           };
         }
 
-        // Trigger alert and generate safe candidates for Laya choice
-        this.isAlertActive = true;
-        this.lastAlertTimestampMs = sampleTimeMs;
-
         const expiresAt = new Date(this.now() + 120_000).toISOString();
-        const candidates = this.buildSafeCandidates(sample, expiresAt);
+        const candidates = this.buildSafeCandidates(sample, expiresAt, state.sampleCounter);
 
-        const context = `[设备性能状态] 来源: ${sample.source}, 时间: ${sample.timestamp}, CPU使用率: ${sample.cpuPercent}%, 内存使用率: ${sample.memoryPercent}%, 采样间隔: ${sample.samplingIntervalMs}ms. 连续超标采样次数: ${this.consecutiveElevatedCount}.`;
+        const context = `[设备性能状态] 来源: ${sample.source}, 时间: ${sample.timestamp}, CPU使用率: ${sample.cpuPercent}%, 内存使用率: ${sample.memoryPercent}%, 采样间隔: ${sample.samplingIntervalMs}ms. 连续超标采样次数: ${state.consecutiveElevatedCount}.`;
 
         const deadline = layaRequest?.deadline ?? new Date(this.now() + 60_000).toISOString();
         const signal = layaRequest?.signal ?? new AbortController().signal;
 
-        const selection = await this.choiceService.choose({
-          context,
-          candidates,
-          deadline,
-          signal,
-        });
+        let selection: LayaActionSelection;
+        try {
+          selection = await this.choiceService.choose({
+            context,
+            candidates,
+            deadline,
+            signal,
+          });
+        } catch {
+          // If inference fails, do NOT update cooldown timestamp so subsequent attempts can proceed
+          return {
+            receiptId: hash(`inference_failed:${sample.source}:${sample.timestamp}:${state.sampleCounter}`),
+            source: sample.source,
+            status: 'monitoring',
+            isAlertActive: state.isAlertActive,
+            consecutiveElevatedCount: state.consecutiveElevatedCount,
+            sample,
+            safeAdvice: 'Laya 推理决策暂时不可用，保持持续监测，未锁定冷却窗口',
+          };
+        }
+
+        if (selection.state === 'abstain') {
+          return {
+            receiptId: hash(`inference_failed:${sample.source}:${sample.timestamp}:${state.sampleCounter}`),
+            source: sample.source,
+            status: 'monitoring',
+            isAlertActive: state.isAlertActive,
+            consecutiveElevatedCount: state.consecutiveElevatedCount,
+            sample,
+            selection,
+            safeAdvice: `Laya 推理暂未产生有效决议 (${selection.reason})，保持持续监测，未锁定冷却窗口`,
+          };
+        }
+
+        // Successfully evaluated by Laya: now mark active and update cooldown timestamp
+        state.isAlertActive = true;
+        state.lastAlertTimestampMs = sampleTimeMs;
 
         const selectedCandidate = candidates.find(c => c.id === selection.selected?.id);
         const safeAdvice = this.formatAdvice(selectedCandidate, selection);
 
         return {
-          receiptId: hash(`alert:${sample.source}:${sample.timestamp}:${this.sampleRevisionCounter}`),
+          receiptId: hash(`alert:${sample.source}:${sample.timestamp}:${state.sampleCounter}`),
+          source: sample.source,
           status: 'alert_triggered',
           isAlertActive: true,
-          consecutiveElevatedCount: this.consecutiveElevatedCount,
+          consecutiveElevatedCount: state.consecutiveElevatedCount,
           sample,
           selection,
           selectedCandidate,
@@ -186,122 +266,115 @@ export class DeviceAnomalyDecisionService {
         };
       }
 
-      // Elevated but still accumulating samples for confirmation
+      // Elevated but still accumulating consecutive samples
       return {
-        receiptId: hash(`monitoring:${sample.source}:${sample.timestamp}:${this.sampleRevisionCounter}`),
+        receiptId: hash(`monitoring:${sample.source}:${sample.timestamp}:${state.sampleCounter}`),
+        source: sample.source,
         status: 'monitoring',
-        isAlertActive: this.isAlertActive,
-        consecutiveElevatedCount: this.consecutiveElevatedCount,
+        isAlertActive: state.isAlertActive,
+        consecutiveElevatedCount: state.consecutiveElevatedCount,
         sample,
-        safeAdvice: `检测到系统指标超过阈值（CPU: ${sample.cpuPercent}%, 内存: ${sample.memoryPercent}%），当前连续采样 ${this.consecutiveElevatedCount}/${this.sustainedCount} 次，持续观察中。`,
+        safeAdvice: `检测到系统指标超标（CPU: ${sample.cpuPercent}%, 内存: ${sample.memoryPercent}%），连续采样确认中 (${state.consecutiveElevatedCount}/${this.sustainedCount})。`,
       };
     }
 
-    // Not elevated: check hysteresis recovery
-    const cpuRecovered = isCpuUnavailable || sample.cpuPercent < this.recoveryThreshold;
-    const memoryRecovered = isMemoryUnavailable || sample.memoryPercent < this.recoveryThreshold;
+    // Sample is NOT elevated (below threshold)
+    // If not in active alert: consecutive count resets immediately to 0
+    if (!state.isAlertActive) {
+      state.consecutiveElevatedCount = 0;
+    }
 
-    if (cpuRecovered && memoryRecovered) {
-      const wasActive = this.isAlertActive;
-      this.isAlertActive = false;
-      this.consecutiveElevatedCount = 0;
+    // Check recovery: ONLY if neither is unavailable AND both strictly below recovery threshold
+    const canCheckRecovery = !isCpuUnavailable && !isMemoryUnavailable;
+    const isBelowRecovery = canCheckRecovery
+      && sample.cpuPercent < this.recoveryThreshold
+      && sample.memoryPercent < this.recoveryThreshold;
+
+    if (isBelowRecovery) {
+      const wasActive = state.isAlertActive;
+      state.isAlertActive = false;
+      state.consecutiveElevatedCount = 0;
 
       if (wasActive) {
         return {
-          receiptId: hash(`recovered:${sample.source}:${sample.timestamp}:${this.sampleRevisionCounter}`),
+          receiptId: hash(`recovered:${sample.source}:${sample.timestamp}:${state.sampleCounter}`),
+          source: sample.source,
           status: 'recovered',
           isAlertActive: false,
           consecutiveElevatedCount: 0,
           sample,
-          safeAdvice: `系统资源负载已恢复至安全阈值以下（CPU: ${sample.cpuPercent}%, 内存: ${sample.memoryPercent}% < ${this.recoveryThreshold}%），异常状态已解除。`,
+          safeAdvice: `系统资源负载已降至安全恢复阈值以下（CPU: ${sample.cpuPercent}%, 内存: ${sample.memoryPercent}% < ${this.recoveryThreshold}%），告警状态已解除。`,
         };
       }
 
       return {
-        receiptId: hash(`normal:${sample.source}:${sample.timestamp}:${this.sampleRevisionCounter}`),
+        receiptId: hash(`normal:${sample.source}:${sample.timestamp}:${state.sampleCounter}`),
+        source: sample.source,
         status: 'normal',
         isAlertActive: false,
         consecutiveElevatedCount: 0,
         sample,
-        safeAdvice: `系统资源运行正常（CPU: ${sample.cpuPercent}%, 内存: ${sample.memoryPercent}%）。`,
+        safeAdvice: `系统资源利用率正常（CPU: ${sample.cpuPercent}%, 内存: ${sample.memoryPercent}%）。`,
       };
     }
 
-    // Inside hysteresis band (between recovery threshold and alarm threshold)
+    // Inside hysteresis band (< threshold but >= recovery threshold)
     return {
-      receiptId: hash(`hysteresis:${sample.source}:${sample.timestamp}:${this.sampleRevisionCounter}`),
-      status: this.isAlertActive ? 'alert_active_hysteresis' : 'normal',
-      isAlertActive: this.isAlertActive,
-      consecutiveElevatedCount: this.consecutiveElevatedCount,
+      receiptId: hash(`hysteresis:${sample.source}:${sample.timestamp}:${state.sampleCounter}`),
+      source: sample.source,
+      status: state.isAlertActive ? 'alert_active_hysteresis' : 'normal',
+      isAlertActive: state.isAlertActive,
+      consecutiveElevatedCount: state.consecutiveElevatedCount,
       sample,
-      safeAdvice: `系统指标处于迟滞恢复观察带（CPU: ${sample.cpuPercent}%, 内存: ${sample.memoryPercent}%），保持现有${this.isAlertActive ? '告警' : '常规'}状态。`,
+      safeAdvice: `系统指标处于迟滞区间（CPU: ${sample.cpuPercent}%, 内存: ${sample.memoryPercent}%），保持现有${state.isAlertActive ? '告警' : '常规'}状态。`,
     };
   }
 
   /**
    * Constructs exactly 3 safe, reversible candidate options.
-   * Explicitly avoids any destructive operations.
+   * STRICT GUARDRAIL: Advisory candidates only. NO self-signed authorizations, NO process killing, NO file deletion.
    */
-  private buildSafeCandidates(sample: DeviceSample, expiresAt: string): readonly LayaActionCandidate[] {
-    const sourceRef = {id: sample.source, revision: this.sampleRevisionCounter};
+  private buildSafeCandidates(sample: DeviceSample, expiresAt: string, revision: number): readonly LayaActionCandidate[] {
+    const sourceRef = {id: sample.source, revision};
+    const emptyDigest = actionArgumentsDigest({});
 
-    // Candidate 1: Remind user to inspect via desktop notification (pre-authorized low-risk tool)
-    const notifyTool = {
-      name: 'desktop:notify',
-      version: '1.0.0',
-      arguments: Object.freeze({
-        level: 'warning',
-        title: '系统资源告警',
-        message: `CPU使用率达到 ${sample.cpuPercent}%，内存使用率达到 ${sample.memoryPercent}%。建议检查高占用任务。`,
-      }),
-    };
-    const notifyDigest = actionArgumentsDigest(notifyTool.arguments);
-    const notifyScope = 'desktop:notify';
-
+    // Candidate 1: Remind user to inspect via desktop notification advice
     const candidate1: LayaActionCandidate = {
       id: 'remind_user_inspect',
       revision: 1,
-      kind: 'tool',
-      description: '通过桌面通知向用户发出资源告警，建议手动检查或排查耗电/高占用应用',
+      kind: 'escalate',
+      description: '生成桌面通知建议，提醒用户检查高占用任务；保持系统应用与进程运行状态不变',
       sources: [sourceRef],
-      scopeRef: notifyScope,
+      scopeRef: 'desktop:notify_advisory',
       expiresAt,
       risk: 'low',
-      tool: notifyTool,
-      argumentsDigest: notifyDigest,
-      authorization: {
-        state: 'granted',
-        refDigest: hash(`${notifyScope}:${notifyDigest}:${expiresAt}`),
-        scopeRef: notifyScope,
-        argumentsDigest: notifyDigest,
-        expiresAt,
-      },
+      argumentsDigest: emptyDigest,
     };
 
-    // Candidate 2: Defer background syncing / indexing tasks (reversible non-tool defer)
+    // Candidate 2: Defer background syncing / indexing tasks
     const candidate2: LayaActionCandidate = {
       id: 'defer_background_tasks',
       revision: 1,
       kind: 'defer',
-      description: '暂缓非紧急的后台同步、本地索引与定期任务，降低背景争抢',
+      description: '建议暂缓非关键后台同步与索引，待系统负荷下降后自动恢复',
       sources: [sourceRef],
-      scopeRef: 'agent:background_scheduler',
+      scopeRef: 'agent:background_scheduler_advisory',
       expiresAt,
       risk: 'low',
-      argumentsDigest: actionArgumentsDigest({}),
+      argumentsDigest: emptyDigest,
     };
 
-    // Candidate 3: Escalate to diagnostic review without mutating system (escalate)
+    // Candidate 3: Capture diagnostic snapshot for review
     const candidate3: LayaActionCandidate = {
       id: 'escalate_diagnostics',
       revision: 1,
       kind: 'escalate',
-      description: '记录瞬时性能指标快照并呈报用户审查，保持系统配置与进程不变',
+      description: '记录瞬时性能指标快照呈报用户复核，不对操作系统环境做任何写操作',
       sources: [sourceRef],
-      scopeRef: 'diagnostics:review',
+      scopeRef: 'diagnostics:review_advisory',
       expiresAt,
       risk: 'low',
-      argumentsDigest: actionArgumentsDigest({}),
+      argumentsDigest: emptyDigest,
     };
 
     return Object.freeze([candidate1, candidate2, candidate3]);
@@ -312,17 +385,17 @@ export class DeviceAnomalyDecisionService {
     selection: LayaActionSelection
   ): string {
     if (!candidate || selection.state !== 'selected') {
-      return 'Laya 建议保持当前状态并由用户人工核实（不执行自动化系统操作）。';
+      return 'Laya 建议保持当前状态并由用户人工核实（未执行任何自动化系统修改）。';
     }
     switch (candidate.id) {
       case 'remind_user_inspect':
-        return 'Laya 决定通过桌面通知提醒用户检查资源占用情况；所有操作为纯建议与轻量通知，未中止任何应用或进程。';
+        return 'Laya 建议通过桌面通知提醒用户检查资源占用情况；仅生成建议卡片，未中止任何应用或进程。';
       case 'defer_background_tasks':
-        return 'Laya 决定暂缓非关键后台同步以降低资源开销；该动作完全可逆，待系统负荷下降后自动恢复。';
+        return 'Laya 建议暂缓非关键后台同步以降低资源开销；该动作完全可逆，待负荷回落后恢复。';
       case 'escalate_diagnostics':
-        return 'Laya 决定记录诊断指标快照并请求用户确认，不对操作系统运行环境做任何非授权修改。';
+        return 'Laya 建议记录诊断指标快照供用户复核，不对系统环境做任何非授权修改。';
       default:
-        return `Laya 建议执行可逆安全操作: ${candidate.description}`;
+        return `Laya 建议执行可逆安全建议: ${candidate.description}`;
     }
   }
 }
