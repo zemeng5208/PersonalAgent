@@ -33,6 +33,32 @@ export interface AgentArtsRuntimeConfig {
   repairCandidateVersion?: '1.0';
 }
 
+export type AgentArtsDiagnosticStage =
+  | 'authorization' | 'catalog_guard' | 'export_guard' | 'transport'
+  | 'http_response' | 'response_body' | 'response_schema' | 'application_schema';
+
+export type AgentArtsSchemaCategory =
+  | 'body_limit' | 'body_shape' | 'utf8' | 'content_type' | 'event_order'
+  | 'event_shape' | 'provider_failure' | 'no_text' | 'json_shape'
+  | 'application_json' | 'application_contract' | 'other';
+
+/** Fixed, content-free failure receipt for a trusted host's existing diagnostic outlet. */
+export interface AgentArtsFailureDiagnostic {
+  readonly stage: AgentArtsDiagnosticStage;
+  readonly code: 'INVALID_ARGUMENT' | 'UNSUPPORTED_CAPABILITY' | 'UNAUTHORIZED'
+    | 'EXTERNAL_FAILURE' | 'CANCELLED' | 'TIMEOUT';
+  readonly requestId?: string;
+  readonly httpStatus?: number;
+  readonly contentType?: 'json' | 'sse' | 'missing' | 'other';
+  readonly terminalEvents?: Readonly<{taskEnd: boolean; end: boolean}>;
+  readonly schemaCategory?: AgentArtsSchemaCategory;
+  readonly providerFailureField?: 'event' | 'type' | 'status'
+    | 'data.event' | 'data.type' | 'data.status';
+  readonly providerFailureToken?: 'error' | 'failed' | 'failure';
+  /** Only a canonical service prefix plus numeric code, never a provider message. */
+  readonly providerErrorCode?: string;
+}
+
 export interface AgentArtsFetchInit {
   method: 'POST';
   headers: Record<string, string>;
@@ -80,6 +106,46 @@ function invalid(message: string): never {
 
 function external(message: string, retryable = false): never {
   throw new ProtocolError('EXTERNAL_FAILURE', message, retryable);
+}
+
+function diagnosticCode(error: unknown): AgentArtsFailureDiagnostic['code'] {
+  try {
+    if (error instanceof ProtocolError && [
+      'INVALID_ARGUMENT', 'UNSUPPORTED_CAPABILITY', 'UNAUTHORIZED',
+      'EXTERNAL_FAILURE', 'CANCELLED', 'TIMEOUT',
+    ].includes(error.code)) return error.code as AgentArtsFailureDiagnostic['code'];
+  } catch { /* Provider errors must not enter the receipt. */ }
+  return 'EXTERNAL_FAILURE';
+}
+
+function diagnosticMediaType(value: string | undefined): AgentArtsFailureDiagnostic['contentType'] {
+  if (value === undefined) return 'missing';
+  const mediaType = value.split(';', 1)[0]?.trim().toLowerCase();
+  return mediaType === 'application/json' ? 'json' : mediaType === 'text/event-stream' ? 'sse' : 'other';
+}
+
+function diagnosticSchemaCategory(error: unknown): AgentArtsSchemaCategory {
+  let message: string | undefined;
+  try { if (error instanceof ProtocolError) message = error.message; } catch { /* Untrusted error. */ }
+  if (message === 'AgentArts response exceeds the byte limit'
+    || message === 'AgentArts response exceeds the text limit') return 'body_limit';
+  if (message === 'AgentArts response body is malformed'
+    || message === 'AgentArts response body is unavailable') return 'body_shape';
+  if (message === 'AgentArts response is not valid UTF-8') return 'utf8';
+  if (message === 'AgentArts response content type is unsupported') return 'content_type';
+  if (message === 'AgentArts workflow event order is malformed'
+    || message === 'AgentArts event follows the stream terminator'
+    || message === 'AgentArts text follows the task terminal') return 'event_order';
+  if (message === 'AgentArts response event is malformed'
+    || message === 'AgentArts workflow_end event is malformed'
+    || message === 'AgentArts message event is malformed'
+    || message === 'AgentArts message index is malformed'
+    || message === 'AgentArts response contains conflicting text') return 'event_shape';
+  if (message === 'AgentArts response reported a failure') return 'provider_failure';
+  if (message === 'AgentArts response contains no text') return 'no_text';
+  if (message === 'AgentArts response JSON is malformed'
+    || message === 'AgentArts SSE response is malformed') return 'json_shape';
+  return 'other';
 }
 
 function abortError(cause: AbortCause): ProtocolError {
@@ -431,6 +497,22 @@ async function readResponseText(response: AgentArtsResponse, combined: CombinedS
 }
 
 type WorkflowIdentity = {id: string | undefined; name: string | undefined};
+interface TerminalDiagnosticState {
+  taskEnd: boolean;
+  end: boolean;
+  providerFailureField: AgentArtsFailureDiagnostic['providerFailureField'] | undefined;
+  providerFailureToken: AgentArtsFailureDiagnostic['providerFailureToken'] | undefined;
+  providerErrorCode: string | undefined;
+}
+
+function diagnosticProviderErrorCode(event: Record<string, unknown>, data: Record<string, unknown> | undefined): string | undefined {
+  for (const candidate of [data?.error_code, event.error_code]) {
+    if (typeof candidate === 'string' && /^[A-Za-z][A-Za-z0-9_]{1,31}\.[0-9]{3,8}$/.test(candidate)) {
+      return candidate.toUpperCase();
+    }
+  }
+  return undefined;
+}
 
 class TextCollector {
   private readonly indexed = new Map<number, string>();
@@ -442,7 +524,7 @@ class TextCollector {
   private finalWorkflowAnswer: string | undefined;
   private terminalPhase: 'open' | 'task-ended' | 'ended' | 'invalid' = 'open';
 
-  constructor(private readonly strictCompletion = false) {}
+  constructor(private readonly strictCompletion = false, private readonly diagnostic?: TerminalDiagnosticState) {}
 
   add(text: string, index: number | undefined): void {
     if (this.strictCompletion && this.terminalPhase !== 'open') {
@@ -490,6 +572,7 @@ class TextCollector {
   }
 
   markTaskEnd(): void {
+    if (this.diagnostic) this.diagnostic.taskEnd = true;
     if (this.terminalPhase !== 'open') {
       this.terminalPhase = 'invalid';
       if (this.workflowSeen) external('AgentArts workflow event order is malformed');
@@ -499,12 +582,25 @@ class TextCollector {
   }
 
   markEnd(): void {
+    if (this.diagnostic) this.diagnostic.end = true;
     if (this.terminalPhase === 'task-ended') {
       this.terminalPhase = 'ended';
       return;
     }
     this.terminalPhase = 'invalid';
     if (this.workflowSeen) external('AgentArts workflow event order is malformed');
+  }
+
+  markProviderFailure(
+    field: AgentArtsFailureDiagnostic['providerFailureField'],
+    token: AgentArtsFailureDiagnostic['providerFailureToken'],
+    code: string | undefined,
+  ): void {
+    if (this.diagnostic) {
+      this.diagnostic.providerFailureField = field;
+      this.diagnostic.providerFailureToken = token;
+      this.diagnostic.providerErrorCode = code;
+    }
   }
 
   finish(requireCompletion = false): string {
@@ -536,18 +632,30 @@ function consumeEvent(value: unknown, collector: TextCollector): void {
   // Gateways may report an error in the event name or in a status/type field,
   // sometimes after emitting one or more partial message events.  Fail closed
   // before inspecting the event payload so provider details are never exposed.
-  const failureFields = ['event', 'type', 'status'];
-  const indicatesFailure = (candidate: unknown): boolean => {
-    if (typeof candidate !== 'string') return false;
+  const failureFields = ['event', 'type', 'status'] as const;
+  const failureToken = (candidate: unknown): AgentArtsFailureDiagnostic['providerFailureToken'] => {
+    if (typeof candidate !== 'string') return undefined;
     const tokens = candidate.trim().toLowerCase().split(/[^a-z]+/).filter(Boolean);
-    return tokens.some(token => token === 'error' || token === 'failed' || token === 'failure');
+    return tokens.find((token): token is 'error' | 'failed' | 'failure' =>
+      token === 'error' || token === 'failed' || token === 'failure');
   };
-  if (failureFields.some(field => indicatesFailure(event[field]))) {
-    external('AgentArts response reported a failure');
-  }
   const data = asPlainObject(event.data);
-  if (data && failureFields.some(field => indicatesFailure(data[field]))) {
-    external('AgentArts response reported a failure');
+  for (const field of failureFields) {
+    const token = failureToken(event[field]);
+    if (token !== undefined) {
+      collector.markProviderFailure(field, token, diagnosticProviderErrorCode(event, data));
+      external('AgentArts response reported a failure');
+    }
+  }
+  if (data) {
+    for (const field of failureFields) {
+      const token = failureToken(data[field]);
+      if (token !== undefined) {
+        collector.markProviderFailure(('data.' + field) as AgentArtsFailureDiagnostic['providerFailureField'],
+          token, diagnosticProviderErrorCode(event, data));
+        external('AgentArts response reported a failure');
+      }
+    }
   }
 
   const eventName = event.event;
@@ -644,8 +752,10 @@ function parseSseStandard(payload: string, collector: TextCollector, strictCompl
   flushSseData(data, collector);
 }
 
-function parseSseWithoutSeparators(payload: string, strictCompletion: boolean): TextCollector {
-  const collector = new TextCollector(strictCompletion);
+function parseSseWithoutSeparators(
+  payload: string, strictCompletion: boolean, diagnostic?: TerminalDiagnosticState,
+): TextCollector {
+  const collector = new TextCollector(strictCompletion, diagnostic);
   const lines = payload.split(/\r\n|\r|\n/);
   let done = false;
   for (const line of lines) {
@@ -674,8 +784,10 @@ function parseSseWithoutSeparators(payload: string, strictCompletion: boolean): 
   return collector;
 }
 
-function parseSsePayload(payload: string, strictCompletion: boolean): TextCollector {
-  const standard = new TextCollector(strictCompletion);
+function parseSsePayload(
+  payload: string, strictCompletion: boolean, diagnostic?: TerminalDiagnosticState,
+): TextCollector {
+  const standard = new TextCollector(strictCompletion, diagnostic);
   try {
     parseSseStandard(payload, standard, strictCompletion);
     return standard;
@@ -683,15 +795,27 @@ function parseSsePayload(payload: string, strictCompletion: boolean): TextCollec
     // Some gateways omit the blank separator between self-contained JSON events.
     // Retry only with the conservative line-oriented form; a valid standard
     // multiline event is returned above without ever being split.
-    return parseSseWithoutSeparators(payload, strictCompletion);
+    if (diagnostic) {
+      diagnostic.taskEnd = false;
+      diagnostic.end = false;
+      diagnostic.providerFailureField = undefined;
+      diagnostic.providerFailureToken = undefined;
+      diagnostic.providerErrorCode = undefined;
+    }
+    return parseSseWithoutSeparators(payload, strictCompletion, diagnostic);
   }
 }
 
-function parseResponsePayload(payload: string, contentType: string | undefined, strictCompletion = false): string {
+function parseResponsePayload(
+  payload: string, contentType: string | undefined, strictCompletion = false,
+  diagnostic?: TerminalDiagnosticState,
+): string {
   const mediaType = contentType?.split(';', 1)[0]?.trim().toLowerCase();
-  if (mediaType === 'text/event-stream') return parseSsePayload(payload, strictCompletion).finish(strictCompletion);
+  if (mediaType === 'text/event-stream') {
+    return parseSsePayload(payload, strictCompletion, diagnostic).finish(strictCompletion);
+  }
   if (mediaType === 'application/json') {
-    const collector = new TextCollector(strictCompletion);
+    const collector = new TextCollector(strictCompletion, diagnostic);
     parseJsonPayload(payload, collector);
     return collector.finish();
   }
@@ -745,6 +869,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
   private readonly fetchImpl: AgentArtsFetch;
   private readonly beforeSend: ((request: CoordinationRequest) => void) | undefined;
   private readonly beforeInitialToolCatalogSend: ((request: CoordinationRequest) => Promise<void>) | undefined;
+  private readonly onDiagnostic: ((receipt: AgentArtsFailureDiagnostic) => void) | undefined;
 
   constructor(
     config: AgentArtsRuntimeConfig,
@@ -752,6 +877,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
     fetchImpl?: AgentArtsFetch,
     beforeSend?: (request: CoordinationRequest) => void,
     beforeInitialToolCatalogSend?: (request: CoordinationRequest) => Promise<void>,
+    onDiagnostic?: (receipt: AgentArtsFailureDiagnostic) => void,
   ) {
     const validated = validateRuntimeConfig(config);
     if (!authorizationProvider || typeof authorizationProvider.read !== 'function') {
@@ -761,6 +887,9 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
     if (beforeSend !== undefined && typeof beforeSend !== 'function') invalid('AgentArts beforeSend guard is invalid');
     if (beforeInitialToolCatalogSend !== undefined && typeof beforeInitialToolCatalogSend !== 'function') {
       invalid('AgentArts initial tool catalog guard is invalid');
+    }
+    if (onDiagnostic !== undefined && typeof onDiagnostic !== 'function') {
+      invalid('AgentArts diagnostic observer is invalid');
     }
     this.gatewayOrigin = validated.gatewayOrigin;
     this.runtimeName = validated.runtimeName;
@@ -773,6 +902,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
     this.fetchImpl = fetchImpl ?? defaultFetch;
     this.beforeSend = beforeSend;
     this.beforeInitialToolCatalogSend = beforeInitialToolCatalogSend;
+    this.onDiagnostic = onDiagnostic;
   }
 
   async invoke(request: CoordinationRequest): Promise<CoordinationResult> {
@@ -799,6 +929,15 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
       ...(continuation === undefined ? {} : {continuation}),
       ...(availableTools === undefined ? {} : {availableTools}),
     });
+    let stage: AgentArtsDiagnosticStage = 'authorization';
+    let diagnosticRequestId: string | undefined;
+    let httpStatus: number | undefined;
+    let contentType: AgentArtsFailureDiagnostic['contentType'];
+    let schemaCategory: AgentArtsSchemaCategory | undefined;
+    const terminalEvents: TerminalDiagnosticState = {
+      taskEnd: false, end: false,
+      providerFailureField: undefined, providerFailureToken: undefined, providerErrorCode: undefined,
+    };
     try {
       const initialAbort = currentAbortError(combined);
       if (initialAbort) throw initialAbort;
@@ -817,6 +956,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
 
       const sessionId = deriveSessionId(sendRequest.taskId);
       const requestId = this.responseMode === 'text' ? deriveRequestId(sessionId, sendRequest.revision) : randomUUID();
+      diagnosticRequestId = requestId;
       const url = `${this.gatewayOrigin}/runtimes/${encodeURIComponent(this.runtimeName)}/invocations`;
       const init: AgentArtsFetchInit = {
         method: 'POST',
@@ -838,6 +978,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
       // The host resolves dynamic availability after the credential read and
       // immediately before transport. A pending guard still obeys cancellation.
       if (availableTools !== undefined) {
+        stage = 'catalog_guard';
         try {
           await callWithAbort(() => this.beforeInitialToolCatalogSend!(sendRequest), combined);
         } catch {
@@ -847,6 +988,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
       // The existing synchronous guard remains the final continuation check.
       // No await separates it from the fetch invocation below.
       if (this.beforeSend !== undefined) {
+        stage = 'export_guard';
         try {
           const guardResult: unknown = this.beforeSend(sendRequest);
           if (guardResult !== undefined) {
@@ -861,6 +1003,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
       if (sendAbort) throw sendAbort;
 
       let response: AgentArtsResponse;
+      stage = 'transport';
       try {
         response = await callWithAbort(() => this.fetchImpl(url, init), combined);
       } catch (error) {
@@ -868,6 +1011,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
       }
       const fetchAbort = currentAbortError(combined);
       if (fetchAbort) throw fetchAbort;
+      stage = 'http_response';
       let status: unknown;
       let responseObject = false;
       try {
@@ -879,28 +1023,64 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
       if (!responseObject || typeof status !== 'number' || !Number.isInteger(status)) {
         external('AgentArts response is malformed');
       }
+      if (status >= 100 && status <= 599) httpStatus = status;
       if (status < 200 || status >= 300) {
         throw new ProtocolError('EXTERNAL_FAILURE', 'AgentArts request returned a non-success HTTP status', status >= 500);
       }
 
-      let text: string;
+      let payload: string;
+      stage = 'response_body';
       try {
-        text = parseResponsePayload(
-          await readResponseText(response, combined),
-          response.headers?.get('content-type') ?? undefined,
-          this.responseMode === 'tool-proposal-json',
-        );
+        payload = await readResponseText(response, combined);
       } catch (error) {
+        schemaCategory = diagnosticSchemaCategory(error);
+        throw currentAbortError(combined) ?? new ProtocolError('EXTERNAL_FAILURE', 'AgentArts response validation failed');
+      }
+      let text: string;
+      stage = 'response_schema';
+      try {
+        const rawContentType = response.headers?.get('content-type') ?? undefined;
+        contentType = diagnosticMediaType(rawContentType);
+        text = parseResponsePayload(payload, rawContentType,
+          this.responseMode === 'tool-proposal-json', terminalEvents);
+      } catch (error) {
+        schemaCategory = contentType === undefined ? 'content_type' : diagnosticSchemaCategory(error);
         throw currentAbortError(combined) ?? new ProtocolError('EXTERNAL_FAILURE', 'AgentArts response validation failed');
       }
       const bodyAbort = currentAbortError(combined);
       if (bodyAbort) throw bodyAbort;
+      stage = 'application_schema';
       try {
         if (this.responseMode === 'tool-proposal-json') return parseApplicationResult(text, this.repairCandidateVersion);
         return parseCoordinationTextResult({kind: 'text', text, verification: 'unverified'});
       } catch (error) {
+        schemaCategory = error instanceof SyntaxError ? 'application_json' : 'application_contract';
         throw currentAbortError(combined) ?? new ProtocolError('EXTERNAL_FAILURE', 'AgentArts response validation failed');
       }
+    } catch (error) {
+      if (this.onDiagnostic !== undefined) {
+        const receipt: AgentArtsFailureDiagnostic = Object.freeze({
+          stage, code: diagnosticCode(error),
+          ...(diagnosticRequestId === undefined ? {} : {requestId: diagnosticRequestId}),
+          ...(httpStatus === undefined ? {} : {httpStatus}),
+          ...(contentType === undefined ? {} : {contentType}),
+          ...(stage === 'response_schema' || stage === 'application_schema'
+            ? {terminalEvents: Object.freeze({taskEnd: terminalEvents.taskEnd, end: terminalEvents.end})} : {}),
+          ...(schemaCategory === undefined ? {} : {schemaCategory}),
+          ...(schemaCategory === 'provider_failure'
+            && terminalEvents.providerFailureField !== undefined
+            && terminalEvents.providerFailureToken !== undefined
+            ? {providerFailureField: terminalEvents.providerFailureField,
+              providerFailureToken: terminalEvents.providerFailureToken,
+              ...(terminalEvents.providerErrorCode === undefined ? {} : {providerErrorCode: terminalEvents.providerErrorCode})}
+            : {}),
+        });
+        try {
+          const observed: unknown = this.onDiagnostic(receipt);
+          if (observed !== undefined) void Promise.resolve(observed).catch(() => undefined);
+        } catch { /* Diagnostics must not change the invocation outcome. */ }
+      }
+      throw error;
     } finally {
       combined.dispose();
     }

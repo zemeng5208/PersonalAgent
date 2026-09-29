@@ -1,6 +1,7 @@
-import {app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, safeStorage, screen, session, Tray} from 'electron';
+import {app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, safeStorage, screen, session, Tray} from 'electron';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
+import {spawn} from 'node:child_process';
 import path from 'node:path';
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
 import {EventCursor} from '@personal-agent/client';
@@ -13,6 +14,7 @@ import {restoreSyntheticRepairSubmission} from './competition-repair-submission.
 import {readCapabilityDirectory} from './capability-directory.js';
 import {createMicrophonePermissionGate} from './microphone-permission.js';
 import {readApprovalPage} from './approval-history.js';
+import {createDesktopNotepadHost} from './notepad-host.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -104,6 +106,9 @@ const terminalTaskStates = new Set(['succeeded', 'failed', 'cancelled']);
 const approvals = new Map();
 const notifications = new Map();
 let runtimeApplication;
+let notepadHost;
+let notepadClosing;
+let notepadClosed = false;
 let syntheticRepairHost;
 const repairPrompts = new Set();
 let microphonePermissionGate;
@@ -127,6 +132,8 @@ function snapshot(surface) {
     notifications: [...notifications.values()],
     model: structuredClone(model),
     thinking: structuredClone(thinking),
+    notepad: notepadHost?.snapshot() ?? {available:false,busy:false,state:'unavailable',
+      reason:'本机执行组件尚未就绪，记事本操作暂不可用。'},
     voice: {available: false, status: 'unavailable', reason: '语音供应商尚未连接'},
   };
 }
@@ -624,9 +631,32 @@ async function initializeRuntime() {
         syntheticRepairHost = (await import('./competition-repair-host.js')).createSyntheticRepairHost(
           path.join(path.dirname(dbPath), 'mvp-synthetic-memory.sqlite'), {decision});
       }
+      // Stable host identity is supplied by the existing MOD-11 Goal bridge (#157).
+      const namespace = desktopHost.userNamespace;
+      const hostPath = path.resolve(dir, '../../windows-host/host/bin/Release/net8.0-windows/WindowsHost.Host.exe');
+      const bridgePath = path.resolve(dir, '../../windows-host/host/bridge/bin/Release/net8.0-windows/WindowsHost.PipeBridge.exe');
+      if (!syntheticMvp && typeof namespace === 'string' && process.platform === 'win32'
+        && existsSync(hostPath) && existsSync(bridgePath)) {
+        notepadHost = createDesktopNotepadHost({
+          createAdapter:runtimeModule.createWindowsHostNotepadAdapter,
+          createAttempts:runtimeModule.createRuntimeWindowsHostAttemptStore,
+          transport:runtimeModule.createWindowsHostBridgeTransport({hostPath,bridgePath}),
+          registerConfirmation:handler => globalShortcut.register('F9',handler)
+            ? () => globalShortcut.unregister('F9') : undefined,
+          openNotepad:() => new Promise((resolve,reject) => {
+            const child=spawn(path.join(process.env.SystemRoot ?? 'C:\\Windows','System32','notepad.exe'),[],
+              {windowsHide:false,stdio:'ignore'});
+            child.once('spawn',()=>{child.unref();resolve();});child.once('error',reject);
+          }),
+          respond:payload => client.call('authorization.respond',payload),
+          cancelTask:taskId => client.call('task.cancel',{taskId,reason:'用户停止记事本操作'}),
+          onUpdate:publish,
+        });
+      }
       runtimeApplication = runtimeModule.createAgentArtsRuntimeApplication({
         path: dbPath,
         ...syntheticTools,
+        ...(notepadHost ? {hostUserNamespace:namespace,tools:notepadHost.tools} : {}),
         ...(syntheticMvp ? {localRepair: syntheticRepairHost.localRepair} : {}),
         ...(agentArtsResponseMode === undefined ? {} : {responseMode: agentArtsResponseMode}),
         ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
@@ -644,6 +674,7 @@ async function initializeRuntime() {
           },
         },
       });
+      notepadHost?.bind(runtimeApplication);
       if (syntheticRepairHost) await syntheticRepairHost.initialize(runtimeApplication.runtime);
     } else {
       const createApplication = process.argv.includes('--weather-tools')
@@ -676,7 +707,7 @@ async function initializeRuntime() {
       if (task.state === 'succeeded') void promptSyntheticRepairCandidate(task.taskId).catch(() => {});
     }
   }
-  eventPoll = setInterval(() => void pumpEvents(), 120);
+  eventPoll = setInterval(() => {void pumpEvents();void notepadHost?.refresh();}, 120);
 }
 
 async function action(event, name, payload) {
@@ -686,6 +717,10 @@ async function action(event, name, payload) {
     throw Error('Competition Profile 的 AgentArts 配置只允许由可信主进程提供；盘古配置操作不可用');
   }
   if (name === 'snapshot') return snapshot(sender === workspace ? 'workspace' : sender === admin ? undefined : 'panel');
+  if (name === 'notepad.start' || name === 'notepad.cancel') {
+    if (sender !== admin || !notepadHost || notepadClosing) throw Error('请从电脑操控设置操作记事本');
+    return name === 'notepad.start' ? notepadHost.start(payload) : notepadHost.cancel();
+  }
   if (name === 'admin.open') { openAdmin(payload?.page); return; }
   if (name === 'workspace.open' && sender === panel) { openWorkspace(); return; }
   if (name === 'workspace.close' && sender === workspace) { workspace.close(); return; }
@@ -858,6 +893,13 @@ app.whenReady().then(async () => {
     else if (panel.isVisible()) { if (!away) away = Date.now(); else if (Date.now() - away > 520) { panel.hide(); away = 0; } }
   }, 80);
   app.on('before-quit', event => {
+    if (notepadHost && !notepadClosed) {
+      event.preventDefault();
+      if (!notepadClosing) notepadClosing = notepadHost.close().then(() => {
+        notepadClosed = true; app.quit();
+      }).catch(() => {notepadClosing = undefined;runtimeError = '本机操作停止尚未确认，请稍后退出';publish();});
+      return;
+    }
     if ((runtimeApplication?.activeTaskCount ?? 0) > 0) {
       event.preventDefault();
       app.isQuitting = false;

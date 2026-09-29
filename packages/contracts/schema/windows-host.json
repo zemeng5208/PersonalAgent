@@ -9,6 +9,8 @@
     {"$ref": "#/$defs/observe"},
     {"$ref": "#/$defs/observed"},
     {"$ref": "#/$defs/observationRefused"},
+    {"$ref": "#/$defs/targetReady"},
+    {"$ref": "#/$defs/targetReadyResult"},
     {"$ref": "#/$defs/execute"},
     {"$ref": "#/$defs/cancel"},
     {"$ref": "#/$defs/status"},
@@ -62,6 +64,26 @@
       "properties": {"kind": {"const": "observation_refused"}, "protocolVersion": {"$ref": "#/$defs/version"},
         "requestId": {"$ref": "#/$defs/id"}, "sessionId": {"$ref": "#/$defs/id"},
         "errorCode": {"enum": ["NOT_FOUND", "TARGET_AMBIGUOUS", "TARGET_STALE", "UNAUTHORIZED", "CANCELLED", "TIMEOUT", "EXTERNAL_FAILURE"]}}
+    },
+    "targetReady": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "protocolVersion", "requestId", "sessionId", "targetRef", "deadline"],
+      "properties": {"kind": {"const": "target_ready"}, "protocolVersion": {"$ref": "#/$defs/version"},
+        "requestId": {"$ref": "#/$defs/id"}, "sessionId": {"$ref": "#/$defs/id"},
+        "targetRef": {"$ref": "#/$defs/targetRef"}, "deadline": {"$ref": "#/$defs/utc"}}
+    },
+    "targetReadyResult": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "protocolVersion", "requestId", "sessionId", "targetRef", "ready"],
+      "properties": {"kind": {"const": "target_ready_result"}, "protocolVersion": {"$ref": "#/$defs/version"},
+        "requestId": {"$ref": "#/$defs/id"}, "sessionId": {"$ref": "#/$defs/id"},
+        "targetRef": {"$ref": "#/$defs/targetRef"}, "ready": {"type": "boolean"},
+        "expiresAt": {"$ref": "#/$defs/utc"},
+        "errorCode": {"enum": ["TARGET_STALE", "TIMEOUT"]}},
+      "oneOf": [
+        {"properties": {"ready": {"const": true}}, "required": ["expiresAt"], "not": {"required": ["errorCode"]}},
+        {"properties": {"ready": {"const": false}}, "required": ["errorCode"], "not": {"required": ["expiresAt"]}}
+      ]
     },
     "execute": {
       "type": "object", "additionalProperties": false,
