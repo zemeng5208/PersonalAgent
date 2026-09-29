@@ -129,6 +129,12 @@ boundary; Node transport/bridge composition, Desktop, bind/observe and real
 Notepad UIA execution remain unverified. The product capability is unavailable.
 
 - SQLite-backed tasks, checkpoints, events and one-shot schedules.
+- `ingestConfirmedPrivateCitation` is a trusted-host bridge for one exact
+  read-only Vault citation. Its injected confirmation callback must obtain a
+  real user decision for that citation and the proposed summary. A decline
+  writes nothing; a changed citation is rejected before a private Memory
+  creation or revision. This does not register a Desktop or wire capability,
+  authenticate the caller, or authorize cloud transfer.
 - `createSqliteFactProjectionHost` binds a pre-provisioned public Memory namespace
   to one fixed consumer, the SQLite feed/query, durable Runtime graph projection,
   host-only confirmation and pending impact processor. `consume` advances one exact
@@ -141,6 +147,31 @@ Notepad UIA execution remain unverified. The product capability is unavailable.
   receipts by increasing graph revision within that fixed consumer scope. The
   consumer persists its last fully handled graph revision only after processing
   the page. Batches without new Fact nodes need no cognition impact receipt.
+  If a trusted Memory erasure intent rewrites a delivery, `consume` reads that
+  exact token and atomically replaces stale, unactivated staging before replaying
+  its surviving facts, including a batch confirmed before a crash. Already
+  activated graph history and receipts still require separate erasure handling.
+  After a trusted Memory erasure intent, `preflightErasure(factId, context)`
+  reads the rewritten durable delivery and exact surviving FactVersions for
+  activated receipts. It inventories stale staged batches, graph dependencies, other graph bindings,
+  all graph impact records and untraced surviving text without writing either
+  database. Missing delivery or mismatched survivor content fails closed. The
+  graph-scoped result is evidence for planning, not permission to finalize
+  deletion; cross-graph coordination and free-text source lineage remain unresolved.
+  The trusted `FactProjectionStore.commitErasure` now performs the Runtime-only
+  atomic cleanup for a verified single-graph subset: it keeps the graph revision
+  high-water mark, removes target mappings, rewrites mixed receipts and impact
+  records, and saves a content-free retry receipt. It rejects stale staging,
+  every other populated graph or projection staging, and surviving text without
+  proven lineage. The trusted
+  `resumeFactErasure` host path reads back that receipt and then removes the
+  pending fact's active Memory history and public-source mapping in a second
+  transaction. A failure between commits stays pending and can be retried after
+  restart with the same operation ID. The deletion path verifies SQLite
+  `secure_delete=ON` before writes and requires successful `TRUNCATE` checkpoints
+  of both WAL files before returning; a busy reader keeps the operation retryable.
+  This is not a public deletion capability and does not clear older free-page
+  traces or backups.
   A trusted host must trigger it after verified source
   changes and on startup recovery; it does not poll private sources or publish to
   AgentArts. Source correction and withdrawal remain append-only Fact revisions.

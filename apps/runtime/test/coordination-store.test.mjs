@@ -58,12 +58,25 @@ test('SQLite: migration preserves tasks and rejects unsupported downgrade', t =>
   const old = openStorage(path, RUNTIME_MIGRATIONS.slice(0, -1));
   old.prepare("INSERT INTO tasks (task_id, goal, conversation_id, attachment_refs_json, state, revision, updated_at, steps_json, evidence_refs_json) VALUES (?, ?, ?, '[]', 'created', 1, ?, '[]', '[]')")
     .run('existing-task', 'preserve me', 'existing-conversation', '2026-09-09T00:00:00.000Z');
+  old.prepare('INSERT INTO coordination_graphs(namespace, snapshot_json) VALUES (?, ?)')
+    .run('existing-graph', JSON.stringify({namespace: 'existing-graph', revision: 1,
+      history: [{...input(), revision: 1, graphRevision: 1}]}));
+  old.prepare('INSERT INTO coordination_fact_projections(graph_namespace, memory_namespace, fact_id, fact_revision, event_id, content_hash, node_id, node_revision, graph_revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run('existing-graph', 'personal', 'meeting', 1, 'event-1', 'existing-hash', 'meeting', 1, 1);
   old.close();
   const runtime = new TaskRuntime(path);
   try {
     assert.equal(runtime.getTask('existing-task').goal, 'preserve me');
+    assert.equal(runtime.bindCoordinationStore('existing-graph').read().history[0].summary,
+      input().summary);
     runtime.provisionCoordinationStore('a').append(0, input());
   } finally { runtime.close(); }
+  const migrated = openStorage(path, RUNTIME_MIGRATIONS);
+  assert.equal(migrated.prepare('SELECT content_hash FROM coordination_fact_projections WHERE graph_namespace = ?')
+    .get('existing-graph').content_hash, 'existing-hash');
+  assert.equal(migrated.prepare('SELECT COUNT(*) AS total FROM coordination_fact_erasure_receipts')
+    .get().total, 0);
+  migrated.close();
   assert.throws(() => openStorage(path, RUNTIME_MIGRATIONS.slice(0, -1)), /newer/);
 });
 test('SQLite: a fresh process reads committed history', t => {

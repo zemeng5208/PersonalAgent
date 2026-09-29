@@ -19,6 +19,8 @@ export {createWindowsHostBridgeTransport, createWindowsHostNotepadAdapter} from 
 export {createRuntimeWindowsHostAttemptStore} from './application/windows-host-attempt-store.js';
 export type {WindowsHostTransport, VerifiedWindowsHostConnection, WindowsHostAttemptStore,
   WindowsHostAdapterOptions, WindowsHostRunIdentity, ObservedNotepad} from './application/windows-host-adapter.js';
+export {ingestConfirmedPrivateCitation} from './application/private-source.js';
+export type {ConfirmedPrivateFact} from './application/private-source.js';
 export {ScopedEvidenceReader} from './application/evidence-reader.js';
 export type {EvidenceReadScope, EvidenceReaderOptions, EvidencePage} from './application/evidence-reader.js';
 export type {

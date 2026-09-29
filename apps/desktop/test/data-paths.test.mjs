@@ -14,6 +14,7 @@ const options = {electronDir, userData};
 test('packaged persistent data stays outside application resources', () => {
   assert.deepEqual(desktopDataPaths({...options, packaged: true}), {
     runtime: path.join(userData, 'runtime.sqlite'),
+    privateMemory: path.join(userData, 'private-memory.sqlite'),
     conversations: path.join(userData, 'conversations.json'),
   });
 });
@@ -21,22 +22,26 @@ test('packaged persistent data stays outside application resources', () => {
 test('development retains original database and conversation paths without migration', () => {
   assert.deepEqual(desktopDataPaths(options), {
     runtime: path.resolve(electronDir, '../.cache/runtime.sqlite'),
+    privateMemory: path.resolve(electronDir, '../.cache/private-memory.sqlite'),
     conversations: path.resolve(electronDir, '../.cache/conversations.json'),
   });
 });
 
 test('explicit test and ephemeral data paths remain isolated', () => {
   assert.deepEqual(desktopDataPaths({...options, testUserData: true}), {
-    runtime: path.join(userData, 'runtime.sqlite'), conversations: path.join(userData, 'conversations.json'),
+    runtime: path.join(userData, 'runtime.sqlite'), privateMemory: path.join(userData, 'private-memory.sqlite'),
+    conversations: path.join(userData, 'conversations.json'),
   });
   assert.deepEqual(desktopDataPaths({...options, ephemeral: true}), {
-    runtime: path.join(userData, 'runtime.sqlite'), conversations: null,
+    runtime: path.join(userData, 'runtime.sqlite'), privateMemory: path.join(userData, 'private-memory.sqlite'),
+    conversations: null,
   });
 });
 
 test('packaged Fake uses isolated userData and never persists conversations', () => {
   assert.deepEqual(desktopDataPaths({...options, packaged: true, fakeRuntime: true}), {
-    runtime: path.join(userData, 'fake-runtime-application.sqlite'), conversations: null,
+    runtime: path.join(userData, 'fake-runtime-application.sqlite'),
+    privateMemory: path.join(userData, 'private-memory.sqlite'), conversations: null,
   });
   assert.equal(desktopDataPaths({...options, fakeModel: true}).conversations, null);
 });

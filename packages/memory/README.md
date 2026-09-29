@@ -64,6 +64,21 @@ Stale proposals fail with `REVISION_CONFLICT`. Source-owned facts cannot be chan
 through ordinary `append`. These host methods do not register a Runtime capability
 or authorize private data or cloud transfer.
 
+Migration 4 adds a content-free operation receipt for host-only `reviseUserFact`.
+After the trusted caller obtains user authorization, it supplies an exact head revision,
+operation ID, user-action source reference and full next fact fields. A correction or
+withdrawal appends one `user_confirmed` version and feed event in the same transaction
+as the receipt. Exact retries return the saved version; stale heads or altered retries
+fail. Public-source-owned facts require a separate source ownership decision and are
+rejected here. Physical fact erasure removes these receipts with the fact. This port
+does not authenticate a user or expose a Desktop/Runtime capability.
+
+Migration 5 adds a content-free operation receipt for host-only `createUserFact`.
+After the trusted caller confirms one private excerpt, this method appends its first
+`user_confirmed` fact and feed event atomically. Exact retries return revision 1;
+altered operation IDs or existing fact IDs cannot overwrite a fact. Physical fact
+erasure removes the creation receipt. No Vault text is imported automatically.
+
 `withdrawPublicSource` records an append-only public tombstone with an expected Fact
 revision and an idempotent withdrawal ID. The caller must first verify source removal
 through its trusted source adapter and obtain authorization for that source; search
@@ -75,9 +90,27 @@ operation.
 This adapter is not registered as a Runtime capability and does not make the ports
 `frozen`. Its confirmation transaction covers only the memory-owned delivery journal;
 Goal/cognition projection and feed confirmation are not yet one atomic host
-transaction. Physical deletion, retention/backup policy, real ingestion and
-cognition/Runtime projection remain unavailable. See
+transaction. Host-only `eraseUnboundFact` removes all versions and public-source
+mapping for an exact head only when the namespace has never had a feed binding;
+an empty deletion marker prevents reuse of the same fact ID. It invalidates
+only query snapshots that contained the fact and rejects bound
+namespaces. Host-only `beginFactErasure` records a durable pending intent for a
+bound fact. It hides the fact from Memory queries and new feed reads, rewrites
+mixed deliveries entry by entry, and keeps unrelated checkpoints. The fact's
+  rows remain until Runtime projections are handled. A trusted
+  consumer can read the revised durable delivery by exact token and atomically
+  replace an unactivated Runtime staging record before replay. Host-only
+  `completeFactErasure` accepts the matching durable Runtime receipt after its
+  graph cleanup, checks that no target feed entry survives, and deletes all
+  target versions and public-source mapping in one Memory transaction. Its
+  `completed` marker describes the active Memory database, not user-level
+  deletion. The SQLite host verifies `secure_delete=ON` and requires a successful
+  `TRUNCATE` WAL checkpoint after the purge; a busy checkpoint is retryable with
+  `STORAGE_UNAVAILABLE`. Older free-page traces and backup copies remain outside
+  this guarantee. Retention/backup policy, real ingestion and production cognition/Runtime
+projection remain unavailable. See
 [ADR-0008](../../docs/adr/0008-fact-feed-consumption.md) (proposed) and
+[ADR-0010](../../docs/adr/0010-memory-erasure.md) (proposed) and
 [MOD-09C](../../docs/modules/MOD-09C-MEMORY-SQLITE-01.md).
 
 Feed transactions check cancellation/deadline after acquiring the write lock and

@@ -64,6 +64,7 @@ export type MemoryQueryErrorCode =
   | 'NOT_FOUND'
   | 'REVISION_CONFLICT'
   | 'SCOPE_DENIED'
+  | 'STORAGE_UNAVAILABLE'
   | 'TIMEOUT'
   | 'CANCELLED';
 
@@ -72,6 +73,7 @@ const errorMessages: Readonly<Record<MemoryQueryErrorCode, string>> = Object.fre
   NOT_FOUND: 'Memory namespace is unavailable',
   REVISION_CONFLICT: 'Memory source revision changed',
   SCOPE_DENIED: 'Memory fact is unavailable',
+  STORAGE_UNAVAILABLE: 'Memory storage is unavailable',
   TIMEOUT: 'Memory query deadline expired',
   CANCELLED: 'Memory query cancelled',
 });

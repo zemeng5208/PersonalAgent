@@ -112,6 +112,20 @@ npm run test:text-smoke --workspace=@personal-agent/desktop
 
 后台未连接的业务页显示真实空状态，不把设计稿的手写业务数据带入产品。盘古 Provider 已接入，但真实 Endpoint/API Key 需要在“模型”页显式配置和测试；思考参数仍待 Runtime 公共契约与根装配接入。SIS 语音仅完成代码接线，真实服务和设备未验收；外部 Runtime 进程/Named Pipe、全局快捷键、安装卸载仍待对应模块接入。当前玻璃为 CSS 材质；原生 Windows 桌面背景模糊未验收。多屏位置算法已测，物理多显示器/DPI 切换未实机验收。PR #25 已合并，但不代表 MOD-11/12/13 或 P0 全部完成。
 
+## Competition 本机私人记忆确认
+
+管理后台“记忆”页允许用户每次会话手动选择一个本机 Vault 文件夹并只读搜索。
+真实私人记忆写入在完整删除保障完成前保持禁用。仅非安装包、隔离测试 userData
+且所选 Vault 与系统临时目录内显式合成夹具路径完全相同时，才可填写摘要并走原生确认对话框。
+主进程重新读取原文，同时展示来源、完整引文和摘要；确认后才通过 MOD-09J
+写入独立的 `private-memory.sqlite`，同源更正使用精确版本。取消、超时、
+来源变化均不写入。Vault 路径不保存，重启后需重新选择。私人事实不进入
+现有公开 Goal 投影或 AgentArts 请求，也不是新 wire capability。
+
+当前仅有合成数据的持久写入测试；真实 Vault 只验证了只读检索与拒绝确认，
+尚无用户逐条确认的真实持久写入验收。独立数据库仍受 MOD-09 的删除、
+备份和迁移限制，不能宣称用户级彻底删除。
+
 ## 文字交互垂直链路
 
 普通启动时，提交文字任务会通过本地 Runtime Application 的 `task.submit` 入口，由 Runtime 自动执行 Agent、`ModelGateway` 和 Provider 编排。Desktop 主进程只负责安全配置、IPC、事件订阅和任务展示；没有 Provider 时任务会如实失败，不会静默生成假回答。

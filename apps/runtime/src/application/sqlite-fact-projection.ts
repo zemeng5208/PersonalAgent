@@ -2,7 +2,7 @@ import type {MemoryReadContext} from '@personal-agent/memory';
 import type {SqliteMemoryHost} from '@personal-agent/memory/sqlite';
 import type {TaskRuntime} from '../index.js';
 import {FactProjectionError} from '../fact-projection-store.js';
-import type {CompletedFactImpact, FactImpactReceipt} from '../fact-projection-store.js';
+import type {CompletedFactImpact, FactErasurePreflight, FactImpactReceipt} from '../fact-projection-store.js';
 import {createMemoryProjectionApplication, createPendingImpactApplication} from './memory.js';
 import type {MemoryProjectionResult} from './memory.js';
 
@@ -16,6 +16,12 @@ export interface SqliteFactProjectionHostOptions {
 }
 
 export interface SqliteFactProjectionHost {
+  /** Trusted, graph-scoped read only evidence after Memory has staged the erasure. */
+  preflightErasure(factId: string, request: MemoryReadContext): Promise<FactErasurePreflight>;
+  /** Host-only recovery after an authorized Memory erasure intent; no user completion claim. */
+  resumeFactErasure(request: MemoryReadContext & {readonly factId: string;
+    readonly expectedRevision: number; readonly operationId: string;
+    readonly expectedGraphRevision: number}): Promise<void>;
   /** One durable feed batch. The provider receipt and graph projection are restart-safe. */
   consume(request: MemoryReadContext & {readonly limit: number}): Promise<MemoryProjectionResult>;
   /** Bounded catch-up for a trusted source trigger or startup recovery. */
@@ -50,13 +56,46 @@ export function createSqliteFactProjectionHost(options: SqliteFactProjectionHost
     feed,
     memory: query,
     projection,
-    confirmation: {confirm: request => memory.confirmFeedBatch(memoryNamespace, consumerKey, request)},
+    confirmation: {
+      confirm: request => memory.confirmFeedBatch(memoryNamespace, consumerKey, request),
+      readBatch: request => memory.readFeedDelivery(memoryNamespace, consumerKey, request),
+    },
   });
   const impacts = createPendingImpactApplication({
     coordination: runtime.bindCoordinationStore(graphNamespace), projection,
     scope: {consumerKey, memoryNamespace},
   });
   return Object.freeze({
+    preflightErasure: (factId: string, request: MemoryReadContext) => projection.preflightErasure({
+      memoryNamespace, factId, ...request,
+      readDelivery: (consumer, batchToken, context) => {
+        if (consumer !== consumerKey) throw new FactProjectionError('INTEGRITY_CONFLICT');
+        return memory.readFeedDelivery(memoryNamespace, consumer, {batchToken, ...context});
+      },
+      readVersion: (fact, context) => query.getVersion({fact, ...context}),
+    }),
+    resumeFactErasure: async (request: MemoryReadContext & {readonly factId: string;
+      readonly expectedRevision: number; readonly operationId: string;
+      readonly expectedGraphRevision: number}) => {
+      await projection.commitErasure({memoryNamespace, factId: request.factId,
+        operationId: request.operationId, expectedGraphRevision: request.expectedGraphRevision,
+        deadline: request.deadline, signal: request.signal,
+        readDelivery: (consumer, batchToken, context) => {
+          if (consumer !== consumerKey) throw new FactProjectionError('INTEGRITY_CONFLICT');
+          return memory.readFeedDelivery(memoryNamespace, consumer, {batchToken, ...context});
+        },
+        readVersion: (fact, context) => query.getVersion({fact, ...context}),
+      });
+      const receipt = projection.readErasureReceipt(memoryNamespace, request.factId);
+      if (!receipt || receipt.operationId !== request.operationId
+        || receipt.expectedGraphRevision !== request.expectedGraphRevision) {
+        throw new FactProjectionError('INTEGRITY_CONFLICT');
+      }
+      projection.checkpointErasureWal();
+      memory.completeFactErasure(memoryNamespace, {factId: request.factId,
+        expectedRevision: request.expectedRevision, operationId: request.operationId,
+        runtimeReceipt: receipt, deadline: request.deadline, signal: request.signal});
+    },
     consume: (request: MemoryReadContext & {readonly limit: number}) => app.consume(request),
     drain: async (request: MemoryReadContext & {readonly limit: number; readonly maxBatches: number}) => {
       if (!Number.isSafeInteger(request.maxBatches) || request.maxBatches < 1 || request.maxBatches > 100) {

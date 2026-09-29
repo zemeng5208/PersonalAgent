@@ -40,6 +40,14 @@ test('public source append is retry-safe across restart and concurrent stale obs
   const first = host.appendPublicSource(namespace, observation('a'));
   assert.equal(first.appended, true);
   assert.deepEqual(first.fact.ref, {id: key.factId, revision: 1});
+  assert.throws(() => host.reviseUserFact(namespace, {
+    factId: key.factId, expectedRevision: 1, operationId: 'source-user-edit',
+    summary: 'User edit', sourceRef: 'user-action-1',
+    observedAt: '2026-09-24T01:00:00.000Z',
+    validFrom: first.fact.validFrom, validUntil: first.fact.validUntil,
+    sensitivity: 'public', state: 'active',
+    deadline: '2099-01-01T00:00:00.000Z', signal: new AbortController().signal,
+  }), fails('SCOPE_DENIED'));
   assert.throws(() => host.append(namespace, {...first.fact,
     ref: {id: key.factId, revision: 2}, corrects: first.fact.ref}),
   fails('INVALID_ARGUMENT'));
@@ -96,6 +104,26 @@ test('source identity cannot claim an existing fact or store unsafe paths', t =>
   assert.throws(() => host.appendPublicSource(namespace, observation('a')),
     fails('INVALID_ARGUMENT'));
   assert.equal(host.readPublicSourceHead(namespace, key), null);
+});
+
+test('unbound fact erase removes public source mapping and historical versions', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'personal-agent-source-'));
+  const path = join(directory, 'memory.sqlite');
+  const host = openSqliteMemoryHost(path);
+  t.after(() => { host.close(); rmSync(directory, {recursive: true, force: true}); });
+  host.provision(namespace);
+  host.appendPublicSource(namespace, observation('a'));
+  host.appendPublicSource(namespace, observation('b', {expectedFactRevision: 1}));
+  host.eraseUnboundFact(namespace, {
+    factId: key.factId, expectedRevision: 2, operationId: 'erase-source-a',
+    deadline: '2099-01-01T00:00:00.000Z', signal: new AbortController().signal,
+  });
+  assert.equal(host.readPublicSourceHead(namespace, key), null);
+  const memory = host.bind(namespace, {allowedSensitivities: ['public']});
+  assert.deepEqual((await memory.listHistory({
+    factId: key.factId, limit: 10,
+    deadline: '2099-01-01T00:00:00.000Z', signal: new AbortController().signal,
+  })).facts, []);
 });
 
 test('failed source mapping write rolls back fact and feed sequence together', t => {

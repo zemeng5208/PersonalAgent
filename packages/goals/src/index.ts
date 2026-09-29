@@ -14,7 +14,13 @@ export interface NodeInput {
   dependencies: NodeRef[];
 }
 export interface NodeVersion extends NodeInput { revision: number; graphRevision: number; }
-export interface GraphSnapshot { namespace: string; revision: number; history: NodeVersion[]; }
+export interface GraphSnapshot {
+  namespace: string;
+  revision: number;
+  history: NodeVersion[];
+  /** Content-free positions removed by a trusted erasure; old revisions never alias new nodes. */
+  erasedGraphRevisions?: number[];
+}
 
 export class GraphError extends Error {
   constructor(readonly code: 'INVALID_ARGUMENT' | 'REVISION_CONFLICT', message: string) { super(message); }
@@ -61,19 +67,33 @@ export function createGraph(namespace: string): GraphSnapshot {
 
 /** Validate untrusted JSON by replaying the ordered, append-only version history. */
 export function parseGraph(value: unknown): GraphSnapshot {
-  object(value, ['namespace', 'revision', 'history']);
+  const sparse = !!value && typeof value === 'object' && Object.hasOwn(value, 'erasedGraphRevisions');
+  object(value, sparse ? ['namespace', 'revision', 'history', 'erasedGraphRevisions']
+    : ['namespace', 'revision', 'history']);
   if (!text(value.namespace) || !integer(value.revision) || !Array.isArray(value.history)
-    || value.revision !== value.history.length) invalid();
+    || (sparse && (!Array.isArray(value.erasedGraphRevisions)
+      || value.erasedGraphRevisions.length === 0))) invalid();
+  const erased = sparse ? value.erasedGraphRevisions as number[] : [];
+  if (value.revision !== value.history.length + erased.length
+    || erased.some((revision, index) => !integer(revision) || revision < 1
+      || revision > (value.revision as number) || (index > 0 && revision <= erased[index - 1]!))) invalid();
   const graph = createGraph(value.namespace);
+  let expected = 1;
+  let gap = 0;
   for (const raw of value.history) {
+    while (erased[gap] === expected) { expected++; gap++; }
     object(raw, [...inputKeys, 'revision', 'graphRevision']);
     const {revision, graphRevision, ...input} = raw;
     validateInput(input as unknown as NodeInput, graph.history);
     const previous = graph.history.findLast(n => n.id === input.id);
-    if (revision !== (previous?.revision ?? 0) + 1 || graphRevision !== graph.revision + 1) invalid();
+    if (revision !== (previous?.revision ?? 0) + 1 || graphRevision !== expected) invalid();
     graph.history.push(structuredClone(raw) as unknown as NodeVersion);
-    graph.revision++;
+    expected++;
   }
+  while (erased[gap] === expected) { expected++; gap++; }
+  if (expected !== (value.revision as number) + 1 || gap !== erased.length) invalid();
+  graph.revision = value.revision;
+  if (sparse) graph.erasedGraphRevisions = [...erased];
   return graph;
 }
 
@@ -94,7 +114,10 @@ export function appendVersion(snapshot: GraphSnapshot, expectedRevision: number,
 export function graphAt(snapshot: GraphSnapshot, revision: number): GraphSnapshot {
   const graph = parseGraph(snapshot);
   if (!integer(revision) || revision > graph.revision) invalid();
-  return {...graph, revision, history: graph.history.slice(0, revision)};
+  const history = graph.history.filter(node => node.graphRevision <= revision);
+  const erased = graph.erasedGraphRevisions?.filter(value => value <= revision);
+  return erased?.length ? {...graph, revision, history, erasedGraphRevisions: erased}
+    : {namespace: graph.namespace, revision, history};
 }
 
 export function currentNodes(snapshot: GraphSnapshot): NodeVersion[] {
