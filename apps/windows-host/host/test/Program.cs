@@ -163,4 +163,11 @@ if (activeExec.TryAttach(null!, "req-3", "s1", CancellationToken.None, out var r
     receiptAfterComplete != terminalReceipt)
     throw new Exception("TryAttach after completion did not return completed receipt");
 
+// Target structural check rejects invalid or dead handles:
+var targetCheck = PersonalAgent.WindowsHost.NotepadAction.CheckSingleTabTarget(0, 0, DateTime.UtcNow);
+if (targetCheck.Success || targetCheck.ErrorCode != "TARGET_STALE")
+    throw new Exception("CheckSingleTabTarget on dead window did not fail with TARGET_STALE");
+if (PersonalAgent.WindowsHost.NotepadAction.HasSingleTabForManualProbe(0, 0, DateTime.UtcNow))
+    throw new Exception("HasSingleTabForManualProbe on dead window unexpectedly succeeded");
+
 Console.WriteLine("Windows Host portable contract and durable-run fixture passed");
