@@ -71,7 +71,29 @@ function adaptRuntimeWork(runtime, namespace) {
         const task = runtime.findTaskByIdempotencyKey(idempotencyKey);
         if (task === undefined) return {state: 'absent'};
         if (!text(task?.taskId)) return {state: 'unknown'};
-        return {state: 'accepted', taskId: task.taskId, ...(text(task.state) ? {taskState: task.state} : {})};
+        let taskState = task.state;
+        let recheck = null;
+        if (typeof runtime.loadCheckpoint === 'function') {
+          try {
+            const cp = runtime.loadCheckpoint(task.taskId, 'knowledge-recheck-result');
+            if (cp && cp.status === 'confirmed' && text(cp.observedRevision)) {
+              recheck = cp;
+            }
+          } catch {}
+        }
+        if (taskState === 'succeeded') {
+          const hasEmptyEvidence = Array.isArray(task.evidenceRefs) && task.evidenceRefs.length === 0;
+          const missingCheckpointWhenAvailable = typeof runtime.loadCheckpoint === 'function' && !recheck;
+          if (hasEmptyEvidence || missingCheckpointWhenAvailable) {
+            taskState = 'unconfirmed_empty_task';
+          }
+        }
+        return {
+          state: 'accepted',
+          taskId: task.taskId,
+          ...(text(taskState) ? {taskState} : {}),
+          ...(recheck ? {recheck} : {}),
+        };
       } catch { return {state: 'unknown'}; }
     },
     async submit({idempotencyKey}) {
@@ -1288,6 +1310,9 @@ export function createKnowledgeWatchHost({
         return {accepted: false, reason: 'reevaluation_unconfirmed',
           taskState: text(read?.taskState) ? read.taskState : (text(read?.state) ? read.state : 'unknown')};
       }
+      if (read.recheck && text(read.recheck.observedRevision) && read.recheck.observedRevision !== prepared.head.revision) {
+        return {accepted: false, reason: 'revision_mismatch', taskState: 'revision_mismatch'};
+      }
       taskIds.push(read.taskId);
     }
     return lock(() => {
@@ -1378,10 +1403,45 @@ export function createKnowledgeWatchHost({
     return snapshot();
   }
 
+  function getRecheckContext(workKey) {
+    if (!text(workKey) || !document) return null;
+    let foundReeval = null;
+    for (const reeval of Object.values(document.reevaluations)) {
+      if (Array.isArray(reeval.submittedWorkKeys) && reeval.submittedWorkKeys.includes(workKey)) {
+        foundReeval = reeval;
+        break;
+      }
+    }
+    if (!foundReeval) return null;
+    const boundSource = foundReeval.source;
+    const sourceId = boundSource?.id;
+    const head = sourceId ? document.sources[sourceId] : null;
+    let matchedWatch = null;
+    for (const watch of Object.values(document.watches)) {
+      if (watch.boundSource?.sourceId === sourceId) {
+        matchedWatch = watch;
+        break;
+      }
+    }
+    return {
+      workKey,
+      topicId: matchedWatch?.topicId ?? null,
+      sourceId,
+      boundRevision: boundSource?.revision ?? null,
+      boundContentSha256: boundSource?.contentSha256 ?? null,
+      observedRevision: head?.revision ?? null,
+      observedContentSha256: head?.contentSha256 ?? null,
+      citation: text(head?.citation) ? head.citation : null,
+      summary: typeof head?.untrustedExcerpt === 'string' ? head.untrustedExcerpt : null,
+      observedAt: head?.observedAt ?? null,
+      availability: head?.availability ?? null,
+    };
+  }
+
   load();
   return Object.freeze({start, stop, dispose, snapshot, listPending, listWatches, dialogueProjection,
     consumeInterestSignal, consumeSourceUpdate, refreshSource, refreshSubscribedFeed,
     registerFeedCheck, cancelFeedChecks, restoreFeedChecks, observeNotificationAcknowledgement,
-    bindObservedRevision,
+    bindObservedRevision, getRecheckContext,
     revoke, pause, resume, enable});
 }

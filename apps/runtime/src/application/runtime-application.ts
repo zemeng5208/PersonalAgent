@@ -58,6 +58,20 @@ export interface SubmitHostToolTaskRequest {
   deadline: string;
 }
 
+export interface KnowledgeRecheckOptions {
+  sourceId: string;
+  sourceRevision?: string;
+  workKey?: string;
+  topicId?: string;
+  boundRevision?: string | null;
+  boundContentSha256?: string | null;
+  observedRevision?: string | null;
+  observedContentSha256?: string | null;
+  citation?: string | null;
+  summary?: string | null;
+  deadline?: string;
+}
+
 export type PrepareHostToolTaskRequest = Omit<SubmitHostToolTaskRequest, 'arguments'>;
 export interface FinalizeHostToolTaskRequest {
   taskId: string;
@@ -885,19 +899,59 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
 
   dispatchKnowledgeRecheckTask(
     taskId: string,
-    options: {sourceId: string; sourceRevision: string},
+    options: KnowledgeRecheckOptions,
   ): Promise<TaskSnapshot> | void {
     if (this.activeTextTasks.has(taskId)) return;
     const task = this.runtime.getTask(taskId);
     if (task.state !== 'created') return;
+    const deadlineIso = options.deadline ?? new Date(this.now().getTime() + 60_000).toISOString();
     const execution = this.runtime.runTask(taskId, async context => {
       if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Knowledge recheck task was cancelled');
+      if (this.now().getTime() >= Date.parse(deadlineIso)) {
+        throw new ProtocolError('TIMEOUT', 'Knowledge recheck task deadline exceeded');
+      }
+
+      const observedRevision = options.observedRevision ?? options.sourceRevision;
+      if (!observedRevision) {
+        throw new ProtocolError('INVALID_ARGUMENT', 'Observed revision is required for knowledge reevaluation');
+      }
+
+      if (options.boundRevision && options.boundRevision === observedRevision
+        && options.boundContentSha256 && options.observedContentSha256
+        && options.boundContentSha256 === options.observedContentSha256) {
+        throw new ProtocolError('REVISION_CONFLICT', 'Source revision and content hash have not changed');
+      }
+
+      const citation = options.citation?.trim();
+      if (!citation) {
+        throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Source citation locator is required for knowledge reevaluation');
+      }
+
+      const evaluatedAt = this.now().toISOString();
+      const topicId = options.topicId ?? 'unknown';
+      const summaryExcerpt = options.summary ? options.summary.slice(0, 500) : null;
+      const recheckRecord = {
+        version: 1,
+        taskId,
+        workKey: options.workKey ?? null,
+        topicId,
+        sourceId: options.sourceId,
+        boundRevision: options.boundRevision ?? null,
+        observedRevision,
+        observedContentSha256: options.observedContentSha256 ?? null,
+        citation,
+        summaryExcerpt,
+        evaluatedAt,
+        status: 'confirmed',
+      };
+      this.runtime.saveCheckpoint(taskId, 'knowledge-recheck-result', recheckRecord);
+
       return {
-        resultSummary: `知识重评确认：来源 ${options.sourceId} 版本 ${options.sourceRevision} 的重评已由正式 Runtime 确认`,
-        evidenceRefs: [],
+        resultSummary: `知识重评确认：关注 ${topicId}，来源 ${options.sourceId} 新版本 ${observedRevision}（引用：${citation}）已由正式 Runtime 确认。摘要：${summaryExcerpt ?? '无'}`,
+        evidenceRefs: [citation],
       };
     }, {
-      deadline: new Date(Date.now() + 60_000).toISOString(),
+      deadline: deadlineIso,
       sideEffect: 'read',
     }).finally(() => this.activeTextTasks.delete(taskId));
     this.activeTextTasks.set(taskId, execution);
