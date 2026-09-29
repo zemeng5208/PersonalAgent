@@ -24,6 +24,12 @@ export interface WorkspacePatchReconcileOptions {
   isProcessAlive?: (identity: WorkspacePatchProcessIdentity) => WorkspacePatchProcessState | Promise<WorkspacePatchProcessState>;
   /** Absolute trusted pwsh/powershell path used when no checker is injected. */
   powerShellPath?: string;
+  /** Original Runtime execution identity, checked before returning or clearing a marker. */
+  expectedRunId?: string;
+  expectedArgumentsDigest?: string;
+  expectedBeforeSha256?: string;
+  /** Keep the marker until Runtime has persisted the reconciliation outcome. */
+  retainMarker?: boolean;
 }
 
 export interface WorkspacePatchProcessIdentity {
@@ -36,11 +42,14 @@ export type WorkspacePatchProcessState = 'running' | 'exited' | 'unknown';
 
 export type WorkspacePatchReconciliationResult =
   | {path: string; state: 'clear'}
-  | {path: string; state: 'in_progress'; pid: number; beforeSha256: string; afterSha256: string}
-  | {path: string; state: 'reconciled'; outcome: 'applied' | 'not_applied' | 'unknown';
-    beforeSha256: string; afterSha256: string; currentSha256: string};
+  | {path: string; state: 'in_progress'; runId: string; argumentsDigest: string;
+    pid: number; beforeSha256: string; afterSha256: string}
+  | {path: string; state: 'reconciled'; runId: string; argumentsDigest: string;
+    outcome: 'applied' | 'not_applied' | 'unknown'; beforeSha256: string; afterSha256: string; currentSha256: string};
 
 interface InFlightMarker {
+  runId: string;
+  argumentsDigest: string;
   pid: number;
   startTimeTicks: string;
   beforeSha256: string;
@@ -141,10 +150,14 @@ function parseMarker(value: string): InFlightMarker {
   }
   const record = parsed as Record<string, unknown>;
   const keys = Object.keys(record).sort();
+  const runId = record.runId;
+  const argumentsDigest = record.argumentsDigest;
   const pid = record.pid;
   const startTimeTicks = record.startTimeTicks;
-  if (keys.length !== 4 || keys[0] !== 'afterSha256' || keys[1] !== 'beforeSha256' || keys[2] !== 'pid'
-    || keys[3] !== 'startTimeTicks'
+  if (keys.length !== 6 || keys[0] !== 'afterSha256' || keys[1] !== 'argumentsDigest'
+    || keys[2] !== 'beforeSha256' || keys[3] !== 'pid' || keys[4] !== 'runId' || keys[5] !== 'startTimeTicks'
+    || typeof runId !== 'string' || !runId.trim() || runId.length > 256
+    || typeof argumentsDigest !== 'string' || !SHA256.test(argumentsDigest)
     || (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid < 1)
     || typeof startTimeTicks !== 'string' || !PROCESS_START_TICKS.test(startTimeTicks)
     || BigInt(startTimeTicks).toString() !== startTimeTicks
@@ -153,6 +166,8 @@ function parseMarker(value: string): InFlightMarker {
     unknown('Workspace patch in-flight record is invalid');
   }
   return {
+    runId,
+    argumentsDigest,
     pid,
     startTimeTicks,
     beforeSha256: record.beforeSha256 as string,
@@ -309,6 +324,11 @@ export async function reconcileWorkspacePatchApply(
     unknown('Workspace patch in-flight record could not be read');
   }
   const marker = parseMarker(markerBytes!);
+  if ((options.expectedRunId !== undefined && options.expectedRunId !== marker.runId)
+    || (options.expectedArgumentsDigest !== undefined && options.expectedArgumentsDigest !== marker.argumentsDigest)
+    || (options.expectedBeforeSha256 !== undefined && options.expectedBeforeSha256 !== marker.beforeSha256)) {
+    unknown('Workspace patch in-flight record does not match the original authorized operation');
+  }
   const identity: WorkspacePatchProcessIdentity = {pid: marker.pid, startTimeTicks: marker.startTimeTicks};
   const isAlive = options.isProcessAlive
     ?? (options.powerShellPath ? (value: WorkspacePatchProcessIdentity) => inspectWorkspacePatchProcess(value, options.powerShellPath!) : undefined);
@@ -321,12 +341,16 @@ export async function reconcileWorkspacePatchApply(
   catch { unknown('Workspace patch helper exit is unconfirmed'); }
   if (state === 'unknown') unknown('Workspace patch helper identity is unconfirmed');
   if (state === 'running') {
-    return {path, state: 'in_progress', pid: marker.pid, beforeSha256: marker.beforeSha256, afterSha256: marker.afterSha256};
+    return {path, state: 'in_progress', runId: marker.runId, argumentsDigest: marker.argumentsDigest,
+      pid: marker.pid, beforeSha256: marker.beforeSha256, afterSha256: marker.afterSha256};
   }
 
   const current = await readCurrentSource(root, path);
   const outcome = current.sha256 === marker.afterSha256 ? 'applied'
     : current.sha256 === marker.beforeSha256 ? 'not_applied' : 'unknown';
+  const reconciled = {path, state: 'reconciled' as const, runId: marker.runId,
+    argumentsDigest: marker.argumentsDigest, outcome, beforeSha256: marker.beforeSha256,
+    afterSha256: marker.afterSha256, currentSha256: current.sha256};
   let currentMarker: Awaited<ReturnType<typeof lstat>>;
   try { currentMarker = await lstat(markerPath); }
   catch (error) {
@@ -345,6 +369,7 @@ export async function reconcileWorkspacePatchApply(
     mtimeMs: currentMarker!.mtimeMs, ctimeMs: currentMarker!.ctimeMs,
   };
   if (!sameFile(markerIdentity, currentMarkerIdentity)) unknown('Workspace patch in-flight record changed during reconciliation');
+  if (options.retainMarker === true) return reconciled;
   try { await unlink(markerPath); }
   catch (error) {
     if (errorCode(error) !== 'ENOENT') unknown('Workspace patch in-flight record could not be cleared');
@@ -352,6 +377,5 @@ export async function reconcileWorkspacePatchApply(
   if (await lstat(markerPath).then(() => true, error => errorCode(error) !== 'ENOENT')) {
     unknown('Workspace patch in-flight record remains after reconciliation');
   }
-  return {path, state: 'reconciled', outcome, beforeSha256: marker.beforeSha256,
-    afterSha256: marker.afterSha256, currentSha256: current.sha256};
+  return reconciled;
 }

@@ -1,4 +1,5 @@
 import {execFileSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
 import {lstatSync, readdirSync, realpathSync, statSync} from 'node:fs';
 import path from 'node:path';
 
@@ -90,8 +91,9 @@ export function createDesktopCodingToolHost({workspaceRoot, authorizedWorkspaceR
     {source: recoveryRootPath, canonical: recovery, directory: true, id: identity(recovery)},
     {source: powerShellPath, canonical: powerShell, directory: false, id: identity(powerShell, true)},
   ];
+  const bindingId = createHash('sha256').update(JSON.stringify(pinned.map(entry => [entry.canonical,
+    Object.entries(entry.id).map(([key, value]) => [key, String(value)])]))).digest('hex');
   const pendingHelpers = listPendingCodingHelpers(recovery);
-  if (pendingHelpers.length) throw Error('Unresolved coding helper requires trusted reconciliation');
   if (typeof createWorkspacePatchApplyTool !== 'function') throw Error('Public patch apply factory is unavailable');
   const implementation = createWorkspacePatchApplyTool({rootPath: root, recoveryRootPath: recovery,
     powerShellPath: powerShell});
@@ -133,10 +135,12 @@ export function createDesktopCodingToolHost({workspaceRoot, authorizedWorkspaceR
     inspectAcl(recovery, powerShell);
   };
   const patchReconciliation = typeof reconcileWorkspacePatchApply === 'function'
-    ? {reconcile: async ({relativePath}) => {
+    ? {bindingId, reconcile: async ({relativePath, expectedRunId, expectedArgumentsDigest,
+      expectedBeforeSha256, retainMarker}) => {
       assertRecoveryBinding();
       return reconcileWorkspacePatchApply({rootPath: root, recoveryRootPath: recovery,
-        relativePath, powerShellPath: powerShell});
+        relativePath, expectedRunId, expectedArgumentsDigest, expectedBeforeSha256,
+        retainMarker, powerShellPath: powerShell});
     }}
     : undefined;
   return {

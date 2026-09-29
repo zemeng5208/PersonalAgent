@@ -20,6 +20,7 @@ export const WORKSPACE_PATCH_APPLY_SCOPE = 'workspace:apply';
 const helperPath = fileURLToPath(new URL('../scripts/locked-apply.ps1', import.meta.url));
 const MAX_HELPER_OUTPUT_BYTES = 8192;
 const STOP_GRACE_MS = 2000;
+const INPUT_DIGEST = /^[a-f0-9]{64}$/u;
 
 export interface WorkspacePatchApplyResult {
   path: string;
@@ -71,6 +72,10 @@ function check(context: ToolContext, now: () => number): number {
   if (!context.scopes.includes('workspace:read') || !context.scopes.includes('workspace:write')
     || !context.scopes.includes(WORKSPACE_PATCH_APPLY_SCOPE)) {
     throw new ProtocolError('SCOPE_DENIED', 'Workspace patch apply requires read, write and apply scopes');
+  }
+  if (typeof context.runId !== 'string' || !context.runId.trim()
+    || !INPUT_DIGEST.test(context.argumentsDigest ?? '')) {
+    throw new ProtocolError('INVALID_ARGUMENT', 'Workspace patch execution identity is unavailable');
   }
   if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Workspace patch apply was cancelled');
   const deadline = Date.parse(context.deadline);
@@ -139,6 +144,8 @@ async function invokeHelper(
     try {
       markerFd = openSync(inflightPath, 'wx', 0o600);
       writeSync(markerFd, JSON.stringify({
+        runId: context.runId,
+        argumentsDigest: context.argumentsDigest,
         pid: processIdentity.pid,
         startTimeTicks: processIdentity.startTimeTicks,
         beforeSha256: request.beforeSha256,

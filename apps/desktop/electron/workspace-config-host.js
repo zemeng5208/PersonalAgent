@@ -266,8 +266,16 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
     mkdirSync(userData,{recursive:true});
     writeFileSync(file+'.tmp',JSON.stringify(record),'utf8');renameSync(file+'.tmp',file);
   }
+  const patchReconciliation = {
+    get bindingId() { return applyHost?.patchReconciliation?.bindingId; },
+    reconcile(input) {
+      const current = applyHost?.patchReconciliation;
+      if (!current) throw Error('Workspace patch reconciliation is unavailable');
+      return current.reconcile(input);
+    },
+  };
   return {tools,snapshot,
-    patchReconciliation:applyHost?.patchReconciliation,
+    get patchReconciliation() { return applyHost ? patchReconciliation : undefined; },
     bindApplication(value){application=value;},
     async select() {
       const selected=await selectDirectory();
