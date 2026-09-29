@@ -79,6 +79,16 @@ export interface HostToolTaskReadback {
   confirmed?: {runId: string; result: unknown; evidenceRefs: string[]};
 }
 
+export interface ConfirmedSystemObservationSample {
+  readonly taskId: string;
+  readonly source: 'node:os';
+  readonly timestamp: string;
+  readonly cpuPercent: number;
+  readonly memoryPercent: number;
+  readonly samplingIntervalMs: number;
+  readonly evidenceRefs: readonly string[];
+}
+
 function assistantText(resultSummary: string): string {
   return resultSummary.replace(MODEL_METADATA, '').trim();
 }
@@ -409,6 +419,36 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
 
   stopSystemObservationSession(sessionId: string): {stopped: boolean} {
     return this.observationSessions.stop(sessionId);
+  }
+
+  /** Read only a successful system observation still bound to the current process-local consent lease. */
+  readCurrentSystemObservationSample(taskId: string): ConfirmedSystemObservationSample | undefined {
+    const sessionId = this.runtime.loadCheckpoint(taskId, SYSTEM_OBSERVATION_SESSION_CHECKPOINT);
+    if (typeof sessionId !== 'string') return undefined;
+    let samplingIntervalMs: number;
+    try { samplingIntervalMs = this.observationSessions.sampleIntervalMs(sessionId, taskId); }
+    catch (error) {
+      if (error instanceof ProtocolError && ['UNAUTHORIZED', 'TIMEOUT'].includes(error.code)) return undefined;
+      throw error;
+    }
+    const readback = this.readHostToolTask(taskId);
+    if (readback.toolName !== SYSTEM_OBSERVATION_NAME || readback.toolVersion !== SYSTEM_OBSERVATION_VERSION
+      || readback.task.state !== 'succeeded' || !readback.confirmed?.evidenceRefs.length) return undefined;
+    const result = readback.confirmed.result;
+    if (!result || typeof result !== 'object' || Array.isArray(result)) return undefined;
+    const sample = result as {source?: unknown; capturedAt?: unknown; cpu?: {utilizationPercent?: unknown}; memory?: {utilizationPercent?: unknown}};
+    const timestamp = sample.capturedAt;
+    const cpuPercent = sample.cpu?.utilizationPercent;
+    const memoryPercent = sample.memory?.utilizationPercent;
+    if (sample.source !== 'node:os' || typeof timestamp !== 'string'
+      || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(timestamp)
+      || !Number.isFinite(Date.parse(timestamp))
+      || typeof cpuPercent !== 'number' || !Number.isFinite(cpuPercent) || cpuPercent < 0 || cpuPercent > 100
+      || typeof memoryPercent !== 'number' || !Number.isFinite(memoryPercent) || memoryPercent < 0 || memoryPercent > 100) {
+      return undefined;
+    }
+    return {taskId, source: 'node:os', timestamp, cpuPercent, memoryPercent,
+      samplingIntervalMs, evidenceRefs: [...readback.confirmed.evidenceRefs]};
   }
 
   startMailReadSession(request: StartMailReadSessionRequest): MailReadSession {
