@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {buildInterestOptions, planKnowledgeReevaluation} from '@personal-agent/cognition';
+import {buildInterestOptions, LayaInterestDecisionService, planKnowledgeReevaluation} from '@personal-agent/cognition';
 
 const PROFILE = 'huawei_ict_agentarts';
 const KEY_PREFIX = 'knowledge-watch:v1:';
@@ -29,7 +29,10 @@ export function knowledgeWatchCheckpointKey(namespace) {
   return KEY_PREFIX + namespace;
 }
 
-/** Explicit fake. It never reports a fetched document or a successful network read. */
+/**
+ * Explicit test double. Production wiring must not call it.
+ * A missing production provider is unavailable; it is not this object.
+ */
 export function createUnavailableSourcePort(reason = 'source_provider_missing') {
   return Object.freeze({
     kind: 'fake',
@@ -38,6 +41,86 @@ export function createUnavailableSourcePort(reason = 'source_provider_missing') 
       return Promise.resolve({availability: 'unavailable', reason, provider: 'fake'});
     },
   });
+}
+
+export function knowledgeWatchConversationId(namespace) {
+  if (!identifier(namespace)) fail('INVALID_ARGUMENT');
+  return `knowledge-watch:${namespace}`;
+}
+
+/** One Runtime schedule. The host does not compute the next run or dispatch it. */
+export function knowledgeWatchScheduleInput({namespace, runAt, checkId} = {}) {
+  if (!identifier(namespace) || !identifier(checkId) || !Number.isFinite(instant(runAt))) fail('INVALID_ARGUMENT');
+  return {
+    scheduleId: `knowledge-watch:${namespace}:${checkId}`,
+    goal: '检查已授权的公开订阅',
+    conversationId: knowledgeWatchConversationId(namespace),
+    runAt,
+    timeZone: 'UTC',
+    missedRunPolicy: 'run_once',
+    taskIdempotencyKey: `knowledge-watch:${namespace}:${checkId}`,
+  };
+}
+
+function adaptRuntimeWork(runtime, namespace) {
+  const conversationId = knowledgeWatchConversationId(namespace);
+  return {
+    async read({idempotencyKey}) {
+      try {
+        const task = runtime.findTaskByIdempotencyKey(idempotencyKey);
+        if (task === undefined) return {state: 'absent'};
+        if (!text(task?.taskId)) return {state: 'unknown'};
+        return {state: 'accepted', taskId: task.taskId};
+      } catch { return {state: 'unknown'}; }
+    },
+    async submit({idempotencyKey}) {
+      const task = await runtime.submitTask({
+        goal: `RECHECK ${idempotencyKey}`,
+        conversationId,
+        idempotencyKey,
+      });
+      if (!text(task?.taskId)) return {accepted: false};
+      return {accepted: true, taskId: task.taskId};
+    },
+  };
+}
+
+function adaptNotificationService(service, namespace) {
+  return {
+    async send(notice) {
+      if (!text(notice?.citation) || !sha(notice.id) || !Number.isFinite(instant(notice.createdAt))) {
+        return {delivered: false, reason: 'citation_missing'};
+      }
+      const item = {
+        source: 'knowledge-watch',
+        accountRef: namespace,
+        externalId: notice.id,
+        occurredAt: notice.createdAt,
+        fetchedAt: notice.createdAt,
+        contentRef: notice.citation,
+        sensitivity: 'public',
+        dedupeKey: `${namespace}:${notice.id}`,
+      };
+      try {
+        service.ingest([item]);
+        const drained = service.drain();
+        const batch = drained?.batches?.find(entry => entry?.state === 'ready_for_delivery'
+          && text(entry.id) && Array.isArray(entry.itemRefs) && entry.itemRefs.includes(item.dedupeKey));
+        if (!batch) return {delivered: false, reason: 'awaiting_batch'};
+        return {delivered: false, receiptId: batch.id, deliveryState: 'ready_for_delivery'};
+      } catch { return null; }
+    },
+    async read(notice) {
+      try {
+        const drained = service.drain();
+        const batch = drained?.batches?.find(entry => entry?.id === notice?.receiptId);
+        if (batch?.state === 'ready_for_delivery' && text(batch.id)) {
+          return {delivered: false, receiptId: batch.id, deliveryState: 'ready_for_delivery'};
+        }
+        return {delivered: false, reason: 'acknowledgement_unknown'};
+      } catch { return null; }
+    },
+  };
 }
 
 function plain(value) {
@@ -111,9 +194,19 @@ export function createKnowledgeWatchHost({
   sourcePort = null,
   subscriptions = null,
   interestDecider = null,
+  layaChooser = null,
   workPort = null,
+  runtime = null,
   notificationPort = null,
+  notificationService = null,
   policyPort = null,
+  authorizationRef = null,
+  policyToolName = null,
+  policyScopes = null,
+  readTrackingGrant = null,
+  feedCollect = null,
+  feedSubscriptionId = null,
+  scheduler = null,
   knowledgeMaxAgeMs = 2 * 60 * 60 * 1000,
 } = {}) {
   if (profile !== PROFILE || !identifier(namespace) || !identifier(checkpointTaskId)
@@ -122,14 +215,36 @@ export function createKnowledgeWatchHost({
     || typeof now !== 'function'
     || !Number.isFinite(knowledgeMaxAgeMs) || knowledgeMaxAgeMs <= 0) fail('INVALID_ARGUMENT');
   if (sourcePort && typeof sourcePort.read !== 'function') fail('INVALID_ARGUMENT');
+  if (feedCollect && typeof feedCollect !== 'function') fail('INVALID_ARGUMENT');
+  if (feedSubscriptionId !== null && !identifier(feedSubscriptionId)) fail('INVALID_ARGUMENT');
   if (subscriptions && typeof subscriptions.subscribe !== 'function') fail('INVALID_ARGUMENT');
   if (interestDecider && typeof interestDecider.choose !== 'function') fail('INVALID_ARGUMENT');
+  if (layaChooser && typeof layaChooser.choose !== 'function') fail('INVALID_ARGUMENT');
   if (workPort && (typeof workPort.submit !== 'function' || typeof workPort.read !== 'function')) fail('INVALID_ARGUMENT');
+  if (runtime !== null && !plain(runtime)) fail('INVALID_ARGUMENT');
   if (notificationPort && typeof notificationPort.send !== 'function') fail('INVALID_ARGUMENT');
-  if (policyPort && typeof policyPort.evaluate !== 'function') fail('INVALID_ARGUMENT');
+  if (notificationService && (typeof notificationService.ingest !== 'function'
+    || typeof notificationService.drain !== 'function')) fail('INVALID_ARGUMENT');
+  if (policyPort && typeof policyPort.evaluate !== 'function' && typeof policyPort.authorize !== 'function') {
+    fail('INVALID_ARGUMENT');
+  }
+  const policyConfigured = authorizationRef !== null || policyToolName !== null || policyScopes !== null;
+  if (policyConfigured && (!text(authorizationRef) || !text(policyToolName) || !Array.isArray(policyScopes)
+    || policyScopes.length === 0 || policyScopes.some(scope => !text(scope)))) fail('INVALID_ARGUMENT');
+  if (readTrackingGrant && typeof readTrackingGrant !== 'function') fail('INVALID_ARGUMENT');
+  if (scheduler && (typeof scheduler.createSchedule !== 'function'
+    || typeof scheduler.listSchedules !== 'function'
+    || typeof scheduler.reconcileSchedules !== 'function')) fail('INVALID_ARGUMENT');
+  const wrappedLaya = !interestDecider && Boolean(layaChooser);
+  if (wrappedLaya) interestDecider = new LayaInterestDecisionService(layaChooser, now);
+  if (!workPort && typeof runtime?.submitTask === 'function'
+    && typeof runtime?.findTaskByIdempotencyKey === 'function') workPort = adaptRuntimeWork(runtime, namespace);
+  if (!notificationPort && notificationService) notificationPort = adaptNotificationService(notificationService, namespace);
+  const boundScheduler = scheduler ?? (typeof runtime?.createSchedule === 'function'
+    && typeof runtime?.listSchedules === 'function'
+    && typeof runtime?.reconcileSchedules === 'function' ? runtime : null);
 
   const checkpointKey = knowledgeWatchCheckpointKey(namespace);
-  const unavailablePort = sourcePort ?? createUnavailableSourcePort();
   let document = null;
   let health = {status: 'ready'};
   let running = false;
@@ -138,6 +253,9 @@ export function createKnowledgeWatchHost({
   let controller = null;
   let chain = Promise.resolve();
   let subscriptionActive = false;
+  let registeredSchedule = false;
+  let life = 0;
+  let feedReading = false;
 
   function clock() {
     const value = now();
@@ -170,8 +288,10 @@ export function createKnowledgeWatchHost({
   function wiring() {
     return {
       profile: PROFILE,
-      source: sourcePort ? 'injected' : 'unavailable_fake',
+      source: feedCollect ? 'feeds' : sourcePort ? 'injected' : 'unavailable',
       subscription: subscriptionActive,
+      scheduler: Boolean(boundScheduler),
+      layaChooser: wrappedLaya,
       interestDecider: Boolean(interestDecider),
       workPort: Boolean(workPort),
       notificationPort: Boolean(notificationPort),
@@ -230,6 +350,25 @@ export function createKnowledgeWatchHost({
     return input;
   }
   function formalDecision(signal) {
+    if (typeof policyPort?.authorize === 'function' && typeof policyPort.evaluate !== 'function') {
+      if (!policyConfigured) return {allowed: false, reason: 'policy_request_incomplete'};
+      try {
+        const decision = policyPort.authorize({
+          authorizationRef,
+          taskId: checkpointTaskId,
+          toolName: policyToolName,
+          requiredScopes: [...policyScopes],
+          now: clock(),
+        });
+        const scopes = Array.isArray(decision?.scopes) ? decision.scopes.filter(text) : [];
+        if (policyScopes.every(scope => scopes.includes(scope))) {
+          return {allowed: true, reason: 'authorized', scopes};
+        }
+        return {allowed: false, reason: 'scope_missing'};
+      } catch (error) {
+        return {allowed: false, reason: text(error?.code) ? error.code : 'policy_failed'};
+      }
+    }
     if (typeof policyPort?.evaluate !== 'function') return {allowed: false, reason: 'policy_port_missing'};
     let decision;
     try {
@@ -363,8 +502,8 @@ export function createKnowledgeWatchHost({
     let built;
     try { built = buildInterestOptions(input); }
     catch { fail('INVALID_ARGUMENT'); }
-    const freshSelected = choice?.outcome === 'selected' && offered(built.options, choice.selected)
-      ? choice.selected : null;
+    const freshSelected = choice?.outcome === 'selected' && choice.requiresHostRevalidation === true
+      && offered(built.options, choice.selected) ? choice.selected : null;
     const approach = built.policy.state === 'watch_public' && freshSelected?.id === 'track_public'
       ? 'track_public' : null;
     let formal = null;
@@ -409,6 +548,7 @@ export function createKnowledgeWatchHost({
     if (Number.isFinite(raw.maxAgeMs) && raw.maxAgeMs > 0) event.maxAgeMs = raw.maxAgeMs;
     if (text(raw.reason)) event.reason = clip(raw.reason, 200);
     if (text(raw.provider)) event.provider = clip(raw.provider, 80);
+    if (text(raw.feedCursor)) event.feedCursor = raw.feedCursor;
     if (plain(raw.check)) event.check = clone(raw.check);
     return event;
   }
@@ -477,10 +617,28 @@ export function createKnowledgeWatchHost({
     if (keys.length && workPort) persist(next);
     return {accepted: true, proceed: true, plans, event, keys: workPort ? keys : [], skipWork};
   }
+  async function grantStatus() {
+    if (typeof readTrackingGrant !== 'function') return 'unchecked';
+    try {
+      const grant = await readTrackingGrant({namespace});
+      if (!plain(grant) || grant.state !== 'granted' || grant.publicLowRiskTracking !== true) return 'revoked';
+      return 'granted';
+    } catch { return 'unreadable'; }
+  }
+  async function boundStillTracked(work) {
+    return lock(() => {
+      if (!running || !document) return false;
+      const topicId = work?.consumer?.id;
+      if (!identifier(topicId) || document.tombstones[topicId]) return false;
+      return document.watches[topicId]?.state === 'tracked';
+    });
+  }
   async function submitKeys(keys, plans) {
     const accepted = new Set();
     const unknown = new Set();
+    const skipped = new Set();
     const works = new Map();
+    const grant = await grantStatus();
     for (const item of plans) for (const work of item.plan.affected) works.set(work.workKey, work);
     for (const workKey of keys) {
       if (!running || controller?.signal.aborted) { unknown.add(workKey); continue; }
@@ -503,7 +661,11 @@ export function createKnowledgeWatchHost({
           continue;
         }
       } catch { verdict = 'unknown'; }
-      if (verdict === 'unknown') { unknown.add(workKey); continue; }
+      if (verdict === 'unknown' || grant === 'unreadable') { unknown.add(workKey); continue; }
+      if (grant === 'revoked' || !(await boundStillTracked(works.get(workKey)))) {
+        skipped.add(workKey);
+        continue;
+      }
       try {
         const result = await workPort.submit({namespace, idempotencyKey: workKey, work: clone(works.get(workKey))});
         if (!running || controller?.signal.aborted) { unknown.add(workKey); continue; }
@@ -519,7 +681,7 @@ export function createKnowledgeWatchHost({
         } else unknown.add(workKey);
       } catch { unknown.add(workKey); }
     }
-    return {accepted, unknown};
+    return {accepted, unknown, skipped};
   }
   function readableNotice(event, binding, knowledge, topicIds) {
     const previous = `${binding.revision}/${binding.contentSha256.slice(0, 8)}`;
@@ -534,16 +696,28 @@ export function createKnowledgeWatchHost({
   function finalizeSource(prepared, submitted) {
     if (!document || health.status !== 'ready') fail('CHECKPOINT_UNREADABLE');
     const event = prepared.event;
+    const providerLabel = event.provider ?? (sourcePort || feedCollect ? 'port' : 'unspecified');
     if (!running) {
       return {accepted: false, reason: 'stopped', notified: false,
-        availability: event.availability, provider: event.provider ?? (sourcePort ? 'port' : 'fake')};
+        availability: event.availability, provider: providerLabel};
     }
     const next = clone(document);
     const notifiedIds = [];
+    const skipped = prepared.skipped ?? new Set();
     let blocked = false;
     for (const item of prepared.plans) {
+      const withheld = item.plan.affected.some(work => !work.duplicate && skipped.has(work.workKey));
+      if (withheld) {
+        for (const work of item.plan.affected) {
+          if (skipped.has(work.workKey) && next.submissions[work.workKey]?.state !== 'accepted') {
+            delete next.submissions[work.workKey];
+          }
+        }
+        continue;
+      }
       if (!prepared.skipWork) {
         const pending = item.plan.affected.filter(work => !work.duplicate
+          && !skipped.has(work.workKey)
           && next.submissions[work.workKey]?.state !== 'accepted');
         if (pending.length) { blocked = true; continue; }
         next.reevaluations[bindingKey(item.group.binding)] = clone(item.plan.checkpoint);
@@ -554,20 +728,29 @@ export function createKnowledgeWatchHost({
         .filter(topicId => next.watches[topicId]?.state === 'tracked'
           || event.availability !== 'available' && next.watches[topicId]?.state !== 'revoked');
       if (!topicIds.length) continue;
-      if (event.availability === 'available' && !event.citation?.locator) continue;
       const id = digest({namespace, sourceId: event.sourceId, binding: item.group.binding.revision,
         content: item.group.binding.contentSha256, reason: item.plan.knowledge.reason,
         workKeys: fresh.map(work => work.workKey)});
-      if (next.notices[id]) continue;
+      const locator = event.citation?.locator ?? null;
+      if (next.notices[id]) {
+        if (!text(next.notices[id].citation) && text(locator) && next.notices[id].delivered !== true) {
+          next.notices[id].citation = locator;
+          next.notices[id].summary = readableNotice(event, item.group.binding, item.plan.knowledge, topicIds);
+          next.notices[id].deliveryReason = 'pending';
+          notifiedIds.push(id);
+        }
+        continue;
+      }
       next.notices[id] = {id, namespace, topicIds: [...topicIds], sourceId: event.sourceId,
         previous: {revision: item.group.binding.revision, contentSha256: item.group.binding.contentSha256},
         latest: {revision: event.revision ?? null, contentSha256: event.contentSha256 ?? null,
           fetchedAt: event.fetchedAt, availability: event.availability},
-        citation: event.citation?.locator ?? null,
+        citation: locator,
         knowledge: {action: item.plan.knowledge.action, reason: item.plan.knowledge.reason},
         summary: readableNotice(event, item.group.binding, item.plan.knowledge, topicIds),
         untrustedExcerpt: typeof event.summary === 'string' ? clip(event.summary.trim()) : null,
-        createdAt: event.fetchedAt, delivered: false, deliveryReason: 'pending', revocable: true};
+        createdAt: event.fetchedAt, delivered: false,
+        deliveryReason: locator ? 'pending' : 'citation_missing', revocable: true};
       notifiedIds.push(id);
     }
     const confirmsBoundCache = prepared.plans.some(item => item.group.binding.revision === event.revision
@@ -587,12 +770,13 @@ export function createKnowledgeWatchHost({
       }
       next.sources[event.sourceId] = {sourceId: event.sourceId, observedAt: event.fetchedAt,
         availability: event.availability, revision: event.revision ?? null,
-        contentSha256: event.contentSha256 ?? null, provider: event.provider ?? (sourcePort ? 'port' : 'fake'),
+        contentSha256: event.contentSha256 ?? null, provider: providerLabel,
         citation: event.citation?.locator ?? null,
+        feedCursor: event.feedCursor ?? existing?.feedCursor ?? null,
         untrustedExcerpt: typeof event.summary === 'string' ? clip(event.summary.trim()) : null};
     }
     persist(next);
-    const provider = event.provider ?? (sourcePort ? 'port' : 'fake');
+    const provider = providerLabel;
     return {accepted: !blocked, reason: blocked ? 'submission_unverified' : 'observed',
       duplicate: false, notified: notifiedIds.length > 0, noticeIds: notifiedIds,
       availability: event.availability, provider,
@@ -600,10 +784,19 @@ export function createKnowledgeWatchHost({
   }
   async function deliverPending() {
     if (!document) return;
-    const pending = Object.values(document.notices).filter(notice => notice.delivered !== true
-      && notice.deliveryReason !== 'citation_missing');
+    const pending = Object.values(document.notices).filter(notice => notice.delivered !== true);
     for (const notice of pending) {
       if (!running || controller?.signal.aborted) return;
+      if (!text(notice.citation)) {
+        await lock(() => {
+          if (!document?.notices[notice.id] || !running) return;
+          const next = clone(document);
+          next.notices[notice.id].delivered = false;
+          next.notices[notice.id].deliveryReason = 'citation_missing';
+          persist(next);
+        });
+        continue;
+      }
       if (typeof notificationPort?.send !== 'function') {
         await lock(() => {
           if (!document?.notices[notice.id] || !running) return;
@@ -615,8 +808,11 @@ export function createKnowledgeWatchHost({
         continue;
       }
       let receipt = null;
-      try { receipt = await notificationPort.send(clone(notice)); }
-      catch { receipt = null; }
+      try {
+        receipt = text(notice.receiptId) && typeof notificationPort.read === 'function'
+          ? await notificationPort.read(clone(notice))
+          : await notificationPort.send(clone(notice));
+      } catch { receipt = null; }
       await lock(() => {
         if (!document?.notices[notice.id] || !running) return;
         const next = clone(document);
@@ -625,10 +821,14 @@ export function createKnowledgeWatchHost({
           saved.delivered = true;
           saved.receiptId = receipt.receiptId.trim();
           saved.deliveryReason = 'provider_receipt';
+        } else if (text(receipt?.receiptId)) {
+          saved.delivered = false;
+          saved.receiptId = receipt.receiptId.trim();
+          saved.deliveryReason = 'awaiting_acknowledgement';
         } else {
           saved.delivered = false;
-          saved.deliveryReason = receipt ? 'invalid_receipt' : 'notification_failed';
-          delete saved.receiptId;
+          saved.deliveryReason = text(receipt?.reason) ? receipt.reason : (receipt ? 'invalid_receipt' : 'notification_failed');
+          if (!text(saved.receiptId)) delete saved.receiptId;
         }
         persist(next);
       });
@@ -650,10 +850,33 @@ export function createKnowledgeWatchHost({
     if (changed) persist(next);
   }
 
+  async function scopeFromGrant(signal) {
+    if (typeof readTrackingGrant !== 'function') return signal;
+    let grant;
+    try {
+      grant = await readTrackingGrant({namespace, topicId: signal.topicId, sourceId: signal.source?.id ?? null});
+    } catch { return null; }
+    if (!plain(grant) || !['granted', 'none', 'revoked'].includes(grant.state) || !identifier(grant.id)
+      || !Number.isSafeInteger(grant.revision) || grant.revision < 1
+      || typeof grant.publicLowRiskTracking !== 'boolean'
+      || !Number.isFinite(instant(grant.expiresAt))) return null;
+    return {...signal, scope: {state: grant.state, id: grant.id, revision: grant.revision,
+      publicLowRiskTracking: grant.publicLowRiskTracking, expiresAt: grant.expiresAt}};
+  }
+  function recordGrantUnreadable(signal) {
+    requireReady();
+    const watch = writeWatch({...signal, at: iso(clock())},
+      {state: 'abstain', reason: 'grant_unreadable', evidence: []},
+      'authorization_required', 'grant_unreadable', null, {allowed: false, reason: 'grant_unreadable'}, null);
+    return {accepted: true, watch};
+  }
   async function consumeInterestSignal(raw, request = {}) {
-    const signal = pickInterest(raw);
+    let signal = pickInterest(raw);
     const userEnable = request.userEnable ?? null;
     await lock(() => { requireReady(); });
+    const granted = await scopeFromGrant(signal);
+    if (!granted) return lock(() => recordGrantUnreadable(signal));
+    signal = granted;
     let choice = null;
     const preview = await lock(() => {
       requireReady();
@@ -662,9 +885,13 @@ export function createKnowledgeWatchHost({
     });
     if (preview.policy.state === 'watch_public' && interestDecider) {
       if (!text(request.deadline) || !(request.signal instanceof AbortSignal)) fail('INVALID_ARGUMENT');
+      const listen = AbortSignal.any([request.signal, controller.signal]);
       choice = await interestDecider.choose(policyInput(signal, userEnable),
-        {deadline: request.deadline, signal: controller.signal});
-      if (!running || controller.signal.aborted) return {accepted: false, reason: 'stopped'};
+        {deadline: request.deadline, signal: listen});
+      if (!running || controller.signal.aborted || request.signal.aborted) return {accepted: false, reason: 'stopped'};
+      const again = await scopeFromGrant(signal);
+      if (!again) return lock(() => recordGrantUnreadable(signal));
+      signal = again;
     }
     const result = await lock(() => commitInterest(signal, choice, userEnable));
     return result;
@@ -674,6 +901,7 @@ export function createKnowledgeWatchHost({
     const prepared = await lock(() => prepareSource(event));
     if (!prepared.proceed) return prepared;
     const submitted = prepared.keys?.length ? await submitKeys(prepared.keys, prepared.plans) : null;
+    if (submitted?.skipped) prepared.skipped = submitted.skipped;
     const result = await lock(() => finalizeSource(prepared, submitted));
     await deliverPending();
     return result;
@@ -681,16 +909,30 @@ export function createKnowledgeWatchHost({
   async function refreshSource(sourceId) {
     requireReady();
     if (!identifier(sourceId)) fail('INVALID_ARGUMENT');
-    const reading = await unavailablePort.read({namespace, sourceId, signal: controller.signal});
+    if (typeof sourcePort?.read !== 'function') {
+      return {accepted: false, availability: 'unavailable', reason: 'source_provider_missing'};
+    }
+    let reading;
+    try { reading = await sourcePort.read({namespace, sourceId, signal: controller.signal}); }
+    catch (error) {
+      if (!running || controller?.signal.aborted || error?.code === 'CANCELLED') {
+        return {accepted: false, reason: 'stopped'};
+      }
+      if (['TIMEOUT', 'EXTERNAL_FAILURE', 'RATE_LIMITED'].includes(error?.code)) {
+        return {accepted: false, availability: 'unavailable', reason: 'source_transient_failure', code: error.code};
+      }
+      return {accepted: false, availability: 'unavailable', reason: 'source_unavailable',
+        ...(text(error?.code) ? {code: error.code} : {})};
+    }
     if (!running || controller.signal.aborted) return {accepted: false, reason: 'stopped'};
     const availability = reading?.availability === 'withdrawn' ? 'withdrawn'
       : reading?.availability === 'available' ? 'available' : 'unavailable';
+    const provider = text(reading?.provider) ? reading.provider : 'port';
     if (availability !== 'available') {
       return consumeSourceUpdate({namespace, sourceId, availability, fetchedAt: iso(clock()),
-        reason: text(reading?.reason) ? reading.reason : 'source_unavailable',
-        provider: reading?.provider ?? 'fake'});
+        reason: text(reading?.reason) ? reading.reason : 'source_unavailable', provider});
     }
-    return consumeSourceUpdate({...reading, namespace, sourceId, availability, provider: 'port'});
+    return consumeSourceUpdate({...reading, namespace, sourceId, availability, provider});
   }
 
   function mutateWatch(topicId, change) {
@@ -763,6 +1005,177 @@ export function createKnowledgeWatchHost({
       signal: enablement?.signal});
   }
 
+  function feedItemIdentity(item) {
+    const record = item?.record;
+    if (!plain(record) || !text(record.dedupeKey) || !text(record.contentRef)
+      || !Number.isFinite(instant(record.occurredAt)) || !text(item.title)) return null;
+    return {dedupeKey: record.dedupeKey, occurredAt: record.occurredAt, contentRef: record.contentRef,
+      title: clip(item.title, 200), summary: typeof item.summary === 'string' ? clip(item.summary, 500) : ''};
+  }
+  function opaqueFeedRevision(validators, contentSha256) {
+    if (text(validators?.etag) || text(validators?.lastModified)) {
+      return digest({etag: validators.etag ?? null, lastModified: validators.lastModified ?? null});
+    }
+    return digest({body: contentSha256});
+  }
+  function readCollectResult(value) {
+    if (!plain(value) || !Array.isArray(value.items) || !plain(value.collection) || !text(value.nextCursor)) return null;
+    const collection = value.collection;
+    if (!['fetched', 'unchanged'].includes(collection.state) || !identifier(collection.subscriptionId)
+      || !Number.isFinite(instant(collection.fetchedAt)) || typeof value.hasMore !== 'boolean') return null;
+    const validators = collection.validators;
+    if (!plain(validators) || !Object.hasOwn(validators, 'etag') || !Object.hasOwn(validators, 'lastModified')) return null;
+    if (validators.etag !== null && !text(validators.etag)) return null;
+    if (validators.lastModified !== null && !text(validators.lastModified)) return null;
+    if (collection.state === 'unchanged' && value.items.length > 0) return null;
+    return value;
+  }
+  async function refreshSubscribedFeed(request = {}) {
+    requireReady();
+    if (typeof feedCollect !== 'function') {
+      return {accepted: false, availability: 'unavailable', reason: 'source_provider_missing'};
+    }
+    const subscriptionId = request.subscriptionId ?? feedSubscriptionId;
+    if (!identifier(subscriptionId)) fail('INVALID_ARGUMENT');
+    if (feedReading) return {accepted: false, reason: 'feed_read_in_progress'};
+    feedReading = true;
+    const ticket = life;
+    try {
+      const grant = await grantStatus();
+      if (grant === 'revoked') return {accepted: false, availability: 'unavailable', reason: 'authorization_required'};
+      if (grant === 'unreadable') return {accepted: false, availability: 'unavailable', reason: 'grant_unreadable'};
+      const cursor = document?.sources?.[subscriptionId]?.feedCursor;
+      const query = {subscriptionId};
+      if (text(cursor)) query.cursor = cursor;
+      let result;
+      try { result = await feedCollect(query, controller.signal); }
+      catch (error) {
+        if (ticket !== life || !running || controller.signal.aborted || error?.code === 'CANCELLED') {
+          return {accepted: false, reason: 'stopped'};
+        }
+        if (['TIMEOUT', 'EXTERNAL_FAILURE', 'RATE_LIMITED'].includes(error?.code)) {
+          return {accepted: false, availability: 'unavailable', reason: 'source_transient_failure', code: error.code};
+        }
+        if (error?.code === 'NOT_FOUND') {
+          return consumeSourceUpdate({namespace, sourceId: subscriptionId, availability: 'withdrawn',
+            fetchedAt: iso(clock()), reason: 'source_withdrawn', provider: 'feeds'});
+        }
+        return {accepted: false, availability: 'unavailable', reason: 'source_unavailable',
+          code: text(error?.code) ? error.code : 'EXTERNAL_FAILURE'};
+      }
+      if (ticket !== life || !running || controller.signal.aborted) return {accepted: false, reason: 'stopped'};
+      const collected = readCollectResult(result);
+      if (!collected || collected.collection.subscriptionId !== subscriptionId) {
+        return {accepted: false, availability: 'unavailable', reason: 'invalid_feed_result'};
+      }
+      if (instant(collected.collection.fetchedAt) > clock()) {
+        return {accepted: false, availability: 'unavailable', reason: 'feed_clock_ahead'};
+      }
+      if (collected.hasMore) {
+        await lock(() => {
+          if (!running || !document || ticket !== life) return;
+          const next = clone(document);
+          const existing = next.sources[subscriptionId];
+          if (existing) existing.feedCursor = collected.nextCursor;
+          else next.sources[subscriptionId] = {sourceId: subscriptionId, observedAt: collected.collection.fetchedAt,
+            availability: 'unavailable', revision: null, contentSha256: null, provider: 'feeds',
+            feedCursor: collected.nextCursor, reason: 'feed_page_incomplete'};
+          persist(next);
+        });
+        return {accepted: true, reason: 'feed_page_incomplete', provider: 'feeds', availability: 'unavailable'};
+      }
+      if (collected.collection.state === 'unchanged') {
+        const head = document.sources[subscriptionId];
+        if (!text(head?.revision) || !sha(head?.contentSha256)) {
+          return {accepted: false, availability: 'unavailable', reason: 'source_body_not_read', provider: 'feeds'};
+        }
+        return consumeSourceUpdate({namespace, sourceId: subscriptionId, availability: 'available',
+          revision: head.revision, contentSha256: head.contentSha256, fetchedAt: collected.collection.fetchedAt,
+          provider: 'feeds', feedCursor: collected.nextCursor,
+          ...(text(head.citation) ? {citation: {locator: head.citation}} : {}),
+          check: {outcome: 'unchanged', checkedAt: collected.collection.fetchedAt, sourceId: subscriptionId,
+            sourceRevision: head.revision, cachedContentSha256: head.contentSha256}});
+      }
+      const identities = [];
+      for (const item of collected.items) {
+        const identity = feedItemIdentity(item);
+        if (!identity) return {accepted: false, availability: 'unavailable', reason: 'invalid_feed_result'};
+        identities.push(identity);
+      }
+      identities.sort((left, right) => left.dedupeKey < right.dedupeKey ? -1 : left.dedupeKey > right.dedupeKey ? 1 : 0);
+      const contentSha256 = digest(identities);
+      const revision = opaqueFeedRevision(collected.collection.validators, contentSha256);
+      const summary = identities.map(item => item.summary).filter(Boolean).join('\n');
+      return consumeSourceUpdate({namespace, sourceId: subscriptionId, availability: 'available', revision,
+        contentSha256, fetchedAt: collected.collection.fetchedAt, provider: 'feeds', feedCursor: collected.nextCursor,
+        ...(text(identities[0]?.contentRef) ? {citation: {locator: identities[0].contentRef}} : {}),
+        ...(summary ? {summary} : {})});
+    } finally { feedReading = false; }
+  }
+  function registerFeedCheck(input) {
+    if (!boundScheduler) return {accepted: false, reason: 'scheduler_missing'};
+    let schedule;
+    try { schedule = knowledgeWatchScheduleInput({namespace, runAt: input?.runAt, checkId: input?.checkId}); }
+    catch (error) { return {accepted: false, reason: text(error?.code) ? error.code : 'INVALID_ARGUMENT'}; }
+    try {
+      const saved = boundScheduler.createSchedule(schedule);
+      if (!plain(saved) || saved.scheduleId !== schedule.scheduleId) return {accepted: false, reason: 'scheduler_rejected'};
+      registeredSchedule = true;
+      return {accepted: true, schedule: clone(saved)};
+    } catch (error) {
+      return {accepted: false, reason: text(error?.code) ? error.code : 'scheduler_failed'};
+    }
+  }
+  function cancelFeedChecks() {
+    if (!boundScheduler) return {accepted: false, reason: 'scheduler_missing'};
+    const conversationId = knowledgeWatchConversationId(namespace);
+    let existing;
+    try { existing = boundScheduler.listSchedules(conversationId); }
+    catch (error) { return {accepted: false, reason: text(error?.code) ? error.code : 'scheduler_failed'}; }
+    if (!Array.isArray(existing)) return {accepted: false, reason: 'scheduler_rejected'};
+    const prefix = `knowledge-watch:${namespace}:`;
+    if (existing.some(item => !text(item?.scheduleId) || !item.scheduleId.startsWith(prefix))) {
+      return {accepted: false, reason: 'scheduler_conversation_not_exclusive'};
+    }
+    try {
+      const saved = boundScheduler.reconcileSchedules(conversationId, []);
+      registeredSchedule = false;
+      return {accepted: true, schedules: Array.isArray(saved) ? clone(saved) : []};
+    } catch (error) {
+      return {accepted: false, reason: text(error?.code) ? error.code : 'scheduler_failed'};
+    }
+  }
+  function restoreFeedChecks() {
+    if (!boundScheduler) return {accepted: false, reason: 'scheduler_missing'};
+    try {
+      const saved = boundScheduler.listSchedules(knowledgeWatchConversationId(namespace));
+      if (!Array.isArray(saved)) return {accepted: false, reason: 'scheduler_rejected'};
+      return {accepted: true, schedules: clone(saved)};
+    } catch (error) {
+      return {accepted: false, reason: text(error?.code) ? error.code : 'scheduler_failed'};
+    }
+  }
+  function observeNotificationAcknowledgement(batch) {
+    return lock(() => {
+      requireReady();
+      if (!plain(batch) || !text(batch.id) || batch.state !== 'delivered') {
+        return {accepted: false, reason: 'acknowledgement_not_confirmed'};
+      }
+      const next = clone(document);
+      let matched = 0;
+      for (const notice of Object.values(next.notices)) {
+        if (notice.receiptId === batch.id && notice.delivered !== true) {
+          notice.delivered = true;
+          notice.deliveryReason = 'acknowledged';
+          matched += 1;
+        }
+      }
+      if (!matched) return {accepted: false, reason: 'notice_not_found'};
+      persist(next);
+      return {accepted: true, matched};
+    });
+  }
+
   function start() {
     if (disposed) fail('DISPOSED');
     if (running) return snapshot();
@@ -789,11 +1202,13 @@ export function createKnowledgeWatchHost({
   }
   function stop() {
     if (disposed) return snapshot();
+    life += 1;
     running = false;
     controller?.abort();
     if (typeof unsubscribe === 'function') unsubscribe();
     unsubscribe = null;
     subscriptionActive = false;
+    if (registeredSchedule) cancelFeedChecks();
     return snapshot();
   }
   function dispose() {
@@ -806,5 +1221,7 @@ export function createKnowledgeWatchHost({
 
   load();
   return Object.freeze({start, stop, dispose, snapshot, listPending, listWatches,
-    consumeInterestSignal, consumeSourceUpdate, refreshSource, revoke, pause, resume, enable});
+    consumeInterestSignal, consumeSourceUpdate, refreshSource, refreshSubscribedFeed,
+    registerFeedCheck, cancelFeedChecks, restoreFeedChecks, observeNotificationAcknowledgement,
+    revoke, pause, resume, enable});
 }
