@@ -513,6 +513,40 @@ test('a busy WAL checkpoint keeps the completed purge retryable', t => {
   }
 });
 
+test('reopened unbound erasure resumes WAL maintenance before private reads', t => {
+  const path = databasePath(t);
+  let host = openSqliteMemoryHost(path);
+  const reader = new DatabaseSync(path);
+  let reading = false;
+  try {
+    host.provision('personal');
+    host.append('personal', version('erase-target', 1));
+    host.append('personal', version('keep-other', 1));
+    reader.exec('BEGIN');
+    reading = true;
+    reader.prepare('SELECT count(*) AS total FROM memory_facts').get();
+    assert.throws(() => host.eraseUnboundFact('personal', request({
+      factId: 'erase-target', expectedRevision: 1, operationId: 'synthetic-unbound-retry',
+    })), {code: 'STORAGE_UNAVAILABLE'});
+    host.close();
+    host = openSqliteMemoryHost(path);
+    assert.throws(() => host.resumeCompletedErasureMaintenance('personal'),
+      {code: 'STORAGE_UNAVAILABLE'});
+    reader.exec('ROLLBACK');
+    reading = false;
+    assert.doesNotThrow(() => host.resumeCompletedErasureMaintenance('personal'));
+    assert.equal(reader.prepare('SELECT count(*) AS total FROM memory_facts WHERE fact_id = ?')
+      .get('erase-target').total, 0);
+    assert.equal(reader.prepare('SELECT count(*) AS total FROM memory_facts WHERE fact_id = ?')
+      .get('keep-other').total, 1);
+    assert.doesNotThrow(() => host.resumeCompletedErasureMaintenance('personal'));
+  } finally {
+    if (reading) reader.exec('ROLLBACK');
+    reader.close();
+    host.close();
+  }
+});
+
 test('SQLite feed invalidates a binding when a visible fact becomes hidden', async t => {
   const path = databasePath(t);
   const host = openSqliteMemoryHost(path);

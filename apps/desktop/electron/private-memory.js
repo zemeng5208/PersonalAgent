@@ -14,12 +14,17 @@ const hash = value => createHash('sha256').update(value).digest('hex');
 /** Local admin-only memory; the caller must present a native confirmation dialog. */
 export function createPrivateMemoryController(databasePath, confirm, confirmDelete = async () => false) {
   let memory;
+  let maintenanceNeeded = true;
   const memoryHost = () => {
     if (!memory) {
       const opened = openSqliteMemoryHost(databasePath);
       try { opened.provision(namespace); }
       catch (error) { opened.close(); throw error; }
       memory = opened;
+    }
+    if (maintenanceNeeded) {
+      memory.resumeCompletedErasureMaintenance(namespace);
+      maintenanceNeeded = false;
     }
     return memory;
   };
@@ -83,8 +88,10 @@ export function createPrivateMemoryController(databasePath, confirm, confirmDele
         at: new Date().toISOString(), limit: 1, ...context()})).facts[0];
       if (!current || current.ref.revision !== ref.revision) throw Error('记忆版本已变化，请刷新列表');
       if (!await confirmDelete(current)) return {state: 'declined'};
+      maintenanceNeeded = true;
       store.eraseUnboundFact(namespace, {factId: ref.id, expectedRevision: ref.revision,
         operationId: `desktop-private-${hash(`${ref.id}@${ref.revision}`)}`, ...context()});
+      maintenanceNeeded = false;
       const [visible, history] = await Promise.all([
         query.listCurrent({factId: ref.id, at: new Date().toISOString(), limit: 1, ...context()}),
         query.listHistory({factId: ref.id, limit: 20, ...context()}),
