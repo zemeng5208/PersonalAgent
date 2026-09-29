@@ -68,7 +68,7 @@ export interface InboxTriageOptions {
   readonly authorizeRead: (scope: {accountRef: string; folder: string} & InboxTriageContext) => boolean;
 }
 const hash = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-const unfinished = new Set(['unavailable', 'invalid_response', 'cancelled', 'deadline']);
+const unfinished = new Set(['unavailable', 'invalid_response', 'cancelled', 'deadline', 'insufficient_input']);
 function reject(message: string): never {throw new ProtocolError('INVALID_ARGUMENT', message);}
 function text(value: unknown): value is string {return typeof value === 'string' && value.trim().length > 0;}
 

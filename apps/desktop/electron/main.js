@@ -25,7 +25,7 @@ import {createLiveVoiceHost} from './live-voice-host.js';
 import {createDesktopProactiveHost} from './proactive-host.js';
 import {createP5SystemObservationSource} from './p5-system-observation-source.js';
 import {createP5DeviceReceiptStore} from './p5-device-receipt-store.js';
-import {createKnowledgeWatchHost, createUnavailableSourcePort} from './knowledge-watch-host.js';
+import {createKnowledgeWatchHost} from './knowledge-watch-host.js';
 import {createPublicConnectorHost} from './public-connector-host.js';
 import {createWorkspaceConfigHost} from './workspace-config-host.js';
 import {createWorkspaceCommandRecipeTool} from './workspace-command-recipes.js';
@@ -1271,36 +1271,18 @@ async function initializeRuntime() {
           idempotencyKey: knowledgeWatchIdempotency,
         });
       }
+      const collectTool = feedsHost?.tools?.find(tool => tool.descriptor?.name === 'feeds.collect');
       knowledgeWatchHost = createKnowledgeWatchHost({
         profile: 'huawei_ict_agentarts',
         namespace,
         checkpointTaskId: knowledgeWatchTask.taskId,
-        checkpoints: {
-          loadCheckpoint: (taskId, key) => runtimeApplication.runtime.loadCheckpoint(taskId, key),
-          saveCheckpoint: (taskId, key, value) => runtimeApplication.runtime.saveCheckpoint(taskId, key, value),
-        },
-        interestDecider: localLaya ? { choose: req => localLaya.choose(req) } : undefined,
-        sourcePort: createUnavailableSourcePort('source_connector_pending'),
-        workPort: {
-          submit: async ({namespace: ns, idempotencyKey, work}) => {
-            const task = runtimeApplication.runtime.submitTask({
-              goal: `Knowledge Reevaluation (${ns})`,
-              conversationId: `knowledge-reevaluation:${ns}`,
-              idempotencyKey,
-            });
-            return {accepted: true, taskId: task.taskId};
-          },
-          read: async ({namespace: ns, idempotencyKey}) => {
-            const existing = runtimeApplication.runtime.findTaskByIdempotencyKey(idempotencyKey);
-            if (!existing) return {state: 'absent'};
-            return {state: 'accepted', taskId: existing.taskId};
-          },
-        },
-        notificationPort: {
-          send: async (notice) => {
-            return {delivered: true, receiptId: `notice-${notice.id}`};
-          },
-        },
+        checkpoints: runtimeApplication.runtime,
+        now: () => Date.now(),
+        layaChooser: localLaya,
+        runtime: runtimeApplication.runtime,
+        feedCollect: collectTool
+          ? (query, signal) => collectTool.execute(query, {taskId: knowledgeWatchTask.taskId, signal})
+          : null,
       });
       await knowledgeWatchHost.start();
     } catch {
@@ -1518,6 +1500,7 @@ async function action(event, name, payload) {
     if (!competitionMode || !knowledgeWatchHost) throw Error('知识关注宿主尚未就绪');
     if (name === 'knowledge.watch.list') return knowledgeWatchHost.listWatches();
     if (name === 'knowledge.watch.pending') return knowledgeWatchHost.listPending();
+    if (name === 'knowledge.watch.dialogue') return knowledgeWatchHost.dialogueProjection?.() ?? {items: []};
     if (name === 'knowledge.watch.revoke') {
       const topicId = typeof payload?.topicId === 'string' ? payload.topicId.trim() : '';
       if (!topicId) throw Error('关注主题标识不能为空');
@@ -1824,6 +1807,8 @@ async function initializeLiveVoice() {
       sessionPermissions:{goals:goalCloudHost?.snapshot().sessionAllowed===true,
         coding: codingWorkspace?.snapshot().cloudExportAllowed===true,
         mailAnalysis:mailConfig?.snapshot().cloudAnalysisAllowed===true},
+      knowledgeWatch: (knowledgeWatchHost?.dialogueProjection?.()?.items ?? [])
+        .map(item => ({topicId: item.topicId, usableAsCurrentFact: item.usableAsCurrentFact, answer: item.answer})),
       note: '工具名称来自与文字任务相同的宿主目录；注册不代表本次已授权或已执行。需要工作时调用 request_work，由 Runtime 为实际任务检查目录、权限和参数；不能将注册列表冒充当前全部可用。任务成功以 Runtime 返回为准。'}),
   });
 }
