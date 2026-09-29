@@ -13,7 +13,7 @@
 | 边界 | 当前实现负责人 | 说明 |
 | --- | --- | --- |
 | P0～P4：PR收拢、业务连接器、Desktop通用接线、语音/Live、子Agent/多模型/本地执行底座 | Potatos498 | 排除下列 P5～P8 专属实现与共享集成写入；P0 可登记相关 PR 状态，不接手被撤回包的实现返修 |
-| P5：Laya、目标与主动认知 | zemeng 侧统筹，执行者待登记 | packages/goals、packages/cognition、scripts/laya 及 Desktop 认知/主动/邮件消费；变化→多候选→真实 Laya→已授权动作→持久读回/恢复去重。连接器提供者仍归 P1 |
+| P5：Laya、目标与主动认知 | zemeng；执行者 Gemini（原交互会话，任务已准备、待送达确认） | packages/goals、packages/cognition、scripts/laya 及明确登记的 Desktop 认知/主动/邮件消费专属文件；变化→多候选→真实 Laya→已授权动作→持久读回/恢复去重。连接器提供者仍归 P1，共享装配归 P8 |
 | P6：Windows与编码工具 | zemeng 侧统筹，执行者待登记 | apps/windows-host、packages/windows-client、packages/coding-tools；复用已集成实现，真实窗口隔离、接管与读回，工作区补丁实际应用和受限命令 |
 | P7：知识、记忆、关注事项 | goo122 保留在途实现；剩余交接由 zemeng 侧统筹 | packages/knowledge、plugins/obsidian、packages/memory、packages/learning 及本地消费；在途文件完成明确交接前不并发改写 |
 | P8：本地共享集成与非云比赛材料 | zemeng 侧统筹，goo122 评审公共兼容 | 根配置/锁文件/公共装配采用独立 PR 和唯一写入槽；既有 Gemini 两份证据/演示文档任务继续保留，不重复委派 |
