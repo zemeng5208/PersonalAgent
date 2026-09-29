@@ -222,3 +222,103 @@ test('explicit JSON mode binds real adapter sends to current Runtime export perm
   } finally { app.close(); }
   });
 });
+
+test('JSON SSE terminal errors never reach factory approval or tool execution', async t => {
+  const proposal = {kind: 'tool_proposal', proposalId: 'synthetic-read',
+    toolName: 'fixture.meeting', toolVersion: '1.0.0', arguments: {id: 'synthetic'}};
+  const message = {event: 'message', data: {text: JSON.stringify(proposal)}};
+  for (const [name, sequence] of [
+    ['missing terminal', [message]],
+    ['reversed terminal', [message, {event: 'end'}, {event: 'task_end'}]],
+    ['error after DONE', [message, {event: 'task_end'}, {event: 'end'}, '[DONE]',
+      {event: 'error', data: {message: 'private error'}}]],
+  ]) await t.test(name, async () => {
+    let executions = 0;
+    let fetches = 0;
+    const app = createAgentArtsRuntimeApplication({path: ':memory:',
+      gatewayUrl: 'https://agentarts.example.test', runtimeName: 'workflow',
+      responseMode: 'tool-proposal-json', authorizationProvider: {read: async () => 'Bearer synthetic'},
+      competitionToolExports: [{toolName: proposal.toolName, toolVersion: proposal.toolVersion,
+        exportPolicyVersion: 'fixture-v1', accepts: () => true, project: ({result}) => ({time: result.time})}],
+      tools: [{descriptor: {name: proposal.toolName, version: proposal.toolVersion,
+        inputSchema: {type: 'object', required: ['id'], properties: {id: {type: 'string'}}},
+        outputSchema: {type: 'object', required: ['time'], properties: {time: {type: 'string'}}},
+        sideEffect: 'read', requiredScopes: ['fixture:read'],
+        idempotencySupport: true, recoverySupport: true, requiresPresence: false},
+      execute: async () => {executions++; return {time: '17:00'};}}],
+      fetchImpl: async () => {fetches++;
+        return new Response(sequence.map(item => `data: ${typeof item === 'string' ? item : JSON.stringify(item)}\n\n`).join(''),
+          {headers: {'content-type': 'text/event-stream'}});
+      },
+    });
+    try {
+      const client = new Client(app);
+      await client.connect();
+      const {taskId} = await client.call('task.submit', {goal: 'Synthetic SSE rejection',
+        conversationId: 'json-mode'}, {idempotencyKey: name});
+      assert.equal((await terminal(app, taskId)).state, 'failed');
+      assert.equal(fetches, 1);
+      assert.equal(executions, 0);
+      assert.deepEqual((await client.call('approval.list', {taskId})).items, []);
+      assert.deepEqual(app.runtime.readToolExecutions(taskId), []);
+    } finally {app.close();}
+  });
+});
+
+test('opt-in factory sends only the selected public tool catalog and rechecks host health after credentials', async t => {
+  for (const revokeDuringCredentials of [false, true]) await t.test(`revoked=${revokeDuringCredentials}`, async () => {
+    let healthy = true;
+    const bodies = [];
+    const toolName = 'fixture.read';
+    const app = createAgentArtsRuntimeApplication({path: ':memory:',
+      gatewayUrl: 'https://agentarts.example.test', runtimeName: 'workflow',
+      responseMode: 'tool-proposal-json', initialRequestMode: 'goal-with-tools-json',
+      authorizationProvider: {read: async () => {
+        if (revokeDuringCredentials) healthy = false;
+        return 'Bearer synthetic-token';
+      }},
+      tools: [{descriptor: {name: toolName, version: '1.0.0',
+        inputSchema: {type: 'object', required: ['id'], additionalProperties: false,
+          description: 'private fixture marker', properties: {id: {type: 'string',
+            enum: ['private fixture marker']}}},
+        outputSchema: {type: 'object', required: ['value'], properties: {value: {type: 'string'}}},
+        sideEffect: 'read', requiredScopes: ['fixture:read'],
+        idempotencySupport: true, recoverySupport: true, requiresPresence: false},
+      execute: async () => ({value: 'local-only'})}],
+      competitionToolExports: [{toolName, toolVersion: '1.0.0', exportPolicyVersion: 'fixture-v1',
+        accepts: () => true, project: ({result}) => ({value: result.value})}],
+      competitionToolAvailability: [{toolName, toolVersion: '1.0.0', available: () => healthy}],
+      fetchImpl: async (_url, init) => {
+        bodies.push(JSON.parse(init.body));
+        return new Response(JSON.stringify(event(JSON.stringify({kind: 'text', text: 'Synthetic catalog accepted'}))),
+          {status: 200, headers: {'content-type': 'application/json'}});
+      },
+    });
+    try {
+      const client = new Client(app);
+      await client.connect();
+      const {taskId} = await client.call('task.submit', {goal: 'Synthetic public read',
+        conversationId: 'catalog'}, {idempotencyKey: `catalog-${revokeDuringCredentials}`});
+      const task = await terminal(app, taskId);
+      if (revokeDuringCredentials) {
+        assert.equal(task.state, 'failed');
+        assert.deepEqual(bodies, []);
+      } else {
+        assert.equal(task.state, 'succeeded');
+        assert.deepEqual(JSON.parse(bodies[0].query), {goal: 'Synthetic public read', availableTools: [{
+          name: toolName, version: '1.0.0', inputSchema: {type: 'object', required: ['id'],
+            additionalProperties: false, properties: {id: {type: 'string'}}},
+        }]});
+        assert.doesNotMatch(JSON.stringify(bodies), /private fixture marker|local-only/);
+      }
+    } finally {app.close();}
+  });
+});
+
+test('factory rejects a catalog without explicit initial request mode', () => {
+  assert.throws(() => createAgentArtsRuntimeApplication({path: ':memory:',
+    gatewayUrl: 'https://agentarts.example.test', runtimeName: 'workflow',
+    responseMode: 'tool-proposal-json', authorizationProvider: {read: async () => 'Bearer synthetic'},
+    competitionToolAvailability: [],
+  }), /explicit initial request mode/);
+});

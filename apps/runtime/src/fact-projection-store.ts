@@ -31,15 +31,30 @@ export interface PendingFactImpact extends FactProjectionReceipt {
   readonly memoryNamespace: string;
 }
 
+export interface CompletedFactImpact {
+  readonly batchToken: string;
+  readonly report: ImpactReport;
+}
+
+export interface FactImpactReceipt {
+  readonly projection: FactProjectionReceipt;
+  readonly completed?: CompletedFactImpact;
+}
+
 export type StagedFactProjection = Pick<FactProjectionRequest,
   'consumerKey' | 'memoryNamespace' | 'batch' | 'facts'>;
 
 export interface FactProjectionStore {
   stage(request: FactProjectionRequest): void;
   readStaged(consumerKey: string, memoryNamespace: string): StagedFactProjection | undefined;
+  reviseStaged(request: FactProjectionRequest): void;
   discardStaged(consumerKey: string, memoryNamespace: string, batchToken: string): void;
   project(request: FactProjectionRequest, providerReceipt: FactChangeReceipt): FactProjectionReceipt;
-  readPending(limit?: number): readonly PendingFactImpact[];
+  readPending(limit?: number, scope?: {readonly consumerKey: string; readonly memoryNamespace: string}): readonly PendingFactImpact[];
+  readCompletedImpact(scope: {readonly consumerKey: string; readonly memoryNamespace: string;
+    readonly batchToken: string}): CompletedFactImpact | undefined;
+  listImpactReceipts(scope: {readonly consumerKey: string; readonly memoryNamespace: string;
+    readonly afterGraphRevision: number; readonly limit: number}): readonly FactImpactReceipt[];
   completeImpact(request: CompleteFactImpactRequest): void;
 }
 
@@ -300,6 +315,57 @@ export function bindFactProjectionStore(db: DatabaseSync, graphNamespace: string
         || digest({batch, facts}) !== rows[0]!.handled_key) throw new FactProjectionError('INTEGRITY_CONFLICT');
       return {consumerKey: consumer, memoryNamespace: memory, batch, facts};
     }),
+    reviseStaged: (request: FactProjectionRequest): void => {
+      const input = validateRequest(request);
+      storage(() => {
+        checkpoint(input);
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          const row = db.prepare([
+            'SELECT handled_key, payload_json FROM coordination_projection_staging',
+            'WHERE graph_namespace = ? AND memory_namespace = ? AND consumer_key = ? AND batch_token = ?',
+          ].join(' ')).get(namespace, input.memoryNamespace, input.consumerKey,
+            input.batch.batchToken) as Record<string, unknown> | undefined;
+          if (!row) throw new FactProjectionError('NOT_FOUND');
+          const old = JSON.parse(row.payload_json as string) as {batch: FactChangeBatch; facts: FactVersion[]};
+          const oldBatch = parseFactChangeBatch(old.batch);
+          const oldFacts = old.facts.map(parseFact);
+          if (digest({batch: oldBatch, facts: oldFacts}) !== row.handled_key
+            || oldBatch.batchToken !== input.batch.batchToken
+            || oldBatch.mode !== input.batch.mode
+            || oldBatch.baseCheckpoint !== input.batch.baseCheckpoint
+            || oldBatch.watermark !== input.batch.watermark
+            || input.batch.entries.length > oldBatch.entries.length
+            || (input.batch.entries.length === oldBatch.entries.length
+              && input.batch.atWatermark === oldBatch.atWatermark)) {
+            throw new FactProjectionError('INTEGRITY_CONFLICT');
+          }
+          let oldIndex = 0;
+          for (let index = 0; index < input.batch.entries.length; index++) {
+            const entry = input.batch.entries[index]!;
+            while (oldIndex < oldBatch.entries.length
+              && (oldBatch.entries[oldIndex]!.eventId !== entry.eventId
+                || factKey(oldBatch.entries[oldIndex]!.fact) !== factKey(entry.fact))) oldIndex++;
+            if (oldIndex === oldBatch.entries.length
+              || canonical(oldFacts[oldIndex]) !== canonical(input.facts[index])) {
+              throw new FactProjectionError('INTEGRITY_CONFLICT');
+            }
+            oldIndex++;
+          }
+          db.prepare([
+            'UPDATE coordination_projection_staging SET handled_key = ?, payload_json = ?',
+            'WHERE graph_namespace = ? AND memory_namespace = ? AND consumer_key = ? AND batch_token = ?',
+          ].join(' ')).run(digest({batch: input.batch, facts: input.facts}),
+            JSON.stringify({batch: input.batch, facts: input.facts}),
+            namespace, input.memoryNamespace, input.consumerKey, input.batch.batchToken);
+          checkpoint(input);
+          db.exec('COMMIT');
+        } catch (error) {
+          db.exec('ROLLBACK');
+          throw error;
+        }
+      });
+    },
     discardStaged: (consumerKey: string, memoryNamespace: string, batchToken: string): void => storage(() => {
       db.prepare([
         'DELETE FROM coordination_projection_staging',
@@ -437,15 +503,18 @@ export function bindFactProjectionStore(db: DatabaseSync, graphNamespace: string
         }
       });
     },
-    readPending: (limit = 100): readonly PendingFactImpact[] => storage(() => {
+    readPending: (limit = 100, scope?: {readonly consumerKey: string; readonly memoryNamespace: string}): readonly PendingFactImpact[] => storage(() => {
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new FactProjectionError('INVALID_ARGUMENT');
+      const consumer = scope === undefined ? undefined : text(scope.consumerKey);
+      const memory = scope === undefined ? undefined : text(scope.memoryNamespace);
       loadGraph(db, namespace);
       const rows = db.prepare([
         'SELECT memory_namespace, consumer_key, batch_token, graph_revision, links_json',
         'FROM coordination_pending_impacts',
         'WHERE graph_namespace = ? AND handled_at IS NULL',
+        ...(scope === undefined ? [] : ['AND consumer_key = ? AND memory_namespace = ?']),
         'ORDER BY created_at, batch_token LIMIT ?'
-      ].join(' ')).all(namespace, limit) as Record<string, unknown>[];
+      ].join(' ')).all(...(scope === undefined ? [namespace, limit] : [namespace, consumer!, memory!, limit])) as Record<string, unknown>[];
       return rows.map(row => ({
         memoryNamespace: row.memory_namespace as string,
         consumerKey: row.consumer_key as string,
@@ -453,6 +522,52 @@ export function bindFactProjectionStore(db: DatabaseSync, graphNamespace: string
         graphRevision: row.graph_revision as number,
         links: parseLinks(JSON.parse(row.links_json as string))
       }));
+    }),
+    readCompletedImpact: (scope: {readonly consumerKey: string; readonly memoryNamespace: string;
+      readonly batchToken: string}): CompletedFactImpact | undefined => storage(() => {
+      const consumer = text(scope.consumerKey);
+      const memory = text(scope.memoryNamespace);
+      const batchToken = text(scope.batchToken);
+      const row = db.prepare([
+        'SELECT graph_revision, handled_at, report_json FROM coordination_pending_impacts',
+        'WHERE graph_namespace = ? AND memory_namespace = ? AND consumer_key = ? AND batch_token = ?'
+      ].join(' ')).get(namespace, memory, consumer, batchToken) as Record<string, unknown> | undefined;
+      if (!row) throw new FactProjectionError('NOT_FOUND');
+      if (row.handled_at === null) return undefined;
+      const report = JSON.parse(row.report_json as string) as ImpactReport;
+      if (report.namespace !== namespace || report.graphRevision !== row.graph_revision
+        || !Array.isArray(report.items)) throw new FactProjectionError('STORAGE_UNAVAILABLE');
+      return {batchToken, report: structuredClone(report)};
+    }),
+    listImpactReceipts: (scope: {readonly consumerKey: string; readonly memoryNamespace: string;
+      readonly afterGraphRevision: number; readonly limit: number}): readonly FactImpactReceipt[] => storage(() => {
+      const consumer = text(scope.consumerKey);
+      const memory = text(scope.memoryNamespace);
+      if (!Number.isSafeInteger(scope.afterGraphRevision) || scope.afterGraphRevision < 0
+        || !Number.isSafeInteger(scope.limit) || scope.limit < 1 || scope.limit > 100) {
+        throw new FactProjectionError('INVALID_ARGUMENT');
+      }
+      loadGraph(db, namespace);
+      const rows = db.prepare([
+        'SELECT p.batch_token, p.graph_revision, r.links_json, p.handled_at, p.report_json',
+        'FROM coordination_pending_impacts AS p',
+        'JOIN coordination_projection_receipts AS r ON r.graph_namespace = p.graph_namespace',
+        'AND r.memory_namespace = p.memory_namespace AND r.consumer_key = p.consumer_key',
+        'AND r.batch_token = p.batch_token',
+        'WHERE p.graph_namespace = ? AND p.memory_namespace = ? AND p.consumer_key = ? AND p.graph_revision > ?',
+        'ORDER BY p.graph_revision, p.batch_token LIMIT ?'
+      ].join(' ')).all(namespace, memory, consumer, scope.afterGraphRevision, scope.limit) as Record<string, unknown>[];
+      return rows.map(row => {
+        const batchToken = row.batch_token as string;
+        const graphRevision = row.graph_revision as number;
+        const projection: FactProjectionReceipt = {batchToken, graphRevision,
+          links: parseLinks(JSON.parse(row.links_json as string))};
+        if (row.handled_at === null) return {projection};
+        const report = JSON.parse(row.report_json as string) as ImpactReport;
+        if (report.namespace !== namespace || report.graphRevision !== graphRevision
+          || !Array.isArray(report.items)) throw new FactProjectionError('STORAGE_UNAVAILABLE');
+        return {projection, completed: {batchToken, report: structuredClone(report)}};
+      });
     }),
     completeImpact: (request: CompleteFactImpactRequest): void => storage(() => {
       const context = {deadline: text(request.deadline), signal: request.signal};

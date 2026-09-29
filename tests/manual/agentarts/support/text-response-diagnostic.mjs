@@ -24,7 +24,8 @@ const REASONS = new Map([
 // are copied or relaxed. This is diagnostic replay, not a second cloud call.
 function parserSnapshot() {
   const source = readFileSync(new URL('../../../../packages/coordination/dist/agentarts.js', import.meta.url), 'utf8');
-  const start = source.indexOf('class TextCollector');
+  const diagnosticCodeStart = source.indexOf('function diagnosticProviderErrorCode');
+  const start = diagnosticCodeStart >= 0 ? diagnosticCodeStart : source.indexOf('class TextCollector');
   const end = source.indexOf('function defaultFetch', start);
   const objectStart = source.indexOf('function asPlainObject');
   const objectEnd = source.indexOf('function validateRequest', objectStart);
