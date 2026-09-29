@@ -718,11 +718,40 @@ function clearInactiveTaskExitWarning() {
   }
 }
 
+const inFlightRechecks = new Set();
+async function dispatchKnowledgeRecheckTask(task) {
+  if (!task || inFlightRechecks.has(task.taskId) || task.state !== 'created') return;
+  const conversationId = task.conversationId;
+  const goal = task.goal;
+  if (!conversationId?.startsWith('knowledge-watch:') || !goal?.startsWith('RECHECK ')) return;
+  inFlightRechecks.add(task.taskId);
+  try {
+    const workKey = task.idempotencyKey;
+    const snapshot = knowledgeWatchHost?.snapshot();
+    const reevaluation = snapshot?.reevaluations
+      ? Object.values(snapshot.reevaluations).find(r => r.submittedWorkKeys?.includes(workKey))
+      : null;
+    if (!snapshot || !reevaluation) return;
+    const source = reevaluation.source;
+    await runtimeApplication.dispatchKnowledgeRecheckTask(task.taskId, {
+      sourceId: source.id,
+      sourceRevision: source.revision,
+    });
+  } catch {
+  } finally {
+    inFlightRechecks.delete(task.taskId);
+  }
+}
+
 function applyEvent(event) {
   if (event.type === 'notification.created' && event.payload) notifications.set(event.payload.notificationId, {...event.payload,occurredAt:event.occurredAt});
   if (event.taskId && event.payload && ['task.created', 'task.state_changed', 'task.completed', 'task.failed', 'task.cancelled'].includes(event.type)) {
     tasks.set(event.taskId, structuredClone(event.payload));
     clearInactiveTaskExitWarning();
+    if (event.type === 'task.created' && event.payload.conversationId?.startsWith('knowledge-watch:')
+      && event.payload.goal?.startsWith('RECHECK ')) {
+      void dispatchKnowledgeRecheckTask(event.payload);
+    }
   }
   if (event.type === 'approval.requested' && event.payload) approvals.set(event.payload.approvalId, structuredClone(event.payload));
   if (event.type === 'task.cancelled' && event.payload?.taskId) {
@@ -789,6 +818,11 @@ async function syncRuntimeSnapshots() {
   const pending = await client.call('approval.list', {state: 'pending', limit: 100});
   for (const approval of pending.items) approvals.set(approval.approvalId, structuredClone(approval));
   eventCursor.reset(snapshotSequence ?? 0);
+  for (const task of tasks.values()) {
+    if (task.state === 'created' && task.conversationId?.startsWith('knowledge-watch:') && task.goal?.startsWith('RECHECK ')) {
+      void dispatchKnowledgeRecheckTask(task);
+    }
+  }
 }
 
 async function promptSyntheticRepairCandidate(taskId) {
@@ -1271,7 +1305,22 @@ async function initializeRuntime() {
           idempotencyKey: knowledgeWatchIdempotency,
         });
       }
-      const collectTool = feedsHost?.tools?.find(tool => tool.descriptor?.name === 'feeds.collect');
+      const feedCollect = async (query, signal) => {
+        const collectTool = feedsHost?.tools?.find(tool => tool.descriptor?.name === 'feeds.collect');
+        const availability = feedsHost?.competitionToolAvailability?.find(item => item.toolName === 'feeds.collect');
+        if (!collectTool || !availability) {
+          const error = new Error('订阅收集工具未注册');
+          error.code = 'TOOL_UNAVAILABLE';
+          throw error;
+        }
+        const isAvailable = availability.available({taskId: knowledgeWatchTask.taskId, signal});
+        if (!isAvailable) {
+          const error = new Error('订阅收集工具未获用户会话授权');
+          error.code = 'UNAUTHORIZED';
+          throw error;
+        }
+        return collectTool.execute(query, {taskId: knowledgeWatchTask.taskId, signal});
+      };
       knowledgeWatchHost = createKnowledgeWatchHost({
         profile: 'huawei_ict_agentarts',
         namespace,
@@ -1280,9 +1329,7 @@ async function initializeRuntime() {
         now: () => Date.now(),
         layaChooser: localLaya,
         runtime: runtimeApplication.runtime,
-        feedCollect: collectTool
-          ? (query, signal) => collectTool.execute(query, {taskId: knowledgeWatchTask.taskId, signal})
-          : null,
+        feedCollect,
       });
       await knowledgeWatchHost.start();
     } catch {
@@ -1501,10 +1548,30 @@ async function action(event, name, payload) {
     if (name === 'knowledge.watch.list') return knowledgeWatchHost.listWatches();
     if (name === 'knowledge.watch.pending') return knowledgeWatchHost.listPending();
     if (name === 'knowledge.watch.dialogue') return knowledgeWatchHost.dialogueProjection?.() ?? {items: []};
+    if (name === 'knowledge.watch.refresh') {
+      const result = await knowledgeWatchHost.refreshSubscribedFeed(payload);
+      await pumpEvents();
+      publish();
+      return result;
+    }
+    if (name === 'knowledge.watch.acknowledge') {
+      const result = knowledgeWatchHost.observeNotificationAcknowledgement(payload);
+      publish();
+      return result;
+    }
+    if (name === 'knowledge.watch.bind') {
+      const topicId = typeof payload?.topicId === 'string' ? payload.topicId.trim() : '';
+      if (!topicId) throw Error('关注主题标识不能为空');
+      const result = await knowledgeWatchHost.bindObservedRevision(topicId);
+      publish();
+      return result;
+    }
     if (name === 'knowledge.watch.revoke') {
       const topicId = typeof payload?.topicId === 'string' ? payload.topicId.trim() : '';
       if (!topicId) throw Error('关注主题标识不能为空');
-      return knowledgeWatchHost.revoke(topicId, payload);
+      const result = await knowledgeWatchHost.revoke(topicId, payload);
+      publish();
+      return result;
     }
     throw Error(`Unsupported knowledge watch action: ${name}`);
   }

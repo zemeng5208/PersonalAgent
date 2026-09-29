@@ -267,7 +267,7 @@ export function mountAdmin(root, invoke, escape) {
     if ((section==='connections' || section==='memory') && data.laya) layaControls ??= mountLayaControls(root.querySelector('.main'),invoke);
     layaControls?.render(data.laya);layaControls?.show(section==='connections' || section==='memory');
     if (section==='memory' && data.knowledge) knowledgeControls ??= mountKnowledgeControls(root.querySelector('.main'),invoke);
-    knowledgeControls?.render(data.knowledge);knowledgeControls?.show(section==='memory');
+    knowledgeControls?.render(data.knowledge, data.knowledgeWatch);knowledgeControls?.show(section==='memory');
     if (section==='worktrees' || section==='environment') codingControls ??= mountWorkspaceControls(root.querySelector('.main'),invoke);
     codingControls?.render(data);codingControls?.show(section==='worktrees' || section==='environment');
     const showAgentArts=section==='models' && data.model?.provider==='agentarts';

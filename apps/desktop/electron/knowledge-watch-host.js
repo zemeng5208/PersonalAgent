@@ -71,7 +71,7 @@ function adaptRuntimeWork(runtime, namespace) {
         const task = runtime.findTaskByIdempotencyKey(idempotencyKey);
         if (task === undefined) return {state: 'absent'};
         if (!text(task?.taskId)) return {state: 'unknown'};
-        return {state: 'accepted', taskId: task.taskId};
+        return {state: 'accepted', taskId: task.taskId, ...(text(task.state) ? {taskState: task.state} : {})};
       } catch { return {state: 'unknown'}; }
     },
     async submit({idempotencyKey}) {
@@ -1251,6 +1251,69 @@ export function createKnowledgeWatchHost({
       return {accepted: false, reason: text(error?.code) ? error.code : 'scheduler_failed'};
     }
   }
+  async function bindObservedRevision(topicId) {
+    if (!identifier(topicId)) fail('INVALID_ARGUMENT');
+    const prepared = await lock(() => {
+      requireReady();
+      if (document.tombstones[topicId]) return {accepted: false, reason: 'user_revoked'};
+      const watch = document.watches[topicId];
+      if (watch?.state !== 'tracked' || !watch.boundSource) return {accepted: false, reason: 'not_tracked'};
+      const binding = watch.boundSource;
+      const head = document.sources[binding.sourceId];
+      if (!head || head.availability !== 'available' || !text(head.revision) || !sha(head.contentSha256)
+        || !text(head.citation) || !Number.isFinite(instant(head.observedAt))) {
+        return {accepted: false, reason: 'observation_incomplete'};
+      }
+      if (head.revision === binding.revision && head.contentSha256 === binding.contentSha256) {
+        return {accepted: false, reason: 'already_bound'};
+      }
+      if (instant(head.observedAt) < instant(binding.lastSuccessfulCheck)) {
+        return {accepted: false, reason: 'observation_stale'};
+      }
+      const keys = document.reevaluations[bindingKey(binding)]?.submittedWorkKeys;
+      if (!workPort || !Array.isArray(keys) || !keys.length || keys.some(key => !sha(key))) {
+        return {accepted: false, reason: 'reevaluation_missing'};
+      }
+      return {accepted: true, proceed: true, keys: [...keys], binding: clone(binding),
+        head: {sourceId: binding.sourceId, revision: head.revision, contentSha256: head.contentSha256,
+          observedAt: head.observedAt, citation: head.citation}};
+    });
+    if (!prepared.proceed) return prepared;
+    const taskIds = [];
+    for (const workKey of prepared.keys) {
+      let read;
+      try { read = await workPort.read({namespace, idempotencyKey: workKey}); }
+      catch { read = {state: 'unknown'}; }
+      if (read?.state !== 'accepted' || read.taskState !== 'succeeded' || !text(read.taskId)) {
+        return {accepted: false, reason: 'reevaluation_unconfirmed',
+          taskState: text(read?.taskState) ? read.taskState : (text(read?.state) ? read.state : 'unknown')};
+      }
+      taskIds.push(read.taskId);
+    }
+    return lock(() => {
+      requireReady();
+      if (document.tombstones[topicId] || document.watches[topicId]?.state !== 'tracked') {
+        return {accepted: false, reason: 'user_revoked'};
+      }
+      const watch = document.watches[topicId];
+      const binding = watch.boundSource;
+      const head = binding ? document.sources[binding.sourceId] : null;
+      if (!binding || binding.revision !== prepared.binding.revision
+        || binding.contentSha256 !== prepared.binding.contentSha256
+        || head?.revision !== prepared.head.revision || head?.contentSha256 !== prepared.head.contentSha256
+        || head?.citation !== prepared.head.citation) {
+        return {accepted: false, reason: 'observation_changed'};
+      }
+      const next = clone(document);
+      const target = next.watches[topicId];
+      target.boundSource = {...clone(target.boundSource), revision: head.revision,
+        contentSha256: head.contentSha256, lastSuccessfulCheck: head.observedAt};
+      target.reason = 'source_bound';
+      target.updatedAt = iso(clock());
+      persist(next);
+      return {accepted: true, reason: 'bound', revision: head.revision, taskIds};
+    });
+  }
   function observeNotificationAcknowledgement(batch) {
     return lock(() => {
       requireReady();
@@ -1319,5 +1382,6 @@ export function createKnowledgeWatchHost({
   return Object.freeze({start, stop, dispose, snapshot, listPending, listWatches, dialogueProjection,
     consumeInterestSignal, consumeSourceUpdate, refreshSource, refreshSubscribedFeed,
     registerFeedCheck, cancelFeedChecks, restoreFeedChecks, observeNotificationAcknowledgement,
+    bindObservedRevision,
     revoke, pause, resume, enable});
 }

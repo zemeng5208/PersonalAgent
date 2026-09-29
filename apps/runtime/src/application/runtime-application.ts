@@ -883,6 +883,28 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     void execution.catch(() => {});
   }
 
+  dispatchKnowledgeRecheckTask(
+    taskId: string,
+    options: {sourceId: string; sourceRevision: string},
+  ): Promise<TaskSnapshot> | void {
+    if (this.activeTextTasks.has(taskId)) return;
+    const task = this.runtime.getTask(taskId);
+    if (task.state !== 'created') return;
+    const execution = this.runtime.runTask(taskId, async context => {
+      if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Knowledge recheck task was cancelled');
+      return {
+        resultSummary: `知识重评确认：来源 ${options.sourceId} 版本 ${options.sourceRevision} 的重评已由正式 Runtime 确认`,
+        evidenceRefs: [],
+      };
+    }, {
+      deadline: new Date(Date.now() + 60_000).toISOString(),
+      sideEffect: 'read',
+    }).finally(() => this.activeTextTasks.delete(taskId));
+    this.activeTextTasks.set(taskId, execution);
+    void execution.catch(() => {});
+    return execution;
+  }
+
   private dispatchSubmittedTextTask(request: Request, response: SuccessfulResponse): void {
     const taskId = response.data && typeof response.data === 'object' && 'taskId' in response.data ? response.data.taskId : undefined;
     const goal = request.operation === 'task.submit' ? request.payload.goal : undefined;
