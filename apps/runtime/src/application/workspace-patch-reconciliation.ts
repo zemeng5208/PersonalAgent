@@ -147,8 +147,10 @@ export class WorkspacePatchReconciliationAdapter {
   constructor(private readonly runtime: TaskRuntime, private readonly port: WorkspacePatchReconciliationPort,
     private readonly namespace?: string) {}
 
+  get bindingId(): string { return this.port.bindingId; }
+
   isPatchTask(taskId: string): boolean {
-    try { return readIntent(this.runtime, taskId, this.namespace).toolName === WORKSPACE_PATCH_APPLY_TOOL_NAME; }
+    try { return readIntent(this.runtime, taskId, this.namespace, this.port.bindingId).toolName === WORKSPACE_PATCH_APPLY_TOOL_NAME; }
     catch { return false; }
   }
 
