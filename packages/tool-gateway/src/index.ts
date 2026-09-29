@@ -78,13 +78,14 @@ export class ToolGateway implements ToolHost {
     }
 
     validateToolValue(tool.descriptor.inputSchema, invocation.arguments);
+    const argumentsDigest = toolArgumentsDigest(invocation.arguments);
     const decision = this.options.policy.authorize({
       authorizationRef: requiredText(invocation.authorizationRef, 'authorizationRef'),
       taskId,
       toolName,
       requiredScopes: tool.descriptor.requiredScopes,
       now: this.now(),
-      argumentsDigest: toolArgumentsDigest(invocation.arguments),
+      argumentsDigest,
     });
     invocation.onAuthorized?.();
 
@@ -112,6 +113,7 @@ export class ToolGateway implements ToolHost {
       signal: controller.signal,
       deadline: invocation.deadline,
       authorizationRef: invocation.authorizationRef,
+      argumentsDigest,
       scopes: decision.scopes,
     };
     try {

@@ -23,6 +23,9 @@ import {acquireHuaweiSisToken} from './huawei-iam-login.js';
 import {createLiveVoiceConfig} from './live-voice-config.js';
 import {createLiveVoiceHost} from './live-voice-host.js';
 import {createDesktopProactiveHost} from './proactive-host.js';
+import {createP5SystemObservationSource} from './p5-system-observation-source.js';
+import {createP5DeviceReceiptStore} from './p5-device-receipt-store.js';
+import {createKnowledgeWatchHost, createUnavailableSourcePort} from './knowledge-watch-host.js';
 import {createPublicConnectorHost} from './public-connector-host.js';
 import {createWorkspaceConfigHost} from './workspace-config-host.js';
 import {createWorkspaceCommandRecipeTool} from './workspace-command-recipes.js';
@@ -156,6 +159,14 @@ let goalCloudHost;
 let competitionCatalog;
 let competitionFactBridge;
 let proactiveHost;
+let p5Cognition;
+let p5SystemObservationSource;
+let p5DeviceReceiptStore;
+let p5DeviceTelemetrySubscription;
+let p5UnavailableReason = '';
+let p5RuntimeFailure = '';
+let p5ReceiptFailure = '';
+let knowledgeWatchHost;
 let productTools;
 let codingWorkspace;
 let competitionToolAvailabilityList = [];
@@ -207,6 +218,105 @@ function taskSurface(task) {
   return undefined;
 }
 
+function p5DevicePanelSuggestions() {
+  if (!p5DeviceReceiptStore) return [];
+  try {
+    return p5DeviceReceiptStore.list().map(receipt => ({
+      id: `p5-device-${receipt.id}`,
+      kind: 'p5_device_anomaly',
+      status: 'suggested',
+      source: receipt.source,
+      capturedAt: receipt.timestamp,
+      summary: `${receipt.title}：${receipt.message}`,
+      result: `Laya 建议：${receipt.advice}。本次 Runtime 已确认采样并保存 Evidence；仅记录提醒，未执行系统调整。`,
+    }));
+  } catch {
+    p5ReceiptFailure = 'P5 提醒记录无法读取';
+    return [];
+  }
+}
+
+function p5StatusSnapshot() {
+  const laya = localLaya?.snapshot() ?? {state: 'unavailable', reason: '本地 Laya 宿主尚未装配'};
+  if (!p5Cognition) return {state: 'unavailable', ready: false,
+    reason: p5UnavailableReason || 'P5 认知组合尚未装配'};
+  const composition = p5Cognition.snapshot();
+  let reason = [p5UnavailableReason, p5RuntimeFailure].filter(Boolean).join('；');
+  if (p5ReceiptFailure) reason = [reason, p5ReceiptFailure].filter(Boolean).join('；');
+  if (!composition.hasDeviceAnomalyService) reason = [reason, '设备异常决策端口不可用'].filter(Boolean).join('；');
+  else if (!composition.hasNotificationPort || !p5DeviceReceiptStore) reason = [reason, '提醒回执存储不可用，设备通知未启用'].filter(Boolean).join('；');
+  else if (!proactiveHost?.snapshot().enabled) reason = [reason, '请先在设置中开启本会话电脑状态监控'].filter(Boolean).join('；');
+  else if (laya.state !== 'ready') reason = [reason, laya.reason || '请先启动本地 Laya'].filter(Boolean).join('；');
+  else if (composition.state !== 'running' || !p5DeviceTelemetrySubscription) reason = [reason, 'P5 设备采样订阅尚未运行'].filter(Boolean).join('；');
+  else reason = '已复用当前本地 Laya；只处理有效观察会话的已确认采样，提醒回执写入本地主动提醒卡片';
+  const ready = Boolean(!p5UnavailableReason && composition.state === 'running' && composition.hasDeviceAnomalyService
+    && composition.hasNotificationPort && p5DeviceTelemetrySubscription && laya.state === 'ready');
+  if (ready && p5ReceiptFailure) reason = `${p5ReceiptFailure}；${reason}`;
+  return {state: composition.state, ready, activeSubscriptionCount: composition.activeSubscriptionCount,
+    hasDeviceAnomalyService: composition.hasDeviceAnomalyService,
+    hasNotificationPort: composition.hasNotificationPort, reason};
+}
+
+function proactiveSnapshot() {
+  const base = proactiveHost?.snapshot() ?? {enabled: false, cloudAnalysis: false, status: 'disabled',
+    reason: '主动观察尚未装配', suggestions: []};
+  const deviceSuggestions = p5DevicePanelSuggestions();
+  const p5 = p5StatusSnapshot();
+  const p5DeviceStatus = {id: 'p5-device-status', kind: 'p5_status', status: p5.ready ? 'ready' : 'unavailable',
+    summary: p5.ready ? 'P5 设备提醒已接入当前观察会话' : `P5 设备提醒不可用：${p5.reason}`};
+  const suggestions = [...(base.suggestions ?? []), ...deviceSuggestions];
+  if (proactiveHost && !p5.ready && base.enabled) suggestions.push(p5DeviceStatus);
+  return {...base, p5, suggestions};
+}
+
+async function startP5DeviceTelemetry() {
+  if (p5UnavailableReason || !p5Cognition || !p5SystemObservationSource || !p5DeviceReceiptStore
+    || !proactiveHost?.snapshot().enabled || localLaya?.snapshot().state !== 'ready') return false;
+  try {
+    if (p5Cognition.snapshot().state !== 'running') await p5Cognition.start();
+    if (!proactiveHost?.snapshot().enabled || localLaya?.snapshot().state !== 'ready') {
+      await p5Cognition.stop();
+      return false;
+    }
+    if (!p5DeviceTelemetrySubscription) {
+      if (typeof p5Cognition.bindDeviceTelemetrySource !== 'function') {
+        throw new Error('P5 telemetry subscription unavailable');
+      }
+      p5DeviceTelemetrySubscription = p5Cognition.bindDeviceTelemetrySource(p5SystemObservationSource);
+    }
+    p5RuntimeFailure = '';
+    publish();
+    return true;
+  } catch {
+    p5RuntimeFailure = 'P5 设备采样订阅启动失败';
+    try { p5DeviceTelemetrySubscription?.unsubscribe?.(); } catch {}
+    p5DeviceTelemetrySubscription = undefined;
+    try { await p5Cognition.stop(); } catch {}
+    publish();
+    return false;
+  }
+}
+
+async function stopP5DeviceTelemetry() {
+  const subscription = p5DeviceTelemetrySubscription;
+  p5DeviceTelemetrySubscription = undefined;
+  try {
+    if (typeof subscription === 'function') subscription();
+    else subscription?.unsubscribe?.();
+  } catch { p5RuntimeFailure = 'P5 设备采样订阅释放未确认'; }
+  try { await p5Cognition?.stop(); }
+  catch { p5RuntimeFailure = 'P5 设备分析取消未确认'; }
+}
+
+async function tickProactiveP5() {
+  await proactiveHost?.tick();
+  if (proactiveHost?.snapshot().enabled && localLaya?.snapshot().state === 'ready') {
+    if (!p5DeviceTelemetrySubscription) await startP5DeviceTelemetry();
+  } else if (p5DeviceTelemetrySubscription || p5Cognition?.snapshot().state === 'running') {
+    await stopP5DeviceTelemetry();
+  }
+}
+
 function orderedTasks() {
   return [...tasks.values()].sort((a, b) => String(conversations?.turns.get(a.taskId)?.createdAt ?? a.createdAt ?? a.updatedAt ?? '')
     .localeCompare(String(conversations?.turns.get(b.taskId)?.createdAt ?? b.createdAt ?? b.updatedAt ?? '')));
@@ -235,7 +345,9 @@ function snapshot(surface) {
     model: structuredClone(model),
     thinking: structuredClone(thinking),
     live: {...(liveVoice?.snapshot() ?? liveConfig?.snapshot()), shortcut: {...liveShortcut}},
-    proactive: proactiveHost?.snapshot() ?? {enabled: false, cloudAnalysis: false, status: 'disabled', reason: '主动观察尚未装配', suggestions: []},
+    proactive: proactiveSnapshot(),
+    p5: p5StatusSnapshot(),
+    knowledgeWatch: knowledgeWatchHost?.snapshot() ?? null,
     mail: mailSnapshot(),
     feeds: feedsHost?.snapshot(),
     todo: todoHost?.snapshot() ?? {available:false,items:[],notifications:[],reason:todoFailure || '待办将在 Runtime 连接后可用'},
@@ -628,6 +740,10 @@ async function pumpEvents() {
     const accepted = eventCursor.accept(events);
     for (const event of accepted) {
       applyEvent(event);
+      if (event.type === 'task.completed' && p5DeviceTelemetrySubscription
+        && p5Cognition?.snapshot().state === 'running' && proactiveHost?.snapshot().enabled) {
+        p5SystemObservationSource?.publishCompletedTask(event.taskId);
+      }
       if (event.type === 'task.completed' && syntheticRepairHost && repairCandidateVersion === '1.0') {
         void promptSyntheticRepairCandidate(event.taskId).catch(() => {
           runtimeError = '本地修复预览未能显示；计划未被自动修改'; publish();
@@ -1001,6 +1117,7 @@ async function initializeRuntime() {
           mailAnalysisHost?.assertCloudSend(request);
         },
         tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...(goalCloudHost?.tools ?? goalHost.tools), ...productTools.tools, ...(mailHost?.tools ?? []), ...(feedsHost?.tools ?? []), ...(notepadHost?.tools ?? []), ...(todoHost?.tools ?? []), ...(subagentTool ? [subagentTool] : []), ...(knowledgeTool ? [knowledgeTool] : [])],
+        ...(codingWorkspace.patchReconciliation ? {workspacePatchReconciliation: codingWorkspace.patchReconciliation} : {}),
         ...(syntheticMvp ? {localRepair: syntheticRepairHost.localRepair} : {}),
         ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
         ...(process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT === undefined ? {} : {workflowGoalInput: process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT}),
@@ -1083,13 +1200,121 @@ async function initializeRuntime() {
       taskGoals.set(taskId, goal);
     },
   });
+  if (competitionMode) {
+    try {
+      try {
+        p5DeviceReceiptStore = createP5DeviceReceiptStore({
+          filePath: path.join(app.getPath('userData'), 'p5-device-receipts.json'),
+        });
+      } catch {
+        p5UnavailableReason = 'P5 本地提醒回执文件损坏或不可用，设备提醒不会启用';
+      }
+      p5SystemObservationSource = createP5SystemObservationSource({application: runtimeApplication});
+      const {createCognitionP5Composition} = await import('./cognition-p5-composition.js');
+      const notificationPort = p5DeviceReceiptStore ? {
+        async sendAdvisoryNotification(notification) {
+          if (!p5DeviceTelemetrySubscription || p5Cognition?.snapshot().state !== 'running') {
+            return {delivered: false, error: 'P5 设备分析已停止'};
+          }
+          const provenance = p5SystemObservationSource?.readCurrentProvenance(notification);
+          if (!provenance) return {delivered: false, error: '观察许可已撤销或采样 Evidence 已失效'};
+          try {
+            p5DeviceReceiptStore.addNotification(notification, provenance);
+            p5ReceiptFailure = '';
+            publish();
+            return {delivered: true};
+          } catch {
+            p5ReceiptFailure = 'P5 设备提醒回执保存失败';
+            publish();
+            return {delivered: false, error: '本地设备提醒回执保存失败'};
+          }
+        },
+      } : undefined;
+      p5Cognition = createCognitionP5Composition({
+        application: runtimeApplication,
+        client,
+        userData: app.getPath('userData'),
+        namespace: desktopHost.userNamespace,
+        layaHost: Object.freeze({
+          snapshot: () => localLaya.snapshot(),
+          start: () => localLaya.start(),
+          stop: () => localLaya.stop(),
+          choose: request => localLaya.choose(request),
+          classify: request => localLaya.classify(request),
+        }),
+        ...(notificationPort ? {notificationPort} : {}),
+        autoStart: false,
+        onUpdate: publish,
+      });
+      if (!p5Cognition.snapshot().hasDeviceAnomalyService) {
+        p5UnavailableReason = [p5UnavailableReason, 'P5 设备异常决策端口不可用'].filter(Boolean).join('；');
+      } else if (!p5DeviceReceiptStore || !p5Cognition.snapshot().hasNotificationPort
+        || typeof p5Cognition.bindDeviceTelemetrySource !== 'function') {
+        p5UnavailableReason = [p5UnavailableReason, 'P5 设备提醒的持久通知或采样订阅端口不可用'].filter(Boolean).join('；');
+      }
+    } catch {
+      p5UnavailableReason = 'P5 组合装配失败，设备提醒保持不可用';
+      try { p5Cognition?.dispose(); } catch {}
+      p5Cognition = undefined;
+      p5SystemObservationSource?.dispose();
+      p5SystemObservationSource = undefined;
+    }
+
+    try {
+      const namespace = desktopHost.userNamespace;
+      const knowledgeWatchIdempotency = `knowledge-watch-root:${namespace}`;
+      let knowledgeWatchTask = runtimeApplication.runtime.findTaskByIdempotencyKey(knowledgeWatchIdempotency);
+      if (!knowledgeWatchTask) {
+        knowledgeWatchTask = runtimeApplication.runtime.submitTask({
+          goal: `Knowledge Watch Root Task (${namespace})`,
+          conversationId: `knowledge-watch:${namespace}`,
+          idempotencyKey: knowledgeWatchIdempotency,
+        });
+      }
+      knowledgeWatchHost = createKnowledgeWatchHost({
+        profile: 'huawei_ict_agentarts',
+        namespace,
+        checkpointTaskId: knowledgeWatchTask.taskId,
+        checkpoints: {
+          loadCheckpoint: (taskId, key) => runtimeApplication.runtime.loadCheckpoint(taskId, key),
+          saveCheckpoint: (taskId, key, value) => runtimeApplication.runtime.saveCheckpoint(taskId, key, value),
+        },
+        interestDecider: localLaya ? { choose: req => localLaya.choose(req) } : undefined,
+        sourcePort: createUnavailableSourcePort('source_connector_pending'),
+        workPort: {
+          submit: async ({namespace: ns, idempotencyKey, work}) => {
+            const task = runtimeApplication.runtime.submitTask({
+              goal: `Knowledge Reevaluation (${ns})`,
+              conversationId: `knowledge-reevaluation:${ns}`,
+              idempotencyKey,
+            });
+            return {accepted: true, taskId: task.taskId};
+          },
+          read: async ({namespace: ns, idempotencyKey}) => {
+            const existing = runtimeApplication.runtime.findTaskByIdempotencyKey(idempotencyKey);
+            if (!existing) return {state: 'absent'};
+            return {state: 'accepted', taskId: existing.taskId};
+          },
+        },
+        notificationPort: {
+          send: async (notice) => {
+            return {delivered: true, receiptId: `notice-${notice.id}`};
+          },
+        },
+      });
+      await knowledgeWatchHost.start();
+    } catch {
+      try { knowledgeWatchHost?.dispose(); } catch {}
+      knowledgeWatchHost = undefined;
+    }
+  }
   await pumpEvents();
   if (syntheticRepairHost && repairCandidateVersion === '1.0') {
     for (const task of tasks.values()) {
       if (task.state === 'succeeded') void promptSyntheticRepairCandidate(task.taskId).catch(() => {});
     }
   }
-  eventPoll = setInterval(() => {void pumpEvents(); void proactiveHost?.tick(); void refreshMail(); void notepadHost?.refresh(); void todoHost?.tick();}, 120);
+  eventPoll = setInterval(() => {void pumpEvents(); void tickProactiveP5(); void refreshMail(); void notepadHost?.refresh(); void todoHost?.tick();}, 120);
 }
 
 async function initializeProductServices() {
@@ -1203,8 +1428,20 @@ async function action(event, name, payload) {
   }
   if (['mail.configure','mail.enable','mail.read','mail.disable','mail.enableCloud','mail.disableCloud','laya.start','laya.stop'].includes(name)) {
     if (sender !== admin || !competitionMode || !mailConfig || !localLaya) throw Error('此操作仅允许从本项目设置调用');
-    if (name === 'laya.start') {localServicesStopped = false; return localLaya.start();}
-    if (name === 'laya.stop') {await mailHost?.cancel(); const result = await localLaya.stop(); publish(); return result;}
+    if (name === 'laya.start') {
+      localServicesStopped = false;
+      const result = await localLaya.start();
+      if (result?.state === 'ready' && proactiveHost?.snapshot().enabled) await startP5DeviceTelemetry();
+      publish();
+      return result;
+    }
+    if (name === 'laya.stop') {
+      await stopP5DeviceTelemetry();
+      await mailHost?.cancel();
+      const result = await localLaya.stop();
+      publish();
+      return result;
+    }
     if (name === 'mail.configure') {await mailConfig.configure(payload); mailFailure = '';}
     if (name === 'mail.enable') mailConfig.enableSession(payload);
     if (name === 'mail.disable') await mailConfig.revoke();
@@ -1236,7 +1473,14 @@ async function action(event, name, payload) {
   if (name === 'knowledge.status') return snapshot(sender === workspace ? 'workspace' : sender === admin ? undefined : 'panel').knowledge;
   if (name === 'proactive.configure' || name === 'proactive.analyze' || name === 'proactive.cognition.apply') {
     if ((sender !== panel && sender !== admin) || !competitionMode || !proactiveHost) throw Error('主动观察仅允许可信设置或面板调用');
-    if (name === 'proactive.configure') return proactiveHost.configure(payload);
+    if (name === 'proactive.configure') {
+      const configuration = proactiveHost.configure(payload);
+      if (payload?.enabled === false && !proactiveHost.snapshot().enabled) await stopP5DeviceTelemetry();
+      const result = await configuration;
+      if (payload?.enabled === true && localLaya?.snapshot().state === 'ready') await startP5DeviceTelemetry();
+      publish();
+      return result;
+    }
     if (name === 'proactive.cognition.apply') {
       const reviewTaskId = typeof payload?.reviewTaskId === 'string' ? payload.reviewTaskId.trim() : '';
       if (!reviewTaskId) throw Error('审阅记录标识不能为空');
@@ -1244,6 +1488,42 @@ async function action(event, name, payload) {
     }
     if (!payload || Object.keys(payload).some(key => key !== 'id') || typeof payload.id !== 'string') throw Error('主动分析请求无效');
     return proactiveHost.analyze(payload.id);
+  }
+  if (name.startsWith('cognition.')) {
+    if (name === 'cognition.status') return p5StatusSnapshot();
+    if (sender !== panel && sender !== admin && sender !== workspace) throw Error('认知操作仅允许可信窗口调用');
+    if (!competitionMode || !p5Cognition) throw Error('认知组合尚未就绪');
+    if (name === 'cognition.proposals.list') return p5Cognition.listProposals();
+    if (name === 'cognition.proposals.apply') {
+      const proposalId = typeof payload?.proposalId === 'string' ? payload.proposalId.trim() : '';
+      if (!proposalId) throw Error('提议标识不能为空');
+      return p5Cognition.applyProposal(proposalId, payload?.authorization);
+    }
+    if (name === 'cognition.receipts.list') return p5Cognition.listReceipts();
+    if (name === 'cognition.mail.triage') {
+      if (!Array.isArray(payload?.messages)) throw Error('邮件列表无效');
+      return p5Cognition.triageMail(payload.messages, payload?.options);
+    }
+    if (name === 'cognition.mail.triagePaged') {
+      if (!payload?.source || typeof payload.source.readPage !== 'function') throw Error('分页邮件源无效');
+      return p5Cognition.triageMailPaged(payload.source, payload?.options);
+    }
+    throw Error(`Unsupported cognition action: ${name}`);
+  }
+  if (name.startsWith('knowledge.watch.')) {
+    if (name === 'knowledge.watch.status') {
+      return knowledgeWatchHost?.snapshot() ?? {state: 'unavailable', reason: '知识关注宿主尚未装配'};
+    }
+    if (sender !== panel && sender !== admin && sender !== workspace) throw Error('知识关注仅允许可信窗口调用');
+    if (!competitionMode || !knowledgeWatchHost) throw Error('知识关注宿主尚未就绪');
+    if (name === 'knowledge.watch.list') return knowledgeWatchHost.listWatches();
+    if (name === 'knowledge.watch.pending') return knowledgeWatchHost.listPending();
+    if (name === 'knowledge.watch.revoke') {
+      const topicId = typeof payload?.topicId === 'string' ? payload.topicId.trim() : '';
+      if (!topicId) throw Error('关注主题标识不能为空');
+      return knowledgeWatchHost.revoke(topicId, payload);
+    }
+    throw Error(`Unsupported knowledge watch action: ${name}`);
   }
   if (name === 'voice.stop') {
     if (sender !== panel) throw Error('语音操作只能从面板调用');
@@ -1637,6 +1917,7 @@ app.whenReady().then(async () => {
     if (runtimeStartup.snapshot().state === 'starting') {
       event.preventDefault(); runtimeError = 'Runtime 正在连接，请稍后退出'; publish(); return;
     }
+    void stopP5DeviceTelemetry();
     proactiveHost?.stop();
     if(todoHost && !todoClosed) {
       event.preventDefault();
@@ -1701,6 +1982,9 @@ app.whenReady().then(async () => {
     }
     globalShortcut.unregisterAll();
     try {
+      p5Cognition?.dispose();
+      p5SystemObservationSource?.dispose();
+      knowledgeWatchHost?.dispose();
       proactiveHost?.close();
       goalCloudHost?.close();
       mailAnalysisHost?.close();
