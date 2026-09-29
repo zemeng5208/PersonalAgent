@@ -118,6 +118,8 @@ async function invokeHelper(
       throw new ProtocolError('RESULT_UNKNOWN', 'Workspace patch helper identity is unavailable');
     }
     processIdentity = await captureWorkspacePatchProcessIdentity(pid, executable);
+    // Identity lookup is async; recheck cancellation and deadline before persisting the marker or sending bytes.
+    check(context, now);
     if (earlyChildError || child.exitCode !== null) {
       throw new ProtocolError('RESULT_UNKNOWN', 'Workspace patch helper identity is unavailable');
     }
