@@ -8,7 +8,10 @@ import {ProtocolError} from '@personal-agent/contracts';
 import type {RegisteredTool, ToolContext, ToolDescriptor} from '@personal-agent/contracts';
 import type {WorkspacePatchPreviewResult} from './patch-preview.js';
 import {checkedSource} from './patch-stage.js';
-import {workspacePatchInflightPathFromCanonical} from './patch-reconcile.js';
+import {
+  captureWorkspacePatchProcessIdentity,
+  workspacePatchInflightPathFromCanonical,
+} from './patch-reconcile.js';
 
 export const WORKSPACE_PATCH_APPLY_TOOL_NAME = 'workspace.apply_text_patch';
 export const WORKSPACE_PATCH_APPLY_TOOL_VERSION = '1.0.0';
@@ -87,31 +90,57 @@ async function invokeHelper(
   now: () => number,
 ): Promise<HelperResponse> {
   const remaining = check(context, now);
-  return new Promise<HelperResponse>((resolveResult, reject) => {
-    let child: ReturnType<typeof spawn>;
-    try {
-      child = spawn(executable, ['-NoProfile', '-NonInteractive', '-File', script], {
-        cwd: request.rootPath,
-        env: {
-          SystemRoot: process.env.SystemRoot ?? 'C:\\Windows',
-          TEMP: process.env.TEMP ?? '',
-          TMP: process.env.TMP ?? '',
-        },
-        shell: false,
-        windowsHide: true,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-    } catch {
-      reject(new ProtocolError('RESULT_UNKNOWN', 'Workspace patch helper could not start'));
-      return;
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(executable, ['-NoProfile', '-NonInteractive', '-File', script], {
+      cwd: request.rootPath,
+      env: {
+        SystemRoot: process.env.SystemRoot ?? 'C:\\Windows',
+        TEMP: process.env.TEMP ?? '',
+        TMP: process.env.TMP ?? '',
+      },
+      shell: false,
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch {
+    throw new ProtocolError('RESULT_UNKNOWN', 'Workspace patch helper could not start');
+  }
+  let earlyChildError = false;
+  const onEarlyChildError = (): void => { earlyChildError = true; };
+  // Install an error observer before the first await. Otherwise a spawn error
+  // can become an unhandled EventEmitter error while identity is queried.
+  child.once('error', onEarlyChildError);
+  let processIdentity: Awaited<ReturnType<typeof captureWorkspacePatchProcessIdentity>>;
+  try {
+    const pid = child.pid;
+    if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid < 1) {
+      throw new ProtocolError('RESULT_UNKNOWN', 'Workspace patch helper identity is unavailable');
     }
+    processIdentity = await captureWorkspacePatchProcessIdentity(pid, executable);
+    if (earlyChildError || child.exitCode !== null) {
+      throw new ProtocolError('RESULT_UNKNOWN', 'Workspace patch helper identity is unavailable');
+    }
+  } catch (error) {
+    child.removeListener('error', onEarlyChildError);
+    try { child.kill('SIGKILL'); } catch { /* identity failure is already unknown */ }
+    await new Promise<void>(resolveResult => {
+      if (child.exitCode !== null) { resolveResult(); return; }
+      const timer = setTimeout(resolveResult, STOP_GRACE_MS);
+      child.once('close', () => { clearTimeout(timer); resolveResult(); });
+    });
+    throw error instanceof ProtocolError ? error : new ProtocolError('RESULT_UNKNOWN', 'Workspace patch helper identity is unavailable');
+  }
+  child.removeListener('error', onEarlyChildError);
+  return new Promise<HelperResponse>((resolveResult, reject) => {
     // Persist this marker before supplying any candidate bytes. A timeout may
     // settle the Gateway early, but reconciliation must wait until close removes it.
     let markerFd: number | undefined;
     try {
       markerFd = openSync(inflightPath, 'wx', 0o600);
       writeSync(markerFd, JSON.stringify({
-        pid: child.pid ?? null,
+        pid: processIdentity.pid,
+        startTimeTicks: processIdentity.startTimeTicks,
         beforeSha256: request.beforeSha256,
         afterSha256: request.afterSha256,
       }));

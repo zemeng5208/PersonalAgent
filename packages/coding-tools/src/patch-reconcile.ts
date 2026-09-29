@@ -1,13 +1,17 @@
+import {spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {realpathSync, statSync} from 'node:fs';
 import {lstat, readFile, unlink} from 'node:fs/promises';
-import {isAbsolute, relative, resolve, sep} from 'node:path';
+import {basename, isAbsolute, relative, resolve, sep} from 'node:path';
 import {ProtocolError} from '@personal-agent/contracts';
 import {checkedSource} from './patch-stage.js';
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const MAX_RELATIVE_PATH_LENGTH = 1024;
 const WINDOWS_RESERVED_NAME = /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/iu;
+const PROCESS_START_TICKS = /^[1-9]\d{0,19}$/u;
+const PROCESS_QUERY_TIMEOUT_MS = 2_000;
+const MAX_PROCESS_QUERY_OUTPUT_BYTES = 256;
 
 export interface WorkspacePatchReconcileOptions {
   /** Trusted workspace root used when the apply marker was created. */
@@ -16,9 +20,19 @@ export interface WorkspacePatchReconcileOptions {
   recoveryRootPath: string;
   /** Canonical relative source path used by the original preview. */
   relativePath: string;
-  /** Optional trusted process identity check. The default only checks OS liveness. */
-  isProcessAlive?: (pid: number) => boolean | Promise<boolean>;
+  /** Trusted process identity check. It must bind both PID and start-time token. */
+  isProcessAlive?: (identity: WorkspacePatchProcessIdentity) => WorkspacePatchProcessState | Promise<WorkspacePatchProcessState>;
+  /** Absolute trusted pwsh/powershell path used when no checker is injected. */
+  powerShellPath?: string;
 }
+
+export interface WorkspacePatchProcessIdentity {
+  pid: number;
+  /** Decimal .NET DateTime.Ticks captured from the helper process. */
+  startTimeTicks: string;
+}
+
+export type WorkspacePatchProcessState = 'running' | 'exited' | 'unknown';
 
 export type WorkspacePatchReconciliationResult =
   | {path: string; state: 'clear'}
@@ -27,7 +41,8 @@ export type WorkspacePatchReconciliationResult =
     beforeSha256: string; afterSha256: string; currentSha256: string};
 
 interface InFlightMarker {
-  pid: number | null;
+  pid: number;
+  startTimeTicks: string;
   beforeSha256: string;
   afterSha256: string;
 }
@@ -127,14 +142,19 @@ function parseMarker(value: string): InFlightMarker {
   const record = parsed as Record<string, unknown>;
   const keys = Object.keys(record).sort();
   const pid = record.pid;
-  if (keys.length !== 3 || keys[0] !== 'afterSha256' || keys[1] !== 'beforeSha256' || keys[2] !== 'pid'
-    || (pid !== null && (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid < 1))
+  const startTimeTicks = record.startTimeTicks;
+  if (keys.length !== 4 || keys[0] !== 'afterSha256' || keys[1] !== 'beforeSha256' || keys[2] !== 'pid'
+    || keys[3] !== 'startTimeTicks'
+    || (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid < 1)
+    || typeof startTimeTicks !== 'string' || !PROCESS_START_TICKS.test(startTimeTicks)
+    || BigInt(startTimeTicks).toString() !== startTimeTicks
     || typeof record.beforeSha256 !== 'string' || !SHA256.test(record.beforeSha256)
     || typeof record.afterSha256 !== 'string' || !SHA256.test(record.afterSha256)) {
     unknown('Workspace patch in-flight record is invalid');
   }
   return {
-    pid: pid as number | null,
+    pid,
+    startTimeTicks,
     beforeSha256: record.beforeSha256 as string,
     afterSha256: record.afterSha256 as string,
   };
@@ -150,16 +170,90 @@ function errorCode(error: unknown): string | undefined {
     ? String((error as {code?: unknown}).code) : undefined;
 }
 
-function defaultIsProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    const code = errorCode(error);
-    if (code === 'ESRCH') return false;
-    if (code === 'EPERM') return true;
-    throw new ProtocolError('RESULT_UNKNOWN', 'Workspace patch process liveness is unconfirmed');
+function canonicalPowerShellPath(powerShellPath: string): string {
+  if (typeof powerShellPath !== 'string' || !isAbsolute(powerShellPath)) {
+    invalid('Workspace patch process checker requires an absolute PowerShell path');
   }
+  let resolved: string;
+  try { resolved = realpathSync.native(powerShellPath); }
+  catch { invalid('Workspace patch process checker PowerShell path is unavailable'); }
+  if (!statSync(resolved).isFile() || !['pwsh.exe', 'powershell.exe'].includes(basename(resolved).toLowerCase())) {
+    invalid('Workspace patch process checker requires pwsh.exe or powershell.exe');
+  }
+  return resolved;
+}
+
+type ProcessStartQuery =
+  | {state: 'found'; startTimeTicks: string}
+  | {state: 'not_found'}
+  | {state: 'unknown'};
+
+function queryProcessStartTime(pid: number, powerShellPath: string): Promise<ProcessStartQuery> {
+  const executable = canonicalPowerShellPath(powerShellPath);
+  const command = `$ErrorActionPreference='Stop'; try { $p=Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($null -eq $p) { [Console]::Out.Write('NOT_FOUND'); exit 3 }; [Console]::Out.Write($p.StartTime.ToUniversalTime().Ticks) } catch { exit 4 }`;
+  return new Promise(resolveResult => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
+        windowsHide: true,
+        shell: false,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+    } catch {
+      resolveResult({state: 'unknown'});
+      return;
+    }
+    let settled = false;
+    let output = '';
+    const timer = setTimeout(() => finish({state: 'unknown'}), PROCESS_QUERY_TIMEOUT_MS);
+    const finish = (result: ProcessStartQuery): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.stdout?.removeAllListeners('data');
+      child.removeAllListeners('close');
+      if (child.exitCode === null) {
+        try { child.kill('SIGKILL'); } catch { /* query cleanup is best effort */ }
+      }
+      resolveResult(result);
+    };
+    child.stdout?.on('data', (chunk: Buffer) => {
+      output += chunk.toString('utf8');
+      if (Buffer.byteLength(output, 'utf8') > MAX_PROCESS_QUERY_OUTPUT_BYTES) finish({state: 'unknown'});
+    });
+    child.once('error', () => finish({state: 'unknown'}));
+    child.once('close', code => {
+      const value = output.trim();
+      if (code === 0 && PROCESS_START_TICKS.test(value) && BigInt(value).toString() === value) {
+        finish({state: 'found', startTimeTicks: value});
+      } else if (code === 3 && value === 'NOT_FOUND') {
+        finish({state: 'not_found'});
+      } else {
+        finish({state: 'unknown'});
+      }
+    });
+  });
+}
+
+/** Captures the helper's OS start token before any candidate bytes are sent. */
+export async function captureWorkspacePatchProcessIdentity(
+  pid: number,
+  powerShellPath: string,
+): Promise<WorkspacePatchProcessIdentity> {
+  if (!Number.isSafeInteger(pid) || pid < 1) unknown('Workspace patch helper identity is unavailable');
+  const result = await queryProcessStartTime(pid, powerShellPath);
+  if (result.state !== 'found') unknown('Workspace patch helper identity is unavailable');
+  return {pid, startTimeTicks: result.startTimeTicks};
+}
+
+async function inspectWorkspacePatchProcess(
+  identity: WorkspacePatchProcessIdentity,
+  powerShellPath: string,
+): Promise<WorkspacePatchProcessState> {
+  const result = await queryProcessStartTime(identity.pid, powerShellPath);
+  if (result.state === 'not_found') return 'exited';
+  if (result.state !== 'found' || result.startTimeTicks !== identity.startTimeTicks) return 'unknown';
+  return 'running';
 }
 
 async function readCurrentSource(root: string, path: string): Promise<{sha256: string; identity: FileIdentity}> {
@@ -215,16 +309,18 @@ export async function reconcileWorkspacePatchApply(
     unknown('Workspace patch in-flight record could not be read');
   }
   const marker = parseMarker(markerBytes!);
-  if (marker.pid === null) unknown('Workspace patch helper exit is unconfirmed');
-  const isAlive = options.isProcessAlive ?? defaultIsProcessAlive;
-  let alive: boolean;
+  const identity: WorkspacePatchProcessIdentity = {pid: marker.pid, startTimeTicks: marker.startTimeTicks};
+  const isAlive = options.isProcessAlive
+    ?? (options.powerShellPath ? (value: WorkspacePatchProcessIdentity) => inspectWorkspacePatchProcess(value, options.powerShellPath!) : undefined);
+  if (!isAlive) unknown('Workspace patch helper identity checker is unavailable');
+  let state: WorkspacePatchProcessState;
   try {
-    const value = await isAlive(marker.pid);
-    if (typeof value !== 'boolean') unknown('Workspace patch helper exit is unconfirmed');
-    alive = value;
+    state = await isAlive(identity);
+    if (!['running', 'exited', 'unknown'].includes(state)) unknown('Workspace patch helper exit is unconfirmed');
   }
   catch { unknown('Workspace patch helper exit is unconfirmed'); }
-  if (alive!) {
+  if (state === 'unknown') unknown('Workspace patch helper identity is unconfirmed');
+  if (state === 'running') {
     return {path, state: 'in_progress', pid: marker.pid, beforeSha256: marker.beforeSha256, afterSha256: marker.afterSha256};
   }
 

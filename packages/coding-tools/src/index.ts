@@ -14,6 +14,8 @@ export {
   reconcileWorkspacePatchApply,
 } from './patch-reconcile.js';
 export type {
+  WorkspacePatchProcessIdentity,
+  WorkspacePatchProcessState,
   WorkspacePatchReconcileOptions,
   WorkspacePatchReconciliationResult,
 } from './patch-reconcile.js';
