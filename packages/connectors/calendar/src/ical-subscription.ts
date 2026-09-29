@@ -28,6 +28,7 @@ export interface FetchResponseLike {
 const USER_AGENT = 'personal-agent-calendar/0.1.0-alpha.1';
 /** 一个只读订阅日历没有邀约可回应；respond 在端口层语义明确拒绝。 */
 const READ_ONLY_REASON = 'Subscribed iCal feed is read-only; no invitation to respond to';
+const ICAL_PAGE_SIZE = 100;
 
 /** 折叠行展开：iCal 规定续行以空格/制表符开头。 */
 export function unfoldLines(raw: string): string[] {
@@ -202,13 +203,17 @@ export class ICalSubscriptionProvider implements CalendarProvider {
   }
 
   /** 每次调用都重新拉取订阅源（缓存 5 分钟由调用方窗口决定）；成功后缓存原文。 */
-  async fetchWindow(_accountRef: string, window: CalendarWindow): Promise<CalendarFetchPage> {
+  async fetchWindow(_accountRef: string, window: CalendarWindow, cursor?: string): Promise<CalendarFetchPage> {
+    const offset = cursor === undefined ? 0 : Number(cursor);
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new ProtocolError('INVALID_ARGUMENT', 'Invalid cursor');
     const body = await this.fetchFeed();
-    const events = parseIcalEvents(body)
+    const matching = parseIcalEvents(body)
       .filter(event => event.status !== 'cancelled' && event.startMs < Date.parse(window.toUtc) && event.endMs > Date.parse(window.fromUtc))
-      .sort((left, right) => left.startMs - right.startMs || left.uid.localeCompare(right.uid))
-      .map(event => this.toRecord(event));
-    return {events, hasMore: false};
+      .sort((left, right) => left.startMs - right.startMs || left.uid.localeCompare(right.uid));
+    const events = matching.slice(offset, offset + ICAL_PAGE_SIZE).map(event => this.toRecord(event));
+    const nextOffset = offset + events.length;
+    const hasMore = nextOffset < matching.length;
+    return {events, hasMore, ...(hasMore ? {nextCursor: String(nextOffset)} : {})};
   }
 
   async getEvent(_accountRef: string, externalId: string): Promise<CalendarEventRecord | undefined> {
