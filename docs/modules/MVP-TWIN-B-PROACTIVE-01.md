@@ -54,6 +54,153 @@ three-node excerpt and cloud goal truncation limits are removed. Existing transp
 body limits and actual server option-count constraints still apply. Local context
 is not automatically copied into the independently approved cloud projection.
 
+### First planning after a committed Goal creation
+
+The host exposes `reviewGoalCreated({expectedGraphRevision, currentGoal}, context)`
+with the same `{at, deadline, signal}` context as Goal revision review. The caller
+uses a verified `goals.create` receipt with no previous Goal, then passes the current
+graph revision and the receipt's exact Goal reference. The host requires that this
+is still the current Goal head, revision 1, active and effective at the evaluation
+time. A stale, non-Goal or inactive reference creates no review task.
+
+The review records `subjectGoal` and an empty `affected` list: creation is not a
+dependency failure. Laya receives the actual Goal description, validity and its
+referenced background. Its offered routes are `plan` (prepare the first steps for
+the already registered Goal), `recheck` (verify context and constraints first) and
+`defer` (defer planning). All are RECHECK approaches with no repair payload, including
+custom options. The chosen route uses the same persistent Runtime/Laya/AgentArts
+handoff, uncertainty route and temporary-unavailability recovery. The stable initial
+review identity uses the exact Goal ref rather than unrelated graph revisions.
+
+Desktop owns consumption of the no-previous-Goal receipt, inclusion of `subjectGoal`
+in the existing redacted projection and the `plan` strategy wording. The output is
+a planning handoff; it does not claim that a Plan node was created or that the Goal
+was executed. No Goal write, public wire operation or scheduler is added here.
+
+Runtime build and three targeted cases passed: an actual public `createGoal` command
+over SQLite followed by initial planning and restart deduplication; rejection of
+non-Goal/stale/withdrawn refs before inference; compatibility with the existing Goal
+revision path. Laya and AgentArts are explicit Fakes. Desktop consumption and real
+cloud planning remain separate root integration checks.
+
+### Consumption of committed graph Goals
+
+At the existing feed watermark, an idle `consumeAndReview` pass also reads current
+active, effective Goal heads from the bound graph. Revision 1 enters initial
+planning; later revisions use the exact preceding Goal version and the existing
+revision review. This covers public `goals.create` / `goals.revise` writes regardless
+of whether they originated in the Desktop host-task list. A revision-1 Goal already
+referenced by a current Decision or Plan is not given another initial-planning pass.
+
+Goals without a recorded review are considered before older pending handoffs, with
+initial planning first within each group. The existing request limit bounds pending
+Goal work; completed reviews and accepted or expired handoffs do not consume it.
+Selected routes waiting for an available handoff remain recoverable, and temporary
+Laya failures retain the existing cooldown/successor chain. Goal scans leave the
+Fact receipt cursor unchanged and add no scheduler, database, dependency or wire API.
+
+Goal revision identity now binds exact previous/current Goal refs, excluding
+unrelated graph appends. Existing UI reviews with the earlier key are found through
+paginated Runtime INTENT checkpoints with a fixed snapshot sequence. Namespace,
+binding version and exact refs must match. A legacy created task runs in place;
+completed review and handoff receipts are reused across polling and SQLite restart.
+This does not relax cloud permission checks or claim completion of a Goal or Plan.
+
+Runtime build passed. Four focused host tests passed: command-created/revised Goal
+discovery and UI/restart deduplication, legacy created-task recovery, and existing
+Fact correction/expiry regressions. After the final priority fix, the two Goal cases
+passed again, including limit=1 with an old unavailable handoff and a new Goal.
+These use actual SQLite/public Goal commands and explicit Fake Laya/AgentArts;
+live cloud-tool execution and Desktop loading remain root acceptance work.
+
+### Time-only expiry consumption
+
+`consumeAndReview` also detects current public Facts whose `validUntil` has elapsed,
+even if the source feed has no new event. Once the feed reaches its watermark and
+the receipt backlog is empty, an idle consumption pass uses the existing
+`analyzeImpact` to select their affected Goal/Decision/Plan versions. A pass that
+already processed Fact reviews leaves the expiry scan to the next existing tick.
+The Desktop goal cognition host already calls this entry point; no new scheduler
+or store is introduced.
+
+An expiry review uses the same TaskRuntime intent/review checkpoints, Laya chooser
+and AgentArts handoff. Its key binds exact expired Fact and consumer references,
+excluding polling time, deadline and unrelated graph revision changes. It does not
+advance the Fact receipt cursor. Only active, public, current Fact versions past
+their end time qualify; future or superseded versions do not. Expiry offers RECHECK
+and defer, without a local repair or an extension to the source validity period.
+Custom options for this trigger must also remain RECHECK without a repair payload.
+
+Targeted validation: Runtime build passed; the existing Fact correction and Goal
+revision cases plus the new expiry-to-AgentArts case passed 3/3 using real SQLite
+and explicit Fake Laya/AgentArts. The new case covers the expiry boundary, repeated
+polling, restart and an unrelated graph append. No live cloud/model or Desktop
+smoke was run for this host-only increment.
+
+This consumes graph validity, not the separate knowledge-cache or interest helpers.
+Those still need trusted providers: knowledge requires cache version, exact content
+hash, successful-check time, bound changed/withdrawn receipts and exact consumer
+references; interests require topic/interaction evidence, verified source transport,
+tracking scope and revocation state. Public Fact summaries cannot supply these
+fields. Do not derive a body hash from a summary or treat observation time as a
+successful source check. No missing provider is replaced with a production Fake.
+
+### Uncertain choices continue as machine review
+
+An otherwise valid Laya `review/uncertain` response can follow an existing offered
+`recheck` candidate to AgentArts for further reasoning. The original selection,
+tentative candidate, scores and `eligibleForRuntime: false` remain unchanged.
+`selectedOption` stays absent: the host records its routing decision separately as
+`machineReview: {reason: 'uncertain', action: 'RECHECK', option: {id, revision}}`.
+The referenced offered option must be `recheck`, have action RECHECK and no repair;
+without that option the host does not manufacture a fallback. Cancelled, expired,
+unavailable, invalid and high-risk responses do not enter this route.
+
+The same existing handoff applies, including export preparation, current permission
+checks and the persistent command ID. Legacy uncertain reviews without a HANDOFF
+can gain this machine-review field before preparing their first handoff; an existing
+handoff never rewrites its saved review or digest. This is machine reasoning rather
+than user approval, and does not execute a repair. The Desktop projection must
+explicitly accept `machineReview` and describe the uncertainty instead of claiming
+that Laya confidently selected the fallback. That adapter remains root-owned.
+
+This increment passed the Runtime build and four targeted cases: preserved uncertain
+receipt and legacy SQLite recovery; unavailable/no offered recheck rejection;
+cancellation during choice; export-scope denial. The tests use Fake Laya/AgentArts
+and real SQLite. They do not establish live model or cloud availability.
+
+### Recovering temporary Laya unavailability
+
+A saved `abstain/unavailable` result is retained as an observation, rather than
+treated as a completed decision that permanently consumes the change. The caller
+receives `EXTERNAL_FAILURE`, so the existing Desktop error path leaves its Fact
+cursor or new Goal marker unadvanced and applies its existing 30-second backoff.
+An independent Runtime checkpoint also preserves that cooldown across ticks and
+restart; calls inside the interval create no task and make no model call.
+
+After the cooldown, the next consumption call creates or finds one successor by a
+stable key bound to the prior task ID. Its intent records `retryOf`; the old terminal
+task and Laya receipt remain intact. A new attempt checks validity at the current
+request time; resuming an already-created attempt uses its own persisted time.
+A call runs at most one new inference attempt,
+and another unavailable result starts a new cooldown. The recovered decision uses
+the original handoff path and command deduplication. Any existing HANDOFF, cancelled
+or expired request, invalid response or other abstention reason is excluded from
+this automatic retry. No task store, timer or retry-count limit is added.
+
+The optional factory `now` dependency is a test clock and defaults to `Date.now`;
+existing composition calls require no API change. Legacy unavailable reviews gain
+their first cooldown when encountered. Fact history is encountered through existing
+receipt replay. A legacy Desktop Goal marker must fall through to the existing
+latest-Goal validation and `reviewGoalRevision` when its saved review is unavailable;
+otherwise its old marker would continue suppressing calls. That adapter is root-owned.
+
+Runtime build and four targeted cases passed: persistent cooldown/successor recovery,
+unavailable/no recheck routing, cancellation and uncertain handoff compatibility.
+The recovery case uses a controlled clock, real SQLite and Fake inference/cloud to
+check repeated failure, restart, current evaluation time, preserved old receipts
+and one successful AgentArts handoff. No real Laya or cloud request was made.
+
 `selectionHandoff` implements:
 
 ```ts
@@ -94,6 +241,18 @@ Cancellation before an envelope is saved prevents dispatch. The root adapter mus
 forward the signal and check it immediately before actual Runtime/network submission.
 
 ## Validation and remaining work
+
+Desktop consumes `machineReview` separately from a confirmed `selectedOption`.
+The outgoing projection identifies host uncertainty escalation, fixes the requested
+action to RECHECK, and explicitly records no confirmed choice or execution. The
+existing session grant, graph revision and final HTTP-send checks remain in place.
+The Desktop integration's four focused tests passed, including uncertain handoff,
+grant revocation during credential loading, graph revision changes and duplicate
+suppression. These use Fake cloud responses; real AgentArts acceptance is pending.
+Desktop also recognizes legacy Goal markers whose saved choice is unavailable and
+re-enters the existing review API. One additional targeted integration test passed:
+the persisted cooldown survives a Desktop restart, a recovered Laya provider creates
+a successor review and one cloud handoff, and the old terminal task stays unchanged.
 
 Verification uses synthetic SQLite sources, Fake Laya and Fake AgentArts. No real
 model process, cloud, mailbox, microphone, Electron or installer is started.

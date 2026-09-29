@@ -1,8 +1,7 @@
 # MOD-09E：公开演示资料到持久事实的离线来源首片
 
 - Profile：`huawei_ict_agentarts`
-- 负责人：`goo122`；事实投影语义待 `zemeng` 非作者评审
-- 状态：`in_progress`；独立工作树 `codex/mod09e-public-source`
+- 负责人：`goo122`；状态：`done`（仅本片离线验收；PR #118 已获批准并于 2026-09-25 合并）
 - 基线：`main@4efa7f6`；依赖已合并的 MOD-08E、MOD-09C/09D
 
 ## 最小边界

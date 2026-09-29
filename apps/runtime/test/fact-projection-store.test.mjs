@@ -92,6 +92,49 @@ test('SQLite projection persists exact FactRef links and replays one batch witho
   assert.equal(runtime.bindCoordinationStore('primary').read().history.length, 1);
 });
 
+test('one projection receipt and pending impact can contain target and unrelated facts', t => {
+  const location = database();
+  const runtime = new TaskRuntime(location.path);
+  t.after(() => { runtime.close(); location.cleanup(); });
+  const store = runtime.provisionFactProjectionStore('primary');
+  const input = request();
+  const other = fact(1, {ref: {id: 'calendar/owner', revision: 1}, summary: 'Owner is Ava'});
+  input.facts = [input.facts[0], other];
+  input.batch.entries = [input.batch.entries[0], {eventId: 'event-owner', fact: other.ref}];
+
+  const receipt = confirmedProject(store, input);
+  assert.deepEqual(receipt.links.map(link => link.fact.id), ['calendar/location', 'calendar/owner']);
+  assert.deepEqual(store.readPending().flatMap(impact => impact.links.map(link => link.fact.id)),
+    ['calendar/location', 'calendar/owner']);
+});
+
+test('staging rewrite keeps exact survivor content and commits atomically', t => {
+  const location = database();
+  let runtime = new TaskRuntime(location.path);
+  t.after(() => { runtime.close(); location.cleanup(); });
+  let store = runtime.provisionFactProjectionStore('primary');
+  const input = request();
+  const other = fact(1, {ref: {id: 'calendar/owner', revision: 1}, summary: 'Owner is Ava'});
+  input.facts = [input.facts[0], other];
+  input.batch.entries = [input.batch.entries[0], {eventId: 'event-owner', fact: other.ref}];
+  store.stage(input);
+  const survivor = {...input, batch: {...input.batch, entries: [input.batch.entries[1]]}, facts: [other]};
+  assert.throws(() => store.reviseStaged({...survivor,
+    facts: [{...other, summary: 'tampered owner'}]}), {code: 'INTEGRITY_CONFLICT'});
+  assert.deepEqual(store.readStaged('cognition-primary', 'personal').facts.map(item => item.ref.id),
+    ['calendar/location', 'calendar/owner']);
+  store.reviseStaged(survivor);
+  assert.deepEqual(store.readStaged('cognition-primary', 'personal').facts, [other]);
+  assert.equal(runtime.bindCoordinationStore('primary').read().revision, 0);
+  runtime.close();
+  runtime = new TaskRuntime(location.path);
+  store = runtime.bindFactProjectionStore('primary');
+  assert.deepEqual(store.readStaged('cognition-primary', 'personal').facts, [other]);
+  assert.deepEqual(store.project(survivor, {
+    batchToken: survivor.batch.batchToken, checkpoint: 'confirmed-checkpoint',
+  }).links.map(link => link.fact.id), ['calendar/owner']);
+});
+
 test('SQLite projection keeps a stable node id while Memory and Goal revisions remain independent', t => {
   const location = database();
   const runtime = new TaskRuntime(location.path);
