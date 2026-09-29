@@ -141,3 +141,47 @@ test('live iCal 订阅读回（真实公开源，免 key）', {skip: LIVE_SKIP},
     assert.ok(event.endUtc > event.startUtc);
   }
 });
+
+
+test('parseIcalDate rejects calendar overflow and invalid clock values', () => {
+  assert.equal(parseIcalDate('2026-99-99'), undefined);
+  assert.equal(parseIcalDate('2026-02-31'), undefined);
+  assert.equal(parseIcalDate('2026-04-10T24:00:00Z'), undefined);
+});
+
+test('zero-length DATE event is normalized to one all-day interval', () => {
+  const events = parseIcalEvents([
+    'BEGIN:VCALENDAR',
+    'BEGIN:VEVENT',
+    'UID:zero-day@test',
+    'DTSTART;VALUE=DATE:20260320',
+    'DTEND;VALUE=DATE:20260320',
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ].join('\r\n'));
+  assert.equal(events.length, 1);
+  assert.equal(events[0].endMs - events[0].startMs, 86_400_000);
+});
+
+test('getEvent reads a UID from the cached subscription feed', async () => {
+  const {provider, calls} = makeProvider();
+  const event = await provider.getEvent(ACCOUNT, 'evt-1@test');
+  assert.equal(event.externalId, 'evt-1@test');
+  assert.equal(event.title, '春季发布日');
+  assert.equal(await provider.getEvent(ACCOUNT, 'missing@test'), undefined);
+  assert.equal(calls.length, 1);
+});
+
+test('fetch failures do not expose subscription URL details and redirects are rejected', async () => {
+  const provider = new ICalSubscriptionProvider({
+    url: 'https://calendar.example.test/feed.ics?token=private-token',
+    fetchImpl: async (_url, init) => {
+      assert.equal(init.redirect, 'error');
+      throw new Error('failed to read https://calendar.example.test/feed.ics?token=private-token');
+    },
+  });
+  await assert.rejects(
+    provider.fetchFeed(),
+    error => error.code === 'EXTERNAL_FAILURE' && !error.message.includes('private-token'),
+  );
+});
