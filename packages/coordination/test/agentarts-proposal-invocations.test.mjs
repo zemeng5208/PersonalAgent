@@ -76,21 +76,21 @@ test('JSON output rejects claims, invalid types and prose without retry', async 
   }
 });
 
-test('whole continuation UTF-8 JSON budget accepts 8192 bytes and rejects 8193 before I/O', async () => {
+test('continuation uses the shared 1 MiB JSON boundary rather than the former demo 8 KiB cap', async () => {
   const base = {proposalId: 'p', state: 'confirmed', result: ''};
   const overhead = Buffer.byteLength(JSON.stringify(base));
-  for (const total of [8192, 8193]) {
+  for (const total of [8193, 1_048_576, 1_048_577]) {
     const input = {...base, result: 'x'.repeat(total - overhead)};
     assert.equal(Buffer.byteLength(JSON.stringify(input)), total);
     let calls = 0;
     const {cloud, reads} = setup(async () => { calls++; return response({kind: 'text', text: 'ok'}); });
-    if (total === 8192) assert.equal((await cloud.invoke(request({continuation: input}))).text, 'ok');
+    if (total <= 1_048_576) assert.equal((await cloud.invoke(request({continuation: input}))).text, 'ok');
     else await assert.rejects(cloud.invoke(request({continuation: input})), {code: 'INVALID_ARGUMENT'});
-    assert.equal(calls, total === 8192 ? 1 : 0);
+    assert.equal(calls, total <= 1_048_576 ? 1 : 0);
     assert.equal(reads(), calls);
   }
   const {cloud, reads} = setup(async () => response({kind: 'text', text: 'unexpected'}));
-  await assert.rejects(cloud.invoke(request({continuation: {...base, result: '中'.repeat(3000)}})), {code: 'INVALID_ARGUMENT'});
+  await assert.rejects(cloud.invoke(request({continuation: {...base, result: '中'.repeat(350_000)}})), {code: 'INVALID_ARGUMENT'});
   assert.equal(reads(), 0);
 });
 

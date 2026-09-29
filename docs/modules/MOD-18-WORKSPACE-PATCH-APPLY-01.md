@@ -3,6 +3,10 @@
 - Profile：`huawei_ict_agentarts`；负责人 `zemeng`；状态 `review`。PR #147 已合入 main（`5816785`），合并前未取得非作者批准评审。
 - 基线：已合并的 #133 stage 工作包；本增量仅涉及 `packages/coding-tools/**` 和本记录。不改公共 Schema、Runtime/Policy、根 lock、Desktop 或业务连接器。
 
+## MOD-11 选择性集成验证（2026-09-27）
+
+旧集成树选择性纳入 stage/apply 与固定命令。Windows 本地合成验证中，command 3/3、stage 3/3、修复后的 apply 6/6 通过；修复了 `.inflight` 标记创建失败后等待 helper 退出或既有 2 秒期限的清理竞态。此验证不证明生产恢复目录 ACL、写中崩溃对账、真实用户工作区、Desktop 联合链路或 AgentArts 工具闭环。
+
 `workspace.apply_text_patch@1.0.0` 复用 preview 的精确编辑、UTF-8、相对路径、敏感项与 expected SHA 校验，使用独立 `workspace:apply` scope。真实源文件写入由 Windows 固定 helper 完成：可信宿主传入授权根、受控且与工作区分离的限权恢复根、PowerShell 路径；helper 脚本和可执行文件须位于授权根外。候选字节由本次 preview 生成并经 SHA 校验后通过 stdin 传递，不读取可被外部编辑的 stage 文件。工具不默认注册到产品，仍由既有 Policy/ToolGateway 对精确参数与一次性授权决定是否调用。
 
 helper 用 .NET `FileStream(FileShare.None)` 独占打开源文件，校验已打开句柄的最终路径与单链接普通文件身份，同句柄读取并核对原 SHA。首写前排他创建备份、`Flush(true)` 并读回；随后仍在同句柄内写入、截断、`Flush(true)` 与目标 SHA 读回。锁前 hash 冲突或文件已占用不写；锁释放后的新编辑不属于这次读回时刻。写入开始后进程中断可能留下部分源文件与备份，结果必须记为未知并凭 task/run 派生备份前缀对账，不自动重试或盲目回滚。启动 helper 时先持久创建每源 `.inflight` 标记（含 PID），只有 `close` 确认后删除；若 2 秒停止等待先返回未知，标记继续阻止同源二次 apply 与过早对账。进程/宿主崩溃留下的标记必须由受信恢复流程确认 PID 已退出并核对备份、当前源文件与授权后处理。该路径防普通 Windows 编辑器在检查与写入之间覆盖，但不是崩溃原子替换、任意路径 OS 沙箱或恶意进程并发改写授权目录时的完整保证。

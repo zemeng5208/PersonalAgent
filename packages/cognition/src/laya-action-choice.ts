@@ -90,12 +90,12 @@ function excluded(candidate: LayaActionCandidate): 'expired' | 'unauthorized' | 
 export class LayaActionChoiceService {
   constructor(private readonly inference: LayaInferencePort) {}
   async choose(request: LayaActionChoiceRequest): Promise<LayaActionSelection> {
-    if (!request || !text(request.context, 4000) || !Array.isArray(request.candidates)
+    if (!request || !text(request.context, Number.MAX_SAFE_INTEGER) || !Array.isArray(request.candidates)
       || request.candidates.length < 2 || request.candidates.length > 16
       || !(request.signal instanceof AbortSignal) || !Number.isFinite(Date.parse(request.deadline))) throw new Error('Invalid action choice request');
     const seen = new Set<string>();
     const candidates = request.candidates.map(candidate => {
-      if (!candidate || !ref(candidate) || seen.has(candidate.id) || !text(candidate.description, 800)
+      if (!candidate || !ref(candidate) || seen.has(candidate.id) || !text(candidate.description, Number.MAX_SAFE_INTEGER)
         || !['tool', 'noop', 'defer', 'escalate'].includes(candidate.kind)
         || !['low', 'high'].includes(candidate.risk) || !text(candidate.scopeRef)
         || !Number.isFinite(Date.parse(candidate.expiresAt))

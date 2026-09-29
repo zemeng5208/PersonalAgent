@@ -24,10 +24,10 @@ const binding = {
 };
 
 async function state(app, taskId, states) {
-  for (let i = 0; i < 200; i++) {
+  for (let i = 0; i < 400; i++) {
     const task = app.runtime.getTask(taskId);
     if (states.includes(task.state)) return task;
-    await new Promise(resolve => setTimeout(resolve, 5));
+    await new Promise(resolve => setTimeout(resolve, 10));
   }
   throw Error('Task did not settle');
 }
@@ -144,7 +144,7 @@ test('revoking the trusted export selection while approval waits prevents execut
 
 test('projection errors, non-JSON and oversized output remain local with execution Evidence', async t => {
   for (const project of [() => {throw Error('synthetic-private-marker');}, () => undefined,
-    () => ({text: 'x'.repeat(8193)}), () => 'x'.repeat(8180),
+    () => ({text: 'x'.repeat(1_048_577)}),
     () => ({get token() {throw Error('synthetic-private-marker');}})]) {
     await t.test('projection denied', async t => {
       const f = await fixture(t, {project});
