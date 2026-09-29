@@ -98,6 +98,26 @@ test('source identity cannot claim an existing fact or store unsafe paths', t =>
   assert.equal(host.readPublicSourceHead(namespace, key), null);
 });
 
+test('unbound fact erase removes public source mapping and historical versions', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'personal-agent-source-'));
+  const path = join(directory, 'memory.sqlite');
+  const host = openSqliteMemoryHost(path);
+  t.after(() => { host.close(); rmSync(directory, {recursive: true, force: true}); });
+  host.provision(namespace);
+  host.appendPublicSource(namespace, observation('a'));
+  host.appendPublicSource(namespace, observation('b', {expectedFactRevision: 1}));
+  host.eraseUnboundFact(namespace, {
+    factId: key.factId, expectedRevision: 2, operationId: 'erase-source-a',
+    deadline: '2099-01-01T00:00:00.000Z', signal: new AbortController().signal,
+  });
+  assert.equal(host.readPublicSourceHead(namespace, key), null);
+  const memory = host.bind(namespace, {allowedSensitivities: ['public']});
+  assert.deepEqual((await memory.listHistory({
+    factId: key.factId, limit: 10,
+    deadline: '2099-01-01T00:00:00.000Z', signal: new AbortController().signal,
+  })).facts, []);
+});
+
 test('failed source mapping write rolls back fact and feed sequence together', t => {
   const directory = mkdtempSync(join(tmpdir(), 'personal-agent-source-'));
   const path = join(directory, 'memory.sqlite');
