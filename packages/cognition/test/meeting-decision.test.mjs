@@ -461,6 +461,62 @@ test('MeetingRescheduleCoordinator: proposal can be subsequently executed via ap
   assert.equal(saved.status, 'applied');
 });
 
+test('MeetingRescheduleCoordinator: rejects stale approved proposal after graph changes', async () => {
+  const {store} = createMeetingFixture();
+  const mockLaya = createMockLaya(0, 0.95);
+  const receiptStore = new InMemoryMeetingDecisionReceiptStore();
+  const coordinator = new MeetingRescheduleCoordinator({store, inference: mockLaya, receiptStore});
+  const event = {
+    eventId: 'evt-stale-proposal-1',
+    source: 'calendar:work',
+    meetingFactId: 'meeting-sync-1',
+    originalSummary: '周四下午 15:00 项目架构同步会',
+    newSummary: '周四下午 16:00 项目架构同步会',
+    sourceRevision: 'rev-stale-1',
+    detectedAt: '2026-09-29T11:00:00.000Z',
+    deadline: new Date(Date.now() + 60_000).toISOString(),
+    signal: new AbortController().signal,
+  };
+
+  const proposal = await coordinator.processEvent(event);
+  assert.equal(proposal.status, 'proposal');
+  const changedRevision = store.read().revision;
+  store.append(changedRevision, {
+    id: 'meeting-sync-1',
+    kind: 'fact',
+    summary: '周四下午 18:00 用户确认的新时间',
+    sourceRef: 'calendar:work',
+    sensitivity: 'private',
+    state: 'active',
+    validFrom: '2026-09-29T11:30:00.000Z',
+    validUntil: '2026-09-30T00:00:00.000Z',
+    reason: '用户在审批等待期间修改会议时间',
+    dependencies: [],
+  });
+
+  let executionCalled = false;
+  const baseExecutionPort = createStoreExecutionPort(store);
+  const executionPort = {
+    executeBatch(request) {
+      executionCalled = true;
+      return baseExecutionPort.executeBatch(request);
+    },
+  };
+  const beforeApply = store.read();
+  const result = await coordinator.applyApprovedProposal(
+    {eventId: event.eventId, source: event.source},
+    {executionPort},
+  );
+
+  assert.equal(result.status, 'conflict');
+  assert.match(result.reason, /需要重新评估/);
+  assert.equal(executionCalled, false);
+  const afterApply = store.read();
+  assert.equal(afterApply.revision, beforeApply.revision);
+  assert.equal(afterApply.history.findLast(n => n.id === 'meeting-sync-1').summary, '周四下午 18:00 用户确认的新时间');
+  assert.equal((await receiptStore.loadReceipt({namespace: 'default', source: event.source, eventId: event.eventId})).status, 'conflict');
+});
+
 test('MeetingRescheduleCoordinator: rejects baseline revision mismatch with conflict', async () => {
   const {store} = createMeetingFixture();
   const mockLaya = createMockLaya(0, 0.95);
