@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
 import {EventEmitter} from 'node:events';
 import {readFile} from 'node:fs/promises';
 import test from 'node:test';
 import {runInNewContext} from 'node:vm';
 
 // Exercise the actual built helper with explicitly fake process/filesystem
-// boundaries. No Windows process, real workspace write or cloud call is made.
+// boundaries. No helper execution, real workspace write or cloud call is made.
 const source = await readFile(new URL('../dist/patch-apply.js', import.meta.url), 'utf8');
 const checkStart = source.indexOf('function check(');
 const helperStart = source.indexOf('async function invokeHelper(');
@@ -130,4 +131,47 @@ test('valid apply still sends exactly once and clears its marker on close', asyn
   assert.equal(harness.sent.length, 1);
   assert.equal(harness.markerCreates, 1);
   assert.equal(harness.markerPresent, false);
+});
+
+
+test('failed helper spawn rejects without an unhandled process error', () => {
+  // Isolate the real ENOENT event: the unpatched helper terminates its process.
+  // No helper executable, workspace write or external service is used.
+  const fixture = `
+    import {spawn} from 'node:child_process';
+    import {randomUUID} from 'node:crypto';
+    import {readFileSync} from 'node:fs';
+    import {tmpdir} from 'node:os';
+    import {join} from 'node:path';
+    import {runInNewContext} from 'node:vm';
+    class ProtocolError extends Error {
+      constructor(code, message) { super(message); this.code = code; }
+    }
+    const invoke = runInNewContext(readFileSync(0, 'utf8'), {
+      spawn, ProtocolError, Buffer, setTimeout, clearTimeout, process: {env: {}},
+      WORKSPACE_PATCH_APPLY_SCOPE: 'workspace:apply', MAX_HELPER_OUTPUT_BYTES: 8192,
+      STOP_GRACE_MS: 2000,
+      captureWorkspacePatchProcessIdentity: async () => {
+        throw new Error('failed spawn must not query an absent pid');
+      },
+    });
+    const controller = new AbortController();
+    try {
+      await invoke(join(tmpdir(), 'pa-missing-helper-' + randomUUID() + '.exe'),
+        'unused.ps1', {rootPath: process.cwd()}, 'unused.inflight', {
+          scopes: ['workspace:read', 'workspace:write', 'workspace:apply'],
+          signal: controller.signal, deadline: new Date(Date.now() + 10000).toISOString(),
+        }, Date.now);
+      process.exitCode = 3;
+    } catch (error) {
+      if (error?.code !== 'RESULT_UNKNOWN') process.exitCode = 4;
+      else process.stdout.write('RESULT_UNKNOWN');
+    }
+  `;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', fixture], {
+    input: helperSource, encoding: 'utf8', timeout: 10000, detached: true, windowsHide: true,
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'RESULT_UNKNOWN');
 });

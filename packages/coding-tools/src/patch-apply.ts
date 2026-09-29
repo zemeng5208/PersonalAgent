@@ -125,7 +125,13 @@ async function invokeHelper(
     check(context, now);
   } catch (error) {
     child.removeListener('error', onEarlyChildError);
-    try { child.kill('SIGKILL'); } catch { /* identity failure is already unknown */ }
+    // A failed spawn may report its asynchronous error after pid validation.
+    // Keep cleanup observed until close rather than crashing the host process.
+    child.on('error', () => {});
+    child.stdin?.on('error', () => {});
+    if (typeof child.pid === 'number' && Number.isSafeInteger(child.pid) && child.pid > 0) {
+      try { child.kill('SIGKILL'); } catch { /* identity failure is already unknown */ }
+    }
     await new Promise<void>(resolveResult => {
       if (child.exitCode !== null) { resolveResult(); return; }
       const timer = setTimeout(resolveResult, STOP_GRACE_MS);
