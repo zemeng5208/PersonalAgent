@@ -628,23 +628,20 @@ test('dialogue projection cites a new feed observation and keeps the old binding
   restored.dispose();
 });
 
-test('reading a notice does not bind the new revision; a succeeded recheck does', async () => {
+test('delivery acknowledgement is not a read or a re-evaluation result', async () => {
   let time = start;
   const store = memoryCheckpoints();
   const tasks = new Map();
   let submits = 0;
   const runtime = {
-    findTaskByIdempotencyKey(key) {
-      const task = tasks.get(key);
-      return task ? {taskId: task.taskId, state: task.state} : undefined;
-    },
+    findTaskByIdempotencyKey(key) { return tasks.get(key); },
     submitTask({goal, conversationId, idempotencyKey}) {
       submits += 1;
       assert.equal(goal, `RECHECK ${idempotencyKey}`);
       assert.equal(conversationId, 'knowledge-watch:person-a');
-      const task = {taskId: `recheck-${tasks.size + 1}`, state: 'created'};
+      const task = {taskId: `recheck-${tasks.size + 1}`, state: 'created', goal, conversationId};
       tasks.set(idempotencyKey, task);
-      return {taskId: task.taskId, state: task.state};
+      return task;
     },
   };
   const host = createKnowledgeWatchHost({profile: 'huawei_ict_agentarts', namespace: 'person-a',
@@ -654,7 +651,7 @@ test('reading a notice does not bind the new revision; a succeeded recheck does'
       return Promise.resolve(actionSelection(track ? 'track_public' : null));
     }},
     runtime,
-    notificationPort: {async send() { return {delivered: false, receiptId: 'batch-read'}; }},
+    notificationPort: {async send() { return {delivered: false, receiptId: 'batch-delivery'}; }},
     feedCollect() { return collected(time); },
     feedSubscriptionId: 'official-docs'});
   host.start();
@@ -664,8 +661,8 @@ test('reading a notice does not bind the new revision; a succeeded recheck does'
   assert.equal(refreshed.notified, true);
   assert.equal(submits, 1);
   assert.equal(host.dialogueProjection().items[0].answer.kind, 'latest_observation');
-  const noticed = await host.observeNotificationAcknowledgement({id: 'batch-read', state: 'delivered'});
-  assert.equal(noticed.accepted, true);
+  const acknowledged = await host.observeNotificationAcknowledgement({id: 'batch-delivery', state: 'delivered'});
+  assert.equal(acknowledged.accepted, true);
   assert.equal(host.snapshot().notices[0].delivered, true);
   assert.equal(host.dialogueProjection().items[0].answer.kind, 'latest_observation');
   assert.equal(host.dialogueProjection().items[0].usableAsCurrentFact, false);
@@ -675,19 +672,73 @@ test('reading a notice does not bind the new revision; a succeeded recheck does'
   assert.equal(early.taskState, 'created');
   assert.equal(host.listWatches()[0].boundSource.revision, 'source-v1');
   assert.equal(submits, 1);
-  for (const task of tasks.values()) task.state = 'succeeded';
-  const bound = await host.bindObservedRevision('typescript');
-  assert.equal(bound.accepted, true);
-  assert.equal(bound.reason, 'bound');
-  assert.equal(submits, 1);
-  const answer = host.dialogueProjection().items[0].answer;
-  assert.equal(answer.kind, 'current_fact');
-  assert.equal(answer.citation, 'https://example.com/typescript-2');
-  assert.notEqual(answer.sourceRevision, 'source-v1');
-  assert.equal(JSON.stringify(answer).includes('发布说明'), false);
-  const repeat = await host.bindObservedRevision('typescript');
-  assert.equal(repeat.reason, 'already_bound');
+  const [workKey, task] = tasks.entries().next().value;
+  const acceptedTaskId = task.taskId;
+  task.goal = 'unrelated successful task';
+  task.state = 'succeeded';
+  const unrelated = await host.bindObservedRevision('typescript');
+  assert.equal(unrelated.accepted, false);
+  assert.equal(unrelated.reason, 'reevaluation_unconfirmed');
+  assert.equal(host.listWatches()[0].boundSource.revision, 'source-v1');
+
+  task.goal = `RECHECK ${workKey}`;
+  task.taskId = 'unrelated-task-id';
+  const mismatched = await host.bindObservedRevision('typescript');
+  assert.equal(mismatched.accepted, false);
+  assert.equal(mismatched.reason, 'reevaluation_task_mismatch');
+  task.taskId = acceptedTaskId;
   time += minute;
+  const newer = await host.consumeSourceUpdate(change(time, {
+    revision: 'source-v3', contentSha256: 'c'.repeat(64),
+    citation: {locator: 'https://example.com/typescript-3'},
+  }));
+  assert.equal(newer.notified, false);
+  assert.equal(submits, 1, 'a created task is read by its original key, not resubmitted');
+  task.state = 'succeeded';
+  const unverified = await host.bindObservedRevision('typescript');
+  assert.equal(unverified.accepted, false);
+  assert.equal(unverified.reason, 'reevaluation_result_unavailable');
+  assert.equal(unverified.taskState, 'succeeded');
+  assert.equal(host.listWatches()[0].boundSource.revision, 'source-v1');
+  assert.equal(host.dialogueProjection().items[0].usableAsCurrentFact, false);
+  assert.equal(submits, 1);
+
+  let injectedTime = start;
+  const injectedTasks = new Map();
+  const injectedHost = createKnowledgeWatchHost({profile: 'huawei_ict_agentarts', namespace: 'person-a',
+    checkpointTaskId: 'injected-watch-task', checkpoints: memoryCheckpoints().checkpoints,
+    now: () => injectedTime,
+    interestDecider: {choose() { return Promise.resolve(selection()); }},
+    workPort: {
+      async read({idempotencyKey}) {
+        const injected = injectedTasks.get(idempotencyKey);
+        return injected ? {state: 'accepted', taskId: injected.taskId, taskState: injected.state}
+          : {state: 'absent'};
+      },
+      async submit({idempotencyKey}) {
+        const injected = {taskId: 'injected-recheck', state: 'created'};
+        injectedTasks.set(idempotencyKey, injected);
+        return {accepted: true, taskId: injected.taskId};
+      },
+    },
+    notificationPort: {async send() { return {delivered: false, receiptId: 'injected-receipt'}; }},
+  });
+  injectedHost.start();
+  await injectedHost.consumeInterestSignal(signal(injectedTime, trackedRows(injectedTime)), deadline());
+  injectedTime += minute;
+  await injectedHost.consumeSourceUpdate(change(injectedTime));
+  for (const injected of injectedTasks.values()) injected.state = 'succeeded';
+  const injectedUnverified = await injectedHost.bindObservedRevision('typescript');
+  assert.equal(injectedUnverified.accepted, false);
+  assert.equal(injectedUnverified.reason, 'reevaluation_result_unavailable');
+  assert.equal(injectedUnverified.taskState, 'succeeded');
+  assert.equal(injectedHost.listWatches()[0].boundSource.revision, 'source-v1');
+  injectedHost.dispose();
+
+  time = start + 61 * minute;
+  const expired = await host.bindObservedRevision('typescript');
+  assert.equal(expired.accepted, false);
+  assert.equal(expired.reason, 'watch_expired');
   await host.revoke('typescript', {id: 'user-revoke-bind', revokedAt: iso(time)});
   const after = await host.bindObservedRevision('typescript');
   assert.equal(after.reason, 'user_revoked');
