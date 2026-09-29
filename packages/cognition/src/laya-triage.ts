@@ -225,10 +225,11 @@ export class LayaTriageService {
           const isMeeting = candidateLabel === 'meeting';
           const highImpact = Boolean(message.highImpact || isHighImpactChoice || isMeeting);
 
-          // Evaluate category confidence independently from impact
+          // A confident category cannot establish that uncertain impact is safe to group.
           const isCategoryConfident = category.answerConfidence >= this.minimum && category.margin >= this.margin;
+          const isImpactConfident = impact.answerConfidence >= this.minimum && impact.margin >= this.margin;
 
-          if (!isCategoryConfident) {
+          if (!isCategoryConfident || !isImpactConfident) {
             // Low confidence / uncertain: candidate label preserved for review
             result.push({
               ...base(message),
