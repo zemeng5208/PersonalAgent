@@ -391,6 +391,28 @@ export class SqliteMemoryHost {
     }
   }
 
+  /** Recheck committed erasures after a crash or blocked post-commit checkpoint. */
+  resumeCompletedErasureMaintenance(namespaceValue: unknown): void {
+    try {
+      const namespace = text(namespaceValue);
+      const completed = this.db.prepare(`SELECT 1 FROM memory_erasure_intents
+        WHERE namespace = ? AND phase = 'completed' LIMIT 1`).get(namespace);
+      if (completed === undefined) return;
+      const remaining = this.db.prepare(`SELECT 1 FROM memory_erasure_intents e
+        WHERE e.namespace = ? AND e.phase = 'completed' AND (
+          EXISTS (SELECT 1 FROM memory_facts f WHERE f.namespace = e.namespace AND f.fact_id = e.fact_id)
+          OR EXISTS (SELECT 1 FROM memory_public_sources s WHERE s.namespace = e.namespace AND s.fact_id = e.fact_id)
+          OR EXISTS (SELECT 1 FROM memory_user_creations c WHERE c.namespace = e.namespace AND c.fact_id = e.fact_id)
+          OR EXISTS (SELECT 1 FROM memory_user_revisions r WHERE r.namespace = e.namespace AND r.fact_id = e.fact_id)
+        ) LIMIT 1`).get(namespace);
+      if (remaining !== undefined) return queryFail('STORAGE_UNAVAILABLE');
+      this.checkpointErasureWal();
+    } catch (error) {
+      if (error instanceof MemoryQueryError) throw error;
+      return queryFail('STORAGE_UNAVAILABLE');
+    }
+  }
+
   provision(namespaceValue: unknown): void {
     try {
       const namespace = text(namespaceValue);

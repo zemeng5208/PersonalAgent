@@ -113,6 +113,11 @@ projection remain unavailable. See
 [ADR-0010](../../docs/adr/0010-memory-erasure.md) (proposed) and
 [MOD-09C](../../docs/modules/MOD-09C-MEMORY-SQLITE-01.md).
 
+For an isolated unbound namespace, `resumeCompletedErasureMaintenance(namespace)`
+checks committed deletion markers for surviving fact/source/confirmation rows and
+retries the WAL truncation after restart. It does not complete pending cross-store
+erasures or manage backup copies. A busy reader keeps the call unavailable.
+
 Feed transactions check cancellation/deadline after acquiring the write lock and
 immediately before commit. Expired or cancelled work rolls back; a committed
 confirmation returns its durable receipt. Synchronous SQLite lock waits cannot

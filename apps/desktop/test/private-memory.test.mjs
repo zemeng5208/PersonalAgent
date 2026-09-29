@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {DatabaseSync} from 'node:sqlite';
 import test from 'node:test';
 import {openSqliteMemoryHost} from '@personal-agent/memory/sqlite';
 import {createPrivateMemoryController} from '../electron/private-memory.js';
@@ -116,4 +117,36 @@ test('private deletion needs fresh native confirmation and removes only the sele
     snapshot: firstPage.snapshot, cursor: firstPage.nextCursor});
   assert.equal(secondPage.facts.length, 1);
   assert.equal(secondPage.nextCursor, undefined);
+});
+
+test('private controller resumes a committed deletion after a blocked checkpoint and restart', async t => {
+  const base = await mkdtemp(join(tmpdir(), 'personal-agent-private-recover-'));
+  const root = join(base, 'vault');
+  const database = join(base, 'private.sqlite');
+  await mkdir(root);
+  await writeFile(join(root, 'note.md'), '合成偏好：先查看计划。\n');
+  let controller = createPrivateMemoryController(database, async () => true, async () => true);
+  let reader;
+  let reading = false;
+  t.after(async () => {
+    if (reading) reader.exec('ROLLBACK');
+    reader?.close();
+    controller.close();
+    await rm(base, {recursive: true, force: true});
+  });
+  await controller.selectVault(root);
+  const source = (await controller.search('合成偏好')).hits[0].source;
+  await controller.save(source, '先查看计划');
+  const ref = (await controller.listSaved()).facts[0].ref;
+  reader = new DatabaseSync(database);
+  reader.exec('BEGIN');
+  reading = true;
+  reader.prepare('SELECT count(*) AS total FROM memory_facts').get();
+  await assert.rejects(controller.delete(ref), {code: 'STORAGE_UNAVAILABLE'});
+  controller.close();
+  controller = createPrivateMemoryController(database, async () => false);
+  await assert.rejects(controller.listSaved(), {code: 'STORAGE_UNAVAILABLE'});
+  reader.exec('ROLLBACK');
+  reading = false;
+  assert.deepEqual((await controller.listSaved()).facts, []);
 });
