@@ -19,6 +19,30 @@ host composes existing Fact receipts, task checkpoints and a minimized host-appr
 AgentArts handoff; it does not directly commit repairs. See
 [`MVP-TWIN-B-PROACTIVE-01`](../../docs/modules/MVP-TWIN-B-PROACTIVE-01.md).
 
+`buildInterestOptions(input)` derives legitimate approaches from the existing
+interest policy. `LayaInterestDecisionService.choose(input, context)` asks Laya to
+select among those approaches for AgentArts orchestration. A one-off question has
+no tracking option; revocation cannot be overridden by a model. Tracking proposals
+bind current public source, evidence, scope and expiry, and always require fresh
+host validation before any actual subscription. No watcher or permanent memory is
+created here. See [`MVP-TWIN-B-INTEREST-01`](../../docs/modules/MVP-TWIN-B-INTEREST-01.md).
+
+`planKnowledgeReevaluation({namespace, freshness, dependencies, checkpoint})`
+turns existing freshness decisions into exact source/version/content-bound
+consumer rechecks. Stable work keys survive JSON checkpoint replay and repeated
+polls. A confirmed content change or withdrawal remains invalid for that cached
+identity, even after a later unchanged check. Persist each nonduplicate work key
+through the existing Runtime before saving the returned consumption checkpoint.
+No source fetch, task store or permission is created. See
+[`MVP-TWIN-B-KNOWLEDGE-01`](../../docs/modules/MVP-TWIN-B-KNOWLEDGE-01.md).
+
+`prepareTriageDispatch({namespace, messages, labels, results})` validates the
+same-call `LayaTriageService` input/receipt binding and returns metadata-only
+label groups, `mainAgent` and machine `review` queues, and deferred items with
+their original required route. Stable work keys use the existing Runtime
+idempotency boundary. This does not read or write mail, grant permission, or
+export content. See [`MVP-TWIN-B-TRIAGE-01`](../../docs/modules/MVP-TWIN-B-TRIAGE-01.md).
+
 `analyzeImpact(graph, evaluatedAt)` validates and replays the complete MOD-27
 graph. It returns current Goal/Decision/Plan references with KEEP or RECHECK,
 reasons and exact causal references. Superseded, withdrawn and out-of-validity
