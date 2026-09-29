@@ -66,14 +66,14 @@ export class CalendarConnector implements ConnectorPort {
     return {state: this.connected ? 'ready' : 'disconnected'};
   }
 
-  fetchChanges(input: {accountRef: string; cursor?: string; limit: number}): {items: ProtocolContracts['connectorItem'][]; nextCursor: string; hasMore: boolean} {
+  async fetchChanges(input: {accountRef: string; cursor?: string; limit: number}): Promise<{items: ProtocolContracts['connectorItem'][]; nextCursor: string; hasMore: boolean}> {
     this.assertConnected();
     if (!Number.isSafeInteger(input.limit) || input.limit < 1) throw new ProtocolError('INVALID_ARGUMENT', 'limit must be a positive integer');
     const window: CalendarWindow = input.cursor === undefined ? this.defaultWindow() : decodeCursor(input.cursor);
     const listArgs: {cursor?: string; limit: number} = {limit: input.limit};
     const offset = offsetOf(input.cursor);
     if (offset !== undefined) listArgs.cursor = offset;
-    const page = this.service.listEvents(input.accountRef, window, listArgs);
+    const page = await this.service.listEvents(input.accountRef, window, listArgs);
     const nextCursor = page.hasMore
       ? encodeCursor({fromUtc: window.fromUtc, toUtc: window.toUtc, offset: Number(page.nextCursor)})
       : '';
@@ -82,7 +82,7 @@ export class CalendarConnector implements ConnectorPort {
 
   async search(accountRef: string, query: string): Promise<ProtocolContracts['connectorItem'][]> {
     this.assertConnected();
-    return this.service.searchEvents(accountRef, query);
+    return await this.service.searchEvents(accountRef, query);
   }
 
   async getItem(accountRef: string, id: string): Promise<ProtocolContracts['connectorItem']> {
@@ -90,7 +90,7 @@ export class CalendarConnector implements ConnectorPort {
     return this.service.getEventItem(accountRef, id);
   }
 
-  performAction(input: {accountRef: string; action: string; input: unknown; idempotencyKey: string}): ProtocolContracts['connectorAction'] {
+  async performAction(input: {accountRef: string; action: string; input: unknown; idempotencyKey: string}): Promise<ProtocolContracts['connectorAction']> {
     this.assertConnected();
     if (input.action !== 'respond') {
       throw new ProtocolError('UNSUPPORTED_CAPABILITY', `Calendar action ${input.action} is not supported`);

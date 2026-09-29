@@ -7,7 +7,20 @@ import type {Migration} from '@personal-agent/storage';
 import {AuthorizationPolicy} from '@personal-agent/policy';
 import {SqliteAuthorizationStore} from './authorization-store.js';
 import {bindCoordinationStore} from './coordination-store.js';
-import type {CoordinationStorePort} from '@personal-agent/goals/store';
+import type {AtomicCoordinationStorePort} from '@personal-agent/goals/store';
+import {bindFactProjectionStore} from './fact-projection-store.js';
+import type {FactProjectionStore} from './fact-projection-store.js';
+
+export {FactProjectionError} from './fact-projection-store.js';
+export type {
+  CompleteFactImpactRequest,
+  FactProjectionLink,
+  FactProjectionReceipt,
+  FactProjectionRequest,
+  FactProjectionStore,
+  PendingFactImpact,
+  StagedFactProjection
+} from './fact-projection-store.js';
 
 type TaskState = TaskSnapshot['state'];
 type TaskError = NonNullable<TaskSnapshot['error']>;
@@ -98,7 +111,7 @@ export interface ScheduleInput {
 }
 
 export interface ScheduleSnapshot extends ScheduleInput {
-  status: 'pending' | 'fired' | 'skipped';
+  status: 'pending' | 'fired' | 'skipped' | 'cancelled';
   taskId?: string;
 }
 
@@ -139,6 +152,7 @@ export interface TaskPort {
   transitionTask(taskId: string, state: TaskState, patch?: TransitionPatch): TaskSnapshot;
   requestCancel(taskId: string, reason?: string): {taskId: string; state: TaskState; cancelAccepted: boolean};
   saveCheckpoint(taskId: string, key: string, value: unknown): void;
+  saveCheckpointOnce(taskId: string, key: string, value: unknown): boolean;
   loadCheckpoint(taskId: string, key: string): unknown;
 }
 
@@ -149,8 +163,11 @@ export interface EventPort {
 export interface SchedulerPort {
   createSchedule(input: ScheduleInput): ScheduleSnapshot;
   getSchedule(scheduleId: string): ScheduleSnapshot;
-  dispatchDueSchedules(): ScheduleDispatch[];
-  recoverMissedSchedules(): ScheduleDispatch[];
+  listSchedules(conversationId: string): ScheduleSnapshot[];
+  /** Exclusive trusted owner supplies its complete desired set before dispatch/recovery. */
+  reconcileSchedules(conversationId: string, desired: readonly ScheduleInput[]): ScheduleSnapshot[];
+  dispatchDueSchedules(conversationId?: string): ScheduleDispatch[];
+  recoverMissedSchedules(conversationId?: string): ScheduleDispatch[];
 }
 
 interface TaskRow {
@@ -186,7 +203,7 @@ interface ScheduleRow {
   time_zone: string;
   missed_run_policy: 'run_once' | 'skip';
   task_idempotency_key: string;
-  status: 'pending' | 'fired' | 'skipped';
+  status: 'pending' | 'fired' | 'skipped' | 'cancelled';
   task_id: string | null;
 }
 
@@ -230,6 +247,26 @@ export const RUNTIME_MIGRATIONS: readonly Migration[] = [{
 }, {
   version: 5,
   sql: 'CREATE TABLE coordination_graphs (namespace TEXT PRIMARY KEY, snapshot_json TEXT NOT NULL) STRICT;'
+}, {
+  version: 6,
+  sql: [
+    'CREATE TABLE coordination_fact_projections (graph_namespace TEXT NOT NULL, memory_namespace TEXT NOT NULL, fact_id TEXT NOT NULL, fact_revision INTEGER NOT NULL CHECK (fact_revision > 0), event_id TEXT NOT NULL, content_hash TEXT NOT NULL, node_id TEXT NOT NULL, node_revision INTEGER NOT NULL CHECK (node_revision > 0), graph_revision INTEGER NOT NULL CHECK (graph_revision > 0), PRIMARY KEY (graph_namespace, memory_namespace, fact_id, fact_revision), UNIQUE (graph_namespace, memory_namespace, event_id)) STRICT;',
+    'CREATE TABLE coordination_projection_receipts (graph_namespace TEXT NOT NULL, memory_namespace TEXT NOT NULL, consumer_key TEXT NOT NULL, batch_token TEXT NOT NULL, base_checkpoint TEXT NOT NULL, watermark TEXT NOT NULL, handled_key TEXT NOT NULL, graph_revision INTEGER NOT NULL CHECK (graph_revision >= 0), links_json TEXT NOT NULL, committed_at TEXT NOT NULL, PRIMARY KEY (graph_namespace, memory_namespace, consumer_key, batch_token)) STRICT;',
+    'CREATE TABLE coordination_pending_impacts (graph_namespace TEXT NOT NULL, memory_namespace TEXT NOT NULL, consumer_key TEXT NOT NULL, batch_token TEXT NOT NULL, graph_revision INTEGER NOT NULL CHECK (graph_revision > 0), links_json TEXT NOT NULL, created_at TEXT NOT NULL, handled_at TEXT, report_json TEXT, PRIMARY KEY (graph_namespace, memory_namespace, consumer_key, batch_token)) STRICT;'
+  ].join('\n')
+}, {
+  version: 7,
+  sql: 'CREATE TABLE coordination_projection_staging (graph_namespace TEXT NOT NULL, memory_namespace TEXT NOT NULL, consumer_key TEXT NOT NULL, batch_token TEXT NOT NULL, handled_key TEXT NOT NULL, payload_json TEXT NOT NULL, staged_at TEXT NOT NULL, PRIMARY KEY (graph_namespace, memory_namespace, consumer_key, batch_token)) STRICT;'
+}, {
+  version: 8,
+  sql: [
+    'ALTER TABLE task_schedules RENAME TO task_schedules_before_cancellation;',
+    "CREATE TABLE task_schedules (schedule_id TEXT PRIMARY KEY, goal TEXT NOT NULL, conversation_id TEXT NOT NULL, run_at TEXT NOT NULL, time_zone TEXT NOT NULL, missed_run_policy TEXT NOT NULL CHECK (missed_run_policy IN ('run_once', 'skip')), task_idempotency_key TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('pending', 'fired', 'skipped', 'cancelled')), task_id TEXT REFERENCES tasks(task_id)) STRICT;",
+    'INSERT INTO task_schedules SELECT * FROM task_schedules_before_cancellation;',
+    'DROP TABLE task_schedules_before_cancellation;',
+    'CREATE INDEX task_schedules_due ON task_schedules(status, run_at);',
+    'CREATE INDEX task_schedules_conversation ON task_schedules(conversation_id);'
+  ].join('\n')
 }];
 
 export class RuntimeError extends Error {
@@ -246,6 +283,12 @@ function canonical(value: unknown): string {
   if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
   const record = value as Record<string, unknown>;
   return '{' + Object.keys(record).sort().map(key => JSON.stringify(key) + ':' + canonical(record[key])).join(',') + '}';
+}
+
+function toolInputDigest(taskId: string, payload: {
+  toolName: string; toolVersion: string; arguments: Record<string, unknown>; scopeRef: string;
+}): string {
+  return createHash('sha256').update(canonical({taskId, payload})).digest('hex');
 }
 
 function requireText(value: string, name: string): string {
@@ -311,13 +354,24 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
   }
 
   /** Trusted host only; provisioning never clears an existing graph. */
-  provisionCoordinationStore(namespace: string): CoordinationStorePort {
+  provisionCoordinationStore(namespace: string): AtomicCoordinationStorePort {
     return bindCoordinationStore(this.db, namespace, true);
   }
 
   /** Does not provision: missing graphs report NOT_FOUND when used. */
-  bindCoordinationStore(namespace: string): CoordinationStorePort {
+  bindCoordinationStore(namespace: string): AtomicCoordinationStorePort {
     return bindCoordinationStore(this.db, namespace, false);
+  }
+
+  /** Trusted host only; provisions the graph without publishing a Runtime capability. */
+  provisionFactProjectionStore(namespace: string): FactProjectionStore {
+    bindCoordinationStore(this.db, namespace, true);
+    return bindFactProjectionStore(this.db, namespace);
+  }
+
+  /** Does not provision: projection or pending reads report NOT_FOUND for a missing graph. */
+  bindFactProjectionStore(namespace: string): FactProjectionStore {
+    return bindFactProjectionStore(this.db, namespace);
   }
 
   close(): void {
@@ -588,7 +642,7 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
             throw new RuntimeError('REVISION_CONFLICT', 'Tools can only be invoked for a running task');
           }
           const runId = request.idempotencyKey ?? this.idFactory();
-          const inputDigest = createHash('sha256').update(canonical({taskId: request.taskId, payload: request.payload})).digest('hex');
+          const inputDigest = toolInputDigest(request.taskId, request.payload);
           const previousRow = this.db.prepare('SELECT record_json FROM tool_execution_records WHERE evidence_id = ?').get(runId);
           if (previousRow) {
             const previous = JSON.parse(previousRow.record_json as string) as ToolExecutionRecord;
@@ -734,6 +788,45 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     return structuredClone(this.transaction(() => this.submitInTransaction(input)));
   }
 
+  /** Trusted host operation: task/idempotency and its launch intent commit together. */
+  submitTaskWithCheckpoint(input: SubmitTaskInput, checkpointKey: string, value: unknown): TaskSnapshot {
+    const key = requireText(checkpointKey, 'checkpoint key');
+    const encoded = JSON.stringify(value);
+    if (encoded === undefined) throw new RuntimeError('INVALID_ARGUMENT', 'Checkpoint must be JSON serializable');
+    return structuredClone(this.transaction(() => {
+      const task = this.submitInTransaction(input);
+      const existing = this.loadCheckpoint(task.taskId, key);
+      if (existing !== undefined) {
+        if (canonical(existing) !== canonical(JSON.parse(encoded))) {
+          throw new RuntimeError('REVISION_CONFLICT', 'Task checkpoint identity conflict');
+        }
+        return task;
+      }
+      if (task.state !== 'created') {
+        throw new RuntimeError('REVISION_CONFLICT', 'Task checkpoint is missing after execution started');
+      }
+      this.saveCheckpoint(task.taskId, key, JSON.parse(encoded));
+      return task;
+    }));
+  }
+
+  /** Trusted host read for binding an existing task before checking mutable state. */
+  findTaskByIdempotencyKey(idempotencyKey: string): TaskSnapshot | undefined {
+    const row = this.db.prepare('SELECT task_id FROM task_idempotency WHERE idempotency_key = ?')
+      .get(requireText(idempotencyKey, 'idempotencyKey')) as {task_id: string} | undefined;
+    return row ? this.getTask(row.task_id) : undefined;
+  }
+
+  /** Compare the persisted request with the exact trusted source invocation. */
+  matchesToolExecutionInput(record: ToolExecutionRecord, input: {
+    arguments: Record<string, unknown>; scopeRef: string;
+  }): boolean {
+    return record.inputDigest === toolInputDigest(record.taskId, {
+      toolName: record.toolName, toolVersion: record.toolVersion,
+      arguments: input.arguments, scopeRef: input.scopeRef,
+    });
+  }
+
   private writeSnapshot(snapshot: TaskSnapshot): void {
     this.db.prepare('UPDATE tasks SET state = ?, revision = ?, updated_at = ?, steps_json = ?, evidence_refs_json = ?, result_summary = ?, error_json = ?, cancel_requested = ? WHERE task_id = ?').run(
       snapshot.state,
@@ -817,6 +910,60 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     );
   }
 
+  /** Atomic create-only checkpoint for irreversible host attempts. Never replaces a run identity. */
+  saveCheckpointOnce(taskId: string, key: string, value: unknown): boolean {
+    requireText(key, 'checkpoint key');
+    this.getTask(taskId);
+    const encoded = JSON.stringify(value);
+    if (encoded === undefined) throw new RuntimeError('INVALID_ARGUMENT', 'Checkpoint must be JSON serializable');
+    const result = this.db.prepare('INSERT INTO task_checkpoints (task_id, checkpoint_key, value_json, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(task_id, checkpoint_key) DO NOTHING').run(
+      taskId, key, encoded, this.timestamp()
+    );
+    return result.changes === 1;
+  }
+
+  /** Freeze a trusted host intent only while its prepared task is still at the observed revision. */
+  saveCheckpointOnceForCreatedTask(taskId: string, key: string, value: unknown,
+    expectedRevision: number): boolean {
+    requireText(key, 'checkpoint key');
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
+      throw new RuntimeError('INVALID_ARGUMENT', 'Invalid expected task revision');
+    }
+    const encoded = JSON.stringify(value);
+    if (encoded === undefined) throw new RuntimeError('INVALID_ARGUMENT', 'Checkpoint must be JSON serializable');
+    return this.transaction(() => {
+      const task = this.getTask(taskId);
+      if (task.state !== 'created' || task.revision !== expectedRevision) {
+        throw new RuntimeError('REVISION_CONFLICT', 'Prepared host task changed before finalization');
+      }
+      const result = this.db.prepare('INSERT INTO task_checkpoints (task_id, checkpoint_key, value_json, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(task_id, checkpoint_key) DO NOTHING').run(
+        taskId, key, encoded, this.timestamp()
+      );
+      return result.changes === 1;
+    });
+  }
+
+  /** Cancel a prepared task only if no intent was frozen at the observed revision. */
+  cancelCreatedTaskWithoutCheckpoint(taskId: string, absentKey: string,
+    expectedRevision: number): TaskSnapshot {
+    requireText(absentKey, 'checkpoint key');
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
+      throw new RuntimeError('INVALID_ARGUMENT', 'Invalid expected task revision');
+    }
+    return structuredClone(this.transaction(() => {
+      const task = this.getTask(taskId);
+      if (this.loadCheckpoint(taskId, absentKey) !== undefined) {
+        throw new RuntimeError('REVISION_CONFLICT', 'Prepared host task intent was already finalized');
+      }
+      if (task.state === 'cancelled') return task;
+      if (task.state !== 'created' || task.revision !== expectedRevision) {
+        throw new RuntimeError('REVISION_CONFLICT', 'Prepared host task changed before cancellation');
+      }
+      this.updateTask(taskId, 'cancelling', {cancelRequested: true}, true);
+      return this.updateTask(taskId, 'cancelled', {cancelRequested: true}, true);
+    }));
+  }
+
   loadCheckpoint(taskId: string, key: string): unknown {
     const row = this.db.prepare('SELECT value_json FROM task_checkpoints WHERE task_id = ? AND checkpoint_key = ?').get(taskId, requireText(key, 'checkpoint key')) as unknown as {value_json: string} | undefined;
     return row ? structuredClone(JSON.parse(row.value_json)) : undefined;
@@ -892,10 +1039,11 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     } catch (error) {
       const current = this.getTask(taskId);
       if (terminal.has(current.state)) return current;
+      if (current.state === 'waiting_reconciliation') return current;
       if (timedOut) {
-        if (options.sideEffect === 'external_write') {
+        if (options.sideEffect !== 'read') {
           return this.transitionTask(taskId, 'waiting_reconciliation', {
-            error: {code: 'RESULT_UNKNOWN', message: 'External write exceeded its deadline; verify before retrying', retryable: false}
+            error: {code: 'RESULT_UNKNOWN', message: `${options.sideEffect === 'local_write' ? 'Local' : 'External'} write exceeded its deadline; verify before retrying`, retryable: false}
           });
         }
         return this.transitionTask(taskId, 'failed', {
@@ -903,7 +1051,6 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
         });
       }
       if (controller.signal.aborted && current.state === 'cancelling') return this.confirmCancellation(taskId);
-      if (current.state === 'waiting_reconciliation') return current;
       return this.transitionTask(taskId, 'failed', {
         error: {
           code: error instanceof RuntimeError || error instanceof ProtocolError ? error.code as TaskError['code'] : 'EXTERNAL_FAILURE',
@@ -956,7 +1103,7 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     }));
   }
 
-  createSchedule(input: ScheduleInput): ScheduleSnapshot {
+  private validateScheduleInput(input: ScheduleInput): void {
     requireText(input.scheduleId, 'scheduleId');
     requireText(input.goal, 'goal');
     requireText(input.conversationId, 'conversationId');
@@ -967,6 +1114,13 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     } catch {
       throw new RuntimeError('INVALID_ARGUMENT', 'timeZone must be a supported IANA zone');
     }
+    if (!['run_once', 'skip'].includes(input.missedRunPolicy)) {
+      throw new RuntimeError('INVALID_ARGUMENT', 'Unknown missed run policy');
+    }
+  }
+
+  createSchedule(input: ScheduleInput): ScheduleSnapshot {
+    this.validateScheduleInput(input);
     const previous = this.db.prepare('SELECT schedule_id, goal, conversation_id, run_at, time_zone, missed_run_policy, task_idempotency_key, status, task_id FROM task_schedules WHERE schedule_id = ?').get(input.scheduleId) as unknown as ScheduleRow | undefined;
     if (previous) {
       const current = scheduleFromRow(previous);
@@ -1001,11 +1155,57 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     return structuredClone(scheduleFromRow(row));
   }
 
-  private processDue(recovery: boolean): ScheduleDispatch[] {
+  listSchedules(conversationId: string): ScheduleSnapshot[] {
+    const rows = this.db.prepare('SELECT schedule_id, goal, conversation_id, run_at, time_zone, missed_run_policy, task_idempotency_key, status, task_id FROM task_schedules WHERE conversation_id = ? ORDER BY run_at, schedule_id')
+      .all(requireText(conversationId, 'conversationId')) as unknown as ScheduleRow[];
+    return rows.map(scheduleFromRow);
+  }
+
+  /** Reconcile an exclusively owned reminder conversation, not arbitrary user tasks.
+   * Called after the authorized source mutation and before any scheduling tick. A restart
+   * must reconstruct this set from that source before recovering overdue reminders. */
+  reconcileSchedules(conversationId: string, desired: readonly ScheduleInput[]): ScheduleSnapshot[] {
+    requireText(conversationId, 'conversationId');
+    const inputs = new Map<string, ScheduleInput>();
+    for (const input of desired) {
+      this.validateScheduleInput(input);
+      if (input.conversationId !== conversationId || inputs.has(input.scheduleId)) {
+        throw new RuntimeError('INVALID_ARGUMENT', 'Reminder conversation or schedule identity is inconsistent');
+      }
+      inputs.set(input.scheduleId, structuredClone(input));
+    }
+    return this.transaction(() => {
+      const previous = this.listSchedules(conversationId);
+      for (const input of inputs.values()) {
+        const row = this.db.prepare('SELECT schedule_id, goal, conversation_id, run_at, time_zone, missed_run_policy, task_idempotency_key, status, task_id FROM task_schedules WHERE schedule_id = ?')
+          .get(input.scheduleId) as unknown as ScheduleRow | undefined;
+        if (!row) { this.createSchedule(input); continue; }
+        if (row.conversation_id !== conversationId || row.task_idempotency_key !== input.taskIdempotencyKey) {
+          throw new RuntimeError('REVISION_CONFLICT', 'Schedule identity belongs to a different source');
+        }
+        // An already dispatched reminder is immutable and must never be fired again.
+        if (row.status === 'fired' || row.status === 'skipped') continue;
+        this.db.prepare('UPDATE task_schedules SET goal = ?, run_at = ?, time_zone = ?, missed_run_policy = ?, status = ? WHERE schedule_id = ?')
+          .run(input.goal, input.runAt, input.timeZone, input.missedRunPolicy, 'pending', input.scheduleId);
+      }
+      for (const row of previous) {
+        if (row.status === 'pending' && !inputs.has(row.scheduleId)) {
+          this.db.prepare('UPDATE task_schedules SET status = ? WHERE schedule_id = ?').run('cancelled', row.scheduleId);
+        }
+      }
+      return this.listSchedules(conversationId);
+    });
+  }
+
+  private processDue(recovery: boolean, conversationId?: string): ScheduleDispatch[] {
     const now = this.timestamp();
-    const rows = this.db.prepare('SELECT schedule_id FROM task_schedules WHERE status = ? AND run_at <= ? ORDER BY run_at, schedule_id').all('pending', now) as unknown as {schedule_id: string}[];
-    return rows.map(({schedule_id}) => this.transaction(() => {
+    if (conversationId !== undefined) requireText(conversationId, 'conversationId');
+    const rows = (conversationId === undefined
+      ? this.db.prepare('SELECT schedule_id FROM task_schedules WHERE status = ? AND run_at <= ? ORDER BY run_at, schedule_id').all('pending', now)
+      : this.db.prepare('SELECT schedule_id FROM task_schedules WHERE status = ? AND run_at <= ? AND conversation_id = ? ORDER BY run_at, schedule_id').all('pending', now, conversationId)) as unknown as {schedule_id: string}[];
+    const dispatches = rows.map(({schedule_id}) => this.transaction(() => {
       const schedule = this.getSchedule(schedule_id);
+      if (schedule.status !== 'pending' || Date.parse(schedule.runAt) > Date.parse(now)) return undefined;
       if (recovery && schedule.missedRunPolicy === 'skip') {
         this.db.prepare('UPDATE task_schedules SET status = ? WHERE schedule_id = ?').run('skipped', schedule.scheduleId);
         return {scheduleId: schedule.scheduleId, status: 'skipped'} as const;
@@ -1018,13 +1218,14 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
       this.db.prepare('UPDATE task_schedules SET status = ?, task_id = ? WHERE schedule_id = ?').run('fired', task.taskId, schedule.scheduleId);
       return {scheduleId: schedule.scheduleId, status: 'fired', task} as const;
     }));
+    return dispatches.filter(dispatch => dispatch !== undefined);
   }
 
-  dispatchDueSchedules(): ScheduleDispatch[] {
-    return structuredClone(this.processDue(false));
+  dispatchDueSchedules(conversationId?: string): ScheduleDispatch[] {
+    return structuredClone(this.processDue(false, conversationId));
   }
 
-  recoverMissedSchedules(): ScheduleDispatch[] {
-    return structuredClone(this.processDue(true));
+  recoverMissedSchedules(conversationId?: string): ScheduleDispatch[] {
+    return structuredClone(this.processDue(true, conversationId));
   }
 }

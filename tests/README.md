@@ -14,3 +14,13 @@
 当前新增测试只服务 [Huawei ICT AgentArts Competition Profile](../docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)。至少覆盖 AgentArts 项目/Agent/deployment 读回、API/trace、工具提案→本地授权→执行→目标系统读回、评估指标，以及 AgentArts 失败时不静默回退 Local。Local 现有测试可以保留，但不新增测试义务，也不能计入比赛完成度。
 
 不得把真实 Provider 测试加入默认 CI。目录在出现第一项真实测试时创建，不保留空占位目录。
+
+## 离线集成测试入口
+
+`npm run check` 在构建、类型检查和 workspace 测试成功后执行 `npm run test:integration`，
+覆盖 `tests/integration/*.test.mjs`，包括受限工作区读取的 Competition 审批消费链。
+任一集成测试失败会使 check 失败；不包含 `manual/`，不启用真实账号或设备验收。
+单独运行时先执行 `npm run build`，再执行 `npm run test:integration`。
+
+`architecture/integration-test-entrypoint.test.mjs` 只防止检查入口再次漏接，
+不代替集成测试本身，也不证明真实 AgentArts、设备或外部 Evidence 验收通过。

@@ -48,7 +48,7 @@ const {_electron}=require('playwright');
    await orb.evaluate(()=>window.desktop.invoke('orb.dragEnd'));
    await orb.evaluate(()=>window.desktop.invoke('orb.open'));
    let panel=app.windows().find(p=>p.url().includes('mode=panel'));
-   await panel.waitForSelector('textarea');
+   await panel.waitForSelector('textarea[aria-label="任务内容"]');
    const panelArea=await app.evaluate(({BrowserWindow,screen})=>screen.getDisplayMatching(BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('mode=orb')).getBounds()).workArea);
    assert.equal(await panel.evaluate(()=>innerWidth),Math.min(420,panelArea.width));
    const orbViewportBefore=await orb.evaluate(()=>({width:innerWidth,height:innerHeight}));
@@ -76,7 +76,7 @@ const {_electron}=require('playwright');
    const panelThinking=await panel.evaluate(()=>window.desktop.invoke('snapshot'));
    assert.equal(panelThinking.value.thinking.depth,3);
    await panel.locator('#model').click();
-   await panel.locator('textarea').fill('测试原版桌面方案接入');await panel.locator('#send').click();
+   await panel.locator('textarea[aria-label="任务内容"]').fill('测试原版桌面方案接入');await panel.locator('#send').click();
    await panel.waitForSelector('[data-action="task.cancel"]');
    assert.match(await panel.locator('#tasks').innerText(),/思考中/);
    if(fake){

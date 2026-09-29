@@ -21,4 +21,9 @@ encodeFrame 包含结尾 LF，帧总长最大 1 MiB；FrameDecoder 支持分片 
 
 公共端口类型见 src/ports.ts。它们是联调形状，不是权限隔离实现。StoragePort 的实际受限注入由 MOD-05 实现；连接器与工具的入参 Schema 校验不能替代账号授权。ToolContext 的 scopes/authorizationRef 只能由可信宿主注入；测试中使用固定值。
 
+Windows Host 的内部 Pipe `0.1.0` 契约单独位于 `schema/windows-host.json`，
+校验器从 `@personal-agent/contracts/windows-host` 导出；不扩展本包已冻结的公共
+`protocol.json` 1.0.0。接入条件与未验证项见
+[Windows Host 内部通信契约](../../docs/interfaces/WINDOWS_HOST_CONTRACT.md)。
+
 新增依赖：Ajv 8.17.1（MIT）用于运行时校验，会增加客户端校验器代码和初始化成本；json-schema-to-typescript 15.0.4（MIT）仅开发时生成类型，不需进入产品包。替代方案是手写双份类型或编译期单独生成验证器；当前选择单一 Schema 和可测试生成流程。最终桌面打包体积和许可证声明留在分发验收中核验。

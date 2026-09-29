@@ -2,8 +2,11 @@ import {
   AgentArtsCloudAgentPort,
   CompetitionCoordinator,
   type AgentArtsAuthorizationProvider,
+  type AgentArtsFailureDiagnostic,
   type AgentArtsFetch,
+  type CoordinationRequest,
 } from '@personal-agent/coordination';
+import {ProtocolError} from '@personal-agent/contracts';
 import {
   createRuntimeApplication,
   type RuntimeApplication,
@@ -11,13 +14,18 @@ import {
 } from './runtime-application.js';
 
 export interface AgentArtsRuntimeApplicationOptions
-  extends Omit<RuntimeApplicationOptions, 'profile' | 'coordination' | 'text' | 'tools'> {
+  extends Omit<RuntimeApplicationOptions, 'profile' | 'coordination' | 'text'> {
   gatewayUrl: string;
   runtimeName: string;
   invokeMode?: 'debug' | 'published';
   workflowGoalInput?: string;
+  responseMode?: 'text' | 'tool-proposal-json';
+  initialRequestMode?: 'goal' | 'goal-with-tools-json';
   authorizationProvider: AgentArtsAuthorizationProvider;
   fetchImpl?: AgentArtsFetch;
+  onDiagnostic?: (receipt: AgentArtsFailureDiagnostic) => void;
+  /** Trusted host egress check, synchronously re-run immediately before each HTTP send. */
+  beforeCompetitionSend?: (request: CoordinationRequest) => void;
 }
 
 /**
@@ -32,23 +40,53 @@ export function createAgentArtsRuntimeApplication(
     runtimeName,
     invokeMode,
     workflowGoalInput,
+    responseMode,
+    initialRequestMode,
     authorizationProvider,
     fetchImpl,
+    onDiagnostic,
+    beforeCompetitionSend,
     ...runtimeOptions
   } = options;
+  if (initialRequestMode === 'goal-with-tools-json'
+    && (responseMode !== 'tool-proposal-json'
+      || !runtimeOptions.competitionToolAvailability?.length
+      || !runtimeOptions.competitionToolExports?.length)) {
+    throw new ProtocolError('INVALID_ARGUMENT', 'Competition tool catalog needs proposal mode and explicit local bindings');
+  }
+  if (initialRequestMode !== 'goal-with-tools-json'
+    && runtimeOptions.competitionToolAvailability !== undefined) {
+    throw new ProtocolError('INVALID_ARGUMENT', 'Competition tool catalog requires explicit initial request mode');
+  }
+  let application: RuntimeApplication;
   const cloud = new AgentArtsCloudAgentPort(
     {
       gatewayUrl,
       runtimeName,
       ...(invokeMode === undefined ? {} : {invokeMode}),
       ...(workflowGoalInput === undefined ? {} : {workflowGoalInput}),
+      ...(responseMode === undefined ? {} : {responseMode}),
+      ...(initialRequestMode === undefined ? {} : {initialRequestMode}),
+      ...(options.repairCandidateVersion === undefined ? {} : {repairCandidateVersion: options.repairCandidateVersion}),
     },
     authorizationProvider,
     fetchImpl,
+    request => {
+      application.assertCompetitionExportAllowed(request);
+      beforeCompetitionSend?.(request);
+    },
+    request => {
+      if (!request.availableTools) throw new ProtocolError('UNAUTHORIZED', 'Initial Competition tool catalog is missing');
+      return application.assertCompetitionToolCatalogAllowed({taskId: request.taskId,
+        revision: request.revision, deadline: request.deadline, signal: request.signal,
+        availableTools: request.availableTools});
+    },
+    onDiagnostic,
   );
-  return createRuntimeApplication({
+  application = createRuntimeApplication({
     ...runtimeOptions,
     profile: 'huawei_ict_agentarts',
     coordination: new CompetitionCoordinator(cloud),
   });
+  return application;
 }

@@ -1,8 +1,36 @@
 # 模块分工与独立交付清单
 
-版本：0.6 · 日期：2026-09-09 · 状态：只实施 Huawei ICT AgentArts Competition Profile；Local Profile 可选留存
+版本：0.7 · 日期：2026-09-29 · 状态：只实施 Huawei ICT AgentArts Competition Profile；Local Profile 可选留存
 
 本文件是未来工作负责人、文件所有权和交付边界的唯一登记处。[Competition Profile](competition/HUAWEI_ICT_AGENTARTS_PROFILE.md) 定义当前优先参赛路径，[PRD](PRD.md) 定义需求，[公共开发协议](DEVELOPMENT_PROTOCOL.md) 定义互通语义，[当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md) 决定接口是否冻结或可用，[ROADMAP](ROADMAP.md) 维护执行状态。
+
+## 0. 首版 MVP 本轮执行权调整（2026-09-29，优先于下文历史分工）
+
+产品负责人最新调整：`Potatos498` 继续负责 P0～P4；撤回此前委派给他的 P5～P8，交回 zemeng 侧统筹，具体执行者在接手前登记。此修订覆盖此前“全部非线上 AgentArts”委派。
+本轮任务、已核对基线、PR 状态和接手回执集中在 [Issue #212](https://github.com/zemeng5208/PersonalAgent/issues/212)，不另复制进度表。
+这是明确的跨模块实施委派；下文原归属保留作为历史及技术评审依据，不再限制 Potatos 只能开发 MOD-20～26。
+
+| 边界 | 当前实现负责人 | 说明 |
+| --- | --- | --- |
+| P0～P4：PR收拢、业务连接器、Desktop通用接线、语音/Live、子Agent/多模型/本地执行底座 | Potatos498 | 排除下列 P5～P8 专属实现与共享集成写入；P0 可登记相关 PR 状态，不接手被撤回包的实现返修 |
+| P5：Laya、目标与主动认知 | zemeng；执行者 Gemini（原交互会话，任务已准备、待送达确认） | packages/goals、packages/cognition、scripts/laya 及明确登记的 Desktop 认知/主动/邮件消费专属文件；变化→多候选→真实 Laya→已授权动作→持久读回/恢复去重。连接器提供者仍归 P1，共享装配归 P8 |
+| P6：Windows与编码工具 | zemeng 侧统筹，执行者待登记 | apps/windows-host、packages/windows-client、packages/coding-tools；复用已集成实现，真实窗口隔离、接管与读回，工作区补丁实际应用和受限命令 |
+| P7：知识、记忆、关注事项 | goo122 保留在途实现；剩余交接由 zemeng 侧统筹 | packages/knowledge、plugins/obsidian、packages/memory、packages/learning 及本地消费；在途文件完成明确交接前不并发改写 |
+| P8：本地共享集成与非云比赛材料 | zemeng 侧统筹，goo122 评审公共兼容 | 根配置/锁文件/公共装配采用独立 PR 和唯一写入槽；既有 Gemini 两份证据/演示文档任务继续保留，不重复委派 |
+| 线上 AgentArts 控制台、工作流提示词修改、发布、实例绑定、云凭据与真实云运行 | zemeng | 保持唯一云配置写入者；本地AgentArts客户端代码可以交给Potatos，真实云验证由zemeng完成 |
+| goo122 已进行的 #209 → #210 → #211 私人记忆/删除恢复PR内部返修 | goo122（限在途范围） | Potatos可作非作者评审；goo122声明交接头与占用文件后，由P7登记的执行者接手，不再默认交给Potatos |
+| MOD-19 Windows打包安装 | 暂停 | 不因本轮扩大分工恢复打包安装；已排除的TraceGuard治理也不重新加入 |
+
+### 单一写入与交接规则
+
+- Potatos 可将 P0～P4 内互不重叠的工作包分给自己的执行Agent；每包声明身份、MOD、拥有路径、基线、依赖和最小交付。保留所有协作者修改。已开展的 P5～P8 停止新增修改，保留分支/PR/未提交工作并回报交接头、差异与占用文件，不删除或回滚。
+- `apps/desktop/electron/main.js`、Admin共享入口、Runtime根装配、根配置/锁文件、公共Schema/迁移只由 P8 登记的一个集成写入者串行处理。P2/P4提供接口和接线补丁需求，P5/P7专属消费代码不因位于Desktop目录而重新归入P2。goo122负责公共语义兼容评审；在途#209～211占用部分先收尾再交接。模块工作不必等待共享文件，可以先通过公开端口独立实现。
+- 原PR作者保留历史归属；Potatos可接手 P0～P4 范围内返修，P5～P8仅盘点并交接。修改前在#212或对应PR登记当前head及范围，不覆盖原作者仍在进行的改动。
+- `codex/mvp-assembly` 的集成内容已通过#206进入main。新工作从最新main确认基线；旧PR先检查等效覆盖，不重复实现、重复合并或因CI绿灯就关闭。
+- Potatos可提交/推送/创建小PR并联系协作者提供接口。本人新增代码仍需另一位登记协作者评审；替他人返修后不能把自己的评审当作对该新增代码的独立批准。
+- 各执行者按当前 P0～P8 边界避免双写；线上AgentArts消费者需要本地改动时，向#212提交精确接口需求，交对应工作包的唯一写入者。Gemini既有两份比赛文档任务保留，不能据此扩展到产品代码。
+- 保留原有用户数据、加密凭据、工作流及配置，不将私人数据或本机路径放到GitHub。首次真实账号/设备操作仍按已有授权范围，不能把本次开发委派解释为任意账号副作用授权。
+- 实现优先，验证限于受影响关键路径。已有真实/离线证据分别复用，完整MVP仍需约定功能与对应真实验收；不通过降低验收口径或全套重复测试制造完成。
 
 ## 1. 人员与决策权
 
@@ -10,9 +38,11 @@
 | --- | --- |
 | goo122 | 工程与存储底座、公共协议、TaskRuntime、ModelGateway/Provider、本地 Policy/工具/MCP/Skills、知识与记忆 |
 | zemeng | 主 Agent 与核心认知架构、桌面/语音/Windows/TraceGuard/编程/分发、目标决策图谱、持续认知、AgentArts |
-| Potatos498 | 待办、日历、邮件、订阅、通知、搜索、天气、微信与社交连接器；MOD-20～26 保持原分工 |
+| Potatos498 | 待办、日历、邮件、订阅、通知、搜索、天气、微信与社交连接器；保留 MOD-20～26 的长期目录所有权，当前工作顺序见 §5 |
 
 产品负责人决定当前只实施华为 ICT AgentArts Competition Profile，通用 Local Profile 仅留存现有代码。核心认知、Goal/Decision/Plan 语义、Competition Profile 及 AgentArts 本地—云边界由 zemeng 负责；公共 Schema、根配置、迁移、锁文件和根装配由 goo122 维护。历史 PR 的作者、评审者和 Evidence 按事实保留，不能因新分工改写。
+
+第一版 MVP 的完成口径以产品负责人当前要求为准：除 Windows 安装包与安装流程外，已约定的功能须实现并取得对应真实验收；AgentArts 单链和合成会议演示只是阶段证据。该口径不改变模块所有权，也不自动把 PRD 明确排除的 PA-018 或尚未选定的 P2 扩展全部升为首版承诺。goo122 负责公共 Runtime、SecretStore、StoragePort 和根装配；zemeng 的 AgentArts、认知、Desktop 等仍由既有负责人推进；Potatos498 负责 §5 业务能力的独立工作包与业务侧验收。
 
 ## 2. 共同所有权规则
 
@@ -52,7 +82,7 @@ goo122 必须让上述模块在没有真实 Desktop、AgentArts 或 zemeng 私�
 | MOD-14 | 语音会话 / PA-007 | packages/voice、apps/desktop/src/features/voice | MOD-02、04B、11 | ASR/TTS、播放、停止播报；与 task.cancel 保持分离 |
 | MOD-15 | 唤醒词与连续语音 / PA-021 | packages/voice-wake | MOD-14 | 授权音频流、默认关闭、撤销停止、误触和回声实机测试 |
 | MOD-16 | Windows 执行与凭据适配 / PA-016 | apps/windows-host、packages/windows-client | MOD-02、05 | Named Pipe、目标确认、输入串行、用户接管、后置验证、安全存储 |
-| MOD-17 | TraceGuard 适配 / PA-011、PA-018 | packages/traceguard | MOD-02、05、16 | 普通用户权限、真实观测、保护拒绝、可逆操作和恢复 Evidence |
+| MOD-17 | 电脑状态读取 / PA-011（不集成 TraceGuard） | packages/windows-client（与 MOD-16 同一提供者，不另建 TraceGuard 包） | MOD-02、05、16 | 普通用户权限、必要真实观测与不可观测声明；PA-018 治理/恢复按 2026-09-17 用户修订排除 |
 | MOD-18 | 编程执行工具 / PA-017 | packages/coding-tools | MOD-02、05 | 授权工作区、patch/command、保留用户改动、输出 Artifact 和验证状态 |
 | MOD-19 | 打包与安装验收 | packaging、scripts/release | 已验收模块、MOD-01 | 独立安装、启动、升级、卸载和数据保留；发布授权另行处理 |
 | MOD-27 | 目标、事实与决策图谱 / PA-024 | packages/goals | MOD-02、03、09、04B | 版本化 Goal/Fact/Decision/Plan 依赖图、来源、冲突和回退；不直接读记忆数据库 |
@@ -64,7 +94,7 @@ goo122 必须让上述模块在没有真实 Desktop、AgentArts 或 zemeng 私�
 
 zemeng 必须优先交付 MOD-29/30/32 的 Competition Golden Path，并让模块在没有 goo122 的真实数据库或未合并实现时使用 Fake Memory/Tool/Runtime 独立开发。AgentArts 成功不能直接把本地任务标为完成；Local Agent 新能力当前不作为必交项。
 
-## 5. Potatos498：业务连接器（保持不变）
+## 5. Potatos498：业务连接器与当前工作顺序
 
 | ID | 模块 / 需求 | 独占目录 | 依赖 | 独立交付与验收 |
 | --- | --- | --- | --- | --- |
@@ -76,7 +106,22 @@ zemeng 必须优先交付 MOD-29/30/32 的 Competition Golden Path，并让模�
 | MOD-25 | 天气 / PA-010 | packages/connectors/weather | MOD-02、05 | 地点不静默猜测；缓存状态和真实提供商证据分开 |
 | MOD-26 | 微信与社交扩展 / PA-019 | packages/connectors/social/platform | MOD-02、05；交互模式另依赖 MOD-16 | 每个平台单独子任务；账号类型、能力和不支持项明确 |
 
-MOD-20～26 的负责人和业务范围不因 AgentArts 调整而改变。AgentArts 只消费这些连接器经 MOD-05 公布的工具能力，不接管连接器实现。
+MOD-20～26 的长期负责人和目录所有权保持不变。AgentArts 只消费经 MOD-05 实际公布的能力。业务模块源码、历史单包 live 读回、生产 Runtime 注册和用户旅程真实验收是不同证据层；`register`、Fake/CI 或设计 PR 均不能替代首版验收。以下是 2026-09-24 的缺口盘点，具体证据见各包 README、模块记录、PR #4/#8/#22/#23/#27/#28/#47/#81 与当前接口目录：
+
+| 能力 | 已有证据 | 第一版仍需读回的结果 |
+| --- | --- | --- |
+| 待办与提醒（PA-009，P0） | `@personal-agent/productivity` 已有 CRUD、时区与 ReminderTrigger 的离线验证；PR #22 已合并 | 真实持久化的创建/修改/取消读回，Runtime 到点及休眠恢复、去重和 Desktop 通知闭环 |
+| 日历（PA-013，P1） | `calendar.events`、事件时区与邀请动作仅 Fake；PR #22 已合并 | 先确定一个账号/提供商，经用户授权做真实同步读回、时区与所声明动作的结果核实 |
+| 邮件（PA-014，P1） | QQ IMAP/SMTP 提供商与多账号入口已合并；包 README 记录 2026-09-13 的一次真实读回/自发自收 | 宿主可信凭据接入后，至少一个邮箱的应用内同步、分类、摘要、草稿读回；发送仅在对应授权后验证，结果未知先查已发送记录 |
+| 订阅（PA-015，P1） | RSS/Atom 增量与去重已合并；包 README 记录两个公开源的真实两轮取数及 304 | 宿主配置的真实源经持久游标轮询，更新去重并进入通知汇总；真实更新时点与界面读回 |
+| 通知（PA-015，P1） | 安静时段、暂停、聚合、去重为离线策略证据；PR #27/#81 已合并 | 真实源进入宿主调度，安静结束/暂停恢复自动裁定，Desktop 展示与确认读回 |
+| 研究（PA-010，P0） | `research.search` 的 OpenAlex 单次 5 条真实读回与失败/过期离线语义；PR #47 已合并 | Competition 应用内请求、来源/时间/过期展示与失败读回；是否需要非学术来源由具体首版场景确认 |
+| 天气（PA-010，P0） | `weather.forecast` 已在 Runtime 显式装配；Open-Meteo/可选 GeoNames 有历史真实读回，PR #4/#12/#23 已合并 | 当前环境下地点确认、观测/覆盖时间和缓存状态的应用内读回，以及 AgentArts/Policy 工具链证据 |
+| 微信与社交（PA-019，P2） | PRD 列为扩展；当前无已选平台的模块提供者或真实验收 | 先由产品负责人确认首版具体平台、账号类型与合法能力；每个被纳入的平台再按动作单独验收，不承诺全部平台读写 |
+
+#88 设计 PR 已合并，仅收敛工具清单与边界，不代表五包已经接入。后续按当前缺口逐项交付，一个能力一个小 PR，不把五包同时塞进根装配：PA-009 待办存取与提醒触发、PA-015 订阅采集与通知裁定分别形成可审查的业务工作包；PA-013 日历在选定一个真实提供商后单列，PA-014 邮件复用已有 QQ 提供商，只补连接器侧实际缺口；PA-010 研究/天气优先复用已实现提供者，不重复造同类工具。现有实现已足够的部分直接进入跨模块验收，不为凑 PR 另写源码。每包固定公开端口、已声明 scope、无配置时 `UNSUPPORTED_CAPABILITY`、对应失败/取消/读回证据；有副作用的操作另按动作授权。公共 Runtime/Policy、SecretStore、StoragePort、根 composition 与 capability 公布由 goo122 的独立 PR 交付并评审，Desktop 展示由 zemeng 负责，邮件分类/摘要/草稿由 MOD-04 负责；业务 PR 不越界修改这些共享文件。
+
+Windows 安装包与安装流程继续暂停。PA-019 及其他 PRD P2 项是否进入首版，先核实具体约定；未选择平台或账号时不得以空实现、Fake 或未经授权的真实账号写入冒充完成。
 
 ## 6. 跨负责人冻结边界
 
@@ -85,7 +130,7 @@ MOD-20～26 的负责人和业务范围不因 AgentArts 调整而改变。AgentA
 | goo122 Runtime → zemeng 核心认知 | CoordinationPort | unavailable；需交付类型、Fake 和注入槽 |
 | zemeng Competition Coordination → AgentArts | CloudAgentPort | unavailable；当前第一优先，需交付 deployment/version/trace、提案和错误语义 |
 | 可选 Local Agent → goo122 模型 | 最小 ModelPort | unavailable；现有 ModelProvider/ModelGateway 为 provisional，不阻塞 Competition Profile |
-| zemeng 核心认知 → goo122 记忆 | MemoryQueryPort、FactChangeFeed | unavailable |
+| zemeng 核心认知 → goo122 记忆 | MemoryQueryPort、FactChangeFeed | provisional；MOD-09B 重建分支已有公开类型与进程内 Fake，生产提供者和持久确认仍 unavailable |
 | zemeng 核心认知 → goo122 工具 | ToolExecutionPort | unavailable；现有 ToolHost/ToolGateway 为 provisional，稳定消费端口尚未定义 |
 | zemeng 目标/决策 → goo122 存储 | CoordinationStorePort | unavailable |
 | 所有模块 → Evidence/Artifact | EvidencePort、ArtifactPort | unavailable |

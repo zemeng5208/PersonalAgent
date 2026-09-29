@@ -159,3 +159,11 @@ HTTP 响应前以 `tls` 类别失败，0 字节/事件，未重试；Runtime 及
 文本冲突，当前生产适配器会拒绝这类冲突。索引观察容量为 1,024，覆盖仍为 partial：
 已观察到的冲突有效，但不能据此断言冲突总数，或判断它们发生在同一还是不同 workflow。
 该记录支持下一步离线复现，不证明已定位生产首个失败分支，也不代表 Desktop 成功。
+## 固定合成分类 runner
+
+[`support/fixed-synthetic-batch.mjs`](support/fixed-synthetic-batch.mjs) 提供 MOD-31 的离线
+三案例分类 runner。它只接受显式注入的 CoordinationPort、未来 UTC deadline 和取消
+信号；内置 prompt 不接收私人输入，也不写入案例预期答案。直接 CLI 要求 `--deadline`，
+并始终使用返回私有固定序列的显式 Fake，仅验证 runner plumbing，不衡量模型能力；它不会
+读取环境凭据或自动连接 AgentArts。输出只记录 case 状态、验证等级、固定错误码、计数和
+耗时；`mock` 结果不构成真实 AgentArts、工具执行或 Evidence 验收。

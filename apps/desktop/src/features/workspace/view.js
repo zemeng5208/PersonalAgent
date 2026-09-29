@@ -1,12 +1,11 @@
 import {Orb} from '../orb/orb.js';
 import {stateNames,isTerminal} from '../conversation/state.js';
 import {mountConversationRail} from '../conversation/rail.js';
+import {resultText} from '../conversation/result-text.js';
 import {connectorCards} from './connectors.js';
 
 const paths={settings:'M4 7h10m4 0h2M4 17h2m4 0h10M16 4v6M8 14v6',connectors:'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zm11 3h7m-3-3v7',close:'m6 6 12 12M6 18 18 6',maximize:'M5 5h14v14H5z',minimize:'M5 12h14',copy:'M8 8h12v12H8zM16 8V4H4v12h4',view:'M3 5h18v14H3zM9 5v14'};
 const icon=name=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${paths[name]}"/></svg>`;
-const resultText=value=>String(value||'').replace(/\s*\[model=[^;\]]+;\s*verification=[^;\]]+;\s*tokens=[^\]]+\]\s*$/,'').trim();
-
 export function mountWorkspace(root,invoke,escape){
   let current={tasks:[]},lastSignature='',cardsSignature='',inspected=null;
   root.innerHTML=`<section class="workspace focused-workspace">
@@ -35,6 +34,7 @@ export function mountWorkspace(root,invoke,escape){
   root.querySelector('#connectors-toggle').onclick=event=>{const hidden=root.querySelector('.connector-board').hidden;root.querySelector('.connector-board').hidden=!hidden;event.currentTarget.setAttribute('aria-expanded',String(hidden));};
   root.querySelector('#connectors-refresh').onclick=async event=>{event.currentTarget.disabled=true;try{await invoke('capability.list');update(await invoke('snapshot'));}catch(error){report(error);}finally{root.querySelector('#connectors-refresh').disabled=false;}};
   root.querySelector('#inspector-close').onclick=()=>{inspected=null;root.querySelector('#conversation-inspector').hidden=true;};
+  root.querySelector('#connector-cards').onclick=event=>{const card=event.target.closest('[data-connector]');if(!card)return;invoke('admin.open',{page:'connections'}).catch(report);};
   conversation.onclick=async event=>{
     const button=event.target.closest('[data-cancel],[data-view],[data-copy]');if(!button)return;
     try{if(button.dataset.view){inspected=button.dataset.view;renderInspector();}else if(button.dataset.copy){await invoke('clipboard.writeText',resultText(current.tasks.find(task=>task.taskId===button.dataset.copy)?.resultSummary));button.title='已复制';}else{button.disabled=true;await invoke('task.cancel',button.dataset.cancel);}}catch(error){report(error);button.disabled=false;}
@@ -53,7 +53,7 @@ export function mountWorkspace(root,invoke,escape){
       conversation.innerHTML=data.tasks.map(task=>`<article class="workspace-turn" data-turn="${escape(task.taskId)}"><div class="user-message">${escape(task.userMessage||'历史对话')}</div><div class="assistant-message">${escape(resultText(task.resultSummary)||task.error?.message||stateNames[task.state]||task.state)}</div><div class="response-actions"><button type="button" data-view="${escape(task.taskId)}" title="在对话内查看" aria-label="查看这轮对话">${icon('view')}</button>${task.resultSummary?`<button type="button" data-copy="${escape(task.taskId)}" title="复制回答" aria-label="复制回答">${icon('copy')}</button>`:''}${!isTerminal(task)?`<button class="turn-action" data-cancel="${escape(task.taskId)}" ${task.state==='cancelling'?'disabled':''}>${task.state==='cancelling'?'正在停止':'停止'}</button>`:''}</div></article>`).join('');
       requestAnimationFrame(()=>{if(atBottom)stage.scrollTop=stage.scrollHeight;updateRail();});if(inspected)renderInspector();
     }
-    const nextCards=JSON.stringify([data.capabilities,data.health,data.notifications]);if(cardsSignature!==nextCards){cardsSignature=nextCards;root.querySelector('#connector-cards').innerHTML=connectorCards(data,escape);}
+    const nextCards=JSON.stringify([data.capabilities,data.health,data.notifications,data.todo?.items,data.todo?.available,data.todo?.sessionAllowed,data.feeds?.subscriptions,data.feeds?.available,data.feeds?.sessionAllowed,data.mail?.status,data.mail?.counts,data.mail?.sessionAllowed,data.knowledge?.configured]);if(cardsSignature!==nextCards){cardsSignature=nextCards;root.querySelector('#connector-cards').innerHTML=connectorCards(data,escape);}
   }
   return update;
 }

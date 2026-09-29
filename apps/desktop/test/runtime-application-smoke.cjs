@@ -174,13 +174,13 @@ function scanFiles(root, needle) {
     assert.ok(server.requests.every(item => item.authorized));
 
     const panelGoal = '小窗口 Runtime Application 验收';
-    await submitAndWait(panel, 'textarea', '#send', panelGoal, `本地盘古回答：${panelGoal}`);
+    await submitAndWait(panel, 'textarea[aria-label="任务内容"]', '#send', panelGoal, `本地盘古回答：${panelGoal}`);
     const panelSnapshot = await panel.evaluate(() => window.desktop.invoke('snapshot'));
     assert.equal(panelSnapshot.value.tasks.length, 1);
     assert.equal(panelSnapshot.value.tasks[0].state, 'succeeded');
 
     const reopenGoal = '窗口重开不重复执行';
-    await panel.locator('textarea').fill(reopenGoal);
+    await panel.locator('textarea[aria-label="任务内容"]').fill(reopenGoal);
     await panel.locator('#send').click();
     await waitFor(() => server.requests.filter(item => item.prompt === reopenGoal).length === 1);
     let workspace = await openWorkspace(app, panel);
@@ -233,10 +233,10 @@ function scanFiles(root, needle) {
     await admin.locator('#model-test').click();
     await waitFor(() => server.requests.length === callsBeforeRetest + 1);
     const enabledGoal = '重新启用后恢复配置';
-    await submitAndWait(panel, 'textarea', '#send', enabledGoal, `本地盘古回答：${enabledGoal}`);
+    await submitAndWait(panel, 'textarea[aria-label="任务内容"]', '#send', enabledGoal, `本地盘古回答：${enabledGoal}`);
 
-    const cancelGoal = '取消测试必须等待 Runtime 终态';
-    await panel.locator('textarea').fill(cancelGoal);
+    const cancelGoal = '取消测试先确认受理再等待 Runtime 终态';
+    await panel.locator('textarea[aria-label="任务内容"]').fill(cancelGoal);
     await panel.locator('#send').click();
     await waitFor(() => server.requests.some(item => item.prompt === cancelGoal));
     const active = await panel.evaluate(() => window.desktop.invoke('snapshot'));
@@ -244,11 +244,13 @@ function scanFiles(root, needle) {
     assert.ok(activeTask);
     const cancelResult = await panel.evaluate(taskId => window.desktop.invoke('task.cancel', taskId), activeTask.taskId);
     assert.equal(cancelResult.ok, true);
-    assert.equal(cancelResult.value.state, 'cancelled');
+    assert.equal(cancelResult.value.cancelAccepted, true);
+    assert.ok(['cancelling', 'cancelled'].includes(cancelResult.value.state));
     await waitFor(() => server.aborted >= 1);
+    await panel.waitForFunction(async taskId => (await window.desktop.invoke('snapshot')).value.tasks.find(task => task.taskId === taskId)?.state === 'cancelled', activeTask.taskId);
 
     const quitGoal = '退出保护必须保留活动 Runtime';
-    await panel.locator('textarea').fill(quitGoal);
+    await panel.locator('textarea[aria-label="任务内容"]').fill(quitGoal);
     await panel.locator('#send').click();
     await waitFor(() => server.requests.some(item => item.prompt === quitGoal));
     workspace = await openWorkspace(app, panel);
@@ -259,7 +261,11 @@ function scanFiles(root, needle) {
     const quitSnapshot = await panel.evaluate(() => window.desktop.invoke('snapshot'));
     const quitTask = quitSnapshot.value.tasks.find(task => !terminalStates.has(task.state));
     const quitCancel = await panel.evaluate(taskId => window.desktop.invoke('task.cancel', taskId), quitTask.taskId);
-    assert.equal(quitCancel.value.state, 'cancelled');
+    assert.equal(quitCancel.ok, true);
+    assert.equal(quitCancel.value.cancelAccepted, true);
+    assert.ok(['cancelling', 'cancelled'].includes(quitCancel.value.state));
+    await panel.waitForFunction(async taskId => (await window.desktop.invoke('snapshot')).value.tasks.find(task => task.taskId === taskId)?.state === 'cancelled', quitTask.taskId);
+    await workspace.waitForFunction(async () => !/仍有活动任务/.test((await window.desktop.invoke('snapshot')).value.connectionError ?? ''));
 
     const qaDir = process.env.PA_DESKTOP_QA_OUTPUT || path.join(os.tmpdir(), 'personal-agent-qa');
     fs.mkdirSync(qaDir, {recursive: true});

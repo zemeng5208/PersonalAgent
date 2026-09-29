@@ -1,18 +1,17 @@
-# Coordination text ports
+# Coordination ports
 
 COMPETITION-PORTS-01 provides provisional, in-process `CoordinationPort.execute` and
 `CloudAgentPort.invoke` types. The consuming coordination package owns their shape.
 Runtime injects CoordinationPort; `AgentArtsCloudAgentPort` is the explicit,
-offline-testable HTTP implementation of the text-only CloudAgentPort boundary.
+offline-testable HTTP implementation of the CloudAgentPort boundary.
 
-MOD-04B adds `CompetitionCoordinator`, which implements the existing text port by
-calling an explicitly injected `CloudAgentPort` once. It validates input, forwards
-the task revision and deadline, relays cancellation through a child signal, bounds
-non-cooperative calls by the deadline, and validates results before returning them.
-Provider exception messages are not exposed. `UnavailableCloudAgentPort` explicitly
-rejects with `UNSUPPORTED_CAPABILITY`; provider-owned `CANCELLED`/`TIMEOUT` errors are
-sanitized as `EXTERNAL_FAILURE` because only the coordinator owns those lifecycle
-signals. There is no automatic fallback or retry.
+MOD-04B adds `CompetitionCoordinator`, which validates each bounded text/tool-proposal
+exchange with an explicitly injected `CloudAgentPort`. It forwards task revision and
+deadline, relays cancellation through a child signal, bounds non-cooperative calls,
+and validates results before returning them. Provider exception messages are not
+exposed. `UnavailableCloudAgentPort` explicitly rejects with
+`UNSUPPORTED_CAPABILITY`; provider-owned lifecycle errors are sanitized because only
+the coordinator owns cancellation and deadlines. There is no automatic fallback or retry.
 
 ```ts
 import {CompetitionCoordinator} from '@personal-agent/coordination';
@@ -26,23 +25,29 @@ const coordination = new CompetitionCoordinator(
 ```
 
 Runtime retains submission deduplication, persistent run identity, task state and
-recovery. The coordinator creates no second task store. Its fulfilled text promise
-does not certify external execution. A non-cooperative provider may continue its
-own internal work after cancellation, but its late result is discarded. The
-coordinator is an in-process boundary, not a sandbox or a data-export authorizer.
+recovery. The coordinator creates no second task store. Runtime owns the tool loop,
+Policy/Approval/ToolGateway and Evidence; the cloud may only propose a registered tool.
+A non-cooperative provider may continue its own internal work after cancellation, but
+its late result is discarded. The coordinator is an in-process boundary, not a sandbox
+or a data-export authorizer.
 
-Input is the submitted goal, task ID/revision, deadline and AbortSignal. It excludes
-conversation history, attachments, credentials, authorization and Runtime methods.
-The host must authorize any future cloud transmission; an available port is not consent.
-Only bounded text (`mock` or `unverified`) is accepted. Text completion is not proof
-of tools, real AgentArts deployment or a verified external action. Unknown fields,
-tool proposals, task-state and Evidence claims are rejected at the Runtime boundary.
+Input is the submitted goal, task ID/revision, deadline and AbortSignal. An explicitly
+enabled initial request may also carry a trusted, per-task directory containing only
+`name`, `version` and `inputSchema` for selected tools. It excludes conversation
+history, attachments, credentials, authorization and Runtime methods.
+After a locally confirmed tool execution, Runtime may add a bounded continuation with
+the proposal ID and a host-selected JSON result. Real cloud export requires an explicit
+read-only tool binding, a bounded projection, and a final host permission check
+before transport dispatch. An available port is not consent. Results may be bounded
+text, a strict tool proposal (`mock` or `unverified`), or an explicitly enabled
+versioned repair candidate. Proposals cannot contain authorization, Evidence or task
+state; Runtime and Policy retain execution and task authority.
 
 Explicit offline fixtures live at `@personal-agent/coordination/testing`:
 `new FakeCoordinationPort(request => 'Fake: ' + request.goal)` and
 `new FakeCloudAgentPort(request => 'Fake cloud: ' + request.goal)`.
-Fixtures do not automatically enforce cancellation; responders must honor the supplied
-signal, allowing tests of both cooperative and non-cooperative adapters.
+Responders may return text or a strict result object. Fixtures do not automatically
+enforce cancellation; responders must honor the supplied signal.
 
 ## AgentArts HTTP adapter (Competition Profile)
 
@@ -56,10 +61,11 @@ The trusted host supplies an `AgentArtsAuthorizationProvider`; its `read(signal)
 called for every invocation and its complete Authorization header value is never
 cached, logged, placed in the request body, or returned in an error. Do not put an API
 key in an environment example, Renderer state, test fixture, or repository. The
-adapter does not read environment variables and does not implement IAM signing. Session
-and request IDs are stable, ASCII-safe header values bounded to 64 characters; local
-task IDs are always represented by a deterministic one-way hash rather than exported
-directly. Authorization must be non-empty,
+adapter does not read environment variables and does not implement IAM signing. The
+session ID is a stable hash of the local task ID; text mode derives a stable request ID,
+while proposal mode uses a fresh UUID for each invocation. Header values are ASCII-safe
+and bounded to 64 characters. The local task ID is not exported directly.
+Authorization must be non-empty,
 bounded, and free of HTTP control characters such as CR/LF.
 
 ```ts
@@ -70,9 +76,12 @@ const cloud = new AgentArtsCloudAgentPort(
 const result = await cloud.invoke(request);
 ```
 
-Only bounded text is returned (`verification: 'unverified'`). Responses must declare
-`application/json` or `text/event-stream`; both forms are byte-limited and metadata/tool
-proposals are discarded. SSE follows the standard blank-line event boundary and joins
+Default mode returns only bounded text (`verification: 'unverified'`). Explicit
+`responseMode: 'tool-proposal-json'` accepts a strict application JSON text or tool
+proposal; `repairCandidateVersion: '1.0'` additionally permits a strict repair
+candidate. All remain unverified cloud output, not execution evidence. Responses must
+declare `application/json` or `text/event-stream`; both forms are byte-limited. SSE
+follows standard event boundaries and joins
 multiple `data:` lines with `\n`; for gateways that omit separators, a conservative
 fallback accepts only one complete JSON event per `data:` line. Malformed or conflicting
 events are rejected. This adapter uses the existing contract error names: `CANCELLED`
@@ -80,41 +89,59 @@ for cancellation, `TIMEOUT` for a deadline (the contract has no
 `DEADLINE_EXCEEDED`), and `EXTERNAL_FAILURE` for authorization, transport, HTTP, or
 malformed-response failures (the contract has no `EXTERNAL_SERVICE_ERROR`).
 
-For responses containing `workflow_start` or `workflow_end`, intermediate
-`message.data.text` is not the final result. The adapter keeps the latest
-`workflow_end.data.answer` candidate and requires a subsequent `task_end` then
-`end` before returning it. A new workflow start clears an earlier candidate;
-workflow events after termination and failure events are rejected. As an explicit
-compatibility choice, `workflow_end` can introduce this mode without a preceding
-`workflow_start`; the two terminal events are still mandatory. This does not
-validate a workflow's internal execution or elevate its answer to trusted Evidence.
-Pure `message` responses retain their existing text-only behavior. The synthetic
-multi-agent fixture reflects observed event fields, not a complete raw cloud trace.
-An explicit `workflow_start` begins a new message-index scope. Conflicting text for
-the same index inside that scope is still rejected, and the 16,000-character
-message budget remains cumulative across all workflows in the response. An
-end-only workflow does not reset indexes. This compatibility rule has synthetic
-coverage; the live global-conflict report does not identify each conflict's scope.
+When a response uses workflow events, each `workflow_start` must pair with a
+`workflow_end`; supplied workflow IDs/names must match. The adapter keeps the latest
+workflow answer and returns it only after the ordered `task_end` then `end` events.
+Intermediate message text is not the final answer, and malformed ordering or a
+provider failure rejects the response. The result remains unverified cloud text.
 
-The adapter is not a claim that AgentArts is available. Real project/runtime setup,
-deployment, authentication, streaming behavior, trace/usage, and local Policy or
-ToolGateway read-back remain unverified; without explicit configuration composition
-must keep the capability unavailable and must not silently fall back to Local or Fake.
+For a cloud deployment whose prompt accepts tool selection, trusted composition may
+set `responseMode: 'tool-proposal-json'` and `initialRequestMode: 'goal-with-tools-json'`.
+The initial `query` then contains exactly `{"goal": string, "availableTools":
+[{"name": string, "version": string, "inputSchema": object}]}`. The host selects
+and minimizes the directory for that task; it is capped at 16 entries and 8 KiB.
+Missing or empty directories fail locally with `UNSUPPORTED_CAPABILITY`, before
+credentials or network. The host must provide `beforeInitialToolCatalogSend` as the
+fifth constructor argument to recheck its current task binding after credential read;
+absence or rejection prevents transport. The fourth `beforeSend` argument remains the
+existing synchronous continuation guard. A confirmed-result continuation keeps its
+existing separate query and does not resend the tool directory. Without the opt-in,
+the adapter sends the raw goal and rejects a supplied directory.
 
-Ports are text-only and not frozen. Tool proposals/results, deployment/version/trace,
-usage, resumable cloud runs and data-export consent require the next reviewed contract
-increment before real AgentArts is enabled. No wire Schema or storage migration changes.
+The adapter alone does not establish AgentArts availability. Deployment, API,
+trace/usage and local tool read-back require their own operational evidence. Without
+explicit trusted configuration, composition keeps the capability unavailable and never
+silently falls back to Local or Fake.
 
-For a Workflow whose start node accepts a single goal string, the trusted host may
-set `workflowGoalInput: 'query'` (replace `query` with the configured variable).
-The adapter then sends `{inputs: {query: goal}}` instead of the default agent body
-`{query: goal}`. It never guesses the application type, sends both forms, adds
-plugin credentials, or retries with a different request shape. This first slice
-accepts ASCII variable identifiers of 1–128 characters; this is a local supported
-subset, not a statement of Huawei's complete naming rules. Workflows requiring
-additional inputs need a later explicit mapping, not fabricated placeholder values.
-`createAgentArtsRuntimeApplication` forwards this trusted option; Desktop settings
-do not yet expose it. Existing `event: 'message', data: {text, index}` parsing is
-reused without treating text as tool instructions. See the official
-[InvokeRuntime reference](https://support.huaweicloud.com/api-agentarts/InvokeRuntime.html)
-and [work package](../../docs/modules/MOD-30-WORKFLOW-INPUT-01.md).
+For a Workflow whose start node accepts one text input, trusted composition may set
+`workflowGoalInput` to its variable name. The adapter maps the computed request text to
+that `inputs` entry; without this opt-in it sends the existing `query` shape. It never
+guesses a variable, sends both forms, or retries with another request shape. This
+provisional option is not evidence that a deployed Workflow accepts the input.
+
+Trusted composition may pass a sixth constructor argument, `onDiagnostic`, to receive
+one content-free receipt when an invocation fails. It contains a fixed failure stage
+and error code, with available local request ID, HTTP status, coarse response media
+type, observed SSE terminal-event flags, and a fixed schema category. It contains no
+goal, response text, authorization, transcript, tool arguments or endpoint. The host
+may forward this receipt to its existing private diagnostic outlet. Observer errors
+do not change the invocation result; the callback does not authorize retry or change
+Runtime task state. Request validation failures before an invocation starts do not
+produce a receipt.
+For `provider_failure`, the receipt may additionally identify the first matching
+fixed field path (`event`, `type`, `status`, or one of those under `data`) and the
+matched `error`/`failed`/`failure` token. It includes `providerErrorCode` only when
+an `error_code` field is a short service prefix followed by a numeric code, such as
+`SERVICE.1234`; arbitrary provider text is discarded. These hints do not change
+response acceptance or establish which cloud node failed.
+
+Ports are not frozen. The real adapter's confirmed-result continuation is a separate
+invocation, not a native AgentArts run resume. Its bounded projection needs host
+authorization; the original goal is not automatically sent again. Request-level
+deployment/version/trace and usage association need separate verified contracts. No
+wire Schema or storage migration changes.
+
+Tool proposal and confirmed continuation JSON copies preserve own special keys such
+as `__proto__` as ordinary data properties. They do not change the copied object's
+prototype or silently drop fields before validation and authorization. Repeated
+parsing preserves the same JSON payload; schema and Policy checks still apply.

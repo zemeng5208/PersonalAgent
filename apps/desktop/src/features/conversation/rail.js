@@ -11,10 +11,11 @@ export function mountConversationRail(container, scroller) {
   scroller.addEventListener('scroll',sync,{passive:true});
   return ()=>{
     const articles=[...scroller.querySelectorAll('[data-turn]')];
-    const next=articles.map(article=>`${article.dataset.turn}:${article.querySelector('.user-message')?.textContent||''}`).join('|');
+    const summaryFor=article=>article.querySelector('.user-message, .assistant-message')?.textContent||'';
+    const next=articles.map(article=>`${article.dataset.turn}:${summaryFor(article)}`).join('|');
     if(next!==signature){signature=next;rail.replaceChildren(...articles.map((article,index)=>{
       const button=document.createElement('button');button.type='button';button.dataset.index=String(index);
-      const summary=article.querySelector('.user-message')?.textContent||`第 ${index+1} 轮对话`;
+      const summary=summaryFor(article)||`第 ${index+1} 轮对话`;
       button.setAttribute('aria-label',`查看：${summary.slice(0,100)}`);
       const dash=document.createElement('span');dash.className='rail-dash';
       const preview=document.createElement('span');preview.className='rail-preview';preview.textContent=summary.slice(0,160);

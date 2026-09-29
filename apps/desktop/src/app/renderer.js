@@ -1,10 +1,16 @@
+import {conversationTimeline} from '../features/conversation/timeline.js';
 import {Orb} from '../features/orb/orb.js';
-import {orbState,stateNames,isTerminal} from '../features/conversation/state.js';
+import {orbState,stateNames,isTerminal,currentTask} from '../features/conversation/state.js';
 import {mountAdmin} from '../features/admin/view.js';
 import {mountWorkspace} from '../features/workspace/view.js';
 import {applyPreferences} from '../ui/preferences.js';
 import {mountConversationRail} from '../features/conversation/rail.js';
+import {resultText} from '../features/conversation/result-text.js';
+import {createGoalControl} from '../features/conversation/goal-view.js';
 import {mountDesktopShell} from '../ui/desktop-shell.js';
+import {mountLiveVoiceControls} from './live-voice-controls.js';
+import {mountProactiveControls} from './proactive-controls.js';
+import {approvalCards,approvalResponse} from '../features/conversation/approval-card.js';
 
 applyPreferences();
 mountDesktopShell();
@@ -12,7 +18,10 @@ const root = document.querySelector('#root');
 const mode = new URLSearchParams(location.search).get('mode');
 const bridge = window.desktop;
 const escape = value => String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const visibleResult = value => String(value ?? '').replace(/\s*\[model=[^;\]]+;\s*verification=[^;\]]+;\s*tokens=[^\]]+\]\s*$/,'').trim();
+const voiceFailureStages = Object.freeze({pcm_acquire:'麦克风就绪',session_start:'会话启动',
+  pcm_release:'麦克风释放',audio_buffer:'音频缓冲',recognition:'语音识别',
+  consumption:'请求回答',dictation:'填写文字',playback:'云端合成或播报',auto_finish:'自动结束',cleanup:'资源释放',
+  initialization:'适配器启动'});
 const responseIcons={copy:'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>',share:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="m8.2 10.8 7.6-4.5M8.2 13.2l7.6 4.5"/></svg>',like:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10v10H4V10h3Zm3 10h7.2a2 2 0 0 0 1.9-1.4l1.5-5A2 2 0 0 0 18.7 11H15l.6-3.1A3.2 3.2 0 0 0 12.5 4L10 10v10Z"/></svg>'};
 async function invoke(action,payload) {
   if(!bridge) throw Error('桌面桥未连接，请从 PersonalAgent 桌面应用启动');
@@ -33,7 +42,7 @@ if(mode==='orb') {
   button.addEventListener('pointerup',finish);button.addEventListener('pointercancel',()=>{if(drag)invoke('orb.dragEnd');start=null;drag=false;});
   button.addEventListener('lostpointercapture',()=>{if(drag)invoke('orb.dragEnd');start=null;drag=false;});
   button.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();invoke('orb.open');}});
-  render=data=>{orb.setLevel(data.audioLevel??0);orb.setState(data.orbStateOverride??orbState(data.tasks.at(-1)));button.setAttribute('aria-label',`PersonalAgent · ${stateNames[data.tasks.at(-1)?.state]??'待机'}`);};
+  render=data=>{const task=currentTask(data.tasks);orb.setLevel(data.audioLevel??0);orb.setState(data.orbStateOverride??orbState(task));button.setAttribute('aria-label',`PersonalAgent · ${stateNames[task?.state]??'待机'}`);};
 } else if(mode==='admin') render=mountAdmin(root,invoke,escape);
 else if(mode==='workspace') render=mountWorkspace(root,invoke,escape);
 else {
@@ -45,8 +54,51 @@ else {
   root.querySelector('#close').before(expand);
   expand.onclick=()=>invoke('workspace.open').catch(error=>{root.querySelector('#error').textContent=error.message;});
   let current,pending=false,lastTaskSignature='';const likedTasks=new Set();
-  const report=e=>root.querySelector('#error').textContent=e.message;
+  const report=e=>root.querySelector('#error').textContent=typeof e==='string'?e:e.message;
   const form=root.querySelector('form'),input=root.querySelector('textarea'),thread=root.querySelector('.thread'),tasksNode=root.querySelector('#tasks');
+  const liveControls=mountLiveVoiceControls(root,invoke);
+  const proactiveControls=mountProactiveControls(root.querySelector('.thread'),invoke);
+  const removeDictation=bridge?.onDictation?.(result=>{
+    if(typeof result?.text!=='string'||!result.text.trim())return;
+    input.value=(input.value.trim()?input.value.trimEnd()+'\n':'')+result.text;
+    input.dispatchEvent(new Event('input',{bubbles:true}));
+    input.focus();input.setSelectionRange(input.value.length,input.value.length);
+  });
+  window.addEventListener('unload',()=>removeDictation?.());
+  const sisSettings=document.createElement('details');
+  sisSettings.className='sis-settings';
+  sisSettings.innerHTML='<summary>华为云语音设置</summary><div class="sis-fields"><label>区域<select id="sis-region"><option value="cn-north-4">华北-北京四</option><option value="cn-east-3">华东-上海一</option></select></label><label>华为云账号名<input id="sis-domain" autocomplete="off" maxlength="128" placeholder="IAM 用户所属的账号名"></label><label>IAM 用户名<input id="sis-username" autocomplete="off" maxlength="128" value="personalagent-sis"></label><label>IAM 用户密码<input id="sis-password" type="password" autocomplete="off" maxlength="1024"></label><button type="button" id="sis-login">连接华为云语音</button><p class="notice">密码仅用于向华为 IAM 登录，不保存；项目令牌在本机加密保存。录音仅在你开启后发送到华为 SIS。</p><details><summary>已有 IAM Token：手动配置</summary><label>项目 ID<input id="sis-project" autocomplete="off" maxlength="128"></label><label>独立 IAM Token<input id="sis-token" type="password" autocomplete="off" maxlength="16384"></label><label>Token 到期时间（UTC，可选）<input id="sis-expiry" autocomplete="off" placeholder="YYYY-MM-DDTHH:mm:ssZ"></label><button type="button" id="sis-save">保存 SIS 配置</button></details><p class="notice" id="sis-reason"></p></div>';
+  root.querySelector('#error').before(sisSettings);
+  const sisRegion=sisSettings.querySelector('#sis-region');
+  const sisProject=sisSettings.querySelector('#sis-project');
+  const sisToken=sisSettings.querySelector('#sis-token');
+  const sisExpiry=sisSettings.querySelector('#sis-expiry');
+  const sisLoginStatus=document.createElement('p');
+  sisLoginStatus.className='notice';sisLoginStatus.setAttribute('role','status');
+  sisSettings.querySelector('#sis-login').after(sisLoginStatus);
+  sisSettings.querySelector('#sis-login').onclick=async()=>{
+    const login=sisSettings.querySelector('#sis-login'),password=sisSettings.querySelector('#sis-password');
+    const request={region:sisRegion.value,domainName:sisSettings.querySelector('#sis-domain').value.trim(),
+      username:sisSettings.querySelector('#sis-username').value.trim(),password:password.value};
+    password.value='';login.disabled=true;sisLoginStatus.textContent='正在连接华为 IAM…';
+    try{const result=await invoke('voice.login',request);
+      sisLoginStatus.textContent=result.connected?'已连接华为云语音，可以开始录音':'凭据已保存，等待任务引擎就绪';
+      if(result.connected)sisSettings.open=false;}
+    catch(err){sisLoginStatus.textContent=err instanceof Error?err.message:'连接失败，请重试';}
+    finally{request.password='';login.disabled=false;}
+  };
+  sisSettings.querySelector('#sis-save').onclick=async()=>{
+    const save=sisSettings.querySelector('#sis-save');
+    save.disabled=true;
+    try { const result=await invoke('voice.configure',{region:sisRegion.value,projectId:sisProject.value.trim(),
+      iamToken:sisToken.value,tokenExpiresAt:sisExpiry.value.trim()});
+      sisToken.value='';sisSettings.open=false;root.querySelector('#error').textContent=result.connected?'':'SIS 配置已保存；等待 Competition Runtime 接通后启用语音'; }
+    catch(err){sisToken.value='';report(err);}
+    finally{save.disabled=false;}
+  };
+  const goalControl=createGoalControl(invoke,()=>input.value);
+  root.querySelector('.composer-bar .spacer').before(goalControl.button);
+  root.querySelector('.panel').append(goalControl.dialog);
   const updateRail=mountConversationRail(root.querySelector('.panel'),thread);
   const sendBtn=root.querySelector('#send'),modelBtn=root.querySelector('#model'),modelMenu=root.querySelector('#model-menu');
   const bellBtn=root.querySelector('#bell'),bellMenu=root.querySelector('#bell-menu');
@@ -59,7 +111,7 @@ else {
   const finishPanelDrag=()=>{if(panelDragging)panelDragReady?.then(()=>invoke('panel.dragEnd').catch(report));panelDragStart=undefined;panelDragging=false;panelDragReady=undefined;};
   header.addEventListener('pointerup',finishPanelDrag);header.addEventListener('pointercancel',finishPanelDrag);header.addEventListener('lostpointercapture',finishPanelDrag);
   const syncSlider=()=>{const v=Number(slider.value);const labels=['最低','低','平衡','深入','高','最高'];const fill=6+(88*v/5);slider.style.setProperty('--fill',fill+'%');depthLabel.textContent=labels[v]??'平衡';modelMenu.classList.toggle('maxed',v===5);};
-  const setSendMode=hasText=>{sendBtn.dataset.mode=hasText?'send':'voice';sendBtn.title=hasText?'发送':'语音模式（语音模型未连接）';sendBtn.setAttribute('aria-label',hasText?'发送消息':'语音模式（语音模型未连接）');sendBtn.disabled=pending || Boolean(current?.tasks.some(task=>!isTerminal(task)));};
+  const setSendMode=hasText=>{sendBtn.dataset.mode=hasText?'send':'live';sendBtn.title=hasText?'发送':current?.live?.active?'关闭 Live 实时语音':'开启 Live 实时语音';sendBtn.setAttribute('aria-label',sendBtn.title);sendBtn.setAttribute('aria-pressed',String(!hasText&&Boolean(current?.live?.active)));sendBtn.disabled=hasText&&(pending || Boolean(current?.tasks.some(task=>!isTerminal(task))));};
   root.querySelector('#admin').onclick=()=>invoke('admin.open').catch(report);
   root.querySelector('#close').onclick=()=>invoke('panel.hide').catch(report);
   modelBtn.onclick=e=>{e.stopPropagation();const open=modelMenu.hidden;closeModel();closeBell();if(open){modelMenu.hidden=false;modelBtn.setAttribute('aria-expanded','true');}};
@@ -69,16 +121,54 @@ else {
   fastBtn.onclick=()=>{const on=fastBtn.getAttribute('aria-pressed')!=='true';fastBtn.setAttribute('aria-pressed',String(on));modelMenu.classList.toggle('fast',on);invoke('thinking.update',{depth:Number(slider.value),fast:on}).catch(report);};
   input.addEventListener('input',e=>{setSendMode(Boolean(e.target.value.trim()));invoke('panel.pin',true).catch(report);});
   input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();if(input.value.trim()&&!pending)form.requestSubmit();}});
-  sendBtn.addEventListener('click',e=>{e.preventDefault();if(sendBtn.dataset.mode==='voice')report('语音模型未连接，圆形按钮预留给语音模式');else if(!pending)form.requestSubmit();});
+  sendBtn.addEventListener('click',e=>{e.preventDefault();if(sendBtn.dataset.mode==='live'){
+    void liveControls.toggle();
+  }else if(!pending)form.requestSubmit();});
   document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(!modelMenu.hidden){closeModel();return;}if(!bellMenu.hidden){closeBell();return;}invoke('panel.hide').catch(report);});
   form.onsubmit=async e=>{e.preventDefault();if(pending||!input.value.trim())return;pending=true;setSendMode(true);try{await invoke('task.submit',input.value);input.value='';requestAnimationFrame(()=>{thread.scrollTop=thread.scrollHeight;});root.querySelector('#error').textContent='';}catch(err){report(err);}finally{pending=false;setSendMode(Boolean(input.value.trim()));}};
   const stopButton=root.querySelector('#stop');
-  // voice.stop is deliberately separate from task.cancel. The current build has no
-  // voice provider, so it reports unavailable instead of claiming that speech stopped.
+  // Stopping playback never sends task.cancel to Runtime.
   stopButton.onclick=async()=>{window.speechSynthesis?.cancel();try{const result=await invoke('voice.stop');if(!result?.stopped)report(result?.reason??'语音供应商尚未连接');}catch(err){report(err);}};
-  root.querySelector('#tasks').onclick=async e=>{const b=e.target.closest('[data-action],[data-ui-action]');if(!b)return;const uiAction=b.dataset.uiAction;if(uiAction==='like'){const on=!likedTasks.has(b.dataset.id);if(on)likedTasks.add(b.dataset.id);else likedTasks.delete(b.dataset.id);b.classList.toggle('active',on);b.setAttribute('aria-pressed',String(on));return;}if(uiAction==='copy'||uiAction==='share'){const task=current?.tasks.find(item=>item.taskId===b.dataset.id);const text=visibleResult(task?.resultSummary);if(!text)return;try{if(uiAction==='share'&&navigator.share){await navigator.share({text});}else{await invoke('clipboard.writeText',text);b.title=uiAction==='copy'?'已复制':'已复制分享文本';b.setAttribute('aria-label',b.title);setTimeout(()=>{b.title=uiAction==='copy'?'复制':'分享';b.setAttribute('aria-label',`${b.title}回答`);},1600);}}catch(err){if(err?.name!=='AbortError')report(err);}return;}b.disabled=true;try{await invoke(b.dataset.action,b.dataset.id);}catch(err){report(err);}finally{b.disabled=false;}};
-  render=data=>{current=data;const task=data.tasks.at(-1);const connectionNode=root.querySelector('#connection');connectionNode.textContent=data.fakeModel?data.connection+' · Fake Model':data.connection;root.querySelector('#state').textContent=task?stateNames[task.state]:'待机';
-    root.querySelector('#error').textContent=data.connectionError??'';
+  const talkButton=root.querySelector('#talk');
+  talkButton.onclick=async()=>{
+    const state=current?.voice?.status;
+    const action=state==='listening'?'voice.record.finish':'voice.record.start';
+    talkButton.disabled=true;
+    try{await invoke(action);root.querySelector('#error').textContent='';}
+    catch(err){report(err);}
+    finally{talkButton.disabled=Boolean(current?.live?.active)||!current?.voice?.experimental||!['unavailable','error','listening','awaiting_speech'].includes(current?.voice?.status);}
+  };
+  root.querySelector('#tasks').onclick=async e=>{const b=e.target.closest('[data-action],[data-ui-action]');if(!b)return;const uiAction=b.dataset.uiAction;if(uiAction==='like'){const on=!likedTasks.has(b.dataset.id);if(on)likedTasks.add(b.dataset.id);else likedTasks.delete(b.dataset.id);b.classList.toggle('active',on);b.setAttribute('aria-pressed',String(on));return;}if(uiAction==='copy'||uiAction==='share'){const task=current?.tasks.find(item=>item.taskId===b.dataset.id);const message=current?.messages?.find(item=>item.id===b.dataset.messageId);const text=b.dataset.messageId?message?.text:resultText(task?.resultSummary);if(!text)return;try{if(uiAction==='share'&&navigator.share){await navigator.share({text});}else{await invoke('clipboard.writeText',text);b.title=uiAction==='copy'?'已复制':'已复制分享文本';b.setAttribute('aria-label',b.title);setTimeout(()=>{b.title=uiAction==='copy'?'复制':'分享';b.setAttribute('aria-label',`${b.title}回答`);},1600);}}catch(err){if(err?.name!=='AbortError')report(err);}return;}b.disabled=true;try{await invoke(b.dataset.action,b.dataset.id);}catch(err){report(err);}finally{b.disabled=false;}};
+  root.querySelector('#tasks').addEventListener('click',async event=>{
+    const button=event.target.closest('[data-approval-decision]');if(!button)return;
+    button.disabled=true;
+    try{await invoke('authorization.respond',approvalResponse(button.dataset.approvalId,
+      button.dataset.approvalDecision,current?.tasks??[],current?.approvals??[]));}
+    catch(error){report(error);button.disabled=false;}
+  });
+  render=data=>{current=data;const task=currentTask(data.tasks);const connectionNode=root.querySelector('#connection');connectionNode.textContent=data.fakeModel?data.connection+' · Fake Model':data.connection;const liveStates={connecting:'正在连接',reconnecting:'正在续接',listening:'正在聆听',speaking:'正在回答',working:'正在处理任务',stopping:'正在关闭',error:'连接失败'};root.querySelector('#state').textContent=data.live?.active?(liveStates[data.live.status]??'Live 已开启'):task?stateNames[task.state]:'待机';
+    liveControls.render(data.live);
+    proactiveControls.render(data.proactive);
+    const notifs=Array.isArray(data.notifications)?data.notifications:[];
+    if(notifs.length>0){
+      bellMenu.innerHTML=notifs.slice(0,5).map(n=>`<div class="notice" style="color:var(--fg);margin:6px 4px"><strong>${escape(n.summary)}</strong><br><small style="color:var(--muted)">${escape(new Date(n.occurredAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}))}</small></div>`).join('');
+      bellBtn.title=`通知 (${notifs.length})`;bellBtn.setAttribute('aria-label',bellBtn.title);
+    }else{
+      bellMenu.innerHTML='<div class="notice">暂无新通知</div>';
+      bellBtn.title='通知';bellBtn.setAttribute('aria-label','通知');
+    }
+    sisSettings.hidden=data.model?.provider!=='agentarts';
+    const sisConfiguration=data.voice?.configuration;
+    sisSettings.querySelector('summary').textContent=sisConfiguration?.configured?'华为云语音设置 · 已配置':'华为云语音设置';
+    sisSettings.querySelector('#sis-reason').textContent=sisConfiguration?.reason??'SIS 尚未配置';
+    sisToken.placeholder=sisConfiguration?.configured?'已安全保存；仅更换令牌时填写':'填写独立 IAM Token';
+    sisSettings.querySelector('#sis-password').placeholder=sisConfiguration?.configured?'已连接，无需重新填写密码':'填写 IAM 用户密码';
+    if(!sisSettings.open){sisRegion.value=sisConfiguration?.region??'cn-north-4';sisProject.value=sisConfiguration?.projectId??'';
+      sisExpiry.value=sisConfiguration?.tokenExpiresAt||'';}
+    const voiceFailure=data.voice?.status==='error'?data.voice.failure:null;
+    const voiceFailureStage=voiceFailureStages[voiceFailure?.stage]??'处理';
+    const voiceError=data.voice?.status==='error'?`语音${voiceFailureStage}失败：${voiceFailure?.message??data.voice.reason??'语音处理失败'}`:'';
+    root.querySelector('#error').textContent=data.connectionError||voiceError;
     const modelReady=data.model?.status==='ready';
     // Thinking controls are a local test surface.  They must remain draggable
     // even while the provider is unconfigured or its connection test failed;
@@ -90,15 +180,25 @@ else {
     modelBtn.title=modelReady?`${modelIdentity} · 模型与思考深度`:'思考设置可调整；模型尚未完成真实连接测试';
     if(data.thinking){slider.value=String(data.thinking.depth??1);fastBtn.setAttribute('aria-pressed',String(Boolean(data.thinking.fast)));modelMenu.classList.toggle('fast',Boolean(data.thinking.fast));syncSlider();}
     const tag=root.querySelector('#model-tag');if(tag)tag.textContent=modelReady?'已测试':data.model?.status==='configured'?'待测试':'未配置';
-    const modelNotice=root.querySelector('#model-notice');if(modelNotice)modelNotice.textContent=modelReady?'思考设置已保存到桌面测试状态；Runtime 参数契约接入后才会影响任务。':`${data.model?.reason??'模型未完成真实连接测试'}；思考设置仍可调整，但不会用于真实任务。`;
-    stopButton.disabled=data.voice?.available!==true;stopButton.title=data.voice?.available===true?'停止播报':'停止播报（语音供应商未连接）';
-    root.querySelector('.bubble').hidden=data.tasks.length>0;
-    const taskSignature=JSON.stringify(data.tasks.map(t=>[t.taskId,t.state,t.revision,t.userMessage,t.resultSummary,t.error?.message]));
+    const modelNotice=root.querySelector('#model-notice');if(modelNotice)modelNotice.textContent=data.thinking?.applied?data.thinking.reason:(modelReady?'思考设置已保存到桌面测试状态；Runtime 参数契约接入后才会影响任务。':`${data.model?.reason??'模型未完成真实连接测试'}；思考设置仍可调整，但不会用于真实任务。`);
+    const voiceState=data.voice?.status;
+    const voiceReady=Boolean(data.voice?.experimental);
+    talkButton.disabled=Boolean(data.live?.active)||!voiceReady||!['unavailable','error','listening','awaiting_speech'].includes(voiceState);
+    talkButton.title=voiceState==='listening'?'结束录音并填入文字':voiceReady?'语音转文字（不自动发送）':'语音转文字未连接';
+    talkButton.setAttribute('aria-label',talkButton.title);
+    root.querySelector('.mic-state').textContent=voiceError|| (voiceState==='listening'?'麦克风：正在采集，点击结束':voiceState==='acquiring'?'麦克风：等待设备就绪':voiceState==='recognizing'?'语音：正在转成文字':voiceReady?'麦克风：语音转文字，不自动发送':'麦克风：未采集');
+    stopButton.disabled=voiceState!=='speaking'&&!data.live?.active;stopButton.title=data.live?.active?'打断回答（保持 Live）':voiceState==='speaking'?'停止播报':'停止播报（当前未播放）';
+    root.querySelector('.bubble').hidden=data.tasks.length>0 || Boolean(data.messages?.length);
+    const taskSignature=JSON.stringify([data.tasks.map(t=>[t.taskId,t.createdAt,t.state,t.revision,t.userMessage,t.resultSummary,t.error?.message,t.steps?.map(s=>[s.stepId,s.status,s.label])]),data.messages,data.approvals]);
     const thinkingGrid='<span class="thinking-grid" aria-hidden="true">'+[0,1,2,1,2,3,2,3,4].map((delay,index)=>`<i style="--i:${delay}" data-cell="${index}"></i>`).join('')+'</span>';
     const wasAtBottom=thread.scrollHeight-thread.scrollTop-thread.clientHeight<90;
-    if(taskSignature!==lastTaskSignature) tasksNode.innerHTML=data.tasks.map(t=>{const terminal=isTerminal(t);const waiting=['waiting_approval','waiting_external','waiting_reconciliation','cancelling'].includes(t.state);const activity=waiting?'等待中':t.state==='verifying'?'整理回答':t.state==='running'?'执行中':'思考中';const answer=visibleResult(t.resultSummary);const failure=t.error?.message;const answerActions=answer?`<div class="response-actions"><button type="button" data-ui-action="copy" data-id="${escape(t.taskId)}" title="复制" aria-label="复制回答">${responseIcons.copy}</button><button type="button" data-ui-action="share" data-id="${escape(t.taskId)}" title="分享" aria-label="分享回答">${responseIcons.share}</button><button type="button" data-ui-action="like" data-id="${escape(t.taskId)}" title="点赞" aria-label="点赞回答" aria-pressed="${likedTasks.has(t.taskId)}" class="${likedTasks.has(t.taskId)?'active':''}">${responseIcons.like}</button></div>`:'';return `<article class="task turn" data-turn="${escape(t.taskId)}">${t.userMessage?`<div class="user-message">${escape(t.userMessage)}</div>`:''}<div class="assistant-turn">${!terminal?`<div class="thinking-line">${thinkingGrid}<span>${activity}</span></div>`:answer?`<div class="assistant-message">${escape(answer)}</div>${answerActions}`:failure?`<div class="assistant-error">${escape(failure)}</div>`:''}</div>${!terminal?`<div class="turn-actions"><button class="turn-action" data-action="task.cancel" data-id="${escape(t.taskId)}" ${t.state==='cancelling'?'disabled':''}>停止</button>${data.fake?`<button class="turn-action" data-action="test.advance" data-id="${escape(t.taskId)}">推进联调</button>`:''}</div>`:''}</article>`;}).join('');
+    if(taskSignature!==lastTaskSignature) tasksNode.innerHTML=conversationTimeline(data.tasks,data.messages).map(entry=>{if(entry.kind==='message'){const m=entry.value;const body=`<div class="${m.role==='user'?'user-message':'assistant-message'}">${escape(m.text)}</div><div class="response-actions"><button type="button" data-ui-action="copy" data-message-id="${escape(m.id)}" title="复制" aria-label="复制语音消息">${responseIcons.copy}</button></div>`;return `<article class="task turn" data-turn="live:${escape(m.id)}">${m.role==='assistant'?`<div class="assistant-turn">${body}</div>`:body}</article>`;}const t=entry.value;const terminal=isTerminal(t);const waiting=['waiting_approval','waiting_external','waiting_reconciliation','cancelling'].includes(t.state);const activeStep=Array.isArray(t.steps)&&t.steps.length?t.steps[t.steps.length-1]:null;const activity=waiting?stateNames[t.state]:activeStep?.label?activeStep.label:t.state==='verifying'?'整理回答':t.state==='running'?'执行中':'思考中';const answer=resultText(t.resultSummary);const failure=t.error?.message;const answerActions=answer?`<div class="response-actions"><button type="button" data-ui-action="copy" data-id="${escape(t.taskId)}" title="复制" aria-label="复制回答">${responseIcons.copy}</button><button type="button" data-ui-action="share" data-id="${escape(t.taskId)}" title="分享" aria-label="分享回答">${responseIcons.share}</button><button type="button" data-ui-action="like" data-id="${escape(t.taskId)}" title="点赞" aria-label="点赞回答" aria-pressed="${likedTasks.has(t.taskId)}" class="${likedTasks.has(t.taskId)?'active':''}">${responseIcons.like}</button></div>`:'';return `<article class="task turn" data-turn="${escape(t.taskId)}">${t.userMessage?`<div class="user-message">${escape(t.userMessage)}</div>`:''}<div class="assistant-turn">${!terminal?`<div class="thinking-line">${thinkingGrid}<span>${activity}</span></div>`:answer?`<div class="assistant-message">${escape(answer)}</div>${answerActions}`:failure?`<div class="assistant-error">${escape(failure)}</div>`:''}</div>${!terminal?`<div class="turn-actions"><button class="turn-action" data-action="task.cancel" data-id="${escape(t.taskId)}" ${t.state==='cancelling'?'disabled':''}>停止</button>${data.fake?`<button class="turn-action" data-action="test.advance" data-id="${escape(t.taskId)}">推进联调</button>`:''}</div>`:''}</article>`;}).join('');
+    if(taskSignature!==lastTaskSignature) for(const task of data.tasks){
+      const article=tasksNode.querySelector(`[data-turn="${CSS.escape(task.taskId)}"]`);
+      article?.insertAdjacentHTML('beforeend',approvalCards(task,data.approvals));
+    }
     setSendMode(Boolean(input.value.trim()));
-    if(taskSignature!==lastTaskSignature){lastTaskSignature=taskSignature;requestAnimationFrame(()=>{if(wasAtBottom)thread.scrollTop=thread.scrollHeight;updateRail();});}};
+    if(taskSignature!==lastTaskSignature){lastTaskSignature=taskSignature;updateRail();requestAnimationFrame(()=>{if(wasAtBottom)thread.scrollTop=thread.scrollHeight;});}};
 }
 if(bridge){const unsubscribe=bridge.subscribe(render);invoke('snapshot').then(render).catch(e=>{root.textContent=e.message;});window.addEventListener('unload',()=>{unsubscribe();orb?.dispose();});}
 else root.textContent='桌面桥未连接，请从 PersonalAgent 桌面应用启动。';
