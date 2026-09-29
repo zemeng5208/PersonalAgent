@@ -12,7 +12,9 @@ const checkStart = source.indexOf('function check(');
 const helperStart = source.indexOf('async function invokeHelper(');
 const helperEnd = source.indexOf('export function createWorkspacePatchApplyToolFromPreview(');
 assert.ok(checkStart >= 0 && helperStart > checkStart && helperEnd > helperStart);
-const helperSource = `${source.slice(checkStart, helperEnd)}\ninvokeHelper;`;
+const inputDigest = source.match(/^const INPUT_DIGEST = .*;$/m)?.[0];
+assert.ok(inputDigest);
+const helperSource = `${inputDigest}\n${source.slice(checkStart, helperEnd)}\ninvokeHelper;`;
 
 function createHarness({duringMarker} = {}) {
   const controller = new AbortController();
