@@ -1,4 +1,4 @@
-import {app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, safeStorage, screen, session, Tray} from 'electron';
+import {app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, safeStorage, screen, session, Tray} from 'electron';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
 import path from 'node:path';
@@ -15,6 +15,8 @@ import {createMicrophonePermissionGate} from './microphone-permission.js';
 import {readApprovalPage} from './approval-history.js';
 import {createAgentArtsConfig} from './agentarts-config.js';
 import {createDeferredRuntimeStartup} from './runtime-startup.js';
+import {createDesktopFeedsHost} from './feeds-host.js';
+import {createDesktopTodoHost} from './todo-host.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -107,6 +109,11 @@ const approvals = new Map();
 const notifications = new Map();
 let runtimeApplication;
 let agentArtsConfig;
+let feedsHost;
+let todoHost;
+let todoFailure = '';
+let todoClosing;
+let todoClosed = false;
 let activeCloudBinding;
 const runtimeStartup = createDeferredRuntimeStartup({
   isConfigured: () => !competitionMode || agentArtsConfig?.snapshot().configured === true,
@@ -132,9 +139,11 @@ function snapshot(surface) {
     health: structuredClone(health),
     capabilityDirectory: {...capabilityDirectory},
     approvals: [...approvals.values()],
-    notifications: [...notifications.values()],
+    notifications: [...notifications.values(), ...(todoHost?.snapshot().notifications ?? [])],
     model: structuredClone(model),
     agentArts: agentArtsConfig?.snapshot(),
+    feeds: feedsHost?.snapshot(),
+    todo: todoHost?.snapshot() ?? {available:false,items:[],notifications:[],reason:todoFailure || '待办将在 Runtime 连接后可用'},
     thinking: structuredClone(thinking),
     voice: {available: false, status: 'unavailable', reason: '语音供应商尚未连接'},
   };
@@ -618,6 +627,17 @@ async function initializeRuntime() {
     if (competitionMode) {
       const cloudBinding=agentArtsConfig.binding();
       activeCloudBinding = cloudBinding;
+      if (!syntheticMvp) feedsHost.prepare();
+      if (!syntheticMvp) {
+        try {todoHost = createDesktopTodoHost({userData:app.getPath('userData'),safeStorage,
+          namespace:desktopHost.userNamespace,createDeliveryHost:runtimeModule.createReminderDeliveryHost,
+          onUpdate:publish,onNotification:item=>{
+            if (!Notification.isSupported()) return;
+            const notification=new Notification({title:'PersonalAgent 待办提醒',body:item.summary});
+            notification.on('click',()=>openPanel());notification.show();
+          }});}
+        catch {todoFailure = '待办存储无法读取，原数据已保留，请恢复本机安全存储';}
+      }
       const syntheticTools = syntheticMvp
         ? (await import('./competition-synthetic-workspace.js')).createSyntheticMeetingToolset(
           path.resolve(dir, '../../../tests/manual/agentarts/fixtures/mvp-meeting'),
@@ -635,9 +655,16 @@ async function initializeRuntime() {
       }
       runtimeApplication = runtimeModule.createAgentArtsRuntimeApplication({
         path: dbPath,
+        hostUserNamespace: desktopHost.userNamespace,
         ...syntheticTools,
         ...(syntheticMvp ? {localRepair: syntheticRepairHost.localRepair} : {}),
         ...(agentArtsResponseMode === undefined ? {} : {responseMode: agentArtsResponseMode}),
+        ...(!syntheticMvp && (feedsHost.tools.length || todoHost?.tools.length) ? {
+          tools:[...feedsHost.tools, ...(todoHost?.tools ?? [])], responseMode:agentArtsResponseMode ?? 'tool-proposal-json',
+          initialRequestMode:'goal-with-tools-json',
+          competitionToolAvailability:[...feedsHost.competitionToolAvailability, ...(todoHost?.competitionToolAvailability ?? [])],
+          competitionToolExports:[...feedsHost.competitionToolExports, ...(todoHost?.competitionToolExports ?? [])],
+        } : {}),
         ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
         ...cloudBinding,
         invokeMode: agentArtsInvokeMode,
@@ -651,6 +678,8 @@ async function initializeRuntime() {
         },
       });
       if (syntheticRepairHost) await syntheticRepairHost.initialize(runtimeApplication.runtime);
+      if (!syntheticMvp) feedsHost.bindApplication(runtimeApplication);
+      todoHost?.bindApplication(runtimeApplication);
     } else {
       const createApplication = process.argv.includes('--weather-tools')
         ? (await import('@personal-agent/runtime/weather')).createOpenMeteoApplication
@@ -682,7 +711,7 @@ async function initializeRuntime() {
       if (task.state === 'succeeded') void promptSyntheticRepairCandidate(task.taskId).catch(() => {});
     }
   }
-  eventPoll = setInterval(() => void pumpEvents(), 120);
+  eventPoll = setInterval(() => {void pumpEvents(); void todoHost?.tick();}, 120);
 }
 
 async function initializeProductServices() {
@@ -745,6 +774,17 @@ async function action(event, name, payload) {
     return {...result, requiresRestart, reason: requiresRestart
       ? '配置已加密保存，请重启应用完成连接。'
       : '配置已加密保存，Runtime 已连接；云端可用性以实际任务结果为准。'};
+  }
+  if (['todo.authorize','todo.revoke','todo.configureNotifications','todo.dismiss'].includes(name)) {
+    if(sender!==admin || !competitionMode || syntheticMvp || !todoHost) throw Error('请从正式应用待办设置操作');
+    const result=todoHost[name.slice(5)](payload);publish();return result;
+  }
+  if (['feeds.add','feeds.remove','feeds.authorize','feeds.revoke'].includes(name)) {
+    if (sender !== admin || !competitionMode || syntheticMvp || !feedsHost) throw Error('请从正式应用订阅设置操作');
+    if (name !== 'feeds.revoke' && (runtimeApplication?.activeTaskCount || runtimeStartup.snapshot().state==='starting')) {
+      throw Error('请等待当前任务和启动结束后修改订阅');
+    }
+    const result = feedsHost[name.slice('feeds.'.length)](payload); publish(); return result;
   }
   if (name === 'voice.stop') {
     if (sender !== panel) throw Error('语音操作只能从面板调用');
@@ -838,6 +878,7 @@ app.whenReady().then(async () => {
   if (!ownsDesktopInstance) return;
   desktopHost = createDesktopHost();
   agentArtsConfig = createAgentArtsConfig({userData: app.getPath('userData'), safeStorage});
+  if (competitionMode && !syntheticMvp) feedsHost = createDesktopFeedsHost({userData:app.getPath('userData'),safeStorage});
   microphonePermissionGate = createMicrophonePermissionGate({
     expectedPageUrl: pathToFileURL(entry).href,
     isTrustedWindow: contents => contents === panel?.webContents,
@@ -894,6 +935,9 @@ app.whenReady().then(async () => {
     else if (panel.isVisible()) { if (!away) away = Date.now(); else if (Date.now() - away > 520) { panel.hide(); away = 0; } }
   }, 80);
   app.on('before-quit', event => {
+    if (runtimeStartup.snapshot().state === 'starting') {
+      event.preventDefault(); runtimeError = 'Runtime 正在连接，请稍后退出'; publish(); return;
+    }
     if ((runtimeApplication?.activeTaskCount ?? 0) > 0) {
       event.preventDefault();
       app.isQuitting = false;
@@ -901,9 +945,16 @@ app.whenReady().then(async () => {
       publish();
       return;
     }
+    if (todoHost && !todoClosed) {
+      event.preventDefault();
+      todoClosing ??= todoHost.close().then(() => {todoClosed=true;app.quit();})
+        .catch(() => {todoClosing=undefined;runtimeError='提醒队列尚未结束，请稍后退出';publish();});
+      return;
+    }
     try {
       if (runtimeApplication) runtimeApplication.close();
       else runtime?.close?.();
+      feedsHost?.close();
     } catch (error) {
       event.preventDefault();
       app.isQuitting = false;
