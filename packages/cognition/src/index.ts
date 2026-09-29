@@ -40,11 +40,34 @@ export {LayaActionChoiceService, actionArgumentsDigest} from './laya-action-choi
 export type {LayaActionCandidate, LayaActionChoiceRequest, LayaActionSelection} from './laya-action-choice.js';
 export {decideInterest, decideKnowledgeFreshness} from './interest-policy.js';
 export type {InterestState, InterestEvidence, InterestEvidenceRef, InterestPolicyInput, InterestPolicyDecision, FreshnessInput, FreshnessDecision} from './interest-policy.js';
-export {MeetingRescheduleCoordinator, createStoreExecutionPort, InMemoryMeetingDecisionReceiptStore} from './meeting-decision.js';
-export type {MeetingRescheduleEvent, MeetingCandidate, MeetingDecisionReceipt, MeetingCoordinatorOptions,
-  MeetingReceiptRecord, MeetingDecisionReceiptStorePort, MeetingPlanExecutionPort} from './meeting-decision.js';
+export {
+  MeetingRescheduleCoordinator,
+  createStoreExecutionPort,
+  createPolicyGuardedExecutionPort,
+  InMemoryMeetingDecisionReceiptStore,
+  FileMeetingDecisionReceiptStore,
+} from './meeting-decision.js';
+export type {
+  MeetingRescheduleEvent,
+  MeetingCandidate,
+  MeetingDecisionReceipt,
+  MeetingCoordinatorOptions,
+  MeetingReceiptRecord,
+  MeetingReceiptQuery,
+  MeetingDecisionReceiptStorePort,
+  MeetingPlanExecutionPort,
+  MeetingExecutionPolicyPort,
+  PolicyGuardedExecutionPortOptions,
+  FileMeetingDecisionReceiptStoreOptions,
+} from './meeting-decision.js';
 export {MailTriagePipeline, DEFAULT_MAIL_LABELS} from './mail-triage-pipeline.js';
 export type {MailTriageCheckpointPort, MailTriagePipelineOptions, MailBatchTriageRequest,
   MailHighImpactNotice, MailBatchTriageSummary} from './mail-triage-pipeline.js';
 export {DeviceAnomalyDecisionService} from './device-anomaly-decision.js';
-export type {DeviceSample, DeviceAnomalyOptions, DeviceAnomalyStatus, DeviceAnomalyDecisionReceipt} from './device-anomaly-decision.js';
+export type {
+  DeviceSample,
+  DeviceAnomalyOptions,
+  DeviceAnomalyStatus,
+  DeviceAnomalyDecisionReceipt,
+  DeviceNotificationPort,
+} from './device-anomaly-decision.js';

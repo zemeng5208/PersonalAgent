@@ -309,3 +309,69 @@ test('DeviceAnomalyDecisionService does not lock cooldown when inference fails',
   });
   assert.notEqual(res2.status, 'cooldown_suppressed');
 });
+
+test('DeviceAnomalyDecisionService only locks cooldown when notification delivery is confirmed', async () => {
+  const inference = createMockLayaChoiceInference(0);
+  let shouldSucceed = false;
+  const sentNotifications = [];
+
+  const notificationPort = {
+    async sendAdvisoryNotification(notif) {
+      sentNotifications.push(notif);
+      return { delivered: shouldSucceed };
+    },
+  };
+
+  const service = new DeviceAnomalyDecisionService(inference, {
+    cpuThresholdPercent: 90,
+    sustainedSampleCount: 1,
+    cooldownMs: 60_000,
+    notificationPort,
+  });
+
+  const baseTime = Date.parse('2026-09-29T18:00:00.000Z');
+
+  // Sample 1: Notification delivery FAILS
+  const res1 = await service.evaluateSample({
+    source: 'sys:metric',
+    timestamp: new Date(baseTime).toISOString(),
+    cpuPercent: 95,
+    memoryPercent: 50,
+    samplingIntervalMs: 5000,
+  });
+  assert.equal(res1.status, 'alert_triggered');
+  assert.equal(res1.notificationDelivered, false);
+  assert.match(res1.safeAdvice, /投递失败/);
+
+  // Sample 2 (10s later): Since delivery failed, cooldown was NOT locked! It triggers again!
+  const res2 = await service.evaluateSample({
+    source: 'sys:metric',
+    timestamp: new Date(baseTime + 10000).toISOString(),
+    cpuPercent: 95,
+    memoryPercent: 50,
+    samplingIntervalMs: 5000,
+  });
+  assert.equal(res2.status, 'alert_triggered'); // NOT cooldown_suppressed!
+
+  // Now enable successful delivery
+  shouldSucceed = true;
+  const res3 = await service.evaluateSample({
+    source: 'sys:metric',
+    timestamp: new Date(baseTime + 20000).toISOString(),
+    cpuPercent: 95,
+    memoryPercent: 50,
+    samplingIntervalMs: 5000,
+  });
+  assert.equal(res3.status, 'alert_triggered');
+  assert.equal(res3.notificationDelivered, true);
+
+  // Sample 4 (5s after successful delivery): NOW it is cooldown_suppressed!
+  const res4 = await service.evaluateSample({
+    source: 'sys:metric',
+    timestamp: new Date(baseTime + 25000).toISOString(),
+    cpuPercent: 95,
+    memoryPercent: 50,
+    samplingIntervalMs: 5000,
+  });
+  assert.equal(res4.status, 'cooldown_suppressed');
+});

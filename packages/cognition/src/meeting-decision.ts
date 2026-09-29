@@ -1,4 +1,6 @@
 import {createHash} from 'node:crypto';
+import {existsSync, mkdirSync, readFileSync, renameSync, readdirSync, writeFileSync} from 'node:fs';
+import path from 'node:path';
 import {
   currentNodes,
   isEffective,
@@ -28,6 +30,7 @@ export interface MeetingRescheduleEvent {
   readonly originalSummary: string;
   readonly newSummary: string;
   readonly sourceRevision: string;
+  readonly expectedBaseRevision?: string | undefined;
   readonly detectedAt: string;
   readonly deadline: string;
   readonly signal: AbortSignal;
@@ -71,19 +74,109 @@ export interface MeetingReceiptRecord {
   readonly updatedAt: string;
 }
 
+export interface MeetingReceiptQuery {
+  readonly eventId: string;
+  readonly namespace?: string | undefined;
+  readonly source?: string | undefined;
+}
+
 export interface MeetingDecisionReceiptStorePort {
-  loadReceipt(eventId: string): MeetingReceiptRecord | undefined | Promise<MeetingReceiptRecord | undefined>;
+  loadReceipt(query: string | MeetingReceiptQuery): MeetingReceiptRecord | undefined | Promise<MeetingReceiptRecord | undefined>;
   saveReceipt(record: MeetingReceiptRecord): void | Promise<void>;
 }
 
 export class InMemoryMeetingDecisionReceiptStore implements MeetingDecisionReceiptStorePort {
   private readonly records = new Map<string, MeetingReceiptRecord>();
-  loadReceipt(eventId: string): MeetingReceiptRecord | undefined {
-    const record = this.records.get(eventId);
-    return record ? structuredClone(record) : undefined;
+
+  private makeKey(namespace: string, source: string, eventId: string): string {
+    return `${namespace}::${source}::${eventId}`;
   }
+
+  loadReceipt(query: string | MeetingReceiptQuery): MeetingReceiptRecord | undefined {
+    if (typeof query === 'string') {
+      for (const record of this.records.values()) {
+        if (record.eventId === query) return structuredClone(record);
+      }
+      return undefined;
+    }
+    if (query.namespace && query.source) {
+      const key = this.makeKey(query.namespace, query.source, query.eventId);
+      const record = this.records.get(key);
+      return record ? structuredClone(record) : undefined;
+    }
+    for (const record of this.records.values()) {
+      if (record.eventId === query.eventId) {
+        if (query.namespace && record.namespace !== query.namespace) continue;
+        if (query.source && record.source !== query.source) continue;
+        return structuredClone(record);
+      }
+    }
+    return undefined;
+  }
+
   saveReceipt(record: MeetingReceiptRecord): void {
-    this.records.set(record.eventId, structuredClone(record));
+    const key = this.makeKey(record.namespace, record.source, record.eventId);
+    this.records.set(key, structuredClone(record));
+  }
+}
+
+export interface FileMeetingDecisionReceiptStoreOptions {
+  readonly storageDir: string;
+}
+
+export class FileMeetingDecisionReceiptStore implements MeetingDecisionReceiptStorePort {
+  private readonly storageDir: string;
+
+  constructor(options: FileMeetingDecisionReceiptStoreOptions) {
+    if (!options || typeof options.storageDir !== 'string' || !options.storageDir.trim()) {
+      throw new CognitionError('INVALID_ARGUMENT');
+    }
+    this.storageDir = path.resolve(options.storageDir);
+    mkdirSync(this.storageDir, { recursive: true });
+  }
+
+  private makeKey(namespace: string, source: string, eventId: string): string {
+    return hash(`${namespace}::${source}::${eventId}`);
+  }
+
+  private getFilePath(namespace: string, source: string, eventId: string): string {
+    return path.join(this.storageDir, `receipt-${this.makeKey(namespace, source, eventId)}.json`);
+  }
+
+  loadReceipt(query: string | MeetingReceiptQuery): MeetingReceiptRecord | undefined {
+    if (typeof query === 'object' && query.namespace && query.source) {
+      const file = this.getFilePath(query.namespace, query.source, query.eventId);
+      if (!existsSync(file)) return undefined;
+      try {
+        return JSON.parse(readFileSync(file, 'utf8'));
+      } catch {
+        return undefined;
+      }
+    }
+    const targetEventId = typeof query === 'string' ? query : query.eventId;
+    try {
+      const files = readdirSync(this.storageDir).filter(f => f.startsWith('receipt-') && f.endsWith('.json'));
+      for (const f of files) {
+        try {
+          const record = JSON.parse(readFileSync(path.join(this.storageDir, f), 'utf8')) as MeetingReceiptRecord;
+          if (record && record.eventId === targetEventId) {
+            if (typeof query === 'object') {
+              if (query.namespace && record.namespace !== query.namespace) continue;
+              if (query.source && record.source !== query.source) continue;
+            }
+            return record;
+          }
+        } catch {}
+      }
+    } catch {}
+    return undefined;
+  }
+
+  saveReceipt(record: MeetingReceiptRecord): void {
+    const file = this.getFilePath(record.namespace, record.source, record.eventId);
+    const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+    writeFileSync(tmp, JSON.stringify(record, null, 2), 'utf8');
+    renameSync(tmp, file);
   }
 }
 
@@ -94,6 +187,8 @@ export interface MeetingPlanExecutionPort {
     readonly eventId: string;
     readonly source: string;
     readonly sourceRevision: string;
+    readonly deadline?: string | undefined;
+    readonly signal?: AbortSignal | undefined;
   }): Promise<{ readonly applied: boolean; readonly snapshot: GraphSnapshot; readonly error?: string }>;
 }
 
@@ -107,6 +202,60 @@ export function createStoreExecutionPort(store: AtomicCoordinationStorePort): Me
         return { applied: false, snapshot: store.read(), error: err instanceof Error ? err.message : String(err) };
       }
     },
+  };
+}
+
+export interface MeetingExecutionPolicyPort {
+  evaluateExecution(request: {
+    readonly eventId: string;
+    readonly source: string;
+    readonly inputs: readonly NodeInput[];
+    readonly risk: 'low' | 'high';
+  }): Promise<{ readonly allowed: boolean; readonly reason?: string }> | { readonly allowed: boolean; readonly reason?: string };
+}
+
+export interface PolicyGuardedExecutionPortOptions {
+  readonly store: AtomicCoordinationStorePort;
+  readonly policy?: MeetingExecutionPolicyPort | undefined;
+  readonly onExecuted?: ((snapshot: GraphSnapshot) => void) | undefined;
+}
+
+export function createPolicyGuardedExecutionPort(options: PolicyGuardedExecutionPortOptions): MeetingPlanExecutionPort {
+  if (!options || !options.store || typeof options.store.appendBatch !== 'function') {
+    throw new CognitionError('INVALID_ARGUMENT');
+  }
+  return {
+    async executeBatch(request) {
+      if (request.signal?.aborted) {
+        return { applied: false, snapshot: options.store.read(), error: '执行前已取消' };
+      }
+      if (request.deadline && Date.now() >= Date.parse(request.deadline)) {
+        return { applied: false, snapshot: options.store.read(), error: '执行已超过截止时间' };
+      }
+      if (options.policy) {
+        const policyDecision = await options.policy.evaluateExecution({
+          eventId: request.eventId,
+          source: request.source,
+          inputs: request.inputs,
+          risk: 'low',
+        });
+        if (!policyDecision.allowed) {
+          return { applied: false, snapshot: options.store.read(), error: `Policy 拒绝执行: ${policyDecision.reason ?? '未获授权'}` };
+        }
+      }
+      try {
+        const next = options.store.appendBatch(request.expectedRevision, request.inputs);
+        options.onExecuted?.(next);
+        return { applied: true, snapshot: next };
+      } catch (err) {
+        const current = options.store.read();
+        const alreadyCommitted = current.history.some(n => n.reason?.includes(`[eventId: ${request.eventId}]`));
+        if (alreadyCommitted) {
+          return { applied: true, snapshot: current };
+        }
+        return { applied: false, snapshot: current, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
   };
 }
 
@@ -148,18 +297,110 @@ export class MeetingRescheduleCoordinator {
   }
 
   /** Readback existing processed decision by event ID from durable receipt store. */
-  async getReceipt(eventId: string): Promise<MeetingDecisionReceipt | undefined> {
-    const record = await this.receiptStore.loadReceipt(eventId);
+  async getReceipt(eventId: string, source?: string): Promise<MeetingDecisionReceipt | undefined> {
+    const record = await this.receiptStore.loadReceipt({
+      eventId,
+      namespace: this.namespace,
+      ...(source ? {source} : {}),
+    });
     return record?.receipt;
   }
 
   /**
+   * Applies an approved proposal or requires_review receipt once authorization is granted.
+   * Transitions receipt state from proposal/requires_review -> applied.
+   */
+  async applyApprovedProposal(
+    query: { readonly eventId: string; readonly source: string; readonly namespace?: string | undefined },
+    options: {
+      readonly executionPort?: MeetingPlanExecutionPort | undefined;
+      readonly deadline?: string | undefined;
+      readonly signal?: AbortSignal | undefined;
+    } = {}
+  ): Promise<MeetingDecisionReceipt> {
+    if (!query || !query.eventId || !query.source) throw new CognitionError('INVALID_ARGUMENT');
+    if (options.signal?.aborted) throw new CognitionError('INVALID_ARGUMENT');
+    if (options.deadline && this.now() >= Date.parse(options.deadline)) throw new CognitionError('INVALID_ARGUMENT');
+
+    const ns = query.namespace ?? this.namespace;
+    const record = await this.receiptStore.loadReceipt({ eventId: query.eventId, namespace: ns, source: query.source });
+    if (!record) throw new CognitionError('NOT_APPLICABLE');
+
+    if (record.receipt.status === 'applied') {
+      return record.receipt;
+    }
+    if (record.receipt.status !== 'proposal' && record.receipt.status !== 'requires_review') {
+      throw new CognitionError('NOT_APPLICABLE');
+    }
+    if (!record.receipt.proposedModifications || record.receipt.proposedModifications.length === 0) {
+      throw new CognitionError('NOT_APPLICABLE');
+    }
+
+    const execPort = options.executionPort ?? this.executionPort;
+    if (!execPort) throw new CognitionError('NOT_APPLICABLE');
+
+    const currentGraph = this.store.read();
+    const execResult = await execPort.executeBatch({
+      expectedRevision: currentGraph.revision,
+      inputs: record.receipt.proposedModifications,
+      eventId: query.eventId,
+      source: query.source,
+      sourceRevision: record.receipt.sourceRevision,
+      deadline: options.deadline,
+      signal: options.signal,
+    });
+
+    if (execResult.applied) {
+      const finalGraph = this.store.read();
+      const appliedRevisions: NodeRef[] = record.receipt.proposedModifications.map(item => ({
+        id: item.id,
+        revision: finalGraph.history.findLast(n => n.id === item.id)!.revision,
+      }));
+
+      const appliedReceipt: MeetingDecisionReceipt = {
+        ...record.receipt,
+        status: 'applied',
+        reason: '方案获批并经由受信执行端口完成原子批提交',
+        graphRevisionBefore: currentGraph.revision,
+        graphRevisionAfter: finalGraph.revision,
+        appliedNodeRevisions: appliedRevisions,
+        evaluatedAt: new Date(this.now()).toISOString(),
+      };
+
+      await this.receiptStore.saveReceipt({
+        ...record,
+        status: 'applied',
+        receipt: appliedReceipt,
+        updatedAt: new Date(this.now()).toISOString(),
+      });
+
+      return appliedReceipt;
+    } else {
+      const failedReceipt: MeetingDecisionReceipt = {
+        ...record.receipt,
+        status: 'requires_review',
+        reason: `授权执行提交失败: ${execResult.error ?? '未知错误'}`,
+        evaluatedAt: new Date(this.now()).toISOString(),
+      };
+      await this.receiptStore.saveReceipt({
+        ...record,
+        status: 'requires_review',
+        receipt: failedReceipt,
+        updatedAt: new Date(this.now()).toISOString(),
+      });
+      return failedReceipt;
+    }
+  }
+
+  /**
    * Main vertical execution:
-   * 1. Replay and conflict detection via durable receipt store
-   * 2. Pure in-memory preflight of prospective fact update & impact analysis
-   * 3. Kahn topological ordering for affected graph dependencies
-   * 4. Multi-candidate selection via LayaActionChoiceService (no self-signed authorization)
-   * 5. Execution through trusted port via atomic appendBatch or emission of proposal
+   * 1. Replay and conflict detection via durable receipt store (isolated by namespace, source, eventId)
+   * 2. Crash window recovery: checks if graph was committed in prior crash before receipt save
+   * 3. Opaque baseline revision verification
+   * 4. Pure in-memory preflight of prospective fact update & impact analysis
+   * 5. Kahn topological ordering for affected graph dependencies
+   * 6. Multi-candidate selection via LayaActionChoiceService (no self-signed authorization)
+   * 7. Execution through trusted port via atomic appendBatch or emission of proposal
    */
   async processEvent(event: MeetingRescheduleEvent): Promise<MeetingDecisionReceipt> {
     if (!event || typeof event.eventId !== 'string' || !event.eventId.trim()
@@ -181,13 +422,20 @@ export class MeetingRescheduleCoordinator {
       sourceRevision: event.sourceRevision,
     }));
 
-    // 1. Replay and conflict protection
-    const existingRecord = await this.receiptStore.loadReceipt(event.eventId);
+    // 1. Replay and conflict protection with source/namespace isolation
+    const existingRecord = await this.receiptStore.loadReceipt({
+      eventId: event.eventId,
+      namespace: this.namespace,
+      source: event.source,
+    });
     if (existingRecord) {
       if (existingRecord.inputDigest === inputDigest) {
-        return {...existingRecord.receipt, status: 'already_processed'};
+        if (existingRecord.receipt.status === 'applied') {
+          return {...existingRecord.receipt, status: 'already_processed'};
+        }
+        return {...existingRecord.receipt};
       }
-      // Same event ID with different content or revision is an explicit conflict
+      // Same event ID from same source with different content or revision is an explicit conflict
       const conflictReceipt: MeetingDecisionReceipt = {
         eventId: event.eventId,
         source: event.source,
@@ -208,6 +456,31 @@ export class MeetingRescheduleCoordinator {
     const initialSnapshot = this.store.read();
     const graphRevisionBefore = initialSnapshot.revision;
 
+    // 2. Crash window recovery: check if graph was already updated with this event in a prior crash
+    const alreadyCommittedFact = initialSnapshot.history.findLast(
+      node => node.id === event.meetingFactId && node.kind === 'fact' && node.reason?.includes(`[eventId: ${event.eventId}]`)
+    );
+    if (alreadyCommittedFact) {
+      const committedNodes = initialSnapshot.history.filter(node => node.reason?.includes(`[eventId: ${event.eventId}]`));
+      const recoveredReceipt: MeetingDecisionReceipt = {
+        eventId: event.eventId,
+        source: event.source,
+        sourceRevision: event.sourceRevision,
+        meetingFactId: event.meetingFactId,
+        selectedCandidateId: 'cand-adjust-schedule',
+        actionId: 'adjust_schedule',
+        status: 'already_processed',
+        confidence: 1.0,
+        reason: '图谱已在历史事务中持久化该改期事件（崩溃恢复去重保护）',
+        graphRevisionBefore: initialSnapshot.revision - 1,
+        graphRevisionAfter: initialSnapshot.revision,
+        evaluatedAt: event.detectedAt,
+        appliedNodeRevisions: committedNodes.map(n => ({ id: n.id, revision: n.revision })),
+      };
+      await this.saveReceiptRecord(event, inputDigest, recoveredReceipt);
+      return recoveredReceipt;
+    }
+
     // Locate the current meeting node in graph
     const currentMeetingFact = initialSnapshot.history.findLast(
       node => node.id === event.meetingFactId && node.kind === 'fact'
@@ -216,7 +489,31 @@ export class MeetingRescheduleCoordinator {
       throw new CognitionError('NOT_APPLICABLE');
     }
 
-    // 2. Pure in-memory preflight of updated fact (DO NOT mutate store yet)
+    // 3. Baseline revision contract check
+    if (event.expectedBaseRevision !== undefined) {
+      const match = /\[sourceRevision:\s*([^\]]+)\]/.exec(currentMeetingFact.reason ?? '');
+      const recordedRevision = match ? match[1]!.trim() : undefined;
+      if (recordedRevision && recordedRevision !== event.expectedBaseRevision) {
+        const baselineConflictReceipt: MeetingDecisionReceipt = {
+          eventId: event.eventId,
+          source: event.source,
+          sourceRevision: event.sourceRevision,
+          meetingFactId: event.meetingFactId,
+          selectedCandidateId: 'cand-conflict',
+          actionId: 'conflict',
+          status: 'conflict',
+          confidence: null,
+          reason: `源事实基线版本不匹配: 期望基线 ${event.expectedBaseRevision}，当前图谱基线 ${recordedRevision}`,
+          graphRevisionBefore,
+          graphRevisionAfter: initialSnapshot.revision,
+          evaluatedAt: event.detectedAt,
+        };
+        await this.saveReceiptRecord(event, inputDigest, baselineConflictReceipt);
+        return baselineConflictReceipt;
+      }
+    }
+
+    // 4. Pure in-memory preflight of updated fact (DO NOT mutate store yet)
     const updatedFactInput: NodeInput = {
       id: event.meetingFactId,
       kind: 'fact',
@@ -226,7 +523,7 @@ export class MeetingRescheduleCoordinator {
       state: 'active',
       validFrom: currentMeetingFact.validFrom,
       validUntil: currentMeetingFact.validUntil,
-      reason: `外部会议改期通知 [eventId: ${event.eventId}]`,
+      reason: `外部会议改期通知 [eventId: ${event.eventId}] [sourceRevision: ${event.sourceRevision}]`,
       dependencies: [],
     };
 
@@ -241,11 +538,11 @@ export class MeetingRescheduleCoordinator {
       node => node.id === event.meetingFactId && node.kind === 'fact'
     )!;
 
-    // 3. Impact analysis on prospective graph
+    // 5. Impact analysis on prospective graph
     const impactReport = analyzeImpact(prospectiveGraph, event.detectedAt);
     const recheckItems = impactReport.items.filter(item => item.action === 'RECHECK');
 
-    // 4. Generate candidates with topological dependency preservation
+    // 6. Generate candidates with topological dependency preservation
     const candidates = this.buildCandidates(prospectiveGraph, prospectiveFact, recheckItems, event);
 
     // Map to LayaActionCandidate (NO self-signed authorization)
@@ -264,7 +561,7 @@ export class MeetingRescheduleCoordinator {
       };
     });
 
-    // 5. Ask Laya to choose between the candidates
+    // 7. Ask Laya to choose between the candidates
     const contextDescription = `会议事实更新：${event.originalSummary} -> ${event.newSummary}。受影响依赖项数：${recheckItems.length}。请在以下备选应对方案中决策。`;
     let selection: LayaActionSelection;
     try {
@@ -294,7 +591,7 @@ export class MeetingRescheduleCoordinator {
       return fallbackReceipt;
     }
 
-    // 6. Handle chosen action
+    // 8. Handle chosen action
     let receipt: MeetingDecisionReceipt;
     const selectedCandidate = candidates.find(c => c.candidateId === selection.selected?.id);
 
@@ -303,13 +600,18 @@ export class MeetingRescheduleCoordinator {
       const fullBatch: NodeInput[] = [updatedFactInput, ...selectedCandidate.proposedModifications];
 
       if (this.executionPort) {
-        // Execute via trusted execution port
+        if (event.signal.aborted || this.now() >= Date.parse(event.deadline)) {
+          throw new CognitionError('INVALID_ARGUMENT');
+        }
+        // Execute via trusted execution port with deadline and signal
         const execResult = await this.executionPort.executeBatch({
           expectedRevision: initialSnapshot.revision,
           inputs: fullBatch,
           eventId: event.eventId,
           source: event.source,
           sourceRevision: event.sourceRevision,
+          deadline: event.deadline,
+          signal: event.signal,
         });
 
         if (execResult.applied) {

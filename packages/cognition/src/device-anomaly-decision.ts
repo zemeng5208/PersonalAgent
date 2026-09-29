@@ -18,6 +18,18 @@ export interface DeviceSample {
   readonly unavailableMetrics?: readonly string[] | undefined;
 }
 
+export interface DeviceNotificationPort {
+  sendAdvisoryNotification(notification: {
+    readonly id: string;
+    readonly source: string;
+    readonly title: string;
+    readonly message: string;
+    readonly advice: string;
+    readonly candidateId: string;
+    readonly timestamp: string;
+  }): Promise<{ readonly delivered: boolean; readonly error?: string }> | { readonly delivered: boolean; readonly error?: string };
+}
+
 export interface DeviceAnomalyOptions {
   /** Alert trigger threshold for CPU percentage (default: 90). */
   readonly cpuThresholdPercent?: number | undefined;
@@ -31,6 +43,7 @@ export interface DeviceAnomalyOptions {
   readonly cooldownMs?: number | undefined;
   /** Maximum sampling gap multiplier before consecutive counter resets (default: 2.5). */
   readonly maxSamplingGapMultiplier?: number | undefined;
+  readonly notificationPort?: DeviceNotificationPort | undefined;
   readonly now?: (() => number) | undefined;
 }
 
@@ -55,6 +68,7 @@ export interface DeviceAnomalyDecisionReceipt {
   readonly selectedCandidate?: LayaActionCandidate | undefined;
   readonly candidates?: readonly LayaActionCandidate[] | undefined;
   readonly safeAdvice: string;
+  readonly notificationDelivered?: boolean | undefined;
 }
 
 interface SourceState {
@@ -84,6 +98,7 @@ export class DeviceAnomalyDecisionService {
   private readonly sustainedCount: number;
   private readonly cooldownMs: number;
   private readonly maxGapMultiplier: number;
+  private readonly notificationPort?: DeviceNotificationPort | undefined;
   private readonly now: () => number;
   private readonly sourceStates = new Map<string, SourceState>();
 
@@ -99,6 +114,7 @@ export class DeviceAnomalyDecisionService {
     this.sustainedCount = Math.max(1, options.sustainedSampleCount ?? 3);
     this.cooldownMs = options.cooldownMs ?? 300_000;
     this.maxGapMultiplier = options.maxSamplingGapMultiplier ?? 2.5;
+    this.notificationPort = options.notificationPort;
     this.now = options.now ?? Date.now;
 
     if (!Number.isFinite(this.cpuThreshold) || !Number.isFinite(this.memoryThreshold)
@@ -245,12 +261,31 @@ export class DeviceAnomalyDecisionService {
           };
         }
 
-        // Successfully evaluated by Laya: now mark active and update cooldown timestamp
-        state.isAlertActive = true;
-        state.lastAlertTimestampMs = sampleTimeMs;
-
         const selectedCandidate = candidates.find(c => c.id === selection.selected?.id);
         const safeAdvice = this.formatAdvice(selectedCandidate, selection);
+
+        let deliveryConfirmed = true;
+        if (this.notificationPort) {
+          try {
+            const deliveryResult = await this.notificationPort.sendAdvisoryNotification({
+              id: hash(`notify:${sample.source}:${sample.timestamp}:${state.sampleCounter}`),
+              source: sample.source,
+              title: `系统资源高负荷告警 (${sample.source})`,
+              message: `CPU使用率: ${sample.cpuPercent}%, 内存使用率: ${sample.memoryPercent}%`,
+              advice: safeAdvice,
+              candidateId: selectedCandidate?.id ?? 'none',
+              timestamp: sample.timestamp,
+            });
+            deliveryConfirmed = deliveryResult.delivered === true;
+          } catch {
+            deliveryConfirmed = false;
+          }
+        }
+
+        state.isAlertActive = true;
+        if (deliveryConfirmed) {
+          state.lastAlertTimestampMs = sampleTimeMs;
+        }
 
         return {
           receiptId: hash(`alert:${sample.source}:${sample.timestamp}:${state.sampleCounter}`),
@@ -262,7 +297,10 @@ export class DeviceAnomalyDecisionService {
           selection,
           selectedCandidate,
           candidates,
-          safeAdvice,
+          safeAdvice: deliveryConfirmed
+            ? safeAdvice
+            : `${safeAdvice} (桌面通知投递失败，未锁定冷却窗口以待后续重试)`,
+          ...(this.notificationPort ? { notificationDelivered: deliveryConfirmed } : {}),
         };
       }
 

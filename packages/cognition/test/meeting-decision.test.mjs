@@ -1,10 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {mkdtempSync, rmSync} from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {FakeCoordinationStoreHost} from '@personal-agent/goals/store';
 import {
   MeetingRescheduleCoordinator,
   createStoreExecutionPort,
+  createPolicyGuardedExecutionPort,
   InMemoryMeetingDecisionReceiptStore,
+  FileMeetingDecisionReceiptStore,
 } from '../dist/index.js';
 
 function createMeetingFixture() {
@@ -300,4 +305,248 @@ test('MeetingRescheduleCoordinator: defer_and_verify defers without mutating sto
   const receipt = await coordinator.processEvent(event);
   assert.equal(receipt.status, 'deferred');
   assert.equal(store.read().revision, 5);
+});
+
+test('FileMeetingDecisionReceiptStore: persists atomically and isolates by namespace, source, eventId', () => {
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'receipt-store-test-'));
+  try {
+    const store1 = new FileMeetingDecisionReceiptStore({storageDir: tmpDir});
+    const record1 = {
+      eventId: 'evt-file-1',
+      namespace: 'user-ns-a',
+      source: 'calendar:work',
+      sourceRevision: 'rev-1',
+      inputDigest: 'digest-1',
+      status: 'applied',
+      receipt: {
+        eventId: 'evt-file-1',
+        source: 'calendar:work',
+        sourceRevision: 'rev-1',
+        meetingFactId: 'meeting-1',
+        selectedCandidateId: 'cand-adjust-schedule',
+        actionId: 'adjust_schedule',
+        status: 'applied',
+        confidence: 0.9,
+        reason: 'test',
+        graphRevisionBefore: 1,
+        graphRevisionAfter: 2,
+        evaluatedAt: '2026-09-29T10:00:00.000Z',
+      },
+      updatedAt: '2026-09-29T10:00:00.000Z',
+    };
+    store1.saveReceipt(record1);
+
+    // Record from different source with same eventId
+    const record2 = {
+      ...record1,
+      source: 'calendar:personal',
+      status: 'proposal',
+      receipt: {...record1.receipt, source: 'calendar:personal', status: 'proposal'},
+    };
+    store1.saveReceipt(record2);
+
+    // Read back in a brand new store instance on same dir
+    const store2 = new FileMeetingDecisionReceiptStore({storageDir: tmpDir});
+    const loaded1 = store2.loadReceipt({namespace: 'user-ns-a', source: 'calendar:work', eventId: 'evt-file-1'});
+    assert.ok(loaded1);
+    assert.equal(loaded1.status, 'applied');
+    assert.equal(loaded1.source, 'calendar:work');
+
+    const loaded2 = store2.loadReceipt({namespace: 'user-ns-a', source: 'calendar:personal', eventId: 'evt-file-1'});
+    assert.ok(loaded2);
+    assert.equal(loaded2.status, 'proposal');
+    assert.equal(loaded2.source, 'calendar:personal');
+
+    // Query non-existent
+    assert.equal(store2.loadReceipt({namespace: 'user-ns-a', source: 'calendar:work', eventId: 'non-existent'}), undefined);
+  } finally {
+    rmSync(tmpDir, {recursive: true, force: true});
+  }
+});
+
+test('MeetingRescheduleCoordinator: recovers from prior crash window after graph commit without duplicate apply', async () => {
+  const {store} = createMeetingFixture();
+  const mockLaya = createMockLaya(0, 0.95);
+
+  // Simulate crash window: Graph was already updated with [eventId: evt-crash-recovery-1]
+  const currentSnapshot = store.read();
+  store.append(currentSnapshot.revision, {
+    id: 'meeting-sync-1',
+    kind: 'fact',
+    summary: '周四下午 17:00 项目架构同步会 (已提交未写收据)',
+    sourceRef: 'calendar:work',
+    sensitivity: 'private',
+    state: 'active',
+    validFrom: '2026-09-29T10:00:00.000Z',
+    validUntil: '2026-09-30T00:00:00.000Z',
+    reason: '外部会议改期通知 [eventId: evt-crash-recovery-1] [sourceRevision: rev-crash-1]',
+    dependencies: [],
+  });
+
+  const revAfterPreCommit = store.read().revision; // 6
+  const receiptStore = new InMemoryMeetingDecisionReceiptStore(); // No receipt in store!
+
+  const coordinator = new MeetingRescheduleCoordinator({
+    store,
+    inference: mockLaya,
+    receiptStore,
+  });
+
+  const event = {
+    eventId: 'evt-crash-recovery-1',
+    source: 'calendar:work',
+    meetingFactId: 'meeting-sync-1',
+    originalSummary: '周四下午 15:00 项目架构同步会',
+    newSummary: '周四下午 17:00 项目架构同步会 (已提交未写收据)',
+    sourceRevision: 'rev-crash-1',
+    detectedAt: '2026-09-29T11:00:00.000Z',
+    deadline: new Date(Date.now() + 60_000).toISOString(),
+    signal: new AbortController().signal,
+  };
+
+  const receipt = await coordinator.processEvent(event);
+  assert.equal(receipt.status, 'already_processed');
+  assert.match(receipt.reason, /崩溃恢复去重保护/);
+  assert.equal(store.read().revision, revAfterPreCommit); // Did NOT append another duplicate node!
+
+  // Receipt was recovered into receiptStore
+  const saved = await receiptStore.loadReceipt({namespace: 'default', source: 'calendar:work', eventId: 'evt-crash-recovery-1'});
+  assert.ok(saved);
+  assert.equal(saved.status, 'already_processed');
+});
+
+test('MeetingRescheduleCoordinator: proposal can be subsequently executed via applyApprovedProposal', async () => {
+  const {store} = createMeetingFixture();
+  const mockLaya = createMockLaya(0, 0.95);
+  const receiptStore = new InMemoryMeetingDecisionReceiptStore();
+
+  // Run without executionPort -> generates proposal
+  const coordinator = new MeetingRescheduleCoordinator({
+    store,
+    inference: mockLaya,
+    receiptStore,
+  });
+
+  const event = {
+    eventId: 'evt-proposal-approve-1',
+    source: 'calendar:work',
+    meetingFactId: 'meeting-sync-1',
+    originalSummary: '周四下午 15:00 项目架构同步会',
+    newSummary: '周四下午 16:00 项目架构同步会',
+    sourceRevision: 'rev-prop-1',
+    detectedAt: '2026-09-29T11:00:00.000Z',
+    deadline: new Date(Date.now() + 60_000).toISOString(),
+    signal: new AbortController().signal,
+  };
+
+  const proposalReceipt = await coordinator.processEvent(event);
+  assert.equal(proposalReceipt.status, 'proposal');
+  assert.equal(store.read().revision, 5); // Untouched
+
+  // Now user / runtime approves the proposal -> call applyApprovedProposal
+  const executionPort = createStoreExecutionPort(store);
+  const appliedReceipt = await coordinator.applyApprovedProposal(
+    {eventId: 'evt-proposal-approve-1', source: 'calendar:work'},
+    {executionPort}
+  );
+
+  assert.equal(appliedReceipt.status, 'applied');
+  assert.match(appliedReceipt.reason, /方案获批/);
+  assert.equal(store.read().revision, 9); // Atomically applied all 4 nodes!
+
+  // Verify updated in receipt store
+  const saved = await receiptStore.loadReceipt({namespace: 'default', source: 'calendar:work', eventId: 'evt-proposal-approve-1'});
+  assert.ok(saved);
+  assert.equal(saved.status, 'applied');
+});
+
+test('MeetingRescheduleCoordinator: rejects baseline revision mismatch with conflict', async () => {
+  const {store} = createMeetingFixture();
+  const mockLaya = createMockLaya(0, 0.95);
+
+  // Set recorded revision on meeting fact
+  store.append(store.read().revision, {
+    id: 'meeting-sync-1',
+    kind: 'fact',
+    summary: '周四下午 15:00 项目架构同步会',
+    sourceRef: 'calendar:work',
+    sensitivity: 'private',
+    state: 'active',
+    validFrom: '2026-09-29T10:00:00.000Z',
+    validUntil: '2026-09-30T00:00:00.000Z',
+    reason: '外部会议改期通知 [eventId: evt-base-1] [sourceRevision: etag-v2]',
+    dependencies: [],
+  });
+
+  const coordinator = new MeetingRescheduleCoordinator({
+    store,
+    inference: mockLaya,
+  });
+
+  const event = {
+    eventId: 'evt-base-mismatch-2',
+    source: 'calendar:work',
+    meetingFactId: 'meeting-sync-1',
+    originalSummary: '周四下午 15:00 项目架构同步会',
+    newSummary: '周四下午 16:00 项目架构同步会',
+    sourceRevision: 'etag-v3',
+    expectedBaseRevision: 'etag-v1', // Mismatch! Graph has etag-v2
+    detectedAt: '2026-09-29T11:00:00.000Z',
+    deadline: new Date(Date.now() + 60_000).toISOString(),
+    signal: new AbortController().signal,
+  };
+
+  const receipt = await coordinator.processEvent(event);
+  assert.equal(receipt.status, 'conflict');
+  assert.match(receipt.reason, /源事实基线版本不匹配/);
+});
+
+test('MeetingRescheduleCoordinator: createPolicyGuardedExecutionPort evaluates policy before commit', async () => {
+  const {store} = createMeetingFixture();
+  const mockLaya = createMockLaya(0, 0.95);
+
+  let policyAllow = false;
+  const policyEvaluations = [];
+  const policy = {
+    evaluateExecution(req) {
+      policyEvaluations.push(req);
+      return {allowed: policyAllow, reason: policyAllow ? 'allowed' : '用户未开启自动日程调整策略'};
+    },
+  };
+
+  const executionPort = createPolicyGuardedExecutionPort({store, policy});
+
+  const coordinator = new MeetingRescheduleCoordinator({
+    store,
+    inference: mockLaya,
+    executionPort,
+  });
+
+  const event = {
+    eventId: 'evt-policy-test-1',
+    source: 'calendar:work',
+    meetingFactId: 'meeting-sync-1',
+    originalSummary: '周四下午 15:00 项目架构同步会',
+    newSummary: '周四下午 16:00 项目架构同步会',
+    sourceRevision: 'rev-pol-1',
+    detectedAt: '2026-09-29T11:00:00.000Z',
+    deadline: new Date(Date.now() + 60_000).toISOString(),
+    signal: new AbortController().signal,
+  };
+
+  // Case 1: Policy denies
+  const receipt1 = await coordinator.processEvent(event);
+  assert.equal(receipt1.status, 'requires_review');
+  assert.match(receipt1.reason, /Policy 拒绝执行/);
+  assert.equal(store.read().revision, 5); // Graph untouched
+
+  // Case 2: Policy allows
+  policyAllow = true;
+  const event2 = {
+    ...event,
+    eventId: 'evt-policy-test-2',
+  };
+  const receipt2 = await coordinator.processEvent(event2);
+  assert.equal(receipt2.status, 'applied');
+  assert.equal(store.read().revision, 9); // Committed
 });
