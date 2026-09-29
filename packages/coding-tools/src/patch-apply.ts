@@ -94,7 +94,7 @@ async function invokeHelper(
   context: ToolContext,
   now: () => number,
 ): Promise<HelperResponse> {
-  const remaining = check(context, now);
+  let remaining = check(context, now);
   let child: ReturnType<typeof spawn>;
   try {
     child = spawn(executable, ['-NoProfile', '-NonInteractive', '-File', script], {
@@ -126,7 +126,9 @@ async function invokeHelper(
     if (earlyChildError || child.exitCode !== null) {
       throw new ProtocolError('RESULT_UNKNOWN', 'Workspace patch helper identity is unavailable');
     }
+    remaining = check(context, now);
   } catch (error) {
+    child.once('error', () => {});
     child.removeListener('error', onEarlyChildError);
     try { child.kill('SIGKILL'); } catch { /* identity failure is already unknown */ }
     await new Promise<void>(resolveResult => {

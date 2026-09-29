@@ -173,7 +173,7 @@ test('deadline expiring during process identity lookup stops before sending patc
   });
   await assert.rejects(
     tool.execute({}, context({deadline: new Date(deadlineMs).toISOString()})),
-    {code: 'RESULT_UNKNOWN'},
+    {code: 'TIMEOUT'},
   );
   assert.equal(nowCalls, 4);
   assert.equal(await readFile(source, 'utf8'), 'before\n');
