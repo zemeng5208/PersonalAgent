@@ -114,7 +114,6 @@ test('cancelled prepared host task cannot freeze arguments or execute', async ()
     await rm(directory, {recursive: true, force: true});
   }
 });
-
 test('trusted host tool task persists approval and resumes once after restart', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'personal-agent-host-tool-'));
   const databasePath = path.join(directory, 'runtime.sqlite');

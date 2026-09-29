@@ -39,39 +39,6 @@ text. Public failures use fixed messages and do not expose provider or listener 
 Adapters own provider configuration, credentials, upload consent and transport. No
 provider is the default: recognition and output return `UNSUPPORTED_CAPABILITY`.
 
-## Explicit Runtime transcript consumption
-
-`RuntimeClientTranscriptConsumer` is a trusted-host `TranscriptConsumerPort` adapter for
-an already connected public `@personal-agent/client`. It remains idle until the caller
-explicitly invokes `consumeTranscript`. That call submits the transcript as the
-`task.submit` goal with the configured `conversationId` and a stable bounded idempotency
-key, then reads `task.get` until Runtime reports a terminal state. Submission acceptance,
-`waiting_approval`, and every other non-terminal state are not treated as a reply.
-
-Only a successful task's bounded `resultSummary` becomes reply text. Runtime and transport
-failures use fixed local errors without external messages. Deadline, parent abort, and
-`VoiceOperation.stop()` bound submit, polling, and non-cooperative Client promises, but
-they stop only this adapter's local wait: the adapter never calls `task.cancel`, retries a
-submission, starts Runtime directly, or invents terminal state. Real local Runtime
-composition remains a separate host-level acceptance step.
-
-## Bounded PCM accumulation
-
-`createVoicePcmBuffer()` is a synchronous trusted-host helper for the bytes collected by
-an external push-to-talk source. It never opens a microphone or file and accepts only
-non-empty, even-length PCM S16LE chunks for the package's fixed 16 kHz mono format.
-Every append is copied immediately into one lazily allocated, capacity-bounded contiguous
-buffer, so arbitrarily small chunks cannot create unbounded retained-object overhead.
-Total bytes are bounded by both the public 60-second limit and an optional smaller
-duration; capacity overflow fails without truncation.
-
-`finish()` returns one independent `VoiceAudioClip`, derives its duration from the fixed
-32 bytes per millisecond rate, and then zeroes and releases the retained buffer.
-`dispose()`, parent abort, and the required deadline also zero and release retained audio;
-the deadline timer remains active while the buffer is idle and all terminal paths detach
-the timer and abort listener. This helper owns no session or Runtime state, emits no audio
-logs, and cannot translate cancellation into `task.cancel`.
-
 ## Windows System.Speech adapters
 
 `createWindowsSystemSpeechPorts()` returns provider-specific recognition and output ports
@@ -149,6 +116,91 @@ relative to `WindowsSystemSpeechHost.cs`:
 5. **Hardware and devices**: The adapter does not verify microphone capture, physical speakers,
    or audio routing devices.
 
+
+## Authorized PCM streaming port (`VoicePcmFrameSourcePort`)
+
+`createVoicePcmFrameSourcePort(binding)` creates a module-local streaming port bound to a
+concrete authorized host capture binding.
+
+### Trust boundary
+
+The voice package never opens a microphone, queries OS device permissions, or issues capture
+authorization. No audio capture starts by default. The trusted host (MOD-11 Desktop main process)
+must perform its own explicit permission checks, manage physical media device lifecycles, and
+pass an already-authorized capture binding. The Renderer cannot grant authorization or sign tokens.
+The host capture binding must attach to ONE physical `getUserMedia` capture source as a
+refcount/fanout attachment, supporting concurrent subscribers (e.g. wake word detection and speech
+recognition) rather than opening a new microphone per subscriber.
+
+### Handoff for MOD-11 physical track release
+
+Subscribing to the port (`port.subscribe({signal, deadline, onFrame, onEnd})`) returns
+`{ready: Promise<void>, unsubscribe(): void, closed: Promise<void>}`.
+1. `ready` resolves only after the host capture binding has successfully returned a valid release
+   handle and confirmed capture availability. If start throws, rejects, returns an invalid handle,
+   or if the subscription terminates before ready, `ready` rejects with a fixed `VoiceSessionError`.
+2. When a subscription terminates (via caller `unsubscribe()`, parent `signal` abort, ISO UTC
+   `deadline` timeout, queue overflow, capture revocation, device unavailability, or port disposal):
+   - Callback delivery halts immediately with no late `onFrame` callbacks.
+   - All buffered/queued PCM frames are immediately zeroed in memory (`.fill(0)`) and discarded.
+   - The port invokes the subscription's upstream `release()` handle (including any late-returned
+     handle from an in-flight async start).
+   - The `closed` promise awaits the release of that subscription's attachment. `closed` resolves
+     only after successful release and rejects with `EXTERNAL_FAILURE` if release fails or start
+     failure prevents release proof. Proves only that this attachment was detached; physical capture
+     continues if other subscribers remain active.
+   - `port.dispose()` awaits all attachments and serves as the whole-source release receipt under the
+     host contract. If any release failed, `dispose()` rejects with `EXTERNAL_FAILURE` and remembers
+     this failure for subsequent calls.
+   - The trusted host binding must clean up its own partial capture resources on start failure; the
+     host must not infer physical track release from an `onEnd` callback alone.
+
+### Frame and queue guarantees
+
+- **Format and sequence**: Frames use `VOICE_AUDIO_FORMAT` (16 kHz mono PCM S16LE) with monotonic
+  sequence numbers starting from 0.
+- **Frame bounds**: Non-empty, even byte length, maximum 3,200 bytes (100 ms).
+- **Isolation**: Each subscriber receives an independent private copy; buffer modifications or
+  zeroization do not affect other subscribers.
+- **Queue limits**: Bounded at 4 frames / 12,800 bytes. Overflow terminates the subscription
+  immediately with terminal reason `'overflow'` (no silent drop or truncation).
+- **Terminal reasons**: Exactly one terminal callback (`onEnd`) with reason `'cancelled'`,
+  `'deadline'`, `'revoked'`, `'device_unavailable'`, `'overflow'`, or `'disposed'`.
+- **Privacy and wire boundary**: No audio or text logs. The public wire capabilities `voice.start`
+  and `voice.stop` remain separate and unpublished.
+
+## Explicit Runtime transcript consumption
+
+`RuntimeClientTranscriptConsumer` is a trusted-host `TranscriptConsumerPort` adapter for
+an already connected public `@personal-agent/client`. It remains idle until the caller
+explicitly invokes `consumeTranscript`. That call submits the transcript as the
+`task.submit` goal with the configured `conversationId` and a stable bounded idempotency
+key, then reads `task.get` until Runtime reports a terminal state. Submission acceptance,
+`waiting_approval`, and every other non-terminal state are not treated as a reply.
+
+Only a successful task's bounded `resultSummary` becomes reply text. Runtime and transport
+failures use fixed local errors without external messages. Deadline, parent abort, and
+`VoiceOperation.stop()` bound submit, polling, and non-cooperative Client promises, but
+they stop only this adapter's local wait: the adapter never calls `task.cancel`, retries a
+submission, starts Runtime directly, or invents terminal state. Real local Runtime
+composition remains a separate host-level acceptance step.
+
+## Bounded PCM accumulation
+
+`createVoicePcmBuffer()` is a synchronous trusted-host helper for the bytes collected by
+an external push-to-talk source. It never opens a microphone or file and accepts only
+non-empty, even-length PCM S16LE chunks for the package's fixed 16 kHz mono format.
+Every append is copied immediately into one lazily allocated, capacity-bounded contiguous
+buffer, so arbitrarily small chunks cannot create unbounded retained-object overhead.
+Total bytes are bounded by both the public 60-second limit and an optional smaller
+duration; capacity overflow fails without truncation.
+
+`finish()` returns one independent `VoiceAudioClip`, derives its duration from the fixed
+32 bytes per millisecond rate, and then zeroes and releases the retained buffer.
+`dispose()`, parent abort, and the required deadline also zero and release retained audio;
+the deadline timer remains active while the buffer is idle and all terminal paths detach
+the timer and abort listener. This helper owns no session or Runtime state, emits no audio
+logs, and cannot translate cancellation into `task.cancel`.
 
 ## Fake use and verification
 

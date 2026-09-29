@@ -152,6 +152,7 @@ export interface TaskPort {
   transitionTask(taskId: string, state: TaskState, patch?: TransitionPatch): TaskSnapshot;
   requestCancel(taskId: string, reason?: string): {taskId: string; state: TaskState; cancelAccepted: boolean};
   saveCheckpoint(taskId: string, key: string, value: unknown): void;
+  saveCheckpointOnce(taskId: string, key: string, value: unknown): boolean;
   loadCheckpoint(taskId: string, key: string): unknown;
 }
 
@@ -165,8 +166,8 @@ export interface SchedulerPort {
   listSchedules(conversationId: string): ScheduleSnapshot[];
   /** Exclusive trusted owner supplies its complete desired set before dispatch/recovery. */
   reconcileSchedules(conversationId: string, desired: readonly ScheduleInput[]): ScheduleSnapshot[];
-  dispatchDueSchedules(): ScheduleDispatch[];
-  recoverMissedSchedules(): ScheduleDispatch[];
+  dispatchDueSchedules(conversationId?: string): ScheduleDispatch[];
+  recoverMissedSchedules(conversationId?: string): ScheduleDispatch[];
 }
 
 interface TaskRow {
@@ -909,6 +910,18 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     );
   }
 
+  /** Atomic create-only checkpoint for irreversible host attempts. Never replaces a run identity. */
+  saveCheckpointOnce(taskId: string, key: string, value: unknown): boolean {
+    requireText(key, 'checkpoint key');
+    this.getTask(taskId);
+    const encoded = JSON.stringify(value);
+    if (encoded === undefined) throw new RuntimeError('INVALID_ARGUMENT', 'Checkpoint must be JSON serializable');
+    const result = this.db.prepare('INSERT INTO task_checkpoints (task_id, checkpoint_key, value_json, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(task_id, checkpoint_key) DO NOTHING').run(
+      taskId, key, encoded, this.timestamp()
+    );
+    return result.changes === 1;
+  }
+
   /** Freeze a trusted host intent only while its prepared task is still at the observed revision. */
   saveCheckpointOnceForCreatedTask(taskId: string, key: string, value: unknown,
     expectedRevision: number): boolean {
@@ -1184,9 +1197,12 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     });
   }
 
-  private processDue(recovery: boolean): ScheduleDispatch[] {
+  private processDue(recovery: boolean, conversationId?: string): ScheduleDispatch[] {
     const now = this.timestamp();
-    const rows = this.db.prepare('SELECT schedule_id FROM task_schedules WHERE status = ? AND run_at <= ? ORDER BY run_at, schedule_id').all('pending', now) as unknown as {schedule_id: string}[];
+    if (conversationId !== undefined) requireText(conversationId, 'conversationId');
+    const rows = (conversationId === undefined
+      ? this.db.prepare('SELECT schedule_id FROM task_schedules WHERE status = ? AND run_at <= ? ORDER BY run_at, schedule_id').all('pending', now)
+      : this.db.prepare('SELECT schedule_id FROM task_schedules WHERE status = ? AND run_at <= ? AND conversation_id = ? ORDER BY run_at, schedule_id').all('pending', now, conversationId)) as unknown as {schedule_id: string}[];
     const dispatches = rows.map(({schedule_id}) => this.transaction(() => {
       const schedule = this.getSchedule(schedule_id);
       if (schedule.status !== 'pending' || Date.parse(schedule.runAt) > Date.parse(now)) return undefined;
@@ -1205,11 +1221,11 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     return dispatches.filter(dispatch => dispatch !== undefined);
   }
 
-  dispatchDueSchedules(): ScheduleDispatch[] {
-    return structuredClone(this.processDue(false));
+  dispatchDueSchedules(conversationId?: string): ScheduleDispatch[] {
+    return structuredClone(this.processDue(false, conversationId));
   }
 
-  recoverMissedSchedules(): ScheduleDispatch[] {
-    return structuredClone(this.processDue(true));
+  recoverMissedSchedules(conversationId?: string): ScheduleDispatch[] {
+    return structuredClone(this.processDue(true, conversationId));
   }
 }
