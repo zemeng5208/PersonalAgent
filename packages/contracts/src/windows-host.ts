@@ -14,6 +14,11 @@ export type WindowsHostObserve = Session & {kind: 'observe'; deadline: string; c
 export type WindowsHostObserved = Session & {kind: 'observed'; targetRef: string; expiresAt: string; source: 'windows-uia'};
 export type WindowsHostObservationRefused = Session & {kind: 'observation_refused';
   errorCode: 'NOT_FOUND' | 'TARGET_AMBIGUOUS' | 'TARGET_STALE' | 'UNAUTHORIZED' | 'CANCELLED' | 'TIMEOUT' | 'EXTERNAL_FAILURE'};
+/** Optional read-only readiness check for the original observation in the same session. */
+export type WindowsHostTargetReady = Session & {kind: 'target_ready'; targetRef: string; deadline: string};
+export type WindowsHostTargetReadyResult = Session & {kind: 'target_ready_result'; targetRef: string} & (
+  {ready: true; expiresAt: string; errorCode?: never}
+  | {ready: false; errorCode: 'TARGET_STALE' | 'TIMEOUT'; expiresAt?: never});
 export type WindowsHostExecute = Session & {
   kind: 'execute'; taskId: string; runId: string; toolName: typeof WINDOWS_HOST_TOOL_NAME;
   toolVersion: '1.0.0'; authorizationRef: string; argumentsDigest: string;
@@ -33,6 +38,7 @@ export type WindowsHostResult = Session & {
 };
 export type WindowsHostFrame = WindowsHostHello | WindowsHostHelloAck | WindowsHostBind
   | WindowsHostObserve | WindowsHostObserved | WindowsHostObservationRefused | WindowsHostExecute | WindowsHostCancel
+  | WindowsHostTargetReady | WindowsHostTargetReadyResult
   | WindowsHostStatus | WindowsHostStatusReply | WindowsHostResult;
 
 const ajv = new Ajv2020({allErrors: true, strict: false});
@@ -48,8 +54,10 @@ function isUtc(value: string): boolean {
 export function parseWindowsHostFrame(value: unknown): WindowsHostFrame {
   if (!validate(value)) invalid('Windows Host frame does not match schema');
   const frame = value as WindowsHostFrame;
-  const times = frame.kind === 'execute' || frame.kind === 'observe' ? [frame.deadline]
-    : frame.kind === 'observed' ? [frame.expiresAt]
+  const times = frame.kind === 'execute' || frame.kind === 'observe' || frame.kind === 'target_ready'
+    ? [frame.deadline]
+    : frame.kind === 'observed' || (frame.kind === 'target_ready_result' && frame.ready)
+      ? [frame.expiresAt]
       : frame.kind === 'result' ? [frame.startedAt, frame.finishedAt] : [];
   if (times.some((time) => !isUtc(time))) invalid('Windows Host frame has an invalid UTC time');
   if (frame.kind === 'result') {
@@ -85,6 +93,17 @@ export function validateWindowsHostObservation(request: WindowsHostObserve,
   if (request.kind !== 'observe' || !['observed', 'observation_refused'].includes(reply.kind)
     || request.requestId !== reply.requestId || request.sessionId !== reply.sessionId
     || request.protocolVersion !== reply.protocolVersion) invalid('Windows Host observation correlation mismatch');
+}
+
+/** Readiness is a fresh Host observation, never an authorization or target renewal. */
+export function validateWindowsHostTargetReady(request: WindowsHostTargetReady,
+  reply: WindowsHostTargetReadyResult): void {
+  parseWindowsHostFrame(request); parseWindowsHostFrame(reply);
+  if (request.kind !== 'target_ready' || reply.kind !== 'target_ready_result'
+    || request.requestId !== reply.requestId || request.sessionId !== reply.sessionId
+    || request.protocolVersion !== reply.protocolVersion || request.targetRef !== reply.targetRef) {
+    invalid('Windows Host target readiness correlation mismatch');
+  }
 }
 
 /** A status poll may use a new requestId; pass it explicitly while retaining the original execute frame. */

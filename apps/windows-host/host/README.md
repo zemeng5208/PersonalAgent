@@ -23,6 +23,9 @@ session；收到并校验 `hello` 后、发送 `hello_ack` 前，以该已读取
 Notepad 顶层窗口；旧 HWND 中的新标签拒绝。Host 只返回短期随机 `targetRef`，
 不返回或记录标题、正文、HWND/PID。无法观察时使用 Schema 中的
 `observation_refused`，不会用断连伪造拒绝。断连后目标引用立即失去执行效力。
+窗口基线在 `hello_ack` 前建立，可信 Desktop 可在握手完成后通过 Runtime adapter
+的可选 `prepareObservation` 等待用户创建和确认新窗口，再发送 `observe`。
+准备过程不授予执行权限；取消或期限到达会关闭本次连接，不消耗短期 targetRef 的有效期。
 
 `execute` 帧中的 `authorizationRef` 不构成授权；正式调用方必须先在 Runtime 的
 Policy/ToolGateway 中完成任务、工具、参数摘要、目标与期限的授权消费。Host 只接受

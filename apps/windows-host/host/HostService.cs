@@ -52,6 +52,9 @@ internal sealed class HostService(HostLaunchBinding launch, HostWire wire, RunJo
         var clientNonce = Field(first, "clientNonce");
         var hostNonce = RandomId();
         var sessionId = RandomId();
+        // Capture pre-existing windows before acknowledging readiness. A trusted client
+        // may launch a new target after hello_ack; bind has no acknowledgement frame.
+        var targets = new NotepadTargets();
         await SendAsync(pipe, new
         {
             kind = "hello_ack", protocolVersion = Version, requestId = helloRequest,
@@ -63,7 +66,6 @@ internal sealed class HostService(HostLaunchBinding launch, HostWire wire, RunJo
             Field(bound, "sessionId") != sessionId || Field(bound, "hostNonce") != hostNonce)
             throw new InvalidDataException("Windows Host handshake did not bind");
 
-        var targets = new NotepadTargets();
         try
         {
             while (!connected.IsCancellationRequested)

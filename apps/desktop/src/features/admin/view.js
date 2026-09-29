@@ -1,4 +1,5 @@
 import {stateNames} from '../conversation/state.js';
+import {mountNotepadControls} from '../../app/notepad-controls.js';
 import {themePreference, saveTheme, saveCalm} from '../../ui/preferences.js';
 import {profilePage, bindProfile} from './profile.js';
 import {approvalPresentation, authorizationHistoryHtml, authorizationListHtml, nextApprovalExpiry} from './approval-status.js';
@@ -57,6 +58,7 @@ export function taskTable(data, escape) {
 }
 
 export function mountAdmin(root, invoke, escape) {
+  let notepadControls;
   let section = 'settings';
   let navigationRevision = -1;
   let modelEditorOpen = false;
@@ -236,6 +238,8 @@ export function mountAdmin(root, invoke, escape) {
       navigationRevision = data.adminNavigation.revision;
       if (sections[data.adminNavigation.page]) section = data.adminNavigation.page;
     }
+    if (section==='computer' && data.notepad) notepadControls ??= mountNotepadControls(root.querySelector('.main'),invoke);
+    notepadControls?.render(data.notepad);notepadControls?.show(section==='computer');
     if (root.querySelector('#profile-dialog')?.open) return;
     root.querySelector('.main').dataset.section = section;
     const directSettings = {settings: 'general', appearance: 'appearance', voice: 'voice', shortcuts: 'shortcuts'};
@@ -273,6 +277,8 @@ export function mountAdmin(root, invoke, escape) {
       content = settingsPane(data, directSettings[section]);
     } else if (section === 'profile') {
       content = profilePage(data, escape);
+    } else if (section === 'computer') {
+      content = '';
     } else if (featureSections.includes(section)) {
       content = featurePage(data, section);
     } else {
