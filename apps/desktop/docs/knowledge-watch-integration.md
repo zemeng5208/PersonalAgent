@@ -147,6 +147,14 @@ knowledgeWatch.start();
 
 `usableAsCurrentFact === true` 只出现在 `current_fact`。`update.untrustedExcerpt` 的 `dataClass` 是 `untrusted_source_text`，不要放进 `task.submit` 的 `goal`。现有主对话入口是 `apps/desktop/electron/main.js` 的 `task.submit`，它调用 `submitConversationTask(client, {goal, conversationId})`，没有单独的上下文字段。
 
+已读、完成重评和绑定新版本是三件不同的事：
+
+- 已读：`observeNotificationAcknowledgement({id, state: "delivered"})` 只把匹配 `receiptId` 的提醒标成已投递。`latest_observation` 不会因此变成 `current_fact`。
+- 完成重评：Runtime `findTaskByIdempotencyKey` 返回的 `state === "succeeded"`。`submitTask` 刚创建时状态是 `created`。宿主不把 `created` 当成完成，也不为了绑定再提交一次。
+- 绑定新版本：`bindObservedRevision(topicId)`。它只在关注仍是 `tracked`、来源头有引用和可靠版本、并且该旧绑定的每条 `submittedWorkKeys` 都已 `succeeded` 时，把 `boundSource` 改到这次观察。`validUntil` 不延长。之后由 `decideKnowledgeFreshness` 决定能否投影 `current_fact`。
+
+`bindObservedRevision` 在任务未完成时返回 `reevaluation_unconfirmed` 和实际 `taskState`。已经绑定返回 `already_bound`。撤销后返回 `user_revoked`。
+
 ## 状态投影
 
 `snapshot()` 含 `namespace`、`running`、`disposed`、`health`、`wiring`、`checkpointKey`、`mountedInMain`、`watches`、`notices`、`submissions`、`sources`、`dialogue`。损坏时后五项为 `null`。
@@ -189,7 +197,7 @@ knowledgeWatchHost = createKnowledgeWatchHost({
 
 ## 已验证和未验证
 
-已在 `node --test apps/desktop/test/knowledge-watch-host.test.mjs` 验证，15 项通过。其中原有 9 项仍覆盖偶然提问、持续跟踪、撤销、重复与乱序、损坏检查点、丢失提交和停止。此前端口适配覆盖：
+此前 `node --test apps/desktop/test/knowledge-watch-host.test.mjs` 已有 15 项通过，本轮没有重跑。本轮只新增并单独通过一项：已读不改变 `answer.kind`，重评任务 `succeeded` 之后 `bindObservedRevision` 才允许投影 `current_fact`。其中原有 9 项仍覆盖偶然提问、持续跟踪、撤销、重复与乱序、损坏检查点、丢失提交和停止。此前端口适配覆盖：
 
 - 真实 `LayaInterestDecisionService` 包住一个选择器双份：持续兴趣才调用模型形态的 `choose`，弃权不跟踪。没有启动 Laya 进程。
 - 合成的 `FeedService.collect` 结果：只影响绑定该来源的关注；`unchanged` 不重复提交；`TIMEOUT` 不把文档当成首次运行。这不是真实网络变化。
@@ -203,4 +211,10 @@ knowledgeWatchHost = createKnowledgeWatchHost({
 
 一次真实公开来源读并读回：用已构建的 `HttpFeedProvider` 和 `FeedService` 读取 `https://hnrss.org/frontpage`，经 `refreshSubscribedFeed` 进入宿主。兴趣选择器是双份，没有启动 Laya；检查点在内存，不是 Runtime sqlite。一次提问为 `suggested`，持续兴趣为 `tracked`。一页收集返回 `observed` / `available`，`notified` 为 true，`submitTask` 1 次。`answer.kind` 为 `latest_observation`，`usableAsCurrentFact` 为 false，`boundRevision` 为 `interest-binding`，`citation` 是该页条目的公开 `contentRef`。新建宿主读同一检查点后，引用和 `tracked` 状态一致。没有修改订阅，没有发通知，没有上传私人数据。这不是桌面会话授权后的 `feeds.collect`。
 
-尚未验证：`main.js` 挂载、真实 Laya 进程、桌面会话授权后的 `feeds.collect`、Runtime sqlite、以及用户界面上的 `acknowledge`。这些属于 Gemini 的总装和现有进程，不在本宿主测试里启动。
+`feeds.collect` 的工具契约是 `execute(query, {taskId, signal})`，返回 `FeedService.collect` 的 `{items, collection, nextCursor, hasMore}`。宿主的 `feedCollect(query, signal)` 直接消费这个返回值；取消沿用传入的 `signal`。桌面包装在会话未 `authorize({readAndCloudConsent: true})` 或任务绑定改变时抛 `订阅读取许可已撤销或任务绑定已改变`，宿主记为 `source_unavailable`。本隔离工作树没有这层受信会话，所以没有把直接调用 `HttpFeedProvider` 当成正式工具路径。总装验收时用已经 `prepare` 和 `authorize` 的 `feedsHost.tools` 调用一次 `refreshSubscribedFeed({subscriptionId})`，再读 `dialogueProjection()`。
+
+真实 Laya：通过 `createLocalLayaHost` 和 `layaChooser` 做了一次持续兴趣判断，随后停止进程。一次偶然提问保持 `suggested`，模型调用 1 次。公开返回 `state: "review"`、`selected: "review_public"`、`reason: "uncertain"`，回执 `2a0d8a6d0d011f251d31452438b35bfc8993349d8828d5d7c318531cffb3aacc`。宿主投影保持 `suggested` / `withheld` / `suggested_only`，没有改成 `tracked`，也没有创建重评任务。同一 SQLite 关闭后重建，读回仍是这个待建议状态。关闭前内存中的关注带有上述回执；关闭后这次读回打印的是状态、`withheld` 和 `suggested_only`。
+
+真实 SQLite 任务恢复使用临时库和 `TaskRuntime`，兴趣选择器是双份，来源事件标记为 `synthetic`。关注成为 `tracked` 后，来源变化创建一条状态为 `created` 的重评任务。此时已读回执把提醒标成已投递，投影仍是 `latest_observation`；`bindObservedRevision` 返回 `reevaluation_unconfirmed`。`runTask` 使任务 `succeeded` 后绑定成功，投影变为 `current_fact`，引用是 `https://example.com/p7-persistence-observation`。关闭并重建后引用和版本 `observed-2` 仍在；重放同一事件得到 `duplicate_event`，任务数仍是 1。撤销后再次重建为 `revoked` / `user_revoked`。
+
+尚未由总装验收：`main.js` 替换旧构造、桌面会话授权后的 `feeds.collect`、界面上的 `acknowledge` 按钮。界面只需调用上面三个现有方法，不必新增宿主协议。

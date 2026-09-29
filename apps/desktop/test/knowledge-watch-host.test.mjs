@@ -627,3 +627,70 @@ test('dialogue projection cites a new feed observation and keeps the old binding
   host.dispose();
   restored.dispose();
 });
+
+test('reading a notice does not bind the new revision; a succeeded recheck does', async () => {
+  let time = start;
+  const store = memoryCheckpoints();
+  const tasks = new Map();
+  let submits = 0;
+  const runtime = {
+    findTaskByIdempotencyKey(key) {
+      const task = tasks.get(key);
+      return task ? {taskId: task.taskId, state: task.state} : undefined;
+    },
+    submitTask({goal, conversationId, idempotencyKey}) {
+      submits += 1;
+      assert.equal(goal, `RECHECK ${idempotencyKey}`);
+      assert.equal(conversationId, 'knowledge-watch:person-a');
+      const task = {taskId: `recheck-${tasks.size + 1}`, state: 'created'};
+      tasks.set(idempotencyKey, task);
+      return {taskId: task.taskId, state: task.state};
+    },
+  };
+  const host = createKnowledgeWatchHost({profile: 'huawei_ict_agentarts', namespace: 'person-a',
+    checkpointTaskId: 'watch-task', checkpoints: store.checkpoints, now: () => time,
+    layaChooser: {choose(request) {
+      const track = request.candidates.some(candidate => candidate.id === 'track_public');
+      return Promise.resolve(actionSelection(track ? 'track_public' : null));
+    }},
+    runtime,
+    notificationPort: {async send() { return {delivered: false, receiptId: 'batch-read'}; }},
+    feedCollect() { return collected(time); },
+    feedSubscriptionId: 'official-docs'});
+  host.start();
+  await host.consumeInterestSignal(signal(time, trackedRows(time)), deadline());
+  time += 5 * minute;
+  const refreshed = await host.refreshSubscribedFeed();
+  assert.equal(refreshed.notified, true);
+  assert.equal(submits, 1);
+  assert.equal(host.dialogueProjection().items[0].answer.kind, 'latest_observation');
+  const noticed = await host.observeNotificationAcknowledgement({id: 'batch-read', state: 'delivered'});
+  assert.equal(noticed.accepted, true);
+  assert.equal(host.snapshot().notices[0].delivered, true);
+  assert.equal(host.dialogueProjection().items[0].answer.kind, 'latest_observation');
+  assert.equal(host.dialogueProjection().items[0].usableAsCurrentFact, false);
+  const early = await host.bindObservedRevision('typescript');
+  assert.equal(early.accepted, false);
+  assert.equal(early.reason, 'reevaluation_unconfirmed');
+  assert.equal(early.taskState, 'created');
+  assert.equal(host.listWatches()[0].boundSource.revision, 'source-v1');
+  assert.equal(submits, 1);
+  for (const task of tasks.values()) task.state = 'succeeded';
+  const bound = await host.bindObservedRevision('typescript');
+  assert.equal(bound.accepted, true);
+  assert.equal(bound.reason, 'bound');
+  assert.equal(submits, 1);
+  const answer = host.dialogueProjection().items[0].answer;
+  assert.equal(answer.kind, 'current_fact');
+  assert.equal(answer.citation, 'https://example.com/typescript-2');
+  assert.notEqual(answer.sourceRevision, 'source-v1');
+  assert.equal(JSON.stringify(answer).includes('发布说明'), false);
+  const repeat = await host.bindObservedRevision('typescript');
+  assert.equal(repeat.reason, 'already_bound');
+  time += minute;
+  await host.revoke('typescript', {id: 'user-revoke-bind', revokedAt: iso(time)});
+  const after = await host.bindObservedRevision('typescript');
+  assert.equal(after.reason, 'user_revoked');
+  assert.equal(host.dialogueProjection().items[0].answer.reason, 'user_revoked');
+  host.dispose();
+});
