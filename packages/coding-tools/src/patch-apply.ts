@@ -8,6 +8,7 @@ import {ProtocolError} from '@personal-agent/contracts';
 import type {RegisteredTool, ToolContext, ToolDescriptor} from '@personal-agent/contracts';
 import type {WorkspacePatchPreviewResult} from './patch-preview.js';
 import {checkedSource} from './patch-stage.js';
+import {workspacePatchInflightPathFromCanonical} from './patch-reconcile.js';
 
 export const WORKSPACE_PATCH_APPLY_TOOL_NAME = 'workspace.apply_text_patch';
 export const WORKSPACE_PATCH_APPLY_TOOL_VERSION = '1.0.0';
@@ -263,7 +264,6 @@ export function createWorkspacePatchApplyToolFromPreview(options: ApplyOptions):
       const sourcePath = resolve(root, ...preview.path.split('/'));
       // One durable marker per source, not per attempt: an unknown prior helper
       // blocks a second apply until a trusted reconciler confirms its process exited.
-      const sourceKey = digest(Buffer.from(`${root}\n${preview.path}`)).slice(0, 32);
       const response = await invokeHelper(powerShell, script, {
         rootPath: root,
         sourcePath,
@@ -271,7 +271,7 @@ export function createWorkspacePatchApplyToolFromPreview(options: ApplyOptions):
         beforeSha256: preview.beforeSha256,
         afterSha256: preview.afterSha256,
         afterBase64: after.toString('base64'),
-      }, resolve(recoveryRoot, `${sourceKey}.inflight`), context, options.now);
+      }, workspacePatchInflightPathFromCanonical(root, recoveryRoot, preview.path), context, options.now);
       if (response.state === 'conflict') throw new ProtocolError('REVISION_CONFLICT', 'Workspace source changed or is busy');
       if (response.state !== 'applied') throw new ProtocolError('RESULT_UNKNOWN', 'Workspace patch apply requires reconciliation');
       result.applied = true;

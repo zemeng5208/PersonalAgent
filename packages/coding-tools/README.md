@@ -36,6 +36,18 @@ ACL 已限权；正式组合在核验目录访问控制前不得注册 apply。�
 明确分阶段错误；本包不越界修改 Gateway。真实用户工作区验收须与命令工具
 共用编程链的一次联合回执。
 
+### 受信恢复对账
+
+`reconcileWorkspacePatchApply(options)` 是宿主在 apply 返回未知或进程/宿主重启后使用的
+显式对账入口。它只接受可信宿主提供的工作区根、工作区外恢复目录和原相对源路径；先读取
+对应 `.inflight` 的严格记录，再由宿主注入的 `isProcessAlive(pid)`（默认仅做 OS 非破坏性
+存在性检查）确认 helper 已退出。helper 仍存活时返回 `in_progress`，不会删除标记、启动或
+终止进程。确认退出后，它重新检查受保护源文件的真实身份并读回 SHA：当前值等于候选 SHA
+返回 `outcome=applied`，等于原 SHA 返回 `not_applied`，其他值返回 `unknown`；三种结果都
+不会伪装成成功。只有退出确认、源文件读回和 marker 身份均稳定后才删除标记，允许下一次
+独立授权的 apply；PID 未知、记录损坏、源路径变化或对账竞态会保留标记并返回
+`RESULT_UNKNOWN`。该入口不会自动重试、回滚、删除备份或改变 ToolGateway 的错误映射。
+
 ## 既有增量：授权后的文本补丁候选文件
 
 `createWorkspacePatchStageTool(options)` 提供显式注册的 `workspace.stage_text_patch@1.0.0`。可信宿主提供工作区根；现有 ToolGateway/Policy 按任务、工具、参数和 `workspace:read` + `workspace:write` 授权，本包不签发授权。输入沿用预览的规范路径、`expectedSha256` 和有界 `edits`。它拒绝链接、硬链接、目录逃逸、敏感文件和过期哈希，在可信根下排他创建 `.pa-stage-*.patch` 候选文件，读回摘要并复核原文件。返回的 `stagedPath` 是相对路径；原文件始终不打开写入、不重命名、不覆盖。`registerWorkspacePatchStage(host, options)` 沿用现有 ToolHost 生命周期，默认不在产品中注册。

@@ -14,3 +14,17 @@ helper 用 .NET `FileStream(FileShare.None)` 独占打开源文件，校验已�
 系统 Windows PowerShell 5.1 在本机为 `Restricted`，固定 `.ps1` 被策略拒绝；实现不使用 `ExecutionPolicy Bypass`。定向测试改用本机已有 PowerShell 7（`RemoteSigned`），因此受信宿主需要提供允许执行此本地脚本的 PowerShell 路径，正式安装/运行环境尚未验收。恢复目录访问控制由受信宿主创建并在生产注册前核验；当前 factory 不验证 ACL，只验证目录在工作区外且存在。未完成 ACL 核验时该能力必须保持未注册/不可用。备份可能包含源码，不是 Artifact，也不自动出机；合成 tmp 目录测试不证明隐私访问控制。
 
 最小验证：coding-tools build 通过；在系统临时目录合成工作区、Node 24.15.0 与 PowerShell 7 下 apply 定向测试 6/6 通过：成功应用/同锁读回且无残留备份、旧 SHA 与已占用源文件不覆盖、缺独立 scope/取消/硬链接拒绝、首写前备份创建失败时原文件不变、现有 Policy/ToolGateway 精确参数绑定的一次性授权，以及遗留同源 `.inflight` 标记拒绝二次 apply。合并前发现 PowerShell 默认 stdin 编码会破坏中文 Windows 路径；`e7a6fc5` 显式设为 UTF-8，并将测试根目录固定为中文路径。带本机 PowerShell 7 的 `npm run check` 已在 PR head 和 2026-09-27 合并后主线通过；合并后 coding-tools 33/33 通过、0 跳过。尚未以真实写中强制终止覆盖进程/宿主崩溃恢复；此风险须在编程链一次联合验收中验证停止/读回。真实用户工作区、AgentArts 和编程链联合验收仍未运行。`ToolGateway` 当前把所有 `local_write` 异常保守映射 `RESULT_UNKNOWN`，包括 helper 首写前冲突；分阶段错误保留属于公共 owner 的后续接口工作。
+
+## P6 对账增量（2026-09-29）
+
+本次增量仍只修改 `packages/coding-tools/**`。新增 `reconcileWorkspacePatchApply(options)`，供可信宿主在
+apply 返回未知或进程/宿主重启后处理同源 `.inflight`：先确认 marker 中的 helper PID 已退出，再复核
+源文件的 canonical 身份和当前 SHA。读回候选 SHA、原 SHA、其他 SHA 分别得到 `applied`、`not_applied`、
+`unknown`；只有 marker 身份稳定且清理成功才解除同源阻塞。存活 helper 保持 `in_progress`；损坏、
+源路径变化、身份竞态或无法确认退出均保留 marker，并返回 `RESULT_UNKNOWN`；该 API 不启动/终止进程、不重试、不回滚备份，
+也不改变 ToolGateway 的统一错误映射。原有 apply 现在与 reconciler 共用 marker 路径派生函数，避免
+对账清理错误的源记录。
+
+本工作树的定向证据：contracts build、coding-tools typecheck/build 通过；对账测试 7/7 通过；coding-tools
+包测试 35 通过、9 跳过（6 条真实 PowerShell 7 apply、3 条原生 Job Object 测试因当前工作树未配置
+对应 helper/PowerShell 而跳过）。未运行全仓 check、Electron、真实用户工作区或云端验收。
