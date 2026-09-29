@@ -14,16 +14,20 @@ function createMockInference(options = {}) {
       const answers = {};
       for (const [key, q] of Object.entries(payload.questions)) {
         if (key.startsWith('category_')) {
+          const criteria = payload.questions[key]?.criteria ?? {};
+          const keys = Object.keys(criteria);
+          const choice = keys.includes('work') ? 'work' : keys[0];
+          const probs = {};
+          const otherProb = keys.length > 1 ? Number(((0.15 / (keys.length - 1))).toFixed(4)) : 0;
+          for (const k of keys) {
+            probs[k] = k === choice ? 0.85 : otherProb;
+          }
+          const sum = Object.values(probs).reduce((a, b) => a + b, 0);
+          probs[choice] = Number((probs[choice] + (1.0 - sum)).toFixed(4));
           answers[key] = {
-            choice: 'work',
-            probabilities: {
-              work: 0.85,
-              schedule: 0.05,
-              finance: 0.04,
-              notification: 0.03,
-              promotional: 0.03,
-            },
-            answer_confidence: 0.85,
+            choice,
+            probabilities: probs,
+            answer_confidence: probs[choice],
             confidence: 0.6,
           };
         } else if (key.startsWith('impact_')) {
@@ -191,4 +195,63 @@ test('MailTriagePipeline config change produces different cache key', async () =
   });
   // Must make a new inference call because label configuration changed!
   assert.equal(inference.calls.length, 2);
+});
+
+test('MailTriagePipeline handles insufficient input and preserves candidateLabel on review', async () => {
+  const inference = {
+    async infer(payload) {
+      const answers = {};
+      for (const [key] of Object.entries(payload.questions)) {
+        if (key.startsWith('category_')) {
+          answers[key] = {
+            choice: 'work',
+            probabilities: {
+              meeting: 0.10,
+              work: 0.35,
+              subscription: 0.15,
+              transaction: 0.15,
+              personal: 0.15,
+              other: 0.10,
+            },
+            answer_confidence: 0.35,
+            confidence: 0.3,
+          };
+        } else if (key.startsWith('impact_')) {
+          answers[key] = {
+            choice: 'routine',
+            probabilities: {routine: 0.8, high_impact: 0.2},
+            answer_confidence: 0.8,
+            confidence: 0.6,
+          };
+        }
+      }
+      return {answers};
+    },
+  };
+
+  const pipeline = new MailTriagePipeline({inference});
+  const messages = [
+    {source: 'mail', messageId: 'm-empty', sourceRevision: 'r1', text: '   '},
+    {source: 'mail', messageId: 'm-uncertain', sourceRevision: 'r1', text: '下周随便聊聊'},
+  ];
+
+  const summary = await pipeline.processBatch({
+    messages,
+    deadline: new Date(Date.now() + 60_000).toISOString(),
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(summary.total, 2);
+  assert.equal(summary.needsReviewCount, 2);
+  assert.equal(summary.abstainedCount, 2);
+
+  const emptyResult = summary.results.find(r => r.messageId === 'm-empty');
+  assert.equal(emptyResult?.reason, 'insufficient_input');
+  assert.equal(emptyResult?.label, null);
+  assert.equal(emptyResult?.candidateLabel, null);
+
+  const uncertainResult = summary.results.find(r => r.messageId === 'm-uncertain');
+  assert.equal(uncertainResult?.reason, 'uncertain');
+  assert.equal(uncertainResult?.label, null);
+  assert.equal(uncertainResult?.candidateLabel, 'work');
 });

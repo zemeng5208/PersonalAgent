@@ -61,7 +61,7 @@ export type {
   PolicyGuardedExecutionPortOptions,
   FileMeetingDecisionReceiptStoreOptions,
 } from './meeting-decision.js';
-export {MailTriagePipeline, DEFAULT_MAIL_LABELS} from './mail-triage-pipeline.js';
+export {MailTriagePipeline, DEFAULT_MAIL_LABELS, DEFAULT_MEETING_LABELS} from './mail-triage-pipeline.js';
 export type {MailClassifierPort, MailTriageCheckpointPort, MailTriagePipelineOptions, MailBatchTriageRequest,
   MailHighImpactNotice, MailBatchTriageSummary} from './mail-triage-pipeline.js';
 export {DeviceAnomalyDecisionService} from './device-anomaly-decision.js';

@@ -37,6 +37,7 @@ export interface MailHighImpactNotice {
   readonly source: string;
   readonly sourceRevision: string;
   readonly label: string | null;
+  readonly candidateLabel?: string | null | undefined;
   readonly route: 'main_agent' | 'review';
   readonly reason: string;
   readonly confidence: number | null;
@@ -50,6 +51,7 @@ export interface MailBatchTriageSummary {
   readonly highImpactCount: number;
   readonly uncertainCount: number;
   readonly abstainedCount: number;
+  readonly needsReviewCount: number;
   readonly results: readonly LayaTriageResult[];
   readonly highImpactNotices: readonly MailHighImpactNotice[];
   readonly categoryCounts: Readonly<Record<string, number>>;
@@ -61,12 +63,15 @@ export interface MailBatchTriageSummary {
 }
 
 export const DEFAULT_MAIL_LABELS: Readonly<Record<string, string>> = Object.freeze({
-  work: '工作邮件：涉及项目协作、任务分配、客户沟通与日常工作事务。',
-  schedule: '日程与会议：包含会议邀请、改期通知、日程确认与时间安排。',
-  finance: '财务与账单：发票凭据、报销单据、银行对账单及付款通知。',
-  notification: '系统通知：自动化构建、告警邮件、服务变更及订阅推送。',
-  promotional: '营销推广：活动推介、新闻资讯、产品宣传等低优先级邮件。',
+  meeting: 'Meeting invitations, rescheduling, calendar events, agenda coordination, and appointments',
+  work: 'Engineering development, code reviews, pull requests, tasks, and deliverables',
+  subscription: 'Newsletters, weekly digests, technology news, and updates',
+  transaction: 'Invoices, receipts, billing statements, orders, and payment records',
+  personal: 'Personal emails, private conversations, family and friends',
+  other: 'Unclear, vague, or miscellaneous messages requiring review',
 });
+
+export const DEFAULT_MEETING_LABELS: readonly string[] = Object.freeze(['meeting']);
 
 const hash = (value: string): string => createHash('sha256').update(value).digest('hex');
 
@@ -213,15 +218,21 @@ export class MailTriagePipeline {
     let highImpactCount = 0;
     let uncertainCount = 0;
     let abstainedCount = 0;
+    let needsReviewCount = 0;
     const categoryCounts: Record<string, number> = {};
     const highImpactNotices: MailHighImpactNotice[] = [];
 
     for (const res of allResults) {
       if (res.abstained) {
         abstainedCount++;
-      } else if (res.label) {
+      }
+      if (res.label) {
         classifiedCount++;
         categoryCounts[res.label] = (categoryCounts[res.label] ?? 0) + 1;
+      }
+
+      if (res.route === 'review') {
+        needsReviewCount++;
       }
 
       if (res.reason === 'uncertain') {
@@ -235,6 +246,7 @@ export class MailTriagePipeline {
           source: res.source,
           sourceRevision: res.sourceRevision,
           label: res.label,
+          candidateLabel: res.candidateLabel,
           route: res.route === 'group' ? 'main_agent' : res.route,
           reason: res.reason,
           confidence: res.scores?.answerConfidence ?? null,
@@ -250,6 +262,7 @@ export class MailTriagePipeline {
       highImpactCount,
       uncertainCount,
       abstainedCount,
+      needsReviewCount,
       results: allResults,
       highImpactNotices,
       categoryCounts: Object.freeze(categoryCounts),
