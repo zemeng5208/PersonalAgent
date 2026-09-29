@@ -5,6 +5,7 @@ import {approvalPresentation, authorizationHistoryHtml, authorizationListHtml, n
 import {agentArtsModelPage} from './agentarts-model.js';
 import {mountAgentArtsControls} from '../../app/agentarts-controls.js';
 import {mountFeedsControls} from '../../app/feeds-controls.js';
+import {mountTodoControls} from '../../app/todo-controls.js';
 
 export const sections = {
   settings: '常规', import: '导入', profile: '个人资料', appearance: '外观', voice: '语音', configuration: '配置',
@@ -107,7 +108,7 @@ export function mountAdmin(root, invoke, escape) {
   localSettingsButton.textContent = '桌面设置与恢复';
   localSettingsButton.addEventListener('click', () => window.desktop.openSettings().catch(error => { root.querySelector('#error').textContent = error.message; }));
   root.querySelector('.admin-bar').insertBefore(localSettingsButton, root.querySelector('#admin-close'));
-  let agentArtsControls, feedsControls;
+  let agentArtsControls, feedsControls, todoControls;
 
   function capabilityTable(data) {
     const status = data.capabilityDirectory ?? {state: 'unavailable', reason: '可信宿主尚未报告能力目录状态'};
@@ -243,6 +244,8 @@ export function mountAdmin(root, invoke, escape) {
     root.querySelector('.main').dataset.section = section;
     if (section==='connections' && data.feeds) feedsControls ??= mountFeedsControls(root.querySelector('.main'),invoke);
     feedsControls?.render(data.feeds);feedsControls?.show(section==='connections');
+    if (section==='connections' && data.todo) todoControls ??= mountTodoControls(root.querySelector('.main'),invoke);
+    todoControls?.render(data.todo);todoControls?.show(section==='connections');
     const showAgentArts=section==='models' && data.model?.provider==='agentarts';
     if (showAgentArts) {
       agentArtsControls ??= mountAgentArtsControls(root.querySelector('.main'),invoke);
