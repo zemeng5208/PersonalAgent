@@ -50,7 +50,10 @@ export function createSqliteFactProjectionHost(options: SqliteFactProjectionHost
     feed,
     memory: query,
     projection,
-    confirmation: {confirm: request => memory.confirmFeedBatch(memoryNamespace, consumerKey, request)},
+    confirmation: {
+      confirm: request => memory.confirmFeedBatch(memoryNamespace, consumerKey, request),
+      readBatch: request => memory.readFeedDelivery(memoryNamespace, consumerKey, request),
+    },
   });
   const impacts = createPendingImpactApplication({
     coordination: runtime.bindCoordinationStore(graphNamespace), projection,
