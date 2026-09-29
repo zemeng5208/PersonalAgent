@@ -80,13 +80,13 @@ function utcInstant(
 /** DATE or UTC DATE-TIME to milliseconds; invalid calendar values return undefined. */
 export function parseIcalDate(value: string): number | undefined {
   const input = value.trim();
-  const dateOnly = /^(?:\\d{8}|\\d{4}-\\d{2}-\\d{2})$/u.test(input);
-  const dateTime = /^(?:\\d{8}|\\d{4}-\\d{2}-\\d{2})T(?:\\d{6}|\\d{2}:\\d{2}:\\d{2})Z$/iu.test(input);
+  const dateOnly = /^(?:\d{8}|\d{4}-\d{2}-\d{2})$/u.test(input);
+  const dateTime = /^(?:\d{8}|\d{4}-\d{2}-\d{2})T(?:\d{6}|\d{2}:\d{2}:\d{2})Z$/iu.test(input);
   if (!dateOnly && !dateTime) return undefined;
   const compact = input.replace(/[-:]/g, '');
   const parts = dateTime
-    ? /^(\\d{4})(\\d{2})(\\d{2})T(\\d{2})(\\d{2})(\\d{2})Z$/iu.exec(compact)
-    : /^(\\d{4})(\\d{2})(\\d{2})$/u.exec(compact);
+    ? /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/iu.exec(compact)
+    : /^(\d{4})(\d{2})(\d{2})$/u.exec(compact);
   if (!parts) return undefined;
   return utcInstant(
     Number(parts[1]), Number(parts[2]), Number(parts[3]),
@@ -242,7 +242,7 @@ export class ICalSubscriptionProvider implements CalendarProvider {
       throw new ProtocolError('EXTERNAL_FAILURE', 'iCal 订阅响应读取失败', true);
     }
     if (signalAborted(signal)) throw new ProtocolError('CANCELLED', 'Calendar fetch cancelled', false);
-    const calendar = body.replace(/^\\uFEFF/u, '').trimStart();
+    const calendar = body.replace(/^\uFEFF/u, '').trimStart();
     if (!calendar.startsWith('BEGIN:VCALENDAR')) {
       throw new ProtocolError('EXTERNAL_FAILURE', `iCal 订阅源返回异常（HTTP ${response.status}）`, false);
     }
