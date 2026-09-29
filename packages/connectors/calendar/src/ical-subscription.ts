@@ -17,7 +17,7 @@ export interface ICalSubscriptionOptions {
   fetchImpl?: FetchLike;
 }
 
-export type FetchLike = (url: string, init: {signal: AbortSignal; headers: Record<string, string>}) => Promise<FetchResponseLike>;
+export type FetchLike = (url: string, init: {signal: AbortSignal; headers: Record<string, string>; redirect: 'error'}) => Promise<FetchResponseLike>;
 
 export interface FetchResponseLike {
   readonly ok: boolean;
@@ -55,20 +55,45 @@ export function unescapeIcalText(value: string): string {
 }
 
 /** DATE 或 DATE-TIME（UTC Z）→ 毫秒；非法返回 undefined。 */
+function utcInstant(
+  year: number,
+  month: number,
+  day: number,
+  hour = 0,
+  minute = 0,
+  second = 0,
+): number | undefined {
+  if (year < 1 || month < 1 || month > 12 || day < 1 || day > 31
+    || hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) {
+    return undefined;
+  }
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  date.setUTCHours(hour, minute, second, 0);
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day
+    || date.getUTCHours() !== hour || date.getUTCMinutes() !== minute || date.getUTCSeconds() !== second) {
+    return undefined;
+  }
+  return date.getTime();
+}
+
+/** DATE or UTC DATE-TIME to milliseconds; invalid calendar values return undefined. */
 export function parseIcalDate(value: string): number | undefined {
-  const compact = value.replace(/[-:]/g, '').trim();
-  const dateOnly = /^(\d{4})(\d{2})(\d{2})$/.exec(compact);
-  if (dateOnly) {
-    const ms = Date.UTC(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]));
-    return Number.isFinite(ms) ? ms : undefined;
-  }
-  const dateTime = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/.exec(compact);
-  if (dateTime) {
-    const ms = Date.UTC(Number(dateTime[1]), Number(dateTime[2]) - 1, Number(dateTime[3]),
-      Number(dateTime[4]), Number(dateTime[5]), Number(dateTime[6]));
-    return Number.isFinite(ms) ? ms : undefined;
-  }
-  return undefined;
+  const input = value.trim();
+  const dateOnly = /^(?:\\d{8}|\\d{4}-\\d{2}-\\d{2})$/u.test(input);
+  const dateTime = /^(?:\\d{8}|\\d{4}-\\d{2}-\\d{2})T(?:\\d{6}|\\d{2}:\\d{2}:\\d{2})Z$/iu.test(input);
+  if (!dateOnly && !dateTime) return undefined;
+  const compact = input.replace(/[-:]/g, '');
+  const parts = dateTime
+    ? /^(\\d{4})(\\d{2})(\\d{2})T(\\d{2})(\\d{2})(\\d{2})Z$/iu.exec(compact)
+    : /^(\\d{4})(\\d{2})(\\d{2})$/u.exec(compact);
+  if (!parts) return undefined;
+  return utcInstant(
+    Number(parts[1]), Number(parts[2]), Number(parts[3]),
+    dateTime ? Number(parts[4]) : 0,
+    dateTime ? Number(parts[5]) : 0,
+    dateTime ? Number(parts[6]) : 0,
+  );
 }
 
 function iso(ms: number): string {
@@ -137,7 +162,7 @@ function readEvent(props: Record<string, string>): ParsedIcalEvent | undefined {
   let endMs = parseIcalDate(endRaw.split(';')[0] ?? '');
   if (startMs === undefined || endMs === undefined) return undefined;
   // 全天事件 DTEND 为排他日界：零长度时后移一天保住 [start, end) 语义。
-  const allDay = /VALUE=DATE/.test(startRaw) && !startRaw.includes('T');
+  const allDay = /^(?:\d{8}|\d{4}-\d{2}-\d{2})$/u.test(startRaw);
   if (endMs === startMs && allDay) endMs = startMs + 86_400_000;
   if (endMs <= startMs) return undefined;
   const sequence = Number(props.SEQUENCE ?? '0');
@@ -186,8 +211,9 @@ export class ICalSubscriptionProvider implements CalendarProvider {
     return {events, hasMore: false};
   }
 
-  getEvent(_accountRef: string, externalId: string): CalendarEventRecord | undefined {
-    return undefined;
+  async getEvent(_accountRef: string, externalId: string): Promise<CalendarEventRecord | undefined> {
+    const event = parseIcalEvents(await this.fetchFeed()).find(item => item.uid === externalId);
+    return event === undefined ? undefined : this.toRecord(event);
   }
 
   /** 只读源无邀约语义：显式 UNSUPPORTED 而非假成功。 */
@@ -200,18 +226,28 @@ export class ICalSubscriptionProvider implements CalendarProvider {
     let response: FetchResponseLike;
     try {
       response = await this.fetchImpl(this.url, {signal: signal ?? new AbortController().signal,
-        headers: {'user-agent': USER_AGENT, accept: 'text/calendar, text/plain'}});
-    } catch (error) {
+        headers: {'user-agent': USER_AGENT, accept: 'text/calendar, text/plain'}, redirect: 'error'});
+    } catch {
       if (signalAborted(signal)) throw new ProtocolError('CANCELLED', 'Calendar fetch cancelled', false);
-      throw new ProtocolError('EXTERNAL_FAILURE', `iCal 订阅抓取失败: ${describe(error)}`, true);
+      throw new ProtocolError('EXTERNAL_FAILURE', 'iCal 订阅抓取失败', true);
     }
     if (response.status === 429) throw new ProtocolError('RATE_LIMITED', 'iCal 订阅源限流', true, 60_000);
-    const body = await response.text();
-    if (!response.ok || !body.startsWith('BEGIN:VCALENDAR')) {
+    if (!response.ok) {
       throw new ProtocolError('EXTERNAL_FAILURE', `iCal 订阅源返回异常（HTTP ${response.status}）`, response.status >= 500);
     }
-    this.cache = {body, fetchedAtMs: Date.now()};
-    return body;
+    let body: string;
+    try { body = await response.text(); }
+    catch {
+      if (signalAborted(signal)) throw new ProtocolError('CANCELLED', 'Calendar fetch cancelled', false);
+      throw new ProtocolError('EXTERNAL_FAILURE', 'iCal 订阅响应读取失败', true);
+    }
+    if (signalAborted(signal)) throw new ProtocolError('CANCELLED', 'Calendar fetch cancelled', false);
+    const calendar = body.replace(/^\\uFEFF/u, '').trimStart();
+    if (!calendar.startsWith('BEGIN:VCALENDAR')) {
+      throw new ProtocolError('EXTERNAL_FAILURE', `iCal 订阅源返回异常（HTTP ${response.status}）`, false);
+    }
+    this.cache = {body: calendar, fetchedAtMs: Date.now()};
+    return calendar;
   }
 
   private toRecord(event: ParsedIcalEvent): CalendarEventRecord {
@@ -236,6 +272,3 @@ function signalAborted(signal: AbortSignal | undefined): boolean {
   return signal !== undefined && signal.aborted;
 }
 
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
