@@ -214,6 +214,28 @@ function orderedTasks() {
 }
 let privateMemory;
 let privateMemoryFixtureWrite = false;
+function privateMemoryController() {
+  if (!privateMemory) {
+    mkdirSync(path.dirname(dataPaths.privateMemory), {recursive: true});
+    privateMemory = createPrivateMemoryController(dataPaths.privateMemory, async details => {
+      const answer = await dialog.showMessageBox(admin, {
+        type: 'question', title: '确认私人记忆',
+        message: details.previous ? '确认更正这条私人记忆？' : '确认保存这条私人记忆？',
+        detail: `来源：${details.source.path}:${details.source.line}\n摘录：${details.citation}\n\n拟保存：${details.summary}`,
+        buttons: ['确认保存', '取消'], defaultId: 1, cancelId: 1, noLink: true,
+      });
+      return answer.response === 0 && admin && !admin.isDestroyed();
+    }, async current => {
+      const answer = await dialog.showMessageBox(admin, {
+        type: 'warning', title: '删除私人记忆', message: '删除这条私人记忆的全部版本？',
+        detail: `当前摘要：${current.summary}\n来源：${current.sourceRef}`,
+        buttons: ['删除所有版本', '取消'], defaultId: 1, cancelId: 1, noLink: true,
+      });
+      return answer.response === 0 && admin && !admin.isDestroyed();
+    });
+  }
+  return privateMemory;
+}
 
 function snapshot(surface) {
   return {
@@ -1353,19 +1375,7 @@ async function action(event, name, payload) {
       const selected = await dialog.showOpenDialog(admin, {properties: ['openDirectory'],
         title: '选择只读知识库文件夹'});
       if (selected.canceled || selected.filePaths.length !== 1) return {selected: false};
-      if (!privateMemory) {
-        mkdirSync(path.dirname(dataPaths.privateMemory), {recursive: true});
-        privateMemory = createPrivateMemoryController(dataPaths.privateMemory, async details => {
-          const answer = await dialog.showMessageBox(admin, {
-            type: 'question', title: '确认私人记忆',
-            message: details.previous ? '确认更正这条私人记忆？' : '确认保存这条私人记忆？',
-            detail: `来源：${details.source.path}:${details.source.line}\n摘录：${details.citation}\n\n拟保存：${details.summary}`,
-            buttons: ['确认保存', '取消'], defaultId: 1, cancelId: 1, noLink: true,
-          });
-          return answer.response === 0 && admin && !admin.isDestroyed();
-        });
-      }
-      await privateMemory.selectVault(selected.filePaths[0]);
+      await privateMemoryController().selectVault(selected.filePaths[0]);
       privateMemoryFixtureWrite = false;
       if (!app.isPackaged && process.env.PA_DESKTOP_TEST_USER_DATA
         && process.env.PA_DESKTOP_PRIVATE_MEMORY_FIXTURE_ROOT) {
@@ -1388,6 +1398,8 @@ async function action(event, name, payload) {
       if (!privateMemory) throw Error('请先选择本机 Vault');
       return privateMemory.search(payload?.query);
     }
+    if (name === 'memory.listSaved') return privateMemoryController().listSaved(payload);
+    if (name === 'memory.delete') return privateMemoryController().delete(payload?.ref);
     if (name === 'memory.save') {
       if (!privateMemoryFixtureWrite) throw Error('真实私人记忆写入等待完整删除保障验收');
       if (!privateMemory) throw Error('请先选择本机 Vault');

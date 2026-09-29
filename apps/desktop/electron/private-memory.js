@@ -1,4 +1,5 @@
 import {createHash, randomUUID} from 'node:crypto';
+import {existsSync} from 'node:fs';
 import {realpath} from 'node:fs/promises';
 import {openReadOnlyVault} from '@personal-agent/knowledge/filesystem';
 import {openSqliteMemoryHost} from '@personal-agent/memory/sqlite';
@@ -11,7 +12,7 @@ const context = () => ({deadline: new Date(Date.now() + 3 * 60_000).toISOString(
 const hash = value => createHash('sha256').update(value).digest('hex');
 
 /** Local admin-only memory; the caller must present a native confirmation dialog. */
-export function createPrivateMemoryController(databasePath, confirm) {
+export function createPrivateMemoryController(databasePath, confirm, confirmDelete = async () => false) {
   let memory;
   const memoryHost = () => {
     if (!memory) {
@@ -34,6 +35,15 @@ export function createPrivateMemoryController(databasePath, confirm) {
     search(query) {
       if (!vault) throw Error('请先选择本机 Vault');
       return vault.search({query, limit: 5, ...context()});
+    },
+    async listSaved({at, snapshot, cursor} = {}) {
+      const queryAt = at ?? new Date().toISOString();
+      if (!memory && !existsSync(databasePath)) return {facts: [], at: queryAt};
+      const page = await memoryHost().bind(namespace, {allowedSensitivities: ['private']})
+        .listCurrent({at: queryAt, limit: 20,
+          ...(snapshot === undefined ? {} : {snapshot}),
+          ...(cursor === undefined ? {} : {cursor}), ...context()});
+      return {...page, at: queryAt};
     },
     async save(source, summary) {
       if (!vault) throw Error('请先选择本机 Vault');
@@ -62,6 +72,25 @@ export function createPrivateMemoryController(databasePath, confirm) {
         },
       }, context());
       return saved ? {state: 'saved', revision: saved.fact.ref.revision} : {state: 'declined'};
+    },
+    async delete(ref) {
+      if (!ref || typeof ref !== 'object' || typeof ref.id !== 'string'
+        || !Number.isSafeInteger(ref.revision) || ref.revision < 1) throw Error('无效的记忆版本');
+      if (!memory && !existsSync(databasePath)) throw Error('没有可删除的私人记忆');
+      const store = memoryHost();
+      const query = store.bind(namespace, {allowedSensitivities: ['private']});
+      const current = (await query.listCurrent({factId: ref.id,
+        at: new Date().toISOString(), limit: 1, ...context()})).facts[0];
+      if (!current || current.ref.revision !== ref.revision) throw Error('记忆版本已变化，请刷新列表');
+      if (!await confirmDelete(current)) return {state: 'declined'};
+      store.eraseUnboundFact(namespace, {factId: ref.id, expectedRevision: ref.revision,
+        operationId: `desktop-private-${hash(`${ref.id}@${ref.revision}`)}`, ...context()});
+      const [visible, history] = await Promise.all([
+        query.listCurrent({factId: ref.id, at: new Date().toISOString(), limit: 1, ...context()}),
+        query.listHistory({factId: ref.id, limit: 20, ...context()}),
+      ]);
+      if (visible.facts.length || history.facts.length) throw Error('删除读回未通过');
+      return {state: 'deleted'};
     },
     close() { memory?.close(); },
   });
