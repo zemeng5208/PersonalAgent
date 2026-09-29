@@ -6,19 +6,26 @@ import {ToolGateway, toolArgumentsDigest} from '@personal-agent/tool-gateway';
 import {TaskRuntime} from '../index.js';
 import {createTextApplication, type TextApplication, type TextApplicationOptions} from './text.js';
 import type {ModelMessage} from '@personal-agent/models';
+import {QwenRealtimeModelGateway} from '@personal-agent/models';
 import {parseCoordinationRepairCandidate} from '@personal-agent/coordination';
 import type {CoordinationPort, CoordinationRequest, CoordinationRepairCandidateResult} from '@personal-agent/coordination';
 import {startCoordinationTask, assertCompetitionExportAllowed, type CompetitionToolExport} from './coordination.js';
 import {createLocalRepairTool, prepareLocalRepair, startLocalRepairTask, LOCAL_REPAIR_CHECKPOINT} from './local-repair.js';
 import type {LocalRepairHostOptions, SubmitLocalRepairRequest} from './local-repair.js';
-import {ScopedEvidenceReader} from './evidence-reader.js';
-import type {EvidenceReaderOptions} from './evidence-reader.js';
+import {isDeepStrictEqual} from 'node:util';
 import {RuntimeCompetitionToolCatalog} from './tool-catalog.js';
 import type {CompetitionAvailableTool, CompetitionToolAvailability} from './tool-catalog.js';
-import {isDeepStrictEqual} from 'node:util';
+import {ScopedEvidenceReader} from './evidence-reader.js';
+import type {EvidenceReaderOptions} from './evidence-reader.js';
 import {createCompetitionFactHost} from './competition-fact-host.js';
 import type {CompetitionFactHost, CompetitionFactHostOptions} from './competition-fact-host.js';
 import {resolve} from 'node:path';
+import {SystemObservationSessions, SYSTEM_OBSERVATION_SESSION_CHECKPOINT,
+  SYSTEM_OBSERVATION_NAME, SYSTEM_OBSERVATION_VERSION, SYSTEM_OBSERVATION_SCOPE} from './system-observation-session.js';
+import type {StartSystemObservationSessionRequest, SystemObservationSession} from './system-observation-session.js';
+import {MailReadSessions, MAIL_READ_SESSION_CHECKPOINT, MAIL_READ_TOOL, MAIL_READ_VERSION} from './mail-read-session.js';
+import type {StartMailReadSessionRequest, MailReadSession} from './mail-read-session.js';
+import {createRuntimeSubagentDispatchTool} from './subagent-host.js';
 type SuccessfulResponse = Extract<Response, {outcome: 'ok'}>;
 
 export interface RevokeHostAuthorizationRequest {
@@ -58,7 +65,6 @@ export interface FinalizeHostToolTaskRequest {
 }
 
 interface HostToolPreparation extends PrepareHostToolTaskRequest { namespace: string; }
-
 interface HostToolIntent extends SubmitHostToolTaskRequest {
   namespace: string;
   argumentsDigest: string;
@@ -77,7 +83,32 @@ function assistantText(resultSummary: string): string {
   return resultSummary.replace(MODEL_METADATA, '').trim();
 }
 
-export interface RuntimeApplicationOptions { path: string; now?: () => Date; idFactory?: () => string; text?: TextApplicationOptions; tools?: readonly RegisteredTool[]; profile?: 'local' | 'huawei_ict_agentarts'; coordination?: CoordinationPort; competitionToolExports?: readonly CompetitionToolExport[]; competitionToolAvailability?: readonly CompetitionToolAvailability[]; repairCandidateVersion?: '1.0'; localRepair?: LocalRepairHostOptions; hostUserNamespace?: string; }
+export interface ThinkingConfig {
+  depth: number;
+  fast: boolean;
+}
+
+export interface ThinkingState extends ThinkingConfig {
+  maxSteps: number;
+  applied: boolean;
+  reason: string;
+  stepBudget: {
+    maxSteps: number;
+    fast: boolean;
+    description: string;
+  };
+  modelReasoning: {
+    supported: boolean;
+    effort: 'none' | 'low' | 'medium' | 'high';
+    reason: string;
+  };
+}
+
+export interface RuntimeApplicationOptions { path: string; now?: () => Date; idFactory?: () => string; text?: TextApplicationOptions; tools?: readonly RegisteredTool[]; profile?: 'local' | 'huawei_ict_agentarts'; coordination?: CoordinationPort; competitionToolExports?: readonly CompetitionToolExport[]; competitionToolAvailability?: readonly CompetitionToolAvailability[]; competitionMaxSteps?: number; repairCandidateVersion?: '1.0'; localRepair?: LocalRepairHostOptions; hostUserNamespace?: string;
+  thinking?: ThinkingConfig;
+  /** Trusted host policy for routine operations inside already enabled module scopes. */
+  automaticTools?: readonly {toolName: string; toolVersion: string}[];
+}
 export interface RuntimeApplicationTransport { send(request: Request, signal: AbortSignal): Promise<Response>; }
 
 export class RuntimeApplication implements RuntimeApplicationTransport {
@@ -88,16 +119,27 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   readonly profile: 'local' | 'huawei_ict_agentarts';
   private readonly coordination: CoordinationPort | undefined;
   private readonly competitionToolExports: readonly CompetitionToolExport[];
+  private competitionMaxSteps: number;
+  private thinkingConfig: ThinkingConfig = {depth: 1, fast: false};
   private readonly repairCandidateVersion: '1.0' | undefined;
   private readonly localRepair: LocalRepairHostOptions | undefined;
-  private readonly competitionToolCatalog?: RuntimeCompetitionToolCatalog;
   private readonly hostUserNamespace: string | undefined;
   private readonly now: () => Date;
+  private readonly competitionToolCatalog?: RuntimeCompetitionToolCatalog;
   private readonly storagePath: string;
+  private readonly observationSessions: SystemObservationSessions;
+  private readonly mailReadSessions: MailReadSessions;
 
   constructor(options: RuntimeApplicationOptions) {
     this.storagePath = resolve(options.path);
     this.profile = options.profile ?? 'local';
+    if (options.competitionMaxSteps !== undefined && (this.profile !== 'huawei_ict_agentarts'
+      || !Number.isSafeInteger(options.competitionMaxSteps) || options.competitionMaxSteps < 1)) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Competition step budget must be a positive integer');
+    }
+    this.competitionMaxSteps = options.competitionMaxSteps ?? 4;
+    if (options.thinking) this.configureThinking(options.thinking);
+    else if (options.competitionMaxSteps !== undefined) this.thinkingConfig = {depth: Math.min(5, Math.max(0, Math.floor(options.competitionMaxSteps / 2) - 1)), fast: false};
     if (!['local', 'huawei_ict_agentarts'].includes(this.profile)
       || (this.profile === 'local' && (options.coordination !== undefined || options.competitionToolExports !== undefined || options.competitionToolAvailability !== undefined || options.repairCandidateVersion !== undefined || options.hostUserNamespace !== undefined))
       || (options.repairCandidateVersion !== undefined && options.repairCandidateVersion !== '1.0')
@@ -136,20 +178,86 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       ...(options.now ? {now: options.now} : {}),
       ...(options.idFactory ? {idFactory: options.idFactory} : {}),
       ...(options.tools || this.localRepair ? {createToolGateway: (policy: import('@personal-agent/policy').AuthorizationPolicy) => {
-        gateway = new ToolGateway({policy, now: () => (options.now?.() ?? new Date()).getTime()});
+        gateway = new ToolGateway({policy: {authorize: request => {
+          // Gate even the generic tool.invoke wire path: a persisted sample
+          // grant alone cannot survive its process-local consent lease.
+          const session = this.runtime.loadCheckpoint(request.taskId, SYSTEM_OBSERVATION_SESSION_CHECKPOINT);
+          if (session !== undefined) {
+            if (typeof session !== 'string' || request.toolName !== SYSTEM_OBSERVATION_NAME
+              || request.authorizationRef !== `host-tool-${request.taskId}`) {
+              throw new ProtocolError('UNAUTHORIZED', 'Invalid observation authorization');
+            }
+            this.observationSessions.assertSample(session, request.taskId);
+          }
+          const mailSession = this.runtime.loadCheckpoint(request.taskId, MAIL_READ_SESSION_CHECKPOINT);
+          if (mailSession !== undefined) {
+            if (typeof mailSession !== 'string' || request.toolName !== MAIL_READ_TOOL
+              || request.authorizationRef !== `host-tool-${request.taskId}`) {
+              throw new ProtocolError('UNAUTHORIZED', 'Invalid inbox read authorization');
+            }
+            this.mailReadSessions.assertPage(mailSession, request.taskId);
+          }
+          return policy.authorize(request);
+        }}, now: () => (options.now?.() ?? new Date()).getTime()});
         for (const tool of options.tools ?? []) gateway.register(tool);
         if (this.localRepair) gateway.register(createLocalRepairTool(() => this.runtime, this.localRepair));
         return gateway;
       }} : {}),
     });
+    this.observationSessions = new SystemObservationSessions(() => this.now().getTime(), taskId => {
+      this.runtime.policy.revoke(`host-tool-${taskId}`);
+      this.runtime.requestCancel(taskId, 'System observation consent ended');
+    });
+    this.mailReadSessions = new MailReadSessions(() => this.now().getTime(), taskId => {
+      this.runtime.policy.revoke(`host-tool-${taskId}`);
+      this.runtime.requestCancel(taskId, 'Inbox read consent ended');
+    });
     if (gateway) {
       const descriptors = gateway.list();
+      const automaticTools = new Set<string>();
+      for (const binding of options.automaticTools ?? []) {
+        const descriptor = descriptors.find(tool => tool.name === binding.toolName && tool.version === binding.toolVersion);
+        if (this.profile !== 'huawei_ict_agentarts' || !descriptor || descriptor.sideEffect === 'external_write' || descriptor.requiresPresence) {
+          throw new ProtocolError('INVALID_ARGUMENT', 'Routine policy requires a registered non-external tool without presence requirements');
+        }
+        automaticTools.add(JSON.stringify([binding.toolName, binding.toolVersion]));
+      }
       const invoker = new RuntimeToolInvoker(this.runtime, descriptors);
       this.tools = {list: () => structuredClone(descriptors), invoke: async invocation => {
         const tool = descriptors.find(item => item.name === invocation.toolName && item.version === invocation.toolVersion);
         if (!tool) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Tool is not registered');
         validateToolValue(tool.inputSchema, invocation.arguments);
+        const observationSession = this.runtime.loadCheckpoint(invocation.taskId, SYSTEM_OBSERVATION_SESSION_CHECKPOINT);
+        if (observationSession !== undefined) {
+          if (typeof observationSession !== 'string' || invocation.toolName !== SYSTEM_OBSERVATION_NAME
+            || invocation.toolVersion !== SYSTEM_OBSERVATION_VERSION
+            || !isDeepStrictEqual(invocation.arguments, {})) {
+            throw new ProtocolError('UNAUTHORIZED', 'Invalid observation session invocation');
+          }
+          this.observationSessions.assertSample(observationSession, invocation.taskId);
+        }
+        const mailSession = this.runtime.loadCheckpoint(invocation.taskId, MAIL_READ_SESSION_CHECKPOINT);
+        if (mailSession !== undefined) {
+          if (typeof mailSession !== 'string' || invocation.toolName !== MAIL_READ_TOOL
+            || invocation.toolVersion !== MAIL_READ_VERSION) throw new ProtocolError('UNAUTHORIZED', 'Invalid inbox invocation');
+          this.mailReadSessions.assertPage(mailSession, invocation.taskId);
+        }
         const ref = invocation.runId;
+        if (!this.runtime.policy.get(ref) && automaticTools.has(JSON.stringify([tool.name, tool.version]))) {
+          const decisionKey = `routine-tool-policy:${ref}`;
+          if (this.runtime.loadCheckpoint(invocation.taskId, decisionKey)) {
+            throw new ProtocolError('UNAUTHORIZED', 'Routine tool grant was revoked');
+          }
+          if (invocation.signal.aborted || this.runtime.getTask(invocation.taskId).state !== 'running'
+            || Date.parse(invocation.deadline) <= this.now().getTime()) {
+            throw new ProtocolError('CANCELLED', 'Routine task is no longer active');
+          }
+          const argumentsDigest = toolArgumentsDigest(invocation.arguments);
+          this.runtime.saveCheckpoint(invocation.taskId, decisionKey, {toolName:tool.name,
+            toolVersion:tool.version, argumentsDigest, source:'trusted-routine-tool-policy'});
+          this.runtime.policy.grant({authorizationRef:ref,taskId:invocation.taskId,toolName:tool.name,
+            scopes:tool.requiredScopes,argumentsDigest,maxUses:1,expiresAt:invocation.deadline});
+        }
         if (!this.runtime.policy.get(ref)) {
           const expiresAt = new Date((options.now?.() ?? new Date()).getTime() + 600_000).toISOString();
           const approval = this.runtime.requestToolApproval(ref, invocation.taskId, tool, expiresAt, toolArgumentsDigest(invocation.arguments));
@@ -171,6 +279,94 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   get deployment(): TextApplication['deployment'] { this.requireLocalText(); return structuredClone(this.textApplication.deployment); }
   get activeTaskCount(): number { return this.activeTextTasks.size; }
 
+  configureThinking(config: ThinkingConfig): ThinkingState {
+    const depth = Number(config?.depth);
+    if (!Number.isInteger(depth) || depth < 0 || depth > 5) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Thinking depth must be an integer between 0 and 5');
+    }
+    const fast = Boolean(config?.fast);
+    this.thinkingConfig = {depth, fast};
+    this.competitionMaxSteps = this.calculateThinkingMaxSteps(depth, fast);
+    const labels = ['最低', '低', '平衡', '深入', '高', '最高'];
+    const effortLevels: ('none' | 'low' | 'medium' | 'high')[] = ['none', 'low', 'low', 'medium', 'high', 'high'];
+    const effort = effortLevels[depth] ?? 'low';
+    const isReasoningSupported = false;
+    const reasoningReason = isReasoningSupported
+      ? `模型推理思考已配置（effort: ${effort}）`
+      : `主模型当前未开放原生 reasoning 参数，思考深度作为任务步骤预算（maxSteps: ${this.competitionMaxSteps}）独立生效；若使用支持 reasoning 的子模型将透传推理参数`;
+
+    return {
+      depth,
+      fast,
+      maxSteps: this.competitionMaxSteps,
+      applied: true,
+      reason: `思考深度已传入 Runtime：深度 ${labels[depth]}（${fast ? '快速模式' : '标准模式'}，最大步数 ${this.competitionMaxSteps}）。${reasoningReason}`,
+      stepBudget: {
+        maxSteps: this.competitionMaxSteps,
+        fast,
+        description: `最大编排执行步数：${this.competitionMaxSteps} 步`,
+      },
+      modelReasoning: {
+        supported: isReasoningSupported,
+        effort,
+        reason: reasoningReason,
+      },
+    };
+  }
+
+  getThinkingState(): ThinkingState {
+    const {depth, fast} = this.thinkingConfig;
+    const maxSteps = this.calculateThinkingMaxSteps(depth, fast);
+    const labels = ['最低', '低', '平衡', '深入', '高', '最高'];
+    const effortLevels: ('none' | 'low' | 'medium' | 'high')[] = ['none', 'low', 'low', 'medium', 'high', 'high'];
+    const effort = effortLevels[depth] ?? 'low';
+    const isReasoningSupported = false;
+    const reasoningReason = isReasoningSupported
+      ? `模型推理思考已配置（effort: ${effort}）`
+      : `主模型当前未开放原生 reasoning 参数，思考深度作为任务步骤预算（maxSteps: ${maxSteps}）独立生效；若使用支持 reasoning 的子模型将透传推理参数`;
+
+    return {
+      depth,
+      fast,
+      maxSteps,
+      applied: true,
+      reason: `思考深度已传入 Runtime：深度 ${labels[depth]}（${fast ? '快速模式' : '标准模式'}，最大步数 ${maxSteps}）。${reasoningReason}`,
+      stepBudget: {
+        maxSteps,
+        fast,
+        description: `最大编排执行步数：${maxSteps} 步`,
+      },
+      modelReasoning: {
+        supported: isReasoningSupported,
+        effort,
+        reason: reasoningReason,
+      },
+    };
+  }
+
+  private calculateThinkingMaxSteps(depth: number, fast: boolean): number {
+    const baseSteps = Math.max(2, (depth + 1) * 2);
+    return fast ? Math.max(2, baseSteps - 2) : baseSteps;
+  }
+
+  /** Trusted Runtime-managed subagent dispatch tool. Creates and tracks real child tasks. */
+  createSubagentDispatchTool(modelGatewayFactory?: (modelName?: string) => import('@personal-agent/models').ModelGateway | undefined): RegisteredTool {
+    return createRuntimeSubagentDispatchTool({
+      getRuntime: () => this.runtime,
+      getTools: () => this.tools,
+      ...(modelGatewayFactory ? {getModelGateway: modelGatewayFactory} : {}),
+    });
+  }
+
+  /** Trusted composition only. Native audio never replaces AgentArts task coordination. */
+  createLiveVoiceModel(config: {workspaceId: string; apiKey: string}): Pick<QwenRealtimeModelGateway, 'connect'> {
+    if (this.profile !== 'huawei_ict_agentarts') {
+      throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Live voice requires Competition Profile');
+    }
+    const gateway = new QwenRealtimeModelGateway(config);
+    return {connect: request => gateway.connect(request)};
+  }
+
   async send(request: Request, signal: AbortSignal): Promise<Response> {
     const response = await this.runtime.send(request, signal);
     if (request.operation === 'task.submit' && response.outcome === 'ok') this.dispatchSubmittedTextTask(request, response);
@@ -184,6 +380,58 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
 
   /** Trusted-host entrypoint. The task and original arguments commit atomically. */
   submitHostToolTask(request: SubmitHostToolTaskRequest): HostToolTaskReadback {
+    return this.submitBoundHostToolTask(request);
+  }
+
+  /** Trusted UI consent only; no wire operation or generic tool permission. */
+  startSystemObservationSession(request: StartSystemObservationSessionRequest): SystemObservationSession {
+    if (this.profile !== 'huawei_ict_agentarts' || !this.hostUserNamespace) {
+      throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'System observation is not configured');
+    }
+    const descriptor = this.hostToolDescriptor(SYSTEM_OBSERVATION_NAME, SYSTEM_OBSERVATION_VERSION);
+    if (descriptor.sideEffect !== 'read' || descriptor.requiresPresence
+      || descriptor.requiredScopes.length !== 1 || descriptor.requiredScopes[0] !== SYSTEM_OBSERVATION_SCOPE) {
+      throw new ProtocolError('UNAUTHORIZED', 'System observation must retain its fixed read-only scope');
+    }
+    return this.observationSessions.start(request);
+  }
+
+  sampleSystemObservationSession(sessionId: string): {state: 'sampled' | 'busy' | 'not_due'; sessionId: string; sample?: HostToolTaskReadback} {
+    const next = this.observationSessions.next(sessionId, taskId =>
+      this.activeTextTasks.has(taskId) || !['succeeded', 'failed', 'cancelled'].includes(this.runtime.getTask(taskId).state));
+    if (next.state !== 'ready') return {state: next.state, sessionId,
+      ...(next.taskId ? {sample: this.readHostToolTask(next.taskId)} : {})};
+    return {state: 'sampled', sessionId, sample: this.submitBoundHostToolTask({
+      commandId: next.commandId, toolName: SYSTEM_OBSERVATION_NAME,
+      toolVersion: SYSTEM_OBSERVATION_VERSION, arguments: {}, deadline: next.deadline,
+    }, sessionId)};
+  }
+
+  stopSystemObservationSession(sessionId: string): {stopped: boolean} {
+    return this.observationSessions.stop(sessionId);
+  }
+
+  startMailReadSession(request: StartMailReadSessionRequest): MailReadSession {
+    if (this.profile !== 'huawei_ict_agentarts' || !this.hostUserNamespace) {
+      throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Inbox session is not configured');
+    }
+    const descriptor = this.hostToolDescriptor(MAIL_READ_TOOL, MAIL_READ_VERSION);
+    if (descriptor.sideEffect !== 'read' || descriptor.requiresPresence
+      || descriptor.requiredScopes.length !== 1 || descriptor.requiredScopes[0] !== 'mail:read') {
+      throw new ProtocolError('UNAUTHORIZED', 'Inbox session requires the fixed read-only tool');
+    }
+    return this.mailReadSessions.start(request);
+  }
+  nextMailReadSession(sessionId: string) {
+    const next = this.mailReadSessions.next(sessionId, taskId => this.readHostToolTask(taskId));
+    if (next.state !== 'ready') return next;
+    return {state: 'submitted' as const, page: this.submitBoundHostToolTask({commandId: next.commandId,
+      toolName: MAIL_READ_TOOL, toolVersion: MAIL_READ_VERSION, arguments: next.arguments,
+      deadline: next.deadline}, undefined, sessionId)};
+  }
+  stopMailReadSession(sessionId: string): {stopped: boolean} {return this.mailReadSessions.stop(sessionId);}
+
+  private submitBoundHostToolTask(request: SubmitHostToolTaskRequest, observationSession?: string, mailSession?: string): HostToolTaskReadback {
     if (!this.hostUserNamespace || !this.tools) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Host tool tasks are not configured');
     if (!HOST_ID.test(request.commandId)) throw new ProtocolError('INVALID_ARGUMENT', 'Invalid host command ID');
     const descriptor = this.hostToolDescriptor(request.toolName, request.toolVersion);
@@ -206,6 +454,20 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       goal: `Host tool ${descriptor.name}`, conversationId: `host-tool:${this.hostUserNamespace}`,
       idempotencyKey,
     }, HOST_TOOL_CHECKPOINT, intent);
+    if (observationSession !== undefined) {
+      this.observationSessions.bind(observationSession, task.taskId);
+      this.runtime.saveCheckpoint(task.taskId, SYSTEM_OBSERVATION_SESSION_CHECKPOINT, observationSession);
+      this.runtime.policy.grant({authorizationRef: `host-tool-${task.taskId}`, taskId: task.taskId,
+        toolName: SYSTEM_OBSERVATION_NAME, scopes: [SYSTEM_OBSERVATION_SCOPE],
+        expiresAt: request.deadline, maxUses: 1, argumentsDigest: intent.argumentsDigest});
+    }
+    if (mailSession !== undefined) {
+      this.mailReadSessions.bind(mailSession, task.taskId);
+      this.runtime.saveCheckpoint(task.taskId, MAIL_READ_SESSION_CHECKPOINT, mailSession);
+      this.runtime.policy.grant({authorizationRef: `host-tool-${task.taskId}`, taskId: task.taskId,
+        toolName: MAIL_READ_TOOL, scopes: ['mail:read'], expiresAt: request.deadline,
+        maxUses: 1, argumentsDigest: intent.argumentsDigest});
+    }
     this.dispatchOrReconcileHostToolTask(task);
     return this.readHostToolTask(task.taskId);
   }
@@ -472,7 +734,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   }
 
   testTextConnection(options?: Parameters<TextApplication['testConnection']>[0]) { this.requireLocalText(); return this.textApplication.testConnection(options); }
-  close(): void { this.runtime.close(); }
+  close(): void { this.observationSessions.stopAll(); this.mailReadSessions.stopAll(); this.runtime.close(); }
 
   resumeTask(taskId: string): void {
     if (this.activeTextTasks.has(taskId)) return;
@@ -533,6 +795,8 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       this.runtime.saveCheckpoint(taskId, 'application-profile', this.profile);
       this.runtime.saveCheckpoint(taskId, 'application-goal', goal);
       this.runtime.saveCheckpoint(taskId, 'application-deadline', request.deadline);
+      this.runtime.saveCheckpoint(taskId, 'competition-max-steps', this.competitionMaxSteps);
+      this.runtime.saveCheckpoint(taskId, 'task-thinking', {depth: this.thinkingConfig.depth, fast: this.thinkingConfig.fast, maxSteps: this.competitionMaxSteps});
       const execution = Promise.resolve().then(() => startCoordinationTask(
         this.runtime, this.coordination, this.tools, taskId, goal, request.deadline,
         {toolExports: this.competitionToolExports,

@@ -1,11 +1,19 @@
 import {stateNames} from '../conversation/state.js';
 import {themePreference, saveTheme, saveCalm} from '../../ui/preferences.js';
+import {mountLiveVoiceControls} from '../../app/live-voice-controls.js';
+import {mountProactiveControls} from '../../app/proactive-controls.js';
+import {mountMailControls} from '../../app/mail-controls.js';
+import {mountLayaControls} from '../../app/laya-controls.js';
+import {mountWorkspaceControls} from '../../app/workspace-controls.js';
+import {mountAgentArtsControls} from '../../app/agentarts-controls.js';
+import {mountFeedsControls} from '../../app/feeds-controls.js';
+import {mountNotepadControls} from '../../app/notepad-controls.js';
+import {mountTodoControls} from '../../app/todo-controls.js';
+import {mountGoalCloudControls} from '../../app/goal-cloud-controls.js';
+import {mountKnowledgeControls} from '../../app/knowledge-controls.js';
 import {profilePage, bindProfile} from './profile.js';
 import {approvalPresentation, authorizationHistoryHtml, authorizationListHtml, nextApprovalExpiry} from './approval-status.js';
 import {agentArtsModelPage} from './agentarts-model.js';
-import {mountAgentArtsControls} from '../../app/agentarts-controls.js';
-import {mountFeedsControls} from '../../app/feeds-controls.js';
-import {mountTodoControls} from '../../app/todo-controls.js';
 
 export const sections = {
   settings: '常规', import: '导入', profile: '个人资料', appearance: '外观', voice: '语音', configuration: '配置',
@@ -108,7 +116,7 @@ export function mountAdmin(root, invoke, escape) {
   localSettingsButton.textContent = '桌面设置与恢复';
   localSettingsButton.addEventListener('click', () => window.desktop.openSettings().catch(error => { root.querySelector('#error').textContent = error.message; }));
   root.querySelector('.admin-bar').insertBefore(localSettingsButton, root.querySelector('#admin-close'));
-  let agentArtsControls, feedsControls, todoControls;
+  let liveControls,proactiveControls,mailControls,layaControls,codingControls,agentArtsControls,feedsControls,notepadControls,todoControls,goalCloudControls,knowledgeControls;
 
   function capabilityTable(data) {
     const status = data.capabilityDirectory ?? {state: 'unavailable', reason: '可信宿主尚未报告能力目录状态'};
@@ -135,7 +143,7 @@ export function mountAdmin(root, invoke, escape) {
     const thinking = data.thinking ?? {depth: 1, fast: false, reason: 'Runtime 尚未公开思考参数契约'};
     const status = model.status === 'ready' ? '已测试' : model.status === 'configured' ? '待测试' : '未连接';
     const capabilityText = model.capabilities ? `文本：${model.capabilities.text ? '支持' : '不支持'} · 流式：${model.capabilities.streaming ? '支持' : '关闭'} · 工具调用：${model.capabilities.toolCalling ? '支持' : '关闭'}` : '能力尚未读取';
-    return `<div class="model-editor"><div class="model-editor-head"><div><h2>${model.configured ? '编辑模型' : '添加模型'}</h2><p>盘古 V2 · OpenAI 兼容接口</p></div><button class="icon-btn" id="model-editor-close" aria-label="关闭模型编辑器">×</button></div><div class="settings-grid"><div class="sheet"><form id="model-config-form" class="settings-form"><label>Endpoint<input id="model-base-url" name="baseUrl" type="url" placeholder="https://api.modelarts-maas.com/openai/v1" value="${escape(model.baseUrl ?? '')}" required></label><label>模型名称<input id="model-name" name="model" value="${escape(model.model ?? 'pangu-nlp-n1-32k')}" required></label><label>部署名称<input id="model-deployment" name="deployment" value="${escape(model.deployment ?? model.model ?? 'pangu-nlp-n1-32k')}" required></label><label>API Key<input id="model-api-key" name="apiKey" type="password" autocomplete="off" placeholder="${model.keyConfigured ? '已安全保存 · 留空沿用' : '输入 API Key'}"></label><div class="form-actions"><button class="btn btn-primary" type="submit" id="model-save">保存模型</button><button class="btn" type="button" id="model-test" ${model.configured && model.enabled !== false ? '' : 'disabled'}>测试连接</button></div></form><p class="settings-status">${badge(status, model.status)} ${escape(model.reason ?? '尚未测试')}<br><span class="muted">${escape(capabilityText)}</span></p></div><div class="sheet thinking-sheet"><h2>推理偏好</h2><p class="muted">仅保存为桌面偏好；Runtime 尚未公开思考参数字段，因此不会伪装成已传入任务。</p><label class="range-label"><span>思考深度 <b id="thinking-depth-label">${['最低','低','平衡','深入','高','最高'][thinking.depth] ?? '低'}</b></span><input id="thinking-depth" type="range" min="0" max="5" step="1" value="${Number(thinking.depth) || 0}"></label><label class="toggle-row"><input id="thinking-fast" type="checkbox" ${thinking.fast ? 'checked' : ''}>快速模式</label><p class="settings-status" id="thinking-status">${escape(thinking.reason ?? 'Runtime 尚未公开思考参数契约')}</p></div></div></div>`;
+    return `<div class="model-editor"><div class="model-editor-head"><div><h2>${model.configured ? '编辑模型' : '添加模型'}</h2><p>盘古 V2 · OpenAI 兼容接口</p></div><button class="icon-btn" id="model-editor-close" aria-label="关闭模型编辑器">×</button></div><div class="settings-grid"><div class="sheet"><form id="model-config-form" class="settings-form"><label>Endpoint<input id="model-base-url" name="baseUrl" type="url" placeholder="https://api.modelarts-maas.com/openai/v1" value="${escape(model.baseUrl ?? '')}" required></label><label>模型名称<input id="model-name" name="model" value="${escape(model.model ?? 'pangu-nlp-n1-32k')}" required></label><label>部署名称<input id="model-deployment" name="deployment" value="${escape(model.deployment ?? model.model ?? 'pangu-nlp-n1-32k')}" required></label><label>API Key<input id="model-api-key" name="apiKey" type="password" autocomplete="off" placeholder="${model.keyConfigured ? '已安全保存 · 留空沿用' : '输入 API Key'}"></label><div class="form-actions"><button class="btn btn-primary" type="submit" id="model-save">保存模型</button><button class="btn" type="button" id="model-test" ${model.configured && model.enabled !== false ? '' : 'disabled'}>测试连接</button></div></form><p class="settings-status">${badge(status, model.status)} ${escape(model.reason ?? '尚未测试')}<br><span class="muted">${escape(capabilityText)}</span></p></div><div class="sheet thinking-sheet"><h2>推理偏好</h2><p class="muted">${thinking.applied ? '已传入 Runtime 任务执行契约，控制单任务最大步数及快慢模式' : '仅保存为桌面偏好；Runtime 尚未公开思考参数字段，因此不会伪装成已传入任务。'}</p><label class="range-label"><span>思考深度 <b id="thinking-depth-label">${['最低','低','平衡','深入','高','最高'][thinking.depth] ?? '低'}</b></span><input id="thinking-depth" type="range" min="0" max="5" step="1" value="${Number(thinking.depth) || 0}"></label><label class="toggle-row"><input id="thinking-fast" type="checkbox" ${thinking.fast ? 'checked' : ''}>快速模式</label><p class="settings-status" id="thinking-status">${escape(thinking.reason ?? 'Runtime 尚未公开思考参数契约')}</p></div></div></div>`;
   }
 
   function modelPage(data) {
@@ -175,9 +183,9 @@ export function mountAdmin(root, invoke, escape) {
         settingRow('对话面板宽度', '桌面固定宽度，窄屏自动收缩', '<span class="value-pill">420px</span>') +
         settingRow('任务取消', '只显示 Runtime 回读后的最终状态', '<span class="value-pill">严格确认</span>') +
         settingRow('默认终端', '终端连接器尚未提供选择接口', '<span class="status-note">待接入</span>', 'is-unavailable')],
-      voice: ['语音', '语音输入、播报与设备选择',
-        settingRow('语音服务', data.voice?.reason ?? '语音供应商尚未连接', '<span class="status-note">未连接</span>', 'is-unavailable') +
-        settingRow('输入设备', '连接语音 Provider 后可选择麦克风', '<span class="status-note">不可用</span>', 'is-unavailable') +
+      voice: ['语音', '听写、原生实时对话和加密凭据',
+        settingRow('麦克风听写', '华为 SIS 转写填入输入框；你确认发送后用文字回答', `<span class="value-pill">${data.voice?.configuration?.configured ? '已配置' : '未配置'}</span>`) +
+        settingRow('Live 实时语音', data.live?.reason ?? '在下方配置百炼北京业务空间和 API Key', `<span class="value-pill">${data.live?.active ? '通话中' : data.live?.configured ? '已配置' : '未配置'}</span>`) +
         settingRow('语音播报', '停止播报与任务取消保持独立', '<span class="value-pill">安全隔离</span>')],
       notifications: ['通知', '任务状态与需要用户处理的提醒',
         settingRow('应用内通知', '当前只显示真实 Runtime 状态', '<span class="value-pill">已启用</span>') +
@@ -198,7 +206,7 @@ export function mountAdmin(root, invoke, escape) {
         settingRow('发送消息', '输入框内提交任务', '<kbd>Enter</kbd>') +
         settingRow('换行', '在输入框中插入新行', '<kbd>Shift</kbd><span class="key-plus">＋</span><kbd>Enter</kbd>') +
         settingRow('收起面板', '使用面板右上角关闭按钮', '<span class="value-pill">按钮</span>') +
-        settingRow('全局快捷键', 'Windows 全局注册能力尚未接入', '<span class="status-note">待接入</span>', 'is-unavailable')],
+        settingRow('Live 开启 / 关闭', data.live?.shortcut?.reason || '在语音设置中修改全局快捷键', `<kbd>${escape(data.live?.shortcut?.key ?? 'F8')}</kbd><button class="btn btn-sm" data-jump="voice">语音设置</button>`)],
       diagnostics: ['诊断与关于', '运行状态、版本边界与应用操作',
         settingRow('Runtime', data.connectionError ? `${data.connection} · ${data.connectionError}` : data.connection, '<button class="btn btn-sm" data-jump="connections">连接状态</button>') +
         settingRow('能力目录', capabilitySummary(data), '<button class="btn btn-sm" data-jump="capabilities">查看目录</button>') +
@@ -242,10 +250,26 @@ export function mountAdmin(root, invoke, escape) {
     }
     if (root.querySelector('#profile-dialog')?.open) return;
     root.querySelector('.main').dataset.section = section;
+    if (section==='voice') liveControls ??= mountLiveVoiceControls(root,invoke);
+    liveControls?.render(data.live);liveControls?.showSettings(section==='voice',section==='voice');
+    if (section==='computer') proactiveControls ??= mountProactiveControls(root.querySelector('.main'),invoke,{settings:true});
+    proactiveControls?.render(data.proactive);proactiveControls?.show(section==='computer');
+    if (section==='computer' && data.notepad) notepadControls ??= mountNotepadControls(root.querySelector('.main'),invoke);
+    notepadControls?.render(data.notepad);notepadControls?.show(section==='computer');
+    if (section==='connections' && data.mail) mailControls ??= mountMailControls(root.querySelector('.main'),invoke);
+    mailControls?.render(data.mail);mailControls?.showSettings(section==='connections');
     if (section==='connections' && data.feeds) feedsControls ??= mountFeedsControls(root.querySelector('.main'),invoke);
     feedsControls?.render(data.feeds);feedsControls?.show(section==='connections');
-    if (section==='connections' && data.todo) todoControls ??= mountTodoControls(root.querySelector('.main'),invoke);
+    if(section==='connections' && data.todo) todoControls ??= mountTodoControls(root.querySelector('.main'),invoke);
     todoControls?.render(data.todo);todoControls?.show(section==='connections');
+    if(section==='connections' && data.goalCloud) goalCloudControls ??= mountGoalCloudControls(root.querySelector('.main'),invoke);
+    goalCloudControls?.render(data.goalCloud);goalCloudControls?.show(section==='connections');
+    if ((section==='connections' || section==='memory') && data.laya) layaControls ??= mountLayaControls(root.querySelector('.main'),invoke);
+    layaControls?.render(data.laya);layaControls?.show(section==='connections' || section==='memory');
+    if (section==='memory' && data.knowledge) knowledgeControls ??= mountKnowledgeControls(root.querySelector('.main'),invoke);
+    knowledgeControls?.render(data.knowledge);knowledgeControls?.show(section==='memory');
+    if (section==='worktrees' || section==='environment') codingControls ??= mountWorkspaceControls(root.querySelector('.main'),invoke);
+    codingControls?.render(data);codingControls?.show(section==='worktrees' || section==='environment');
     const showAgentArts=section==='models' && data.model?.provider==='agentarts';
     if (showAgentArts) {
       agentArtsControls ??= mountAgentArtsControls(root.querySelector('.main'),invoke);
@@ -288,6 +312,8 @@ export function mountAdmin(root, invoke, escape) {
       content = settingsPane(data, directSettings[section]);
     } else if (section === 'profile') {
       content = profilePage(data, escape);
+    } else if (section === 'computer') {
+      content = '';
     } else if (featureSections.includes(section)) {
       content = featurePage(data, section);
     } else {

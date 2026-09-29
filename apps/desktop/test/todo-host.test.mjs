@@ -79,3 +79,24 @@ test('notification pause persists and queues until expiry without losing due rem
   await f.restart();f.advance(120_000);await f.host.tick(true);
   assert.equal(f.host.snapshot().notifications.length,1);
 });
+
+test('direct product entry todo.create and todo.update persist to storage and read back in snapshot', async t => {
+  const f = await fixture(t);
+  const created = await f.host.create({ title: 'Synthetic Task from UI', remindUtc: '2026-09-27T10:05:00.000Z' });
+  assert.equal(created.items.length, 1);
+  assert.equal(created.items[0].title, 'Synthetic Task from UI');
+  assert.equal(created.items[0].status, 'open');
+
+  const id = created.items[0].id;
+  const updated = await f.host.update({ id, status: 'done' });
+  assert.equal(updated.items.find(i => i.id === id).status, 'done');
+
+  // Verify persistence across restart
+  await f.restart();
+  const loaded = f.host.snapshot();
+  const target = loaded.items.find(i => i.id === id);
+  assert.ok(target, 'target item should persist across restart');
+  assert.equal(target.title, 'Synthetic Task from UI');
+  assert.equal(target.status, 'done');
+});
+

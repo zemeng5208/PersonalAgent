@@ -11,6 +11,15 @@ import {createWorkspacePatchStageToolFromReader} from './patch-stage.js';
 import {createWorkspacePatchApplyToolFromPreview} from './patch-apply.js';
 import type {WorkspacePatchApplyHostOptions} from './patch-apply.js';
 export {
+  reconcileWorkspacePatchApply,
+} from './patch-reconcile.js';
+export type {
+  WorkspacePatchProcessIdentity,
+  WorkspacePatchProcessState,
+  WorkspacePatchReconcileOptions,
+  WorkspacePatchReconciliationResult,
+} from './patch-reconcile.js';
+export {
   WORKSPACE_PATCH_APPLY_SCOPE,
   WORKSPACE_PATCH_APPLY_TOOL_NAME,
   WORKSPACE_PATCH_APPLY_TOOL_VERSION,

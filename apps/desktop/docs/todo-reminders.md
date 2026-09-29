@@ -16,6 +16,8 @@ NotificationService 的暂停、安静期和聚合规则保持原实现；当前
 
 - `dispatchDueSchedules/recoverMissedSchedules` 增加可选 conversationId，兼容原无参数调用；避免一个宿主消费其他来源的提醒。
 - 复用现有 workspace 依赖 productivity、notifications；锁文件仅登记这两个 Desktop 依赖。不增加外部库或迁移（依赖提醒协调 migration 8 / #197）。
-- 原集成工作树的 Runtime / productivity / notifications 构建、Desktop 核心 3 项、Runtime 协调 3 项和架构门禁 3/3 已通过，覆盖真实 SQLite / Policy / ToolGateway 下创建改期、取消、重启、skip、暂停与来源隔离。加密使用测试适配器，云端未调用；本分支仅做独立移植所需检查。
-- 新设置组件已在原集成工作树的内置浏览器实际渲染检查。当前命令环境 Node 26.3.0，仓库指定 Node 24.15.x，仍需 CI 标准版本核验。尚未重载正在使用的 Electron、操作真实 AgentArts 或验证系统 toast 显示，不据此标记产品链路完成。
-- 邮件分类重构未进入本工作包；这里只新增待办使用的共用加密存储文件。
+- Runtime / productivity / notifications 构建通过；Desktop 核心 3 项和 Runtime 原协调 3 项通过，覆盖真实 SQLite / Policy / ToolGateway 下创建改期、取消、重启、skip、暂停与来源隔离。加密使用测试适配器，云端未调用。
+- 架构门禁 3/3，JavaScript 语法、差异检查通过。当前命令环境 Node 26.3.0，仓库指定 Node 24.15.x，仍需 CI 标准版本核验。
+- 新设置组件已在内置浏览器实际渲染检查。尚未重载正在使用的 Electron、操作真实 AgentArts 或验证系统 toast 显示，不据此标记产品链路完成。
+
+邮件分类原有安全存储改为消费共用原子 StoragePort，保留 `mail-classification.json` 文件名和 version 1 格式，原记录无需迁移。

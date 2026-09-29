@@ -52,8 +52,8 @@ export interface CalendarRespondResult {
 export interface CalendarProvider {
   /** 账号类型（进 manifest.accountTypes），Fake 为 'fixture'。 */
   readonly providerKind: string;
-  listCalendars(accountRef: string): CalendarSummary[];
-  fetchWindow(accountRef: string, window: CalendarWindow, cursor?: string): CalendarFetchPage;
-  getEvent(accountRef: string, externalId: string): CalendarEventRecord | undefined;
-  respond(input: CalendarRespondInput): CalendarRespondResult;
+  listCalendars(accountRef: string): CalendarSummary[] | Promise<CalendarSummary[]>;
+  fetchWindow(accountRef: string, window: CalendarWindow, cursor?: string): CalendarFetchPage | Promise<CalendarFetchPage>;
+  getEvent(accountRef: string, externalId: string): CalendarEventRecord | undefined | Promise<CalendarEventRecord | undefined>;
+  respond(input: CalendarRespondInput): CalendarRespondResult | Promise<CalendarRespondResult>;
 }
