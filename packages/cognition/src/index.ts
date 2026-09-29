@@ -4,6 +4,9 @@ export type {MinimalRepairSelection, MinimalRepairResult} from './minimal-repair
 export {buildInterestOptions, LayaInterestDecisionService} from './interest-options.js';
 export type {InterestApproachId, InterestApproach, InterestOptions,
   InterestChoiceReceipt, InterestChoiceResult} from './interest-options.js';
+export {planKnowledgeReevaluation} from './knowledge-reevaluation.js';
+export type {KnowledgeDependency, KnowledgeReevaluationCheckpoint, KnowledgeReevaluationInput,
+  KnowledgeReevaluationWork, KnowledgeReevaluationPlan} from './knowledge-reevaluation.js';
 export type {ImpactCause, ImpactItem, ImpactReport, PlanRevisionRequest, PlanRevisionProposal} from './impact.js';
 export {analyzeStoredImpact, commitStoredPlanRevision} from './persistent.js';
 export type {StoredImpact, StoredPlanRevisionRequest, StoredPlanRevisionResult,
@@ -30,6 +33,8 @@ export type {ProjectedFactDecisionInput} from './projected-fact-decision.js';
 export {LayaTriageService} from './laya-triage.js';
 export type {LayaTriageMessage, LayaTriageRequest, LayaTriageResult, LayaTriageScores, LayaTriageOptions} from './laya-triage.js';
 export type {LayaBatchPayload, LayaBatchInferencePort} from './laya-triage.js';
+export {prepareTriageDispatch} from './triage-consumer.js';
+export type {TriageDispatchInput, TriageDispatchRef, TriageDeferredRef, TriageDispatch} from './triage-consumer.js';
 export {LocalLayaBatchHttpTransport} from './laya-batch-transport.js';
 export {LayaActionChoiceService, actionArgumentsDigest} from './laya-action-choice.js';
 export type {LayaActionCandidate, LayaActionChoiceRequest, LayaActionSelection} from './laya-action-choice.js';
