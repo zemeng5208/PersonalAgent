@@ -185,3 +185,16 @@ test('fetch failures do not expose subscription URL details and redirects are re
     error => error.code === 'EXTERNAL_FAILURE' && !error.message.includes('private-token'),
   );
 });
+
+
+test('CalendarService pagination advances through the iCal feed without replaying the first event', async () => {
+  const {CalendarService} = await import('../dist/index.js');
+  const {provider} = makeProvider();
+  const service = new CalendarService(provider, {now: () => NOW});
+  const window = {fromUtc: '2026-01-01T00:00:00.000Z', toUtc: '2027-01-01T00:00:00.000Z'};
+  const first = await service.listEvents(ACCOUNT, window, {limit: 1});
+  const second = await service.listEvents(ACCOUNT, window, {cursor: first.nextCursor, limit: 1});
+  assert.equal(first.items[0].externalId, 'evt-1@test');
+  assert.equal(second.items[0].externalId, 'evt-2@test');
+  assert.equal(second.hasMore, false);
+});
