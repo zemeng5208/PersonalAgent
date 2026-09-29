@@ -2,7 +2,7 @@ import {app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, safeS
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
 import path from 'node:path';
-import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync} from 'node:fs';
 import {EventCursor} from '@personal-agent/client';
 import {register, requestTaskCancellation} from './runtime.js';
 import {panelBounds, clampOrb, draggedGroupBounds} from './placement.js';
@@ -13,6 +13,7 @@ import {restoreSyntheticRepairSubmission} from './competition-repair-submission.
 import {readCapabilityDirectory} from './capability-directory.js';
 import {createMicrophonePermissionGate} from './microphone-permission.js';
 import {readApprovalPage} from './approval-history.js';
+import {createPrivateMemoryController} from './private-memory.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -107,6 +108,8 @@ let runtimeApplication;
 let syntheticRepairHost;
 const repairPrompts = new Set();
 let microphonePermissionGate;
+let privateMemory;
+let privateMemoryFixtureWrite = false;
 
 function snapshot(surface) {
   return {
@@ -123,6 +126,8 @@ function snapshot(surface) {
     capabilities: structuredClone(capabilities),
     health: structuredClone(health),
     capabilityDirectory: {...capabilityDirectory},
+    privateMemory: {available: competitionMode && Boolean(runtimeApplication),
+      vaultSelected: Boolean(privateMemory?.selected), writeEnabled: privateMemoryFixtureWrite},
     approvals: [...approvals.values()],
     notifications: [...notifications.values()],
     model: structuredClone(model),
@@ -206,7 +211,7 @@ function movePanelGroup(point) {
 }
 
 function openAdmin(page) {
-  if (page && ['settings','profile','models','tasks','capabilities','authorizations','git','connections'].includes(page)) {
+  if (page && ['settings','profile','models','tasks','capabilities','authorizations','git','connections','memory'].includes(page)) {
     adminNavigation = {page, revision:adminNavigation.revision + 1};
   }
   if (admin && !admin.isDestroyed()) { admin.show(); admin.focus(); publish(); return; }
@@ -737,6 +742,56 @@ async function action(event, name, payload) {
     if (sender !== admin) throw Error('模型启停只能从管理后台调用');
     return toggleModel(payload);
   }
+  if (typeof name === 'string' && name.startsWith('memory.')) {
+    if (sender !== admin || !competitionMode || !runtimeApplication) {
+      throw Error('私人记忆仅在 Competition 管理后台可用');
+    }
+    if (name === 'memory.selectVault') {
+      const selected = await dialog.showOpenDialog(admin, {properties: ['openDirectory'],
+        title: '选择只读知识库文件夹'});
+      if (selected.canceled || selected.filePaths.length !== 1) return {selected: false};
+      if (!privateMemory) {
+        mkdirSync(path.dirname(dataPaths.privateMemory), {recursive: true});
+        privateMemory = createPrivateMemoryController(dataPaths.privateMemory, async details => {
+          const answer = await dialog.showMessageBox(admin, {
+            type: 'question', title: '确认私人记忆',
+            message: details.previous ? '确认更正这条私人记忆？' : '确认保存这条私人记忆？',
+            detail: `来源：${details.source.path}:${details.source.line}\n摘录：${details.citation}\n\n拟保存：${details.summary}`,
+            buttons: ['确认保存', '取消'], defaultId: 1, cancelId: 1, noLink: true,
+          });
+          return answer.response === 0 && admin && !admin.isDestroyed();
+        });
+      }
+      await privateMemory.selectVault(selected.filePaths[0]);
+      privateMemoryFixtureWrite = false;
+      if (!app.isPackaged && process.env.PA_DESKTOP_TEST_USER_DATA
+        && process.env.PA_DESKTOP_PRIVATE_MEMORY_FIXTURE_ROOT) {
+        try {
+          const chosen = realpathSync.native(selected.filePaths[0]);
+          const fixture = realpathSync.native(process.env.PA_DESKTOP_PRIVATE_MEMORY_FIXTURE_ROOT);
+          const temp = realpathSync.native(app.getPath('temp'));
+          const relativeFixture = path.relative(temp, fixture);
+          privateMemoryFixtureWrite = process.platform === 'win32'
+            ? chosen.toLowerCase() === fixture.toLowerCase() : chosen === fixture;
+          privateMemoryFixtureWrite &&= Boolean(relativeFixture)
+            && relativeFixture !== '..' && !relativeFixture.startsWith(`..${path.sep}`)
+            && !path.isAbsolute(relativeFixture);
+        } catch { /* Invalid fixture configuration remains read only. */ }
+      }
+      publish();
+      return {selected: true};
+    }
+    if (name === 'memory.search') {
+      if (!privateMemory) throw Error('请先选择本机 Vault');
+      return privateMemory.search(payload?.query);
+    }
+    if (name === 'memory.save') {
+      if (!privateMemoryFixtureWrite) throw Error('真实私人记忆写入等待完整删除保障验收');
+      if (!privateMemory) throw Error('请先选择本机 Vault');
+      return privateMemory.save(payload?.source, payload?.summary);
+    }
+    throw Error('不支持的私人记忆操作');
+  }
   if (name === 'thinking.update') {
     if (sender !== panel && sender !== admin && sender !== workspace) throw Error('思考设置来源不受信任');
     return updateThinking(payload);
@@ -866,6 +921,7 @@ app.whenReady().then(async () => {
       return;
     }
     try {
+      privateMemory?.close();
       if (runtimeApplication) runtimeApplication.close();
       else runtime?.close?.();
     } catch (error) {

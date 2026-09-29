@@ -63,6 +63,8 @@ export function mountAdmin(root, invoke, escape) {
   let approvalExpiryTimer;
   let current = {tasks: [], capabilities: [], health: [], approvals: []};
   let history = {items: [], nextBeforeRowId: undefined, loading: false, loaded: false, error: false};
+  let memorySearch = {query: '', hits: [], truncated: false, status: ''};
+  const memorySummaries = new Map();
   let historyGeneration = 0;
   async function loadHistory(reset = false) {
     if (history.loading && !reset) return;
@@ -229,6 +231,26 @@ export function mountAdmin(root, invoke, escape) {
     return `<section class="feature-page"><div class="settings-heading"><h2>${feature[0]}</h2><p>${escape(feature[1])}</p></div><div class="settings-list">${feature[2].map(([title, detail, target]) => settingRow(title, detail, sections[target] ? `<button class="btn btn-sm" data-jump="${target}">${sections[target]}</button>` : `<span class="${['待接入','不可用','未连接','待设置','未设置'].includes(target) ? 'status-note' : 'value-pill'}">${target}</span>`)).join('')}</div></section>`;
   }
 
+  function memoryPage(data) {
+    if (!data.privateMemory?.available) return featurePage(data, 'memory');
+    const selected = data.privateMemory.vaultSelected;
+    const hits = memorySearch.hits.map((hit, index) => `<article class="sheet">
+      <p>${escape(hit.excerpt)}</p><small>${escape(hit.source.path)}:${hit.source.line}</small>
+      <label>拟保存的私人记忆<input data-memory-summary="${index}" maxlength="500"
+        value="${escape(memorySummaries.get(index) ?? '')}" placeholder="逐条填写并确认摘要"></label>
+      <button class="btn btn-sm" data-memory-save="${index}" ${data.privateMemory.writeEnabled ? '' : 'disabled'}>检查并确认</button></article>`).join('');
+    return `<section class="feature-page"><div class="settings-heading"><h2>私人记忆</h2>
+      <p>只读检索本机 Vault；每条摘录或更正都需在原生对话框中确认。不会自动发送至云端。</p></div>
+      <div class="sheet"><button class="btn btn-sm" id="memory-select-vault">选择本机 Vault 文件夹</button>
+      <p class="muted">${selected ? '已选择本机会话 Vault；重启后需重新选择。' : '尚未选择 Vault。'}</p>
+      <form id="memory-search-form"><input id="memory-query" type="search" maxlength="200"
+        value="${escape(memorySearch.query)}" placeholder="搜索摘录" ${selected ? '' : 'disabled'}>
+        <button class="btn btn-sm" ${selected ? '' : 'disabled'}>搜索</button></form>
+      <p role="status">${escape(data.privateMemory.writeEnabled ? memorySearch.status
+        : '真实私人记忆写入等待完整删除保障验收；当前仅可只读检索。')}</p></div>${hits}
+      ${memorySearch.truncated ? '<p class="muted">结果已截断，请缩小搜索范围。</p>' : ''}</section>`;
+  }
+
   function render(data) {
     current = data;
     clearApprovalExpiryTimer();
@@ -273,6 +295,8 @@ export function mountAdmin(root, invoke, escape) {
       content = settingsPane(data, directSettings[section]);
     } else if (section === 'profile') {
       content = profilePage(data, escape);
+    } else if (section === 'memory') {
+      content = memoryPage(data);
     } else if (featureSections.includes(section)) {
       content = featurePage(data, section);
     } else {
@@ -290,6 +314,45 @@ export function mountAdmin(root, invoke, escape) {
       }
     }
     if (section === 'profile') bindProfile(root, escape);
+    root.querySelector('#memory-select-vault')?.addEventListener('click', async event => {
+      event.currentTarget.disabled = true;
+      try {
+        const result = await invoke('memory.selectVault');
+        if (result.selected) {
+          memorySearch = {query: '', hits: [], truncated: false, status: 'Vault 已选择，尚未保存任何摘录。'};
+          memorySummaries.clear();
+        }
+        render(current);
+      } catch (error) {
+        event.currentTarget.disabled = false;
+        root.querySelector('#error').textContent = error.message;
+      }
+    });
+    root.querySelector('#memory-search-form')?.addEventListener('submit', async event => {
+      event.preventDefault();
+      const query = root.querySelector('#memory-query').value.trim();
+      try {
+        const result = await invoke('memory.search', {query});
+        memorySearch = {query, hits: result.hits, truncated: result.truncated,
+          status: result.hits.length ? `找到 ${result.hits.length} 条引文；尚未保存。` : '没有匹配引文。'};
+        memorySummaries.clear();
+        render(current);
+      } catch (error) { root.querySelector('#error').textContent = error.message; }
+    });
+    root.querySelectorAll('[data-memory-summary]').forEach(input => input.addEventListener('input', () => {
+      memorySummaries.set(Number(input.dataset.memorySummary), input.value);
+    }));
+    root.querySelectorAll('[data-memory-save]').forEach(button => button.addEventListener('click', async () => {
+      const index = Number(button.dataset.memorySave);
+      button.disabled = true;
+      try {
+        const result = await invoke('memory.save', {source: memorySearch.hits[index].source,
+          summary: (memorySummaries.get(index) ?? '').trim()});
+        memorySearch.status = result.state === 'saved' ? `私人记忆已保存为版本 ${result.revision}。`
+          : result.state === 'unchanged' ? '这条私人记忆已经保存。' : '已取消，未写入记忆。';
+        render(current);
+      } catch (error) { root.querySelector('#error').textContent = error.message; button.disabled = false; }
+    }));
     root.querySelector('#quit')?.addEventListener('click', () => invoke('app.quit'));
     root.querySelector('#model-add')?.addEventListener('click', () => { modelEditorOpen = true; render(current); });
     root.querySelector('#model-more')?.addEventListener('click', () => { modelEditorOpen = true; render(current); });
