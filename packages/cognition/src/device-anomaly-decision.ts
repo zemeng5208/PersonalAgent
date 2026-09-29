@@ -3,10 +3,15 @@ import {
   LayaActionChoiceService,
   actionArgumentsDigest,
   type LayaActionCandidate,
+  type LayaActionChoiceRequest,
   type LayaActionSelection,
 } from './laya-action-choice.js';
 import type {LayaInferencePort} from './laya-decision.js';
 import {CognitionError} from './impact.js';
+
+export interface DeviceAnomalyActionChoicePort {
+  choose(request: LayaActionChoiceRequest): Promise<LayaActionSelection>;
+}
 
 export interface DeviceSample {
   readonly source: string;
@@ -91,7 +96,7 @@ const hash = (text: string): string => createHash('sha256').update(text).digest(
  * - Advisory-only candidates: NO self-signed authorization, NO destructive operations.
  */
 export class DeviceAnomalyDecisionService {
-  private readonly choiceService: LayaActionChoiceService;
+  private readonly choiceService: DeviceAnomalyActionChoicePort;
   private readonly cpuThreshold: number;
   private readonly memoryThreshold: number;
   private readonly recoveryThreshold: number;
@@ -103,11 +108,17 @@ export class DeviceAnomalyDecisionService {
   private readonly sourceStates = new Map<string, SourceState>();
 
   constructor(
-    inference: LayaInferencePort,
+    inferenceOrChooser: LayaInferencePort | DeviceAnomalyActionChoicePort,
     options: DeviceAnomalyOptions = {}
   ) {
-    if (!inference) throw new CognitionError('INVALID_ARGUMENT');
-    this.choiceService = new LayaActionChoiceService(inference);
+    if (!inferenceOrChooser) throw new CognitionError('INVALID_ARGUMENT');
+    if ('choose' in inferenceOrChooser && typeof inferenceOrChooser.choose === 'function') {
+      this.choiceService = inferenceOrChooser;
+    } else if ('infer' in inferenceOrChooser && typeof (inferenceOrChooser as LayaInferencePort).infer === 'function') {
+      this.choiceService = new LayaActionChoiceService(inferenceOrChooser as LayaInferencePort);
+    } else {
+      throw new CognitionError('INVALID_ARGUMENT');
+    }
     this.cpuThreshold = options.cpuThresholdPercent ?? 90;
     this.memoryThreshold = options.memoryThresholdPercent ?? 90;
     this.recoveryThreshold = options.recoveryThresholdPercent ?? 80;

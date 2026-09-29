@@ -19,9 +19,14 @@ import {
   LayaActionChoiceService,
   actionArgumentsDigest,
   type LayaActionCandidate,
+  type LayaActionChoiceRequest,
   type LayaActionSelection,
 } from './laya-action-choice.js';
 import type {LayaInferencePort} from './laya-decision.js';
+
+export interface MeetingActionChoicePort {
+  choose(request: LayaActionChoiceRequest): Promise<LayaActionSelection>;
+}
 
 export interface MeetingRescheduleEvent {
   readonly eventId: string;
@@ -346,7 +351,8 @@ export function createPolicyGuardedExecutionPort(options: PolicyGuardedExecution
 
 export interface MeetingCoordinatorOptions {
   readonly store: CoordinationStorePort | AtomicCoordinationStorePort;
-  readonly inference: LayaInferencePort;
+  readonly inference?: LayaInferencePort | undefined;
+  readonly chooser?: MeetingActionChoicePort | undefined;
   readonly executionPort?: MeetingPlanExecutionPort | undefined;
   readonly receiptStore?: MeetingDecisionReceiptStorePort | undefined;
   readonly namespace?: string | undefined;
@@ -363,18 +369,18 @@ const hash = (value: string): string => createHash('sha256').update(value).diges
  */
 export class MeetingRescheduleCoordinator {
   private readonly store: CoordinationStorePort;
-  private readonly choiceService: LayaActionChoiceService;
+  private readonly choiceService: MeetingActionChoicePort;
   private readonly executionPort?: MeetingPlanExecutionPort | undefined;
   private readonly receiptStore: MeetingDecisionReceiptStorePort;
   private readonly namespace: string;
   private readonly now: () => number;
 
   constructor(options: MeetingCoordinatorOptions) {
-    if (!options || !options.store || typeof options.store.read !== 'function' || !options.inference) {
+    if (!options || !options.store || typeof options.store.read !== 'function' || (!options.inference && !options.chooser)) {
       throw new CognitionError('INVALID_ARGUMENT');
     }
     this.store = options.store;
-    this.choiceService = new LayaActionChoiceService(options.inference);
+    this.choiceService = options.chooser ?? new LayaActionChoiceService(options.inference!);
     this.executionPort = options.executionPort;
     this.receiptStore = options.receiptStore ?? new InMemoryMeetingDecisionReceiptStore();
     this.namespace = options.namespace ?? 'default';

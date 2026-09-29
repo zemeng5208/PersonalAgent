@@ -52,6 +52,7 @@ export type {
   MeetingCandidate,
   MeetingDecisionReceipt,
   MeetingCoordinatorOptions,
+  MeetingActionChoicePort,
   MeetingReceiptRecord,
   MeetingReceiptQuery,
   MeetingDecisionReceiptStorePort,
@@ -61,7 +62,7 @@ export type {
   FileMeetingDecisionReceiptStoreOptions,
 } from './meeting-decision.js';
 export {MailTriagePipeline, DEFAULT_MAIL_LABELS} from './mail-triage-pipeline.js';
-export type {MailTriageCheckpointPort, MailTriagePipelineOptions, MailBatchTriageRequest,
+export type {MailClassifierPort, MailTriageCheckpointPort, MailTriagePipelineOptions, MailBatchTriageRequest,
   MailHighImpactNotice, MailBatchTriageSummary} from './mail-triage-pipeline.js';
 export {DeviceAnomalyDecisionService} from './device-anomaly-decision.js';
 export type {
@@ -70,4 +71,5 @@ export type {
   DeviceAnomalyStatus,
   DeviceAnomalyDecisionReceipt,
   DeviceNotificationPort,
+  DeviceAnomalyActionChoicePort,
 } from './device-anomaly-decision.js';

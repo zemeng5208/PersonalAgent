@@ -9,13 +9,18 @@ import {
 import type {LayaInferencePort} from './laya-decision.js';
 import {CognitionError} from './impact.js';
 
+export interface MailClassifierPort {
+  classify(request: LayaTriageRequest): Promise<readonly LayaTriageResult[]>;
+}
+
 export interface MailTriageCheckpointPort {
   load(): Record<string, LayaTriageResult> | Promise<Record<string, LayaTriageResult>>;
   save(results: Record<string, LayaTriageResult>): void | Promise<void>;
 }
 
 export interface MailTriagePipelineOptions extends LayaTriageOptions {
-  readonly inference: LayaInferencePort;
+  readonly inference?: LayaInferencePort | undefined;
+  readonly classifier?: MailClassifierPort | undefined;
   readonly checkpoint?: MailTriageCheckpointPort | undefined;
   readonly labels?: Readonly<Record<string, string>> | undefined;
   readonly now?: (() => number) | undefined;
@@ -74,7 +79,7 @@ const hash = (value: string): string => createHash('sha256').update(value).diges
  * - High-impact notification summaries without text or header leakage
  */
 export class MailTriagePipeline {
-  private readonly triageService: LayaTriageService;
+  private readonly triageService: MailClassifierPort;
   private readonly checkpointPort?: MailTriageCheckpointPort | undefined;
   private readonly labels: Readonly<Record<string, string>>;
   private readonly chunkSize: number;
@@ -84,8 +89,8 @@ export class MailTriagePipeline {
   private checkpointLoaded = false;
 
   constructor(options: MailTriagePipelineOptions) {
-    if (!options || !options.inference) throw new CognitionError('INVALID_ARGUMENT');
-    this.triageService = new LayaTriageService(options.inference, options);
+    if (!options || (!options.inference && !options.classifier)) throw new CognitionError('INVALID_ARGUMENT');
+    this.triageService = options.classifier ?? new LayaTriageService(options.inference!, options);
     this.checkpointPort = options.checkpoint;
     this.labels = options.labels ?? DEFAULT_MAIL_LABELS;
     this.chunkSize = Math.max(1, Math.min(options.chunkSize ?? 4, 16));
