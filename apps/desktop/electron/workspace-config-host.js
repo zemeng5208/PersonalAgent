@@ -90,7 +90,7 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
   selectNodeExecutable,selectCheckFile,selectNpmCli,jobHelperExecutable,
   projectScriptEnvSource,createCommandRecipeTool}) {
   const file = path.join(userData,'coding-workspace.json');
-  let savedRoot,savedNode,savedCheckFile,savedNpmCli,boundRoot,boundProjectHelper,rootIdentity,application,active=true,consent,applyHost,failure='',commandFailure='',projectFailure='';
+  let savedRoot,savedNode,savedCheckFile,savedNpmCli,boundRoot,boundNode,boundProjectHelper,rootIdentity,nodeIdentity,application,active=true,consent,applyHost,failure='',commandFailure='',projectFailure='';
   let generation=randomUUID();
   const implementations=[];
   const inflight=new Set();
@@ -123,6 +123,9 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
   if (savedRoot) {
     try {
       boundRoot=savedRoot; rootIdentity=statSync(boundRoot,{bigint:true});
+      try {
+        if(savedNode) {boundNode=fixedNode(savedNode,boundRoot);nodeIdentity=statSync(boundNode,{bigint:true});}
+      } catch {boundNode=undefined;nodeIdentity=undefined;}
       const options={rootPath:boundRoot};
       implementations.push(coding.createWorkspaceReadTool(options), coding.createWorkspaceListTool({rootPath:boundRoot}),
         coding.createWorkspacePatchPreviewTool(options),coding.createWorkspacePatchStageTool(options));
@@ -211,6 +214,33 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
       && directory(boundRoot)===boundRoot && now.dev===rootIdentity.dev && now.ino===rootIdentity.ino
       && now.birthtimeNs===rootIdentity.birthtimeNs;} catch {return false;}
   };
+  // Trusted main-process configuration only. A getter cannot grant read or
+  // execute permission, and this record must not enter Renderer/cloud output.
+  const readWorkspaceBinding=() => {
+    if(!active || consent?.cloudExportAllowed!==true || !identityCurrent()
+      || !boundNode || savedNode!==boundNode || !nodeIdentity) return undefined;
+    try {
+      if(fixedNode(boundNode,boundRoot)!==boundNode) return undefined;
+      const current=statSync(boundNode,{bigint:true});
+      if(['dev','ino','birthtimeNs','size','mtimeNs','ctimeNs'].some(key=>current[key]!==nodeIdentity[key])) {
+        return undefined;
+      }
+      return Object.freeze({rootPath:boundRoot,nodeExecutable:boundNode,bindingId:generation});
+    } catch {return undefined;}
+  };
+  const isWorkspaceBindingCurrent=binding => {
+    try {
+      if(!binding || typeof binding!=='object' || Array.isArray(binding)
+        || ![Object.prototype,null].includes(Object.getPrototypeOf(binding))) return false;
+      const keys=['rootPath','nodeExecutable','bindingId'];
+      const own=Reflect.ownKeys(binding);
+      if(own.length!==keys.length || keys.some(key=>!own.includes(key))) return false;
+      const fields=Object.getOwnPropertyDescriptors(binding);
+      if(keys.some(key=>!('value' in fields[key]) || typeof fields[key].value!=='string')) return false;
+      const current=readWorkspaceBinding();
+      return Boolean(current && keys.every(key=>fields[key].value===current[key]));
+    } catch {return false;}
+  };
   const isProject=tool=>['workspace.npm_build','workspace.npm_test'].includes(tool.descriptor.name);
   const projectIdentityCurrent=()=> {
     try {return savedNode && fixedNode(savedNode,boundRoot)===savedNode
@@ -274,7 +304,7 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
       return current.reconcile(input);
     },
   };
-  return {tools,snapshot,
+  return {tools,snapshot,readWorkspaceBinding,isWorkspaceBindingCurrent,
     get patchReconciliation() { return applyHost ? patchReconciliation : undefined; },
     bindApplication(value){application=value;},
     async select() {
