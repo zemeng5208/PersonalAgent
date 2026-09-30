@@ -190,6 +190,19 @@ export class SqliteLearningHost {
 
   close(): void { this.db.close(); }
 
+  /** Retry only post-commit maintenance, never propose/validate/execute on startup. */
+  resumeErasureMaintenance(namespaceValue: string): void {
+    const namespace = label(namespaceValue);
+    const marker = this.db.prepare('SELECT 1 FROM learning_erasures WHERE namespace = ? LIMIT 1').get(namespace);
+    if (!marker) return;
+    const surviving = this.db.prepare(`SELECT 1 FROM learning_erasures e WHERE e.namespace = ? AND (
+      EXISTS (SELECT 1 FROM learning_versions v WHERE v.namespace = e.namespace AND v.workflow_id = e.workflow_id)
+      OR EXISTS (SELECT 1 FROM learning_activations a WHERE a.namespace = e.namespace AND a.workflow_id = e.workflow_id)
+    ) LIMIT 1`).get(namespace);
+    if (surviving) return fail('STORAGE_UNAVAILABLE');
+    this.checkpointErasureWal();
+  }
+
   private ensureNotErased(namespace: string, workflowId: string): void {
     if (this.db.prepare(`SELECT 1 FROM learning_erasures
       WHERE namespace = ? AND workflow_id = ?`).get(namespace, workflowId) !== undefined) {
