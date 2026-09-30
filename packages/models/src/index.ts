@@ -256,6 +256,12 @@ export interface PanguModelProviderOptions {
   apiKey: () => string | Promise<string>;
   fetch?: typeof globalThis.fetch;
   timeoutMs?: number;
+  /**
+   * 鉴权头：官方盘古大模型 API（/v2/{project_id}/pools/.../chat/completions）要求
+   * `X-Auth-Token`（IAM 用户 Token），为默认值；OpenAI 格式部署可用 'bearer' 覆盖。
+   * 凭据一律由受信宿主注入（Token 或 Key），Provider 不落盘。
+   */
+  authHeader?: 'x-auth-token' | 'bearer';
 }
 
 function panguCapabilities(): ModelCapabilities {
@@ -286,12 +292,13 @@ function panguError(status: number, retryAfter: string | null): ProtocolError {
  */
 function panguCompletionsUrl(baseUrl: string): string {
   const normalized = baseUrl.replace(/\/+$/, '');
+  if (normalized.endsWith('/chat/completions')) return normalized;
   let pathname = '';
   try { pathname = new URL(normalized).pathname.replace(/\/+$/, '').toLowerCase(); } catch { /* constructor validates the URL */ }
-  if (pathname.endsWith('/openai/v1') || pathname.endsWith('/api/v2') || pathname.endsWith('/v1')) {
-    return `${normalized}/chat/completions`;
-  }
-  return `${normalized}/api/v2/chat/completions`;
+  // 裸主机名走历史默认；其余（/v1、/v2、/v4、/api/v2、/openai/v1，以及官方文档的
+  // /v2/{project_id}/pools/{pool_id}/deployments/{deployment_id}）均已含版本/部署段，直接补后缀。
+  if (pathname === '' || pathname === '/') return `${normalized}/api/v2/chat/completions`;
+  return `${normalized}/chat/completions`;
 }
 
 /** Pangu V2 OpenAI-format text provider. Credentials are supplied by the trusted host. */
@@ -303,6 +310,7 @@ export class PanguModelProvider implements ModelProvider {
   private readonly deploymentName: string;
   private readonly apiKey: () => string | Promise<string>;
   private readonly timeoutMs: number;
+  private readonly authHeader: 'x-auth-token' | 'bearer';
 
   constructor(options: PanguModelProviderOptions) {
     this.baseUrl = requiredText(options.baseUrl, 'baseUrl').replace(/\/+$/, '');
@@ -314,6 +322,7 @@ export class PanguModelProvider implements ModelProvider {
     this.timeoutMs = options.timeoutMs ?? 30_000;
     if (!this.request) throw new ProtocolError('INVALID_ARGUMENT', 'fetch is required for Pangu provider');
     if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs < 1) throw new ProtocolError('INVALID_ARGUMENT', 'timeoutMs must be a positive integer');
+    this.authHeader = options.authHeader ?? 'x-auth-token';
     this.deployment = {provider: 'pangu', deployment: this.deploymentName, model: this.model, verification: 'conditional', capabilities: panguCapabilities()};
   }
 
@@ -340,7 +349,8 @@ export class PanguModelProvider implements ModelProvider {
     try {
       const response = await this.request(panguCompletionsUrl(this.baseUrl), {
         method: 'POST',
-        headers: {'content-type': 'application/json', authorization: `Bearer ${key}`},
+        headers: {'content-type': 'application/json',
+          ...(this.authHeader === 'bearer' ? {authorization: `Bearer ${key}`} : {'x-auth-token': key})},
         body: JSON.stringify({
           model: this.model,
           messages,

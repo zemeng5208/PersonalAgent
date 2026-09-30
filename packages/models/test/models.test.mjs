@@ -57,13 +57,31 @@ test('Pangu V2 provider maps a text completion and keeps usage metadata', async 
   }));
   const result = await new ModelGateway(provider).complete(request());
   assert.equal(received.url, 'https://pangu.example.test/api/v2/chat/completions');
-  assert.equal(received.options.headers.authorization, 'Bearer secret-key');
+  assert.equal(received.options.headers['x-auth-token'], 'secret-key', 'official Pangu API auth header');
+  assert.equal(received.options.headers.authorization, undefined);
   assert.deepEqual(received.body, {model: 'pangu-nlp-n1-32k', messages: [{role: 'user', content: 'hello'}], max_tokens: 20, stream: false});
   assert.deepEqual(result.response, {kind: 'final', text: 'hello'});
   assert.deepEqual(result.usage, {promptTokens: 3, completionTokens: 2, totalTokens: 5});
   assert.equal(result.deployment.provider, 'pangu');
   assert.equal(result.deployment.deployment, 'deployment-a');
   assert.equal(result.deployment.verification, 'conditional');
+});
+
+test('Pangu provider supports the documented /v2 pools deployment URL and the Bearer variant', async () => {
+  const seen = [];
+  const capture = async (url, options) => {
+    seen.push({url, options});
+    return panguResponse({id: 'r', model: 'pangu', choices: [{message: {role: 'assistant', content: 'ok'}, finish_reason: 'stop'}], usage: {}});
+  };
+  const deploymentBase = 'https://pangu.cn-southwest-2.myhuaweicloud.com/v2/project-1/pools/pool-1/deployments/dep-1';
+  await new PanguModelProvider(panguOptions(capture, {baseUrl: deploymentBase})).complete(request());
+  await new PanguModelProvider(panguOptions(capture, {baseUrl: `${deploymentBase}/chat/completions`})).complete(request());
+  const bearer = new PanguModelProvider(panguOptions(capture, {baseUrl: deploymentBase, authHeader: 'bearer'}));
+  await new ModelGateway(bearer).complete(request());
+  assert.equal(seen[0].url, `${deploymentBase}/chat/completions`, 'deployment base gets the suffix');
+  assert.equal(seen[1].url, `${deploymentBase}/chat/completions`, 'complete URLs pass through untouched');
+  assert.equal(seen[2].options.headers.authorization, 'Bearer secret-key');
+  assert.equal(seen[2].options.headers['x-auth-token'], undefined);
 });
 
 test('Pangu provider leaves output length to the service when no local budget is configured', async () => {
