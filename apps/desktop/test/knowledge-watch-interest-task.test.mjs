@@ -207,6 +207,34 @@ test('persisted intake identity stays host-only while source changes use the str
   } finally {host.dispose();}
 });
 
+test('two consumers of one source validate their own intake leases and cannot borrow each other grant', async () => {
+  const fx=fixture();fx.sustained();fx.host.dispose();
+  fx.tasks.get('question-task').goal='Follow up Cisco question';
+  const options={...fx.options,readInterestSignal:async input=>{
+    const raw=await fx.options.readInterestSignal(input);
+    if (input.taskId === 'question-task') {
+      raw.topicId='cisco';raw.evidence=raw.evidence.map(item=>({...item,topicId:'cisco'}));
+    }
+    return raw;
+  }};
+  const host=createKnowledgeWatchHost(options);host.start();let restored;
+  try {
+    await host.consumeInterestTask('followup-task',request());
+    await host.consumeInterestTask('question-task',request());
+    host.dispose();restored=createKnowledgeWatchHost(options);restored.start();fx.grantReads.length=0;
+    assert.equal((await restored.refreshSubscribedFeed({subscriptionId:'feed-a',...request()})).reason,'invalid_feed_result');
+    assert.deepEqual([...new Set(fx.grantReads.map(input=>input.taskId))].sort(),['followup-task','question-task']);
+    assert.equal(fx.feedReads,1);
+    fx.grants.get('followup-task').state='revoked';
+    assert.equal((await restored.refreshSubscribedFeed({subscriptionId:'feed-a',...request(),taskId:'question-task'})).accepted,false);
+    assert.equal(fx.feedReads,1);
+    assert.equal(fx.grants.get('question-task').state,'granted');
+    assert.equal((await restored.consumeInterestTask('followup-task',request())).duplicate,true);
+    assert.equal((await restored.refreshSubscribedFeed({subscriptionId:'feed-a',...request()})).accepted,false);
+    assert.equal(fx.feedReads,1);
+  } finally {host.dispose();restored?.dispose();}
+});
+
 test('Runtime interest source changes during judgment leave unknown intake and prevent a blind retry', async () => {
   let started; let release;
   const ready = new Promise(resolve=>{started=resolve;}); const waiting = new Promise(resolve=>{release=resolve;});
