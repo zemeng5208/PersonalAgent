@@ -395,6 +395,7 @@ export function createCognitionP5Composition({
         meetings: records.slice(-20).map(({receipt}) => ({eventId: receipt.eventId,
           status: receipt.status, graphRevisionAfter: receipt.graphRevisionAfter,
           confidence: receipt.confidence, actionId: receipt.actionId,
+          retryableInference: receipt.retryableInference === true,
           // This is an internal graph commit, never proof of provider reschedule.
           calendarWriteVerified: false})),
         devices: devices.map(({source, pendingDeliveryId, receipt}) => ({source,

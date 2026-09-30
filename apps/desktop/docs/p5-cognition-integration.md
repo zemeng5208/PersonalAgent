@@ -37,6 +37,8 @@ P8 在可信组合入口注入 `calendarReadPort: {readBaseline, readCurrent}`�
 
 新增来源路径 9 项检查通过，包括使用真实公共 `eventToItem` 的事件映射、来源/版本失败路径、取消/期限、可信读取顺序、显式 Fake 图谱/推理下的三候选 → Policy → CAS → 文件 receipt → 重建回放，以及 stop 中止读取。受影响 composition 既有 5 项通过；真实订阅和生产 Runtime/Policy/旧投影工厂尚未验收，不据此冻结接口。
 
+会议恢复增量：`MeetingDecisionReceipt.retryableInference?: true` 仅由协调器为**执行前**推理异常、不可用、非法响应、取消/超时或候选过期的审核回执记录。新有效消费调用最多重试一次选择；仍检查相同输入 digest、当前来源/基线、deadline/signal 和 Policy/CAS，不自动安排重试或重开 Runtime 已取消任务。缺 marker 的旧回执保守保持审核；uncertain、有效 proposal、applied 和未知执行结果均不重跑。异常回执不回显模型原始 error。`dialogueProjection().meetings[].retryableInference` 只表示可重新读源评估，不授予执行权限。新增 3 项恢复检查包含文件 receipt → 新协调器/文件 store 读回 → chooser 恢复、变更基线拒绝、uncertain/proposal 不重跑和 unknown/旧回执不重写；会议文件合计 20 项、新来源 9 项通过。
+
 P8 精确消费名：`getPendingProposals`、`applyMeetingProposal({eventId,source}, {deadline,signal})`、`listMeetingReceipts`、`triageMails`、`triagePagedMails({fetchPage,...})`。没有 `listProposals/applyProposal/listReceipts/triageMail/triageMailPaged` 别名；分页函数、Policy 与授权上下文只能来自受信宿主。
 
 通知投递契约：写入卡片、`webContents.send` 或 `publish` 仅是准备/发送请求；实际通知投递或受信窗口展示确认后才能返回 `{delivered:true}`。明确未送达返回 false，未知抛错并保留意图，由宿主读回核实。当前建议暂缓后台任务的候选只投递建议，不宣称实际暂停或自动恢复调度器。

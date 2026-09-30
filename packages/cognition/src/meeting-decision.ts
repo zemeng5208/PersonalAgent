@@ -66,6 +66,8 @@ export interface MeetingDecisionReceipt {
   readonly appliedNodeRevisions?: readonly NodeRef[] | undefined;
   readonly selection?: LayaActionSelection | undefined;
   readonly proposedModifications?: readonly NodeInput[] | undefined;
+  /** Trusted receipt marker: inference failed before any proposal or execution. Legacy receipts do not opt in. */
+  readonly retryableInference?: true | undefined;
 }
 
 export interface MeetingReceiptRecord {
@@ -360,6 +362,17 @@ export interface MeetingCoordinatorOptions {
 }
 
 const hash = (value: string): string => createHash('sha256').update(value).digest('hex');
+const transientInferenceReasons = new Set(['unavailable', 'invalid_response', 'cancelled', 'deadline', 'candidate_expired']);
+function canRetryInference(receipt: MeetingDecisionReceipt): boolean {
+  // Only inference-stage receipts with no execution/proposal evidence are retried.
+  // Legacy journals without the explicit marker keep their conservative review state.
+  return receipt.retryableInference === true && receipt.status === 'requires_review'
+    && receipt.graphRevisionBefore === receipt.graphRevisionAfter
+    && !receipt.appliedNodeRevisions?.length && !receipt.proposedModifications?.length
+    && ((!receipt.selection && receipt.selectedCandidateId === 'cand-review-fallback')
+      || (receipt.selection?.state !== 'selected'
+        && transientInferenceReasons.has(receipt.selection?.reason ?? '')));
+}
 
 /**
  * End-to-end meeting reschedule decision coordinator.
@@ -574,24 +587,25 @@ export class MeetingRescheduleCoordinator {
         if (existingRecord.receipt.status === 'applied') {
           return {...existingRecord.receipt, status: 'already_processed'};
         }
-        return {...existingRecord.receipt};
+        if (!canRetryInference(existingRecord.receipt)) return {...existingRecord.receipt};
+      } else {
+        // Same event ID from same source with different content or revision is an explicit conflict
+        const conflictReceipt: MeetingDecisionReceipt = {
+          eventId: event.eventId,
+          source: event.source,
+          sourceRevision: event.sourceRevision,
+          meetingFactId: event.meetingFactId,
+          selectedCandidateId: 'cand-conflict',
+          actionId: 'conflict',
+          status: 'conflict',
+          confidence: null,
+          reason: '相同 eventId 包含冲突的输入内容或源版本',
+          graphRevisionBefore: this.store.read().revision,
+          graphRevisionAfter: this.store.read().revision,
+          evaluatedAt: event.detectedAt,
+        };
+        return conflictReceipt;
       }
-      // Same event ID from same source with different content or revision is an explicit conflict
-      const conflictReceipt: MeetingDecisionReceipt = {
-        eventId: event.eventId,
-        source: event.source,
-        sourceRevision: event.sourceRevision,
-        meetingFactId: event.meetingFactId,
-        selectedCandidateId: 'cand-conflict',
-        actionId: 'conflict',
-        status: 'conflict',
-        confidence: null,
-        reason: '相同 eventId 包含冲突的输入内容或源版本',
-        graphRevisionBefore: this.store.read().revision,
-        graphRevisionAfter: this.store.read().revision,
-        evaluatedAt: event.detectedAt,
-      };
-      return conflictReceipt;
     }
 
     const initialSnapshot = this.store.read();
@@ -735,7 +749,7 @@ export class MeetingRescheduleCoordinator {
         deadline: event.deadline,
         signal: event.signal,
       });
-    } catch (error) {
+    } catch {
       // Model failure or timeout leads to graceful review state without mutating graph
       const fallbackReceipt: MeetingDecisionReceipt = {
         eventId: event.eventId,
@@ -745,8 +759,9 @@ export class MeetingRescheduleCoordinator {
         selectedCandidateId: 'cand-review-fallback',
         actionId: 'escalate_conflict',
         status: 'requires_review',
+        retryableInference: true,
         confidence: null,
-        reason: error instanceof Error ? error.message : 'Laya 模型推理异常，降级等待人工确认',
+        reason: 'Laya 推理暂时不可用，尚未执行；来源重新读回后可以重试',
         graphRevisionBefore,
         graphRevisionAfter: initialSnapshot.revision,
         evaluatedAt: event.detectedAt,
@@ -876,6 +891,8 @@ export class MeetingRescheduleCoordinator {
         graphRevisionAfter: initialSnapshot.revision,
         evaluatedAt: event.detectedAt,
         selection,
+        ...(selection.state !== 'selected' && transientInferenceReasons.has(selection.reason)
+          ? {retryableInference: true as const} : {}),
       };
     }
 
