@@ -294,8 +294,9 @@ their input/output bindings restored through the visible canvas.
 | MVP router | `81bc9eb8-cf6a-4869-a1a2-e3b446349447` | `1790763138570` | `mvp-goal-router-20260930-a` |
 | MVP controller | `2f5d361c-bd85-4d2f-9903-bb35d4f55afa` | `1790763483827` | `mvp-goal-controller-20260930-a` |
 
-Read-only published previews confirmed the Plan/Review prompts, the router's
-9,435-character Code source against `mvp-goal-router.py`, the World Goal
+Read-only published previews confirmed the Plan/Review prompts and, at that
+publication checkpoint, the router's 9,435-character Code source against
+`mvp-goal-router.py`; the World Goal
 addendum, child versions, parameter references and aggregation. Plan receives
 Start.query and World.raw_output; Review receives Start.query, Plan.response_content
 and Plan.world_result. The first-nonempty aggregate preserves Code.text_result,
@@ -342,3 +343,8 @@ Ignored UI proof: `goal-plan-published-20260930.jpg`,
 `goal-review-published-20260930.jpg`, `goal-router-published-20260930.jpg`,
 `goal-controller-published-20260930.jpg`, `runtime-v16-latest-20260930.jpg`,
 `runtime-v16-binding-20260930.jpg` under `.cache/cloud-mvp-build/`.
+
+After that publication checkpoint, the local router added tuple membership
+checks so malformed list/dict `kind` and `state` values return a controlled
+response. This hardening has not been published or verified in the cloud;
+Runtime v16 and Latest still point to the previously read-back source.
