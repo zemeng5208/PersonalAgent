@@ -10,8 +10,11 @@ Profile：`huawei_ict_agentarts`。隔离工作树登记：`.worktrees/subagent-
 ```js
 import {createModelApiConfig} from './model-api-config.js';
 import {createConfiguredSubagentModelGateway} from '@personal-agent/runtime/application';
-const modelApiHost = createModelApiConfig({userData, safeStorage,
-  createModelGateway: createConfiguredSubagentModelGateway});
+const modelApiHost = createModelApiConfig({
+  userData, safeStorage,
+  // Runtime/Application-owned adapter; Electron never imports model implementations.
+  createGateway: createConfiguredSubagentModelGateway,
+});
 const subagentTool = createDesktopSubagentDispatchTool({
   getRuntime: () => runtimeApplication.runtime,
   getTools: () => runtimeApplication.tools,
@@ -56,7 +59,9 @@ controls.close();
 返回 unavailable，不回退旧盘古配置。P8 应把稳定 ID 绑定到原有子任务选型控件及可用
 模型目录，不将本地配置表直接导出到云端。保留 AgentArts/Live/SIS 的现有配置。
 
-模型均经已有 ModelGateway 和 StructuredToolProvider；后者是文字 JSON 提案协议，
+`createGateway` 必须由 Runtime/Application 注入，接收供应商、Endpoint、模型、稳定部署 ID
+和仅在请求时读取密钥的回调，并返回已有 `ModelGateway`。没有注入时模型保持不可用；
+Desktop 不导入或构造 Provider。模型均经已有 ModelGateway 和 StructuredToolProvider；后者是文字 JSON 提案协议，
 能力等级 conditional，不是原生工具调用。当前配置宿主返回空 reasoningEfforts；
 只有可信宿主独立确认某个端点支持时，才可向子任务宿主注入支持列表。
 thinkingDepth 仍控制既有执行步骤预算，不构成原生模型 reasoning 的验证。
