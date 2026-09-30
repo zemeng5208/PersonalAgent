@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync, rmSync, writeFileSync} from 'node:fs';
+import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
 import {FakeCoordinationStoreHost} from '@personal-agent/goals/store';
@@ -57,6 +58,92 @@ test('selected-but-ineligible meeting candidate cannot execute or cross coordina
   assert.deepEqual(store.read(), before);
   await assert.rejects(coordinator.applyApprovedProposal({eventId: 'guarded-meeting',
     source: 'calendar:work', namespace: 'foreign'}), error => error.code === 'INVALID_ARGUMENT');
+});
+
+test('transient inference receipts recover after coordinator restart, without replaying execution or leaking errors', async t => {
+  const root = fileURLToPath(new URL('../../../.cache/meeting-retry-test/', import.meta.url));
+  mkdirSync(root, {recursive: true});
+  const storageDir = mkdtempSync(path.join(root, 'receipt-'));
+  t.after(() => rmSync(storageDir, {recursive: true, force: true}));
+  for (const failure of ['thrown', 'unavailable', 'invalid_response']) {
+    const {store} = createMeetingFixture();
+    const receipts = new FileMeetingDecisionReceiptStore({storageDir});
+    const event = guardedEvent({eventId: `recover-${failure}`});
+    const choice = new LayaActionChoiceService(createMockLaya());
+    const first = new MeetingRescheduleCoordinator({store, receiptStore: receipts,
+      executionPort: createStoreExecutionPort(store), chooser: {choose: async request => {
+        if (failure === 'thrown') throw Error('private mail contents and credential path');
+        return {...await choice.choose(request), state: 'abstain', eligibleForRuntime: false,
+          selected: undefined, reason: failure};
+      }}});
+    const before = store.read();
+    assert.equal((await first.processEvent(event)).status, 'requires_review');
+    assert.deepEqual(store.read(), before);
+    assert.equal(JSON.stringify(await first.getReceipt(event.eventId, event.source)).includes('private mail'), false);
+    const inference = createMockLaya();
+    const restarted = new MeetingRescheduleCoordinator({store,
+      receiptStore: new FileMeetingDecisionReceiptStore({storageDir}),
+      inference, executionPort: createStoreExecutionPort(store)});
+    assert.equal((await restarted.processEvent({...event, deadline: new Date(Date.now() + 60_000).toISOString()})).status, 'applied');
+    const applied = store.read();
+    assert.equal((await restarted.processEvent(event)).status, 'already_processed');
+    assert.deepEqual(store.read(), applied);
+    assert.equal(inference.getCallCount(), 1);
+  }
+});
+
+test('unknown execution and unmarked legacy inference receipts cannot opt into automatic replay', async () => {
+  for (const kind of ['execution_unknown', 'legacy_fallback']) {
+    const {store} = createMeetingFixture();
+    const receipts = new InMemoryMeetingDecisionReceiptStore();
+    const event = guardedEvent({eventId: kind});
+    const first = new MeetingRescheduleCoordinator({store, receiptStore: receipts,
+      inference: kind === 'legacy_fallback' ? {infer: () => {throw Error('unavailable');}} : createMockLaya(),
+      ...(kind === 'execution_unknown' ? {executionPort: {executeBatch: async () => ({applied: false,
+        snapshot: store.read(), error: 'unknown execution outcome'})}} : {})});
+    const original = await first.processEvent(event);
+    assert.equal(original.status, 'requires_review');
+    if (kind === 'legacy_fallback') {
+      const saved = receipts.loadReceipt(event.eventId);
+      const {retryableInference, ...legacy} = saved.receipt;
+      receipts.saveReceipt({...saved, receipt: legacy});
+    } else assert.equal(original.retryableInference, undefined);
+    const before = store.read();
+    let executions = 0;
+    const inference = createMockLaya();
+    const restarted = new MeetingRescheduleCoordinator({store, receiptStore: receipts, inference,
+      executionPort: {executeBatch: () => {executions++; throw Error('must not execute');}}});
+    assert.equal((await restarted.processEvent(event)).status, 'requires_review');
+    assert.equal(inference.getCallCount(), 0);
+    assert.equal(executions, 0);
+    assert.deepEqual(store.read(), before);
+  }
+});
+
+test('transient retry rechecks source baseline; uncertain decisions and proposals remain stable', async () => {
+  const {store} = createMeetingFixture();
+  const receipts = new InMemoryMeetingDecisionReceiptStore();
+  const event = guardedEvent({eventId: 'retry-stale-source'});
+  const first = new MeetingRescheduleCoordinator({store, receiptStore: receipts,
+    chooser: {choose: () => {throw Error('model stopped');}}});
+  await first.processEvent(event);
+  const current = store.read().history.findLast(node => node.id === event.meetingFactId);
+  const {revision, graphRevision, ...input} = current;
+  store.append(store.read().revision, {...input, summary: 'newer calendar source'});
+  const inference = createMockLaya();
+  const restarted = new MeetingRescheduleCoordinator({store, receiptStore: receipts,
+    inference, executionPort: createStoreExecutionPort(store)});
+  assert.equal((await restarted.processEvent(event)).status, 'conflict');
+  assert.equal(inference.getCallCount(), 0);
+  for (const confidence of [0.5, 0.95]) {
+    const {store: stableStore} = createMeetingFixture();
+    const stableInference = createMockLaya(0, confidence);
+    const stable = new MeetingRescheduleCoordinator({store: stableStore, inference: stableInference});
+    const receipt = await stable.processEvent(event);
+    assert.equal(receipt.status, confidence === 0.5 ? 'requires_review' : 'proposal');
+    assert.deepEqual(await stable.processEvent(event), receipt);
+    assert.equal(stableInference.getCallCount(), 1);
+  }
 });
 
 function createMeetingFixture() {
