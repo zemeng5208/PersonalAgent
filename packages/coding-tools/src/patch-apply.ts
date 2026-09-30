@@ -235,6 +235,11 @@ async function invokeHelper(
       }
     });
     context.signal.addEventListener('abort', onAbort, {once: true});
+    try { remaining = check(context, now); }
+    catch (error) {
+      stop(error instanceof ProtocolError ? error : new ProtocolError('RESULT_UNKNOWN', 'Workspace patch apply preflight failed'));
+      return;
+    }
     deadlineTimer = setTimeout(() => stop(new ProtocolError('RESULT_UNKNOWN', 'Workspace patch apply deadline expired')), Math.min(remaining, 2_147_483_647));
     child.stdin?.end(JSON.stringify(request));
     if (context.signal.aborted) onAbort();
