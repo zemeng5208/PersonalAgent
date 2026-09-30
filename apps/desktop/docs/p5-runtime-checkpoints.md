@@ -6,8 +6,8 @@
 
 第一次读取先迁移现有 `device-anomaly-checkpoint.json` 和 `meeting-receipts/receipt-*.json`，原文件完全保留。已存在 SQLite checkpoint 时不再重新导入旧文件。损坏会议文件阻止迁移，不能跳过丢失去重状态；设备内容仍由现有服务校验 configDigest/状态。本消费增量没有新 Schema 或数据库迁移；底层 host KV 迁移由 P8 提供。旧版本仍可读原文件，但不会看到本次新增 SQLite 状态；回退不能被当成新的执行许可或删除 pending 记录。
 
-只有明确的最小离线宿主缺少 host KV API 时沿用旧文件端口，snapshot 为 `legacy_files`。生产不能据此声称 SQLite 恢复已验收。
+缺少 host KV API 时组合直接 unavailable，不回退旧文件 writer。旧 JSON 仅作一次迁移输入。旧 v1 envelope 可缺 revision；新写递增 revision，namespace/source/eventId/inputDigest 不能被替换。旧设备文件没有 namespace，可信宿主可用 legacyDeviceNamespace 指定原归属；不同归属不导入。
 
-组合增加可选 trusted `meetingExecutionPort`，优先于旧 `policyEvaluator`。生产 writer 应注入真实 Runtime/Policy/ToolGateway 的执行端口；旧 `createPolicyGuardedExecutionPort` 的 `allowed` 和直接 CAS 不构成工具 Evidence。端口未装配时会议仍为 proposal。calendar provider 写入与内部图谱修复分别验证，内部 applied 不代表真实日历已改期。
+组合只消费既有 Goal cognition host 的 `meetingReviewedRepairPort` 或明确注入同一 reviewedRepair 端口。旧 meetingExecutionPort/policyEvaluator 参数仅保留兼容识别，不执行。会议读取已提交 Fact 的 completed projection，不在 policy 函数 appendBatch。执行走原 AgentArts/Policy/ToolGateway；applied 必须有工具 Evidence 和准确版本读回。缺端口保 RECHECK，unknown 保原任务核实。calendar provider 写入与内部图谱修复分别验证，内部 applied 不代表真实日历已改期。邮件状态仍用唯一 InboxTriagePipeline 的原加密 StoragePort，不把私人信头写入公共 host KV。
 
-本次最小验证：最初 TaskRuntime checkpoint 方案的真实 SQLite 2/2 通过；随后按 P8 同 namespace host KV 接口调整，不再创建 anchor 任务，最终 KV 2-case 由 P8 在其新 Runtime 编译完成后执行。不得用旧方案通过替代最终 KV 验证。helper、组合及邮件验收函数语法检查通过，diff 检查通过。chooser 明确不可调用，没有模型、真实设备或云调用；不重复旧设备通知和 deadline 测试。
+用户提供的最终 KV 两 case 已由 P8 在新 compiled Runtime 实际 PASS，包含 0 tasks、reopen/corrupt。本轮复用该本机证据，不再测；本轮新增 revision/consumer 行为只做静态核对，新用例准备未运行。完整接口、迁移和本机验收入口见 `packages/cognition/CLOUD-MVP-COGNITION.md`。没有云端测试、构建、模型或真实账号调用。
