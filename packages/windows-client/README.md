@@ -22,10 +22,12 @@
 开发机数据。使用注入 probe 时结果固定标记 `source=injected`，不构成真实本机观测证据；仅默认
 适配器标记 `source=node:os`。
 
-当前只交付 provider slice；`register(host)` 可将工具交给现有 `ToolHost` 并返回注销函数。
-可信宿主也可通过现有 Runtime 的工具数组入口显式装配；只有实际注册后才能在生产能力发现中公布工具。
-Competition Profile 已有离线工具循环，生产 Desktop / Runtime / AgentArts 接线尚未完成；因此本包
-不代表 Desktop、AgentArts、MOD-16 或 PA-011 已完整验收。
+`register(host)` 将工具交给现有 `ToolHost` 并返回注销函数；可信宿主也可通过 Runtime 的工具数组显式装配。
+当前 main 的 Runtime/Application 已重新导出 `createSystemObservationTool`，Desktop 的
+`createPublicConnectorHost` / `createProductToolsComposition` 使用该工厂注册本工具，再向 Runtime 注入 tools。
+只有实际注册后才能在能力发现中公布，缺工厂时保持不可用；此接线不等于实际采样、授权或云端消费成功。
+提供者结果是本地输出；没有为其配置 Competition 结果出口时，不自动将系统指标发送到 AgentArts。
+本包不代表 Desktop、AgentArts、MOD-16 或 PA-011 已完整验收。
 
 验证：
 

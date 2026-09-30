@@ -1114,7 +1114,14 @@ async function initializeRuntime() {
           mailHost = runtimeModule.createQQMailTriageHost({user, authCode, accountRef:'desktop-qq-inbox',
             storage:createMailMetadataStorage({userData:app.getPath('userData'), safeStorage}),
             namespace:`${namespace}:qq-inbox:${user.toLowerCase()}`, triage:localLaya,
-            classifierFingerprint:runtimeModule.LOCAL_INBOX_CLASSIFIER_FINGERPRINT,
+            getClassifierFingerprint:() => {
+              const identity=localLaya?.readClassifierIdentity?.();
+              const policy=runtimeModule.LOCAL_INBOX_CLASSIFIER_FINGERPRINT;
+              return typeof identity==='string' && /^[a-f0-9]{64}$/.test(identity)
+                && typeof policy==='string' && /^[a-f0-9]{64}$/.test(policy)
+                ? createHash('sha256').update(JSON.stringify(['inbox-classifier-v2',identity,policy])).digest('hex')
+                : undefined;
+            },
             labels:{meeting:'Meeting invitations, rescheduling and appointment notices',
               work:'Work, project, technical discussions and documents',
               subscription:'Subscribed newsletters, news digests and product updates',
