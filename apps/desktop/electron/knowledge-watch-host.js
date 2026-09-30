@@ -1468,12 +1468,13 @@ export function createKnowledgeWatchHost({
         if (!text(head?.revision) || !sha(head?.contentSha256)) {
           return {accepted: false, availability: 'unavailable', reason: 'source_body_not_read', provider: 'feeds'};
         }
-        return consumeSourceUpdate({namespace, sourceId: subscriptionId, availability: 'available',
+        const observation = await consumeSourceUpdate({namespace, sourceId: subscriptionId, availability: 'available',
           revision: head.revision, contentSha256: head.contentSha256, fetchedAt: collected.collection.fetchedAt,
           provider: 'feeds', feedCursor: collected.nextCursor,
           ...(text(head.citation) ? {citation: {locator: head.citation}} : {}),
           check: {outcome: 'unchanged', checkedAt: collected.collection.fetchedAt, sourceId: subscriptionId,
             sourceRevision: head.revision, cachedContentSha256: head.contentSha256}});
+        return {...observation, notified: observation.notified === true};
       }
       const identities = [];
       for (const item of collected.items) {

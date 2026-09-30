@@ -1559,11 +1559,10 @@ async function action(event, name, payload) {
     if (name === 'cognition.receipts.list') return p5Cognition.listReceipts();
     if (name === 'cognition.mail.triage') {
       if (!Array.isArray(payload?.messages)) throw Error('邮件列表无效');
-      return p5Cognition.triageMail(payload.messages, payload?.options);
+      return p5Cognition.triageMails(payload.messages);
     }
     if (name === 'cognition.mail.triagePaged') {
-      if (!payload?.source || typeof payload.source.readPage !== 'function') throw Error('分页邮件源无效');
-      return p5Cognition.triageMailPaged(payload.source, payload?.options);
+      throw Error('分页邮件源必须由主进程绑定');
     }
     throw Error(`Unsupported cognition action: ${name}`);
   }
