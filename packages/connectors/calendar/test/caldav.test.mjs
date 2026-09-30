@@ -228,5 +228,5 @@ test('经 CalendarService 规范化：dedupeKey 携带 sequence，occurredAt=开
   assert.equal(item.occurredAt, '2026-11-02T00:00:00.000Z');
   assert.equal(item.dedupeKey, 'calendar:caldav:svc@test:3');
   assert.equal(item.validFor, '2026-11-02T00:00:00.000Z/2026-11-02T01:00:00.000Z');
-  assert.match(item.contentRef, /\[confirmed\] 服务层｜2026-11-02T00:00:00（UTC）→ 2026-11-02T01:00:00/);
+  assert.match(item.contentRef, /\[confirmed\] 服务层｜2026-11-02T09:00:00（Asia\/Tokyo）→ 2026-11-02T10:00:00/);
 });
