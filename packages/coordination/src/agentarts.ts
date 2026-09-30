@@ -4,6 +4,7 @@ import {parseCoordinationAvailableTools, parseCoordinationContinuation, parseCoo
 import type {CloudAgentPort, CoordinationAvailableTool, CoordinationContinuation, CoordinationRequest, CoordinationResult} from './index.js';
 
 const MAX_RESPONSE_BYTES = 1024 * 1024;
+const MAX_HTTP_DIAGNOSTIC_MS = 1_000;
 const MAX_TEXT_CHARS = 16_000;
 const MAX_INITIAL_QUERY_BYTES = 32_768;
 const MAX_AUTHORIZATION_CHARS = 4_096;
@@ -1021,6 +1022,21 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
       }
       if (status >= 100 && status <= 599) httpStatus = status;
       if (status < 200 || status >= 300) {
+        if (this.onDiagnostic !== undefined) {
+          try {
+            contentType = diagnosticMediaType(response.headers?.get('content-type') ?? undefined);
+          } catch { /* Raw provider headers must not enter diagnostics. */ }
+          const diagnosticSignal = makeCombinedSignal(combined.signal,
+            Math.min(combined.deadlineMs, Date.now() + MAX_HTTP_DIAGNOSTIC_MS));
+          try {
+            const errorResponse = asPlainObject(JSON.parse(await readResponseText(response, diagnosticSignal)));
+            if (errorResponse !== undefined) {
+              terminalEvents.providerErrorCode = diagnosticProviderErrorCode(errorResponse,
+                asPlainObject(errorResponse.data));
+            }
+          } catch { /* Optional diagnostics cannot replace the established HTTP failure. */ }
+          finally { diagnosticSignal.dispose(); }
+        }
         throw new ProtocolError('EXTERNAL_FAILURE', 'AgentArts request returned a non-success HTTP status', status >= 500);
       }
 
@@ -1063,12 +1079,12 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
           ...(stage === 'response_schema' || stage === 'application_schema'
             ? {terminalEvents: Object.freeze({taskEnd: terminalEvents.taskEnd, end: terminalEvents.end})} : {}),
           ...(schemaCategory === undefined ? {} : {schemaCategory}),
+          ...(terminalEvents.providerErrorCode === undefined ? {} : {providerErrorCode: terminalEvents.providerErrorCode}),
           ...(schemaCategory === 'provider_failure'
             && terminalEvents.providerFailureField !== undefined
             && terminalEvents.providerFailureToken !== undefined
             ? {providerFailureField: terminalEvents.providerFailureField,
-              providerFailureToken: terminalEvents.providerFailureToken,
-              ...(terminalEvents.providerErrorCode === undefined ? {} : {providerErrorCode: terminalEvents.providerErrorCode})}
+              providerFailureToken: terminalEvents.providerFailureToken}
             : {}),
         });
         try {

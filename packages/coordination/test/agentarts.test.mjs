@@ -593,16 +593,68 @@ test('underlying ProtocolError values are not trusted or leaked', async () => {
   await rejectsCode(fetchFailure.invoke(request()), 'EXTERNAL_FAILURE', [secret]);
 });
 
-test('401 and 500 are external failures without response-body disclosure', async () => {
+test('non-success HTTP diagnostics expose only bounded canonical provider codes', {timeout: 4_000}, async () => {
   const token = 'Bearer hidden-token';
   const goal = 'hidden goal';
-  for (const status of [401, 500]) {
-    const cloud = port(async () => new Response(`provider secret ${token} ${goal}`, {
-      status,
-      headers: {'content-type': 'application/json'},
-    }));
-    await rejectsCode(cloud.invoke(request({goal})), 'EXTERNAL_FAILURE', [token, goal, 'provider secret']);
+  const secret = `provider secret ${token} ${goal}`;
+  const check = async (response, expectedCode, overrides = {}) => {
+    const receipts = [];
+    let fetchCalls = 0;
+    const cloud = new AgentArtsCloudAgentPort({gatewayUrl: GATEWAY, runtimeName: RUNTIME},
+      provider(token), async () => { fetchCalls += 1; return response; },
+      undefined, undefined, receipt => receipts.push(receipt));
+    await rejectsCode(cloud.invoke(request({goal, ...overrides})), 'EXTERNAL_FAILURE', [token, goal, secret]);
+    assert.equal(fetchCalls, 1);
+    assert.equal(receipts.length, 1);
+    const receipt = receipts[0];
+    assert.match(receipt.requestId, /^pa-[0-9a-f]{32}-3$/);
+    assert.equal(Object.isFrozen(receipt), true);
+    assert.deepEqual(receipt, {
+      stage: 'http_response', code: 'EXTERNAL_FAILURE', requestId: receipt.requestId,
+      httpStatus: response.status, contentType: response.headers ? 'json' : 'missing',
+      ...(expectedCode === undefined ? {} : {providerErrorCode: expectedCode}),
+    });
+    for (const value of [token, goal, secret, 'private-header']) {
+      assert.equal(JSON.stringify(receipt).includes(value), false);
+    }
+  };
+  await check(jsonResponse({error_code: 'Service.1234', error_msg: secret}, 403), 'SERVICE.1234');
+  await check(jsonResponse({data: {error_code: 'service.4321', message: secret}}, 401), 'SERVICE.4321');
+  for (const error_code of [secret, 'SERVICE.1234\nprivate-header', 1234]) {
+    await check(jsonResponse({error_code, error_msg: secret}, 500));
   }
+  await check(new Response(secret, {status: 403,
+    headers: {'content-type': 'application/json', 'x-private': 'private-header'}}));
+  let chunkReads = 0;
+  await check({status: 403, body: {
+    async *[Symbol.asyncIterator]() {
+      chunkReads += 1;
+      yield new Uint8Array(1024 * 1024 + 1);
+      chunkReads += 1;
+      yield new TextEncoder().encode(JSON.stringify({error_code: 'SERVICE.1234'}));
+    },
+  }});
+  assert.equal(chunkReads, 1);
+  const controller = new AbortController();
+  await check({status: 403, text: () => {
+    queueMicrotask(() => controller.abort());
+    return new Promise(() => {});
+  }}, undefined, {signal: controller.signal});
+  await check({status: 403, text: () => new Promise(() => {})}, undefined, {
+    deadline: new Date(Date.now() + 50).toISOString(),
+  });
+  const diagnosticStarted = Date.now();
+  await check({status: 403, text: () => new Promise(() => {})}, undefined, {
+    deadline: new Date(Date.now() + 10_000).toISOString(),
+  });
+  assert.ok(Date.now() - diagnosticStarted < 3_000);
+  let bodyReads = 0;
+  const withoutObserver = port(async () => ({status: 403, text: () => {
+    bodyReads += 1;
+    return new Promise(() => {});
+  }}));
+  await rejectsCode(withoutObserver.invoke(request()), 'EXTERNAL_FAILURE');
+  assert.equal(bodyReads, 0);
 });
 
 test('response byte and text limits are enforced at their exact boundaries', async () => {
