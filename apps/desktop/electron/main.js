@@ -1006,7 +1006,8 @@ async function initializeRuntime() {
         // P1's controlled single-read factory is not published yet. No direct
         // CalendarService/Connector call or implicit read grant substitutes for it.
       });
-      if (!syntheticMvp) goalCloudHost = createDesktopGoalCloudHost({goalHost});
+      if (!syntheticMvp) goalCloudHost = createDesktopGoalCloudHost({goalHost, namespace,
+        readProactiveBinding: taskId => proactiveHost?.readRepairBinding?.(taskId)});
       if (!syntheticMvp) {
         try {todoHost = createDesktopTodoHost({userData:app.getPath('userData'),safeStorage,namespace,
           createDeliveryHost:runtimeModule.createReminderDeliveryHost,onUpdate:publish,

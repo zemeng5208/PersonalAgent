@@ -16,7 +16,11 @@ function fixture(dependencies) {
   host.bindApplication({profile: 'huawei_ict_agentarts', runtime: {
     getTask: () => ({conversationId: 'desktop-panel'}),
     loadCheckpoint: (taskId, key) => checkpoints.get(`${taskId}:${key}`),
-    saveCheckpoint: (taskId, key, value) => checkpoints.set(`${taskId}:${key}`, value),
+    saveCheckpointOnce(taskId, key, value) {
+      const address=`${taskId}:${key}`;
+      if(checkpoints.has(address)) return false;
+      checkpoints.set(address,value);return true;
+    },
   }});
   host.authorize({goalCloudConsent: true});
   const signal = new AbortController().signal;
