@@ -1,4 +1,5 @@
 import {execFileSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
 import {lstatSync, readdirSync, realpathSync, statSync} from 'node:fs';
 import path from 'node:path';
 
@@ -71,6 +72,7 @@ export function listPendingCodingHelpers(recoveryRootPath) {
  * Policy and ToolGateway still own every execution decision and result state. */
 export function createDesktopCodingToolHost({workspaceRoot, authorizedWorkspaceRoot,
   recoveryRootPath, powerShellPath, createWorkspacePatchApplyTool,
+  reconcileWorkspacePatchApply,
   inspectAcl = verifyWindowsRecoveryAcl}) {
   if (process.platform !== 'win32') throw Error('Coding patch host requires Windows');
   const root = canonicalDirectory(workspaceRoot, 'Workspace root');
@@ -89,8 +91,9 @@ export function createDesktopCodingToolHost({workspaceRoot, authorizedWorkspaceR
     {source: recoveryRootPath, canonical: recovery, directory: true, id: identity(recovery)},
     {source: powerShellPath, canonical: powerShell, directory: false, id: identity(powerShell, true)},
   ];
+  const bindingId = createHash('sha256').update(JSON.stringify(pinned.map(entry => [entry.canonical,
+    Object.entries(entry.id).map(([key, value]) => [key, String(value)])]))).digest('hex');
   const pendingHelpers = listPendingCodingHelpers(recovery);
-  if (pendingHelpers.length) throw Error('Unresolved coding helper requires trusted reconciliation');
   if (typeof createWorkspacePatchApplyTool !== 'function') throw Error('Public patch apply factory is unavailable');
   const implementation = createWorkspacePatchApplyTool({rootPath: root, recoveryRootPath: recovery,
     powerShellPath: powerShell});
@@ -119,10 +122,32 @@ export function createDesktopCodingToolHost({workspaceRoot, authorizedWorkspaceR
     if (!available()) throw Error('Coding patch host is closed or requires helper reconciliation');
     return implementation.execute(input, context);
   }};
+  const assertRecoveryBinding = () => {
+    if (!active) throw Error('Coding patch host is closed');
+    for (const entry of pinned) {
+      const current = entry.directory
+        ? canonicalDirectory(entry.source, 'Pinned coding directory')
+        : canonicalFile(entry.source, 'Pinned PowerShell executable');
+      if (current !== entry.canonical || !sameIdentity(entry.id, identity(current, !entry.directory))) {
+        throw Error('Coding patch host binding changed');
+      }
+    }
+    inspectAcl(recovery, powerShell);
+  };
+  const patchReconciliation = typeof reconcileWorkspacePatchApply === 'function'
+    ? {bindingId, reconcile: async ({relativePath, expectedRunId, expectedArgumentsDigest,
+      expectedBeforeSha256, retainMarker}) => {
+      assertRecoveryBinding();
+      return reconcileWorkspacePatchApply({rootPath: root, recoveryRootPath: recovery,
+        relativePath, expectedRunId, expectedArgumentsDigest, expectedBeforeSha256,
+        retainMarker, powerShellPath: powerShell});
+    }}
+    : undefined;
   return {
     tools: [tool],
     pendingHelpers,
     available,
+    ...(patchReconciliation ? {patchReconciliation} : {}),
     close: () => { active = false; },
   };
 }

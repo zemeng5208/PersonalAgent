@@ -10,6 +10,8 @@ export interface ToolContext {
   signal: AbortSignal;
   deadline: string;
   authorizationRef: string;
+  /** Canonical digest of the arguments authorized for this run. */
+  argumentsDigest?: string;
   scopes: readonly string[];
 }
 export interface RegisteredTool {

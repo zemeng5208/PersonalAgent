@@ -26,6 +26,8 @@ import type {StartSystemObservationSessionRequest, SystemObservationSession} fro
 import {MailReadSessions, MAIL_READ_SESSION_CHECKPOINT, MAIL_READ_TOOL, MAIL_READ_VERSION} from './mail-read-session.js';
 import type {StartMailReadSessionRequest, MailReadSession} from './mail-read-session.js';
 import {createRuntimeSubagentDispatchTool} from './subagent-host.js';
+import {WORKSPACE_PATCH_APPLY_TOOL_NAME, WorkspacePatchReconciliationAdapter} from './workspace-patch-reconciliation.js';
+import type {WorkspacePatchReconciliationPort, WorkspacePatchReconciliationReadback} from './workspace-patch-reconciliation.js';
 type SuccessfulResponse = Extract<Response, {outcome: 'ok'}>;
 
 export interface RevokeHostAuthorizationRequest {
@@ -64,10 +66,14 @@ export interface FinalizeHostToolTaskRequest {
   arguments: Record<string, unknown>;
 }
 
-interface HostToolPreparation extends PrepareHostToolTaskRequest { namespace: string; }
+interface HostToolPreparation extends PrepareHostToolTaskRequest {
+  namespace: string;
+  workspaceBindingId?: string;
+}
 interface HostToolIntent extends SubmitHostToolTaskRequest {
   namespace: string;
   argumentsDigest: string;
+  workspaceBindingId?: string;
 }
 
 export interface HostToolTaskReadback {
@@ -108,6 +114,8 @@ export interface RuntimeApplicationOptions { path: string; now?: () => Date; idF
   thinking?: ThinkingConfig;
   /** Trusted host policy for routine operations inside already enabled module scopes. */
   automaticTools?: readonly {toolName: string; toolVersion: string}[];
+  /** Trusted Desktop-only recovery port; paths and process identity stay in its closure. */
+  workspacePatchReconciliation?: WorkspacePatchReconciliationPort;
 }
 export interface RuntimeApplicationTransport { send(request: Request, signal: AbortSignal): Promise<Response>; }
 
@@ -129,6 +137,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   private readonly storagePath: string;
   private readonly observationSessions: SystemObservationSessions;
   private readonly mailReadSessions: MailReadSessions;
+  private readonly workspacePatchReconciliation?: WorkspacePatchReconciliationAdapter;
 
   constructor(options: RuntimeApplicationOptions) {
     this.storagePath = resolve(options.path);
@@ -155,6 +164,12 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       throw new ProtocolError('INVALID_ARGUMENT', 'Invalid trusted host user namespace');
     }
     this.hostUserNamespace = options.hostUserNamespace;
+    if (options.workspacePatchReconciliation !== undefined
+      && (this.profile !== 'huawei_ict_agentarts' || !this.hostUserNamespace
+        || typeof options.workspacePatchReconciliation.reconcile !== 'function'
+        || !/^[a-f0-9]{64}$/u.test(options.workspacePatchReconciliation.bindingId))) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Workspace patch reconciliation needs the trusted Competition host');
+    }
     if (this.localRepair && (!this.localRepair.graphNamespace?.trim() || !this.localRepair.bindingVersion?.trim()
       || typeof this.localRepair.resolveBinding !== 'function' || typeof this.localRepair.matchesSource !== 'function'
       || typeof this.localRepair.withSourceLock !== 'function'
@@ -204,6 +219,10 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
         return gateway;
       }} : {}),
     });
+    if (options.workspacePatchReconciliation) {
+      this.workspacePatchReconciliation = new WorkspacePatchReconciliationAdapter(
+        this.runtime, options.workspacePatchReconciliation, this.hostUserNamespace);
+    }
     this.observationSessions = new SystemObservationSessions(() => this.now().getTime(), taskId => {
       this.runtime.policy.revoke(`host-tool-${taskId}`);
       this.runtime.requestCancel(taskId, 'System observation consent ended');
@@ -383,6 +402,14 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     return this.submitBoundHostToolTask(request);
   }
 
+  /** Trusted host recovery entry for one persisted workspace patch task. */
+  reconcileWorkspacePatchTask(taskId: string): Promise<WorkspacePatchReconciliationReadback> {
+    if (!this.workspacePatchReconciliation) {
+      throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Workspace patch reconciliation is not configured');
+    }
+    return this.workspacePatchReconciliation.reconcile(taskId);
+  }
+
   /** Trusted UI consent only; no wire operation or generic tool permission. */
   startSystemObservationSession(request: StartSystemObservationSessionRequest): SystemObservationSession {
     if (this.profile !== 'huawei_ict_agentarts' || !this.hostUserNamespace) {
@@ -445,10 +472,12 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     }
     if (!existing && deadlineMs <= this.now().getTime()) throw new ProtocolError('TIMEOUT', 'Host tool deadline has expired');
     const args = this.hostToolArguments(descriptor, request.arguments);
+    const workspaceBindingId = this.workspacePatchBindingFor(descriptor.name);
     const intent: HostToolIntent = {
       namespace: this.hostUserNamespace, commandId: request.commandId,
       toolName: descriptor.name, toolVersion: descriptor.version, arguments: args,
       argumentsDigest: toolArgumentsDigest(args), deadline: request.deadline,
+      ...(workspaceBindingId ? {workspaceBindingId} : {}),
     };
     const task = this.runtime.submitTaskWithCheckpoint({
       goal: `Host tool ${descriptor.name}`, conversationId: `host-tool:${this.hostUserNamespace}`,
@@ -487,9 +516,17 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       throw new ProtocolError('REVISION_CONFLICT', 'Host tool command is no longer preparable');
     }
     if (!existing && deadlineMs <= this.now().getTime()) throw new ProtocolError('TIMEOUT', 'Host tool deadline has expired');
+    const workspaceBindingId = this.workspacePatchBindingFor(descriptor.name);
+    if (existing) {
+      const prior = this.runtime.loadCheckpoint(existing.taskId, HOST_TOOL_PREPARATION_CHECKPOINT) as HostToolPreparation | undefined;
+      if (prior?.workspaceBindingId !== workspaceBindingId) {
+        throw new ProtocolError('REVISION_CONFLICT', 'Prepared workspace patch belongs to a different workspace');
+      }
+    }
     const preparation: HostToolPreparation = {namespace: this.hostUserNamespace,
       commandId: request.commandId, toolName: descriptor.name,
-      toolVersion: descriptor.version, deadline: request.deadline};
+      toolVersion: descriptor.version, deadline: request.deadline,
+      ...(workspaceBindingId ? {workspaceBindingId} : {})};
     return this.runtime.submitTaskWithCheckpoint({
       goal: `Host tool ${descriptor.name}`, conversationId: `host-tool:${this.hostUserNamespace}`,
       idempotencyKey,
@@ -507,6 +544,10 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       throw new ProtocolError('NOT_FOUND', 'Prepared host tool task not found');
     }
     const descriptor = this.hostToolDescriptor(preparation.toolName, preparation.toolVersion);
+    const workspaceBindingId = this.workspacePatchBindingFor(descriptor.name);
+    if (preparation.workspaceBindingId !== workspaceBindingId) {
+      throw new ProtocolError('REVISION_CONFLICT', 'Prepared workspace patch belongs to a different workspace');
+    }
     const args = this.hostToolArguments(descriptor, request.arguments);
     const intent: HostToolIntent = {...preparation, arguments: args,
       argumentsDigest: toolArgumentsDigest(args)};
@@ -556,6 +597,14 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
         error: {code: 'RESULT_UNKNOWN', message: 'Host tool was interrupted; reconcile its result before retrying', retryable: false},
       });
     } else if (task.state === 'waiting_approval') this.resumeHostToolTask(task.taskId);
+    else if (task.state === 'waiting_reconciliation' && this.workspacePatchReconciliation
+      && this.workspacePatchReconciliation.isPatchTask(task.taskId)) {
+      void this.reconcileWorkspacePatchTask(task.taskId).catch(() => {
+        // The task and original Evidence remain waiting_reconciliation. A
+        // trusted host may retry the same recovery entry after observing the
+        // persisted reason; no new tool invocation is scheduled here.
+      });
+    }
   }
 
   /** Call after restart for a persisted allowed approval that predated dispatch. */
@@ -588,6 +637,15 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     return {commandId: intent.commandId, toolName: intent.toolName, toolVersion: intent.toolVersion,
       task, ...(approval ? {approval} : {}),
       ...(task.state === 'succeeded' && result ? {confirmed: {runId, result: result.result, evidenceRefs: [runId]}} : {})};
+  }
+
+  private workspacePatchBindingFor(toolName: string): string | undefined {
+    if (toolName !== WORKSPACE_PATCH_APPLY_TOOL_NAME) return undefined;
+    const bindingId = this.workspacePatchReconciliation?.bindingId;
+    if (typeof bindingId !== 'string' || !/^[a-f0-9]{64}$/u.test(bindingId)) {
+      throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Workspace patch recovery is not bound to a trusted workspace');
+    }
+    return bindingId;
   }
 
   private hostToolDescriptor(name: string, version: string): ToolDescriptor {

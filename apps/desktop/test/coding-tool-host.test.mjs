@@ -49,7 +49,10 @@ test('host rejects workspace changes, nested recovery roots and unresolved helpe
   assert.deepEqual(listPendingCodingHelpers(paths.recoveryRootPath), ['unknown.inflight']);
   assert.equal(host.available(), false);
   assert.throws(() => host.tools[0].execute(), /reconciliation/);
-  assert.throws(() => createDesktopCodingToolHost(options(paths)), /reconciliation/);
+  const recoveryHost = createDesktopCodingToolHost(options(paths));
+  assert.deepEqual(recoveryHost.pendingHelpers, ['unknown.inflight']);
+  assert.equal(recoveryHost.available(), false);
+  assert.throws(() => recoveryHost.tools[0].execute(), /reconciliation/);
 });
 
 test('host refuses an unverified ACL and unexpected public tool', {skip: process.platform !== 'win32'}, t => {
