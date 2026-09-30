@@ -66,9 +66,9 @@ export {
   SUBAGENT_DISPATCH_TOOL_NAME,
   SUBAGENT_DISPATCH_TOOL_VERSION,
 } from './application/subagent-host.js';
-export type {SubagentHostOptions, DesktopSubagentDispatchToolOptions} from './application/subagent-host.js';
+export type {SubagentHostOptions, DesktopSubagentDispatchToolOptions,ConfiguredSubagentModelOptions} from './application/subagent-host.js';
 export {LOCAL_REPAIR_TOOL} from './application/local-repair.js';
-export {createKnowledgeFeedReceipt,createKnowledgeFeedReceiptFromCollectResult, parseKnowledgeFeedReceipt, verifyKnowledgeFeedReceiptBinding,
+export {createKnowledgeFeedReceipt,createKnowledgeFeedReceiptFromCollectResult,createKnowledgeFeedReceiptFromConfirmedExecution, parseKnowledgeFeedReceipt, verifyKnowledgeFeedReceiptBinding,
   knowledgeFeedReceiptItems} from './application/knowledge-feed-receipt.js';
 export type {KnowledgeFeedItem, KnowledgeFeedCitation, KnowledgeFeedReceipt, KnowledgeFeedReceiptBinding,
   KnowledgeFeedQuotedItem} from './application/knowledge-feed-receipt.js';
@@ -81,3 +81,5 @@ export {createTrustedKnowledgeTools} from './application/knowledge-tools.js';
 export type {TrustedKnowledgeSource,TrustedKnowledgeBinding,KnowledgeToolTaskBindings} from './application/knowledge-tools.js';
 export {createWorkflowLearningApplication,createBoundPublicFactErasureApplication,LEARNING_BINDING_CHECKPOINT} from './application/memory-learning.js';
 export type {WorkflowLearningOptions,LearningTaskBinding,LearningSkillManifest} from './application/memory-learning.js';
+export {KnowledgeWriteReconciliationAdapter} from './application/knowledge-write-reconciliation.js';
+export type {KnowledgeWriteReconciliationPort} from './application/knowledge-write-reconciliation.js';

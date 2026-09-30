@@ -2,6 +2,10 @@
 
 Baseline: P8 d2a23bea182a0a61104f601a6769d6ac16d7db5b, normally merged P8 9a60ae5 and MCP/Skills PR269 fe0666021cae04b3873393cca25b9b0b32713ec5. Original cloud WIP remains in the local Git stash; no hard reset or force push.
 
+Local continuation of the same Draft #273: source ef4c5e29e4fe2c9f76e9dd169be9acb9329a273f normally merged into the original model-config worktree, then PR269 cbc3af583c546e718ce45fadd0a2cf0e53ffc4cc and PR270 1655275f07dd4e89287c511e3b26d961e48bebb9. The interrupted cloud task remains idle. No changes to the knowledge/learning author's source beyond consuming those exact commits.
+
+Final local source closes confirmed export refusal at projection, worker receipt validation and the pre-adapter final guard: retain the original run/cache and `competition-export-withheld`, enter `waiting_reconciliation`, then `resumeConfirmedTask` revalidates the original receipt without execution. `referenceSkillWorker().invoke` prepares native projection after the original confirmed MCP/Skill Evidence and before selector summary generation. The async hook is `prepareCompetitionToolExport({phase:'preflight'|'projection',taskId,proposal,deadline,signal}): Promise<void>`; final binding acceptance stays synchronous immediately before actual I/O. `recordKnowledgeFeedRead` consumes P7's exact confirmed-execution helper, now exported through the public application entry alongside `KnowledgeWriteReconciliationAdapter`, its port and `ConfiguredSubagentModelOptions`. Manual native API acceptance uses the public Application dispatch factory. Source fixtures cover phase ordering, zero-read preflight denial, refusal/replay and narrower restart policy. Only syntax/diff checks in this handoff; P8 owns the single final build/tests.
+
 Draft delivery: source implemented, cloud build/tests/model/network inference NOT run. Same PR receives remaining phase3 integration and directed local acceptance fixtures. PR270's source helper must be consumed by the root; no knowledge host edits here.
 
 ## P8 public composition

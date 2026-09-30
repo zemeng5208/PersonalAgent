@@ -30,7 +30,7 @@ import {MailReadSessions, MAIL_READ_SESSION_CHECKPOINT, MAIL_READ_TOOL, MAIL_REA
 import type {StartMailReadSessionRequest, MailReadSession} from './mail-read-session.js';
 import {createRuntimeSubagentDispatchTool, resumeRuntimeSubagentTask, readRuntimeSubagentSummary,
   SUBAGENT_DISPATCH_TOOL_NAME} from './subagent-host.js';
-import {verifyKnowledgeFeedReceiptBinding,createKnowledgeFeedReceiptFromCollectResult,knowledgeFeedReceiptItems} from './knowledge-feed-receipt.js';
+import {verifyKnowledgeFeedReceiptBinding,createKnowledgeFeedReceiptFromCollectResult,createKnowledgeFeedReceiptFromConfirmedExecution,knowledgeFeedReceiptItems} from './knowledge-feed-receipt.js';
 import type {KnowledgeFeedQuotedItem} from './knowledge-feed-receipt.js';
 import {planKnowledgeReevaluation,LayaActionChoiceService,actionArgumentsDigest} from '@personal-agent/cognition';
 import type {LayaActionChoiceRequest} from '@personal-agent/cognition';
@@ -692,7 +692,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   readConversationContext(input:{taskId:string;conversationId:string;deadline:string;signal:AbortSignal;
     historyMessages?:readonly ConversationContextMessage[]}):ConversationContextMessage[] {
     const task=this.runtime.getTask(input.taskId);
-    if(task.conversationId!==input.conversationId || input.signal.aborted
+    if(task.conversationId!==input.conversationId || !Number.isFinite(Date.parse(input.deadline)) || input.signal.aborted
       || this.now().getTime()>=Date.parse(input.deadline))throw new ProtocolError('UNAUTHORIZED','Conversation scope expired');
     const result=new Map<string,ConversationContextMessage>();
     for(const turn of this.runtime.readConversationHistory(input.conversationId,input.taskId,CONVERSATION_HISTORY_LIMIT)) {
@@ -1489,7 +1489,16 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       await this.assertReferenceSkillBinding?.(context.taskId);
       const result=await skill.invoke(input,context);
       await this.assertReferenceSkillBinding?.(context.taskId);
-      if(result.state==='confirmed')this.assertReferenceSkillEvidence(context.taskId,input,result.evidenceRefs);
+      if(result.state==='confirmed') {
+        this.assertReferenceSkillEvidence(context.taskId,input,result.evidenceRefs);
+        const loop=context.loadCheckpoint('competition-loop') as {pending?:import('@personal-agent/coordination').CoordinationToolProposalResult}|undefined;
+        if(loop?.pending && this.coordinationWorkers.accepts(loop.pending)) {
+          await this.prepareCompetitionToolExport?.({phase:'projection',taskId:context.taskId,
+            proposal:structuredClone(loop.pending),deadline:context.deadline,signal:context.signal});
+          if(context.signal.aborted)throw new ProtocolError('CANCELLED','Skill result export cancelled');
+          if(this.now().getTime()>=Date.parse(context.deadline))throw new ProtocolError('TIMEOUT','Skill result export expired');
+        }
+      }
       if(result.state==='unknown' && this.runtime.getTask(context.taskId).state==='running')this.runtime.transitionTask(context.taskId,'waiting_reconciliation');
       return result;
     }};
@@ -1802,7 +1811,8 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       || !this.runtime.matchesToolExecutionInput(record,{arguments:input.arguments,scopeRef:input.runId})) {
       throw new ProtocolError('UNAUTHORIZED','Feed source is not an original confirmed Runtime read');
     }
-    const receipt=createKnowledgeFeedReceiptFromCollectResult({namespace:input.namespace,sourceId:input.sourceId,result:cached.result});
+    const receipt=createKnowledgeFeedReceiptFromConfirmedExecution({namespace:input.namespace,sourceId:input.sourceId,
+      taskId:input.taskId,runId:input.runId,toolVersion:record.toolVersion,query:input.arguments,scopeRef:input.runId,runtime:this.runtime});
     if(!receipt)throw new ProtocolError('UNSUPPORTED_CAPABILITY','Feed read is incomplete or lacks v2 article mapping');
     const owner=input.receiptTaskId??input.taskId;
     if(this.runtime.getTask(owner).conversationId!==`knowledge-watch:${input.namespace}`)throw new ProtocolError('UNAUTHORIZED','Feed receipt index belongs to another namespace');
