@@ -18,7 +18,7 @@ import {createPrivateMemoryController} from './private-memory.js';
 import {createMemoryLearningHost} from './memory-learning-host.js';
 import {createKnowledgeSourceConfig} from './knowledge-source-config.js';
 import {createMicrophoneCaptureHost} from './microphone-capture-host.js';
-import {createDesktopEvidenceHost} from './evidence-host.js';
+import {createDesktopEvidenceHost, ownsDesktopReferenceSkillTask} from './evidence-host.js';
 import {createDesktopCompetitionFactBridge} from './competition-fact-bridge.js';
 import {createDesktopSisPlaybackHost} from './huawei-sis-playback.js';
 import {createDesktopSisConfigHost} from './huawei-sis-config.js';
@@ -1400,7 +1400,7 @@ async function initializeRuntime() {
       memoryLearningHost=createMemoryLearningHost({profile:'huawei_ict_agentarts',privateMemory:privateMemoryController(),
         learningApplication,managedPrivateCopies:[]});
       await memoryLearningHost.recover();
-      feedsHost?.bindApplication(runtimeApplication);
+      feedsHost?.bindApplication(runtimeApplication, namespace);
       todoHost?.bindApplication(runtimeApplication);
       goalHost.bind(runtimeApplication);
       calendarMeetingHost?.bindApplication(runtimeApplication);
@@ -1647,6 +1647,10 @@ async function action(event, name, payload) {
     if ((sender !== admin && sender !== workspace) || !notepadHost || notepadClosing) throw Error('请从电脑操控设置操作记事本');
     return name === 'notepad.start' ? notepadHost.start(payload) : notepadHost.cancel();
   }
+  if (name === 'notepad.reconcile') {
+    if (sender !== admin || !notepadHost || notepadClosing) throw Error('请从可信后台核实原始记事本任务');
+    return notepadHost.recover(payload);
+  }
   if (name === 'admin.open') { openAdmin(payload?.page); return; }
   if (name === 'workspace.open' && sender === panel) { openWorkspace(); return; }
   if (name === 'workspace.close' && sender === workspace) { workspace.close(); return; }
@@ -1706,8 +1710,25 @@ async function action(event, name, payload) {
     if(sender!==admin || !competitionMode || syntheticMvp || !goalCloudHost) throw Error('请从正式应用目标管理设置操作');
     const result=goalCloudHost[name.slice('goalCloud.'.length)](payload);publish();return result;
   }
-  if (['feeds.add','feeds.remove','feeds.authorize','feeds.revoke','feeds.refresh'].includes(name)) {
+  if (['feeds.add','feeds.remove','feeds.authorize','feeds.revoke','feeds.refresh','feeds.classify'].includes(name)) {
     if (sender !== admin || !competitionMode || syntheticMvp || !feedsHost) throw Error('请从正式应用订阅设置操作');
+    if (name === 'feeds.classify') {
+      if (!payload || Object.keys(payload).length !== 2 || typeof payload.subscriptionId !== 'string'
+        || typeof payload.taskId !== 'string') throw Error('请选择订阅和原始任务');
+      const originAdmin=admin, originApplication=runtimeApplication, originFeeds=feedsHost;
+      const choice=originFeeds.prepareNativeSourceChoice(payload);
+      const answer=await dialog.showMessageBox(originAdmin,{type:'question',title:'订阅来源与持续跟踪许可',
+        message:`订阅：${choice.title}\n原任务：${choice.taskId}`,
+        detail:`实际地址：${choice.url}\n许可到期：${choice.deadline}\n公开选择只适用于无需凭据的公共资料，并允许该原任务持续跟踪；来源获取仍需真实读取证据。分类改变后需重启接入新目录。`,
+        buttons:choice.containsCredentials ? ['取消','保持私人'] : ['取消','公开并允许本任务跟踪','保持私人'],
+        defaultId:0,cancelId:0,noLink:true});
+      if (admin !== originAdmin || originAdmin.isDestroyed() || runtimeApplication !== originApplication
+        || feedsHost !== originFeeds) throw Error('订阅许可窗口已经改变');
+      if (answer.response === 0) return originFeeds.snapshot();
+      const result=originFeeds.applyNativeSourceChoice(choice,
+        !choice.containsCredentials && answer.response === 1 ? 'public' : 'private');
+      publish();return result;
+    }
     if (name !== 'feeds.revoke' && name !== 'feeds.refresh' && (runtimeApplication?.activeTaskCount || runtimeStartup.snapshot().state==='starting')) {
       throw Error('请等待当前任务和启动结束后修改订阅');
     }
@@ -2085,6 +2106,7 @@ async function action(event, name, payload) {
       isAdminSession: () => admin === sender && !sender.isDestroyed()
         && sender.webContents === event.sender && !sender.webContents.isDestroyed(),
       ownsTask: task => {
+        if (ownsDesktopReferenceSkillTask(runtimeApplication, namespace, task)) return true;
         const turn = conversations?.turns.get(task.taskId);
         if (turn && ['panel', 'workspace'].includes(turn.surface)
           && task.conversationId === `desktop-${turn.surface}`) return true;
