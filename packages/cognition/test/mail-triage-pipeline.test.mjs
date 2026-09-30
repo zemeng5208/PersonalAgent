@@ -64,6 +64,25 @@ test('missing classification records cannot acknowledge a source page', async ()
   }), error => error.code === 'INVALID_ARGUMENT');
 });
 
+test('invalid model response is retryable and never becomes a durable classification', async () => {
+  let calls = 0, saved = {};
+  const pipeline = new MailTriagePipeline({inference: {infer: async () => {calls++; return {answers: {}};}},
+    checkpoint: {load: () => saved, save: value => {saved = value;}}});
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await pipeline.processPagedStream({
+      fetchPage: async () => ({messages: [{source: 'mail', messageId: 'bad-response', sourceRevision: '1', text: 'work'}],
+        hasMore: false, nextCursor: {uidValidity: 1, lastUid: 1}}),
+      onPageCompleted: () => assert.fail('Invalid model output must not confirm a page'),
+      deadline: new Date(Date.now() + 60_000).toISOString(), signal: new AbortController().signal,
+    });
+    assert.equal(result.stoppedReason, 'classification_unavailable');
+    assert.equal(result.cachedCount, 0);
+    assert.equal(result.results[0].reason, 'invalid_response');
+  }
+  assert.equal(calls, 2);
+  assert.equal(Object.keys(saved).length, 0);
+});
+
 function createMockInference(options = {}) {
   const calls = [];
   const inference = {

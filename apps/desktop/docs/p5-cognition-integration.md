@@ -17,7 +17,7 @@
 - `await p5.readDeviceFeedback()` 读持久设备反馈与 `pendingDeliveryId`；仅受信通知宿主能调用 `p5.deviceAnomalyService.reconcileDelivery(source, deliveryId, delivered)`，根据真实读回核实结果。禁止把此方法直接暴露给 Renderer 或模型。
 - `await p5.dialogueProjection()` 返回无正文的会议图谱状态与设备反馈。`meetings[].calendarWriteVerified` 固定为 false：内部图谱 CAS 成功不表示外部日历已经改期。待投递意图同样不表示通知送达。
 
-本轮四个受影响文件的定向测试合计 44 项通过（分次执行，会议 17、邮件 11、设备 11、composition 5），另架构门禁 3 项通过；覆盖来源/基线不匹配、同事件并发、选择资格、取消/部分页恢复、并发断点、设备冷却重启与旧采样去重、投递后写盘失败、复核不投递、直接消费者停止和安全错误展示。测试来源/通知为明确双份。使用已有 TypeScript 5.9.3 与 bundled Node 24.19.0；本机默认 Node 26.3.0/npm 11.16.0 安装依赖时触发仓库 24.15.x/11.12.x engine 警告，未修改版本约束或全局工具。
+本轮四个受影响文件的定向测试合计 45 项通过（分次执行，会议 17、邮件 12、设备 11、composition 5），另架构门禁 3 项通过；覆盖来源/基线不匹配、同事件并发、选择资格、取消/部分页恢复、非法模型响应可重试、并发断点、设备冷却重启与旧采样去重、投递后写盘失败、复核不投递、直接消费者停止和安全错误展示。测试来源/通知为明确双份。使用已有 TypeScript 5.9.3 与 bundled Node 24.19.0；本机默认 Node 26.3.0/npm 11.16.0 安装依赖时触发仓库 24.15.x/11.12.x engine 警告，未修改版本约束或全局工具。
 
 真实模型验收入口：`node tests/manual/cognition/p5-local-laya.mjs`。脚本使用既有本地虚拟环境/643MB 权重和单例公开端口，保持 0.70/0.15，批量/缓存/断点恢复分别计时；输入是合成投影信头，不能当作真实邮箱吞吐。输出在被忽略的 `.cache/p5-real-laya/`，不保存 API Key。
 

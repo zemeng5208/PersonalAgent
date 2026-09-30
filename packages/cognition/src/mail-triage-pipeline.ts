@@ -129,6 +129,7 @@ export const DEFAULT_MAIL_LABELS: Readonly<Record<string, string>> = Object.free
 export const DEFAULT_MEETING_LABELS: readonly string[] = Object.freeze(['meeting']);
 
 const hash = (value: string): string => createHash('sha256').update(value).digest('hex');
+const transientReasons = new Set(['cancelled', 'deadline', 'unavailable', 'invalid_response']);
 
 function compileNotices(results: readonly LayaTriageResult[]): MailHighImpactNotice[] {
   const notices: MailHighImpactNotice[] = [];
@@ -219,7 +220,8 @@ export class MailTriagePipeline {
       const persisted = await this.checkpointPort.load();
       if (persisted && typeof persisted === 'object') {
         for (const [key, val] of Object.entries(persisted)) {
-          this.cache.set(key, val);
+          if (!val || typeof val !== 'object') throw new CognitionError('INVALID_ARGUMENT');
+          if (!transientReasons.has(val.reason)) this.cache.set(key, val);
         }
       }
       this.checkpointLoaded = true;
@@ -348,7 +350,7 @@ export class MailTriagePipeline {
         const snapshot: Record<string, LayaTriageResult> = {};
         for (const [k, v] of this.cache) snapshot[k] = v;
         for (const res of chunkResults) {
-          if (res.reason !== 'cancelled' && res.reason !== 'deadline' && res.reason !== 'unavailable') {
+          if (!transientReasons.has(res.reason)) {
             snapshot[this.makeKey(res.source, res.messageId, res.sourceRevision)] = res;
           }
         }
@@ -358,7 +360,7 @@ export class MailTriagePipeline {
 
       // Safe to update cache now
       for (const res of chunkResults) {
-        if (res.reason !== 'cancelled' && res.reason !== 'deadline' && res.reason !== 'unavailable') {
+        if (!transientReasons.has(res.reason)) {
           const key = this.makeKey(res.source, res.messageId, res.sourceRevision);
           this.cache.set(key, res);
         }
@@ -518,8 +520,7 @@ export class MailTriagePipeline {
         cumulativeInferenceMs += pageSummary.throughput.inferenceDurationMs;
         // Do not acknowledge a page containing transient results. Restart rereads
         // the same page and the durable chunk cache skips only completed records.
-        const transient = pageSummary.results.find(result =>
-          ['cancelled', 'deadline', 'unavailable'].includes(result.reason));
+        const transient = pageSummary.results.find(result => transientReasons.has(result.reason));
         if (transient) {
           stoppedReason = transient.reason === 'cancelled' ? 'cancelled'
             : transient.reason === 'deadline' ? 'deadline' : 'classification_unavailable';
