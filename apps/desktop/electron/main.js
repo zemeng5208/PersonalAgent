@@ -75,12 +75,19 @@ if (fakeMode || fakeModelMode) app.setPath('userData', app.isPackaged
 if (process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1') app.setPath('userData', app.isPackaged
   ? path.join(app.getPath('temp'), `personal-agent-test-${process.pid}`)
   : path.resolve(dir, `../.cache/test-user-data-${process.pid}`));
-if (process.env.PA_DESKTOP_TEST_USER_DATA) {
+const userDataDirectory = process.env.PA_USER_DATA_DIR;
+if (userDataDirectory !== undefined) {
+  if (!userDataDirectory.trim() || !path.isAbsolute(userDataDirectory)) {
+    throw Error('PA_USER_DATA_DIR 必须是明确的绝对目录');
+  }
+  app.setPath('userData', userDataDirectory);
+} else if (process.env.PA_DESKTOP_TEST_USER_DATA) {
   app.setPath('userData', path.resolve(process.env.PA_DESKTOP_TEST_USER_DATA));
 }
 const dataPaths = desktopDataPaths({electronDir: dir, userData: app.getPath('userData'),
   packaged: app.isPackaged, fakeRuntime: fakeMode, fakeModel: fakeModelMode,
   ephemeral: process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1',
+  userDataOverride: userDataDirectory !== undefined,
   testUserData: Boolean(process.env.PA_DESKTOP_TEST_USER_DATA)});
 
 const ownsDesktopInstance = app.requestSingleInstanceLock();
