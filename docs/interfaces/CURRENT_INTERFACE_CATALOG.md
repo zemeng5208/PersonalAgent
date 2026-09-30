@@ -218,6 +218,12 @@ MOD-09J 在受信宿主增加单条私人 Vault 引文的确认写入桥接，�
 接口保持 `provisional`：尚无生产确认 UI、身份/授权装配或私人数据出机控制；真实 Vault 的
 只读检索不等于已确认持久写入。
 
+MOD-09K 为 Desktop Competition 管理后台增加本机会话 Vault 选择和只读搜索；
+原生确认及独立私人 Memory SQLite 写入只在隔离合成夹具验收中开启。真实 Vault
+写入在完整删除保障前保持禁用。此本机管理入口为 `provisional`，并非 Runtime
+wire capability；私人事实不进入当前仅公开敏感级别的 Goal 投影或 AgentArts 请求。
+真实 Vault 已验证只读搜索和拒绝确认；真实用户确认的持久写入、生产身份与完整删除未验收。
+
 ### 6.3 桌面、语音、工具与通知增量（provisional）
 
 PR #54、#77、#81 已进入 main，分别补充取消受理、过期审批展示和通知时间精度；PR #83 已集成受限 `workspace.list` 与 `workspace.read_text`。旧 #63、#65 已关闭且未直接进入 main；语音/唤醒、转写消费和合成语音记录仍只存在于 #61 及其堆叠分支。
