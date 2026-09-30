@@ -30,7 +30,20 @@ const required = name => {
   return value.trim();
 };
 
-const baseUrl = required('PA_MODEL_BASE_URL');
+const baseUrlInput = required('PA_MODEL_BASE_URL');
+let baseUrl;
+try {
+  const endpoint = new URL(baseUrlInput);
+  if (endpoint.username || endpoint.password || endpoint.search || endpoint.hash
+    || !(endpoint.protocol === 'https:' || (endpoint.protocol === 'http:'
+      && ['localhost', '127.0.0.1', '[::1]'].includes(endpoint.hostname)))) {
+    throw new Error();
+  }
+  baseUrl = endpoint.href.replace(/\\/+$/u, '');
+} catch {
+  console.error('PA_MODEL_BASE_URL must use HTTPS; HTTP is allowed only for loopback, without credentials, query, or fragment.');
+  process.exit(1);
+}
 const model = required('PA_MODEL_MODEL');
 const apiKey = required('PA_MODEL_API_KEY');
 
@@ -56,7 +69,7 @@ try {
   assert.equal(child.state, 'succeeded', `子任务应成功，实际 ${child.state}`);
   assert.ok((child.resultSummary ?? '').trim(), '结果必须非空');
   console.log('child resultSummary:', child.resultSummary);
-  console.log('PASS: 真实模型子任务端到端（模型=' + model + '，端点=' + baseUrl + '）');
+  console.log('PASS: 真实模型子任务端到端（模型=' + model + '）');
 } finally {
   runtime.close?.();
   await rm(directory, {recursive: true, force: true});
