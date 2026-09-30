@@ -21,7 +21,23 @@
 
 真实模型验收入口：`node tests/manual/cognition/p5-local-laya.mjs`。脚本使用既有本地虚拟环境/643MB 权重和单例公开端口，保持 0.70/0.15，批量/缓存/断点恢复分别计时；输入是合成投影信头，不能当作真实邮箱吞吐。输出在被忽略的 `.cache/p5-real-laya/`，不保存 API Key。
 
-2026-09-30 10:41（Asia/Shanghai）实际启动返回 `memory_insufficient`：当时空闲内存约 721MiB，低于已有 2GiB 门槛；未加载模型、未生成子进程，8766 未监听，停止后 `state: stopped`。不降低门槛或关闭用户应用。本轮真实批量吞吐尚未得到；真实日历事件/正式邮件页来源/Windows 遥测与确认通知生产闭环仍待 P1/P8 对接验收。P5 与整体 MVP 均未完成。
+2026-09-30 10:41（Asia/Shanghai）启动曾返回 `memory_insufficient`（空闲约 721MiB）。恢复工作后，在 P6/P8 确认独占模型槽且空闲约 4.2GiB 时，12:59–13:00 实际加载既有本地 multilingual 权重完成一轮验收：24 条合成投影信头、6 次 multi_state 调用、10.359 秒、2.32 条/秒，12 条不确定结果保留复核。当前进程缓存及重建 pipeline 后均命中 24/24、模型调用为 0；取消页完成 4 条，重建后仅补 4 条并完成游标，空输入不推理。3 次合成高占用采样经真实 Laya 选中后台任务暂缓建议，重建服务读回相同 receipt；通知端口未配置，`notificationDelivered: false`。证据为被忽略的 `.cache/p5-real-laya/report-1790744364097.json`。结束后 host 为 stopped，模型进程/8766 listener 均为 0。
+
+上述是**真实模型、合成输入**，不能证明真实邮箱吞吐、真实日历变化、Windows 异常来源或桌面确认送达。正式来源与宿主读回仍待 P1/P8 接线验收；P5 与整体 MVP 均未完成。
+
+### P1 日历公开投影消费增量（#224 合并后）
+
+`electron/p5-calendar-meeting-source.js` 消费 #216 的公开 `ConnectorItem`（`@personal-agent/calendar` 的 `eventToItem` / `CalendarService.getEventItem`），不访问提供者私有路径或另建存储。绑定由可信宿主登记，包含 `accountRef/calendarId/externalId/sourceRef/meetingFactId`；同 UID、同账号、同日历且 confirmed、SEQUENCE 递增和 start/end 变化才生成 `MeetingRescheduleEvent`。`expectedBaseRevision` 对应旧 SEQUENCE，当前 Fact 必须已有同来源、旧 `contentRef` 和 `[sourceRevision: n]` 基线。`validFor` 仅比较会议区间，不当作 Fact 新鲜度，未来会议可以提前消费变化。
+
+缺旧投影、源缺失、取消/待定、来源替换、版本回退、同版本不同内容、过时读回或仅元数据变化都返回审核结果，不推断撤回或日历外部写入。iCal 取消不会出现在 list/fetchWindow；可信单条读取应使用已知 UID 的 `getEventItem`。NOT_FOUND 不能自动撤回 Fact。iCal 订阅只读，所有反馈保持 `calendarWriteVerified: false`。
+
+P8 在可信组合入口注入 `calendarReadPort: {readBaseline, readCurrent}`。两个端口接收 `(binding, {deadline, signal})`；旧 ConnectorItem 必须复用现有持久来源/Fact 投影，当前读取必须已获得 Runtime/Policy 授权。P5 不替宿主签发 read scope，也不将 Renderer/云端提供的绑定或 callback 当权限。未注入端口时 `hasCalendarMeetingSource: false`、`calendarSource.status: unavailable`，不会隐式创建 Fake 或访问账号。
+
+`p5.refreshCalendarMeeting(binding, context)` 经现有 tracked 生命周期消费读取、真实 chooser 和既有 Policy/CAS/receipt 路径；队列串行、取消/截止在每次异步读取后重验，停止能中止在途读取。`snapshot()` / `dialogueProjection()` 只公开来源状态与安全原因码，不回显原始异常、日历文本或凭据。
+
+新增来源路径 9 项检查通过，包括使用真实公共 `eventToItem` 的事件映射、来源/版本失败路径、取消/期限、可信读取顺序、显式 Fake 图谱/推理下的三候选 → Policy → CAS → 文件 receipt → 重建回放，以及 stop 中止读取。受影响 composition 既有 5 项通过；真实订阅和生产 Runtime/Policy/旧投影工厂尚未验收，不据此冻结接口。
+
+会议恢复增量：`MeetingDecisionReceipt.retryableInference?: true` 仅由协调器为**执行前**推理异常、不可用、非法响应、取消/超时或候选过期的审核回执记录。新有效消费调用最多重试一次选择；仍检查相同输入 digest、当前来源/基线、deadline/signal 和 Policy/CAS，不自动安排重试或重开 Runtime 已取消任务。缺 marker 的旧回执保守保持审核；uncertain、有效 proposal、applied 和未知执行结果均不重跑。异常回执不回显模型原始 error。`dialogueProjection().meetings[].retryableInference` 只表示可重新读源评估，不授予执行权限。新增 3 项恢复检查包含文件 receipt → 新协调器/文件 store 读回 → chooser 恢复、变更基线拒绝、uncertain/proposal 不重跑和 unknown/旧回执不重写；会议文件合计 20 项、新来源 9 项通过。
 
 P8 精确消费名：`getPendingProposals`、`applyMeetingProposal({eventId,source}, {deadline,signal})`、`listMeetingReceipts`、`triageMails`、`triagePagedMails({fetchPage,...})`。没有 `listProposals/applyProposal/listReceipts/triageMail/triageMailPaged` 别名；分页函数、Policy 与授权上下文只能来自受信宿主。
 

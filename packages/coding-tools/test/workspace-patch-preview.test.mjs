@@ -9,6 +9,7 @@ import {
   WORKSPACE_PATCH_PREVIEW_TOOL_NAME,
   WORKSPACE_READ_SCOPE,
   createWorkspacePatchPreviewTool,
+  createWorkspaceReadTool,
   registerWorkspacePatchPreview,
 } from '../dist/index.js';
 
@@ -32,6 +33,30 @@ async function fixture(t) {
   t.after(() => rm(base, {recursive: true, force: true}));
   return {base, root, sibling};
 }
+
+test('uses the read digest with BOM and CRLF, and rejects a changed source without writing', async t => {
+  const {root} = await fixture(t);
+  const source = '\ufeffconst greeting = "你好";\r\n';
+  const file = join(root, 'src', 'bom.ts');
+  await writeFile(file, source, 'utf8');
+  const reader = createWorkspaceReadTool({rootPath: root});
+  const read = await reader.execute({path: 'src/bom.ts'}, context());
+  assert.equal(read.content, source);
+  assert.equal(read.byteLength, Buffer.byteLength(source));
+  assert.equal(read.sha256, hash(await readFile(file)));
+  const input = {path: read.path, expectedSha256: read.sha256,
+    edits: [{oldText: '你好', newText: '再见'}]};
+  const tool = createWorkspacePatchPreviewTool({rootPath: root});
+  const preview = await tool.execute(input, context());
+  assert.equal(preview.beforeSha256, read.sha256);
+  assert.equal(preview.previewText, source.replace('你好', '再见'));
+  assert.equal(preview.afterSha256, hash(Buffer.from(preview.previewText)));
+  assert.deepEqual(await readFile(file), Buffer.from(source));
+  const userEdit = source.replace('你好', '用户修改');
+  await writeFile(file, userEdit, 'utf8');
+  await assert.rejects(tool.execute(input, context()), {code: 'REVISION_CONFLICT'});
+  assert.deepEqual(await readFile(file), Buffer.from(userEdit));
+});
 
 test('previews ordered non-ASCII edits from an immutable input snapshot without writing', async t => {
   const {root} = await fixture(t);
@@ -127,9 +152,12 @@ test('inherits path, sensitive, link, UTF-8 and bounded input/output rejection',
   await assert.rejects(tool.execute(preview('src/invalid.bin', Buffer.from([0xc3, 0x28]), [
     {oldText: 'x', newText: 'y'},
   ]), context()), {code: 'INVALID_ARGUMENT'});
-  await assert.rejects(tool.execute(preview('src/bom.txt', Buffer.from([0xef, 0xbb, 0xbf, 0x6f, 0x6b]), [
+  const bomPreview = await tool.execute(preview('src/bom.txt', Buffer.from([0xef, 0xbb, 0xbf, 0x6f, 0x6b]), [
     {oldText: 'ok', newText: 'yes'},
-  ]), context()), {code: 'INVALID_ARGUMENT'});
+  ]), context());
+  assert.equal(bomPreview.previewText, '\ufeffyes');
+  assert.equal(bomPreview.afterSha256, hash(Buffer.from('\ufeffyes')));
+  assert.deepEqual(await readFile(join(root, 'src', 'bom.txt')), Buffer.from('\ufeffok'));
   await assert.rejects(tool.execute(preview('src/small.txt', Buffer.from('small\n'), [
     {oldText: 'small', newText: '你'.repeat(16)},
   ]), context()), {code: 'INVALID_ARGUMENT'});
