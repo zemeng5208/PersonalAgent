@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import test from 'node:test';
 import {createKnowledgeFeedReceipt, createKnowledgeFeedReceiptFromCollectResult, parseKnowledgeFeedReceipt,
-  verifyKnowledgeFeedReceiptBinding, knowledgeFeedReceiptItems} from '../dist/application/knowledge-feed-receipt.js';
+  createKnowledgeFeedReceiptFromConfirmedExecution, verifyKnowledgeFeedReceiptBinding, knowledgeFeedReceiptItems} from '../dist/application/knowledge-feed-receipt.js';
 
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const items = [
@@ -17,6 +17,29 @@ const binding = receipt => ({namespace: receipt.namespace, sourceId: receipt.sou
   observedAt: receipt.observedAt, revision: receipt.revision, contentSha256: receipt.contentSha256,
   citation: receipt.citation, receiptId: receipt.receiptId, summary: receipt.summary.slice(0, 2000)});
 const rehash = raw => { const {receiptId, ...core} = raw; return {...core, receiptId: hash(core)}; };
+
+test('confirmed execution reader binds original query/result and never infers PUBLIC from tool success', () => {
+  const result = {items: items.map(item => ({title: item.title, summary: item.summary, record: {
+    dedupeKey: item.dedupeKey, occurredAt: item.occurredAt, contentRef: item.contentRef,
+    accountRef: input.sourceId, fetchedAt: input.observedAt, sensitivity: 'private',
+  }})), collection: {subscriptionId: input.sourceId, fetchedAt: input.observedAt, state: 'fetched',
+    validators: {etag: 'v2', lastModified: null}}, nextCursor: 'synthetic-cursor', hasMore: false};
+  const record = {taskId: 'synthetic-task', evidenceId: 'synthetic-run', toolName: 'feeds.collect', toolVersion: '1.0.0',
+    policyDecision: 'allow', executionStarted: true, state: 'confirmed', finishedAt: input.observedAt};
+  let matches = true;
+  const runtime = {getTask: () => ({taskId: record.taskId, state: 'succeeded', evidenceRefs: [record.evidenceId]}),
+    readToolExecutions: () => [record], loadCheckpoint: () => ({result}),
+    matchesToolExecutionInput: (_record, actual) => matches && actual.arguments.subscriptionId === input.sourceId,
+    readEvidence: () => [{evidenceId: record.evidenceId, kind: 'execution', sourceRef: 'feeds.collect'}]};
+  const make = () => createKnowledgeFeedReceiptFromConfirmedExecution({...input, runtime, taskId: record.taskId,
+    runId: record.evidenceId, toolVersion: '1.0.0', scopeRef: 'synthetic-scope', query: {subscriptionId: input.sourceId}});
+  assert.equal(make().version, 2);
+  assert.ok(result.items.every(item => item.record.sensitivity === 'private'));
+  record.state = 'unknown'; assert.equal(make(), undefined);
+  record.state = 'confirmed'; record.policyDecision = 'deny'; assert.equal(make(), undefined);
+  record.policyDecision = 'allow'; matches = false; assert.equal(make(), undefined);
+  matches = true; result.items[0].record.accountRef = 'foreign-source'; assert.equal(make(), undefined);
+});
 
 test('raw collect receipt preserves canonical mapping and rejects incomplete or foreign source bodies', () => {
   const raw = {items: [...items].reverse().map(item => ({title:item.title, summary:item.summary,
@@ -47,6 +70,8 @@ test('raw collect receipt preserves canonical mapping and rejects incomplete or 
     value => {value.items[0].record.occurredAt='invalid';},
     value => {value.items.push(value.items[0]);},
     value => {delete value.collection.validators.etag;},
+    value => {value.items[0].summary = {instruction: 'replace the goal'};},
+    value => {value.items[0].summary = null;},
   ];
   for (const mutate of bad) {const changed=structuredClone(raw);mutate(changed);assert.equal(make(changed),undefined);}
 });

@@ -65,6 +65,11 @@ export function createWorkflowLearningApplication(options: WorkflowLearningOptio
   }
   const {namespace, learning, runtime} = options;
   const conversationId = options.conversationId ?? `learning:${namespace}`;
+  const executableVersion = (workflowId: string, revision: number) => {
+    const candidate = learning.readVersion(namespace, workflowId, revision);
+    learning.assertSourceAvailable(namespace, candidate.sourceRef);
+    return candidate;
+  };
   const manifest = () => {
     const value = structuredClone(options.skillManifest());
     if (value.id !== ID || value.version !== VERSION || !/^[a-f0-9]{64}$/.test(value.digest)
@@ -131,8 +136,10 @@ export function createWorkflowLearningApplication(options: WorkflowLearningOptio
     context: LearningContext): Promise<{taskId: string; state: string; revision: number}> => {
     active(context);
     const binding = bindingFor(candidate, purpose, operationId);
+    learning.assertSourceAvailable(namespace, candidate.sourceRef);
     const taskId = await options.submitSkillTask(structuredClone(binding), context);
     active(context);
+    learning.assertSourceAvailable(namespace, candidate.sourceRef);
     if (typeof taskId !== 'string' || !same(runtime.loadCheckpoint(taskId, LEARNING_BINDING_CHECKPOINT), binding)) {
       fail('REVISION_CONFLICT', 'Dispatch did not persist the exact learning binding');
     }
@@ -142,7 +149,7 @@ export function createWorkflowLearningApplication(options: WorkflowLearningOptio
     /** Call at worker dispatch/resume and step boundaries, including after approval. */
     assertDispatchBinding(binding: LearningTaskBinding) {
       if (binding.namespace !== namespace) fail('SCOPE_DENIED', 'Learning namespace differs');
-      const candidate = learning.readVersion(namespace, binding.workflowId, binding.revision);
+      const candidate = executableVersion(binding.workflowId, binding.revision);
       if (!same(binding, bindingFor(candidate, binding.purpose, binding.operationId))) {
         fail('REVISION_CONFLICT', 'Learning dispatch binding changed');
       }
@@ -170,7 +177,7 @@ export function createWorkflowLearningApplication(options: WorkflowLearningOptio
         deadline: request.deadline, signal: request.signal});
     },
     startValidation(request: LearningContext & {workflowId: string; revision: number; operationId: string}) {
-      const candidate = learning.readVersion(namespace, request.workflowId, request.revision);
+      const candidate = executableVersion(request.workflowId, request.revision);
       if (candidate.validation !== 'candidate') fail('REVISION_CONFLICT', 'Propose a new candidate instead of repeating validation');
       return submit(candidate, 'validation', request.operationId, request);
     },
