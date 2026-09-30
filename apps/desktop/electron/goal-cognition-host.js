@@ -1,9 +1,13 @@
 import {createHash,randomUUID} from 'node:crypto';
 import {toolArgumentsDigest} from '@personal-agent/tool-gateway';
+import {prepareReviewedRepair} from '@personal-agent/cognition';
+import {parseCoordinationRepairCandidate} from '@personal-agent/coordination';
+import {isDeepStrictEqual} from 'node:util';
 
 const VERSION='desktop-goal-analysis-v1';
 const MARKER='desktop-goal-cognition-review';
 const HANDOFF_TASK_MARKER='desktop-goal-cognition-handoff-task-v1';
+const REPAIR_TASK_MARKER='desktop-goal-cognition-repair-task-v1';
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const sameRef=(a,b)=>a?.id===b?.id && a?.revision===b?.revision;
 const machineReview=review=>!review?.selectedOption && review?.machineReview?.reason==='uncertain'
@@ -28,6 +32,9 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
   const outgoing=new Map(),reviews=new Map();
   const context=()=>({signal:controller.signal,deadline:new Date(now()+180_000).toISOString()});
   const allowed=()=>enabled && cloudAllowed && !closed && !controller.signal.aborted;
+  function repairPreparation(review,candidate) {
+    return prepareReviewedRepair(store.read(),new Date(now()).toISOString(),review,candidate);
+  }
   function project(review) {
     if (!allowed() || review.graphNamespace!==namespace || review.bindingVersion!==VERSION || !canHandoff(review)) return;
     const snapshot=store.read();
@@ -58,7 +65,15 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
       nodes.push({id:hash(node.id),revision:node.revision,kind:node.kind,summary:node.summary,
         state:node.state,validFrom:node.validFrom,validUntil:node.validUntil});
     }
+    const prepared=repairPreparation(review);
+    const repairContext=prepared.kind==='prepared'?{
+      expectedGraphRevision:prepared.request.expectedGraphRevision,
+      allowedDependencies:prepared.binding.dependencies.map(ref=>({id:hash(ref.id),revision:ref.revision})),
+      targets:prepared.request.changes.map(change=>({node:{id:hash(change.node.id),revision:change.node.revision},
+        summary:snapshot.history.findLast(node=>sameRef(node,change.node)).summary,
+        requestedDependencies:change.dependencies.map(ref=>({id:hash(ref.id),revision:ref.revision}))}))}:undefined;
     const payload={action:needsMachineReview?'RECHECK':review.selectedOption.action,strategy,nodes,
+      ...(repairContext?{repairContext}:{}),
       ...(needsMachineReview?{decisionSource:'host_uncertainty_escalation',layaState:'uncertain',
         selectedOption:null,eligibleForRuntime:false}:{}),
       omittedSources:refs.size-nodes.length,calibrated:false,executed:false};
@@ -86,6 +101,81 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
     },
   };
   cognition=createHost({application,facts,graphNamespace:namespace,bindingVersion:VERSION,chooser,selectionHandoff:handoff});
+  function currentEnvelope(taskId) {
+    if (!allowed() || application.runtime.getTask(taskId).conversationId!==conversationId) return;
+    for (const [commandId,envelope] of outgoing) {
+      if (envelope.generation!==generation || Date.parse(envelope.deadline)<=now()
+        || application.runtime.findTaskByIdempotencyKey(commandId)?.taskId!==taskId) continue;
+      const review=cognition.readReview(envelope.reviewTaskId).review;
+      if (review && project(review)?.goal===envelope.goal && toolArgumentsDigest(review)===envelope.selectionDigest) return {envelope,review};
+    }
+  }
+  function readPreparedRepair(taskId) {
+    const bound=currentEnvelope(taskId);
+    if (!bound) return {kind:'unavailable',reason:'current_binding_unavailable'};
+    if (application.runtime.getTask(taskId).state!=='succeeded') return {kind:'unavailable',reason:'source_not_terminal'};
+    const prepared=repairPreparation(bound.review);
+    if (prepared.kind!=='prepared') return prepared;
+    const saved=application.runtime.loadCheckpoint(taskId,'competition-repair-candidate');
+    if (saved===undefined) return {kind:'unavailable',reason:'no_structured_candidate'};
+    const parsed=parseCoordinationRepairCandidate(saved);
+    const refs=new Map([...prepared.binding.targets,...prepared.binding.dependencies].map(ref=>[`${hash(ref.id)}:${ref.revision}`,ref]));
+    const local=ref=>{const found=refs.get(`${ref.id}:${ref.revision}`);if(!found) throw Error('云端修复引用不在原有选择范围内');return {...found};};
+    return repairPreparation(bound.review,{expectedGraphRevision:parsed.candidate.expectedGraphRevision,
+      changes:parsed.candidate.changes.map(change=>({...change,node:local(change.node),dependencies:change.dependencies.map(local)}))});
+  }
+  function repairTask(value) {
+    const saved=application.runtime.loadCheckpoint(value.task.taskId,REPAIR_TASK_MARKER);
+    if(!saved) return;
+    const intent=application.runtime.loadCheckpoint(saved.taskId,'local-repair-intent');
+    if(saved.version!==1 || saved.namespace!==namespace || saved.reviewTaskId!==value.task.taskId
+      || saved.sourceTaskId!==value.handoff?.task?.taskId || intent?.sourceKind!=='goal_review'
+      || intent.sourceTaskId!==saved.sourceTaskId || intent.reviewTaskId!==saved.reviewTaskId
+      || intent.graphNamespace!==namespace || saved.candidateDigest!==toolArgumentsDigest(intent.candidate.candidate)) {
+      throw Error('持久修复任务绑定不匹配');
+    }
+    const task=application.runtime.getTask(saved.taskId);
+    if(task.conversationId!==conversationId) throw Error('持久修复任务会话不匹配');
+    return {task,intent};
+  }
+  function submitRepair(value) {
+    if(repairTask(value) || value.handoff?.state!=='submitted' || !allowed()) return;
+    const prepared=readPreparedRepair(value.handoff.task.taskId);
+    if(prepared.kind!=='prepared') return;
+    const idempotencyKey=`desktop-reviewed-repair:${value.handoff.task.taskId}:${prepared.binding.candidateDigest}`;
+    const prior=application.runtime.findTaskByIdempotencyKey('local-repair:'+idempotencyKey);
+    const saved=prior && application.runtime.loadCheckpoint(prior.taskId,'local-repair-intent');
+    if(prior && (saved?.sourceKind!=='goal_review' || saved.sourceTaskId!==value.handoff.task.taskId
+      || saved.reviewTaskId!==value.task.taskId || saved.binding?.candidateDigest!==prepared.binding.candidateDigest)) throw Error('修复受理结果需要核实');
+    const task=prior??application.submitLocalRepair({sourceTaskId:value.handoff.task.taskId,reviewTaskId:value.task.taskId,
+      idempotencyKey,deadline:new Date(now()+180_000).toISOString()});
+    application.runtime.saveCheckpoint(value.task.taskId,REPAIR_TASK_MARKER,{version:1,namespace,
+      reviewTaskId:value.task.taskId,sourceTaskId:value.handoff.task.taskId,taskId:task.taskId,candidateDigest:prepared.binding.candidateDigest});
+  }
+  function verifiedRepair(value,bound) {
+    const {task,intent}=bound;
+    if(intent.reviewDigest!==toolArgumentsDigest(value.review)) return {};
+    const original=store.read(intent.binding.graphRevision);
+    const prepared=prepareReviewedRepair(original,value.review.evaluatedAt,value.review,intent.candidate.candidate);
+    if(prepared.kind!=='prepared' || !isDeepStrictEqual(prepared.binding,intent.binding)) return {};
+    for(const record of application.runtime.readToolExecutions(task.taskId)) {
+      if(record.toolName!=='cognition.commit_repair' || record.toolVersion!=='1.0.0' || record.state!=='confirmed'
+        || record.policyDecision!=='allow' || !record.executionStarted || !task.evidenceRefs.includes(record.evidenceId)
+        || !application.runtime.matchesToolExecutionInput(record,{arguments:{intentDigest:toolArgumentsDigest(intent)},scopeRef:record.evidenceId})) continue;
+      const result=application.runtime.loadCheckpoint(task.taskId,'tool-result-'+record.evidenceId)?.result;
+      if(result?.kind!=='applied' || result.graphRevision!==prepared.preview.after.snapshot.revision
+        || !isDeepStrictEqual(store.read(result.graphRevision),prepared.preview.after.snapshot)) continue;
+      const updatedNodes=prepared.preview.inputs.map(node=>{
+        const applied=prepared.preview.after.snapshot.history.findLast(item=>item.id===node.id);return {id:applied.id,revision:applied.revision,kind:applied.kind};
+      });
+      const current=store.read();
+      const verified=updatedNodes.every(ref=>sameRef(current.history.findLast(node=>node.id===ref.id),ref));
+      return {executionVerified:true,graphUpdateVerified:verified,evidenceRefs:[record.evidenceId],
+        graphRevision:result.graphRevision,updatedNodes,
+        executionStatus:verified?'选定修复已执行，涉及的图节点版本已持久读回':'修复写入已确认，但目标已有后续版本，当前状态需复核'};
+    }
+    return {};
+  }
   function record(value) {
     if (!value?.review) return;
     if (value.handoff?.state==='submitted') {
@@ -121,18 +211,32 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
     if (value.handoff?.state!=='submitted') return {state:value.handoff?.state??value.review?.selection?.state??'local',
       executionStatus:value.handoff?.state==='pending'?'编排受理结果待核实，尚未确认执行'
         :value.review?.selection?.state==='review'?'等待复核，尚未执行':'本地决策建议，尚未执行'};
-    const task=application.runtime.getTask(value.handoff.task.taskId);
+    let local;
+    try {local=repairTask(value);} catch {return {state:'waiting_reconciliation',executionStatus:'修复回执绑定待核实，不会重复提交'};}
+    const task=local?.task??application.runtime.getTask(value.handoff.task.taskId);
     const labels={created:'编排任务已受理，尚未执行完成',planning:'AgentArts 编排准备中，尚未执行完成',
       running:'AgentArts 编排进行中，执行结果尚未核实',waiting_external:'等待外部编排结果，尚未执行完成',
       verifying:'编排结果核实中，尚未确认目标更新',cancelling:'正在取消编排，尚未确认停止',
       waiting_approval:'等待本地审批，尚未执行完成',waiting_reconciliation:'执行结果待核实',
       succeeded:'AgentArts 编排任务已完成；目标更新尚未核实',failed:'编排任务失败，未确认目标更新',
       cancelled:'编排任务已取消，未确认目标更新'};
-    return {state:task.state,taskId:task.taskId,
-      executionStatus:labels[task.state]??'编排任务已受理，执行结果尚未核实'};
+    let verified={};try {if(local) verified=verifiedRepair(value,local);} catch {}
+    return {state:task.state,taskId:task.taskId,...(local?{sourceTaskId:value.handoff.task.taskId}:{}),
+      executionStatus:labels[task.state]??'编排任务已受理，执行结果尚未核实',...verified,
+      ...(task.state==='succeeded' && verified.executionVerified && verified.graphUpdateVerified?{status:'applied'}:{})};
   }
   try {restoreMarkers();} catch {status='recovery_pending';reason='既有决策记录尚未读回，保留持久回执等待核实';}
   return {
+    /** Trusted host only. No raw source data, authorization or new wire operation. */
+    readRepairBinding(taskId) {
+      try {
+        const bound=currentEnvelope(taskId);if(!bound) return;
+        const prepared=repairPreparation(bound.review);
+        return prepared.kind==='prepared'?structuredClone(prepared.binding):undefined;
+      } catch {return;}
+    },
+    /** Reuse Runtime's validated versioned candidate; translate only refs offered by this exact local selection. */
+    readPreparedRepair,
     configure(input) {
       if (typeof input.enabled!=='boolean'||typeof input.cloudAllowed!=='boolean') throw Error('目标分析设置无效');
       controller.abort();controller=new AbortController();generation=randomUUID();
@@ -171,7 +275,7 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
         selected: r?.selectedOption?.id,
         trigger,
         choice,
-        ...feedback,executionVerified:false,graphUpdateVerified:false,
+        executionVerified:false,graphUpdateVerified:false,...feedback,
       };
     })}),
     async tick() {
@@ -206,7 +310,12 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
           application.runtime.saveCheckpoint(item.taskId,MARKER,result.task.taskId);record(result);
         }
       } catch {if(!current.signal.aborted){nextTick=now()+30_000;status='error';reason='主动分析暂未完成，保留原任务；稍后按原任务核实恢复';}}
-      finally {busy=false;onUpdate();}
+      finally {
+        for(const value of reviews.values()) {
+          try {submitRepair(value);} catch {status='repair_unavailable';reason='结构化修复尚未受理，保留候选与真实任务回执等待核实';}
+        }
+        busy=false;onUpdate();
+      }
     },
     async applyDecision(reviewTaskId) {
       if (closed) throw Error('目标分析已关闭');
@@ -224,13 +333,18 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
         value=await cognition.handoffReview(reviewTaskId,context());
         record(value);
       }
+      try {submitRepair(value);} catch(error) {
+        if(error?.code==='UNSUPPORTED_CAPABILITY') return {status:'unavailable',reviewTaskId,
+          ...execution(value),executionVerified:false,graphUpdateVerified:false,reason:'受控修复端口尚未装配'};
+        throw error;
+      }
       onUpdate();
       const feedback=execution(value);
-      return {status:value.handoff?.state==='submitted'
+      return {status:feedback.state==='succeeded' && feedback.executionVerified && feedback.graphUpdateVerified?'applied':value.handoff?.state==='submitted'
         ? ['succeeded','failed','cancelled','waiting_approval','waiting_reconciliation'].includes(feedback.state)
           ? feedback.state : 'submitted'
         : value.handoff?.state??'unavailable',reviewTaskId,...feedback,
-        executionVerified:false,graphUpdateVerified:false};
+        executionVerified:feedback.executionVerified===true,graphUpdateVerified:feedback.graphUpdateVerified===true};
     },
     close(){closed=true;enabled=false;cloudAllowed=false;controller.abort();cognition.close();},
   };

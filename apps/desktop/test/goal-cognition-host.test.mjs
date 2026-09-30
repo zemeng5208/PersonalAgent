@@ -22,12 +22,16 @@ async function terminal(application,id) {
   }
   throw Error('Synthetic task did not settle');
 }
-async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCredentialRead=false,uncertain=false,unavailableInitially=false,newGoal=false,holdFetch=false}={}) {
+async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCredentialRead=false,uncertain=false,unavailableInitially=false,newGoal=false,holdFetch=false,controlledRepair=false}={}) {
   const root=fileURLToPath(new URL('../../../.cache/desktop-goal-cognition/',import.meta.url));
   await mkdir(root,{recursive:true});const directory=await mkdtemp(path.join(root,'case-'));
   let host,layaCalls=0,goalWrites=0,releaseFetch,time=Date.now(),unavailable=unavailableInitially;const sent=[],announced=[];
   const application=createAgentArtsRuntimeApplication({path:path.join(directory,'runtime.sqlite'),
     gatewayUrl:'https://agentarts.example.test',runtimeName:'synthetic',
+    ...(controlledRepair?{repairCandidateVersion:'1.0',responseMode:'tool-proposal-json',localRepair:{graphNamespace:namespace,bindingVersion:'desktop-reviewed-execution-v1',
+      withSourceLock:async work=>work(),reviewedSource:{resolve:input=>{
+        const prepared=host.readPreparedRepair(input.sourceTaskId);return prepared?.kind==='prepared' && prepared.binding.reviewTaskId===input.reviewTaskId?prepared:undefined;
+      }}}}:{}),
     beforeCompetitionSend:request=>host.assertCloudSend(request),
     authorizationProvider:{read:async()=>{
       if(revokeDuringCredentialRead) host.configure({enabled:true,cloudAllowed:false});
@@ -37,7 +41,12 @@ async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCred
     fetchImpl:async(_url,input)=>{
       sent.push(JSON.parse(input.body));
       if(holdFetch) await new Promise(resolve=>{releaseFetch=resolve;});
-      return new Response(JSON.stringify({event:'message',data:{text:'合成规划已接收',index:0}}),
+      const payload=JSON.parse(input.body);
+      const context=controlledRepair?JSON.parse(payload.query.slice(payload.query.lastIndexOf('\n')+1)).repairContext:undefined;
+      const text=context?JSON.stringify({kind:'repair_candidate',candidateVersion:'1.0',
+        candidate:{expectedGraphRevision:context.expectedGraphRevision,changes:context.targets.map(item=>({node:item.node,
+          summary:item.summary,reason:'Synthetic semantic review of selected dependency change',dependencies:item.requestedDependencies}))}}):'合成规划已接收';
+      return new Response(JSON.stringify({event:'message',data:{text,index:0}}),
         {headers:{'content-type':'application/json'}});
     }});
   const store=application.runtime.provisionCoordinationStore(namespace);
@@ -72,7 +81,7 @@ async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCred
     createHost:input=>createProactiveCognitionHost({...input,now:()=>time}),onTask:item=>announced.push(item),now:()=>time};
   host=createDesktopGoalCognitionHost(options);
   t.after(async()=>{host.close();facts.close();application.close();await rm(directory,{recursive:true,force:true});});
-  return {application,sent,announced,store,sourceTaskId:sourceTask.taskId,host:()=>host,layaCalls:()=>layaCalls,
+  return {application,client,sent,announced,store,sourceTaskId:sourceTask.taskId,host:()=>host,layaCalls:()=>layaCalls,
     goalWrites:()=>goalWrites,releaseFetch:()=>releaseFetch?.(),
     restoreLaya:()=>{unavailable=false;},advance:(ms=1100)=>{time+=ms;},restart:()=>{host.close();host=createDesktopGoalCognitionHost(options);return host;}};
 }
@@ -266,6 +275,58 @@ test('a selected strategy must still match the offered candidate and host bindin
     await assert.rejects(f.host().applyDecision(id),changed==='candidate'?/没有合法选择/:/可验证/);
     assert.equal(f.goalWrites(),0);assert.equal(f.sent.length,0);assert.equal(f.store.read().revision,5);
   }
+});
+
+test('a structured cloud repair translates only this selected scope and preserves private source omission',async t=>{
+  const f=await fixture(t);
+  f.host().configure({enabled:true,cloudAllowed:true});await f.host().tick();
+  const taskId=f.announced[0].taskId;await terminal(f.application,taskId);
+  const binding=f.host().readRepairBinding(taskId);assert.ok(binding);
+  const payload=JSON.parse(f.sent[0].query.slice(f.sent[0].query.lastIndexOf('\n')+1));
+  assert.equal(payload.repairContext.expectedGraphRevision,5);
+  assert.doesNotMatch(JSON.stringify(payload.repairContext),/private-source|PRIVATE_SOURCE_SENTINEL|synthetic\/source/);
+  assert.equal(f.host().readPreparedRepair(taskId).reason,'no_structured_candidate');
+  const saved={kind:'repair_candidate',candidateVersion:'1.0',verification:'unverified',
+    candidate:{expectedGraphRevision:5,changes:payload.repairContext.targets.map(item=>({node:item.node,summary:item.summary,
+      reason:'Synthetic reviewed candidate',dependencies:item.requestedDependencies}))}};
+  saved.candidate.changes[0].summary='Explicit revised decision';
+  f.application.runtime.saveCheckpoint(taskId,'competition-repair-candidate',saved);
+  const prepared=f.host().readPreparedRepair(taskId);
+  assert.equal(prepared.kind,'prepared');
+  assert.deepEqual(prepared.request.changes.map(change=>change.node.id),['decision','plan']);
+  assert.equal(prepared.request.changes[0].summary,'Explicit revised decision');
+  assert.equal(f.store.read().revision,5);assert.equal(f.goalWrites(),0);
+  saved.candidate.changes[0].node.id='unoffered';
+  f.application.runtime.saveCheckpoint(taskId,'competition-repair-candidate',saved);
+  assert.throws(()=>f.host().readPreparedRepair(taskId),/选择范围/);
+  f.host().configure({enabled:true,cloudAllowed:false});
+  assert.equal(f.host().readRepairBinding(taskId),undefined);
+  assert.equal(f.host().readPreparedRepair(taskId).kind,'unavailable');
+});
+
+test('Desktop reports applied only after real Runtime repair approval, CAS, Evidence and node-version readback',async t=>{
+  const f=await fixture(t,{controlledRepair:true});
+  f.host().configure({enabled:true,cloudAllowed:true});await f.host().tick();
+  await terminal(f.application,f.announced[0].taskId);
+  const reviewTaskId=f.host().snapshot().reviews[0].reviewTaskId;
+  const accepted=await f.host().applyDecision(reviewTaskId);
+  assert.notEqual(accepted.taskId,f.announced[0].taskId);assert.equal(accepted.graphUpdateVerified,false);
+  for(let n=0;n<100 && f.application.runtime.getTask(accepted.taskId).state!=='waiting_approval';n++) await new Promise(resolve=>setTimeout(resolve,5));
+  const approval=(await f.client.call('approval.list',{taskId:accepted.taskId})).items[0];assert.ok(approval);
+  assert.equal(f.store.read().revision,5);
+  await f.client.call('authorization.respond',{approvalId:approval.approvalId,expectedRevision:approval.revision,decision:'allow_once'});
+  assert.equal((await terminal(f.application,accepted.taskId)).state,'succeeded');
+  const result=await f.host().applyDecision(reviewTaskId);
+  assert.equal(result.status,'applied');assert.equal(result.executionVerified,true);assert.equal(result.graphUpdateVerified,true);
+  assert.equal(f.store.read().revision,7);assert.equal(f.goalWrites(),0,'no summary overwrite through GoalHost.revise');
+  assert.deepEqual(result.updatedNodes.map(node=>[node.id,node.revision]),[['decision',2],['plan',2]]);
+  assert.ok(result.evidenceRefs.length);assert.equal(f.application.runtime.readToolExecutions(accepted.taskId).length,1);
+  const restored=f.restart().snapshot().reviews[0];
+  assert.equal(restored.taskId,accepted.taskId);assert.equal(restored.status,'applied');assert.equal(restored.graphUpdateVerified,true);
+  assert.equal(f.host().snapshot().cloudAllowed,false);
+  f.store.append(7,node('plan','plan',[ref('decision',2)],'Subsequent explicit Plan'));
+  const changed=f.host().snapshot().reviews[0];assert.equal(changed.executionVerified,true);assert.equal(changed.graphUpdateVerified,false);
+  assert.notEqual(changed.status,'applied');assert.equal(f.store.read().revision,8);
 });
 
 

@@ -251,11 +251,18 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
         || !/^[a-f0-9]{64}$/u.test(options.workspacePatchReconciliation.bindingId))) {
       throw new ProtocolError('INVALID_ARGUMENT', 'Workspace patch reconciliation needs the trusted Competition host');
     }
-    if (this.localRepair && (!this.localRepair.graphNamespace?.trim() || !this.localRepair.bindingVersion?.trim()
-      || typeof this.localRepair.resolveBinding !== 'function' || typeof this.localRepair.matchesSource !== 'function'
-      || typeof this.localRepair.withSourceLock !== 'function'
-      || typeof this.localRepair.memory?.listCurrent !== 'function')) {
-      throw new ProtocolError('INVALID_ARGUMENT', 'Invalid local repair host configuration');
+    if (this.localRepair) {
+      // Compatible with the reviewed Goal source adapter while preserving the
+      // complete original Fact/tool-Evidence source configuration.
+      const reviewedSource = (this.localRepair as unknown as {reviewedSource?: {resolve?: unknown}}).reviewedSource;
+      const factSource = this.localRepair.sourceTool
+        && typeof this.localRepair.resolveBinding === 'function' && typeof this.localRepair.matchesSource === 'function'
+        && typeof this.localRepair.memory?.listCurrent === 'function';
+      if (!this.localRepair.graphNamespace?.trim() || !this.localRepair.bindingVersion?.trim()
+        || typeof this.localRepair.withSourceLock !== 'function'
+        || (!factSource && typeof reviewedSource?.resolve !== 'function')) {
+        throw new ProtocolError('INVALID_ARGUMENT', 'Invalid local repair host configuration');
+      }
     }
     this.competitionToolExports = (options.competitionToolExports ?? []).map(binding => Object.freeze({...binding}));
     const exportNames = new Set<string>();
