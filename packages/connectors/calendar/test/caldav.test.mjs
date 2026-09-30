@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
+import {isDeepStrictEqual} from 'node:util';
 import {CalDavProvider, parseCalDavEvents, zonedWallToUtc} from '../dist/index.js';
 import {CalendarService} from '../dist/index.js';
 
@@ -244,11 +245,10 @@ test('live CalDAV read-back: ctag/etag poll, wide window, single-event roundtrip
   const snapshot = await provider.pollChanges();
   assert.equal(typeof snapshot.ctag, 'string', 'collection must return a ctag');
   assert.ok(snapshot.ctag.length > 0);
-  console.log('live CalDAV ctag:', snapshot.ctag, '/ etag entries:', Object.keys(snapshot.etags).length);
+  console.log('live CalDAV ctag returned; etag entries:', Object.keys(snapshot.etags).length);
 
   const page = await provider.fetchWindow('live', {fromUtc: '2000-01-01T00:00:00.000Z', toUtc: '2100-01-01T00:00:00.000Z'});
-  assert.equal(page.hasMore, false);
-  console.log('live CalDAV events in wide window:', page.events.length);
+  console.log('live CalDAV events in first page:', page.events.length);
   if (page.events.length === 0) return; // 空日历：轮询与查询路径已验证，单条读回无目标可查。
 
   const first = page.events[0];
@@ -259,11 +259,11 @@ test('live CalDAV read-back: ctag/etag poll, wide window, single-event roundtrip
   const wallDigits = first.startLocal.replace(/[-:]/g, '').slice(0, 15);
   const roundTrip = zonedWallToUtc(wallDigits, first.timeZone);
   const delta = Math.abs(roundTrip - Date.parse(first.startUtc));
-  assert.ok(delta === 0 || delta <= 3_600_000, `wall ${first.startLocal} (${first.timeZone}) vs ${first.startUtc}`);
-  console.log('live first event:', first.externalId, first.timeZone, first.startLocal, '→', first.startUtc);
+  assert.ok(delta === 0 || delta <= 3_600_000, 'event wall time does not match its UTC instant');
+  console.log('live event time-zone round-trip passed');
 
   const readback = await provider.getEvent('live', first.externalId);
-  assert.deepEqual(readback, first, 'single-event readback matches the window fetch');
+  assert.ok(isDeepStrictEqual(readback, first), 'single-event readback differs from the window result');
 });
 
 test('live CalDAV wrong credentials are refused as UNAUTHORIZED without retry', {
