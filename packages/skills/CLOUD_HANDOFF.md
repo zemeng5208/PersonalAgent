@@ -1,99 +1,65 @@
-# MCP/Skill 云工作包交接
+# MCP/Skill PR269 本机续修交接
 
-Profile `huawei_ict_agentarts`；MOD-06/07、PA-005/006/023/026/027。独占分支 `codex/cloud-mvp-mcp-skills`。
-起始 main `7ede5f5b`；吸收指定 P8 依赖后 PR target/base 为
-`codex/zemeng/p8-mvp-final-integration@d2a23bea182a0a61104f601a6769d6ac16d7db5b`。
-已读该树 `MVP-P8-CLOUD-RUNTIME-HANDOFF.md` 与实际源码。d94 原件继承自 P8，不重造 MCP helper。
-本包不改 application/main/rootlock、P6 workspace-config-host、native许可UI、DB或安全配置。
+Profile `huawei_ict_agentarts`，PA-005/006/023/026/027。从云 `fe0666021cae04b3873393cca25b9b0b32713ec5` 普通合并到原本机树，保留 d94 历史、完整 worker selector 和恢复校验。仅修改 MCP/Skills、reference-tools-host 及专属 case/docs；原 Runtime CloudRuntime、P6 workspace-host、P8 main/native/rootlock 均未编辑。不新 PR，普通 FF 更新原 `codex/cloud-mvp-mcp-skills` / PR269。
 
-## P6/P8 出口合同
+## 最小两阶段端口
 
-| 公开符号（`@personal-agent/mcp`） | 行为 |
+所有公开 types 从 `@personal-agent/mcp` 根 exports 消费：
+
+| 类型/端口 | 精确语义 |
 | --- | --- |
-| `createPublicReferenceExport` / `PublicReferenceExportOptions` | 原 d94，policy2.0.0，md/txt，真实 MCP schema 保持 |
-| `createWorkspaceReferenceExport` / `WorkspaceReferenceExportOptions` | 新 workspace 专用入口，policy workspace-reference-2.0.0，不冒 MCP |
-| `PublicReferenceExportQuery` | 共用 `{taskId,proposalId,path,configurationRef}` |
-| `PublicReferenceExportAuthorization` | 共用 `{authorizationId,contentDigest,expiresAt}`，native明确 PUBLIC 出机许可 |
+| `PublicReferenceExportQuery` | `{taskId,proposalId,path,configurationRef}`，四字段同原任务、提案、路径和当前配置 |
+| `PublicReferenceReadQuery` | 上述四字段 + `arguments: Record<string,unknown>` 完整原输入（workspace 含 maxBytes），始终留本机 |
+| `PublicReferenceExportPreflight` | `{authorizationId,expiresAt,sensitivity:'PUBLIC',purpose:'reference-summary'或'coding-reference',maxExportBytes}` |
+| `PublicReferenceContentQuery` | ReadQuery + `contentDigest` + 实际 `byteLength` |
+| `PublicReferenceExportAuthorization` | 同原 Preflight scope/id/expiry/上限 + 精确 `contentDigest` |
+| `readPreflight(ReadQuery)` | native PUBLIC 来源/目的预许可与原任务读取资格；没有 digest/receipt 要求，不读文件，不签权 |
+| `readConfirmed(ReadQuery+contentDigest)` | 只读原 Runtime `{runId,result}`；核原 proposal/run/tool/version/fullargs/scope/Policy/Evidence/结果 checkpoint |
+| `readAuthorization(ContentQuery)` | confirmed 原读取之后核 native exact-content 许可，缺失拒绝；原 PUBLIC 预许可可具体化原 SHA，不由模型赋权 |
 
-两个 options 均为 `currentConfigurationRef():string|undefined`、
-`readAuthorization(query):PublicReferenceExportAuthorization|undefined`、同步只读 `readConfirmed`。
-MCP readConfirmed 返回 `{runId,result:McpReadResult}`；workspace 返回 `{runId,result:WorkspaceReadResult}`，
-后者直接 import 原 coding-tools 公共类型，无第二 result DTO。实现分别在 mcp/src/public-export.ts、workspace-export.ts。
-configurationRef 必须唯一绑定原 session/root/configGeneration，撤销/断连返回 undefined，不恢复旧 ID。
-native授权回调检查 query 四字段及当前工具/版本的独立 cloudExport scope，workspace read scope 不可替代。
-readConfirmed 核原 proposal→run、完整 args（含 maxBytes）、工具/版本/scope、Policy allow、confirmed/
-executionStarted/finishedAt、原 result checkpoint、同 task Evidence；不得 invoke/grant/接受外部 receipt/改状态。
-workspace helper 接 `{path,maxBytes?}`，安全相对 path 可含 .js，maxBytes 1..262144；同 proposal 完整参数不可替换。
-真实结果要求 path/encoding=utf-8/byteLength/content/sha256，字节数与 SHA 一致；历史缺 SHA 拒绝。
-MCP 输出仍仅 `{source:'approved-reference',contentDigest,readConfirmed:true}`；workspace 仅
-`{source:'approved-workspace-reference',contentDigest,readConfirmed:true}`。正文/path/授权/run/Evidence 不出机。
-missing/unknown/expiry/revoke/config或许可替换：accepts=false/project UNAUTHORIZED；取消 CANCELLED；dispose永久拒绝。
-真正 cloud I/O 前仍调原 Competition export guard，不能缓存 projection 绕过撤销。P6只consume workspace helper，P8只inject native ports。
+`createPublicReferenceExport` 是 MCP 原 schema、policy `3.0.0`；`createWorkspaceReferenceExport` 保留原 `WorkspaceReadResult`（utf-8/byteLength/content/sha256），policy `workspace-reference-3.0.0`。不互相冒 result。options 还含 `currentConfigurationRef()`，全部同步 native 只读 callbacks；撤销/断连为 undefined，配置引用绑定真实 session/root/generation，不恢复旧 ID。
 
-## Desktop现有宿主
+两者复用原 `accepts/project`：
 
-保留 `createDesktopReferenceHost` 原 submit/reconcile/启停/native worker 路径，新增可信 options：
+1. `accepts({taskId,proposalId,arguments,phase:'preflight'})`，不用还不存在的 digest/确认收据。只核原四字段/完整参数和明确 PUBLIC、限定目的、原生许可身份/期限/上限；实际读取仍经过原 Policy/Gateway。
+2. 原工具 confirmed 后 `project({taskId,proposalId,result,signal})`。完整结果必须与原 confirmed record 对应的结果一致，path/byteLength/SHA/fullargs/run/Evidence 全由模块及可信 adapter 核验，之后才能具体化 native 精确内容许可。
+3. 投影为 `{source,content,byteLength,contentDigest,truncated:false,readConfirmed:true}`；source 是 approved-reference 或 approved-workspace-reference。content 是确切批准的、完整有界 PUBLIC 正文，不是 opaque hash。超 native maxExportBytes 拒绝，不截断；上限不超过现读取 262144 字节。模型接收正文作为不可信资料，不赋工具权限。路径、许可 ID、run/raw Evidence 不出机。
+4. **真实 CloudAgentPort I/O、异步凭据读取之后及 continuation replay**：`accepts({...原proposal,phase:'final',projection:原Runtime持久 continuation.result,signal})`。重新核原收据、精确内容许可和实际投影，即使本机重启没有 helper map 也不能仅 preflight 放行。默认 phase 只保旧第一读兼容，不能用于最终 I/O。
+5. 精确内容许可 pending/deny/撤销/未知时，原 confirmed tool result 和 pending proposal 留在原 Runtime；shared worker 按已有等待/核实状态恢复，只重 projection，不能重 execute、新 task/store、伪造确认或 failed 后自动重开。helper 的 UNAUTHORIZED 不是“原读取没有发生”。进一步内容 native 对话由 P8 处理；缺许可不外发。
 
-- `publicReferenceExport:{readAuthorization,readConfirmed}`：消费 d94；currentConfigurationRef 用原 current()。
-- `publicReferenceAvailability(input & {configurationRef})`：native公开 MCP availability gate；缺槽不公布。
-- `publicSkillAvailability(input & {configurationRef})`：独立 native公开 Skill availability gate。
-- `resolvePublicSkillSource({taskId,proposalId,revision,sourceRef,deadline,signal,configurationRef})`：
-  opaque sourceRef 解析为 `PublicSkillSource extends PublicReferenceExportAuthorization`，附本地 path/sourceRef/configurationRef/revision。
-  复查 native PUBLIC、原task/proposal、root/configGeneration、期限、取消和原输入revision。
+原不同 policy 版本的 continuation 不默迁到新正文策略。callbacks 的 missing metadata 不默认 PUBLIC。scope/id/expiry/参数/config 变化拒绝，取消 CANCELLED，dispose 永久拒绝。
 
-旧 policy1/path-only export 已替换。readWorkspaceBinding 仅许可读，不派生PUBLIC授权。
-stop/invalidate 关闭 cloud selector、abort worker并清config，再沿原TaskRuntime取消；新service须重新注入当前worker。
+## Desktop/P6/P8 接线
 
-## CloudRuntime原循环接线（shared由唯一作者实现）
+`reference-tools-host` 的 `publicReferenceExport` 增加 readPreflight，另外两个 callback 改上述精准 query；currentConfigurationRef 仍原 current()。publicReferenceAvailability/publicSkillAvailability 只是可发现性，不能签权。
 
-`@personal-agent/skills` 提供 `createCloudSkillSelectionPort`、`VersionedSkillWorkerPort`、`PublicSkillSource`、
-`CloudSkillContext` 与 `CLOUD_SKILL_TOOL_NAME/VERSION/PUBLIC_ENUM_PATHS`。
-名字固定 `skill.workspace_reference_summary@1.0.0`。调用 host.configureCloudSkillWorker(port) 注入同一已有worker：
-manifest()/health()/invoke(ReferenceSummaryInput,AgentWorkerContext)，不新建worker/framework/task。
+P6 仅消费 createWorkspaceReferenceExport；native candidate 查询若严格四字段，应从 ReadQuery 明确取四字段，再以原 Runtime 核完整 arguments，不能丢 maxBytes 或借其它 run。P8 提供原生 PUBLIC 来源/目的预许可，confirmed 后 exact SHA/bytes 内容许可及撤销；不使用 Node 绕工具预读未知文件。所有 selector、发布目录和 main/public exports/唯一 lock 由原负责人装配。
 
-1. CloudRuntime在原application公开已有private referenceSkill的最小accessor。invoke前校验/保存同task的原
-   REFERENCE_SKILL_TASK intent，沿原configuration绑定及readConfirmedSkillSource；不另runTask或第二Taskstore。
-2. `await host.cloudSkillCatalog({taskId,revision,deadline,signal})` 返回已有 CoordinationAvailableTool。
-   全字段显式type；id/version/digest用enum。native明确批准 PUBLIC_ENUM_PATHS
-   `['/skillId','/version','/digest']` 后交原safeSchema，不用const-only manifest.inputSchema。
-   sourceRef是native公开来源别名，不在catalog发布私路径/正文。
-3. 根给原RuntimeCompetitionToolCatalog增加worker capability注入、持久目录和发送前复查。
-   worker descriptor不可注册到Gateway，不能造占位RegisteredTool满足注册检查。
-4. AgentArts沿原goal/availableTools返回原CoordinationToolProposalResult（tool_proposal）；现parser验证后，
-   在coordination worker的tools.invoke之前分派该名字到host.dispatchCloudSkillProposal(proposal,context)。
-   context复用原task checkpoint/progress/deadline/signal；revision是原请求/输入绑定revision，非云授予数字。
-   native校验输入失效；普通progress造成的UI TaskSnapshot revision递增不等于新权限。
-5. selector在原checkpoint skill:cloud-selection:v1绑定task/proposal/manifest/path/config/revision/许可/SHA/expiry。
-   内层MCP才走原ToolPort/Policy/Gateway。pending/unknown交原waiting_approval/waiting_reconciliation；
-   仅confirmed receipt放入原CoordinationContinuation.result，无新Cloud DTO/协议/模型loop。
-6. 异步凭据读取后、真实cloud I/O前，调用port.assertReceiptAllowed(selection,receipt,context)，
-   核持久同task receipt和新鲜许可；根将selection保存原competition checkpoint。select/catalog/run仅本地参数。
+reference-tools-host 新增 native-only getters：`readPublicReferencePreflightCandidate(query严格4)` 返回冻结 query/runId/toolName/toolVersion/arguments/deadline，无 SHA/body；`readPublicReferenceCandidate(query严格4)` 核原 confirmed 记录/Policy/参数/scope/同 task Evidence/结果字节 SHA 后附 contentDigest/byteLength；`readConfirmedPublicReference(ReadQuery+contentDigest)` 独立返回原 run/result。factory 注入同 trusted `hostUserNamespace`，bindTask 在原 task checkpoint 保存 namespace fence；所有 getter 每次复查当前 config、profile、namespace、deadline、取消和原 proposal/manifest，停止清会话 pin。原 parsed pending 必须由 Runtime **先**保存到现 competition-loop 再 native preflight。Skill sourceRef 第一次尚无 selection path 时，需要 P8 `resolvePublicSkillPath({taskId,proposalId,sourceRef,configurationRef})` 仅从现 native PUBLIC alias 映射路径（不读文件/签权），或已有原 selection/Skill intent 绑定。getter 不从云字符串猜 path；Skill run与Competition run各核原绑定，确认结果不可互借。
 
-Skill run `skill-read-taskId-digest` 与云MCP run `competition-tool-taskId-step` 不同，不可互相冒确认。
-继续沿原SkillReadReconciliationQuery核原task/run/input/scope/config/Evidence；如要复用原读，根先公开并核实
-精确proposal/run映射；缺映射unknown，不伪造Evidence或重call。同task不同proposal/input拒绝覆盖原selection。
+## 原 CloudSkill worker/循环
 
-## 验证与迁移
+保留 `createCloudSkillSelectionPort`、`VersionedSkillWorkerPort`、`CLOUD_SKILL_TOOL_NAME=skill.workspace_reference_summary@1.0.0`、原 skill:cloud-selection:v1 checkpoint，绝不 RegisteredTool 占位或嵌套 tool.invoke。
 
-无DB/wire迁移。固定bundle新增归一化bodySHA pin；body变更需升版本/digest，保留CRLF兼容。
-恢复read-confirmed/complete核保存正文SHA与sources/Evidence一致性，保留d94 complete configRef复查。
-类型依赖均已有workspace：mcp加coding-tools，skills加mcp/coordination。根唯一lock/顺序由P8更新：
-contracts/coding-tools/agents/coordination产物就绪 → mcp → skills → runtime/desktop。
+- `CloudSkillSelectionOptions.publicReferenceExport` 注入同一 native MCP 两阶段端口。`PublicSkillSource` 现在是 Preflight + 本地 path/公开 sourceRef/configurationRef/原输入 revision；首读前不臆造内容 SHA，purpose 必须 reference-summary。
+- `describe()` 保留显式 type +公开 id/version/digest enum，host 批准 PUBLIC_ENUM_PATHS 后沿原 availableTools。opaque sourceRef 不发布私路径。
+- 同已存在的 ReferenceSummary worker/原 REFERENCE_SKILL_TASK intent/config/readback，从原 coordination worker tools.invoke **之前** dispatch；不新 runTask/framework/store。
+- worker 内层 MCP 仍原 ToolPort/Policy/Gateway。confirmed 后只读原 MCP 收据，走同精确 native PUBLIC 出机切面，才用与本地 worker 同一纯函数投影实际摘要。
+- confirmed receipt 带 `content/byteLength/summaryDigest/truncated`、`contentDigest`（原来源 SHA）、selectionRef/sourceRef/state。摘要仅前两条非空行最多 480 字符，UTF-8 字节数与摘要 SHA 实算；truncated 表示相对归一化来源是否省略，绝不把来源 hash 冒摘要。原路径、resultSummary 元数据和 raw Evidence 不外发。
+- `assertReceiptAllowed` 在每次真正 I/O 前只读原收据、重验原 native scope/exact content、重投影比 persisted receipt；pending/unknown 不允许 confirmed continuation。许可拒绝时原 worker read-confirmed/complete 留在同任务，继续只投影，读取次数不增加。
+- Skill run skill-read-task-digest 与 Competition run competition-tool-task-step 不互冒。Native readConfirmed adapter 必须按原 Skill intent/selection/proposal 精确映射原 MCP run，原 readonly reconciliation 保留。输入 revision 由可信 Runtime 绑定，UI progress revision 不重新授予源许可。
 
-本轮不跑unit/integration/smoke/check/build/模型/供应商，仅静态核API/source/diff。
-用户更新执行方式前的一项依赖准备安装随即取消，无cache/依赖/lock提交。
-继承d94 tsc+新增受改2case2/2及P8官方MCP+SQLite/Policy/allow_once、routine-read两case历史收据，不重跑或冒本轮结果。
-本机根更新唯一lock及必要前置产物后统一执行：
+## 验证与限制
 
-```sh
-npm run build --workspace=@personal-agent/mcp
-npm run build --workspace=@personal-agent/skills
-npm run typecheck --workspace=@personal-agent/mcp
-npm run typecheck --workspace=@personal-agent/skills
-node --test packages/mcp/test/workspace-export.test.mjs packages/skills/test/cloud-selection.test.mjs
-```
+本轮只 JS/MJS 与 TypeScript 语法解析、git diff --check；**没有 build、类型检查、test execution、SDK/server、模型或云调用**。prepared case 为显式 offline permission/worker/receipt，不冒原生/SQLite/真实云证据。继承 d94 与 P8 已有收据，不重测、不把历史成功算本增量验证。
 
-prepared cases为offline permission/worker/receipt fixture，非生产Fake。
-尚需root接原Runtime worker/intent/catalog/dispatch/finalguard，P6workspace gate，P8native确认撤销，
-真实AgentArts账号/deployment/version/trace与Windows stdio/现SQLiteEvidence统一验收。
-麦克风、安全存储、私人数据不在此包范围；缺ports/账号明确unavailable，不回退Local。
+P8 所有源码接线后统一本机验证：
+
+- 首次没有 digest/receipt 时 preflight 可达，原 Gateway 一次读取确认后 native 精准 PUBLIC 正文与字节/SHA 进入真实 AgentArts continuation，得到基于正文的回答。
+- native exact permission pending/deny、过期/撤销、scope/config/完整 maxBytes 变化、缺 metadata/PRIVATE、wrong run/hash/byte/path、取消、超上限拒绝出机。
+- confirmed 后拒绝投影，再许可/恢复同 task/run/结果/Evidence；重启 continuation final phase 重验且工具执行次数保持一。
+- Skill 首读 pending/unknown/confirmed 恢复、摘要正文/字节/SHA/省略标记正确、真实 I/O 前撤销拒绝，同记录零重读。
+
+模块 prepared entry：packages/mcp/test/public-export.test.mjs（MCP）、workspace-export.test.mjs（workspace）、packages/skills/test/cloud-selection.test.mjs、apps/desktop/test/reference-export-candidates.test.mjs。两种读格式共享 public-export-fixture.mjs，各入口只注册自身 case，workspace glob 不重复执行同一 case。
+
+无 wire/DB/根 lock 修改；新增内部私有校验和纯摘要函数，无额外依赖。根既有 build 顺序与依赖版本由 P8 维护。未知、无服务、缺端口仍 unavailable，不回退 Local，不宣称 MOD/MVP done。

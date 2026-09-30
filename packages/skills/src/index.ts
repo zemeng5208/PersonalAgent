@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {ProtocolError, validateToolValue} from '@personal-agent/contracts';
 import type {AgentToolInvocation, AgentToolPort, AgentWorkerContext, ToolInvocationResult} from '@personal-agent/agents';
+import {referenceSummary} from './reference-summary.js';
 export {createCloudSkillSelectionPort, CLOUD_SKILL_CHOICE_SCHEMA, CLOUD_SKILL_TOOL_NAME, CLOUD_SKILL_TOOL_VERSION, CLOUD_SKILL_PUBLIC_ENUM_PATHS} from './cloud-selection.js';
 export type {VersionedSkillWorkerPort, PublicSkillSource, CloudSkillChoice, CloudSkillContext, CloudSkillSelection, CloudSkillReceipt, CloudSkillSelectionOptions} from './cloud-selection.js';
 
@@ -189,7 +190,7 @@ export function createReferenceSummarySkill(options?:ReferenceSummaryOptions) {
     if(saved.configurationRef && configurationRef()!==saved.configurationRef) fail('REVISION_CONFLICT','Skill configuration changed');
     context.reportProgress({stepId:'skill-summarize-reference',label:'Summarize confirmed reference',completedUnits:1,totalUnits:2});
     const read=saved.read!;
-    const excerpt=read.text.split(/\r?\n/).map(line=>line.trim()).filter(Boolean).slice(0,2).join(' ').slice(0,480);
+    const excerpt=referenceSummary(read.text).content;
     const outcome:SkillOutcome={state:'confirmed',resultSummary:`${excerpt || '(empty reference)'} [source=${read.path}; sha256=${read.contentDigest}]`,sources:[{path:read.path,contentDigest:read.contentDigest}],evidenceRefs:[...saved.evidenceRefs]};
     check(context,generation,input.digest);
     saved.phase='complete';saved.outcome=outcome;context.saveCheckpoint(CHECKPOINT,saved);

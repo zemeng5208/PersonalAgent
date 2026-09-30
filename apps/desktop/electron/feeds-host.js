@@ -46,17 +46,18 @@ export function createDesktopFeedsHost({userData, safeStorage, provider = new fe
       knownUrlDigest:hash(item.url), containsCredentials:Boolean(url.username || url.password || url.search),
       sensitivity:item.sensitivity, available:current(), transportVerified:false};
   }
-  function taskBinding(taskId) {
+  function taskBinding(taskId, allowCompleted = false) {
     if (!application || typeof taskId !== 'string' || !taskId || taskId.length > 256) throw Error('请选择原始任务');
     const task = application.runtime.getTask(taskId);
     if (![`desktop-panel`,`desktop-workspace`,`host-tool:${namespace}`,`knowledge-watch:${namespace}`].includes(task.conversationId)
-      || task.cancelRequested || ['succeeded','failed','cancelled'].includes(task.state)) throw Error('任务不属于当前用户或已经停止');
+      || task.cancelRequested || ['failed','cancelled'].includes(task.state)
+      || (!allowCompleted && task.state === 'succeeded')) throw Error('任务不属于当前用户或已经停止');
     const deadline = application.runtime.loadCheckpoint(taskId,'application-deadline')
       ?? application.runtime.loadCheckpoint(taskId,'host-tool-intent')?.deadline;
     if (typeof deadline !== 'string' || !Number.isFinite(Date.parse(deadline)) || Date.parse(deadline) <= now()) {
       throw Error('原任务没有有效期限');
     }
-    return {taskId, conversationId:task.conversationId, deadline};
+    return {taskId, conversationId:task.conversationId, deadline, purposeDigest:hash(task.goal),goal:task.goal};
   }
   const grantKey = (sourceId,taskId) => 'feed-source-grant:' + hash({sourceId,taskId});
   function readTrackingGrant(query) {
@@ -65,12 +66,13 @@ export function createDesktopFeedsHost({userData, safeStorage, provider = new fe
     if (!grantStore || query?.namespace !== namespace || typeof query?.sourceId !== 'string'
       || typeof query?.taskId !== 'string') return absent;
     try {
-      const binding = sourceBinding(query.sourceId), task = taskBinding(query.taskId);
+      const binding = sourceBinding(query.sourceId), task = taskBinding(query.taskId,true);
       const grant = grantStore.get(grantKey(query.sourceId,query.taskId));
       if (!grant || grant.state !== 'granted' || binding?.sensitivity !== 'public' || binding.containsCredentials
         || !binding.available || grant.configurationRef !== binding.configurationRef
         || grant.namespace !== namespace || grant.sourceId !== query.sourceId || grant.taskId !== task.taskId
-        || grant.conversationId !== task.conversationId || grant.expiresAt !== task.deadline
+        || grant.conversationId !== task.conversationId || grant.purposeDigest !== task.purposeDigest
+        || grant.expiresAt !== task.deadline
         || Date.parse(grant.expiresAt) <= now()) return absent;
       return structuredClone(grant);
     } catch { return absent; }
@@ -148,7 +150,8 @@ export function createDesktopFeedsHost({userData, safeStorage, provider = new fe
       if (!['public','private'].includes(classification) || !grantStore || !choice) throw Error('来源分类无效');
       const binding = sourceBinding(choice.subscriptionId), task = taskBinding(choice.taskId);
       if (!binding || binding.configurationRef !== choice.configurationRef || binding.generation !== choice.generation
-        || task.conversationId !== choice.conversationId || task.deadline !== choice.deadline) throw Error('来源或原任务已改变');
+        || task.conversationId !== choice.conversationId || task.deadline !== choice.deadline
+        || task.purposeDigest !== choice.purposeDigest) throw Error('来源或原任务已改变');
       if (classification === 'public' && binding.containsCredentials) throw Error('含查询参数或凭据的来源不能作为公开跟踪源');
       const key = grantKey(binding.sourceId,task.taskId), previous = grantStore.get(key);
       if (saved.find(item => item.id === binding.sourceId).sensitivity !== classification) {
@@ -159,6 +162,7 @@ export function createDesktopFeedsHost({userData, safeStorage, provider = new fe
         revision:Number.isSafeInteger(previous?.revision) ? previous.revision+1 : 1,
         namespace,sourceId:binding.sourceId,subscriptionId:binding.subscriptionId,
         configurationRef:currentBinding.configurationRef,taskId:task.taskId,conversationId:task.conversationId,
+        purposeDigest:task.purposeDigest,
         publicLowRiskTracking:classification === 'public',expiresAt:task.deadline,
         classifiedAt:new Date(now()).toISOString(),classificationSource:'native-user-choice'});
       const index = grantStore.get('feed-source-grant-index');

@@ -1,10 +1,12 @@
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {isDeepStrictEqual} from 'node:util';
 import {ProtocolError, validateToolValue} from '@personal-agent/contracts';
 import type {AgentWorkerContext} from '@personal-agent/agents';
 import type {CoordinationAvailableTool, CoordinationToolProposalResult} from '@personal-agent/coordination';
-import type {PublicReferenceExportAuthorization} from '@personal-agent/mcp';
+import {createPublicReferenceExport} from '@personal-agent/mcp';
+import type {PublicReferenceExportPreflight,PublicReferenceExportOptions} from '@personal-agent/mcp';
 import type {ReferenceSummaryInput, SkillManifest, SkillOutcome} from './index.js';
+import {referenceSummary} from './reference-summary.js';
 
 /** The existing versioned worker, injected at Runtime dispatch OUTSIDE tool locks. */
 export interface VersionedSkillWorkerPort {
@@ -12,17 +14,20 @@ export interface VersionedSkillWorkerPort {
   health():{connected:boolean};
   invoke(input:ReferenceSummaryInput, context:AgentWorkerContext):Promise<SkillOutcome>;
 }
-export interface PublicSkillSource extends PublicReferenceExportAuthorization {
-  path:string; sourceRef:string; contentDigest:string; configurationRef:string; revision:number;
+export interface PublicSkillSource extends PublicReferenceExportPreflight {
+  path:string; sourceRef:string; configurationRef:string; revision:number;
 }
 export interface CloudSkillChoice {skillId:string; version:string; digest:string; sourceRef:string}
 export interface CloudSkillContext extends AgentWorkerContext {revision:number; proposalId:string}
 export interface CloudSkillSelection {selectionRef:string; skillId:string; version:string; digest:string}
 export interface CloudSkillReceipt {
   state:SkillOutcome['state']; selectionRef:string; sourceRef:string; contentDigest?:string;
+  content?:string;byteLength?:number;summaryDigest?:string;truncated?:boolean;
 }
 export interface CloudSkillSelectionOptions {
   versionedSkillworker?:VersionedSkillWorkerPort|undefined;
+  /** Same native two-phase export gate as the original MCP read. Missing denies. */
+  publicReferenceExport?:PublicReferenceExportOptions|undefined;
   /** Trusted, fresh PUBLIC export permission check. No grants issued here. */
   resolvePublicSource(input:{taskId:string; proposalId:string; revision:number; sourceRef:string; deadline:string; signal:AbortSignal}):PublicSkillSource;
 }
@@ -33,11 +38,12 @@ export const CLOUD_SKILL_PUBLIC_ENUM_PATHS=['/skillId','/version','/digest'] as 
 export const CLOUD_SKILL_CHOICE_SCHEMA={type:'object',properties:{skillId:{type:'string',const:'workspace-reference-summary'},version:{type:'string',const:'1.0.0'},digest:{type:'string',pattern:'^[a-f0-9]{64}$'},sourceRef:{type:'string',pattern:'^[A-Za-z0-9._:-]{1,128}$'}},required:['skillId','version','digest','sourceRef'],additionalProperties:false};
 const selectionSchema={type:'object',properties:{selectionRef:{type:'string',minLength:1,maxLength:128},skillId:{const:'workspace-reference-summary'},version:{const:'1.0.0'},digest:{type:'string',pattern:'^[a-f0-9]{64}$'}},required:['selectionRef','skillId','version','digest'],additionalProperties:false};
 interface Saved {taskId:string; proposalId:string; choice:CloudSkillChoice; source:PublicSkillSource; selection:CloudSkillSelection; receipt?:CloudSkillReceipt}
-const fail=(code:string,message:string):never=>{throw new ProtocolError(code,message);};
+function fail(code:string,message:string):never {throw new ProtocolError(code,message);}
 
 /** Selection/receipt adapter only: no second framework, loop, Gateway or DB. */
 export function createCloudSkillSelectionPort(options:CloudSkillSelectionOptions) {
   const worker=options.versionedSkillworker;
+  const exporter=createPublicReferenceExport(options.publicReferenceExport);
   let closed=false;
   const controller=new AbortController();
   const active=new Set<string>();
@@ -46,7 +52,7 @@ export function createCloudSkillSelectionPort(options:CloudSkillSelectionOptions
     if(!Number.isFinite(Date.parse(context.deadline)) || Date.parse(context.deadline)<=Date.now()) fail('TIMEOUT','Skill selection expired');
     if(!Number.isSafeInteger(context.revision) || context.revision<1) fail('INVALID_ARGUMENT','Skill revision is required');
     if(typeof context.proposalId!=='string' || !context.proposalId || context.proposalId.length>1024) fail('INVALID_ARGUMENT','Original Skill proposal is required');
-    if(!worker?.health().connected) fail('UNSUPPORTED_CAPABILITY','Versioned Skill worker is unavailable');
+    if(!worker?.health().connected || !options.publicReferenceExport) fail('UNSUPPORTED_CAPABILITY','Versioned Skill worker or public export is unavailable');
   }
   function source(choice:CloudSkillChoice,context:CloudSkillContext):PublicSkillSource {
     const value=options.resolvePublicSource({taskId:context.taskId,proposalId:context.proposalId,revision:context.revision,
@@ -54,10 +60,36 @@ export function createCloudSkillSelectionPort(options:CloudSkillSelectionOptions
     if(!value || value.sourceRef!==choice.sourceRef || value.revision!==context.revision
       || typeof value.path!=='string' || !value.path || typeof value.configurationRef!=='string'
       || !/^[A-Za-z0-9._:-]{1,128}$/.test(value.configurationRef)
-      || !/^[a-f0-9]{64}$/.test(value.contentDigest)
+      || value.sensitivity!=='PUBLIC' || value.purpose!=='reference-summary'
+      || !Number.isSafeInteger(value.maxExportBytes) || value.maxExportBytes<1 || value.maxExportBytes>262144
       || !/^[A-Za-z0-9._:-]{1,128}$/.test(value.authorizationId)
       || !Number.isFinite(Date.parse(value.expiresAt)) || Date.parse(value.expiresAt)<=Date.now()) fail('UNAUTHORIZED','Public Skill source is unavailable');
-    return structuredClone(value);
+    // Content SHA is not invented before the original read has happened.
+    return {path:value.path,sourceRef:value.sourceRef,configurationRef:value.configurationRef,revision:value.revision,
+      sensitivity:value.sensitivity,purpose:value.purpose,maxExportBytes:value.maxExportBytes,
+      authorizationId:value.authorizationId,expiresAt:value.expiresAt};
+  }
+  function readInput(saved:Saved) {return {taskId:saved.taskId,proposalId:saved.proposalId,arguments:{path:saved.source.path}};}
+  function assertPublicReadScope(saved:Saved,context:CloudSkillContext) {
+    const permission=options.publicReferenceExport!.readPreflight({...readInput(saved),path:saved.source.path,
+      configurationRef:saved.source.configurationRef});
+    if(!permission || ['authorizationId','expiresAt','sensitivity','purpose','maxExportBytes'].some(key=>
+      permission[key as keyof PublicReferenceExportPreflight]!==saved.source[key as keyof PublicReferenceExportPreflight]))
+      fail('UNAUTHORIZED','Skill and read export permissions do not match');
+    if(!exporter.accepts({...readInput(saved),phase:'preflight',signal:context.signal})) fail('UNAUTHORIZED','Public Skill read scope is unavailable');
+  }
+  function publicSummary(saved:Saved,contentDigest:string,context:CloudSkillContext) {
+    const input=readInput(saved);
+    assertPublicReadScope(saved,context);
+    const original=options.publicReferenceExport!.readConfirmed({...input,path:saved.source.path,
+      configurationRef:saved.source.configurationRef,contentDigest});
+    if(!original) fail('RESULT_UNKNOWN','Original Skill read is not confirmed');
+    const projection=exporter.project({...input,result:original.result,signal:context.signal});
+    if(projection.contentDigest!==contentDigest) fail('RESULT_UNKNOWN','Public Skill source changed');
+    assertPublicReadScope(saved,context);
+    const summary=referenceSummary(projection.content);
+    return {content:summary.content,byteLength:Buffer.byteLength(summary.content),
+      summaryDigest:createHash('sha256').update(summary.content).digest('hex'),truncated:summary.truncated};
   }
   function matchingManifest(choice:CloudSkillChoice) {
     const manifest=worker!.manifest();
@@ -89,7 +121,7 @@ export function createCloudSkillSelectionPort(options:CloudSkillSelectionOptions
     /** Native host approves publishing these owned public enums. This descriptor
      * feeds existing availableTools, not ToolGateway.register. */
     describe():CoordinationAvailableTool|undefined {
-      if(closed || !worker?.health().connected) return undefined;
+      if(closed || !worker?.health().connected || !options.publicReferenceExport) return undefined;
       const manifest=worker.manifest();
       return {name:CLOUD_SKILL_TOOL_NAME,version:CLOUD_SKILL_TOOL_VERSION,inputSchema:{
         type:'object',properties:{skillId:{type:'string',enum:[manifest.id]},version:{type:'string',enum:[manifest.version]},
@@ -108,6 +140,7 @@ export function createCloudSkillSelectionPort(options:CloudSkillSelectionOptions
     select,
     async run(selection:CloudSkillSelection,context:CloudSkillContext):Promise<CloudSkillReceipt> {
       const saved=bound(selection,context);
+      assertPublicReadScope(saved,context);
       if(active.has(context.taskId)) fail('REVISION_CONFLICT','Skill selection is already running');
       active.add(context.taskId);
       try {
@@ -119,9 +152,10 @@ export function createCloudSkillSelectionPort(options:CloudSkillSelectionOptions
         if(!isDeepStrictEqual(saved.source,source(saved.choice,context))) fail('REVISION_CONFLICT','Skill export permission changed');
         if(!['confirmed','pending','unknown'].includes(outcome.state)) fail('RESULT_UNKNOWN','Skill receipt is not valid');
         if(outcome.state==='confirmed' && (outcome.sources?.length!==1 || outcome.sources[0]?.path!==saved.source.path
-          || outcome.sources[0]?.contentDigest!==saved.source.contentDigest)) fail('RESULT_UNKNOWN','Skill body digest is not bound to the public source');
+          || !/^[a-f0-9]{64}$/.test(outcome.sources[0]?.contentDigest??''))) fail('RESULT_UNKNOWN','Skill body digest is not bound to the public source');
+        const contentDigest=outcome.state==='confirmed'?outcome.sources![0]!.contentDigest:undefined;
         const receipt:CloudSkillReceipt={state:outcome.state,selectionRef:selection.selectionRef,sourceRef:saved.source.sourceRef,
-          ...(outcome.state==='confirmed'?{contentDigest:saved.source.contentDigest}:{})};
+          ...(contentDigest?{contentDigest,...publicSummary(saved,contentDigest,context)}:{})};
         saved.receipt=receipt;context.saveCheckpoint(KEY,saved);
         return structuredClone(receipt);
       } finally {active.delete(context.taskId);}
@@ -130,9 +164,12 @@ export function createCloudSkillSelectionPort(options:CloudSkillSelectionOptions
      * existing CloudAgentPort I/O, including resumed continuation. */
     assertReceiptAllowed(selection:CloudSkillSelection,receipt:CloudSkillReceipt,context:CloudSkillContext):void {
       const saved=bound(selection,context);
-      if(!saved.receipt || !isDeepStrictEqual(saved.receipt,receipt)) fail('UNAUTHORIZED','Skill receipt is not the persisted original result');
+      if(receipt.state!=='confirmed' || !receipt.contentDigest || !saved.receipt || !isDeepStrictEqual(saved.receipt,receipt))
+        fail('UNAUTHORIZED','Skill receipt is not the persisted original confirmed result');
+      const projected=publicSummary(saved,receipt.contentDigest,context);
+      if(!isDeepStrictEqual({...receipt,...projected},receipt)) fail('UNAUTHORIZED','Skill summary is no longer exportable');
     },
-    close(){closed=true;controller.abort();},
+    close(){closed=true;controller.abort();exporter.dispose();},
   };
   return {...port,
     /** Existing validated Coordination tool_proposal, dispatched by the original
