@@ -101,7 +101,8 @@ context: Pick<ToolContext, 'signal' | 'deadline'>): Promise<KnowledgeWriteFinali
   }
   const sourceKey = options.hash(options.rootPath + '\n' + record.path);
   const request = {rootPath: options.rootPath, sourcePath: join(options.rootPath, ...record.path.split('/')),
-    operationPath, knowledgeMarker: join(options.recoveryRootPath, sourceKey + '.knowledge-pending'),
+    operationPath, finalizationPath: join(options.recoveryRootPath, accepted.operationId + '.knowledge-finalization.json'),
+    knowledgeMarker: join(options.recoveryRootPath, sourceKey + '.knowledge-pending'),
     sharedMarker: join(options.recoveryRootPath, sourceKey.slice(0, 32) + '.inflight'),
     accepted, beforeSha256: record.beforeSha256, afterSha256: record.afterSha256, deadline: context.deadline};
   active(context);
