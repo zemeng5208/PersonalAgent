@@ -152,6 +152,7 @@ interface ParsedCalDavEvent {
   startMs: number;
   endMs: number;
   allDay: boolean;
+  timeZone: string;
   sequence: number;
   lastModifiedMs: number | undefined;
   status: 'confirmed' | 'tentative' | 'cancelled';
@@ -189,6 +190,8 @@ function readEvent(props: Record<string, string>): ParsedCalDavEvent | undefined
   let endMs = parseZonedValue(end.value, end.params);
   if (startMs === undefined || endMs === undefined) return undefined;
   const allDay = /^\d{8}$/u.test(start.value.trim());
+  const timeZone = allDay || start.value.trim().endsWith('Z')
+    ? 'UTC' : /TZID="?([^";]+)"?/i.exec(start.params)?.[1] ?? 'UTC';
   if (endMs === startMs && allDay) endMs = startMs + 86_400_000;
   if (endMs <= startMs) return undefined;
   const sequence = Number(props.SEQUENCE ?? '0');
@@ -197,7 +200,7 @@ function readEvent(props: Record<string, string>): ParsedCalDavEvent | undefined
     : statusRaw === 'TENTATIVE' ? 'tentative' : 'confirmed';
   const lastModifiedRaw = props['LAST-MODIFIED'];
   return {
-    uid, summary, startMs, endMs, allDay, sequence,
+    uid, summary, startMs, endMs, allDay, timeZone, sequence,
     lastModifiedMs: lastModifiedRaw === undefined ? undefined : parseIcalDate(lastModifiedRaw.split(';')[0] ?? ''),
     status,
   };
@@ -394,9 +397,9 @@ export class CalDavProvider implements CalendarProvider {
       title: event.summary,
       startUtc: iso(event.startMs),
       endUtc: iso(event.endMs),
-      timeZone: 'UTC',
-      startLocal: localWall(event.startMs, 'UTC'),
-      endLocal: localWall(event.endMs, 'UTC'),
+      timeZone: event.timeZone,
+      startLocal: localWall(event.startMs, event.timeZone),
+      endLocal: localWall(event.endMs, event.timeZone),
       status: event.status,
       sequence: event.sequence,
       updatedUtc: event.lastModifiedMs === undefined ? iso(event.startMs) : iso(event.lastModifiedMs),
