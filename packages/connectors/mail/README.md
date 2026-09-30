@@ -71,7 +71,7 @@ PA_MAIL_LIVE=1 PA_MAIL_LIVE_SEND=1 PA_QQ_MAIL_USER=… PA_QQ_MAIL_AUTH_CODE=… 
 
 ## 已知限制
 
-- `QQMailProvider` 的网络路径未经本机验证（需授权码，live 门控待执行）——协议映射逻辑（envelope→条目、游标、错误映射）已离线固定，live 结果待补记。
+- `QQMailProvider` 真实网络路径已于 **2026-09-13** 完成一次门控读回验证（`PA_MAIL_LIVE=1`，22/22：IMAP 列文件夹＋拉信＋uidValidity 捕获、SMTP 自发自收 `confirmed`，证据见上方「真实读回证据」段）。**当时使用的授权码已作废**——当前为条件性可用：需用户重新生成有效授权码后方可复跑 live 或生产使用，不偷偷复用旧码。协议映射逻辑（envelope→条目、游标、错误映射）离线固定。
 - QQ 邮箱 IMAP 有连接频率限制，连接为惰性单例（复用直至不可用）；无 IDLE 推送（增量靠游标轮询，调度建议由宿主给出）。
 - 搜索为客户端过滤（拉全量窗口后按主题/发件人匹配），未用 IMAP SEARCH；大邮箱应改服务端搜索。
 - 文件夹列表的 `uidValidity` 仅在 `fetchPage` 打开邮箱时可得，`listFolders` 返回 0 占位。
