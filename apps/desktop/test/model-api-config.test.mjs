@@ -14,10 +14,12 @@ function fixture(fetch) {
   const base = new URL('../../../.cache/model-api-config-tests/',import.meta.url);
   mkdirSync(base,{recursive:true});
   const userData = mkdtempSync(base);
-  const modelApi = {...models,
-    OpenAICompatibleModelProvider:class extends models.OpenAICompatibleModelProvider {constructor(options) {super({...options,fetch});}},
-    PanguModelProvider:class extends models.PanguModelProvider {constructor(options) {super({...options,fetch});}}};
-  const options = {userData,safeStorage,modelApi};
+  const createModelGateway = (options,decorate) => {
+    const Provider = options.provider === 'pangu' ? models.PanguModelProvider : models.OpenAICompatibleModelProvider;
+    const provider = new models.StructuredToolProvider(new Provider({...options,fetch}));
+    return new models.ModelGateway(decorate(provider));
+  };
+  const options = {userData,safeStorage,createModelGateway};
   return {options,host:createModelApiConfig(options)};
 }
 const answer = () => new Response(JSON.stringify({choices:[{message:{content:'Synthetic answer'}}]}));
@@ -25,15 +27,18 @@ test('encrypted model config restores, masks keys, preserves only same-destinati
   const calls = [];
   const {host,options} = fixture(async (url,init)=>{calls.push({url,init});return answer();});
   const state = host.configure({...input,id:'research',makeDefault:true});
+  const originalDeployment = host.getModelGateway('research').deployment.deployment;
   assert.doesNotMatch(JSON.stringify(state),/synthetic-secret|apiKey/);
   assert.doesNotMatch(readFileSync(path.join(options.userData,'model-api-config.json'),'utf8'),/synthetic-secret/);
   assert.equal(calls.length,0);
   assert.equal(host.getModelGateway('unknown'),undefined);
   assert.deepEqual(host.getModelReasoningEfforts('research'),[]);
   host.configure({...input,id:'research',apiKey:''});
+  assert.notEqual(host.getModelGateway('research').deployment.deployment,originalDeployment);
   assert.throws(()=>host.configure({...input,id:'research',apiKey:'',baseUrl:'https://different.invalid/v1'}));
   assert.throws(()=>host.configure({...input,id:'research',apiKey:'',provider:'pangu'}));
   const restored = createModelApiConfig(options);
+  assert.equal(restored.getModelGateway('research').deployment.deployment,host.getModelGateway('research').deployment.deployment);
   assert.equal(restored.snapshot().defaultId,'research');
   await restored.getModelGateway().complete(request());
   assert.equal(calls[0].init.headers.authorization,'Bearer synthetic-secret');
@@ -73,7 +78,7 @@ test('unsafe storage, credential URLs and missing provider stay unavailable with
   for (const baseUrl of ['http://remote.invalid/v1','https://user:secret@synthetic.invalid/v1','https://synthetic.invalid/v1?token=secret']) {
     assert.throws(()=>host.configure({...input,baseUrl}));
   }
-  const missing = createModelApiConfig({...options,modelApi:{...models,OpenAICompatibleModelProvider:undefined}});
+  const missing = createModelApiConfig({...options,createModelGateway:undefined});
   missing.configure({...input,id:'absent'});
   assert.equal(missing.snapshot().configured,false);
   assert.equal(missing.getModelGateway(),undefined);

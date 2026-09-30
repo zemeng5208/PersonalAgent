@@ -9,7 +9,9 @@ Profile：`huawei_ict_agentarts`。隔离工作树登记：`.worktrees/subagent-
 
 ```js
 import {createModelApiConfig} from './model-api-config.js';
-const modelApiHost = createModelApiConfig({userData, safeStorage});
+import {createConfiguredSubagentModelGateway} from '@personal-agent/runtime/application';
+const modelApiHost = createModelApiConfig({userData, safeStorage,
+  createModelGateway: createConfiguredSubagentModelGateway});
 const subagentTool = createDesktopSubagentDispatchTool({
   getRuntime: () => runtimeApplication.runtime,
   getTools: () => runtimeApplication.tools,
@@ -19,6 +21,12 @@ const subagentTool = createDesktopSubagentDispatchTool({
 // 主进程退出时调用；不得向 Renderer 暴露 host 或 gateway。
 modelApiHost.dispose();
 ```
+
+P8 在 `apps/runtime/src/application.ts` 现有 subagent-host 导出组中加入
+`createConfiguredSubagentModelGateway`、`resumeRuntimeSubagentTask`、
+`readRuntimeSubagentSummary`。该工厂及模型 Provider 构造位于 Runtime，
+Desktop 不导入 models/agents。第二参数是 provider decorator，由配置宿主添加撤销
+和取消信号；不改变 Policy/工具授权，也不新建模型执行循环。
 
 共享 IPC 使用既有可信窗口/发送者校验与模型设置权限，限定以下分派：
 
@@ -60,10 +68,23 @@ thinkingDepth 仍控制既有执行步骤预算，不构成原生模型 reasonin
 - 无网关行为保留 main #232 的 UNSUPPORTED_CAPABILITY 回归；生产不生成角色完成文本。
 - 父级进度写入已有 TaskRuntime；父/child checkpoint、取消、deadline 与去重沿既有路径。
 - 更改、停用、删除、释放配置会中止该记录正在运行的请求，旧 gateway 引用随后拒绝调用。
-- 子任务 waiting_approval / waiting_reconciliation 不汇总为成功。现有 SubtaskExecutionSummary
-  只有 succeeded/failed/cancelled，本包把未完成汇总为 failed 并保留 child 的真实等待状态。
-  独立 child 的审批恢复与重新汇总仍需要 P8 在现有 Runtime Application 恢复入口接线，
-  不能用本包离线自动授权用例证明该恢复用户旅程已经完成。
+  每次配置产生持久 bindingId，网关 deployment 绑定该版本；子任务记录 subtask-model-binding。
+  等待期间替换模型配置，恢复会拒绝旧提案，不能只凭同一个稳定选型 ID 换端点继续执行。
+- 子任务 waiting_approval / waiting_reconciliation 在已有 SubtaskProgress 中显示 pending，
+  不计入成功或失败；父进度 checkpoint 也保留 pending，避免缓存不可恢复的 failed。
+  汇总从真实 child 读回，覆盖历史失败缓存；结果同时提供 descriptor 要求的 summary。
+- `resumeRuntimeSubagentTask(options: SubagentHostOptions, childTaskId: string, parentSignal?: AbortSignal)`
+  返回 `Promise<TaskSnapshot>`；options 的模型/工具 getter 与初次派发相同。
+  P8 在 resumeTask 的 application-goal 读取前识别 subtask-parent，调用该 helper。
+  它校验 parentTaskId/subtaskId/goal/model/parentDeadline、child 会话与幂等身份，
+  验证 `agent-run-${childTaskId}-${agentLoop.step}` 的已允许审批、原工具和参数 digest、
+  未撤销 grant，随后以 `resume: true` 复用相同 child 与 runAgent/agent-loop。
+  不延长期限，不重开终态，不生成授权，不在 waiting_reconciliation 盲目重做工具。
+  已完成的工具保留既有 replay/checkpoint；parentSignal 取消沿 requestCancel 传 child。
+- `readRuntimeSubagentSummary(runtime, parentTaskId, definitions?)` 只读真实子任务与进度，
+  返回原 SubtaskExecutionSummary 加 descriptor 既有 summary。definitions 未传时由已有
+  inputDigest/child binding 恢复。P8 可在 child 完成后重聚合并展示；该读回不修改父终态，
+  不能把尚未完成的父工具直接确认，父等待/恢复挂载仍归 P8。
 
 ## 验证与限制
 
@@ -85,6 +106,11 @@ node --check apps/desktop/src/app/model-api-controls.js
 git diff --check
 ```
 
-上述 12 个用例通过；默认选择取消的小修改后仅重跑配置的 3 个用例，通过。
+初轮 12 个用例通过；默认选择取消的小修改后仅重跑配置的 3 个用例，通过。
+CI 指出 Desktop 直接导入 models 的架构边界错误后，将模型构造移入 Runtime 工厂并注入，
+保持原门禁；Runtime 单包编译、6 个 task-binding 与 3 个配置用例及单个架构门禁通过。
+新增 Runtime 工厂无凭据拒绝与一次真实 SQLite approval allowed → 同 child 同 invocation
+恢复 → Evidence → 重新聚合的离线检查，未重复全依赖构建或旧 12 项。
+模型配置版本绑定的新失败用例验证：等待期间变更部署，旧提案不执行、不消费已批准 grant。
 独立浏览器预览检查保存后模型选中、默认选中和密码清空，截图位于本树忽略目录
 `.cache/model-api-controls-preview.png`；该预览只使用合成值与 Fake IPC。

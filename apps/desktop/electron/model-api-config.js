@@ -1,7 +1,6 @@
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
-import * as models from '@personal-agent/models';
 
 const providers = new Set(['pangu', 'openai-compatible']);
 const fail = message => { throw Error(message); };
@@ -18,11 +17,12 @@ function endpoint(value) {
 function validateRecord(value) {
   if (!value || !providers.has(value.provider) || typeof value.enabled !== 'boolean') fail('模型配置无效');
   return {id: text(value.id, 100), provider: value.provider, baseUrl: endpoint(value.baseUrl),
-    model: text(value.model, 200), displayName: text(value.displayName, 200), apiKey: text(value.apiKey, 8192)};
+    model: text(value.model, 200), displayName: text(value.displayName, 200), apiKey: text(value.apiKey, 8192),
+    bindingId: text(value.bindingId, 100)};
 }
 
 /** Trusted main process only. Snapshot is safe for IPC; no endpoint is contacted while saving. */
-export function createModelApiConfig({userData, safeStorage, modelApi = models}) {
+export function createModelApiConfig({userData, safeStorage, createModelGateway}) {
   const target = path.join(userData, 'model-api-config.json');
   let entries = new Map(), defaultId, restoreFailed = false, disposed = false;
   const gateways = new Map();
@@ -59,9 +59,7 @@ export function createModelApiConfig({userData, safeStorage, modelApi = models})
       renameSync(temporary, target);
     } catch {fail('模型加密配置保存失败');}
   };
-  const available = entry => typeof modelApi.ModelGateway === 'function'
-    && typeof modelApi.StructuredToolProvider === 'function'
-    && typeof modelApi[entry.provider === 'pangu' ? 'PanguModelProvider' : 'OpenAICompatibleModelProvider'] === 'function';
+  const available = () => typeof createModelGateway === 'function';
   const snapshot = () => ({
     configured: !disposed && [...entries.values()].some(entry => entry.enabled && available(entry)),
     defaultId: defaultId ?? '',
@@ -85,10 +83,9 @@ export function createModelApiConfig({userData, safeStorage, modelApi = models})
     const assertCurrent = () => {
       if (disposed || entries.get(id) !== entry || !entry.enabled) fail('模型配置已撤销或更改');
     };
-    const Provider = modelApi[entry.provider === 'pangu' ? 'PanguModelProvider' : 'OpenAICompatibleModelProvider'];
-    const provider = new modelApi.StructuredToolProvider(new Provider({baseUrl: entry.baseUrl,
-      model: entry.model, deployment: entry.id, apiKey: () => {assertCurrent(); return entry.apiKey;}}));
-    const gateway = new modelApi.ModelGateway({deployment: provider.deployment, async complete(request) {
+    const gateway = createModelGateway({provider: entry.provider, baseUrl: entry.baseUrl,
+      model: entry.model, deployment: `${entry.id}@${entry.bindingId}`, apiKey: () => {assertCurrent(); return entry.apiKey;}},
+    provider => ({deployment: provider.deployment, async complete(request) {
       assertCurrent();
       const controller = new AbortController();
       const abort = () => controller.abort(request.signal.reason);
@@ -103,7 +100,7 @@ export function createModelApiConfig({userData, safeStorage, modelApi = models})
       } finally {
         request.signal.removeEventListener('abort', abort); pending.delete(controller);
       }
-    }});
+    }}));
     gateways.set(id, gateway);
     return gateway;
   }
@@ -120,7 +117,7 @@ export function createModelApiConfig({userData, safeStorage, modelApi = models})
       const previous = entries.get(id);
       const baseUrl = endpoint(input.baseUrl);
       const sameDestination = previous?.provider === input.provider && previous?.baseUrl === baseUrl;
-      const entry = {...validateRecord({...input, id, baseUrl, enabled: input.enabled ?? previous?.enabled ?? true,
+      const entry = {...validateRecord({...input, id, baseUrl, bindingId: randomUUID(), enabled: input.enabled ?? previous?.enabled ?? true,
         apiKey: input.apiKey?.trim() || (sameDestination ? previous.apiKey : '')}),
         enabled: input.enabled ?? previous?.enabled ?? true};
       const next = new Map(entries); next.set(id, entry);
