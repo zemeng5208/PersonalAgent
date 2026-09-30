@@ -47,11 +47,11 @@ cloud-specific patches; Cloud Runtime/P8 owns its shared composition and exports
 | Consumer API | Required owner-provided input / guarantee |
 | --- | --- |
 | `createKnowledgeWatchHost({readInterestSignal, readTrackingGrant})` | Actual native source/grant readers. Signal source proof must preserve PRIVATE unless explicitly classified PUBLIC with evidence. Neither HTTPS nor sessionAllowed is classification/consent. |
-| `readTrackingGrantSnapshot({namespace, topicId, sourceId})` | Synchronous actual current grant view for answer projection. Match id/revision/expiry to the watch. Reader errors or stale grants withhold. |
+| `readTrackingGrant({namespace, sourceId, taskId})` / `readTrackingGrantSnapshot({namespace, sourceId, taskId})` | `taskId` is the original trusted Runtime intake task persisted in `watch.consumer.intakeTaskId`, never the root checkpoint task, new work task or namespace-wide permission. Native readers validate original purpose, source/config and current lease; the host matches id/revision/expiry. Snapshot is synchronous and required for source commit/current-fact/recovery gates. |
 | `createKnowledgeTrackingPorts({readTrackingGrant, readTrackingGrantSnapshot, layaChooser})` | Thin reader/chooser composition; no authority issuance, database, UI, sourceproof manufacture or grants. Laya is advisory; this is not AgentArts orchestration evidence. |
 | `readFeedReceiptEvidence({namespace, sourceId, sourceReadTaskId, receiptId})` | Synchronous reader returning a v2 receipt rebuilt from the original confirmed execution. Root owns durable rootreceipt→actual task/run/query/scopeRef binding, not a boolean from Renderer. |
 | `createKnowledgeFeedReceiptFromConfirmedExecution({namespace, sourceId, taskId, runId, toolVersion, query, scopeRef, runtime})` | New helper in knowledge-feed-receipt.ts. Uses original getTask/readToolExecutions/input digest match/tool-result checkpoint/readEvidence. Requires allow, executionStarted, confirmed, exact tool/version/query and original record accountRef/fetchedAt/classification. Returns v2 or undefined; never changes sensitivity. P8 adds the public application export. |
-| `consumeInterestTask(taskId, {deadline, signal, feedCheck?})` | Actual accepted Runtime task; trusted reader alone supplies explicitEnable. Caller scope/enablement is not permission. Root dispatches this bounded consumer and preserves unknown receipts. |
+| `consumeInterestTask(taskId, {deadline, signal, feedCheck?})` | Actual accepted Runtime task; trusted reader alone supplies explicitEnable. Only this entry point attaches the real intake task to the persisted consumer. Caller scope/enablement/intakeTaskId is not permission. A replacement intake or lease increments the consumer revision. Root dispatches this bounded consumer and preserves unknown receipts. |
 | `recheckCurrentSource(sourceId, {deadline, signal})` | Trigger after resume or new consumer. Uses original receipt with independently current grant/consumer, then original Runtime workPort and judgment gates. No 304 body fabrication. |
 | `prepareCoordinationGoal({taskId, conversationId, publicGoal, deadline, signal})` | P8/Cloud Runtime calls consumptionHost.prepare after acceptance and before dispatch. Persist only publicGoal and metadata binding. Return private projected goal in memory only. |
 | `beforeCompetitionSend(request)` | Call consumptionHost.assertCloudSend synchronously immediately before actual send, after credential waits. Never persist projected private lease body into goal, loops, events or history. ReleaseTask on finalization/cancel; restart requires fresh native consent. |
@@ -61,6 +61,32 @@ The actual `@personal-agent/runtime/application` exports for PA020 application f
 helpers are P8's change. Portable hosts import only existing public package exports; do not deep-import
 Runtime internals from Desktop. CloudBusiness's provider proof API and P8's native feed/grant descriptor
 reader can be passed through the above existing signal/receipt readers without changing the public wire protocol.
+
+## Local P7 grant compatibility continuation
+
+The original d875 source was normally merged with the retained 1ffe/81fe local history. P7 then updated
+only its knowledge host, dedicated intake cases and this handoff. All async and snapshot grant reads
+use the same complete native tuple. Awaited reads are followed by exact current consumer/lease checks;
+the queued interest commit rereads the grant and synchronous lease before checking task/cancellation/deadline.
+No Renderer fields attach authority, no database or public Runtime wire schema was added.
+
+Feed/source refresh and 304/recheck reuse require existing exact tracked consumer bindings. Native initial
+source acquisition stays a separately admitted Runtime/ToolGateway read; a caller-supplied new task ID
+cannot bootstrap a missing consumer or borrow its grant. Shared source batches validate every active
+consumer separately and withhold the batch if any identity/lease is unavailable or changed. Revoked
+consumers cannot be authorized by another consumer of the same source. Feed-check schedule identities
+include the persisted intake ID; old due/recheck bindings fail after intake replacement. Pause/resume
+also checks the exact native snapshot and cannot reactivate a revoked/expired lease.
+
+Legacy checkpoints remain readable, but records without `consumer.intakeTaskId` cannot fetch, project
+a current fact, bind a revision or recover due work under native ports. Completed/unknown old intake
+receipts never fill in the missing identity or re-enable a watch; fresh trusted intake is required.
+
+Prepared cases in `knowledge-watch-interest-task.test.mjs` cover strict tuple keys, original identity
+after restart, wrong source/caller-task substitution, id/revision/expiry/revocation, queued lease
+revocation, fired-task separation and consumer-revision replacement. They use explicit doubles and
+were not executed in this source-only phase. P8's final integrated run must still prove actual native
+consent, source/config binding, Runtime feed execution provenance and current-fact answer consumption.
 
 ## Local unified validation (not run here)
 
