@@ -1,6 +1,16 @@
 # 同单例 Laya：小型邮件分页验收准备
 
-仅准备，未执行。Goal 真实验收优先；P8 在同一个已 ready 的 owned Laya 模型槽顺带执行此批次，不新建 host、不 start/stop 模型、不安装、不联网 QQ、不发送云。
+已提供可注入的 `p5-small-mail-batch.mjs`，真实模型验收仍未执行。Goal 真实验收优先；P8 在同一个已 ready 的 owned Laya 模型槽顺带执行此批次，不新建 host、不 start/stop 模型、不安装、不联网 QQ、不发送云。
+
+## 可直接消费的函数
+
+`runSmallMailBatchAcceptance({createPipeline,storage,reopenStorage,layaHost,getClassifierFingerprint,labels,meetingLabels,namespace,authorizeRead,pauseRead,resumeRead,signal,deadline,onProgress})` 使用正式 Runtime 的 `createInboxTriagePipeline`，由可信测试宿主注入现有持久 StoragePort 和唯一 loaded Laya。`getClassifierFingerprint` 必须原样使用当前集成的 identity + policy hash，函数在每次真实 classify 前后复核，不提供伪造 fingerprint 的默认值。labels/meetingLabels 也使用当前主装配值，函数不调整模型策略。
+
+`authorizeRead` 复用宿主本次公开合成素材隔离读取许可；`pauseRead/resumeRead` 由许可 owner 控制，不能修改真实邮箱或全局用户许可。`reopenStorage` 释放并重建同一路径/namespace 的实际持久 storage；不能返回新空缓存，也不从函数复制结果。函数不会新建模型、数据库、Runtime、授权或云客户端。完整路径返回 `completed` 及真实回执/计时；不可用或未完成分类返回 `classification_incomplete`，异常不自动重复。调用方负责结束隔离许可和 storage 生命周期，保留失败时的原 checkpoint。
+
+函数按实际 host 返回原样记录每次输入与选择，不期待特定标签或高置信度；所有 uncertain/needsReview 都保留。缓存重放要求 classified=0、reused=4、receipt逐条一致和 classify次数不变。`classified` 是有效 group 结果数，`automaticSafeClassifications` 另从正式 metadata 的 `needsReview=false` 统计，不能把会议候选当自动安全处理。`sourceAccountVerified=false`，这不是 QQ 账号验收。
+
+该函数本次只做 Node 语法/import 检查；没有运行模型，也没有制造性能结果。新增真实 SQLite checkpoint 测试属于独立持久化包，不等于此邮件分类测试。
 
 `mail-batch-small.json` 是 8 条不同、非空的公开合成信头，没有私人账号或正文。它们涵盖会议变动、工程、订阅、订单、个人交流和不明主题；不固定模型应选标签，不改变 description/阈值，不为 uncertain 制造成功。`.invalid` 地址不会用于网络。生产 `ConnectorItem.sensitivity` 仍由邮件契约标为 private，这不是把合成素材当真实私信。
 
