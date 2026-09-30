@@ -1,6 +1,6 @@
 # P5 目标决策反馈修复（Competition Profile）
 
-本工作包独立于 #231 的日历/会议恢复包，仅拥有 `electron/goal-cognition-host.js`、专属测试及本文。
+原 #237 反馈保护包独立于 #231。后续受控修复增量见 [MOD-28-REVIEWED-REPAIR-01](../../../docs/modules/MOD-28-REVIEWED-REPAIR-01.md)，仅真实执行与持久读回后提升核实状态。
 共享 main.js / Renderer / Admin 由 P8 唯一写入，Luna 仅处理 CSS，不新增 Local Profile。
 
 ## 问题与行为变化
@@ -27,7 +27,7 @@
 }
 ```
 
-`snapshot().reviews[]` 使用同样的 state/taskId/executionStatus/verification 字段。未交接时 state 可以为本地选择或 unavailable/pending/expired 状态。任务 succeeded 仅显示“AgentArts 编排任务已完成；目标更新尚未核实”，不输出 applied。真正的目标更新完成需要后续合法执行 Evidence 与目标 revision 读回；本工作包没有这份执行证据。
+`snapshot().reviews[]` 使用同样的 state/taskId/executionStatus/verification 字段。未交接时 state 可以为本地选择或 unavailable/pending/expired 状态。source 任务 succeeded 仅显示“AgentArts 编排任务已完成；目标更新尚未核实”。后续独立 `cognition.commit_repair` 任务通过 Runtime/Policy、真实执行 Evidence 和涉及节点 revision 持久读回后才设置两 verification 为 true、status 为 applied；updatedNodes 标明实际改变的节点。后续版本改变时保留已执行证据，当前图核实降 false。
 
 P8 必须消除 Renderer 中“非 applied 也显示执行完成”及按钮固定“已在本地执行”的默认分支。缺许可或非法/过时候选显示明确失败/复核原因；复用已存在设置授权，不新增逐次低风险审批。
 
@@ -35,8 +35,8 @@ P8 必须消除 Renderer 中“非 applied 也显示执行完成”及按钮固�
 
 构造时及既有 tick 中复用 Goal source task 的 `desktop-goal-cognition-review` marker 与公开 readReview 重建显示记录，不依赖模型启动。交接确认后仅在现有 TaskRuntime checkpoint 写入 `desktop-goal-cognition-handoff-task-v1`（namespace、bindingVersion、reviewTaskId、selectionDigest、taskId）。无新任务库/调度器，无原始目标文本/云 payload/凭据/许可。重建以 digest/宿主绑定和实际 Runtime task 确认交接任务，实时展示状态；出云许可与 outgoing 会话不恢复。
 
-## 验证与限制
+## 原 #237 验证与限制
 
-专属检查 11 项通过：现有出口撤销/新版本防发送、合法候选/机器复核、缺许可拒绝、受理与真实终态分离、同交接幂等、失败读回、稳定 marker/交接 ID 重建、不恢复许可、不新增推理，以及候选替换/宿主绑定错配拒绝。测试使用真实 Runtime/SQLite/Client 与严格 GoalHostCore；Laya 推理和 AgentArts fetch 为明确测试替身，未调用真实模型/云端/账号，不证明实际 Plan 执行或图谱更新。
+原反馈保护包专属检查 11 项通过：现有出口撤销/新版本防发送、合法候选/机器复核、缺许可拒绝、受理与真实终态分离、同交接幂等、失败读回、稳定 marker/交接 ID 重建、不恢复许可、不新增推理，以及候选替换/宿主绑定错配拒绝。测试使用真实 Runtime/SQLite/Client 与严格 GoalHostCore；Laya 推理和 AgentArts fetch 为明确测试替身。该包未调用真实模型/云端/账号，未验证 Plan 执行或图谱更新；后续受控修复的新增执行验证见上述 MOD-28 文档。
 
 依赖产物只在包 src/package.json/tsconfig 指纹一致时复用 P8 已有 dist；不匹配的 coordination/cognition/Runtime 单独编译。未全仓构建、未全套 smoke、未启动模型。最初缺 Client/dist 导致测试启动失败，补齐上述匹配产物后重新通过。P8 Renderer 消费与正式窗口验收待完成，P5/MVP 未 done。
