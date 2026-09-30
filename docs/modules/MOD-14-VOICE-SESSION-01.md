@@ -116,3 +116,45 @@ Agent、ModelGateway 或具体供应商。Fake 测试覆盖：
    `stopSpeaking` 不得接线到 `task.cancel`。真实任务取消仍使用现有公共取消 API。
 5. Desktop 尚未接线，真实麦克风验收尚未执行；在完成可见设备状态、真实 ASR/TTS、
    打断与数据边界读回前，接口目录继续保持语音能力 `unavailable`。
+
+## 2026-09-30：首版 Live 宿主与共享历史修复
+
+本节是后续 Desktop 消费增量，不改写上述历史 package 验收。当前根主控委派
+MOD-14 对话维护 `apps/desktop/electron/live-voice-host.js`；P8 已在
+`b34af799d27a2f4cc0d108d5c6dbc831f53edfce` 明确无在途编辑并交接。
+实现基线为 main `803089919171d655b7a76c2df51cd2c297bf1d6f`，
+profile 仍为 `huawei_ict_agentarts`。不修改原 voice package 或实时 provider，
+不修改公共 wire、根 manifest/lock、SIS/Live 加密配置或 Runtime 的任务状态。
+
+增量行为：
+
+- `live-voice-history.js` 是原 `Conversations` 的进程内覆盖层，不建新任务库。
+  磁盘写入失败不停止音频；失败消息保留到下次转写或开启 Live 时回补。
+  UI 最近 20 条限制不会丢弃尚未保存的消息；同身份修订保留原创建时间，
+  重放按消息 ID 去重，不按相同文字删除不同轮次。
+- 初始和续接 Live 都合并文字任务与语音上下文，仅 `succeeded` 才作为成功回答；
+  历史标为参考数据，宿主不会因恢复重发历史工作。
+- 每个 `request_work` 独立绑定受理的 taskId。同 callId/同 goal 共享一次结果，
+  换输入拒绝；并发失败只读本次 task，unknown/等待状态不宣称完成。
+  consumer 工厂失败不再卡住会话。停止 Live 仍不调用 `task.cancel`。
+- 停止期间等待在途连接完成释放，再允许新会话；连接关闭只调用一次。
+  同步设备释放异常也继续清理其他资源，释放不明时禁止重开。
+
+P8 消费合同：
+
+1. 原宿主 API 保留，新增 `historyMessages()` 返回
+   `{id,sessionId,role,text,createdAt}[]` 的独立副本，包含未保存覆盖层。
+2. `readContext` 的持久语音消息必须保留 `id`，避免与覆盖层重复。
+3. 文字上下文将 `historyMessages()` 与原 `Conversations.history` 按 ID 合并、
+   按任务创建时刻截断；不把尚未保存的语音排除在文字后续轮次之外。
+4. `onTaskSubmitted` 先保留受理 task 的内存 goal 关联，再保存 Desktop 元数据。
+   元数据失败不能改写 Runtime 的受理状态。
+
+验证：`node --test apps/desktop/test/live-voice-host.test.mjs
+apps/desktop/test/live-voice-history.test.mjs` 共 17/17 通过；`git diff --check`
+通过。覆盖多轮/续接/显式停止、失败回补与修订、并发 task 状态隔离、同 callId
+幂等、consumer 工厂异常、在途连接关闭、同步释放失败及旧回调隔离。
+此证据为离线显式 Fake，仅证明宿主消费者行为；P8 的主进程/文字上下文消费、
+真实千问双向音频与工具桥、物理麦克风/扬声器仍需在最终组合中分别验收。
+磁盘持续不可写时，覆盖层不具备跨进程耐久性，不能宣称重启后仍保留未落盘消息。
+当前增量为 `review` / `provisional`，不据此将 PA-007 或 MOD-14 整体标记 done。
