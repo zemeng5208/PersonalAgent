@@ -2,16 +2,20 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {createHash} from 'node:crypto';
 import {createKnowledgeWatchHost} from '../electron/knowledge-watch-host.js';
+import * as receipts from '../../runtime/dist/application/knowledge-feed-receipt.js';
 
 const start = Date.parse('2026-09-30T00:00:00Z');
 const iso = time => new Date(time).toISOString();
 const namespace = 'fixture-user';
 
-function fixture({feedCollect, readTrackingGrant, workPort, notificationPort} = {}) {
+// Synthetic Runtime/host ports; they do not prove native grants or public-source execution.
+function fixture({feedCollect, readTrackingGrant, workPort, notificationPort, sourceEvidence = false} = {}) {
   let time = start;
   const rows = new Map();
   const schedules = new Map();
   const tasks = new Map();
+  const signals = new Map();
+  const sourceReceipts = new Map();
   const queries = [];
   const checkpoints = {
     loadCheckpoint(taskId, key) { return structuredClone(rows.get(`${taskId}:${key}`)); },
@@ -42,13 +46,35 @@ function fixture({feedCollect, readTrackingGrant, workPort, notificationPort} = 
       return this.listSchedules(conversationId);
     },
   };
+  const readGrant = identity => {
+    assert.deepEqual(Object.keys(identity).sort(), ['namespace', 'sourceId', 'taskId']);
+    const original = signals.get(identity.taskId);
+    if (identity.namespace !== namespace || !runtime.getTask(identity.taskId)
+      || original?.source.id !== identity.sourceId) return null;
+    return structuredClone(original.scope);
+  };
   const options = {profile: 'huawei_ict_agentarts', namespace, checkpointTaskId: 'root-task',
-    checkpoints, runtime, now: () => time, readTrackingGrant, workPort, notificationPort,
+    checkpoints, runtime, now: () => time, workPort, notificationPort,
+    readInterestSignal: async identity => identity.namespace === namespace && runtime.getTask(identity.taskId)
+      ? structuredClone(signals.get(identity.taskId)) : null,
+    readTrackingGrant: async identity => {
+      const original = readGrant(identity);
+      return original && readTrackingGrant ? readTrackingGrant(identity) : original;
+    },
+    readTrackingGrantSnapshot: readGrant,
+    ...(sourceEvidence ? {knowledgeFeedReceipts: receipts,
+      readFeedReceiptEvidence: identity => identity.namespace === namespace && identity.sourceId === 'feed-a'
+        && identity.sourceReadTaskId === 'root-task' ? structuredClone(sourceReceipts.get(identity.receiptId)) : null} : {}),
     interestDecider: {choose: async () => ({outcome: 'selected', requiresHostRevalidation: true,
       selected: {id: 'track_public', revision: 1}, receipt: {modelReceiptId: 'fixture-laya'}})},
     feedCollect: async (query, signal) => {
       queries.push({...query, signal});
-      return feedCollect ? feedCollect(query, signal) : collected(time);
+      const result = feedCollect ? await feedCollect(query, signal) : collected(time);
+      if (sourceEvidence && result.collection?.state === 'fetched') {
+        const receipt = receipts.createKnowledgeFeedReceiptFromCollectResult({namespace, sourceId: query.subscriptionId, result});
+        if (receipt) sourceReceipts.set(receipt.receiptId, receipt);
+      }
+      return result;
     }};
   const host = createKnowledgeWatchHost(options);
   host.start();
@@ -66,9 +92,18 @@ function fixture({feedCollect, readTrackingGrant, workPort, notificationPort} = 
     sourceContent: {contentSha256: 'a'.repeat(64), cacheVersion: 'baseline',
       lastSuccessfulCheck: iso(time - 1000), validUntil: iso(start + 3_600_000)},
   });
-  return {host, options, rows, schedules, tasks, queries, runtime, interest,
-    track: (topicId, sourceId, request = {}) => host.consumeInterestSignal(interest(topicId, sourceId),
-      {deadline: iso(time + 60_000), signal: new AbortController().signal, ...request}),
+  return {host, options, rows, schedules, tasks, signals, queries, runtime, interest, readGrant,
+    async track(topicId = 'typescript', sourceId = 'feed-a', request = {}) {
+      const task = runtime.submitTask({goal: `Follow up ${topicId}`, conversationId: 'fixture-conversation',
+        idempotencyKey: `interest:${topicId}:${sourceId}`});
+      signals.set(task.taskId, interest(topicId, sourceId));
+      const result = await host.consumeInterestTask(task.taskId,
+        {deadline: iso(time + 60_000), signal: new AbortController().signal, ...request});
+      assert.equal(result.accepted, true);
+      assert.equal(result.watch.state, 'tracked');
+      assert.equal(result.watch.consumer.intakeTaskId, task.taskId);
+      return result;
+    },
     advance() { time += 1000; },
     register(checkId = 'check-a', extra = {}) {
       return host.registerFeedCheck({checkId, runAt: iso(time + 1000), subscriptionId: 'feed-a', ...extra});
@@ -161,27 +196,36 @@ test('late feed result after pause/resume and caller cancellation cannot persist
 
 test('source consumer and grant are revalidated after await, and restored pending schedules remain cancellable', async () => {
   let release;
-  const fx = fixture({readTrackingGrant: async () => new Promise(resolve => { release = resolve; })});
-  // Establish the persisted watch with the normal existing public scope before injecting the live grant reader.
-  const normal = fixture(); await normal.track();
-  fx.rows.set(`root-task:knowledge-watch:v1:${namespace}`, normal.rows.get(`root-task:knowledge-watch:v1:${namespace}`));
-  const restored = createKnowledgeWatchHost({...fx.options, readTrackingGrant: null}); restored.start();
-  const saved = restored.registerFeedCheck({checkId: 'restore', runAt: iso(start + 1000), subscriptionId: 'feed-a'});
+  let entered;
+  let gate = false;
+  const ready = new Promise(resolve => {entered = resolve;});
+  const fx = fixture({readTrackingGrant: async identity => {
+    const grant = fx.readGrant(identity);
+    if (gate) {gate = false; entered(); await new Promise(resolve => {release = resolve;});}
+    return grant;
+  }});
+  await fx.track();
+  const intakeTaskId = fx.host.listWatches()[0].consumer.intakeTaskId;
+  const saved = fx.host.registerFeedCheck({checkId: 'restore', runAt: iso(start + 1000), subscriptionId: 'feed-a'});
   assert.equal(saved.bound, true);
+  // Same Runtime retains the original intake task, signal and intake receipt.
   const next = createKnowledgeWatchHost(fx.options); next.start();
+  assert.equal(next.listWatches()[0].consumer.intakeTaskId, intakeTaskId);
+  assert.ok(fx.runtime.getTask(intakeTaskId));
   assert.equal(next.restoreFeedChecks().schedules.length, 1);
   const taskId = fx.fire(saved.schedule.scheduleId);
+  gate = true;
   const pending = next.consumeFeedCheck(taskId, {signal: new AbortController().signal});
-  await new Promise(resolve => setImmediate(resolve));
+  await ready;
   await next.revoke('typescript', {id: 'revoke-grant-wait'});
-  release({state: 'granted', publicLowRiskTracking: true});
-  assert.equal((await pending).reason, 'feed_check_invalidated');
+  release();
+  assert.equal((await pending).reason, 'authorization_required');
   assert.equal(fx.queries.length, 0);
   // A separate still-pending row restored from Runtime is cancelled on stop.
   const other = fixture(); await other.track(); const registered = other.register();
   const reboot = createKnowledgeWatchHost(other.options); reboot.start(); reboot.restoreFeedChecks(); reboot.stop();
   assert.equal(other.schedules.get(registered.schedule.scheduleId).status, 'cancelled');
-  normal.host.dispose(); fx.host.dispose(); restored.dispose(); next.dispose(); other.host.dispose(); reboot.dispose();
+  fx.host.dispose(); next.dispose(); other.host.dispose(); reboot.dispose();
 });
 
 test('user read is idempotent and durable, independent of system delivery and bound revision', async () => {
@@ -237,7 +281,7 @@ test('a changed live grant after feed read blocks late source persistence withou
 });
 
 test('binding control becomes ready only after exact checkpoint v2 and judgment Evidence readback', async () => {
-  const fx = fixture(); await fx.track(); fx.advance();
+  const fx = fixture({sourceEvidence: true}); await fx.track(); fx.advance();
   await fx.host.refreshSubscribedFeed({subscriptionId: 'feed-a'});
   const [workKey, submission] = Object.entries(fx.host.snapshot().submissions)[0];
   const context = fx.host.getRecheckContext(workKey);

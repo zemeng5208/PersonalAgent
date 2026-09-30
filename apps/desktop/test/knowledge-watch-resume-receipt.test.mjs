@@ -10,15 +10,27 @@ test('resumed consumer reuses exact durable v3 after 304 without retrying old un
   const expiry = new Date(time + 3600_000).toISOString();
   let version = 'v2'; let unchanged = false;
   const rows = new Map(); const tasks = new Map();
+  const intakeTasks = new Map(); const intakeSignals = new Map(); const sourceEvidence = new Map();
   const checkpoints = {loadCheckpoint: (_task, key) => structuredClone(rows.get(key)),
     saveCheckpoint: (_task, key, value) => rows.set(key, structuredClone(value))};
   const grant = {id: 'synthetic-native-grant', revision: 1, state: 'granted',
     publicLowRiskTracking: true, expiresAt: expiry};
   const submitted = [];
+  const readGrant = identity => {
+    assert.deepEqual(Object.keys(identity).sort(), ['namespace', 'sourceId', 'taskId']);
+    const original = intakeSignals.get(identity.taskId);
+    if (identity.namespace !== 'synthetic' || identity.sourceId !== original?.source.id
+      || !intakeTasks.has(identity.taskId)) return null;
+    return structuredClone(grant);
+  };
   const host = createKnowledgeWatchHost({profile: 'huawei_ict_agentarts', namespace: 'synthetic',
     checkpointTaskId: 'synthetic-root', checkpoints, knowledgeFeedReceipts: receipts, now: () => time,
-    readTrackingGrant: async () => ({...grant}), readTrackingGrantSnapshot: () => ({...grant}),
-    readFeedReceiptEvidence: input => rows.get(`knowledge-watch-source-read:${input.receiptId}`),
+    runtime: {getTask: taskId => structuredClone(intakeTasks.get(taskId))},
+    readInterestSignal: async identity => identity.namespace === 'synthetic' && intakeTasks.has(identity.taskId)
+      ? structuredClone(intakeSignals.get(identity.taskId)) : null,
+    readTrackingGrant: async identity => readGrant(identity), readTrackingGrantSnapshot: readGrant,
+    readFeedReceiptEvidence: identity => identity.namespace === 'synthetic' && identity.sourceId === 'feed'
+      && identity.sourceReadTaskId === 'synthetic-root' ? structuredClone(sourceEvidence.get(identity.receiptId)) : null,
     interestDecider: {choose: async () => ({outcome: 'selected', requiresHostRevalidation: true,
       selected: {id: 'track_public', revision: 1}, receipt: {modelReceiptId: 'synthetic-advisory'}})},
     workPort: {read: async ({idempotencyKey}) => tasks.get(idempotencyKey) ?? {state: 'absent'},
@@ -29,11 +41,19 @@ test('resumed consumer reuses exact durable v3 after 304 without retrying old un
         return work.consumer.id === 'A' && submitted.filter(item => item.work.consumer.id === 'A').length === 1
           ? {state: 'unknown'} : {...task, accepted: true};
       }},
-    feedCollect: async () => ({items: unchanged ? [] : [{title: `Release ${version}`, summary: `Synthetic ${version}`,
+    feedCollect: async () => {
+      const result = {items: unchanged ? [] : [{title: `Release ${version}`, summary: `Synthetic ${version}`,
       record: {dedupeKey: 'article', contentRef: 'https://example.com/release', occurredAt: iso(),
         accountRef: 'feed', fetchedAt: iso(), sensitivity: 'public'}}], nextCursor: 'synthetic-cursor', hasMore: false,
       collection: {state: unchanged ? 'unchanged' : 'fetched', subscriptionId: 'feed', fetchedAt: iso(),
-        validators: {etag: version, lastModified: null}}}),
+        validators: {etag: version, lastModified: null}}};
+      if (!unchanged) {
+        const receipt = receipts.createKnowledgeFeedReceiptFromCollectResult({namespace: 'synthetic', sourceId: 'feed', result});
+        assert.ok(receipt);
+        sourceEvidence.set(receipt.receiptId, receipt);
+      }
+      return result;
+    },
   });
   host.start();
   try {
@@ -46,7 +66,13 @@ test('resumed consumer reuses exact durable v3 after 304 without retrying old un
         scope: grant, source: {id: 'feed', revision: 'baseline', visibility: 'public', risk: 'low',
           transportVerified: true, verificationExpiresAt: expiry}, sourceContent: {contentSha256: 'a'.repeat(64),
           cacheVersion: 'baseline', lastSuccessfulCheck: iso(), validUntil: expiry}};
-      await host.consumeInterestSignal(signal, {deadline: expiry, signal: new AbortController().signal});
+      const taskId = `synthetic-intake-${topicId}`;
+      intakeTasks.set(taskId, {taskId, conversationId: 'synthetic-conversation', goal: `Follow up ${topicId}`, state: 'created'});
+      intakeSignals.set(taskId, structuredClone(signal));
+      const result = await host.consumeInterestTask(taskId, {deadline: expiry, signal: new AbortController().signal});
+      assert.equal(result.accepted, true);
+      assert.equal(result.watch.state, 'tracked');
+      assert.equal(result.watch.consumer.intakeTaskId, taskId);
     }
     time += 1000; await host.refreshSubscribedFeed({subscriptionId: 'feed'});
     const oldA = submitted.find(item => item.work.consumer.id === 'A');

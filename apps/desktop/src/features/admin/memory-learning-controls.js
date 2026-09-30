@@ -7,7 +7,9 @@ export function memoryLearningControlsHtml({status = {}, refs = [], version = nu
   const workflow = version ? `<p>候选 v${escape(version.revision)} · ${escape(version.validation)} ·
     ${version.hasEvidence ? '有 Runtime 验证记录' : '等待验证'}</p>` : '<p>尚未选择流程版本。</p>';
   const memories = refs.map((ref, index) => `<div class="setting-row"><span>私人记忆 ${index + 1} · v${escape(ref.revision)}</span>
-    <div class="setting-control"><button class="btn btn-sm" data-ml-withdraw="${index}">撤回消费</button>
+    <div class="setting-control"><button class="btn btn-sm" data-ml-use="${index}" data-conversation="desktop-panel">用于主对话</button>
+    <button class="btn btn-sm" data-ml-use="${index}" data-conversation="desktop-workspace">用于工作区</button>
+    <button class="btn btn-sm" data-ml-withdraw="${index}">撤回消费</button>
     <button class="btn btn-sm" data-ml-delete="${index}">删除历史</button></div></div>`).join('');
   return `<section class="card memory-learning-panel" aria-label="私人记忆与流程学习">
     <h3>私人记忆</h3><p>${status.writeEnabled ? '确认写入已接通' : '写入未接通'} · 当前应用库删除保障</p>
@@ -51,7 +53,8 @@ export function mountMemoryLearningControls(root, {invoke, status, refs = []}) {
     const action = button.dataset.mlAction;
     const withdraw = button.dataset.mlWithdraw;
     const deletion = button.dataset.mlDelete;
-    if (!action && withdraw === undefined && deletion === undefined) return;
+    const use = button.dataset.mlUse;
+    if (!action && withdraw === undefined && deletion === undefined && use === undefined) return;
     const value = name => root.querySelector(`[name="ml-${name}"]`)?.value.trim();
     const workflowId = value('workflow');
     const revision = Number(value('revision'));
@@ -63,7 +66,12 @@ export function mountMemoryLearningControls(root, {invoke, status, refs = []}) {
     button.disabled = true;
     try {
       let result;
-      if (withdraw !== undefined || deletion !== undefined) {
+      if (use !== undefined) {
+        const ref=state.refs[Number(use)];
+        if (!ref) throw Error('请刷新记忆引用');
+        result=await invoke('memory.selectForConversation',{conversationId:button.dataset.conversation,ref});
+        state.message='已选择；每个新任务发送前会单独确认私人记忆范围。';
+      } else if (withdraw !== undefined || deletion !== undefined) {
         const index = Number(withdraw ?? deletion);
         const ref = state.refs[index];
         if (!ref) throw Error('请刷新记忆引用');

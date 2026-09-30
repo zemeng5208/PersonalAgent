@@ -15,6 +15,9 @@ import {readCapabilityDirectory} from './capability-directory.js';
 import {createMicrophonePermissionGate} from './microphone-permission.js';
 import {readApprovalPage} from './approval-history.js';
 import {createPrivateMemoryController} from './private-memory.js';
+import {createPrivateMemoryConsumptionHost} from './private-memory-consumption-host.js';
+import {createPrivateMemoryErasureHost} from './private-memory-erasure-host.js';
+import {createLiveHistoryFileStore} from './live-history-file-store.js';
 import {createMemoryLearningHost} from './memory-learning-host.js';
 import {createKnowledgeSourceConfig} from './knowledge-source-config.js';
 import {createMicrophoneCaptureHost} from './microphone-capture-host.js';
@@ -148,6 +151,8 @@ let syntheticRepairHost;
 const repairPrompts = new Set();
 let microphonePermissionGate;
 let privateMemory;
+let privateConsumption, privateErasure;
+const coordinationWatchInputs = new Map();
 let memoryLearningHost,learningApplication,learningStore;
 let microphoneCaptureHost;
 let voicePcmSource;
@@ -184,6 +189,7 @@ let p5ReceiptFailure = '';
 let p5DeviceFeedback = {state: 'unread', items: []};
 let p5FeedbackReading = false;
 let knowledgeWatchHost;
+let admitNativeFeedInterest;
 let modelApiHost;
 let reviewedRepairLock = Promise.resolve();
 function withReviewedRepairLock(work) {
@@ -1133,6 +1139,8 @@ async function initializeRuntime() {
           }),
           respond:payload => client.call('authorization.respond',payload),
           cancelTask:taskId => client.call('task.cancel',{taskId,reason:'用户停止记事本操作'}),
+          reconcileTask:taskId=>runtimeApplication.reconcileWindowsHostTask(taskId,
+            {deadline:new Date(Date.now()+60_000).toISOString(),signal:new AbortController().signal}),
           onUpdate:publish,
           onTask:({taskId,goal}) => {
             conversations.add(taskId,'panel',goal); taskGoals.set(taskId,goal);
@@ -1360,6 +1368,48 @@ async function initializeRuntime() {
       runtimeApplication = runtimeModule.createAgentArtsRuntimeApplication({
         path: dbPath,
         hostUserNamespace: namespace,
+        ...(notepadHost ? {windowsHostRecovery:{recover:(taskId,runId)=>{
+          const intent=runtimeApplication.runtime.loadCheckpoint(taskId,'host-tool-intent');
+          return notepadHost.recoverOriginalRun({taskId,runId,argumentsDigest:intent?.argumentsDigest},
+            {deadline:new Date(Date.now()+60_000).toISOString(),signal:new AbortController().signal});
+        }}} : {}),
+        coordinationInput:{
+          prepareCoordinationGoal:async scope=>{
+            if (!['desktop-panel','desktop-workspace'].includes(scope.conversationId)) return scope.publicGoal;
+            if (!privateConsumption) throw Error('私人记忆消费宿主尚未装配');
+            return (await privateConsumption.prepare({...scope,goal:scope.publicGoal})).goal;
+          },
+          readConversationContext:async scope=>{
+            if (!['desktop-panel','desktop-workspace'].includes(scope.conversationId)) {
+              coordinationWatchInputs.set(scope.taskId,'[]');return [];
+            }
+            const task=runtimeApplication.runtime.getTask(scope.taskId);
+            const cutoff=conversations.turns.get(scope.taskId)?.createdAt ?? task.createdAt ?? task.updatedAt;
+            const surface=scope.conversationId === 'desktop-panel' ? 'panel'
+              : scope.conversationId === 'desktop-workspace' ? 'workspace' : undefined;
+            const messages=surface ? [...conversations.messagesFor(surface),
+              ...(liveVoice?.historyMessages({...scope,cutoff}) ?? [])]
+              .filter(message=>Date.parse(message.createdAt)<=Date.parse(cutoff))
+              .map(message=>({id:message.id,role:message.role,content:message.text})) : [];
+            const context=runtimeApplication.readConversationContext({...scope,historyMessages:messages});
+            const current=(knowledgeWatchHost?.dialogueProjection?.()?.items ?? [])
+              .filter(item=>item.usableAsCurrentFact === true && item.answer?.kind === 'current_fact');
+            coordinationWatchInputs.set(scope.taskId,JSON.stringify(current));
+            if (current.length) context.push({id:'knowledge-watch-current',role:'assistant',
+              content:JSON.stringify({treatment:'untrusted_public_facts',items:current})});
+            return context;
+          },
+          beforeCoordinationSend:(request,scope)=>{
+            const conversationId=runtimeApplication.runtime.getTask(request.taskId).conversationId;
+            if (!['desktop-panel','desktop-workspace'].includes(conversationId)) return;
+            if (!privateConsumption) throw Error('私人记忆发送门禁尚未装配');
+            privateConsumption.assertCloudSend({...request,goal:scope.preparedGoal});
+            const current=(knowledgeWatchHost?.dialogueProjection?.()?.items ?? [])
+              .filter(item=>item.usableAsCurrentFact === true && item.answer?.kind === 'current_fact');
+            if (coordinationWatchInputs.get(request.taskId)!==JSON.stringify(current)) throw Error('公开事实来源已变化，请重新核实');
+          },
+          releaseTask:taskId=>{privateConsumption?.releaseTask(taskId);coordinationWatchInputs.delete(taskId);},
+        },
         knowledgeWriteReconciliation:{
           reconcile: (original,context)=>{
             const current=knowledgeSourceConfig.snapshot();
@@ -1386,7 +1436,8 @@ async function initializeRuntime() {
           .map(tool=>({toolName:tool.descriptor.name,toolVersion:tool.descriptor.version})),
           ...(!syntheticMvp ? [{toolName:runtimeModule.LOCAL_REPAIR_TOOL,toolVersion:'1.0.0'}] : [])],
         subagentModels: {getModelGateway: (modelName,ref) => modelApiHost?.getModelGateway(modelName,ref),
-          getModelReasoningEfforts: (modelName,ref) => modelApiHost?.getModelReasoningEfforts(modelName,ref) ?? []},
+          getModelReasoningEfforts: (modelName,ref) => modelApiHost?.getModelReasoningEfforts(modelName,ref) ?? [],
+          getModelConfigurationRef:modelName=>modelApiHost?.getModelReasoningState(modelName)?.configurationRef || undefined},
         readConversationPreference: conversationId => {
           if (!['desktop-panel','desktop-workspace'].includes(conversationId)) return undefined;
           const preference = conversations.preference(conversationId,{depth:thinking.depth,fast:thinking.fast});
@@ -1454,6 +1505,12 @@ async function initializeRuntime() {
       if (mailHost) {mailHost.bindApplication(runtimeApplication); mailConfig.markBound(configuredMail.revision);}
       codingWorkspace.bindApplication(runtimeApplication);
       referenceHost.bindApplication(runtimeApplication);
+      const cloudSkillSelector=referenceHost.configureCloudSkillWorker(runtimeApplication.referenceSkillWorker());
+      runtimeApplication.configureCloudSkillSelection({
+        cloudSkillCatalog:input=>referenceHost.cloudSkillCatalog(input),
+        dispatchCloudSkillProposal:(proposal,context)=>referenceHost.dispatchCloudSkillProposal(proposal,context),
+        assertReceiptAllowed:(selection,receipt,context)=>cloudSkillSelector.assertReceiptAllowed(selection,receipt,context),
+      });
       knowledgeTools.bindApplication(runtimeApplication);
       const {openSqliteLearningHost}=await import('@personal-agent/learning');
       learningStore=openSqliteLearningHost(path.join(app.getPath('userData'),'workflow-learning.sqlite'));
@@ -1477,10 +1534,20 @@ async function initializeRuntime() {
             buttons:['删除全部版本','取消'],defaultId:1,cancelId:1,noLink:true});
           return answer.response===0 && admin && !admin.isDestroyed();
         }});
-      // Current application has no backup/copy path for its private-memory store.
-      // Unknown future managed copies must be wired before this inventory changes.
+      privateConsumption?.close();
+      privateConsumption=createPrivateMemoryConsumptionHost({profile:'huawei_ict_agentarts',privateMemory:privateMemoryController(),
+        readTask:taskId=>runtimeApplication.runtime.getTask(taskId),
+        readTaskBinding:taskId=>runtimeApplication.readPrivateTaskBinding(taskId),
+        writeTaskBinding:(taskId,binding)=>runtimeApplication.writePrivateTaskBinding(taskId,binding),
+        readConfigurationRef:()=>runtimeApplication.coordinationConfigurationRef,
+        assertCopyManagement:()=>privateErasure.assertReady([])});
+      privateErasure=createPrivateMemoryErasureHost({privateMemory:privateMemoryController(),consumptionHost:privateConsumption,
+        listBindings:input=>runtimeApplication.listBindings(input),
+        cancelTask:taskId=>runtimeApplication.runtime.requestCancel(taskId,'私人记忆使用已撤回'),
+        eraseTaskCopies:scope=>runtimeApplication.eraseTaskCopies(scope),
+        readCopyErasureReceipt:taskId=>runtimeApplication.readCopyErasureReceipt(taskId)});
       memoryLearningHost=createMemoryLearningHost({profile:'huawei_ict_agentarts',privateMemory:privateMemoryController(),
-        learningApplication,managedPrivateCopies:[]});
+        learningApplication,privateErasure,managedPrivateCopies:[]});
       await memoryLearningHost.recover();
       feedsHost?.bindApplication(runtimeApplication, namespace);
       todoHost?.bindApplication(runtimeApplication);
@@ -1547,7 +1614,7 @@ async function initializeRuntime() {
       return answer.response===0 && admin && !admin.isDestroyed();
     }});
     memoryLearningHost=createMemoryLearningHost({profile:'huawei_ict_agentarts',privateMemory:privateMemoryController(),
-      learningApplication,publicErasure,managedPrivateCopies:[]});
+      learningApplication,publicErasure,privateErasure,managedPrivateCopies:[]});
     await memoryLearningHost.recover();
   }
   if (competitionMode) {
@@ -1625,6 +1692,9 @@ async function initializeRuntime() {
         });
       }
       const feedProofStore=runtimeApplication.createHostStateStore('knowledge-tracking');
+      const feedProvenance=await import('@personal-agent/feeds');
+      const intakeKey=taskId=>'feed-interest-intake:'+createHash('sha256').update(taskId).digest('hex');
+      const sourceKey=sourceId=>'feed-confirmed-source:'+sourceId;
       const proofKey=receiptId=>'feed-confirmed-read:'+receiptId;
       const rebuildFeedReceipt=binding=>{
         if (!binding || binding.namespace !== namespace || binding.containerTaskId !== knowledgeWatchTask.taskId
@@ -1682,6 +1752,9 @@ async function initializeRuntime() {
                 const saved=readFeedReceiptEvidence({namespace,sourceId:query.subscriptionId,
                   sourceReadTaskId:knowledgeWatchTask.taskId,receiptId:receipt.receiptId});
                 if (!saved) throw Object.assign(Error('订阅原始执行证据绑定未获确认'),{code:'RESULT_UNKNOWN'});
+                runtimeApplication.runtime.saveCheckpoint(knowledgeWatchTask.taskId,
+                  'knowledge-watch-source-read:'+receipt.receiptId,receipt);
+                feedProofStore.set(sourceKey(query.subscriptionId),{...binding,receiptId:receipt.receiptId});
               }
               return read.confirmed.result;
             }
@@ -1701,10 +1774,56 @@ async function initializeRuntime() {
         layaChooser: localLaya,
         runtime: runtimeApplication.runtime,
         feedCollect,
+        readTrackingGrant:query=>feedsHost.readTrackingGrant(query),
+        readTrackingGrantSnapshot:query=>feedsHost.readTrackingGrant(query),
+        readInterestSignal:async query=>{
+          if (query.namespace!==namespace) return undefined;
+          const intake=feedProofStore.get(intakeKey(query.taskId));
+          if (!intake || intake.taskId!==query.taskId) return undefined;
+          const task=runtimeApplication.runtime.getTask(query.taskId);
+          const grant=feedsHost.readTrackingGrant({namespace,sourceId:intake.subscriptionId,taskId:query.taskId});
+          const current=feedsHost.readSourceBinding(intake.subscriptionId);
+          const binding=feedProofStore.get(sourceKey(intake.subscriptionId));
+          const receipt=rebuildFeedReceipt(binding);
+          if (!current?.available || current.sensitivity!=='public' || current.containsCredentials
+            || grant.state!=='granted' || !receipt || task.cancelRequested
+            || createHash('sha256').update(JSON.stringify(task.goal)).digest('hex')!==intake.purposeDigest) return undefined;
+          const original=runtimeApplication.runtime.loadCheckpoint(binding.sourceReadTaskId,'tool-result-'+binding.runId)?.result;
+          const provenance=original?.sourceReceipt;
+          if (!provenance?.publicFetch || provenance.sensitivity!=='public'
+            || provenance.transport?.nativeFetch!==true || provenance.transport?.credentialFree!==true
+            || original.items.some(item=>item.record.sensitivity!=='public')) return undefined;
+          feedProvenance.assertFeedSourceReceiptMatches(provenance,original,
+            {subscriptionId:intake.subscriptionId,configBinding:current.configurationRef});
+          const topicId='feed:'+intake.subscriptionId;
+          const validUntil=new Date(Math.min(Date.parse(receipt.observedAt)+600_000,Date.parse(grant.expiresAt))).toISOString();
+          return {namespace,topicId,at:intake.classifiedAt,evidenceMaxAgeMs:600_000,
+            watchDurationMs:Math.max(1,Date.parse(grant.expiresAt)-Date.parse(intake.classifiedAt)),scope:grant,
+            evidence:[{id:query.taskId,topicId,sourceId:'conversation',sourceRevision:intake.purposeDigest,
+              occurredAt:intake.classifiedAt,interactionId:query.taskId,kind:'question',match:'exact'}],
+            explicitEnable:{id:grant.id,topicId,occurredAt:intake.classifiedAt},
+            source:{id:intake.subscriptionId,revision:receipt.revision,visibility:'public',risk:'low',
+              transportVerified:true,verificationExpiresAt:validUntil},
+            sourceContent:{contentSha256:receipt.contentSha256,cacheVersion:receipt.revision,
+              lastSuccessfulCheck:receipt.observedAt,validUntil}};
+        },
         readFeedReceiptEvidence,
         knowledgeFeedReceipts:runtimeModule,
       });
       await knowledgeWatchHost.start();
+      admitNativeFeedInterest=async()=>{
+        for (const taskId of feedProofStore.get('feed-interest-intake-index') ?? []) {
+          const intake=feedProofStore.get(intakeKey(taskId));
+          if (!intake || feedsHost.readTrackingGrant({namespace,sourceId:intake.subscriptionId,taskId}).state!=='granted') continue;
+          const task=runtimeApplication.runtime.getTask(taskId);
+          const deadline=runtimeApplication.runtime.loadCheckpoint(taskId,'application-deadline')
+            ?? runtimeApplication.runtime.loadCheckpoint(taskId,'host-tool-intent')?.deadline;
+          if (!deadline || Date.now()>=Date.parse(deadline) || task.cancelRequested) continue;
+          const signal=new AbortController().signal;
+          await feedCollect({subscriptionId:intake.subscriptionId,limit:20},signal);
+          await knowledgeWatchHost.consumeInterestTask(taskId,{deadline,signal});
+        }
+      };
       for (const fired of runtimeApplication.runtime.recoverMissedSchedules(`knowledge-watch:${namespace}`)) {
         if (fired.task) void dispatchKnowledgeFeedCheckTask(fired.task);
       }
@@ -1843,12 +1962,23 @@ async function action(event, name, payload) {
       if (answer.response === 0) return originFeeds.snapshot();
       const result=originFeeds.applyNativeSourceChoice(choice,
         !choice.containsCredentials && answer.response === 1 ? 'public' : 'private');
+      if (!choice.containsCredentials && answer.response === 1) {
+        const storage=originApplication.createHostStateStore('knowledge-tracking');
+        const key='feed-interest-intake:'+createHash('sha256').update(choice.taskId).digest('hex');
+        const previous=storage.get(key);
+        if (previous && previous.subscriptionId!==choice.subscriptionId) throw Error('原任务已绑定另一个订阅来源');
+        if (!previous) storage.set(key,{taskId:choice.taskId,subscriptionId:choice.subscriptionId,
+          purposeDigest:choice.purposeDigest,classifiedAt:new Date().toISOString()});
+        storage.set('feed-interest-intake-index',[...new Set([...(storage.get('feed-interest-intake-index') ?? []),choice.taskId])]);
+      }
       publish();return result;
     }
     if (name !== 'feeds.revoke' && name !== 'feeds.refresh' && (runtimeApplication?.activeTaskCount || runtimeStartup.snapshot().state==='starting')) {
       throw Error('请等待当前任务和启动结束后修改订阅');
     }
-    const result = name === 'feeds.refresh' ? feedsHost.snapshot() : feedsHost[name.slice('feeds.'.length)](payload); publish(); return result;
+    const result = name === 'feeds.refresh' ? feedsHost.snapshot() : feedsHost[name.slice('feeds.'.length)](payload);
+    if (name==='feeds.authorize') await admitNativeFeedInterest?.();
+    publish(); return result;
   }
   if (['coding.select','coding.selectNode','coding.selectNpmCli','coding.selectCheckFile','coding.authorize','coding.revoke'].includes(name)) {
     if ((sender !== admin && sender !== workspace) || !competitionMode || syntheticMvp || !codingWorkspace) throw Error('请从正式应用设置配置编程工作区');
@@ -2187,6 +2317,11 @@ async function action(event, name, payload) {
       return privateMemory.search(payload?.query);
     }
     if (name === 'memory.listSaved') return privateMemoryController().listSaved(payload);
+    if (name === 'memory.selectForConversation') {
+      if (!privateConsumption || !payload || Object.keys(payload).some(key=>!['conversationId','ref'].includes(key))
+        || !['desktop-panel','desktop-workspace'].includes(payload.conversationId)) throw Error('请选择原对话与精确记忆版本');
+      return privateConsumption.select(payload);
+    }
     if(['memory.delete','memory.withdraw','memory.save','memory.previewSave','memory.boundErase'].includes(name)) {
       if(!memoryLearningHost) throw Error('私人记忆保障尚未接通');
       const result=await memoryLearningHost.invoke(name,payload);publish();return result;
@@ -2441,6 +2576,7 @@ async function initializeLiveVoice() {
     createSource: () => createVoicePcmFrameSourcePort(microphoneCaptureHost.binding),
     createGateway: config => runtimeApplication.createLiveVoiceModel(config),
     createConsumer: createRuntimeClientTranscriptConsumer, client, onUpdate: publish,
+    historyStore:createLiveHistoryFileStore(path.join(app.getPath('userData'),'live-history-recovery.json')),
     onTranscript: message => conversations.addLiveMessage(message),
     onTaskSubmitted: ({taskId, goal}) => {taskGoals.set(taskId, goal);conversations.add(taskId, 'panel', goal);},
     readContext: () => JSON.stringify({profile: 'huawei_ict_agentarts',
@@ -2637,6 +2773,8 @@ app.whenReady().then(async () => {
       p5SystemObservationSource?.dispose();
       knowledgeWatchHost?.dispose();
       modelApiHost?.dispose();
+      privateConsumption?.close();
+      coordinationWatchInputs.clear();
       privateMemory?.close();
       learningStore?.close();
       knowledgeSourceConfig?.close();

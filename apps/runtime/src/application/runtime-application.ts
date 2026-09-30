@@ -577,7 +577,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     if(!plainObject(binding) || binding.taskId!==taskId || binding.conversationId!==task.conversationId
       || binding.destination!=='agentarts' || binding.configurationRef!==this.coordinationBinding
       || binding.deadline!==this.runtime.loadCheckpoint(taskId,'application-deadline')
-      || binding.userGoalDigest!==createHash('sha256').update(task.goal).digest('hex')
+      || typeof task.goal!=='string' || binding.userGoalDigest!==createHash('sha256').update(task.goal ?? '').digest('hex')
       || !plainObject(binding.fact) || !plainObject(binding.fact.ref)
       || !nonEmptyText(binding.fact.ref.id) || !Number.isSafeInteger(binding.fact.ref.revision)
       || (binding.fact.ref.revision as number)<1 || !sha256(binding.fact.summaryDigest) || !sha256(binding.fact.sourceDigest)
@@ -631,12 +631,12 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       try {return await port.execute(request);}catch(error) {this.holdCompetitionExport(request.taskId);throw error;}
     }
     const task=this.runtime.getTask(request.taskId);
-    const scope={taskId:task.taskId,conversationId:task.conversationId,publicGoal:request.goal,
+    const scope={taskId:task.taskId,conversationId:task.conversationId ?? '',publicGoal:request.goal,
       deadline:request.deadline,signal:request.signal};
     const prepared=await hooks.prepareCoordinationGoal?.(scope) ?? request.goal;
     this.assertInputActive(request);
     if(!nonEmptyText(prepared))throw new ProtocolError('INVALID_ARGUMENT','Empty ephemeral input');
-    const messages=await hooks.readConversationContext?.({taskId:task.taskId,conversationId:task.conversationId,
+    const messages=await hooks.readConversationContext?.({taskId:task.taskId,conversationId:task.conversationId ?? '',
       deadline:request.deadline,signal:request.signal}) ?? [];
     this.assertInputActive(request);
     const ids=new Set<string>();
