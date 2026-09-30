@@ -4,6 +4,8 @@ import {buildInterestOptions, decideKnowledgeFreshness, LayaInterestDecisionServ
 
 const PROFILE = 'huawei_ict_agentarts';
 const KEY_PREFIX = 'knowledge-watch:v1:';
+const KNOWLEDGE_RECHECK_RESULT_KEY = 'knowledge-recheck-result';
+const KNOWLEDGE_RECHECK_RESULT_VERSION = 2;
 const LABELS = {
   suggested: '待建议',
   tracked: '已跟踪',
@@ -72,7 +74,12 @@ function adaptRuntimeWork(runtime, namespace) {
         if (task === undefined) return {state: 'absent'};
         if (!text(task?.taskId) || task.goal !== `RECHECK ${idempotencyKey}`
           || task.conversationId !== conversationId) return {state: 'unknown'};
-        return {state: 'accepted', taskId: task.taskId, ...(text(task.state) ? {taskState: task.state} : {})};
+        const knowledgeRecheckResult = typeof runtime.loadCheckpoint === 'function'
+          ? runtime.loadCheckpoint(task.taskId, KNOWLEDGE_RECHECK_RESULT_KEY) : undefined;
+        return {state: 'accepted', taskId: task.taskId,
+          ...(text(task.state) ? {taskState: task.state} : {}),
+          ...(knowledgeRecheckResult === undefined ? {} : {knowledgeRecheckResult: clone(knowledgeRecheckResult)}),
+          ...(Array.isArray(task.evidenceRefs) ? {taskEvidenceRefs: [...task.evidenceRefs]} : {})};
       } catch { return {state: 'unknown'}; }
     },
     async submit({idempotencyKey}) {
@@ -137,6 +144,49 @@ function instant(value) {
   return Number.isFinite(parsed) ? parsed : NaN;
 }
 
+function validRecheckContext(value, workKey, namespace) {
+  if (!plain(value) || value.version !== 1 || value.namespace !== namespace || value.workKey !== workKey
+    || !identifier(value.topicId) || !Number.isSafeInteger(value.consumerRevision) || value.consumerRevision < 1
+    || !identifier(value.sourceId) || !text(value.boundRevision) || !sha(value.boundContentSha256)
+    || !text(value.observedRevision) || !sha(value.observedContentSha256)
+    || value.availability !== 'available' || !Number.isFinite(instant(value.observedAt)) || !text(value.citation)
+    || value.summary !== undefined && typeof value.summary !== 'string') return false;
+  const allowed = new Set(['version', 'namespace', 'workKey', 'topicId', 'consumerRevision', 'sourceId',
+    'boundRevision', 'boundContentSha256', 'observedRevision', 'observedContentSha256', 'observedAt',
+    'availability', 'citation', 'summary']);
+  return Object.keys(value).every(key => allowed.has(key));
+}
+
+function sameRecheckIdentity(left, right) {
+  return plain(left) && plain(right)
+    && ['version', 'namespace', 'workKey', 'topicId', 'consumerRevision', 'sourceId', 'boundRevision',
+      'boundContentSha256', 'observedRevision', 'observedContentSha256', 'availability', 'citation']
+      .every(key => left[key] === right[key]);
+}
+
+function validKnowledgeRecheckResult(read, context, head) {
+  const result = read?.knowledgeRecheckResult;
+  const refs = result?.evidenceRefs;
+  const taskRefs = read?.taskEvidenceRefs;
+  return plain(result) && result.version === KNOWLEDGE_RECHECK_RESULT_VERSION
+    && result.status === 'completed'
+    && result.taskId === read.taskId && result.workKey === context.workKey
+    && result.namespace === context.namespace && result.topicId === context.topicId
+    && result.consumerRevision === context.consumerRevision
+    && result.sourceId === context.sourceId && result.boundRevision === context.boundRevision
+    && result.boundContentSha256 === context.boundContentSha256
+    && result.observedRevision === context.observedRevision
+    && result.observedContentSha256 === context.observedContentSha256
+    && result.evaluatedContentSha256 === context.observedContentSha256
+    && result.citation === context.citation && result.citation === head.citation
+    && Number.isFinite(instant(result.evaluatedAt))
+    && plain(result.evaluation) && Object.keys(result.evaluation).length > 0
+    && Array.isArray(refs) && refs.length > 0 && refs.every(text)
+    && new Set(refs).size === refs.length
+    && Array.isArray(taskRefs) && refs.every(ref => taskRefs.includes(ref))
+    && refs.every(ref => ref !== result.citation);
+}
+
 function emptyDocument(namespace) {
   return {version: 1, namespace, watches: {}, sources: {}, reevaluations: {},
     submissions: {}, notices: {}, tombstones: {}};
@@ -174,9 +224,13 @@ function readableCheckpoint(raw, namespace) {
       return {ok: false, reason: 'checkpoint_notice_unreadable'};
     }
   }
-  for (const submission of Object.values(raw.submissions)) {
+  for (const [workKey, submission] of Object.entries(raw.submissions)) {
     if (!plain(submission) || !['unknown', 'accepted'].includes(submission.state)
       || submission.state === 'accepted' && !text(submission.taskId)) {
+      return {ok: false, reason: 'checkpoint_submission_unreadable'};
+    }
+    if (submission.recheckContext !== undefined
+      && !validRecheckContext(submission.recheckContext, workKey, namespace)) {
       return {ok: false, reason: 'checkpoint_submission_unreadable'};
     }
   }
@@ -654,15 +708,26 @@ export function createKnowledgeWatchHost({
   function freshnessFor(group, event) {
     const binding = group.binding;
     const changed = event.availability === 'available'
-      && (event.revision !== binding.revision || event.contentSha256 !== binding.contentSha256);
+      && (event.contentSha256 ? event.contentSha256 !== binding.contentSha256
+        : event.revision !== binding.revision);
     const check = changed ? {outcome: 'changed', checkedAt: event.fetchedAt, sourceId: binding.sourceId,
       sourceRevision: binding.revision, cachedContentSha256: binding.contentSha256} : event.check;
     return {at: event.fetchedAt, maxAgeMs: event.maxAgeMs ?? knowledgeMaxAgeMs,
-      requestedVersion: event.requestedVersion ?? binding.cacheVersion,
+      requestedVersion: event.requestedVersion ?? (changed && event.revision ? event.revision : binding.cacheVersion),
       sourceState: event.availability, cache: {version: binding.cacheVersion, sourceId: binding.sourceId,
         sourceRevision: binding.revision, contentSha256: binding.contentSha256,
         lastSuccessfulCheck: binding.lastSuccessfulCheck, validUntil: binding.validUntil},
       ...(check ? {check} : {})};
+  }
+  function recheckContextFor(work, event) {
+    const context = {version: 1, namespace, workKey: work.workKey,
+      topicId: work.consumer?.id, consumerRevision: work.consumer?.revision,
+      sourceId: work.source?.id, boundRevision: work.source?.revision,
+      boundContentSha256: work.source?.contentSha256,
+      observedRevision: event.revision, observedContentSha256: event.contentSha256,
+      observedAt: event.fetchedAt, availability: event.availability, citation: event.citation?.locator,
+      ...(typeof event.summary === 'string' ? {summary: event.summary} : {})};
+    return validRecheckContext(context, work.workKey, namespace) ? context : null;
   }
   function prepareSource(event) {
     requireReady();
@@ -701,11 +766,17 @@ export function createKnowledgeWatchHost({
     const next = clone(document);
     for (const item of plans) {
       for (const work of item.plan.affected) {
-        if (work.duplicate || next.submissions[work.workKey]?.state === 'accepted') continue;
-        if (!next.submissions[work.workKey]) {
-          next.submissions[work.workKey] = {state: 'unknown', namespace, attemptedAt: event.fetchedAt,
-            sourceId: event.sourceId};
+        const recheckContext = recheckContextFor(work, event);
+        const existing = next.submissions[work.workKey];
+        if (existing?.recheckContext && (!recheckContext
+          || !sameRecheckIdentity(existing.recheckContext, recheckContext))) {
+          return {accepted: false, reason: 'reevaluation_identity_conflict'};
         }
+        if (work.duplicate || existing?.state === 'accepted') continue;
+        next.submissions[work.workKey] = {...(existing ?? {}), state: 'unknown', namespace,
+          attemptedAt: event.fetchedAt, sourceId: event.sourceId,
+          ...((existing?.recheckContext ?? recheckContext)
+            ? {recheckContext: existing?.recheckContext ?? recheckContext} : {})};
         keys.push(work.workKey);
       }
     }
@@ -753,8 +824,8 @@ export function createKnowledgeWatchHost({
           await lock(() => {
             if (!document?.submissions[workKey]) return;
             const next = clone(document);
-            next.submissions[workKey] = {state: 'accepted', namespace, taskId: read.taskId,
-              sourceId: current?.sourceId};
+            next.submissions[workKey] = {...next.submissions[workKey], state: 'accepted', namespace,
+              taskId: read.taskId, sourceId: current?.sourceId};
             persist(next);
           });
           continue;
@@ -773,8 +844,8 @@ export function createKnowledgeWatchHost({
           await lock(() => {
             if (!document) return;
             const next = clone(document);
-            next.submissions[workKey] = {state: 'accepted', namespace, taskId: result.taskId,
-              sourceId: current?.sourceId};
+            next.submissions[workKey] = {...next.submissions[workKey], state: 'accepted', namespace,
+              taskId: result.taskId, sourceId: current?.sourceId};
             persist(next);
           });
         } else unknown.add(workKey);
@@ -1254,6 +1325,34 @@ export function createKnowledgeWatchHost({
       return {accepted: false, reason: text(error?.code) ? error.code : 'scheduler_failed'};
     }
   }
+  function getRecheckContext(workKey) {
+    if (!sha(workKey) || !document || health.status !== 'ready') return null;
+    const submission = document.submissions[workKey];
+    const context = submission?.recheckContext;
+    if (!plain(submission) || !['unknown', 'accepted'].includes(submission.state)
+      || submission.namespace !== namespace || submission.sourceId !== context?.sourceId
+      || !validRecheckContext(context, workKey, namespace)
+      || submission.state === 'accepted' && !text(submission.taskId)) return null;
+    if (document.tombstones[context.topicId]) return null;
+    const watch = document.watches[context.topicId];
+    if (watch?.state !== 'tracked' || !plain(watch.consumer)
+      || watch.consumer.id !== context.topicId || watch.consumer.revision !== context.consumerRevision
+      || watch.boundSource?.sourceId !== context.sourceId
+      || watch.boundSource?.revision !== context.boundRevision
+      || watch.boundSource?.contentSha256 !== context.boundContentSha256
+      || watch.expiresAt && (!Number.isFinite(instant(watch.expiresAt)) || instant(watch.expiresAt) <= clock())) {
+      return null;
+    }
+    const head = document.sources[context.sourceId];
+    if (head) {
+      const headAt = instant(head.observedAt);
+      if (!Number.isFinite(headAt)) return null;
+      if (headAt >= instant(context.observedAt)
+        && (head.availability !== 'available' || head.revision !== context.observedRevision
+          || head.contentSha256 !== context.observedContentSha256 || head.citation !== context.citation)) return null;
+    }
+    return {...clone(context), taskId: submission.taskId ?? null};
+  }
   async function bindObservedRevision(topicId) {
     if (!identifier(topicId)) fail('INVALID_ARGUMENT');
     const prepared = await lock(() => {
@@ -1280,13 +1379,26 @@ export function createKnowledgeWatchHost({
       if (instant(head.observedAt) < instant(binding.lastSuccessfulCheck)) {
         return {accepted: false, reason: 'observation_stale'};
       }
-      const keys = document.reevaluations[bindingKey(binding)]?.submittedWorkKeys;
-      if (!workPort || !Array.isArray(keys) || !keys.length || keys.some(key => !sha(key))) {
+      const submittedKeys = document.reevaluations[bindingKey(binding)]?.submittedWorkKeys;
+      if (!workPort || !Array.isArray(submittedKeys) || !submittedKeys.length
+        || submittedKeys.some(key => !sha(key))) {
         return {accepted: false, reason: 'reevaluation_missing'};
       }
+      const keys = submittedKeys.filter(key => {
+        const context = document.submissions[key]?.recheckContext;
+        return validRecheckContext(context, key, namespace)
+          && context.topicId === topicId && context.consumerRevision === watch.consumer.revision
+          && context.sourceId === binding.sourceId && context.boundRevision === binding.revision
+          && context.boundContentSha256 === binding.contentSha256
+          && context.observedRevision === head.revision
+          && context.observedContentSha256 === head.contentSha256
+          && context.citation === head.citation;
+      });
+      if (keys.length !== 1) return {accepted: false, reason: 'reevaluation_missing'};
       const submissions = Object.fromEntries(keys.map(key => [key, clone(document.submissions[key] ?? null)]));
       if (Object.values(submissions).some(submission => submission?.state !== 'accepted'
-        || !text(submission.taskId) || submission.sourceId !== binding.sourceId)) {
+        || !text(submission.taskId) || submission.sourceId !== binding.sourceId
+        || submission.recheckContext?.topicId !== topicId)) {
         return {accepted: false, reason: 'reevaluation_missing'};
       }
       return {accepted: true, proceed: true, keys: [...keys], binding: clone(binding),
@@ -1295,6 +1407,7 @@ export function createKnowledgeWatchHost({
           observedAt: head.observedAt, citation: head.citation}};
     });
     if (!prepared.proceed) return prepared;
+    const taskIds = [];
     for (const workKey of prepared.keys) {
       let read;
       try { read = await workPort.read({namespace, idempotencyKey: workKey}); }
@@ -1306,6 +1419,12 @@ export function createKnowledgeWatchHost({
       if (read.taskId !== prepared.submissions[workKey]?.taskId) {
         return {accepted: false, reason: 'reevaluation_task_mismatch', taskState: read.taskState};
       }
+      const context = prepared.submissions[workKey]?.recheckContext;
+      if (!validRecheckContext(context, workKey, namespace)
+        || !validKnowledgeRecheckResult(read, context, prepared.head)) {
+        return {accepted: false, reason: 'reevaluation_result_unavailable', taskState: read.taskState};
+      }
+      taskIds.push(read.taskId);
     }
     return lock(() => {
       requireReady();
@@ -1330,10 +1449,14 @@ export function createKnowledgeWatchHost({
         || head?.observedAt !== prepared.head.observedAt || head?.citation !== prepared.head.citation) {
         return {accepted: false, reason: 'observation_changed'};
       }
-      // The host's current workPort contract only exposes generic task state and
-      // identity. A succeeded task is not proof that it re-evaluated this consumer
-      // against this observed source revision, regardless of which adapter read it.
-      return {accepted: false, reason: 'reevaluation_result_unavailable', taskState: 'succeeded'};
+      const next = clone(document);
+      const target = next.watches[topicId];
+      target.boundSource = {...clone(target.boundSource), revision: head.revision,
+        contentSha256: head.contentSha256, lastSuccessfulCheck: head.observedAt};
+      target.reason = 'source_bound';
+      target.updatedAt = iso(clock());
+      persist(next);
+      return {accepted: true, reason: 'bound', revision: head.revision, taskIds};
     });
   }
   /** Confirms notification delivery by batch receipt; it does not mean the user read it. */
@@ -1405,6 +1528,6 @@ export function createKnowledgeWatchHost({
   return Object.freeze({start, stop, dispose, snapshot, listPending, listWatches, dialogueProjection,
     consumeInterestSignal, consumeSourceUpdate, refreshSource, refreshSubscribedFeed,
     registerFeedCheck, cancelFeedChecks, restoreFeedChecks, observeNotificationAcknowledgement,
-    bindObservedRevision,
+    getRecheckContext, bindObservedRevision,
     revoke, pause, resume, enable});
 }

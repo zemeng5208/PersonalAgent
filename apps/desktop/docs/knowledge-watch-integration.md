@@ -153,14 +153,38 @@ knowledgeWatch.start();
 
 - 投递确认：`observeNotificationAcknowledgement({id, state: "delivered"})` 只把匹配 `receiptId` 的提醒标成已投递，不是用户阅读回执。`latest_observation` 不会因此变成 `current_fact`。
 - 任务状态：Runtime `findTaskByIdempotencyKey` 返回的 `state === "succeeded"` 只证明 Runtime 任务进入成功终态。`submitTask` 刚创建时状态是 `created`；宿主会按原幂等键读回，不重新提交。
-- 重评结果：当前 `TaskSnapshot` 和宿主的 `workPort.read` 都没有与 `consumer`、来源及本次观察版本绑定的结构化重评结果。默认 Runtime 适配只提交 `RECHECK <workKey>`；任何适配器返回普通 `succeeded` 都不能证明执行了该重评。因此宿主统一返回 `reevaluation_result_unavailable`，不会把新观察绑定成当前事实。
-- 绑定新版本：`bindObservedRevision(topicId)` 还会核对原已提交 `taskId`、兴趣 `consumer`、完整旧来源绑定和读取期间未变化的观察头。当前公共 Runtime 结果不足以满足重评结果核验，因此所有现有适配路径都拒绝绑定；`validUntil` 不延长。即使未来提供结构化结果，仍由 `decideKnowledgeFreshness` 决定能否投影 `current_fact`。
+- 重评结果：宿主通过共享 Runtime 的 `loadCheckpoint(taskId, "knowledge-recheck-result")` 读取结果，并同时读取同一 `TaskSnapshot.evidenceRefs`。普通 `succeeded`、通用 goal、固定摘要、引用 URL 或空 Evidence 都不是重评证明。结果缺失、版本不对、身份不匹配或 Evidence 未被任务快照确认时返回 `reevaluation_result_unavailable`，不会把新观察绑定成当前事实。
+- `getRecheckContext(workKey)` 是总装读取已接受任务的唯一入口。它按精确 `workKey` 找到对应 consumer，拒绝墓碑、过期、非 tracked、旧来源绑定不一致或来源头已前进的上下文。返回的 v1 上下文最少包含：
+
+```js
+{
+  version: 1,
+  namespace, workKey, topicId, consumerRevision,
+  sourceId, boundRevision, boundContentSha256,
+  observedRevision, observedContentSha256, observedAt,
+  availability: "available", citation, summary?
+}
+```
+
+- Runtime 结果读取口固定为同一任务的 v2 checkpoint。宿主要求 `status: "completed"`，并逐项匹配 `taskId`、`workKey`、`namespace`、`topicId`、`consumerRevision`、旧来源 id/revision/content hash、本次 observed revision/content hash、`evaluatedContentSha256`、`citation`、`evaluatedAt`；还要求非空的结构化 `evaluation` 和唯一 `evidenceRefs`。每个 Evidence 引用必须出现在 `TaskSnapshot.evidenceRefs`，且不能只复用 citation URL。
+
+```js
+{
+  version: 2, status: "completed", taskId, workKey, namespace, topicId,
+  consumerRevision, sourceId, boundRevision, boundContentSha256,
+  observedRevision, observedContentSha256, evaluatedContentSha256,
+  citation, evaluatedAt, evaluation: { /* actual re-evaluation */ },
+  evidenceRefs: [/* trusted Runtime evidence ids */]
+}
+```
+
+- 绑定新版本：`bindObservedRevision(topicId)` 还会核对原已提交 `taskId`、兴趣 `consumer`、完整旧来源绑定和读取期间未变化的观察头。结果合法后才更新绑定版本；`validUntil` 不延长。即使未来提供结构化结果，仍由 `decideKnowledgeFreshness` 决定能否投影 `current_fact`。
 
 `bindObservedRevision` 在任务未完成时返回 `reevaluation_unconfirmed` 和实际 `taskState`；已跟踪关注缺少对应 consumer 时返回 `reevaluation_consumer_missing`；任务与已持久接受的 `taskId` 不一致时返回 `reevaluation_task_mismatch`；经任一适配器读回的任务成功但宿主没有可核验的结构化重评结果时返回 `reevaluation_result_unavailable`。过期关注返回 `watch_expired`；已经绑定返回 `already_bound`；撤销后返回 `user_revoked`。
 
-总装解锁点：`knowledge-watch-host.js` 的 `adaptRuntimeWork` / `bindObservedRevision` 需要一个正式 Runtime 结果读取口。当前总装 `main.js` 的 `dispatchKnowledgeRecheckTask` 只从计划检查点取旧缓存来源 id/revision，调用 Runtime 的 `dispatchKnowledgeRecheckTask(taskId, {sourceId, sourceRevision})`；该实现只检查取消信号，然后返回固定成功摘要和空 `evidenceRefs`，没有实际读取或重评来源，也没关联本次观察版本。宿主现在会拒绝这类成功态。
+总装解锁点：`knowledge-watch-host.js` 的 `adaptRuntimeWork` / `bindObservedRevision` 已固定上述消费契约，但 P8 当前装配仍未形成生产正向闭环。P8 `f700dec` 的 `main.js` 会取 `getRecheckContext(workKey)` 并传部分来源元数据，却没有注入受信 `reevaluator`，也没有把 namespace、consumerRevision 和完整 v2 结果写入 Runtime；Runtime 当前记录仍是 v1，且缺少实际结果时默认 `confirmed`。因此 P7 会安全拒绝该路径，保持 `reevaluation_result_unavailable`。P7 不在宿主解析摘要、不自行调用 `runTask`，也不新增第二套结果存储。
 
-交给总装实现的最小可信结果契约：由受信 Runtime 读回，与原 `workKey` 和已接受的 `taskId` 一一关联；绑定 namespace、consumer id/revision、旧来源 id/revision/content hash，以及本次 observed revision/content hash；明确表明实际重评已完成，并提供可审计的 Evidence 引用。宿主应逐项比对这些身份后才能考虑绑定。仅有 `TaskSnapshot.state`、通用 goal 字符串、固定 `resultSummary` 或空 Evidence 不够；不得在宿主解析摘要或自行调用 `runTask`。当前没有这个公共接口，本轮不新增 Runtime 协议，也不修改 `main.js` 或 Runtime。
+交给总装实现的最小可信结果契约：由受信 Runtime 实际执行来源重评后，在同一任务 checkpoint 写入上面的 v2 记录，并把同一 Evidence ids 写入 `TaskSnapshot.evidenceRefs`；`main.js` 只负责把 P7 返回的完整上下文传入 Runtime。仅有 `TaskSnapshot.state`、通用 goal 字符串、固定 `resultSummary` 或空 Evidence 不够。
 
 ## 状态投影
 
@@ -174,13 +198,9 @@ knowledgeWatch.start();
 
 ## 总装分支上的当前调用
 
-分支 `codex/zemeng/p8-shared-assembly` 的 `apps/desktop/electron/main.js` 用幂等键 `` `knowledge-watch-root:${namespace}` `` 创建任务，然后这样构造宿主：
+分支 `codex/zemeng/p8-shared-assembly` 当前的 `apps/desktop/electron/main.js`（P8 `f700dec`）用幂等键 `` `knowledge-watch-root:${namespace}` `` 创建任务，并接入 P7 宿主的 `layaChooser: localLaya`、受会话授权门控的 `feedCollect` 和 Runtime 适配。P8 的 `dispatchKnowledgeRecheckTask` 已能取 `getRecheckContext(workKey)`，但尚未注入受信 `reevaluator`，也未写入本页定义的 v2 checkpoint；这部分仍保持不可用。
 
-- `interestDecider: { choose: req => localLaya.choose(req) }`。宿主会调用 `choose(input, {deadline, signal})`，并要求返回 `outcome`、`requiresHostRevalidation` 和 `receipt.modelReceiptId`。`localLaya.choose` 只接收一个 `LayaActionChoiceRequest`，未就绪时抛 `本地 Laya 决策尚未就绪`。
-- `sourcePort: createUnavailableSourcePort('source_connector_pending')`。这是测试夹具，生产读取会停在不可用。
-- `notificationPort.send` 固定返回 `{delivered: true, receiptId}`。宿主会据此把提醒标成已投递。
-- `workPort.submit` 丢掉 `work`，目标写成 `Knowledge Reevaluation`，对话 id 用 `knowledge-reevaluation:`。宿主自带的 Runtime 适配会先 `findTaskByIdempotencyKey`，再 `submitTask({goal: "RECHECK <workKey>", conversationId: "knowledge-watch:<namespace>", idempotencyKey: workKey})`。
-- 该分支里的 `knowledge-watch-host.js` 还是旧副本，没有 `layaChooser`、`feedCollect` 和 `dialogueProjection`。
+总装更新时必须使用 P7 最新宿主文件，不得把旧副本复制回来。`knowledgeWatchHost` 的 `workPort` 仍应只使用 `RECHECK <workKey>` 的 Runtime 幂等任务；不要另建结果库或在 Desktop 解析摘要。
 
 最小替换是删掉 `createUnavailableSourcePort` 的生产导入、`interestDecider`、`sourcePort`、`workPort` 和上述 `notificationPort`，改成：
 
@@ -204,7 +224,9 @@ knowledgeWatchHost = createKnowledgeWatchHost({
 
 ## 已验证和未验证
 
-此前宿主单测曾有 15 项通过。本轮只运行受影响的单项检查，不重跑整组测试。此前“任务 succeeded 后绑定”的 Fake 断言现已改为：投递确认不表示已读；错误目标和 taskId 不匹配的任务不会被接受；更晚的观察不会被旧通用任务绑定；默认 Runtime 适配和注入式 `workPort` 即使都读回普通成功状态，缺少结构化重评结果时仍保持旧绑定和非 `current_fact`。受影响单测 1 项通过，`git diff --check` 通过。SQLite 重启复验未运行：此隔离 Desktop 工作树缺少 `@personal-agent/runtime` 安装入口，定向加载时报 `ERR_MODULE_NOT_FOUND`；没有因此安装依赖或构建共享 Runtime。此前其余测试覆盖偶然提问、持续跟踪、撤销、重复与乱序、损坏检查点、丢失提交和停止。此前端口适配覆盖：
+本轮运行 `node --test apps/desktop/test/knowledge-watch-host.test.mjs`，17/17 通过；覆盖投递确认不表示已读、错误目标和 taskId 不匹配、精确 consumer/workKey 映射、缺少结构化结果时拒绝绑定，以及提供 TEST ONLY v2 结果后的正向绑定。`git diff --check` 通过。
+
+使用 P8 已构建的 `TaskRuntime`（`node:sqlite`）对临时数据库做了真实持久化读回：无结果不绑定，写入同一任务的 v2 checkpoint 和 Evidence 后才绑定；重复来源事件不重复提交；关闭并重开 Runtime 后保持绑定；撤销后重启不复活关注或新建任务。输出为 `{"status":"verified","sqlite":true,"taskCount":2,"duplicateNoResubmit":true,"restartRevocation":true}`。这验证的是共享 SQLite 存储和消费者契约，结果 checkpoint 仍是手写测试夹具，不是云端或生产重评证明。此前其余测试覆盖偶然提问、持续跟踪、撤销、重复与乱序、损坏检查点、丢失提交和停止。此前端口适配覆盖：
 
 - 真实 `LayaInterestDecisionService` 包住一个选择器双份：持续兴趣才调用模型形态的 `choose`，弃权不跟踪。没有启动 Laya 进程。
 - 合成的 `FeedService.collect` 结果：只影响绑定该来源的关注；`unchanged` 不重复提交；`TIMEOUT` 不把文档当成首次运行。这不是真实网络变化。
@@ -222,6 +244,6 @@ knowledgeWatchHost = createKnowledgeWatchHost({
 
 真实 Laya：通过 `createLocalLayaHost` 和 `layaChooser` 做了一次持续兴趣判断，随后停止进程。一次偶然提问保持 `suggested`，模型调用 1 次。公开返回 `state: "review"`、`selected: "review_public"`、`reason: "uncertain"`。宿主投影保持 `suggested` / `withheld` / `suggested_only`，没有改成 `tracked`，也没有创建重评任务。同一 SQLite 关闭后重建，读回仍是这个待建议状态。关闭前回执存在于内存投影；重启记录只打印了状态和 withheld 原因，没有打印回执 id。代码路径审计显示检查点与投影会保留该字段，但这次临时库没有保留字段级读回，具体回执的 SQLite 重启值仍未证实。
 
-既有临时 SQLite 恢复实验使用 `TaskRuntime`、双份兴趣选择器和 synthetic 来源事件。它验证过关注、提醒、检查点、撤销和重复事件的持久化。实验 harness 随后手动调用 `runTask` 将通用 `RECHECK <workKey>` 任务推进到 `succeeded`，旧宿主据此绑定并投影 `current_fact`；这只验证了任务状态门槛，不能证明该任务实际重评了哪一版来源。按本轮收紧后的宿主行为，这种成功状态现在返回 `reevaluation_result_unavailable` 并保持旧绑定。该实验临时库没有保留；不把它记为正式重评验收。
+本轮 SQLite 实验使用 `TaskRuntime`、双份兴趣选择器和 synthetic 来源事件，手动将通用 `RECHECK <workKey>` 任务推进到 `succeeded` 后仍先得到 `reevaluation_result_unavailable`；只有补入完整 v2 checkpoint 才绑定。这确认普通成功状态没有被当作实际重评证据。临时库和脚本已删除，不把它记为云端或正式生产重评验收。
 
 尚未由总装验收：`main.js` 替换旧构造、桌面会话授权后的 `feeds.collect`、界面上的投递确认按钮。UI 可复用现有宿主方法；绑定新版本仍需上述可信 Runtime 重评结果接口，不得用按钮或任务成功状态替代。

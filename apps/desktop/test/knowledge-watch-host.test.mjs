@@ -343,6 +343,20 @@ function collected(now, {state = 'fetched', etag = 'v10', items = null, hasMore 
       alreadySeenCount: 0, conditional: state === 'unchanged', validators: {etag, lastModified: null}, skipped: []}};
 }
 
+// TEST ONLY: a hand-authored checkpoint stands in for the not-yet-complete P8
+// Runtime producer. It exercises the consumer contract and is not production proof.
+function testOnlyKnowledgeRecheckResult(context, taskId, overrides = {}) {
+  return {version: 2, status: 'completed', taskId, workKey: context.workKey,
+    namespace: context.namespace, topicId: context.topicId, consumerRevision: context.consumerRevision,
+    sourceId: context.sourceId, boundRevision: context.boundRevision,
+    boundContentSha256: context.boundContentSha256, observedRevision: context.observedRevision,
+    observedContentSha256: context.observedContentSha256,
+    evaluatedContentSha256: context.observedContentSha256, citation: context.citation,
+    evaluation: {outcome: 'test-only-consumer-contract'},
+    evidenceRefs: [`test-only:evidence/${context.workKey}`], evaluatedAt: iso(start + minute),
+    ...overrides};
+}
+
 test('LayaInterestDecisionService chooses tracking and an abstention does not', async () => {
   let time = start;
   const seen = [];
@@ -425,7 +439,8 @@ test('opaque revisions are not ordered by string magnitude, and a lost runtime t
   const runtime = {
     findTaskByIdempotencyKey(key) {
       const taskId = tasks.get(key);
-      return taskId ? {taskId, state: 'created'} : undefined;
+      return taskId ? {taskId, state: 'created', goal: `RECHECK ${key}`,
+        conversationId: 'knowledge-watch:person-a'} : undefined;
     },
     submitTask(input) {
       submits += 1;
@@ -628,13 +643,50 @@ test('dialogue projection cites a new feed observation and keeps the old binding
   restored.dispose();
 });
 
+test('work key selects its exact consumer when several watches share a source', async () => {
+  const fx = harness();
+  const firstRows = trackedRows(fx.time);
+  const secondRows = [
+    evidence('rust-question', 'question', fx.time, {topicId: 'rust'}),
+    evidence('rust-followup', 'followup', fx.time,
+      {topicId: 'rust', relatedEvidenceId: 'rust-question'}),
+  ];
+  assert.equal((await fx.host.consumeInterestSignal(signal(fx.time, firstRows), deadline())).watch.state, 'tracked');
+  assert.equal((await fx.host.consumeInterestSignal(signal(fx.time, secondRows, {topicId: 'rust'}), deadline())).watch.state,
+    'tracked');
+  fx.time += 5 * minute;
+  const update = await fx.host.consumeSourceUpdate(change(fx.time));
+  assert.equal(update.notified, true);
+  const contexts = [...fx.tasks.keys()].map(workKey => fx.host.getRecheckContext(workKey));
+  assert.equal(contexts.length, 2);
+  assert.deepEqual(contexts.map(context => context.topicId).sort(), ['rust', 'typescript']);
+  for (const context of contexts) {
+    assert.equal(context.sourceId, 'official-docs');
+    assert.equal(context.boundRevision, 'source-v1');
+    assert.equal(context.observedRevision, 'source-v2');
+    assert.equal(context.consumerRevision, 1);
+    assert.equal(context.workKey.length, 64);
+  }
+  const rustKey = [...fx.tasks.keys()].find(workKey => fx.host.getRecheckContext(workKey)?.topicId === 'rust');
+  const typescriptKey = [...fx.tasks.keys()].find(workKey => fx.host.getRecheckContext(workKey)?.topicId === 'typescript');
+  await fx.host.revoke('rust', {id: 'rust-revoked', revokedAt: iso(fx.time)});
+  assert.equal(fx.host.getRecheckContext(rustKey), null);
+  assert.equal(fx.host.getRecheckContext(typescriptKey).topicId, 'typescript');
+  fx.host.dispose();
+});
+
 test('delivery acknowledgement is not a read or a re-evaluation result', async () => {
   let time = start;
   const store = memoryCheckpoints();
   const tasks = new Map();
+  const taskCheckpoints = new Map();
   let submits = 0;
   const runtime = {
     findTaskByIdempotencyKey(key) { return tasks.get(key); },
+    loadCheckpoint(taskId, key) {
+      const value = taskCheckpoints.get(`${taskId}\0${key}`);
+      return value === undefined ? undefined : structuredClone(value);
+    },
     submitTask({goal, conversationId, idempotencyKey}) {
       submits += 1;
       assert.equal(goal, `RECHECK ${idempotencyKey}`);
@@ -687,21 +739,46 @@ test('delivery acknowledgement is not a read or a re-evaluation result', async (
   assert.equal(mismatched.accepted, false);
   assert.equal(mismatched.reason, 'reevaluation_task_mismatch');
   task.taskId = acceptedTaskId;
+  task.state = 'succeeded';
+  const initialContext = host.getRecheckContext(workKey);
+  const initialEvidenceRef = `test-only:evidence/${workKey}`;
+  task.evidenceRefs = [initialContext.citation];
+  taskCheckpoints.set(`${acceptedTaskId}\0knowledge-recheck-result`,
+    testOnlyKnowledgeRecheckResult(initialContext, acceptedTaskId, {evidenceRefs: [initialContext.citation]}));
+  const citationOnly = await host.bindObservedRevision('typescript');
+  assert.equal(citationOnly.accepted, false);
+  assert.equal(citationOnly.reason, 'reevaluation_result_unavailable');
+  task.evidenceRefs = [initialEvidenceRef];
+  taskCheckpoints.set(`${acceptedTaskId}\0knowledge-recheck-result`,
+    testOnlyKnowledgeRecheckResult(initialContext, acceptedTaskId,
+      {evidenceRefs: [initialEvidenceRef]}));
+  const bound = await host.bindObservedRevision('typescript');
+  assert.equal(bound.accepted, true);
+  assert.equal(bound.reason, 'bound');
+  assert.deepEqual(bound.taskIds, [acceptedTaskId]);
+  assert.equal(host.listWatches()[0].boundSource.revision, initialContext.observedRevision);
+  assert.equal(host.dialogueProjection().items[0].usableAsCurrentFact, true);
+  assert.equal(submits, 1);
+
   time += minute;
   const newer = await host.consumeSourceUpdate(change(time, {
     revision: 'source-v3', contentSha256: 'c'.repeat(64),
     citation: {locator: 'https://example.com/typescript-3'},
   }));
-  assert.equal(newer.notified, false);
-  assert.equal(submits, 1, 'a created task is read by its original key, not resubmitted');
-  task.state = 'succeeded';
+  assert.equal(newer.notified, true);
+  assert.equal(submits, 2, 'a new source identity receives a new idempotent recheck key');
+  const latest = [...tasks.entries()].find(([key]) => key !== workKey);
+  assert.ok(latest);
+  const [latestKey, latestTask] = latest;
+  assert.equal(host.getRecheckContext(latestKey).observedRevision, 'source-v3');
+  latestTask.state = 'succeeded';
   const unverified = await host.bindObservedRevision('typescript');
   assert.equal(unverified.accepted, false);
   assert.equal(unverified.reason, 'reevaluation_result_unavailable');
   assert.equal(unverified.taskState, 'succeeded');
-  assert.equal(host.listWatches()[0].boundSource.revision, 'source-v1');
+  assert.equal(host.listWatches()[0].boundSource.revision, initialContext.observedRevision);
   assert.equal(host.dialogueProjection().items[0].usableAsCurrentFact, false);
-  assert.equal(submits, 1);
+  assert.equal(submits, 2);
 
   let injectedTime = start;
   const injectedTasks = new Map();
