@@ -1,4 +1,5 @@
 import {ProtocolError, validateToolValue} from '@personal-agent/contracts';
+import {createHash} from 'node:crypto';
 import type {Event, Request, Response, RegisteredTool, TaskSnapshot, ToolDescriptor} from '@personal-agent/contracts';
 import {RuntimeToolInvoker} from '@personal-agent/agents';
 import type {AgentToolPort} from '@personal-agent/agents';
@@ -48,6 +49,16 @@ const MODEL_METADATA = /\s*\[model=[^;\]]+;\s*verification=[^;\]]+;\s*tokens=[^\
 const HOST_TOOL_CHECKPOINT = 'host-tool-intent';
 const HOST_TOOL_PREPARATION_CHECKPOINT = 'host-tool-preparation';
 const HOST_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+const KNOWLEDGE_SOURCE_READ_PREFIX = 'knowledge-watch-source-read:';
+const KNOWLEDGE_RECHECK_RESULT_KEY = 'knowledge-recheck-result';
+const KNOWLEDGE_RECHECK_JUDGMENT_KEY = 'knowledge-recheck-judgment';
+
+const hashJson = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const plainObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object'
+  && !Array.isArray(value) && [Object.prototype, null].includes(Object.getPrototypeOf(value));
+const nonEmptyText = (value: unknown): value is string => typeof value === 'string'
+  && value.trim().length > 0 && !value.includes('\0');
+const sha256 = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value);
 
 export interface SubmitHostToolTaskRequest {
   /** Stable across retries and application restarts, chosen by the trusted host. */
@@ -56,6 +67,66 @@ export interface SubmitHostToolTaskRequest {
   toolVersion: string;
   arguments: Record<string, unknown>;
   deadline: string;
+}
+
+export interface KnowledgeRecheckResult {
+  status?: 'completed' | 'rejected' | 'failed' | string | undefined;
+  outcome?: 'relevant_update' | 'not_relevant' | string | undefined;
+  freshnessAction?: 'refresh_required' | string | undefined;
+  freshnessReason?: 'content_changed' | string | undefined;
+  judgment?: {
+    provider: 'local_laya';
+    modelReceiptId: string;
+    contextDigest: string;
+    observedSummarySha256: string;
+  } | undefined;
+  summary?: string | undefined;
+}
+
+export interface KnowledgeRecheckContext {
+  taskId: string;
+  deadline: string;
+  workKey: string;
+  namespace: string;
+  topicId: string;
+  consumerRevision: number;
+  sourceId: string;
+  boundRevision: string;
+  boundContentSha256: string;
+  boundCacheVersion: string;
+  boundLastSuccessfulCheck: string;
+  boundValidUntil: string;
+  observedRevision: string;
+  observedContentSha256: string;
+  observedAt: string;
+  citation: string;
+  sourceReadTaskId: string;
+  sourceReadReceiptId: string;
+  summary?: string | null | undefined;
+  signal: AbortSignal;
+}
+
+export interface KnowledgeRecheckOptions {
+  sourceId: string;
+  workKey: string;
+  namespace: string;
+  topicId: string;
+  consumerRevision: number;
+  boundRevision: string;
+  boundContentSha256: string;
+  boundCacheVersion: string;
+  boundLastSuccessfulCheck: string;
+  boundValidUntil: string;
+  observedRevision: string;
+  observedContentSha256: string;
+  observedAt: string;
+  citation: string;
+  sourceReadTaskId: string;
+  sourceReadReceiptId: string;
+  summary?: string | null | undefined;
+  deadline?: string | undefined;
+  revalidateCurrent?: (() => unknown) | undefined;
+  reevaluator?: ((context: KnowledgeRecheckContext) => Promise<KnowledgeRecheckResult>) | undefined;
 }
 
 export type PrepareHostToolTaskRequest = Omit<SubmitHostToolTaskRequest, 'arguments'>;
@@ -83,6 +154,16 @@ export interface HostToolTaskReadback {
   task: TaskSnapshot;
   approval?: {approvalId: string; revision: number; state: 'pending' | 'allowed' | 'denied'};
   confirmed?: {runId: string; result: unknown; evidenceRefs: string[]};
+}
+
+export interface ConfirmedSystemObservationSample {
+  readonly taskId: string;
+  readonly source: 'node:os';
+  readonly timestamp: string;
+  readonly cpuPercent: number;
+  readonly memoryPercent: number;
+  readonly samplingIntervalMs: number;
+  readonly evidenceRefs: readonly string[];
 }
 
 function assistantText(resultSummary: string): string {
@@ -436,6 +517,36 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
 
   stopSystemObservationSession(sessionId: string): {stopped: boolean} {
     return this.observationSessions.stop(sessionId);
+  }
+
+  /** Read only a successful system observation still bound to the current process-local consent lease. */
+  readCurrentSystemObservationSample(taskId: string): ConfirmedSystemObservationSample | undefined {
+    const sessionId = this.runtime.loadCheckpoint(taskId, SYSTEM_OBSERVATION_SESSION_CHECKPOINT);
+    if (typeof sessionId !== 'string') return undefined;
+    let samplingIntervalMs: number;
+    try { samplingIntervalMs = this.observationSessions.sampleIntervalMs(sessionId, taskId); }
+    catch (error) {
+      if (error instanceof ProtocolError && ['UNAUTHORIZED', 'TIMEOUT'].includes(error.code)) return undefined;
+      throw error;
+    }
+    const readback = this.readHostToolTask(taskId);
+    if (readback.toolName !== SYSTEM_OBSERVATION_NAME || readback.toolVersion !== SYSTEM_OBSERVATION_VERSION
+      || readback.task.state !== 'succeeded' || !readback.confirmed?.evidenceRefs.length) return undefined;
+    const result = readback.confirmed.result;
+    if (!result || typeof result !== 'object' || Array.isArray(result)) return undefined;
+    const sample = result as {source?: unknown; capturedAt?: unknown; cpu?: {utilizationPercent?: unknown}; memory?: {utilizationPercent?: unknown}};
+    const timestamp = sample.capturedAt;
+    const cpuPercent = sample.cpu?.utilizationPercent;
+    const memoryPercent = sample.memory?.utilizationPercent;
+    if (sample.source !== 'node:os' || typeof timestamp !== 'string'
+      || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(timestamp)
+      || !Number.isFinite(Date.parse(timestamp))
+      || typeof cpuPercent !== 'number' || !Number.isFinite(cpuPercent) || cpuPercent < 0 || cpuPercent > 100
+      || typeof memoryPercent !== 'number' || !Number.isFinite(memoryPercent) || memoryPercent < 0 || memoryPercent > 100) {
+      return undefined;
+    }
+    return {taskId, source: 'node:os', timestamp, cpuPercent, memoryPercent,
+      samplingIntervalMs, evidenceRefs: [...readback.confirmed.evidenceRefs]};
   }
 
   startMailReadSession(request: StartMailReadSessionRequest): MailReadSession {
@@ -841,6 +952,230 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     }).finally(() => this.activeTextTasks.delete(taskId));
     this.activeTextTasks.set(taskId, execution);
     void execution.catch(() => {});
+  }
+
+  dispatchKnowledgeRecheckTask(
+    taskId: string,
+    options: KnowledgeRecheckOptions,
+  ): Promise<TaskSnapshot> | void {
+    if (this.activeTextTasks.has(taskId)) return;
+    const task = this.runtime.getTask(taskId);
+    if (task.state !== 'created') return;
+    const deadlineIso = options.deadline ?? new Date(this.now().getTime() + 60_000).toISOString();
+    const execution = this.runtime.runTask(taskId, async context => {
+      if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Knowledge recheck task was cancelled');
+      if (this.now().getTime() >= Date.parse(deadlineIso)) {
+        throw new ProtocolError('TIMEOUT', 'Knowledge recheck task deadline exceeded');
+      }
+      const required = [options.workKey, options.namespace, options.topicId, options.sourceId,
+        options.boundRevision, options.boundCacheVersion, options.boundLastSuccessfulCheck,
+        options.boundValidUntil, options.observedRevision, options.observedAt, options.citation,
+        options.sourceReadTaskId, options.sourceReadReceiptId];
+      if (required.some(value => !nonEmptyText(value))
+        || !/^[a-f0-9]{64}$/u.test(options.workKey)
+        || !sha256(options.boundContentSha256) || !sha256(options.observedContentSha256)
+        || !Number.isSafeInteger(options.consumerRevision) || options.consumerRevision < 1
+        || !sha256(options.sourceReadReceiptId)
+        || !Number.isFinite(Date.parse(options.boundLastSuccessfulCheck))
+        || !Number.isFinite(Date.parse(options.boundValidUntil))
+        || !Number.isFinite(Date.parse(options.observedAt))
+        || Date.parse(options.observedAt) > this.now().getTime()
+        || Date.parse(options.boundLastSuccessfulCheck) > Date.parse(options.observedAt)) {
+        throw new ProtocolError('INVALID_ARGUMENT', 'Knowledge recheck identity or source timestamps are incomplete');
+      }
+      const registeredTask = this.runtime.findTaskByIdempotencyKey(options.workKey);
+      if (registeredTask?.taskId !== taskId || task.goal !== `RECHECK ${options.workKey}`
+        || task.conversationId !== `knowledge-watch:${options.namespace}`
+        || this.hostUserNamespace && this.hostUserNamespace !== options.namespace) {
+        throw new ProtocolError('REVISION_CONFLICT', 'Knowledge recheck task does not match its trusted source binding');
+      }
+      if (options.boundRevision === options.observedRevision
+        && options.boundContentSha256 === options.observedContentSha256) {
+        throw new ProtocolError('REVISION_CONFLICT', 'Source revision and content hash have not changed');
+      }
+      if (typeof options.reevaluator !== 'function') {
+        throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Knowledge reevaluation capability is unavailable');
+      }
+      if (typeof options.revalidateCurrent !== 'function') {
+        throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Current knowledge binding revalidation is unavailable');
+      }
+
+      const bindingFields = ['workKey', 'namespace', 'topicId', 'consumerRevision', 'sourceId',
+        'boundRevision', 'boundContentSha256', 'boundCacheVersion', 'boundLastSuccessfulCheck',
+        'boundValidUntil', 'observedRevision', 'observedContentSha256', 'observedAt', 'citation',
+        'sourceReadTaskId', 'sourceReadReceiptId'] as const;
+      const currentBindingMatches = () => {
+        const current = options.revalidateCurrent?.();
+        return plainObject(current) && current.taskId === taskId
+          && bindingFields.every(key => current[key] === options[key]);
+      };
+      if (!currentBindingMatches()) {
+        throw new ProtocolError('REVISION_CONFLICT', 'Knowledge source or consumer binding changed before reevaluation');
+      }
+
+      const readReceiptCore = (receipt: Record<string, unknown>) => ({version: receipt.version,
+        kind: receipt.kind, namespace: receipt.namespace, sourceId: receipt.sourceId,
+        observedAt: receipt.observedAt, revision: receipt.revision, contentSha256: receipt.contentSha256,
+        citation: receipt.citation, summary: receipt.summary, items: receipt.items});
+      const loadVerifiedSourceReceipt = () => {
+        const rootTask = this.runtime.findTaskByIdempotencyKey(`knowledge-watch-root:${options.namespace}`);
+        const sourceTask = this.runtime.getTask(options.sourceReadTaskId);
+        if (!rootTask || rootTask.taskId !== options.sourceReadTaskId || sourceTask.taskId === taskId
+          || sourceTask.conversationId !== `knowledge-watch:${options.namespace}`) {
+          throw new ProtocolError('REVISION_CONFLICT', 'Feed read receipt belongs to another Runtime task');
+        }
+        const receipt = this.runtime.loadCheckpoint(options.sourceReadTaskId,
+          KNOWLEDGE_SOURCE_READ_PREFIX + options.sourceReadReceiptId) as Record<string, unknown> | undefined;
+        const receiptKeys = ['version', 'kind', 'namespace', 'sourceId', 'observedAt', 'revision',
+          'contentSha256', 'citation', 'summary', 'items', 'receiptId'];
+        if (!receipt || !plainObject(receipt) || receipt.version !== 1 || receipt.kind !== 'feeds.collect'
+          || Object.keys(receipt).length !== receiptKeys.length
+          || receiptKeys.some(key => !Object.hasOwn(receipt, key))
+          || receipt.namespace !== options.namespace || receipt.sourceId !== options.sourceId
+          || receipt.receiptId !== options.sourceReadReceiptId || receipt.revision !== options.observedRevision
+          || receipt.contentSha256 !== options.observedContentSha256 || receipt.observedAt !== options.observedAt
+          || receipt.citation !== options.citation || typeof receipt.summary !== 'string'
+          || options.summary !== receipt.summary.slice(0, 2000) || !Array.isArray(receipt.items)
+          || receipt.items.length === 0 || !sha256(receipt.revision) || !sha256(receipt.contentSha256)
+          || receipt.items.some(item => !plainObject(item) || Object.keys(item).length !== 5
+            || ['dedupeKey', 'occurredAt', 'contentRef', 'title', 'summary'].some(key => !Object.hasOwn(item, key))
+            || !nonEmptyText(item.dedupeKey)
+            || !nonEmptyText(item.contentRef) || !nonEmptyText(item.title)
+            || !nonEmptyText(item.occurredAt) || !Number.isFinite(Date.parse(item.occurredAt))
+            || typeof item.summary !== 'string')) {
+          throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'A durable feeds.collect read receipt is required');
+        }
+        const items = receipt.items as Array<Record<string, unknown>>;
+        const sorted = [...items].sort((left, right) => String(left.dedupeKey) < String(right.dedupeKey) ? -1
+          : String(left.dedupeKey) > String(right.dedupeKey) ? 1 : 0);
+        const expectedSummary = items.flatMap(item => [item.title, item.summary]).filter(Boolean).join('\n');
+        const legacySummary = items.map(item => (item.summary || item.title) as string).join('\n');
+        if (JSON.stringify(sorted) !== JSON.stringify(items)
+          || new Set(items.map(item => item.dedupeKey)).size !== items.length
+          || hashJson(items) !== receipt.contentSha256
+          || items[0]?.contentRef !== receipt.citation
+          || ![expectedSummary, legacySummary].includes(receipt.summary as string)
+          || hashJson(readReceiptCore(receipt)) !== receipt.receiptId) {
+          throw new ProtocolError('REVISION_CONFLICT', 'Durable source read receipt failed identity validation');
+        }
+        return structuredClone(receipt);
+      };
+
+      const sourceReceipt = loadVerifiedSourceReceipt();
+      const reevalResult = await options.reevaluator({
+        taskId,
+        deadline: deadlineIso,
+        workKey: options.workKey,
+        namespace: options.namespace,
+        topicId: options.topicId,
+        consumerRevision: options.consumerRevision,
+        sourceId: options.sourceId,
+        boundRevision: options.boundRevision,
+        boundContentSha256: options.boundContentSha256,
+        boundCacheVersion: options.boundCacheVersion,
+        boundLastSuccessfulCheck: options.boundLastSuccessfulCheck,
+        boundValidUntil: options.boundValidUntil,
+        observedRevision: options.observedRevision,
+        observedContentSha256: options.observedContentSha256,
+        observedAt: options.observedAt,
+        citation: options.citation,
+        sourceReadTaskId: options.sourceReadTaskId,
+        sourceReadReceiptId: options.sourceReadReceiptId,
+        summary: options.summary,
+        signal: context.signal,
+      });
+
+      if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Knowledge recheck task was cancelled');
+      if (this.now().getTime() >= Date.parse(deadlineIso)) {
+        throw new ProtocolError('TIMEOUT', 'Knowledge recheck task deadline exceeded');
+      }
+      if (!isDeepStrictEqual(loadVerifiedSourceReceipt(), sourceReceipt)) {
+        throw new ProtocolError('REVISION_CONFLICT', 'Feed source evidence changed during reevaluation');
+      }
+      if (!currentBindingMatches()) {
+        throw new ProtocolError('REVISION_CONFLICT', 'Knowledge source or consumer binding changed during reevaluation');
+      }
+      const judgment = reevalResult?.judgment;
+      const summaryDigest = createHash('sha256').update(options.summary ?? '').digest('hex');
+      if (reevalResult?.status !== 'completed'
+        || !['relevant_update', 'not_relevant'].includes(reevalResult.outcome ?? '')
+        || reevalResult.freshnessAction !== 'refresh_required'
+        || reevalResult.freshnessReason !== 'content_changed'
+        || !judgment || judgment.provider !== 'local_laya'
+        || !sha256(judgment.modelReceiptId) || !sha256(judgment.contextDigest)
+        || judgment.observedSummarySha256 !== summaryDigest) {
+        throw new ProtocolError('EXTERNAL_FAILURE', 'Knowledge reevaluation lacks a completed source-bound local judgment');
+      }
+
+      const evaluatedAt = this.now().toISOString();
+      const sourceReadRef = KNOWLEDGE_SOURCE_READ_PREFIX + options.sourceReadReceiptId;
+      const judgmentRef = `${KNOWLEDGE_RECHECK_JUDGMENT_KEY}:${taskId}`;
+      const evidenceRefs = [sourceReadRef, judgmentRef];
+      const judgmentRecord = {
+        version: 1,
+        taskId,
+        evidenceRef: judgmentRef,
+        provider: 'local_laya',
+        modelReceiptId: judgment.modelReceiptId,
+        contextDigest: judgment.contextDigest,
+        outcome: reevalResult.outcome,
+        sourceReadReceiptId: options.sourceReadReceiptId,
+        observedSummarySha256: summaryDigest,
+        evaluatedAt,
+      };
+      const evaluation = {
+        outcome: reevalResult.outcome,
+        freshnessAction: reevalResult.freshnessAction,
+        freshnessReason: reevalResult.freshnessReason,
+        topicId: options.topicId,
+        consumerRevision: options.consumerRevision,
+        sourceId: options.sourceId,
+        observedRevision: options.observedRevision,
+        observedSummarySha256: summaryDigest,
+        modelReceiptId: judgment.modelReceiptId,
+        contextDigest: judgment.contextDigest,
+      };
+      const recheckRecord = {
+        version: 2,
+        status: 'completed',
+        taskId,
+        workKey: options.workKey,
+        namespace: options.namespace,
+        topicId: options.topicId,
+        consumerRevision: options.consumerRevision,
+        sourceId: options.sourceId,
+        boundRevision: options.boundRevision,
+        boundContentSha256: options.boundContentSha256,
+        boundCacheVersion: options.boundCacheVersion,
+        boundLastSuccessfulCheck: options.boundLastSuccessfulCheck,
+        boundValidUntil: options.boundValidUntil,
+        observedRevision: options.observedRevision,
+        observedContentSha256: options.observedContentSha256,
+        observedAt: options.observedAt,
+        evaluatedContentSha256: options.observedContentSha256,
+        sourceReadTaskId: options.sourceReadTaskId,
+        sourceReadReceiptId: options.sourceReadReceiptId,
+        citation: options.citation,
+        evaluatedAt,
+        evaluation,
+        evidenceRefs,
+      };
+      this.runtime.saveCheckpoint(taskId, KNOWLEDGE_RECHECK_JUDGMENT_KEY, judgmentRecord);
+      this.runtime.saveCheckpoint(taskId, KNOWLEDGE_RECHECK_RESULT_KEY, recheckRecord);
+
+      return {
+        resultSummary: reevalResult.outcome === 'relevant_update'
+          ? `本地语义重评确认：来源 ${options.sourceId} 的新内容与关注事项 ${options.topicId} 相关。`
+          : `本地语义重评确认：来源 ${options.sourceId} 的新内容与关注事项 ${options.topicId} 无关；来源版本保持未绑定。`,
+        evidenceRefs,
+      };
+    }, {
+      deadline: deadlineIso,
+      sideEffect: 'read',
+    }).finally(() => this.activeTextTasks.delete(taskId));
+    this.activeTextTasks.set(taskId, execution);
+    void execution.catch(() => {});
+    return execution;
   }
 
   private dispatchSubmittedTextTask(request: Request, response: SuccessfulResponse): void {

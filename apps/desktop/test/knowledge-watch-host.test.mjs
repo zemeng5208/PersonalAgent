@@ -343,20 +343,6 @@ function collected(now, {state = 'fetched', etag = 'v10', items = null, hasMore 
       alreadySeenCount: 0, conditional: state === 'unchanged', validators: {etag, lastModified: null}, skipped: []}};
 }
 
-// TEST ONLY: a hand-authored checkpoint stands in for the not-yet-complete P8
-// Runtime producer. It exercises the consumer contract and is not production proof.
-function testOnlyKnowledgeRecheckResult(context, taskId, overrides = {}) {
-  return {version: 2, status: 'completed', taskId, workKey: context.workKey,
-    namespace: context.namespace, topicId: context.topicId, consumerRevision: context.consumerRevision,
-    sourceId: context.sourceId, boundRevision: context.boundRevision,
-    boundContentSha256: context.boundContentSha256, observedRevision: context.observedRevision,
-    observedContentSha256: context.observedContentSha256,
-    evaluatedContentSha256: context.observedContentSha256, citation: context.citation,
-    evaluation: {outcome: 'test-only-consumer-contract'},
-    evidenceRefs: [`test-only:evidence/${context.workKey}`], evaluatedAt: iso(start + minute),
-    ...overrides};
-}
-
 test('LayaInterestDecisionService chooses tracking and an abstention does not', async () => {
   let time = start;
   const seen = [];
@@ -643,8 +629,74 @@ test('dialogue projection cites a new feed observation and keeps the old binding
   restored.dispose();
 });
 
+test('citation-only task Evidence cannot bind an observed feed revision', async () => {
+  let time = start;
+  const store = memoryCheckpoints();
+  const tasks = new Map();
+  let resultReadback;
+  const workPort = {
+    async read({idempotencyKey}) {
+      const task = tasks.get(idempotencyKey);
+      return task ? {state: 'accepted', taskId: task.taskId, taskState: task.state,
+        ...(resultReadback ? structuredClone(resultReadback) : {})} : {state: 'absent'};
+    },
+    async submit({idempotencyKey}) {
+      const task = {taskId: 'citation-only-recheck', state: 'created'};
+      tasks.set(idempotencyKey, task);
+      return {accepted: true, taskId: task.taskId};
+    },
+  };
+  const feedCollect = () => collected(time);
+  const host = createKnowledgeWatchHost({profile: 'huawei_ict_agentarts', namespace: 'person-a',
+    checkpointTaskId: 'watch-task', checkpoints: store.checkpoints, now: () => time,
+    layaChooser: {choose(request) {
+      const track = request.candidates.some(candidate => candidate.id === 'track_public');
+      return Promise.resolve(actionSelection(track ? 'track_public' : null));
+    }}, workPort, feedCollect, feedSubscriptionId: 'official-docs'});
+  host.start();
+  await host.consumeInterestSignal(signal(time, trackedRows(time)), deadline());
+  time += 5 * minute;
+  await host.refreshSubscribedFeed();
+  const [workKey, task] = tasks.entries().next().value;
+  const context = host.getRecheckContext(workKey);
+  assert.ok(context?.sourceReadReceiptId);
+  task.state = 'succeeded';
+  const judgmentRef = `knowledge-recheck-judgment:${task.taskId}`;
+  resultReadback = {
+    knowledgeRecheckResult: {
+      version: 2, status: 'completed', taskId: task.taskId, workKey,
+      namespace: context.namespace, topicId: context.topicId, consumerRevision: context.consumerRevision,
+      sourceId: context.sourceId, boundRevision: context.boundRevision,
+      boundContentSha256: context.boundContentSha256, boundCacheVersion: context.boundCacheVersion,
+      boundLastSuccessfulCheck: context.boundLastSuccessfulCheck, boundValidUntil: context.boundValidUntil,
+      observedRevision: context.observedRevision, observedContentSha256: context.observedContentSha256,
+      observedAt: context.observedAt, evaluatedContentSha256: context.observedContentSha256,
+      sourceReadTaskId: context.sourceReadTaskId, sourceReadReceiptId: context.sourceReadReceiptId,
+      citation: context.citation, evaluatedAt: iso(time),
+      evaluation: {outcome: 'relevant_update', freshnessAction: 'refresh_required',
+        freshnessReason: 'content_changed', topicId: context.topicId,
+        consumerRevision: context.consumerRevision, sourceId: context.sourceId,
+        observedRevision: context.observedRevision, observedSummarySha256: 'a'.repeat(64),
+        modelReceiptId: 'b'.repeat(64), contextDigest: 'c'.repeat(64)},
+      evidenceRefs: [context.citation],
+    },
+    knowledgeRecheckJudgment: {version: 1, taskId: task.taskId, evidenceRef: judgmentRef,
+      provider: 'local_laya', outcome: 'relevant_update', sourceReadReceiptId: context.sourceReadReceiptId,
+      observedSummarySha256: 'a'.repeat(64), modelReceiptId: 'b'.repeat(64), contextDigest: 'c'.repeat(64),
+      evaluatedAt: iso(time)},
+    taskEvidenceRefs: [context.citation],
+  };
+  const bound = await host.bindObservedRevision('typescript');
+  assert.equal(bound.accepted, false);
+  assert.equal(bound.reason, 'reevaluation_result_unavailable');
+  assert.equal(host.listWatches()[0].boundSource.revision, 'source-v1');
+  host.dispose();
+});
+
 test('work key selects its exact consumer when several watches share a source', async () => {
-  const fx = harness();
+  let fx;
+  fx = harness({options: {feedCollect: async () => collected(fx.time, {etag: 'v11'}),
+    feedSubscriptionId: 'official-docs'}});
   const firstRows = trackedRows(fx.time);
   const secondRows = [
     evidence('rust-question', 'question', fx.time, {topicId: 'rust'}),
@@ -655,7 +707,7 @@ test('work key selects its exact consumer when several watches share a source', 
   assert.equal((await fx.host.consumeInterestSignal(signal(fx.time, secondRows, {topicId: 'rust'}), deadline())).watch.state,
     'tracked');
   fx.time += 5 * minute;
-  const update = await fx.host.consumeSourceUpdate(change(fx.time));
+  const update = await fx.host.refreshSubscribedFeed();
   assert.equal(update.notified, true);
   const contexts = [...fx.tasks.keys()].map(workKey => fx.host.getRecheckContext(workKey));
   assert.equal(contexts.length, 2);
@@ -663,9 +715,9 @@ test('work key selects its exact consumer when several watches share a source', 
   for (const context of contexts) {
     assert.equal(context.sourceId, 'official-docs');
     assert.equal(context.boundRevision, 'source-v1');
-    assert.equal(context.observedRevision, 'source-v2');
     assert.equal(context.consumerRevision, 1);
     assert.equal(context.workKey.length, 64);
+    assert.ok(context.sourceReadReceiptId);
   }
   const rustKey = [...fx.tasks.keys()].find(workKey => fx.host.getRecheckContext(workKey)?.topicId === 'rust');
   const typescriptKey = [...fx.tasks.keys()].find(workKey => fx.host.getRecheckContext(workKey)?.topicId === 'typescript');
@@ -679,14 +731,9 @@ test('delivery acknowledgement is not a read or a re-evaluation result', async (
   let time = start;
   const store = memoryCheckpoints();
   const tasks = new Map();
-  const taskCheckpoints = new Map();
   let submits = 0;
   const runtime = {
     findTaskByIdempotencyKey(key) { return tasks.get(key); },
-    loadCheckpoint(taskId, key) {
-      const value = taskCheckpoints.get(`${taskId}\0${key}`);
-      return value === undefined ? undefined : structuredClone(value);
-    },
     submitTask({goal, conversationId, idempotencyKey}) {
       submits += 1;
       assert.equal(goal, `RECHECK ${idempotencyKey}`);
@@ -739,27 +786,6 @@ test('delivery acknowledgement is not a read or a re-evaluation result', async (
   assert.equal(mismatched.accepted, false);
   assert.equal(mismatched.reason, 'reevaluation_task_mismatch');
   task.taskId = acceptedTaskId;
-  task.state = 'succeeded';
-  const initialContext = host.getRecheckContext(workKey);
-  const initialEvidenceRef = `test-only:evidence/${workKey}`;
-  task.evidenceRefs = [initialContext.citation];
-  taskCheckpoints.set(`${acceptedTaskId}\0knowledge-recheck-result`,
-    testOnlyKnowledgeRecheckResult(initialContext, acceptedTaskId, {evidenceRefs: [initialContext.citation]}));
-  const citationOnly = await host.bindObservedRevision('typescript');
-  assert.equal(citationOnly.accepted, false);
-  assert.equal(citationOnly.reason, 'reevaluation_result_unavailable');
-  task.evidenceRefs = [initialContext.citation, initialEvidenceRef];
-  taskCheckpoints.set(`${acceptedTaskId}\0knowledge-recheck-result`,
-    testOnlyKnowledgeRecheckResult(initialContext, acceptedTaskId,
-      {evidenceRefs: [initialContext.citation, initialEvidenceRef]}));
-  const bound = await host.bindObservedRevision('typescript');
-  assert.equal(bound.accepted, true);
-  assert.equal(bound.reason, 'bound');
-  assert.deepEqual(bound.taskIds, [acceptedTaskId]);
-  assert.equal(host.listWatches()[0].boundSource.revision, initialContext.observedRevision);
-  assert.equal(host.dialogueProjection().items[0].usableAsCurrentFact, true);
-  assert.equal(submits, 1);
-
   time += minute;
   const newer = await host.consumeSourceUpdate(change(time, {
     revision: 'source-v3', contentSha256: 'c'.repeat(64),
@@ -770,13 +796,14 @@ test('delivery acknowledgement is not a read or a re-evaluation result', async (
   const latest = [...tasks.entries()].find(([key]) => key !== workKey);
   assert.ok(latest);
   const [latestKey, latestTask] = latest;
-  assert.equal(host.getRecheckContext(latestKey).observedRevision, 'source-v3');
+  assert.equal(host.getRecheckContext(latestKey), null,
+    'direct source updates without a durable feeds.collect receipt cannot become bindable');
   latestTask.state = 'succeeded';
   const unverified = await host.bindObservedRevision('typescript');
   assert.equal(unverified.accepted, false);
-  assert.equal(unverified.reason, 'reevaluation_result_unavailable');
-  assert.equal(unverified.taskState, 'succeeded');
-  assert.equal(host.listWatches()[0].boundSource.revision, initialContext.observedRevision);
+  assert.equal(unverified.reason, 'reevaluation_missing');
+  assert.equal(task.state, 'succeeded');
+  assert.equal(host.listWatches()[0].boundSource.revision, 'source-v1');
   assert.equal(host.dialogueProjection().items[0].usableAsCurrentFact, false);
   assert.equal(submits, 2);
 
@@ -807,8 +834,8 @@ test('delivery acknowledgement is not a read or a re-evaluation result', async (
   for (const injected of injectedTasks.values()) injected.state = 'succeeded';
   const injectedUnverified = await injectedHost.bindObservedRevision('typescript');
   assert.equal(injectedUnverified.accepted, false);
-  assert.equal(injectedUnverified.reason, 'reevaluation_result_unavailable');
-  assert.equal(injectedUnverified.taskState, 'succeeded');
+  assert.equal(injectedUnverified.reason, 'reevaluation_missing');
+  assert.equal([...injectedTasks.values()][0].state, 'succeeded');
   assert.equal(injectedHost.listWatches()[0].boundSource.revision, 'source-v1');
   injectedHost.dispose();
 
