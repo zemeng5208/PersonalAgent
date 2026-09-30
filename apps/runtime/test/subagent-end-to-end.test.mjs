@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {TaskRuntime} from '../dist/index.js';
 import {createRuntimeSubagentDispatchTool} from '../dist/application.js';
+import {ModelGateway, FakeModelProvider} from '@personal-agent/models';
 
 test('end-to-end subagent dispatch verifies parent-child tracking and cancellation chain', async () => {
   const runtime = new TaskRuntime(':memory:');
@@ -13,8 +14,14 @@ test('end-to-end subagent dispatch verifies parent-child tracking and cancellati
     idempotencyKey: 'jarvis-main-goal-1',
   });
 
+  // 显式 Fake 网关（测试内构造，等价 fakeModelMode 开关）：无网关时现在是明确失败而非假成功。
+  const gateway = new ModelGateway(new FakeModelProvider([
+    () => ({kind: 'final', text: '调研完成：天气与日程已核对'}),
+    () => ({kind: 'final', text: '工程核对完成：差异与依赖已确认'}),
+  ]));
   const tool = createRuntimeSubagentDispatchTool({
     getRuntime: () => runtime,
+    getModelGateway: () => gateway,
   });
 
   // 2. 派发两个不同职责子任务

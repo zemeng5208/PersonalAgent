@@ -244,6 +244,13 @@ P1 邮件连接器与 P5 邮件分类之间的分页与身份映射契约固定�
 epoch 轮换抛 `CURSOR_EXPIRED` 且消费侧必须从头重建，不复用旧断点；`send` 为外部副作用
 （unknown 先核对、同幂等键不盲重发）。2026-09-13 的 22/22 真实读回证据对应的授权码已作废，
 当前条件性可用。该契约为 `provisional`，升格冻结需 P1/P5 双侧非作者评审。
+### MOD-20B-CALENDAR-P5-PROJECTION-01 登记契约（2026-09-30）
+P1 日历连接器与 P5 认知之间的投影消费契约固定为
+[P1-CALENDAR-P5-PROJECTION.md](P1-CALENDAR-P5-PROJECTION.md)：P1 只提供版本化条目
+（`dedupeKey` 携带 `sequence` 即 sourceRevision）与单条读回；**取消必须走单条
+`getEventItem`**（列表路径过滤 cancelled）；`MeetingRescheduleEvent` 的生成是 P5 的投影职责。
+含对 Issue #212 答复的更正：CalDAV 记录的 `timeZone` 是事件原始 TZID（订阅源才是恒 UTC）。
+该契约为 `provisional`，升格冻结需 P1/P5 双侧非作者评审。
 
 ### 6.3 桌面、语音、工具与通知增量（provisional）
 
