@@ -64,6 +64,15 @@ Stale proposals fail with `REVISION_CONFLICT`. Source-owned facts cannot be chan
 through ordinary `append`. These host methods do not register a Runtime capability
 or authorize private data or cloud transfer.
 
+Migration 4 adds a content-free operation receipt for host-only `reviseUserFact`.
+After the trusted caller obtains user authorization, it supplies an exact head revision,
+operation ID, user-action source reference and full next fact fields. A correction or
+withdrawal appends one `user_confirmed` version and feed event in the same transaction
+as the receipt. Exact retries return the saved version; stale heads or altered retries
+fail. Public-source-owned facts require a separate source ownership decision and are
+rejected here. Physical fact erasure removes these receipts with the fact. This port
+does not authenticate a user or expose a Desktop/Runtime capability.
+
 `withdrawPublicSource` records an append-only public tombstone with an expected Fact
 revision and an idempotent withdrawal ID. The caller must first verify source removal
 through its trusted source adapter and obtain authorization for that source; search

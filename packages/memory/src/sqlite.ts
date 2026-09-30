@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {createHash, randomUUID} from 'node:crypto';
 import type {DatabaseSync} from 'node:sqlite';
 import {openStorage, type Migration} from '@personal-agent/storage';
 import {FactChangeFeedError, MemoryQueryError, parseFactChangeBatch} from './index.js';
@@ -130,6 +130,20 @@ const MIGRATIONS: readonly Migration[] = [{
       phase TEXT NOT NULL CHECK (phase IN ('pending', 'completed')),
       PRIMARY KEY (namespace, fact_id),
       FOREIGN KEY (namespace) REFERENCES memory_namespaces(namespace)
+    ) STRICT;
+  `,
+}, {
+  version: 4,
+  sql: `
+    CREATE TABLE memory_user_revisions (
+      operation_id TEXT PRIMARY KEY,
+      namespace TEXT NOT NULL,
+      fact_id TEXT NOT NULL,
+      expected_revision INTEGER NOT NULL CHECK (expected_revision >= 1),
+      fact_revision INTEGER NOT NULL CHECK (fact_revision >= 2),
+      fingerprint TEXT NOT NULL,
+      FOREIGN KEY (namespace, fact_id, fact_revision)
+        REFERENCES memory_facts(namespace, fact_id, revision)
     ) STRICT;
   `,
 }];
@@ -418,6 +432,8 @@ export class SqliteMemoryHost {
           .get(namespace) !== undefined) return queryFail('SCOPE_DENIED');
         this.db.prepare('DELETE FROM memory_public_sources WHERE namespace = ? AND fact_id = ?')
           .run(namespace, factId);
+        this.db.prepare('DELETE FROM memory_user_revisions WHERE namespace = ? AND fact_id = ?')
+          .run(namespace, factId);
         this.invalidateFactSnapshots(namespace, factId);
         this.db.prepare('DELETE FROM memory_facts WHERE namespace = ? AND fact_id = ?')
           .run(namespace, factId);
@@ -591,6 +607,8 @@ export class SqliteMemoryHost {
         }
         this.db.prepare('DELETE FROM memory_public_sources WHERE namespace = ? AND fact_id = ?')
           .run(namespace, factId);
+        this.db.prepare('DELETE FROM memory_user_revisions WHERE namespace = ? AND fact_id = ?')
+          .run(namespace, factId);
         const removed = this.db.prepare('DELETE FROM memory_facts WHERE namespace = ? AND fact_id = ?')
           .run(namespace, factId);
         if (Number(removed.changes) !== expectedRevision) return queryFail('SCOPE_DENIED');
@@ -645,6 +663,66 @@ export class SqliteMemoryHost {
       }
     }
     return structuredClone(next);
+  }
+
+  /** Host-only user-confirmed correction or withdrawal after authorization outside this port. */
+  reviseUserFact(namespaceValue: unknown, value: unknown): {
+    readonly fact: FactVersion;
+    readonly appended: boolean;
+  } {
+    try {
+      const namespace = text(namespaceValue);
+      const record = exact(value, ['factId', 'expectedRevision', 'operationId', 'summary',
+        'sourceRef', 'observedAt', 'validFrom', 'validUntil', 'sensitivity', 'state',
+        'deadline', 'signal']);
+      const factId = text(record.factId);
+      const operationId = text(record.operationId, 128);
+      const expected = record.expectedRevision;
+      if (!/^[A-Za-z0-9_.-]+$/.test(operationId)
+        || typeof expected !== 'number' || !Number.isSafeInteger(expected)
+        || expected < 1 || expected >= Number.MAX_SAFE_INTEGER) return queryFail();
+      const operation = context(record, queryFail);
+      const next = fact({ref: {id: factId, revision: expected + 1},
+        summary: record.summary, sourceRef: record.sourceRef,
+        observedAt: record.observedAt, validFrom: record.validFrom,
+        validUntil: record.validUntil, sensitivity: record.sensitivity,
+        state: record.state, confirmation: 'user_confirmed',
+        corrects: {id: factId, revision: expected}});
+      const fingerprint = createHash('sha256').update(JSON.stringify(next)).digest('hex');
+      return transaction(this.db, () => {
+        active(operation, queryFail);
+        if (this.db.prepare('SELECT 1 FROM memory_erasure_intents WHERE namespace = ? AND fact_id = ?')
+          .get(namespace, factId) !== undefined) return queryFail('SCOPE_DENIED');
+        const receipt = this.db.prepare(`SELECT namespace, fact_id, expected_revision,
+          fact_revision, fingerprint FROM memory_user_revisions WHERE operation_id = ?`)
+          .get(operationId) as Row | undefined;
+        if (receipt !== undefined) {
+          if (receipt.namespace !== namespace || receipt.fact_id !== factId
+            || receipt.expected_revision !== expected || receipt.fingerprint !== fingerprint
+            || receipt.fact_revision !== next.ref.revision) return queryFail('REVISION_CONFLICT');
+          const saved = this.db.prepare(`SELECT payload FROM memory_facts
+            WHERE namespace = ? AND fact_id = ? AND revision = ?`)
+            .get(namespace, factId, next.ref.revision) as Row | undefined;
+          if (saved === undefined) return queryFail('SCOPE_DENIED');
+          return {fact: fact(parseJson(rowText(saved, 'payload'))), appended: false};
+        }
+        if (this.db.prepare('SELECT 1 FROM memory_public_sources WHERE namespace = ? AND fact_id = ?')
+          .get(namespace, factId) !== undefined) return queryFail('SCOPE_DENIED');
+        const head = this.db.prepare(`SELECT MAX(revision) AS revision FROM memory_facts
+          WHERE namespace = ? AND fact_id = ?`).get(namespace, factId) as Row;
+        if (head.revision === null) return queryFail('NOT_FOUND');
+        if (head.revision !== expected) return queryFail('REVISION_CONFLICT');
+        const saved = this.appendFact(namespace, next);
+        this.db.prepare(`INSERT INTO memory_user_revisions(
+          operation_id, namespace, fact_id, expected_revision, fact_revision, fingerprint
+        ) VALUES (?, ?, ?, ?, ?, ?)`).run(operationId, namespace, factId,
+          expected, next.ref.revision, fingerprint);
+        return {fact: saved, appended: true};
+      }, () => active(operation, queryFail));
+    } catch (error) {
+      if (error instanceof MemoryQueryError) throw error;
+      return queryFail();
+    }
   }
 
   readPublicSourceHead(namespaceValue: unknown, keyValue: unknown): number | null {

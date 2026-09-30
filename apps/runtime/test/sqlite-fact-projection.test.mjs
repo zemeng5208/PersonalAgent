@@ -56,6 +56,69 @@ test('Competition application owns a public Fact source and resumes its graph pr
   }
 });
 
+test('user-confirmed correction and withdrawal project exact versions without reviving an old fact', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'personal-agent-user-memory-projection-'));
+  const memoryPath = join(directory, 'memory.sqlite');
+  const runtimePath = join(directory, 'runtime.sqlite');
+  let memory = openSqliteMemoryHost(memoryPath);
+  let runtime = new TaskRuntime(runtimePath);
+  try {
+    memory.provision(namespace);
+    memory.append(namespace, {
+      ref: {id: 'synthetic-preference', revision: 1}, summary: 'Old preference',
+      sourceRef: 'synthetic-user-action-0', observedAt: '2026-09-25T00:00:00.000Z',
+      validFrom: '2026-09-25T00:00:00.000Z', validUntil: '2027-01-01T00:00:00.000Z',
+      sensitivity: 'public', state: 'active', confirmation: 'user_confirmed',
+    });
+    const host = () => createSqliteFactProjectionHost({memory, runtime,
+      memoryNamespace: namespace, graphNamespace: graph, consumerKey});
+    assert.deepEqual(await host().drain({limit: 10, maxBatches: 2, ...context()}),
+      {batches: 1, atWatermark: true});
+    const correction = {factId: 'synthetic-preference', expectedRevision: 1,
+      operationId: 'synthetic-user-correction', summary: 'Corrected preference',
+      sourceRef: 'synthetic-user-action-1', observedAt: '2026-09-25T01:00:00.000Z',
+      validFrom: '2026-09-25T00:00:00.000Z', validUntil: '2027-01-01T00:00:00.000Z',
+      sensitivity: 'public', state: 'active', ...context()};
+    assert.equal(memory.reviseUserFact(namespace, correction).appended, true);
+    assert.equal(memory.reviseUserFact(namespace, correction).appended, false);
+    await host().drain({limit: 10, maxBatches: 2, ...context()});
+    const withdrawal = {...correction, expectedRevision: 2,
+      operationId: 'synthetic-user-withdrawal', summary: 'User withdrew preference',
+      sourceRef: 'synthetic-user-action-2', state: 'withdrawn'};
+    assert.equal(memory.reviseUserFact(namespace, withdrawal).fact.ref.revision, 3);
+    await host().drain({limit: 10, maxBatches: 2, ...context()});
+    const receipts = host().listImpactReceipts({afterGraphRevision: 0, limit: 10});
+    assert.deepEqual(receipts.map(item => item.projection.links[0].fact.revision), [1, 2, 3]);
+    assert.equal(new Set(receipts.map(item => item.projection.links[0].node.id)).size, 1);
+    assert.equal(runtime.bindCoordinationStore(graph).read().history.length, 3);
+    assert.deepEqual((await memory.bind(namespace, {allowedSensitivities: ['public']})
+      .listCurrent({at: '2026-09-25T03:00:00.000Z', limit: 10, ...context()})).facts, []);
+    memory.close(); runtime.close();
+    memory = openSqliteMemoryHost(memoryPath);
+    runtime = new TaskRuntime(runtimePath);
+    assert.equal(host().listImpactReceipts({afterGraphRevision: 0, limit: 10}).length, 3);
+    assert.equal(memory.reviseUserFact(namespace, correction).appended, false);
+    const erasure = {factId: 'synthetic-preference', expectedRevision: 3,
+      operationId: 'synthetic-user-erasure', ...context()};
+    memory.beginFactErasure(namespace, erasure);
+    const inspection = await host().preflightErasure(erasure.factId, context());
+    assert.equal(inspection.targetVersions, 3);
+    await host().resumeFactErasure({...erasure,
+      expectedGraphRevision: inspection.graphRevision});
+    await host().resumeFactErasure({...erasure,
+      expectedGraphRevision: inspection.graphRevision});
+    assert.deepEqual(runtime.bindCoordinationStore(graph).read().history, []);
+    assert.deepEqual((await memory.bind(namespace, {allowedSensitivities: ['public']})
+      .listHistory({factId: erasure.factId, limit: 10, ...context()})).facts, []);
+    const db = new DatabaseSync(memoryPath);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM memory_user_revisions').get().count, 0);
+    db.close();
+  } finally {
+    memory.close(); runtime.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
 test('trusted SQLite feed binding confirms public source corrections across restart', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'personal-agent-fact-host-'));
   const memoryPath = join(directory, 'memory.sqlite');
