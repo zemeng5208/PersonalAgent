@@ -90,6 +90,33 @@ test('a persisted-but-unconfirmed notification is never resent; only reconcile s
   assert.match((await port.sendAdvisoryNotification({id: 'n-4', title: '另一条', body: '同样中断'})).error, /failed/);
 });
 
+test('bounded history never evicts an unresolved delivery', async t => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'pa-notify-'));
+  t.after(() => rm(dir, {recursive: true, force: true}));
+  const notifier = fakeNotifier({autoShow: false});
+  const port = createDesktopNotificationPort({storageDir: dir, notifier, maxRecords: 1});
+
+  const first = await port.sendAdvisoryNotification({id: 'n-pending', title: '待核实', body: '不重发'});
+  assert.equal(first.delivered, false);
+  assert.equal(port.list()[0].state, 'persisted');
+
+  const blocked = await port.sendAdvisoryNotification({id: 'n-next', title: '新通知', body: '等待容量'});
+  assert.equal(blocked.delivered, false);
+  assert.match(blocked.error, /落盘失败/);
+  assert.deepEqual(port.list().map(record => record.id), ['n-pending']);
+  assert.equal(notifier.shown.length, 1, 'full unresolved store must refuse before system delivery');
+
+  const retry = await port.sendAdvisoryNotification({id: 'n-pending', title: '待核实', body: '不重发'});
+  assert.match(retry.error, /persisted/);
+  assert.equal(notifier.shown.length, 1);
+
+  port.reconcile('n-pending', true);
+  const admitted = await port.sendAdvisoryNotification({id: 'n-next', title: '新通知', body: '已腾出容量'});
+  assert.equal(admitted.delivered, false);
+  assert.deepEqual(port.list().map(record => record.id), ['n-next']);
+  assert.equal(notifier.shown.length, 2);
+});
+
 test('a persistence failure or an OS rejection never reports delivery', async t => {
   const base = await mkdtemp(path.join(tmpdir(), 'pa-notify-'));
   t.after(() => rm(base, {recursive: true, force: true}));

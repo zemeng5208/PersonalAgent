@@ -55,6 +55,7 @@ export function createDesktopNotificationPort(options = {}) {
   const notifier = options.notifier ?? defaultNotifier();
   const now = options.now ?? Date.now;
   const maxRecords = options.maxRecords ?? MAX_RECORDS;
+  if (!Number.isSafeInteger(maxRecords) || maxRecords < 1) throw Error('maxRecords must be a positive safe integer');
   const filePath = options.storageDir === undefined
     ? undefined : path.join(options.storageDir, RECORDS_FILE);
 
@@ -70,7 +71,13 @@ export function createDesktopNotificationPort(options = {}) {
 
   function persist(next) {
     if (filePath === undefined) throw Error('notification persistence is unavailable');
-    const bounded = next.slice(-maxRecords);
+    const bounded = [...next];
+    while (bounded.length > maxRecords) {
+      const oldestTerminal = bounded.findIndex(record =>
+        ['delivered', 'acknowledged', 'failed'].includes(record.state));
+      if (oldestTerminal < 0) throw Error('unresolved notifications fill the store');
+      bounded.splice(oldestTerminal, 1);
+    }
     mkdirSync(path.dirname(filePath), {recursive: true});
     const temporary = `${filePath}.tmp-${process.pid}-${randomUUID()}`;
     try {
