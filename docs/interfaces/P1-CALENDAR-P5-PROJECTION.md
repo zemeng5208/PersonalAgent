@@ -56,7 +56,7 @@ P1 不发射事件、不做前后版本 diff、不判断「改期」语义，也
 
 | 码 | 语义 | 重试 |
 | --- | --- | --- |
-| `NOT_FOUND` | 读回目标不存在（可能已删除） | 否（转为取消/移除处理） |
+| `NOT_FOUND` | 单条读回未命中；不能单独证明日历取消或删除 | 否（转为人工复核，不自动撤回 Fact） |
 | `UNAUTHORIZED` | 认证被拒绝（401/403） | 否（凭据问题） |
 | `RATE_LIMITED` | 限流 | 是，`retryAfterMs`（默认 60s） |
 | `EXTERNAL_FAILURE` | 网络/服务器失败/畸形响应 | 按 `retryable` 标志（5xx/网络/超时可重试；4xx 与非 multistatus 否） |
