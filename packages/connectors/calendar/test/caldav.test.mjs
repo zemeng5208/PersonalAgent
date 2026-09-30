@@ -279,3 +279,31 @@ test('live CalDAV wrong credentials are refused as UNAUTHORIZED without retry', 
     return true;
   });
 });
+
+test('connector manifest follows the provider kind instead of a stale fixture example', async () => {
+  const {CalendarConnector, CalendarService, FakeCalendarProvider} = await import('../dist/index.js');
+  const fixtureConnector = new CalendarConnector(new CalendarService(new FakeCalendarProvider(), {now: () => 0}));
+  assert.deepEqual(fixtureConnector.manifest.accountTypes, ['fixture']);
+  assert.equal(fixtureConnector.manifest.authentication, 'none');
+  assert.ok(fixtureConnector.manifest.capabilities.includes('performAction'), 'Fake keeps respond');
+
+  const {fetchImpl} = fixtureServer({propfind: multistatus([{href: '/cal/', ctag: 'c'}])});
+  const real = new CalendarConnector(new CalendarService(
+    new CalDavProvider({calendarUrl: 'https://caldav.example.test/cal/', fetchImpl}), {now: () => 0}));
+  assert.deepEqual(real.manifest.accountTypes, ['caldav'], 'real providers are no longer labelled fixture');
+  assert.equal(real.manifest.authentication, 'basic');
+  assert.equal(real.manifest.verification, 'conditional');
+  assert.ok(!real.manifest.capabilities.includes('performAction'),
+    'read-only providers must not advertise respond');
+});
+
+test('loopback plain HTTP is opt-in and localhost-only', async () => {
+  assert.throws(() => new CalDavProvider({calendarUrl: 'http://localhost:5232/user/cal/'}), {code: 'INVALID_ARGUMENT'});
+  const {fetchImpl, calls} = fixtureServer({propfind: multistatus([{href: '/user/cal/', ctag: 'c'}])});
+  const provider = new CalDavProvider({calendarUrl: 'http://127.0.0.1:5232/user/cal',
+    allowLoopbackHttp: true, fetchImpl});
+  await provider.pollChanges();
+  assert.equal(calls[0].url, 'http://127.0.0.1:5232/user/cal/');
+  assert.throws(() => new CalDavProvider({calendarUrl: 'http://192.168.1.5/cal/', allowLoopbackHttp: true}),
+    {code: 'INVALID_ARGUMENT'}, 'non-loopback plaintext stays refused');
+});
