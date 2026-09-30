@@ -81,10 +81,19 @@ delivered/failed，之后 readDeviceFeedback 读回；unknown/pending 不猜测�
 - 新 Node SQLite port case 5/5 通过：数据库关闭重开、delivered 去重、pending→unknown、
   旧 JSON 一次导入/旧文件不变、V1 不伪 delivered、读写/腐坏失败、多 source 来源绑定、容量保留。
 - 宿主和 store 的 node --check、git diff --check 通过。#248 原 10 个 Fake case 不重复运行。
+- 本轮执行器实际为 Windows / Node `v26.3.0`，与仓库 `.node-version` 的 `24.15.0` 不同；
+  本包没有改根版本约束或安装运行时，Electron/声明 Node 版本的正式组合仍由 P8 验收。
 - Node SQLite seam case 使用隔离真实 SQLite 和同形 StoragePort，不等于 P8 migration10
   与正式 Runtime namespace 集成验收。未安装/启动模型、没有真实 OS 通知副作用。
 - P6 默认真实 source 是 node:os；injected 只能是显式测试来源。CPU/内存没有进程/磁盘/
   温度/网络归因，不能从相关性推断变慢原因。
+- 2026-09-30 19:57（Asia/Shanghai）复用 P6 既有脱敏 capture CLI 完成一次真实 Windows
+  provider 读取：`computer.system.observe@1.0.0`、`source=node:os`、Schema 有效且聚合
+  指标存在，requested=250ms、actual=253.27ms。证据类型明确为
+  `direct_provider_read_only`；`productionAuthorizationVerified=false`、`agentArtsVerified=false`。
+  本地忽略目录保留原 metadata，未包含实际 CPU/内存读数、私人账号或个人路径；
+  unavailable 为 `process_breakdown/disk_io/thermal/network_activity`。该次真实观测未触发通知，
+  不证明 Runtime/Policy/Evidence、持续异常、Laya 决策或 OS 投递。
 - 完整证据需 P8 最后短槽：实际已许可 Windows 指标/同 Runtime Evidence → P5 真实 Laya
   多候选 → 新鲜策略 → OS show/failed/unknown → SQLite 回执/重启核实/撤销隔离。
   若用公开合成持续高压样本触发一次真实 OS，必须分别标注“合成输入、真实投递”；
