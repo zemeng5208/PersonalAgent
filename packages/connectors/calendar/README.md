@@ -33,6 +33,16 @@ MOD-20 · 日历连接器（PA-013，P1；Fake 提供商先行）。负责人 `P
 - **限制**：`respond` 显式 `UNSUPPORTED_CAPABILITY`（CalDAV 写侧/If-Match 更新留待独立工作包）；单条 `getEvent` 为全量拉取后按 UID 过滤（MVP 规模可接受）；`DURATION`（无 `DTEND`）事件不支持；未做日历集发现（`/.well-known/caldav`、`calendar-home-set`）——需直接给集合 URL；multistatus 用宽容正则解析（本地名匹配任意前缀），异常服务器形态宁可 fail-fast。
 - `verification: 'conditional'`——离线夹具测试全绿，真实 CalDAV 服务器（Nextcloud/Radicale 等）读回验收待真实账号（见下方真实验收边界）。
 
+### 真实读回（门控，需真实服务器）
+
+```sh
+PA_CALDAV_LIVE=1 PA_CALDAV_URL=<日历集合 URL> \
+PA_CALDAV_USER=<用户名> PA_CALDAV_PASSWORD=<应用密码> \
+node --test test/caldav.test.mjs
+```
+
+覆盖：`pollChanges` 读回非空 ctag 与 etag 表；宽窗 `fetchWindow` 事件解析＋**记录时区合法性与墙上时间↔UTC 瞬间换算一致性**（DST 歧义允许 1 小时差）；`getEvent` 单条读回与窗口结果逐字段一致；错误凭据得到 `UNAUTHORIZED` 且不可重试（仅在配置了 `PA_CALDAV_USER` 的受认证服务器上运行）。凭据只经环境变量注入，不进仓库、不进日志。
+
 
 ## 公共入口
 

@@ -230,3 +230,52 @@ test('经 CalendarService 规范化：dedupeKey 携带 sequence，occurredAt=开
   assert.equal(item.validFor, '2026-11-02T00:00:00.000Z/2026-11-02T01:00:00.000Z');
   assert.match(item.contentRef, /\[confirmed\] 服务层｜2026-11-02T09:00:00（Asia\/Tokyo）→ 2026-11-02T10:00:00/);
 });
+
+const liveSkip = process.env.PA_CALDAV_LIVE === '1' && process.env.PA_CALDAV_URL
+  ? false
+  : 'set PA_CALDAV_LIVE=1 and PA_CALDAV_URL=<calendar collection url> (plus PA_CALDAV_USER/PA_CALDAV_PASSWORD when the server requires auth) to run against a real CalDAV server';
+
+test('live CalDAV read-back: ctag/etag poll, wide window, single-event roundtrip', {skip: liveSkip}, async () => {
+  const authorization = process.env.PA_CALDAV_USER !== undefined && process.env.PA_CALDAV_PASSWORD !== undefined
+    ? `Basic ${Buffer.from(`${process.env.PA_CALDAV_USER}:${process.env.PA_CALDAV_PASSWORD}`, 'utf8').toString('base64')}`
+    : undefined;
+  const provider = new CalDavProvider({calendarUrl: process.env.PA_CALDAV_URL, authorization});
+
+  const snapshot = await provider.pollChanges();
+  assert.equal(typeof snapshot.ctag, 'string', 'collection must return a ctag');
+  assert.ok(snapshot.ctag.length > 0);
+  console.log('live CalDAV ctag:', snapshot.ctag, '/ etag entries:', Object.keys(snapshot.etags).length);
+
+  const page = await provider.fetchWindow('live', {fromUtc: '2000-01-01T00:00:00.000Z', toUtc: '2100-01-01T00:00:00.000Z'});
+  assert.equal(page.hasMore, false);
+  console.log('live CalDAV events in wide window:', page.events.length);
+  if (page.events.length === 0) return; // 空日历：轮询与查询路径已验证，单条读回无目标可查。
+
+  const first = page.events[0];
+  assert.match(first.startUtc, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  // 记录时区必须是合法 IANA 名（Intl 可构造），且墙上时间在该时区下换算回的 UTC 瞬间与 startUtc 一致
+  // （DST 回拨歧义时刻允许两次出现，差值不超过一小时）。
+  new Intl.DateTimeFormat('en-US', {timeZone: first.timeZone});
+  const wallDigits = first.startLocal.replace(/[-:]/g, '').slice(0, 15);
+  const roundTrip = zonedWallToUtc(wallDigits, first.timeZone);
+  const delta = Math.abs(roundTrip - Date.parse(first.startUtc));
+  assert.ok(delta === 0 || delta <= 3_600_000, `wall ${first.startLocal} (${first.timeZone}) vs ${first.startUtc}`);
+  console.log('live first event:', first.externalId, first.timeZone, first.startLocal, '→', first.startUtc);
+
+  const readback = await provider.getEvent('live', first.externalId);
+  assert.deepEqual(readback, first, 'single-event readback matches the window fetch');
+});
+
+test('live CalDAV wrong credentials are refused as UNAUTHORIZED without retry', {
+  skip: process.env.PA_CALDAV_LIVE === '1' && process.env.PA_CALDAV_URL && process.env.PA_CALDAV_USER !== undefined
+    ? false
+    : 'requires PA_CALDAV_LIVE=1, PA_CALDAV_URL and PA_CALDAV_USER (a server that enforces authentication)',
+}, async () => {
+  const provider = new CalDavProvider({calendarUrl: process.env.PA_CALDAV_URL,
+    authorization: `Basic ${Buffer.from('definitely-not:the-password', 'utf8').toString('base64')}`});
+  await assert.rejects(provider.pollChanges(), error => {
+    assert.equal(error.code, 'UNAUTHORIZED');
+    assert.equal(error.retryable, false);
+    return true;
+  });
+});
