@@ -59,6 +59,13 @@
   覆盖分页恢复、过期/撤销与重启旧权限拒绝、分类指纹失效、accepted 保留、CURSOR_EXPIRED 停止与下一次主动同步。
   读取工具和 Laya 使用显式 Fake，不是实际 QQ IMAP、本机模型或正式 UI 证明。
   Runtime 单包构建通过；未重建或重启当前 Desktop，也没有占用模型槽。
+- 独立测试 userData 的 Electron Fake 预览在 420×640 / DPR 1 加载新 Renderer。
+  用显式 UI 夹具核对尚未交接、handoff succeeded 但目标未核实、mail resync_required 与主动重同步按钮。
+  按钮只调用注入的模拟返回，不接正式 IPC 执行端；无云、邮箱、Goal 或记事本操作。
+  实际截图和 DOM 反馈匹配，页面有内容、无错误覆盖层、最终 console/pageerror 均为空。
+  预览发现目标卡片三处 inline style 被既有 CSP 拦截，已移除，未放宽 CSP；视觉 CSS 由 Luna 单独负责。
+  邮件设置默认按钮在浅色主题下黑底黑字问题已交视觉负责人，尚未在本包修复。
+  仅关闭自己启动的预览进程，旧正式应用和 Notepad 现场保留。预览记录在忽略的 `.cache/p8-ui-feedback-preview/`。
 
 本机记录保存在被忽略的 `.cache/p8-real-notepad/`；不上传原应用配置、备份、私人对话或截图。
 没有新增云调用，也没有重新执行已成功的会议链路。未运行全量 `npm run check` 或全套 Desktop smoke。
@@ -71,5 +78,5 @@
   本次不修改既有 labels→storageKey 行为；未来变更标签定义前须规划原键迁移，不能用新键隐藏旧 accepted/cursor。
   已越过游标的旧分类保持待复核，当前没有为了策略变化而自动回读全部旧邮件。
   指纹绑定的是 model 名与逻辑策略，并未校验 HF snapshot 或权重字节；允许切换权重前还需接入实际模型版本身份。
-- P5 目标宿主新包合入后，安全加载并核对真实按钮、handoff task 状态和恢复后的卡片；本次纯状态投影测试不替代真实渲染。
+- P5 目标宿主新包合入后，安全加载并核对正式 IPC、handoff task 状态和恢复后的卡片；隔离 Fake UI 预览不替代该正式链路。
 - Calendar 的受控读源工厂、持久旧基线和 Fact 种入仍需 P1 的正式端口，缺失时保持 unavailable。

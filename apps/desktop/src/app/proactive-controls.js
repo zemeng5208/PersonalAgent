@@ -141,18 +141,18 @@ export function mountProactiveControls(container, invoke, {settings = false} = {
     }
     if (reviewsList) {
       if (cognitionReviews.length > 0) {
-        reviewsList.innerHTML = '<h3 style="margin-top:12px;font-size:14px;color:var(--text-secondary)">目标与计划决策</h3>' + cognitionReviews.map(r => {
+        reviewsList.innerHTML = '<h3 class="cognition-review-title">目标与计划决策</h3>' + cognitionReviews.map(r => {
           const feedback = cognitionReviewFeedback(r);
           return `
           <article class="task cognition-review-card" data-review-id="${escape(r.reviewTaskId || '')}">
             <p class="cognition-trigger"><strong>触发原因：</strong>${escape(r.trigger || '事实或目标变更')}</p>
             <p class="cognition-choice"><strong>Laya 方案：</strong>${escape(r.choice || '本地决策建议')}</p>
             <p class="notice cognition-status"><strong>处理状态：</strong>${escape(feedback.message)}</p>
-            <div class="cognition-actions" style="margin-top:8px">
+            <div class="cognition-actions">
               <button class="btn btn-sm" type="button" data-action="apply-cognition" data-review-id="${escape(r.reviewTaskId || '')}" ${feedback.locked || cognitionPending.has(r.reviewTaskId) ? 'disabled' : ''}>
                 ${feedback.label}
               </button>
-              <span class="notice" data-feedback-id="${escape(r.reviewTaskId || '')}" style="margin-left:8px"></span>
+              <span class="notice" data-feedback-id="${escape(r.reviewTaskId || '')}"></span>
             </div>
           </article>
         `;
