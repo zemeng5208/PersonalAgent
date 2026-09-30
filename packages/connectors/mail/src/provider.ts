@@ -1,5 +1,6 @@
 /** 邮件提供商端口：实现方负责真实协议（QQ IMAP/SMTP）或 Fake 夹具，本包只做规范化。 */
 import { ProtocolError } from '@personal-agent/contracts';
+import type { ProtocolContracts } from '@personal-agent/contracts';
 
 export interface MailFolder {
   path: string;
@@ -33,6 +34,7 @@ export interface MailFetchInput {
   folder?: string;
   cursor?: MailCursor;
   limit: number;
+  signal?: AbortSignal;
 }
 
 export interface MailPage {
@@ -70,6 +72,10 @@ export interface MailProvider {
   getMessage(accountRef: string, folder: string, uid: number): MailMessage | undefined | Promise<MailMessage | undefined>;
   markSeen(accountRef: string, input: MailMarkSeenInput): {uid: number; seen: boolean} | Promise<{uid: number; seen: boolean}>;
   send(accountRef: string, input: MailSendInput & {idempotencyKey: string}): MailSendResult | Promise<MailSendResult>;
+  /** Optional real draft capability; absent providers remain unsupported. No SMTP delivery. */
+  saveDraft?(accountRef: string, input: MailSendInput & {idempotencyKey: string}): Promise<ProtocolContracts['connectorAction']>;
+  /** Read-only Sent-folder reconciliation. A missing match remains unknown, never means failed. */
+  reconcileSend?(accountRef: string, messageId: string): Promise<MailSendResult>;
 }
 
 export function encodeMailCursor(cursor: MailCursor): string {

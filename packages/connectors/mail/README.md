@@ -2,6 +2,22 @@
 
 MOD-21 · 邮件连接器——QQ 邮箱提供商工作包（PA-014，P1）。负责人 `Potatos498`，评审者 `goo122`。
 
+## 2026-09-30 云端业务增量（待本地统一验收）
+
+本轮完成源码和离线用例，未运行新增测试或真实邮箱调用，状态为 provisional。
+精确接线、统一验收入口和越界交接见 [cloud-business-handoff.md](docs/cloud-business-handoff.md)。
+历史实测不证明本次修改通过真实验收；当前云端没有配置真实邮箱账号。
+
+- 新增 mail.mark_seen（mail:write）、mail.save_draft（mail:draft，条件注册）和
+  mail.reconcile_send（mail:read，条件注册），返回已有公共 ConnectorAction。
+- 草稿使用 IMAP Drafts APPEND、内存 MIME 和 Message-ID 读回，不调用 SMTP；unknown 不自动重写，
+  recoverySupport=false，跨重启输入绑定和未知动作阻断由 Runtime 持久记录负责。
+- QQ SMTP 在发送前生成稳定 Message-ID，未知结果也保留为 externalId。reconcileSend 只读 Sent，
+  核对精确 Message-ID；没找到仍 unknown，不据此盲重发。
+- fetchInbox 按 UID 排序、校验进度和 epoch、由页补齐 UIDVALIDITY；工具取消信号传到读取端口。
+  IMAP 有 30 秒连接/问候/空闲限制，取消在返回前拦截；不承诺在途命令立即取消。
+- 完整 dedupeKey 以源码为准：accountRef:uidValidity:folder:uid:messageId，而不是下面旧简写。
+
 ## 职责
 
 - **多账号绑定**：`MailAccountRegistry` 支持同一实例绑定多个邮箱（bind/unbind/按 `accountRef` 分发；重复 bind 同 ref 为换绑）；凭据的持久化与加密存储归宿主（桌面端 safeStorage 模式，参照既有 Pangu API Key 设置），本包只在运行时持有已构造的提供商实例。
@@ -11,7 +27,7 @@ MOD-21 · 邮件连接器——QQ 邮箱提供商工作包（PA-014，P1）。�
 
 ## 非职责
 
-- 分类、摘要、草稿：PA-014 的这些环节由 MOD-04 模型层完成，连接器只供数据与动作。
+- 分类、摘要、草稿内容生成由 P5/模型消费层完成；连接器供信头投影、已读动作和草稿保存，不做分类决策。
 - 其他邮箱提供商（IMAP 通用化、Gmail/Outlook）：后续按提供商拆分工作包。
 - 授权码的获取与存储：用户在 QQ 邮箱设置生成授权码，装配层经环境变量注入（`PA_QQ_MAIL_USER` / `PA_QQ_MAIL_AUTH_CODE`），不进仓库、不进前端快照。
 

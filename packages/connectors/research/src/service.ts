@@ -68,6 +68,8 @@ export class ResearchService {
    */
   async search(accountRef: string, query: string, options: {limit?: number; signal?: AbortSignal}): Promise<ResearchResult> {
     const limit = options?.limit ?? 10;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20) throw new ProtocolError('INVALID_ARGUMENT', 'limit must be 1..20');
+    if (options?.signal?.aborted) throw new ProtocolError('CANCELLED', 'Research query cancelled');
     if (typeof query !== 'string' || query.trim().length === 0) throw new ProtocolError('INVALID_ARGUMENT', 'Query must be a non-empty string');
     // 缓存键含 accountRef 且用 JSON 结构化编码（goo122 2026-09-14 两轮复审）：
     // `|` 拼接在 accountRef 含分隔符时可碰撞——`a|10`+limit5+`x` ≡ `a`+limit10+`5|x`，
@@ -75,7 +77,7 @@ export class ResearchService {
     const cacheKey = JSON.stringify([this.provider.providerKind, accountRef, limit, query.trim().toLowerCase()]);
     const now = this.options.now();
     const cached = this.cache.get(cacheKey);
-    const cacheFresh = cached !== undefined && now - cached.fetchedAtMs < this.cacheTtlMs;
+    const cacheFresh = cached !== undefined && now >= cached.fetchedAtMs && now - cached.fetchedAtMs < this.cacheTtlMs;
 
     let materials: ResearchMaterial[];
     let state: ResearchResult['cache']['state'];
@@ -91,14 +93,16 @@ export class ResearchService {
         const searchArgs: ResearchSearchInput = {query, limit};
         if (options?.signal !== undefined) searchArgs.signal = options.signal;
         materials = await this.provider.search(accountRef, searchArgs);
+        if (options?.signal?.aborted) throw new ProtocolError('CANCELLED', 'Research query cancelled');
         state = 'fetched';
-        servedAtMs = now;
+        servedAtMs = this.options.now();
         if (this.cache.size >= CACHE_LIMIT) {
           const oldest = this.cache.keys().next().value;
           if (oldest !== undefined) this.cache.delete(oldest);
         }
-        this.cache.set(cacheKey, {materials: structuredClone(materials), fetchedAtMs: now});
+        this.cache.set(cacheKey, {materials: structuredClone(materials), fetchedAtMs: servedAtMs});
       } catch (error) {
+        if (options?.signal?.aborted) throw new ProtocolError('CANCELLED', 'Research query cancelled');
         const protocolError = asProtocolError(error);
         if (protocolError !== undefined && protocolError.retryable && cached !== undefined) {
           materials = cached.materials;

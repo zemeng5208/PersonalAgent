@@ -19,6 +19,9 @@ export interface OpenMeteoOptions {
   forecastBaseUrl?: string;
   geocodingBaseUrl?: string;
   geocodeCacheLimit?: number;
+  /** Place resolution expires independently of the forecast cache. Default: 24 hours. */
+  geocodeCacheTtlMs?: number;
+  now?: () => number;
   /** Population floor for trusting a match that is not an administrative seat. See `assessConfidence`. */
   minCorroboratedPopulation?: number;
   /**
@@ -222,7 +225,9 @@ export class OpenMeteoProvider implements WeatherProvider {
   private readonly minMinorSeatPopulation: number;
   private readonly geonamesUsername: string | undefined;
   private readonly geonamesBaseUrl: string;
-  private readonly geocodeCache = new Map<string, ResolvedPlace>();
+  private readonly geocodeCache = new Map<string, {place: ResolvedPlace; fetchedAtMs: number}>();
+  private readonly geocodeCacheTtlMs: number;
+  private readonly now: () => number;
 
   constructor(options: OpenMeteoOptions = {}) {
     this.fetchImpl = options.fetchImpl ?? ((url, init) => fetch(url, init));
@@ -233,6 +238,11 @@ export class OpenMeteoProvider implements WeatherProvider {
     const limit = options.geocodeCacheLimit ?? DEFAULT_GEOCODE_CACHE_LIMIT;
     if (!Number.isInteger(limit) || limit < 1) throw new Error('geocodeCacheLimit must be a positive integer');
     this.geocodeCacheLimit = limit;
+    this.geocodeCacheTtlMs = options.geocodeCacheTtlMs ?? 86_400_000;
+    if (!Number.isSafeInteger(this.geocodeCacheTtlMs) || this.geocodeCacheTtlMs < 1) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'geocodeCacheTtlMs must be a positive integer');
+    }
+    this.now = options.now ?? Date.now;
     const floor = options.minCorroboratedPopulation ?? DEFAULT_MIN_CORROBORATED_POPULATION;
     if (!Number.isFinite(floor) || floor < 0) throw new Error('minCorroboratedPopulation must be a non-negative number');
     this.minCorroboratedPopulation = floor;
@@ -302,9 +312,13 @@ export class OpenMeteoProvider implements WeatherProvider {
     if (!trimmed) throw new ProtocolError('INVALID_ARGUMENT', 'Weather location must not be empty; refusing to guess', false);
     const hint = locationQuery?.trim() || undefined;
     // The hint changes which place a string resolves to, so it has to be part of the key.
-    const cacheKey = `${this.language}|${normalize(location)}|${normalize(hint ?? '')}`;
+    if (signal.aborted) throw new ProtocolError('CANCELLED', 'Weather resolution cancelled');
+    const cacheKey = JSON.stringify([this.language, normalize(location), normalize(hint ?? '')]);
     const cached = this.geocodeCache.get(cacheKey);
-    if (cached) return structuredClone(cached);
+    if (cached && this.now() >= cached.fetchedAtMs && this.now() - cached.fetchedAtMs < this.geocodeCacheTtlMs) {
+      return structuredClone(cached.place);
+    }
+    this.geocodeCache.delete(cacheKey);
 
     let ranked = rankPlaces(await this.searchPasses(trimmed, signal), normalize(trimmed));
     if (hint !== undefined && (ranked[0] === undefined || this.confidenceOf(ranked[0]) === 'low')) {
@@ -340,7 +354,7 @@ export class OpenMeteoProvider implements WeatherProvider {
       const oldest = this.geocodeCache.keys().next().value;
       if (oldest !== undefined) this.geocodeCache.delete(oldest);
     }
-    this.geocodeCache.set(cacheKey, place);
+    this.geocodeCache.set(cacheKey, {place, fetchedAtMs: this.now()});
     return structuredClone(place);
   }
 
