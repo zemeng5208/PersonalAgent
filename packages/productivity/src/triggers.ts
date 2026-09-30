@@ -58,10 +58,13 @@ export function applyReminderDispatches(
   now: () => number,
 ): TodoItem[] {
   const updated: TodoItem[] = [];
+  const processed = new Set<string>();
   for (const dispatch of dispatches) {
     for (const item of items) {
+      if (item.status !== 'open' || processed.has(item.id)) continue;
       if (!item.reminder || item.reminder.state !== 'scheduled') continue;
       if (reminderScheduleId(item.id, item.reminder.remindAt.utc) !== dispatch.scheduleId) continue;
+      processed.add(item.id);
       const next: TodoItem = {
         ...item,
         reminder: {

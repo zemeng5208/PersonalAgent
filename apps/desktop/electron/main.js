@@ -33,6 +33,7 @@ import {createKnowledgeWatchHost, createProductionKnowledgeReevaluator} from './
 import {createPublicConnectorHost} from './public-connector-host.js';
 import {createWorkspaceConfigHost} from './workspace-config-host.js';
 import {createDesktopReferenceHost} from './reference-tools-host.js';
+import {createNativePublicReferenceConsent} from './public-reference-consent.js';
 import {createWorkspaceCommandRecipeTool} from './workspace-command-recipes.js';
 import {createAgentArtsConfig} from './agentarts-config.js';
 import {createDeferredRuntimeStartup} from './runtime-startup.js';
@@ -206,6 +207,7 @@ let todoFailure = '';
 let todoClosing;
 let todoClosed = false;
 let notepadHost;
+let publicReferenceConsent;
 let notepadClosing;
 let notepadClosed = false;
 let mailHost;
@@ -1140,8 +1142,38 @@ async function initializeRuntime() {
         rootPath: path.resolve(dir, '../fixtures/agentarts'), createWorkspaceReadTool,
       });
       productTools = createPublicConnectorHost({systemObservationFactory:runtimeModule.createSystemObservationTool});
+      const publicReferenceModule=await import('@personal-agent/mcp');
+      publicReferenceConsent?.close();
+      publicReferenceConsent=createNativePublicReferenceConsent({
+        readPreflightCandidate:query=>codingWorkspace?.readWorkspaceExportPreflightCandidate?.(query)
+          ?? referenceHost?.readPublicReferencePreflightCandidate?.(query),
+        readConfirmedCandidate:query=>codingWorkspace?.readWorkspaceExportCandidate?.(query)
+          ?? referenceHost?.readPublicReferenceCandidate?.(query),
+        isTaskCurrent:taskId=>{
+          try {
+            const task=runtimeApplication.runtime.getTask(taskId);
+            return task.state === 'running' && task.cancelRequested !== true;
+          } catch {return false;}
+        },
+        confirmNative:async (request,context)=>{
+          if (context.signal.aborted || Date.now() >= Date.parse(context.deadline)) return false;
+          openAdmin('computer');const originAdmin=admin,originApplication=runtimeApplication;
+          if (!originAdmin || originAdmin.isDestroyed()) return false;
+          const purpose=request.purpose === 'coding-reference' ? '编程参考' : '参考资料摘要';
+          const answer=await dialog.showMessageBox(originAdmin,{type:'question',title:'本任务公开资料许可',
+            message:request.phase === 'preflight' ? `允许读取此公开资料用于${purpose}？` : `允许向 AgentArts 发送这份已读回的公开内容用于${purpose}？`,
+            detail:`原任务：${request.query.taskId}\n资料：${request.query.path}\n内容上限：${request.maxExportBytes} 字节\n到期：${request.expiresAt}`
+              + (request.phase === 'confirmed' ? `\n实际大小：${request.byteLength} 字节\nSHA256：${request.contentDigest}` : '\n仅选择公开资料；此步骤尚未发送文件内容。'),
+            buttons:['取消','确认仅本任务使用此公开资料'],defaultId:0,cancelId:0,noLink:true});
+          return answer.response === 1 && admin === originAdmin && !originAdmin.isDestroyed()
+            && runtimeApplication === originApplication && !context.signal.aborted && Date.now() < Date.parse(context.deadline);
+        },
+      });
       const commandHelper=path.join(app.getPath('userData'),'native-tools','workspace-command','WindowsJobProcessHost.exe');
       codingWorkspace = createWorkspaceConfigHost({userData:app.getPath('userData'),safeStorage,
+        createWorkspaceReferenceExport:publicReferenceModule.createWorkspaceReferenceExport,
+        readWorkspaceExportPreflight:query=>publicReferenceConsent?.readPreflight(query),
+        readWorkspaceExportAuthorization:query=>publicReferenceConsent?.readAuthorization(query),
         jobHelperExecutable:existsSync(commandHelper)?commandHelper:undefined,
         selectDirectory:async () => {
           const result = await dialog.showOpenDialog(admin, {title:'选择允许 PersonalAgent 使用的编程工作区',
@@ -1337,6 +1369,16 @@ async function initializeRuntime() {
           mailAnalysisHost?.assertCloudSend(request);
         },
         tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...(goalCloudHost?.tools ?? goalHost.tools), ...productTools.tools, ...(mailHost?.tools ?? []), ...(calendarMeetingHost?.tools ?? []), ...(feedsHost?.tools ?? []), ...(notepadHost?.tools ?? []), ...(todoHost?.tools ?? []), ...(subagentTool ? [subagentTool] : []), ...(knowledgeTools?.tools??[]),...(referenceHost?.tools??[])],
+        prepareCompetitionToolExport:async ({phase,taskId,proposal,deadline,signal})=>{
+          if (!['workspace.read_text','mcp.workspace.read_text'].includes(proposal?.toolName)) return;
+          if (!publicReferenceConsent || !['preflight','projection'].includes(phase)) throw Error('原生公开资料许可入口不可用');
+          const configurationRef=proposal.toolName === 'workspace.read_text'
+            ? codingWorkspace?.readWorkspaceExportConfigurationRef?.() : referenceHost?.bindTask(taskId);
+          const query={taskId,proposalId:proposal.proposalId,path:proposal.arguments.path,
+            configurationRef,arguments:proposal.arguments};
+          if (phase === 'preflight') await publicReferenceConsent.requestPreflight(query,{deadline,signal});
+          else await publicReferenceConsent.requestExact(query,{deadline,signal});
+        },
         ...(codingWorkspace.patchReconciliation ? {workspacePatchReconciliation: codingWorkspace.patchReconciliation} : {}),
         localRepair: syntheticMvp ? syntheticRepairHost.localRepair : {
           graphNamespace: namespace, bindingVersion:'desktop-reviewed-execution-v1',
@@ -1753,7 +1795,7 @@ async function action(event, name, payload) {
       const choice=originFeeds.prepareNativeSourceChoice(payload);
       const answer=await dialog.showMessageBox(originAdmin,{type:'question',title:'订阅来源与持续跟踪许可',
         message:`订阅：${choice.title}\n原任务：${choice.taskId}\n用途：${choice.goal}`,
-        detail:`实际地址：${choice.url}\n许可到期：${choice.deadline}\n公开选择只适用于无需凭据的公共资料，并允许该原任务持续跟踪；来源获取仍需真实读取证据。分类改变后需重启接入新目录。`,
+        detail:`实际地址：${choice.url}\n许可到期：${choice.deadline}\n公开选择只适用于无需凭据的公共资料，并允许该原任务持续跟踪；来源获取仍需真实读取证据。分类改变会关闭本会话读取许可并使旧任务绑定失效，请重新允许本会话读取。`,
         buttons:choice.containsCredentials ? ['取消','保持私人'] : ['取消','公开并允许本任务跟踪','保持私人'],
         defaultId:0,cancelId:0,noLink:true});
       if (admin !== originAdmin || originAdmin.isDestroyed() || runtimeApplication !== originApplication
@@ -2526,6 +2568,7 @@ app.whenReady().then(async () => {
       competitionCatalog?.close();
       productTools?.close();
       codingWorkspace?.close();
+      publicReferenceConsent?.close();
       feedsHost?.close();
       void todoHost?.close();
     } catch (error) {

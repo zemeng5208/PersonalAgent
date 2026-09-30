@@ -1,6 +1,7 @@
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
 import {createHash, randomUUID} from 'node:crypto';
 import path from 'node:path';
+import {isDeepStrictEqual} from 'node:util';
 import * as feeds from '@personal-agent/feeds';
 
 function subscription(value) {
@@ -23,7 +24,7 @@ export function createDesktopFeedsHost({userData, safeStorage, provider = new fe
   const file = path.join(userData, 'feeds-config.json');
   let saved = [], failure = '', allowed = false, active = true, generation = randomUUID();
   let boundRevision, application, release, namespace, grantStore;
-  const implementations = [], tools = [], inflight = new Set();
+  const implementations = [], tools = [], inflight = new Set(), sourceReceipts = new Map();
   try {
     if (existsSync(file)) {
       const record = JSON.parse(readFileSync(file, 'utf8'));
@@ -38,10 +39,10 @@ export function createDesktopFeedsHost({userData, safeStorage, provider = new fe
   const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
   function sourceBinding(subscriptionId) {
     const item = saved.find(entry => entry.id === subscriptionId);
-    if (!active || !namespace || !item) return null;
+    if (!active || !namespace || !item || typeof feeds.feedConfigBinding !== 'function') return null;
     const url = new URL(item.url);
     return {namespace, subscriptionId:item.id, sourceId:item.id,
-      configurationRef:hash({namespace, provider:provider.source, subscriptions:saved}),
+      configurationRef:feeds.feedConfigBinding(item,provider.source),
       generation, provider:provider.source, transport:url.protocol.slice(0,-1),
       knownUrlDigest:hash(item.url), containsCredentials:Boolean(url.username || url.password || url.search),
       sensitivity:item.sensitivity, available:current(), transportVerified:false};
@@ -97,6 +98,7 @@ export function createDesktopFeedsHost({userData, safeStorage, provider = new fe
   function revoke(revokeTracking = true) {
     allowed = false; generation = randomUUID();
     for (const controller of inflight) controller.abort();
+    sourceReceipts.clear();
     if (revokeTracking && grantStore) {
       const keys = grantStore.get('feed-source-grant-index');
       for (const key of Array.isArray(keys) ? keys : []) {
@@ -121,24 +123,45 @@ export function createDesktopFeedsHost({userData, safeStorage, provider = new fe
     if (boundRevision !== undefined) return;
     boundRevision = revision();
     if (!saved.length) return;
-    if (!['conditional','verified'].includes(provider.verification)) throw Error('需要真实订阅提供者');
-    release = feeds.register({register(tool) {implementations.push(tool); return () => {};}},
-      {provider, subscriptions:saved});
+    registerCurrentSources();
     for (const tool of implementations) tools.push({descriptor:tool.descriptor,
       async execute(input,context) {
         if (context.signal.aborted || !current() || !bound(context.taskId)) throw Error('订阅读取许可已撤销或任务绑定已改变');
+        const executing=implementations.find(item=>item.descriptor.name === tool.descriptor.name
+          && item.descriptor.version === tool.descriptor.version);
+        if (!executing) throw Error('订阅当前实例不可用');
+        const config=input?.subscriptionId ? sourceBinding(input.subscriptionId) : null;
         const controller = new AbortController(); inflight.add(controller);
         try {
-          const result = await tool.execute(input,{...context,signal:AbortSignal.any([context.signal,controller.signal])});
+          const result = await executing.execute(input,{...context,signal:AbortSignal.any([context.signal,controller.signal])});
           if (!current() || !bound(context.taskId) || controller.signal.aborted || context.signal.aborted) throw Error('订阅读取已撤销');
+          if (result?.sourceReceipt) {
+            if (!config || typeof feeds.assertFeedSourceReceiptMatches !== 'function') throw Error('订阅来源收据验证不可用');
+            feeds.assertFeedSourceReceiptMatches(result.sourceReceipt,result,
+              {subscriptionId:config.subscriptionId,configBinding:config.configurationRef});
+            sourceReceipts.set(config.subscriptionId,structuredClone(result.sourceReceipt));
+          }
           return result;
         } finally {inflight.delete(controller);}
       }});
+  }
+  function registerCurrentSources() {
+    if (!['conditional','verified'].includes(provider.verification)) throw Error('需要真实订阅提供者');
+    const next=[];
+    const nextRelease=feeds.register({register(tool) {next.push(tool);return () => {};}},
+      {provider,subscriptions:saved,trackRevisions:true,isPaused:()=>!active || !allowed});
+    if (tools.length && !isDeepStrictEqual(next.map(item=>item.descriptor),tools.map(item=>item.descriptor))) {
+      nextRelease();throw Error('订阅目录定义已经改变，请重启接入');
+    }
+    release?.();release=nextRelease;implementations.splice(0,implementations.length,...next);
+    boundRevision=revision();
   }
   return {
     snapshot,
     // Host-only facts and native consent. None of these methods are exposed directly over IPC.
     readSourceBinding:sourceBinding,
+    readSourceReceipt:subscriptionId=>sourceReceipts.has(subscriptionId)
+      ? structuredClone(sourceReceipts.get(subscriptionId)) : undefined,
     readTrackingGrant,
     prepareNativeSourceChoice({subscriptionId,taskId}) {
       const binding = sourceBinding(subscriptionId), task = taskBinding(taskId);
@@ -156,6 +179,7 @@ export function createDesktopFeedsHost({userData, safeStorage, provider = new fe
       const key = grantKey(binding.sourceId,task.taskId), previous = grantStore.get(key);
       if (saved.find(item => item.id === binding.sourceId).sensitivity !== classification) {
         save(saved.map(item => item.id === binding.sourceId ? {...item,sensitivity:classification} : item));
+        registerCurrentSources();
       }
       const currentBinding = sourceBinding(binding.sourceId);
       grantStore.set(key,{state:classification === 'public' ? 'granted' : 'revoked',id:randomUUID(),
