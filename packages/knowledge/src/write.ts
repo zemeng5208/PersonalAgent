@@ -8,6 +8,9 @@ import {createWorkspaceReadTool, createWorkspacePatchPreviewTool, createWorkspac
   reconcileWorkspacePatchApply} from '@personal-agent/coding-tools';
 import type {WorkspaceReadResult, WorkspacePatchPreviewResult} from '@personal-agent/coding-tools';
 import {openReadOnlyVault} from './filesystem.js';
+import {finalizeControlledVaultWrite} from './write-finalize.js';
+import type {KnowledgeWriteFinalizationAcceptance, KnowledgeWriteFinalizationResult} from './write-finalize.js';
+export type {KnowledgeWriteFinalizationAcceptance, KnowledgeWriteFinalizationResult} from './write-finalize.js';
 
 export const KNOWLEDGE_WRITE_TOOL_NAME = 'knowledge.apply_note_patch';
 export const KNOWLEDGE_WRITE_TOOL_VERSION = '1.0.0';
@@ -63,6 +66,9 @@ export interface KnowledgeWritePort {
       state: 'in_progress' | 'applied' | 'not_applied' | 'unknown';
       operationId: string; backupId: string; lockRetained: boolean; currentSha256?: string;
     }>;
+  /** Trusted Runtime accepts the ORIGINAL known execution/evidence, then clears only matching metadata locks. */
+  finalize(accepted: KnowledgeWriteFinalizationAcceptance,
+    context: Pick<ToolContext, 'signal' | 'deadline'>): Promise<KnowledgeWriteFinalizationResult>;
 }
 
 function deny(code: 'SCOPE_DENIED' | 'REVISION_CONFLICT' | 'RESULT_UNKNOWN' | 'INVALID_ARGUMENT'): never {
@@ -173,6 +179,9 @@ export function openControlledVaultWriter(options: {
     durable(tmp, JSON.stringify(record)); renameSync(tmp, file);
   };
   return {
+    finalize: (accepted, context) => finalizeControlledVaultWrite({rootPath: root, recoveryRootPath: recovery,
+      powerShellPath: options.powerShellPath, allowedNotePaths: allowed, bindingCurrent: options.bindingCurrent,
+      digest: inputDigest, hash}, accepted, context),
     async apply(input, context) {
       validateToolValue(knowledgeWriteInputSchema, input); active(context); assertBinding();
       if (KNOWLEDGE_WRITE_SCOPES.some(scope => !context.scopes.includes(scope))) deny('SCOPE_DENIED');
@@ -254,6 +263,7 @@ export function openControlledVaultWriter(options: {
       if (finalHelper.state === 'in_progress') return {state: 'in_progress', operationId, backupId: record.backupId, lockRetained: true};
       const currentSha256 = finalHelper.state === 'reconciled' ? finalHelper.currentSha256
         : (await readback.readNote({path: record.path, ...context})).revision;
+      active(context); assertBinding();
       const unchanged = result.revision === currentSha256
         && (helper.state !== 'reconciled' || helper.currentSha256 === currentSha256);
       const state = unchanged && currentSha256 === record.afterSha256 ? 'applied'

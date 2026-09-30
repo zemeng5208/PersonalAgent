@@ -210,6 +210,7 @@ export async function createKnowledgeSourceConfig({userData, safeStorage, namesp
       const binding = snapshot(), selectedVault = vault, selectedWriter = writer;
       return {binding, read: selectedVault, write: writeAllowed ? selectedWriter : undefined,
         reconcileWrite: selectedWriter ? (input, context) => selectedWriter.reconcile(input, context) : undefined,
+        finalizeWrite: selectedWriter ? (accepted, context) => selectedWriter.finalize(accepted, context) : undefined,
         signal: AbortSignal.any([signal, controller.signal]),
         assertCurrent() {checkBinding(expected); if (controller.signal.aborted) throw Error('知识源调用已撤销');},
         release() {inflight.delete(controller);}};
