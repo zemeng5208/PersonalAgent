@@ -43,5 +43,20 @@ $resource.dsl.configs.variables = @()
 # Only the new workflow is emitted. Never emit provider_auth_data or import old names.
 $outputDirectory = Split-Path -Parent $OutputPath
 if ($outputDirectory) { New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null }
-$resource | ConvertTo-Json -Depth 100 -Compress | Set-Content -LiteralPath $OutputPath -Encoding utf8
+function Remove-ProviderAuthData($Value) {
+  if ($null -eq $Value) { return }
+  if ($Value -is [pscustomobject]) {
+    $Value.PSObject.Properties.Remove('provider_auth_data')
+    foreach ($property in @($Value.PSObject.Properties)) { Remove-ProviderAuthData $property.Value }
+  } elseif ($Value -is [System.Collections.IDictionary]) {
+    $Value.Remove('provider_auth_data')
+    foreach ($item in @($Value.Values)) { Remove-ProviderAuthData $item }
+  } elseif ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [string]) {
+    foreach ($item in $Value) { Remove-ProviderAuthData $item }
+  }
+}
+Remove-ProviderAuthData $resource
+$json = $resource | ConvertTo-Json -Depth 100 -Compress
+if ($json -match '"provider_auth_data"\s*:') { throw 'Provider authentication data must not be exported.' }
+$json | Set-Content -LiteralPath $OutputPath -Encoding utf8
 Write-Output ([pscustomobject]@{ name = $resource.resource_name; id = $id; file = $OutputPath; modelCalls = 1; thinking = $false; stream = $true })
