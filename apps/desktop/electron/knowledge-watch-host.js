@@ -70,30 +70,9 @@ function adaptRuntimeWork(runtime, namespace) {
       try {
         const task = runtime.findTaskByIdempotencyKey(idempotencyKey);
         if (task === undefined) return {state: 'absent'};
-        if (!text(task?.taskId)) return {state: 'unknown'};
-        let taskState = task.state;
-        let recheck = null;
-        if (typeof runtime.loadCheckpoint === 'function') {
-          try {
-            const cp = runtime.loadCheckpoint(task.taskId, 'knowledge-recheck-result');
-            if (cp && cp.status === 'confirmed' && text(cp.observedRevision)) {
-              recheck = cp;
-            }
-          } catch {}
-        }
-        if (taskState === 'succeeded') {
-          const hasEmptyEvidence = Array.isArray(task.evidenceRefs) && task.evidenceRefs.length === 0;
-          const missingCheckpointWhenAvailable = typeof runtime.loadCheckpoint === 'function' && !recheck;
-          if (hasEmptyEvidence || missingCheckpointWhenAvailable) {
-            taskState = 'unconfirmed_empty_task';
-          }
-        }
-        return {
-          state: 'accepted',
-          taskId: task.taskId,
-          ...(text(taskState) ? {taskState} : {}),
-          ...(recheck ? {recheck} : {}),
-        };
+        if (!text(task?.taskId) || task.goal !== `RECHECK ${idempotencyKey}`
+          || task.conversationId !== conversationId) return {state: 'unknown'};
+        return {state: 'accepted', taskId: task.taskId, ...(text(task.state) ? {taskState: task.state} : {})};
       } catch { return {state: 'unknown'}; }
     },
     async submit({idempotencyKey}) {
@@ -261,7 +240,9 @@ export function createKnowledgeWatchHost({
   const wrappedLaya = !interestDecider && Boolean(layaChooser);
   if (wrappedLaya) interestDecider = new LayaInterestDecisionService(layaChooser, now);
   if (!workPort && typeof runtime?.submitTask === 'function'
-    && typeof runtime?.findTaskByIdempotencyKey === 'function') workPort = adaptRuntimeWork(runtime, namespace);
+    && typeof runtime?.findTaskByIdempotencyKey === 'function') {
+    workPort = adaptRuntimeWork(runtime, namespace);
+  }
   if (!notificationPort && notificationService) notificationPort = adaptNotificationService(notificationService, namespace);
   const boundScheduler = scheduler ?? (typeof runtime?.createSchedule === 'function'
     && typeof runtime?.listSchedules === 'function'
@@ -1279,7 +1260,14 @@ export function createKnowledgeWatchHost({
       requireReady();
       if (document.tombstones[topicId]) return {accepted: false, reason: 'user_revoked'};
       const watch = document.watches[topicId];
+      if (watch?.state === 'tracked' && watch.expiresAt && instant(watch.expiresAt) <= clock()) {
+        return {accepted: false, reason: 'watch_expired'};
+      }
       if (watch?.state !== 'tracked' || !watch.boundSource) return {accepted: false, reason: 'not_tracked'};
+      if (!plain(watch.consumer) || watch.consumer.id !== topicId
+        || !Number.isSafeInteger(watch.consumer.revision) || watch.consumer.revision < 1) {
+        return {accepted: false, reason: 'reevaluation_consumer_missing'};
+      }
       const binding = watch.boundSource;
       const head = document.sources[binding.sourceId];
       if (!head || head.availability !== 'available' || !text(head.revision) || !sha(head.contentSha256)
@@ -1296,12 +1284,17 @@ export function createKnowledgeWatchHost({
       if (!workPort || !Array.isArray(keys) || !keys.length || keys.some(key => !sha(key))) {
         return {accepted: false, reason: 'reevaluation_missing'};
       }
+      const submissions = Object.fromEntries(keys.map(key => [key, clone(document.submissions[key] ?? null)]));
+      if (Object.values(submissions).some(submission => submission?.state !== 'accepted'
+        || !text(submission.taskId) || submission.sourceId !== binding.sourceId)) {
+        return {accepted: false, reason: 'reevaluation_missing'};
+      }
       return {accepted: true, proceed: true, keys: [...keys], binding: clone(binding),
+        consumer: clone(watch.consumer ?? null), submissions,
         head: {sourceId: binding.sourceId, revision: head.revision, contentSha256: head.contentSha256,
           observedAt: head.observedAt, citation: head.citation}};
     });
     if (!prepared.proceed) return prepared;
-    const taskIds = [];
     for (const workKey of prepared.keys) {
       let read;
       try { read = await workPort.read({namespace, idempotencyKey: workKey}); }
@@ -1310,35 +1303,40 @@ export function createKnowledgeWatchHost({
         return {accepted: false, reason: 'reevaluation_unconfirmed',
           taskState: text(read?.taskState) ? read.taskState : (text(read?.state) ? read.state : 'unknown')};
       }
-      if (read.recheck && text(read.recheck.observedRevision) && read.recheck.observedRevision !== prepared.head.revision) {
-        return {accepted: false, reason: 'revision_mismatch', taskState: 'revision_mismatch'};
+      if (read.taskId !== prepared.submissions[workKey]?.taskId) {
+        return {accepted: false, reason: 'reevaluation_task_mismatch', taskState: read.taskState};
       }
-      taskIds.push(read.taskId);
     }
     return lock(() => {
       requireReady();
-      if (document.tombstones[topicId] || document.watches[topicId]?.state !== 'tracked') {
-        return {accepted: false, reason: 'user_revoked'};
-      }
+      if (document.tombstones[topicId]) return {accepted: false, reason: 'user_revoked'};
       const watch = document.watches[topicId];
+      if (watch?.state === 'expired') return {accepted: false, reason: 'watch_expired'};
+      if (watch?.state !== 'tracked') return {accepted: false, reason: 'not_tracked'};
+      if (watch.expiresAt && instant(watch.expiresAt) <= clock()) {
+        return {accepted: false, reason: 'watch_expired'};
+      }
       const binding = watch.boundSource;
       const head = binding ? document.sources[binding.sourceId] : null;
-      if (!binding || binding.revision !== prepared.binding.revision
+      if (!binding || binding.sourceId !== prepared.binding.sourceId
+        || binding.revision !== prepared.binding.revision
         || binding.contentSha256 !== prepared.binding.contentSha256
+        || binding.cacheVersion !== prepared.binding.cacheVersion
+        || binding.lastSuccessfulCheck !== prepared.binding.lastSuccessfulCheck
+        || binding.validUntil !== prepared.binding.validUntil
+        || watch.consumer?.id !== prepared.consumer?.id
+        || watch.consumer?.revision !== prepared.consumer?.revision
         || head?.revision !== prepared.head.revision || head?.contentSha256 !== prepared.head.contentSha256
-        || head?.citation !== prepared.head.citation) {
+        || head?.observedAt !== prepared.head.observedAt || head?.citation !== prepared.head.citation) {
         return {accepted: false, reason: 'observation_changed'};
       }
-      const next = clone(document);
-      const target = next.watches[topicId];
-      target.boundSource = {...clone(target.boundSource), revision: head.revision,
-        contentSha256: head.contentSha256, lastSuccessfulCheck: head.observedAt};
-      target.reason = 'source_bound';
-      target.updatedAt = iso(clock());
-      persist(next);
-      return {accepted: true, reason: 'bound', revision: head.revision, taskIds};
+      // The host's current workPort contract only exposes generic task state and
+      // identity. A succeeded task is not proof that it re-evaluated this consumer
+      // against this observed source revision, regardless of which adapter read it.
+      return {accepted: false, reason: 'reevaluation_result_unavailable', taskState: 'succeeded'};
     });
   }
+  /** Confirms notification delivery by batch receipt; it does not mean the user read it. */
   function observeNotificationAcknowledgement(batch) {
     return lock(() => {
       requireReady();
@@ -1403,45 +1401,10 @@ export function createKnowledgeWatchHost({
     return snapshot();
   }
 
-  function getRecheckContext(workKey) {
-    if (!text(workKey) || !document) return null;
-    let foundReeval = null;
-    for (const reeval of Object.values(document.reevaluations)) {
-      if (Array.isArray(reeval.submittedWorkKeys) && reeval.submittedWorkKeys.includes(workKey)) {
-        foundReeval = reeval;
-        break;
-      }
-    }
-    if (!foundReeval) return null;
-    const boundSource = foundReeval.source;
-    const sourceId = boundSource?.id;
-    const head = sourceId ? document.sources[sourceId] : null;
-    let matchedWatch = null;
-    for (const watch of Object.values(document.watches)) {
-      if (watch.boundSource?.sourceId === sourceId) {
-        matchedWatch = watch;
-        break;
-      }
-    }
-    return {
-      workKey,
-      topicId: matchedWatch?.topicId ?? null,
-      sourceId,
-      boundRevision: boundSource?.revision ?? null,
-      boundContentSha256: boundSource?.contentSha256 ?? null,
-      observedRevision: head?.revision ?? null,
-      observedContentSha256: head?.contentSha256 ?? null,
-      citation: text(head?.citation) ? head.citation : null,
-      summary: typeof head?.untrustedExcerpt === 'string' ? head.untrustedExcerpt : null,
-      observedAt: head?.observedAt ?? null,
-      availability: head?.availability ?? null,
-    };
-  }
-
   load();
   return Object.freeze({start, stop, dispose, snapshot, listPending, listWatches, dialogueProjection,
     consumeInterestSignal, consumeSourceUpdate, refreshSource, refreshSubscribedFeed,
     registerFeedCheck, cancelFeedChecks, restoreFeedChecks, observeNotificationAcknowledgement,
-    bindObservedRevision, getRecheckContext,
+    bindObservedRevision,
     revoke, pause, resume, enable});
 }

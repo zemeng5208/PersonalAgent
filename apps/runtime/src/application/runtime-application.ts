@@ -58,6 +58,25 @@ export interface SubmitHostToolTaskRequest {
   deadline: string;
 }
 
+export interface KnowledgeRecheckResult {
+  status?: string;
+  outcome?: unknown;
+  summary?: string;
+  evidenceRefs?: readonly string[];
+}
+
+export interface KnowledgeRecheckContext {
+  taskId: string;
+  workKey?: string | undefined;
+  topicId?: string | undefined;
+  sourceId: string;
+  boundRevision?: string | null | undefined;
+  observedRevision: string;
+  citation: string;
+  summary?: string | null | undefined;
+  signal: AbortSignal;
+}
+
 export interface KnowledgeRecheckOptions {
   sourceId: string;
   sourceRevision?: string;
@@ -70,6 +89,7 @@ export interface KnowledgeRecheckOptions {
   citation?: string | null;
   summary?: string | null;
   deadline?: string;
+  reevaluator?: (context: KnowledgeRecheckContext) => Promise<KnowledgeRecheckResult>;
 }
 
 export type PrepareHostToolTaskRequest = Omit<SubmitHostToolTaskRequest, 'arguments'>;
@@ -927,6 +947,22 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
         throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Source citation locator is required for knowledge reevaluation');
       }
 
+      if (typeof options.reevaluator !== 'function') {
+        throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Knowledge reevaluation capability is unavailable');
+      }
+
+      const reevalResult = await options.reevaluator({
+        taskId,
+        workKey: options.workKey,
+        topicId: options.topicId,
+        sourceId: options.sourceId,
+        boundRevision: options.boundRevision,
+        observedRevision,
+        citation,
+        summary: options.summary,
+        signal: context.signal,
+      });
+
       const evaluatedAt = this.now().toISOString();
       const topicId = options.topicId ?? 'unknown';
       const summaryExcerpt = options.summary ? options.summary.slice(0, 500) : null;
@@ -942,13 +978,14 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
         citation,
         summaryExcerpt,
         evaluatedAt,
-        status: 'confirmed',
+        status: reevalResult.status ?? 'confirmed',
+        outcome: reevalResult.outcome ?? null,
       };
       this.runtime.saveCheckpoint(taskId, 'knowledge-recheck-result', recheckRecord);
 
       return {
-        resultSummary: `知识重评确认：关注 ${topicId}，来源 ${options.sourceId} 新版本 ${observedRevision}（引用：${citation}）已由正式 Runtime 确认。摘要：${summaryExcerpt ?? '无'}`,
-        evidenceRefs: [citation],
+        resultSummary: reevalResult.summary ?? `知识重评确认：关注 ${topicId}，来源 ${options.sourceId} 新版本 ${observedRevision}（引用：${citation}）已由正式 Runtime 确认。摘要：${summaryExcerpt ?? '无'}`,
+        evidenceRefs: [citation, ...(reevalResult.evidenceRefs ?? [])],
       };
     }, {
       deadline: deadlineIso,
