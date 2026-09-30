@@ -103,7 +103,7 @@ test('runtimeApplication configureThinking independently presents stepBudget and
   assert.deepEqual(readback.modelReasoning, state.modelReasoning);
 });
 
-test('createRuntimeSubagentDispatchTool executes real ModelGateway with role prompt and native reasoningEffort', async () => {
+test('subagent forwards reasoning only when trusted host explicitly supports it', async () => {
   const runtime = new TaskRuntime(':memory:');
   const parent = runtime.submitTask({
     conversationId: 'desktop-panel',
@@ -127,6 +127,7 @@ test('createRuntimeSubagentDispatchTool executes real ModelGateway with role pro
   const tool = createRuntimeSubagentDispatchTool({
     getRuntime: () => runtime,
     getModelGateway: () => gateway,
+    getModelReasoningEfforts: () => ['low', 'medium'],
   });
 
   const context = {
@@ -276,7 +277,6 @@ test('model registry resolves requested names to real gateways; unknown names re
 
   // 注册过的名字 → 解析到对应网关（真实 provider 标识）。
   const named = await tool.execute({subtasks: [{subtaskId: 'sub-named', role: 'researcher', goal: 'x', model: 'deepseek-chat'}]}, context);
-  if (named.succeeded !== 1) console.log('NAMED_FAIL:', JSON.stringify(named));
   assert.equal(named.succeeded, 1);
   assert.ok(gateways.has('deepseek-chat'), 'the requested model resolved through the registry');
   assert.match(named.subtasks[0].result, /openai-compatible\/deepseek-chat/);
@@ -290,4 +290,20 @@ test('model registry resolves requested names to real gateways; unknown names re
   const unknown = await tool.execute({subtasks: [{subtaskId: 'sub-unknown', role: 'researcher', goal: 'x', model: 'not-registered'}]}, context);
   assert.equal(unknown.failed, 1);
   assert.match(unknown.subtasks[0].error, /not-registered 未配置或不受支持/);
+});
+
+test('registry lookup ignores inherited object properties', async () => {
+  const runtime = new TaskRuntime(':memory:');
+  const parent = runtime.submitTask({conversationId: 'desktop-panel', goal: '拒绝原型键模型', idempotencyKey: 'registry-prototype-parent'});
+  const tool = createDesktopSubagentDispatchTool({getRuntime: () => runtime, modelRegistry: {
+    'configured-model': () => new ModelGateway(new FakeModelProvider([() => ({kind: 'final', text: 'ok'})],
+      {provider: 'openai-compatible', deployment: 'configured-model', model: 'configured-model', verification: 'conditional',
+        capabilities: {text: true, streaming: false, toolCalling: true, structuredOutput: true, vision: false}})),
+  }});
+  const result = await tool.execute({subtasks: [{subtaskId: 'sub-prototype', role: 'researcher', goal: 'x', model: 'constructor'}]}, {
+    taskId: parent.taskId, runId: 'registry-prototype-run', signal: new AbortController().signal,
+    deadline: new Date(Date.now() + 60_000).toISOString(), authorizationRef: 'auth-prototype', scopes: ['agent:delegate'],
+  });
+  assert.equal(result.failed, 1);
+  assert.match(result.subtasks[0].error, /constructor 未配置或不受支持/);
 });
