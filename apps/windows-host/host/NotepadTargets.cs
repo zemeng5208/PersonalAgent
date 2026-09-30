@@ -25,9 +25,12 @@ internal sealed class NotepadTargets
                 try
                 {
                     if (process.SessionId != currentSession) continue;
+                    _ = process.SafeHandle; // Bind subsequent queries to the original process.
+                    if (process.HasExited) throw new InvalidOperationException("Baseline process exited");
                     var start = process.StartTime.ToUniversalTime();
                     foreach (var handle in WindowsForProcess(process.Id, visibleUnownedOnly: false))
                         _existing.Add((handle, process.Id, start));
+                    if (process.HasExited) throw new InvalidOperationException("Baseline process exited");
                 }
                 catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or
                                            System.ComponentModel.Win32Exception)
@@ -56,6 +59,8 @@ internal sealed class NotepadTargets
                 try
                 {
                     if (process.SessionId != currentSession) continue;
+                    _ = process.SafeHandle;
+                    if (process.HasExited) throw new InvalidOperationException("Observed process exited");
                     var start = process.StartTime.ToUniversalTime();
                     foreach (var handle in WindowsForProcess(process.Id, visibleUnownedOnly: true))
                     {
@@ -63,6 +68,7 @@ internal sealed class NotepadTargets
                         if (!NotepadAction.IsTrustedNotepadProcess(process)) unverifiable = true;
                         else candidates.Add((handle, process.Id, start));
                     }
+                    if (process.HasExited) unverifiable = true;
                 }
                 catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or
                                            System.ComponentModel.Win32Exception)
