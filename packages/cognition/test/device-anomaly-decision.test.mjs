@@ -5,6 +5,68 @@ import {
   CognitionError,
 } from '../dist/index.js';
 
+test('durable device feedback preserves cooldown and replay protection across restart', async () => {
+  let saved;
+  const checkpoint = {load: () => saved, save: value => {saved = structuredClone(value);}};
+  let deliveries = 0;
+  const inference = createMockLayaChoiceInference();
+  const options = {checkpoint, sustainedSampleCount: 1,
+    notificationPort: {sendAdvisoryNotification: () => {deliveries++; return {delivered: true};}}};
+  const sample = {source: 'windows', timestamp: new Date().toISOString(), cpuPercent: 95,
+    memoryPercent: 50, samplingIntervalMs: 5000};
+  const first = await new DeviceAnomalyDecisionService(inference, options).evaluateSample(sample);
+  assert.equal(first.notificationDelivered, true);
+  const restarted = new DeviceAnomalyDecisionService(inference, options);
+  assert.equal((await restarted.evaluateSample(sample)).status, 'replayed');
+  assert.equal((await restarted.evaluateSample({...sample,
+    timestamp: new Date(Date.parse(sample.timestamp) + 5000).toISOString()})).status, 'cooldown_suppressed');
+  const feedback = await restarted.readFeedback();
+  assert.equal(feedback[0].receipt.status, 'cooldown_suppressed');
+  assert.equal(deliveries, 1);
+  assert.equal(inference.calls.length, 1);
+});
+
+test('post-delivery checkpoint failure leaves a durable intent requiring reconciliation without resending', async () => {
+  let saved, saves = 0, deliveries = 0;
+  const checkpoint = {load: () => saved, save: value => {
+    if (++saves === 2) throw Error('disk unavailable');
+    saved = structuredClone(value);
+  }};
+  const inference = createMockLayaChoiceInference();
+  const options = {checkpoint, sustainedSampleCount: 1, notificationPort: {
+    sendAdvisoryNotification: () => {deliveries++; return {delivered: true};}}};
+  const sample = {source: 'windows', timestamp: new Date().toISOString(), cpuPercent: 95,
+    memoryPercent: 50, samplingIntervalMs: 5000};
+  await assert.rejects(new DeviceAnomalyDecisionService(inference, options).evaluateSample(sample), /disk unavailable/);
+  const restarted = new DeviceAnomalyDecisionService(inference, options);
+  assert.equal((await restarted.evaluateSample(sample)).status, 'indeterminate');
+  assert.equal(deliveries, 1);
+  const pending = (await restarted.readFeedback())[0].pendingDeliveryId;
+  await assert.rejects(restarted.reconcileDelivery('windows', 'wrong-id', true));
+  await restarted.reconcileDelivery('windows', pending, true);
+  assert.equal((await restarted.evaluateSample({...sample,
+    timestamp: new Date(Date.parse(sample.timestamp) + 5000).toISOString()})).status, 'cooldown_suppressed');
+  assert.equal(deliveries, 1);
+});
+
+test('review cannot send notifications and unknown telemetry breaks consecutive elevation', async () => {
+  const inference = createMockLayaChoiceInference();
+  let delivered = 0;
+  const service = new DeviceAnomalyDecisionService({choose: async request => ({
+    state: 'review', reason: 'uncertain', eligibleForRuntime: false, calibrated: false,
+    scores: [], selected: {id: request.candidates[0].id, revision: 1}, receipt: {id: 'review'}})}, {
+    sustainedSampleCount: 2, notificationPort: {sendAdvisoryNotification: () => {delivered++; return {delivered: true};}}});
+  const sample = {source: 'windows', timestamp: new Date().toISOString(), cpuPercent: 95,
+    memoryPercent: 50, samplingIntervalMs: 5000};
+  const at = index => ({...sample, timestamp: new Date(Date.parse(sample.timestamp) + index * 5000).toISOString()});
+  await service.evaluateSample(at(0));
+  await service.evaluateSample({...at(1), unavailableMetrics: ['cpu', 'memory']});
+  assert.equal((await service.evaluateSample(at(2))).consecutiveElevatedCount, 1);
+  const review = await service.evaluateSample(at(3));
+  assert.equal(review.notificationDelivered, false);
+  assert.equal(delivered, 0);
+});
+
 function createMockLayaChoiceInference(preferredChoiceIndex = 0, shouldFail = false) {
   const calls = [];
   const inference = {

@@ -6,6 +6,64 @@ import {
   CognitionError,
 } from '../dist/index.js';
 
+test('partial page cancellation retains the prior cursor and resumes completed chunks from checkpoint', async () => {
+  let saved = {};
+  const checkpoint = {load: () => saved, save: value => {saved = structuredClone(value);}};
+  const inference = createMockInference();
+  const pipeline = new MailTriagePipeline({inference, checkpoint, chunkSize: 2});
+  const controller = new AbortController();
+  const messages = Array.from({length: 4}, (_, i) => ({source: 'mail', messageId: `partial-${i}`,
+    sourceRevision: '1', text: `Work task ${i}`}));
+  const cursor = {uidValidity: 1, lastUid: 10};
+  let acknowledged = 0;
+  const request = {initialCursor: cursor, fetchPage: async () => ({messages,
+    nextCursor: {uidValidity: 1, lastUid: 14}, hasMore: false}),
+    onPageCompleted: () => {acknowledged++;}, deadline: new Date(Date.now() + 60_000).toISOString()};
+  const partial = await pipeline.processPagedStream({...request, signal: controller.signal,
+    onProgress: progress => {if (progress.processedCount === 2) controller.abort();}});
+  assert.deepEqual(partial.lastCursor, cursor);
+  assert.equal(partial.stoppedReason, 'cancelled');
+  assert.equal(partial.pagesProcessed, 0);
+  assert.equal(acknowledged, 0);
+  assert.equal(Object.keys(saved).length, 2);
+  const resumed = await new MailTriagePipeline({inference, checkpoint, chunkSize: 2})
+    .processPagedStream({...request, signal: new AbortController().signal});
+  assert.equal(resumed.cachedCount, 2);
+  assert.equal(resumed.newlyClassifiedCount, 2);
+  assert.equal(resumed.stoppedReason, 'completed');
+  assert.equal(acknowledged, 1);
+});
+
+test('unavailable page is not acknowledged and concurrent batches preserve both checkpoints', async () => {
+  const failed = new MailTriagePipeline({inference: {infer: async () => {throw Error('offline');}}});
+  const messages = [{source: 'mail', messageId: 'unavailable', sourceRevision: '1', text: 'Work update'}];
+  let ack = false;
+  const result = await failed.processPagedStream({fetchPage: async () => ({messages,
+    nextCursor: {uidValidity: 1, lastUid: 1}, hasMore: false}),
+    onPageCompleted: () => {ack = true;}, signal: new AbortController().signal,
+    deadline: new Date(Date.now() + 60_000).toISOString()});
+  assert.equal(result.stoppedReason, 'classification_unavailable');
+  assert.equal(result.lastCursor, undefined);
+  assert.equal(ack, false);
+  let saved = {};
+  const pipeline = new MailTriagePipeline({inference: createMockInference(),
+    checkpoint: {load: () => saved, save: async value => {await Promise.resolve(); saved = value;}}});
+  await Promise.all(['a', 'b'].map(messageId => pipeline.processBatch({
+    messages: [{...messages[0], messageId}], signal: new AbortController().signal,
+    deadline: new Date(Date.now() + 60_000).toISOString()})));
+  assert.equal(Object.keys(saved).length, 2);
+});
+
+test('missing classification records cannot acknowledge a source page', async () => {
+  const pipeline = new MailTriagePipeline({classifier: {classify: async () => []}});
+  await assert.rejects(pipeline.processPagedStream({
+    fetchPage: async () => ({messages: [{source: 'mail', messageId: 'missing', sourceRevision: '1', text: 'work'}],
+      hasMore: false, nextCursor: {uidValidity: 1, lastUid: 1}}),
+    onPageCompleted: () => assert.fail('Incomplete classification must not advance the page'),
+    deadline: new Date(Date.now() + 60_000).toISOString(), signal: new AbortController().signal,
+  }), error => error.code === 'INVALID_ARGUMENT');
+});
+
 function createMockInference(options = {}) {
   const calls = [];
   const inference = {

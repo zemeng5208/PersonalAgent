@@ -107,7 +107,7 @@ export interface MailPagedTriageSummary extends MailBatchTriageSummary {
   readonly pagesProcessed: number;
   readonly lastCursor?: MailCursorRef | undefined;
   readonly hasMore: boolean;
-  readonly stoppedReason: 'completed' | 'cancelled' | 'deadline' | 'max_pages';
+  readonly stoppedReason: 'completed' | 'cancelled' | 'deadline' | 'max_pages' | 'classification_unavailable';
 }
 
 export const MAIL_TRIAGE_STRATEGY_VERSION = 'mail-triage-strategy-v2';
@@ -168,6 +168,7 @@ export class MailTriagePipeline {
   private readonly configDigest: string;
   private cache = new Map<string, LayaTriageResult>();
   private checkpointLoaded = false;
+  private batchTail: Promise<void> = Promise.resolve();
 
   constructor(options: MailTriagePipelineOptions) {
     if (!options || (!options.inference && !options.classifier)) throw new CognitionError('INVALID_ARGUMENT');
@@ -197,6 +198,12 @@ export class MailTriagePipeline {
    * Processes a batch of projected mail messages with backpressure and bounded chunking.
    */
   async processBatch(request: MailBatchTriageRequest): Promise<MailBatchTriageSummary> {
+    const result = this.batchTail.then(() => this.processBatchSerial(request));
+    this.batchTail = result.then(() => {}, () => {});
+    return result;
+  }
+
+  private async processBatchSerial(request: MailBatchTriageRequest): Promise<MailBatchTriageSummary> {
     if (!request || !Array.isArray(request.messages) || !(request.signal instanceof AbortSignal)
       || !Number.isFinite(Date.parse(request.deadline))) {
       throw new CognitionError('INVALID_ARGUMENT');
@@ -242,6 +249,10 @@ export class MailTriagePipeline {
       const key = this.makeKey(msg.source, msg.messageId, msg.sourceRevision);
       const cached = this.cache.get(key);
       if (cached) {
+        if (cached.source !== msg.source || cached.messageId !== msg.messageId
+          || cached.sourceRevision !== msg.sourceRevision || cached.receipt?.contextDigest !== hash(msg.text)) {
+          throw new CognitionError('INVALID_ARGUMENT');
+        }
         allResults.push(cached);
         cachedCount++;
       } else {
@@ -318,6 +329,16 @@ export class MailTriagePipeline {
 
       const inferenceStart = this.now();
       const chunkResults = await this.triageService.classify(triageRequest);
+      if (!Array.isArray(chunkResults) || chunkResults.length !== chunk.length) {
+        throw new CognitionError('INVALID_ARGUMENT');
+      }
+      for (let index = 0; index < chunk.length; index++) {
+        const message = chunk[index]!, result = chunkResults[index]!;
+        if (!result || result.source !== message.source || result.messageId !== message.messageId
+          || result.sourceRevision !== message.sourceRevision || result.receipt?.contextDigest !== hash(message.text)) {
+          throw new CognitionError('INVALID_ARGUMENT');
+        }
+      }
       const inferenceEnd = this.now();
       cumulativeInferenceMs += Math.max(1, inferenceEnd - inferenceStart);
 
@@ -436,16 +457,6 @@ export class MailTriagePipeline {
 
     const startTime = this.now();
 
-    if (this.checkpointPort && !this.checkpointLoaded) {
-      const persisted = await this.checkpointPort.load();
-      if (persisted && typeof persisted === 'object') {
-        for (const [key, val] of Object.entries(persisted)) {
-          this.cache.set(key, val);
-        }
-      }
-      this.checkpointLoaded = true;
-    }
-
     let currentCursor: MailCursorRef | undefined = request.initialCursor;
     let hasMore = true;
     let pagesProcessed = 0;
@@ -473,11 +484,13 @@ export class MailTriagePipeline {
         break;
       }
 
-      currentCursor = page?.nextCursor;
-      hasMore = Boolean(page?.hasMore);
-      pagesProcessed++;
-
-      const pageMessages = Array.isArray(page?.messages) ? page.messages : [];
+      if (!page || !Array.isArray(page.messages) || typeof page.hasMore !== 'boolean'
+        || (page.hasMore && (!page.nextCursor
+          || (page.nextCursor.uidValidity === currentCursor?.uidValidity
+            && page.nextCursor.lastUid === currentCursor?.lastUid)))) {
+        throw new CognitionError('INVALID_ARGUMENT');
+      }
+      const pageMessages = page.messages;
       if (pageMessages.length > 0) {
         const pageSummary = await this.processBatch({
           messages: pageMessages,
@@ -503,13 +516,25 @@ export class MailTriagePipeline {
         cachedCount += pageSummary.cachedCount;
         newlyClassifiedCount += pageSummary.newlyClassifiedCount;
         cumulativeInferenceMs += pageSummary.throughput.inferenceDurationMs;
+        // Do not acknowledge a page containing transient results. Restart rereads
+        // the same page and the durable chunk cache skips only completed records.
+        const transient = pageSummary.results.find(result =>
+          ['cancelled', 'deadline', 'unavailable'].includes(result.reason));
+        if (transient) {
+          stoppedReason = transient.reason === 'cancelled' ? 'cancelled'
+            : transient.reason === 'deadline' ? 'deadline' : 'classification_unavailable';
+          break;
+        }
       }
 
       await request.onPageCompleted?.({
-        cursor: currentCursor,
-        hasMore,
+        cursor: page.nextCursor,
+        hasMore: page.hasMore,
         processedCount: allResults.length,
       });
+      currentCursor = page.nextCursor;
+      hasMore = page.hasMore;
+      pagesProcessed++;
 
       if (request.signal.aborted) {
         stoppedReason = 'cancelled';
@@ -519,7 +544,7 @@ export class MailTriagePipeline {
         stoppedReason = 'deadline';
         break;
       }
-      if (pagesProcessed >= maxPages) {
+      if (hasMore && pagesProcessed >= maxPages) {
         stoppedReason = 'max_pages';
         break;
       }
