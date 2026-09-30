@@ -1,9 +1,11 @@
 import { ProtocolError } from '@personal-agent/contracts';
 import { unfoldLines, unescapeIcalText, parseIcalDate } from './ical-subscription.js';
+import { assertReadActive } from './read-context.js';
 import type {
   CalendarEventRecord,
   CalendarFetchPage,
   CalendarProvider,
+  CalendarReadContext,
   CalendarRespondInput,
   CalendarRespondResult,
   CalendarSummary,
@@ -304,7 +306,8 @@ export class CalDavProvider implements CalendarProvider {
     return [{id: 'caldav', name: this.calendarName ?? fallback, timeZone: 'UTC'}];
   }
 
-  private async request(method: 'PROPFIND' | 'REPORT', body: string, depth: '0' | '1'): Promise<string> {
+  private async request(method: 'PROPFIND' | 'REPORT', body: string, depth: '0' | '1', context?: CalendarReadContext): Promise<string> {
+    assertReadActive(context);
     const headers: Record<string, string> = {
       'user-agent': USER_AGENT,
       'content-type': 'application/xml; charset=utf-8',
@@ -313,13 +316,35 @@ export class CalDavProvider implements CalendarProvider {
     };
     if (this.authorization !== undefined) headers.authorization = this.authorization;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+    const abort = (): void => controller.abort();
+    context?.signal?.addEventListener('abort', abort, {once: true});
+    const remainingMs = context?.deadline === undefined ? this.requestTimeoutMs : Date.parse(context.deadline) - Date.now();
+    const timeout = setTimeout(abort, Math.max(0, Math.min(this.requestTimeoutMs, remainingMs)));
+    const interrupted = (): ProtocolError => {
+      assertReadActive(context);
+      return new ProtocolError('EXTERNAL_FAILURE', 'CalDAV 请求超时', true);
+    };
+    // Bound both fetch and body reads even when an injected transport ignores abort.
+    const read = async <T>(operation: () => Promise<T>): Promise<T> => {
+      if (controller.signal.aborted) throw interrupted();
+      let onAbort: () => void = () => {};
+      const cancelled = new Promise<never>((_resolve, reject) => {
+        onAbort = () => {
+          try { reject(interrupted()); } catch (error) { reject(error); }
+        };
+        controller.signal.addEventListener('abort', onAbort, {once: true});
+      });
+      try { return await Promise.race([operation(), cancelled]); }
+      finally { controller.signal.removeEventListener('abort', onAbort); }
+    };
     try {
       let response: CalDavFetchResponseLike;
       try {
-        response = await this.fetchImpl(this.calendarUrl, {method, headers, body,
-          signal: controller.signal, redirect: 'error'});
-      } catch {
+        response = await read(() => this.fetchImpl(this.calendarUrl, {method, headers, body,
+          signal: controller.signal, redirect: 'error'}));
+      } catch (error) {
+        assertReadActive(context);
+        if (error instanceof ProtocolError) throw error;
         throw new ProtocolError('EXTERNAL_FAILURE', controller.signal.aborted ? 'CalDAV 请求超时' : 'CalDAV 请求失败', true);
       }
       if (response.status === 429) throw new ProtocolError('RATE_LIMITED', 'CalDAV 服务器限流', true, 60_000);
@@ -331,20 +356,24 @@ export class CalDavProvider implements CalendarProvider {
         throw new ProtocolError('EXTERNAL_FAILURE', `CalDAV 服务器返回异常（HTTP ${response.status}）`, response.status >= 500);
       }
       let text: string;
-      try { text = await response.text(); }
-      catch {
+      try { text = await read(() => response.text()); }
+      catch (error) {
+        assertReadActive(context);
+        if (error instanceof ProtocolError) throw error;
         throw new ProtocolError('EXTERNAL_FAILURE', controller.signal.aborted ? 'CalDAV 响应读取超时' : 'CalDAV 响应读取失败', true);
       }
       if (text.trim().length === 0) throw new ProtocolError('EXTERNAL_FAILURE', 'CalDAV 响应为空', false);
+      assertReadActive(context);
       return text;
     } finally {
       clearTimeout(timeout);
+      context?.signal?.removeEventListener('abort', abort);
     }
   }
 
   /** 廉价变更轮询：一次 Depth:1 PROPFIND 同时取 ctag 与全部子资源 etag。 */
-  async pollChanges(): Promise<CalDavChangeSnapshot> {
-    const body = await this.request('PROPFIND', PROP_BOTH, '1');
+  async pollChanges(context?: CalendarReadContext): Promise<CalDavChangeSnapshot> {
+    const body = await this.request('PROPFIND', PROP_BOTH, '1', context);
     const responses = parseMultistatus(body);
     // href 可能是绝对 URL 也可能只有路径（Radicale 只给路径），按解析后的 pathname 归一化比较。
     const collectionPath = new URL(this.calendarUrl).pathname.replace(/\/+$/, '');
@@ -365,8 +394,8 @@ export class CalDavProvider implements CalendarProvider {
     return {ctag, etags};
   }
 
-  private async queryEvents(window: CalendarWindow | undefined): Promise<ParsedCalDavEvent[]> {
-    const body = await this.request('REPORT', calendarQueryXml(window), '1');
+  private async queryEvents(window: CalendarWindow | undefined, context?: CalendarReadContext): Promise<ParsedCalDavEvent[]> {
+    const body = await this.request('REPORT', calendarQueryXml(window), '1', context);
     const events: ParsedCalDavEvent[] = [];
     for (const item of parseMultistatus(body)) {
       if (item.calendarData === undefined) continue;
@@ -374,8 +403,10 @@ export class CalDavProvider implements CalendarProvider {
         events.push(event);
       }
     }
-    // Select the current UID revision before filtering: a newer cancelled or
-    // moved version must not resurrect an older version inside the window.
+    return this.selectLatest(events);
+  }
+
+  private selectLatest(events: ParsedCalDavEvent[]): ParsedCalDavEvent[] {
     const latest = new Map<string, ParsedCalDavEvent>();
     const ordered = events.sort((a, b) => b.sequence - a.sequence
       || (b.lastModifiedMs ?? 0) - (a.lastModifiedMs ?? 0));
@@ -389,19 +420,36 @@ export class CalDavProvider implements CalendarProvider {
         throw new ProtocolError('EXTERNAL_FAILURE', 'CalDAV returned conflicting versions for one UID', false);
       }
     }
-    return [...latest.values()].filter(event => window === undefined
-      || (event.startMs < Date.parse(window.toUtc) && event.endMs > Date.parse(window.fromUtc)));
+    return [...latest.values()];
   }
 
-  async fetchWindow(_accountRef: string, window: CalendarWindow, cursor?: string): Promise<CalendarFetchPage> {
+  async fetchWindow(_accountRef: string, window: CalendarWindow, cursor?: string, context?: CalendarReadContext): Promise<CalendarFetchPage> {
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/u.test(window?.fromUtc ?? '')
       || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/u.test(window?.toUtc ?? '')) {
       throw new ProtocolError('INVALID_ARGUMENT', 'Calendar window must be ISO-8601 UTC instants');
     }
     const offset = cursor === undefined ? 0 : Number(cursor);
     if (!Number.isSafeInteger(offset) || offset < 0) throw new ProtocolError('INVALID_ARGUMENT', 'Invalid cursor');
-    const matching = (await this.queryEvents(window))
-      .filter(event => event.status !== 'cancelled')
+    const candidates = await this.queryEvents(window, context);
+    // A server time-range hides a newer revision moved out of this window.
+    // Reuse the unwindowed getEvent read path once, then match each candidate's
+    // exact UID against the current collection before applying client filters.
+    const currentByUid = new Map((candidates.length === 0 ? [] : await this.queryEvents(undefined, context))
+      .map(event => [event.uid, event]));
+    const confirmed = candidates.map(candidate => {
+      const current = currentByUid.get(candidate.uid);
+      if (current === undefined || current.sequence < candidate.sequence
+        || (current.sequence === candidate.sequence && (current.lastModifiedMs ?? 0) < (candidate.lastModifiedMs ?? 0))) {
+        throw new ProtocolError('EXTERNAL_FAILURE', 'CalDAV could not confirm the current candidate UID revision', false);
+      }
+      // Equal versions with differing content are conflicts across the two reads too.
+      this.selectLatest([candidate, current]);
+      return current;
+    });
+    assertReadActive(context);
+    const matching = confirmed
+      .filter(event => event.status !== 'cancelled'
+        && event.startMs < Date.parse(window.toUtc) && event.endMs > Date.parse(window.fromUtc))
       .sort((left, right) => left.startMs - right.startMs || left.uid.localeCompare(right.uid));
     const events = matching.slice(offset, offset + CALDAV_PAGE_SIZE).map(event => this.toRecord(event));
     const nextOffset = offset + events.length;
@@ -409,11 +457,11 @@ export class CalDavProvider implements CalendarProvider {
     return {events, hasMore, ...(hasMore ? {nextCursor: String(nextOffset)} : {})};
   }
 
-  async getEvent(_accountRef: string, externalId: string): Promise<CalendarEventRecord | undefined> {
+  async getEvent(_accountRef: string, externalId: string, context?: CalendarReadContext): Promise<CalendarEventRecord | undefined> {
     if (typeof externalId !== 'string' || externalId.length === 0) {
       throw new ProtocolError('INVALID_ARGUMENT', 'externalId must be a non-empty string');
     }
-    const event = (await this.queryEvents(undefined)).find(item => item.uid === externalId);
+    const event = (await this.queryEvents(undefined, context)).find(item => item.uid === externalId);
     return event === undefined ? undefined : this.toRecord(event);
   }
 
