@@ -91,6 +91,42 @@ test('trusted workspace binding rejects root or Node replacement at the same pat
   }
 });
 
+// Prepared for the final unified suite. These do not grant PUBLIC export consent.
+test('workspace export gate keeps source local and redacts non-content result projections', async t=> {
+  const {root,open}=await workspaceBindingFixture(t);
+  const host=open();
+  const checkpoints=new Map();
+  host.bindApplication({runtime:{loadCheckpoint:(id,key)=>checkpoints.get(id+key),
+    saveCheckpoint:(id,key,value)=>checkpoints.set(id+key,value)}});
+  await writeFile(path.join(root,'private.js'),'const privateValue="LOCAL_ONLY";\n');
+  host.authorize({cloudExportAllowed:true,writeAllowed:true,commandAllowed:false});
+  const request={taskId:'export-private',proposalId:'proposal-private',
+    signal:new AbortController().signal,deadline:new Date(Date.now()+30000).toISOString()};
+  const local=async(name,args,scopes)=> {
+    assert.equal(host.competitionToolAvailability.find(item=>item.toolName===name).available(request),true);
+    return host.tools.find(item=>item.descriptor.name===name).execute(args,{...request,scopes});
+  };
+  const read=await local('workspace.read_text',{path:'private.js'},['workspace:read']);
+  assert.match(read.content,/LOCAL_ONLY/); // The real local result is preserved.
+  const readExport=host.competitionToolExports.find(item=>item.toolName==='workspace.read_text');
+  assert.throws(()=>readExport.project({...request,result:read}),{code:'UNSUPPORTED_CAPABILITY'});
+  const list=await local('workspace.list_entries',{path:'.'},['workspace:list']);
+  const listExport=host.competitionToolExports.find(item=>item.toolName==='workspace.list_entries');
+  assert.deepEqual(listExport.project({...request,result:list}),{listed:true,truncated:false});
+  const preview=await local('workspace.preview_text_patch',{path:'private.js',expectedSha256:read.sha256,
+    edits:[{oldText:'LOCAL_ONLY',newText:'STILL_LOCAL'}]},['workspace:read']);
+  const previewExport=host.competitionToolExports.find(item=>item.toolName==='workspace.preview_text_patch');
+  const safe=previewExport.project({...request,result:preview});
+  assert.deepEqual(safe,{previewed:true,changed:true});
+  for(const privateValue of ['private.js','LOCAL_ONLY','STILL_LOCAL',read.sha256]) {
+    assert.equal(JSON.stringify(safe).includes(privateValue),false);
+  }
+  assert.throws(()=>previewExport.project({...request,result:{...preview,unexpected:'private'}}),{code:'INVALID_ARGUMENT'});
+  const cancelled=new AbortController();cancelled.abort();
+  assert.throws(()=>previewExport.project({...request,signal:cancelled.signal,result:preview}),{code:'CANCELLED'});
+  host.revoke();assert.throws(()=>previewExport.project({...request,result:preview}),{code:'UNAUTHORIZED'});
+});
+
 test('selected workspace binds tasks, keeps consent session-only and rejects reuse after revocation', async () => {
   const root=await mkdtemp(path.join(os.tmpdir(),'pa-coding-selected-'));
   const userData=await mkdtemp(path.join(os.tmpdir(),'pa-coding-config-'));
@@ -120,7 +156,7 @@ test('selected workspace binds tasks, keeps consent session-only and rejects reu
     const policy=host.competitionToolExports.find(item=>item.toolName==='workspace.read_text');
     const larger=await read.execute({path:'larger.js'},context);
     assert.equal(larger.content,largerSource);
-    assert.equal(policy.project({...request,result:larger}).content,largerSource);
+    assert.throws(()=>policy.project({...request,result:larger}),{code:'UNSUPPORTED_CAPABILITY'});
     assert.equal(policy.accepts(request),true);
     host.revoke();assert.equal(policy.accepts(request),false);
     await assert.rejects(read.execute({path:'hello.js'},context),/撤销|绑定/);
