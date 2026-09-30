@@ -15,7 +15,8 @@ async function terminal(app, taskId) {
   throw Error('Task did not settle');
 }
 
-test('trusted factory runs the competition HTTP adapter without local fallback', async () => {
+for (const workflowGoalInput of [undefined, 'goal']) {
+test(`trusted factory runs the competition HTTP adapter without local fallback (${workflowGoalInput ?? 'agent'})`, async () => {
   const base = new URL('../../../.cache/agentarts-application-tests/', import.meta.url);
   await mkdir(base, {recursive: true});
   const directory = await mkdtemp(new URL('case-', base));
@@ -26,6 +27,7 @@ test('trusted factory runs the competition HTTP adapter without local fallback',
     gatewayUrl: 'https://agentarts.example.test',
     runtimeName: 'pa-runtime',
     invokeMode: 'published',
+    ...(workflowGoalInput === undefined ? {} : {workflowGoalInput}),
     authorizationProvider: {
       read: async () => {
         authorizationReads += 1;
@@ -55,7 +57,9 @@ test('trusted factory runs the competition HTTP adapter without local fallback',
     assert.deepEqual(task.evidenceRefs, []);
     assert.equal(authorizationReads, 1);
     assert.equal(calls.length, 1);
-    assert.deepEqual(JSON.parse(calls[0].init.body), {query: '只分析合成事实，不执行工具'});
+    assert.deepEqual(JSON.parse(calls[0].init.body), workflowGoalInput === undefined
+      ? {query: '只分析合成事实，不执行工具'}
+      : {inputs: {goal: '只分析合成事实，不执行工具'}});
     assert.equal(calls[0].url, 'https://agentarts.example.test/runtimes/pa-runtime/invocations');
     assert.throws(() => app.configureText({mode: 'fake'}), /unavailable/);
   } finally {
@@ -63,6 +67,7 @@ test('trusted factory runs the competition HTTP adapter without local fallback',
     await rm(directory, {recursive: true, force: true});
   }
 });
+}
 
 test('HTTP 200 stream error after a partial message fails the task without persisting the partial answer', async () => {
   const base = new URL('../../../.cache/agentarts-application-tests/', import.meta.url);

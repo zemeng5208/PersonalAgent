@@ -1,8 +1,36 @@
 # 模块分工与独立交付清单
 
-版本：0.6 · 日期：2026-09-09 · 状态：只实施 Huawei ICT AgentArts Competition Profile；Local Profile 可选留存
+版本：0.7 · 日期：2026-09-29 · 状态：只实施 Huawei ICT AgentArts Competition Profile；Local Profile 可选留存
 
 本文件是未来工作负责人、文件所有权和交付边界的唯一登记处。[Competition Profile](competition/HUAWEI_ICT_AGENTARTS_PROFILE.md) 定义当前优先参赛路径，[PRD](PRD.md) 定义需求，[公共开发协议](DEVELOPMENT_PROTOCOL.md) 定义互通语义，[当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md) 决定接口是否冻结或可用，[ROADMAP](ROADMAP.md) 维护执行状态。
+
+## 0. 首版 MVP 本轮执行权调整（2026-09-29，优先于下文历史分工）
+
+产品负责人最新调整：`Potatos498` 继续负责 P0～P4；撤回此前委派给他的 P5～P8，交回 zemeng 侧统筹，具体执行者在接手前登记。此修订覆盖此前“全部非线上 AgentArts”委派。
+本轮任务、已核对基线、PR 状态和接手回执集中在 [Issue #212](https://github.com/zemeng5208/PersonalAgent/issues/212)，不另复制进度表。
+这是明确的跨模块实施委派；下文原归属保留作为历史及技术评审依据，不再限制 Potatos 只能开发 MOD-20～26。
+
+| 边界 | 当前实现负责人 | 说明 |
+| --- | --- | --- |
+| P0～P4：PR收拢、业务连接器、Desktop通用接线、语音/Live、子Agent/多模型/本地执行底座 | Potatos498 | 排除下列 P5～P8 专属实现与共享集成写入；P0 可登记相关 PR 状态，不接手被撤回包的实现返修 |
+| P5：Laya、目标与主动认知 | zemeng；执行者 Gemini（原交互会话，任务已准备、待送达确认） | packages/goals、packages/cognition、scripts/laya 及明确登记的 Desktop 认知/主动/邮件消费专属文件；变化→多候选→真实 Laya→已授权动作→持久读回/恢复去重。连接器提供者仍归 P1，共享装配归 P8 |
+| P6：Windows与编码工具 | zemeng 侧统筹，执行者待登记 | apps/windows-host、packages/windows-client、packages/coding-tools；复用已集成实现，真实窗口隔离、接管与读回，工作区补丁实际应用和受限命令 |
+| P7：知识、记忆、关注事项 | goo122 保留在途实现；剩余交接由 zemeng 侧统筹 | packages/knowledge、plugins/obsidian、packages/memory、packages/learning 及本地消费；在途文件完成明确交接前不并发改写 |
+| P8：本地共享集成与非云比赛材料 | zemeng 侧统筹，goo122 评审公共兼容 | 根配置/锁文件/公共装配采用独立 PR 和唯一写入槽；既有 Gemini 两份证据/演示文档任务继续保留，不重复委派 |
+| 线上 AgentArts 控制台、工作流提示词修改、发布、实例绑定、云凭据与真实云运行 | zemeng | 保持唯一云配置写入者；本地AgentArts客户端代码可以交给Potatos，真实云验证由zemeng完成 |
+| goo122 已进行的 #209 → #210 → #211 私人记忆/删除恢复PR内部返修 | goo122（限在途范围） | Potatos可作非作者评审；goo122声明交接头与占用文件后，由P7登记的执行者接手，不再默认交给Potatos |
+| MOD-19 Windows打包安装 | 暂停 | 不因本轮扩大分工恢复打包安装；已排除的TraceGuard治理也不重新加入 |
+
+### 单一写入与交接规则
+
+- Potatos 可将 P0～P4 内互不重叠的工作包分给自己的执行Agent；每包声明身份、MOD、拥有路径、基线、依赖和最小交付。保留所有协作者修改。已开展的 P5～P8 停止新增修改，保留分支/PR/未提交工作并回报交接头、差异与占用文件，不删除或回滚。
+- `apps/desktop/electron/main.js`、Admin共享入口、Runtime根装配、根配置/锁文件、公共Schema/迁移只由 P8 登记的一个集成写入者串行处理。P2/P4提供接口和接线补丁需求，P5/P7专属消费代码不因位于Desktop目录而重新归入P2。goo122负责公共语义兼容评审；在途#209～211占用部分先收尾再交接。模块工作不必等待共享文件，可以先通过公开端口独立实现。
+- 原PR作者保留历史归属；Potatos可接手 P0～P4 范围内返修，P5～P8仅盘点并交接。修改前在#212或对应PR登记当前head及范围，不覆盖原作者仍在进行的改动。
+- `codex/mvp-assembly` 的集成内容已通过#206进入main。新工作从最新main确认基线；旧PR先检查等效覆盖，不重复实现、重复合并或因CI绿灯就关闭。
+- Potatos可提交/推送/创建小PR并联系协作者提供接口。本人新增代码仍需另一位登记协作者评审；替他人返修后不能把自己的评审当作对该新增代码的独立批准。
+- 各执行者按当前 P0～P8 边界避免双写；线上AgentArts消费者需要本地改动时，向#212提交精确接口需求，交对应工作包的唯一写入者。Gemini既有两份比赛文档任务保留，不能据此扩展到产品代码。
+- 保留原有用户数据、加密凭据、工作流及配置，不将私人数据或本机路径放到GitHub。首次真实账号/设备操作仍按已有授权范围，不能把本次开发委派解释为任意账号副作用授权。
+- 实现优先，验证限于受影响关键路径。已有真实/离线证据分别复用，完整MVP仍需约定功能与对应真实验收；不通过降低验收口径或全套重复测试制造完成。
 
 ## 1. 人员与决策权
 

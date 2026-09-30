@@ -26,6 +26,14 @@
 
 ## 2. 状态定义与冻结门槛
 
+### MOD-30-WORKFLOW-INPUT-01 开发增量
+
+`AgentArtsRuntimeConfig` 和可信 Runtime 工厂新增可选 `workflowGoalInput`，将适配器构造的
+请求文本映射为一个 Workflow 开始变量的 `inputs`；未配置继续使用智能体 `query`。此选项是
+provisional 进程内配置，不是 wire operation、完整多输入映射或云端可用性证明。适配器与
+工厂合成验证不冻结 CloudAgentPort，也不证明工具提案/恢复或真实 Workflow 接通。详见
+[工作包与官方依据](../modules/MOD-30-WORKFLOW-INPUT-01.md)。
+
 ### 事实变化消费开发增量
 
 PR #89～#91 已合入 provisional 的 `MemoryQueryPort`、`FactChangeFeedPort`、批次解析、

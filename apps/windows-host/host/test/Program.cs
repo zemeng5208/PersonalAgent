@@ -1,8 +1,16 @@
 using System.Text.Json;
+using System.Diagnostics;
 using PersonalAgent.WindowsHost.Service;
 
 if (args.Length != 2) throw new ArgumentException("Pass #168 schema and fixture paths");
 var wire = new HostWire(args[0]);
+// An unstarted Process has no queryable session/start identity. A baseline
+// failure must reject the whole observation, rather than omit an old window
+// which could become queryable after the trusted user prepares a new target.
+var incompleteBaseline = new NotepadTargets(() => [new Process()]);
+var refusedObservation = incompleteBaseline.Observe(DateTime.UtcNow.AddSeconds(30));
+if (refusedObservation.Target is not null || refusedObservation.ErrorCode != "UNAUTHORIZED")
+    throw new Exception("Incomplete baseline must never select a window");
 using var fixtures = JsonDocument.Parse(File.ReadAllText(args[1]));
 foreach (var valid in fixtures.RootElement.GetProperty("valid").EnumerateArray())
 {

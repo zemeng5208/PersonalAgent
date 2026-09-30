@@ -20,10 +20,11 @@ helper 脚本和可执行文件也必须位于授权工作区外，模型和工�
 打开文件时已有其他句柄或原 SHA 不符时不写。成功结果只证明独占读回的那个
 时刻，锁释放后的用户编辑仍可继续。写入开始后故障、超时或进程终止可能留下
 部分文件与备份，必须以任务/运行标识查找备份并重新核对当前源文件及授权，
-不自动重试或盲目回滚。恢复目录还按源文件保留 `.inflight` 标记及 helper PID：
+不自动重试或盲目回滚。恢复目录还按源文件保留 `.inflight` 标记及 helper 的进程身份（PID
+和进程起始时间 token）：
 候选字节发送前持久创建，只有进程 `close` 确认后才删除；2 秒停止等待超时
 可以先向上层返回未知，但标记未消失前不得对账或再次 apply 同一源文件。
-进程/宿主崩溃留下的标记只能由受信恢复流程确认 PID 已退出、核对备份和
+进程/宿主崩溃留下的标记只能由受信恢复流程确认同一进程身份已退出、核对备份和
 当前源文件后处理。原位写入不是断电/崩溃时始终原子旧或新的替换。
 
 此工具仍不构成任意路径的 OS 沙箱；Node 先拒绝链接、硬链接和越界路径，
@@ -35,6 +36,21 @@ ACL 已限权；正式组合在核验目录访问控制前不得注册 apply。�
 `RESULT_UNKNOWN`，包括可以证明首写前安全拒绝的冲突，需由公共 owner 后续
 明确分阶段错误；本包不越界修改 Gateway。真实用户工作区验收须与命令工具
 共用编程链的一次联合回执。
+
+### 受信恢复对账
+
+`reconcileWorkspacePatchApply(options)` 是宿主在 apply 返回未知或进程/宿主重启后使用的
+显式对账入口。它只接受可信宿主提供的工作区根、工作区外恢复目录和原相对源路径；先读取
+对应 `.inflight` 的严格记录（必须同时包含 PID 和进程起始时间 token），再由宿主注入的
+`isProcessAlive(identity)` 确认同一 helper 身份的状态。检查器必须返回 `running`、`exited`
+或 `unknown`；也可由可信宿主提供绝对 `powerShellPath`，让本包通过受信 PowerShell 查询
+PID 的起始时间并与 marker 比对。未提供检查器或 PowerShell 路径、PID 已复用、起始时间不匹配、
+查询不可用或结果不确定，都保留 marker 并返回 `RESULT_UNKNOWN`。helper 仍存活时返回
+`in_progress`，不会删除标记、启动或终止进程。确认同一身份已退出后，它重新检查受保护源文件的真实身份并读回 SHA：当前值等于候选 SHA
+返回 `outcome=applied`，等于原 SHA 返回 `not_applied`，其他值返回 `unknown`；三种结果都
+不会伪装成成功。只有退出确认、源文件读回和 marker 身份均稳定后才删除标记，允许下一次
+独立授权的 apply；进程身份未知、记录损坏、源路径变化或对账竞态会保留标记并返回
+`RESULT_UNKNOWN`。该入口不会自动重试、回滚、删除备份或改变 ToolGateway 的错误映射。
 
 ## 既有增量：授权后的文本补丁候选文件
 
@@ -69,6 +85,7 @@ ACL 已限权；正式组合在核验目录访问控制前不得注册 apply。�
   - 使用 `CreateProcessW` 配合 `CREATE_SUSPENDED` 创建挂起目标进程与标准管道重定向；
   - 严格保持在 `ResumeThread` 前通过 `AssignProcessToJobObject` 纳管进程（分配失败立即 TerminateProcess 挂起进程），决不允许未纳管的进程开始运行；
   - 在宿主进程被杀、超时、取消或句柄关闭时，由 Windows 内核原子终止整棵子进程树，防止后台孤儿编译/脚本进程残留；
+  - 根命令正常退出后先关闭本次 Job，再等待 stdout/stderr 排空；继承输出句柄的遗留子进程会随 Job 结束，保留根命令的实际退出码和已收集输出，不能作为后台服务启动器。
   - 仅用于受信 Desktop 宿主构造的受控命令（如 npm-build / npm-test），严禁向模型暴露任意 shell/argv。
   - 受信宿主可在 recipe 或 options 中注入受控只读环境变量（key 必须满足正则、严禁包含 TOKEN/KEY/SECRET/PASSWORD/CREDENTIAL/AUTH 等敏感词、value 限制长度且不含 NUL）；未指定时默认空环境，绝不继承外部 `process.env` 私人凭据。
   - 提供了专属开发构建脚本 `packages/coding-tools/native/build-helper.mjs`，调用者必须显式传入工作区外的目标目录（例如 app `userData/native-helper`）并通过 `dotnet publish` 输出二进制；脚本严禁将发布目标设在仓库或工作区内部，要求系统预装 .NET 8 SDK，不执行 `ExecutionPolicy Bypass`，不自动下载外部 SDK。

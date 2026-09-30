@@ -14,6 +14,7 @@ import {restoreSyntheticRepairSubmission} from './competition-repair-submission.
 import {readCapabilityDirectory} from './capability-directory.js';
 import {createMicrophonePermissionGate} from './microphone-permission.js';
 import {readApprovalPage} from './approval-history.js';
+import {createPrivateMemoryController} from './private-memory.js';
 import {createMicrophoneCaptureHost} from './microphone-capture-host.js';
 import {createDesktopEvidenceHost} from './evidence-host.js';
 import {createDesktopCompetitionFactBridge} from './competition-fact-bridge.js';
@@ -37,7 +38,6 @@ import {createDesktopGoalCloudHost} from './goal-cloud-host.js';
 import {createMailMetadataStorage} from './mail-metadata-storage.js';
 import {createLocalLayaHost} from './laya-local-host.js';
 import {resultText} from '../src/features/conversation/result-text.js';
-import {createPrivateMemoryController} from './private-memory.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -133,6 +133,8 @@ let runtimeApplication;
 let syntheticRepairHost;
 const repairPrompts = new Set();
 let microphonePermissionGate;
+let privateMemory;
+let privateMemoryFixtureWrite = false;
 let microphoneCaptureHost;
 let voicePcmSource;
 let voiceInput;
@@ -212,8 +214,6 @@ function orderedTasks() {
   return [...tasks.values()].sort((a, b) => String(conversations?.turns.get(a.taskId)?.createdAt ?? a.createdAt ?? a.updatedAt ?? '')
     .localeCompare(String(conversations?.turns.get(b.taskId)?.createdAt ?? b.createdAt ?? b.updatedAt ?? '')));
 }
-let privateMemory;
-let privateMemoryFixtureWrite = false;
 function privateMemoryController() {
   if (!privateMemory) {
     mkdirSync(path.dirname(dataPaths.privateMemory), {recursive: true});
@@ -1768,11 +1768,11 @@ app.whenReady().then(async () => {
     }
     globalShortcut.unregisterAll();
     try {
+      privateMemory?.close();
       proactiveHost?.close();
       goalCloudHost?.close();
       mailAnalysisHost?.close();
       competitionFactBridge?.close();
-      privateMemory?.close();
       if (runtimeApplication) runtimeApplication.close();
       else runtime?.close?.();
       competitionCatalog?.close();

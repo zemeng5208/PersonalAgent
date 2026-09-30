@@ -21,19 +21,24 @@ export async function ingestConfirmedPrivateCitation(options: {
   readonly validUntil: string;
   readonly confirm: (citation: string) => Promise<ConfirmedPrivateFact | null>;
 }, context: MemoryReadContext) {
-  const citation = await options.vault.readCitation({source: options.source, ...context});
-  const decision = await options.confirm(citation);
+  // Keep the confirmed source and write target stable across injected async ports.
+  const {vault, memory, namespace, factId, expectedRevision, observedAt,
+    validFrom, validUntil, confirm} = options;
+  const source = structuredClone(options.source);
+  const scope = {deadline: context.deadline, signal: context.signal};
+  const read = () => vault.readCitation({source: structuredClone(source), ...scope});
+  const citation = await read();
+  const decision = await confirm(citation);
   if (decision === null) return null;
-  if (await options.vault.readCitation({source: options.source, ...context}) !== citation) {
+  const {operationId, summary} = decision;
+  if (await read() !== citation) {
     throw new KnowledgeError('SOURCE_CHANGED');
   }
-  const sourceRef = `${options.source.vaultId}/${options.source.path}`
-    + `#L${options.source.line}@${options.source.revision}`;
-  const fields = {factId: options.factId, operationId: decision.operationId,
-    summary: decision.summary, sourceRef, observedAt: options.observedAt,
-    validFrom: options.validFrom, validUntil: options.validUntil, ...context};
-  return options.expectedRevision === null
-    ? options.memory.createUserFact(options.namespace, fields)
-    : options.memory.reviseUserFact(options.namespace,
-      {...fields, expectedRevision: options.expectedRevision, sensitivity: 'private', state: 'active'});
+  const sourceRef = `${source.vaultId}/${source.path}#L${source.line}@${source.revision}`;
+  const fields = {factId, operationId, summary, sourceRef, observedAt,
+    validFrom, validUntil, ...scope};
+  return expectedRevision === null
+    ? memory.createUserFact(namespace, fields)
+    : memory.reviseUserFact(namespace,
+      {...fields, expectedRevision, sensitivity: 'private', state: 'active'});
 }

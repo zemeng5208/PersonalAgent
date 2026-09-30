@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "profile": "huawei_ict_agentarts",
+  "surface": "Runtime Application only; no Desktop or IPC",
+  "evidenceLevel": "conditional",
+  "startedAt": "2026-09-17T09:57:48.350Z",
+  "finishedAt": "2026-09-17T09:57:49.273Z",
+  "codeVersion": {
+    "runtimeHead": "291ad4aaafd9a2c9b9b1084cd61259d14c27115b",
+    "helperCommit": "ece2151df70158ca1ecdc62b3ac1a74e92558152"
+  },
+  "taskId": "446bee58-a2b0-452a-b824-2e8067773a58",
+  "networkCallCount": 1,
+  "authorizationReadCount": 1,
+  "firstRun": {
+    "state": "failed",
+    "errorCode": "EXTERNAL_FAILURE",
+    "verification": "unavailable",
+    "hasResult": false,
+    "evidenceRefCount": 0
+  },
+  "response": {
+    "fetchOutcome": "rejected",
+    "status": "unread",
+    "contentType": "unread",
+    "bodyOutcome": "unread",
+    "byteCountCapped": 0,
+    "chunkCountCapped": 0,
+    "eventCountCapped": 0,
+    "eventInspection": "unconfirmed",
+    "indexedMessageCoverage": "partial"
+  },
+  "restart": {
+    "sameDatabase": true,
+    "submittedDuringRestart": false,
+    "authorizationReadCount": 0,
+    "fetchCallCount": 0,
+    "state": "failed",
+    "errorCode": "EXTERNAL_FAILURE",
+    "verification": "unavailable"
+  },
+  "localFallbackConfigured": false,
+  "automaticRetryPerformed": false,
+  "conclusion": "Fetch rejected before any HTTP response was received. No SSE/parser evidence was collected; the earlier full-response failure remains unresolved.",
+  "notVerified": [
+    "specific fetch rejection cause",
+    "Desktop success",
+    "earlier parser failure branch",
+    "cloud execution or billing outcome",
+    "trusted tool or Evidence loop"
+  ],
+  "security": {
+    "rawResponseSaved": false,
+    "privateInputSent": false,
+    "credentialsRecorded": false
+  }
+}
