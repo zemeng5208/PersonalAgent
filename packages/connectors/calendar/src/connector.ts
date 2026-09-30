@@ -30,7 +30,7 @@ export class CalendarConnector implements ConnectorPort {
     this.defaultWindowDays = options.defaultWindowDays ?? 7;
     this.now = options.now ?? Date.now;
     // manifest 随实际 Provider 声明，不保留把真实提供者标为 fixture 的过时示例：
-    // 真实只读源（ical-subscription/caldav）无 respond 能力、需凭据；Fake 仅供测试。
+    // 真实只读源无 respond 能力；CalDAV 可用 Basic 凭据，iCal 使用订阅 URL。Fake 仅供测试。
     const kind = this.service.providerKind;
     const real = kind !== 'fixture';
     this.manifest = {
@@ -47,7 +47,7 @@ export class CalendarConnector implements ConnectorPort {
         },
         additionalProperties: false,
       },
-      authentication: real ? 'basic' : 'none',
+      authentication: kind === 'caldav' ? 'basic' : 'none',
       requiresPresence: false,
       syncStrategy: 'windowed',
       verification: this.service.providerVerification,

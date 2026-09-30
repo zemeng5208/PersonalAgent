@@ -58,7 +58,7 @@ node --test test/caldav.test.mjs
 
 ### 连接器（ConnectorPort）
 
-manifest 随**实际 Provider** 声明（不保留把真实提供者标为 fixture 的过时示例）：`accountTypes=[providerKind]`（Fake=`fixture`、订阅源=`ical-subscription`、CalDAV=`caldav`）、`authentication`（Fake=`none`，真实源=`basic`）、`capabilities`（Fake 含 `performAction`；只读真实源只有 `fetchChanges/search/getItem`）、`verification` 透传 Provider 声明（Fake=`mock`、网络型真实源=`conditional`）、`syncStrategy='windowed'`。未 `connect()` 前调用数据方法抛 `UNAUTHORIZED`；游标损坏抛 `CURSOR_EXPIRED`；不支持的动作抛 `UNSUPPORTED_CAPABILITY`。
+manifest 随**实际 Provider** 声明（不保留把真实提供者标为 fixture 的过时示例）：`accountTypes=[providerKind]`（Fake=`fixture`、订阅源=`ical-subscription`、CalDAV=`caldav`）、`authentication`（Fake/iCal 订阅=`none`，CalDAV=`basic`）、`capabilities`（Fake 含 `performAction`；只读真实源只有 `fetchChanges/search/getItem`）、`verification` 透传 Provider 声明（Fake=`mock`、网络型真实源=`conditional`）、`syncStrategy='windowed'`。未 `connect()` 前调用数据方法抛 `UNAUTHORIZED`；游标损坏抛 `CURSOR_EXPIRED`；不支持的动作抛 `UNSUPPORTED_CAPABILITY`。
 
 ## 取消、超时与重试
 

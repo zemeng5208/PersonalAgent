@@ -289,7 +289,7 @@ test('live CalDAV wrong credentials are refused as UNAUTHORIZED without retry', 
 });
 
 test('connector manifest follows the provider kind instead of a stale fixture example', async () => {
-  const {CalendarConnector, CalendarService, FakeCalendarProvider} = await import('../dist/index.js');
+  const {CalendarConnector, CalendarService, FakeCalendarProvider, ICalSubscriptionProvider} = await import('../dist/index.js');
   const fixtureConnector = new CalendarConnector(new CalendarService(new FakeCalendarProvider(), {now: () => 0}));
   assert.deepEqual(fixtureConnector.manifest.accountTypes, ['fixture']);
   assert.equal(fixtureConnector.manifest.authentication, 'none');
@@ -303,6 +303,13 @@ test('connector manifest follows the provider kind instead of a stale fixture ex
   assert.equal(real.manifest.verification, 'conditional');
   assert.ok(!real.manifest.capabilities.includes('performAction'),
     'read-only providers must not advertise respond');
+
+  const subscription = new CalendarConnector(new CalendarService(
+    new ICalSubscriptionProvider({url: 'https://calendar.example.test/feed.ics'}), {now: () => 0}));
+  assert.deepEqual(subscription.manifest.accountTypes, ['ical-subscription']);
+  assert.equal(subscription.manifest.authentication, 'none');
+  assert.equal(subscription.manifest.verification, 'conditional');
+  assert.ok(!subscription.manifest.capabilities.includes('performAction'));
 });
 
 test('loopback plain HTTP is opt-in and localhost-only', async () => {
