@@ -1,0 +1,117 @@
+import assert from 'node:assert/strict';
+import {copyFile, mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
+import {join} from 'node:path';
+import test from 'node:test';
+import {openSqliteMemoryHost} from '@personal-agent/memory/sqlite';
+import {createPrivateMemoryController} from '../electron/private-memory.js';
+import {createMemoryLearningHost} from '../electron/memory-learning-host.js';
+import {memoryLearningControlsHtml} from '../src/features/admin/memory-learning-controls.js';
+
+const context = () => ({deadline: new Date(Date.now() + 60_000).toISOString(), signal: new AbortController().signal});
+async function fixture(t, options = {}) {
+  const parent = fileURLToPath(new URL('../../../.cache/memory-learning-tests/', import.meta.url));
+  await mkdir(parent, {recursive: true});
+  const base = await mkdtemp(join(parent, 'case-'));
+  const root = join(base, 'vault');
+  const database = join(base, 'private.sqlite');
+  await mkdir(root);
+  await writeFile(join(root, 'note.md'), 'Synthetic preference: read the plan first.\n');
+  const controller = createPrivateMemoryController(database, options.confirm ?? (async () => true),
+    async () => true, {confirmWithdraw: async () => true, authorizeConsumption: options.authorize ?? (async () => false)});
+  t.after(async () => {controller.close(); await rm(base, {recursive: true, force: true});});
+  await controller.selectVault(root);
+  const source = (await controller.search('Synthetic preference')).hits[0].source;
+  return {base, root, database, controller, source};
+}
+
+test('production bridge enables only authoritative no-copy/unbound deletion readiness; exact baselines are enforced', async t => {
+  const f = await fixture(t);
+  const disabled = createMemoryLearningHost({profile: 'huawei_ict_agentarts', privateMemory: f.controller});
+  assert.equal(disabled.snapshot().writeEnabled, false);
+  await assert.rejects(disabled.invoke('memory.save', {source: f.source, summary: 'Read plan'}), /副本/);
+  const host = createMemoryLearningHost({profile: 'huawei_ict_agentarts', privateMemory: f.controller, managedPrivateCopies: []});
+  assert.equal(host.snapshot().writeEnabled, true);
+  const payload = {source: f.source, summary: 'Read plan', baseline: {expectedRevision: null, configurationRevision: 1}};
+  assert.equal((await host.invoke('memory.save', payload)).revision, 1);
+  await assert.rejects(host.invoke('memory.save', {...payload, summary: 'Stale overwrite'}), /版本已变化/);
+  assert.equal((await host.invoke('memory.save', {...payload, summary: 'Corrected plan',
+    baseline: {expectedRevision: 1, configurationRevision: 1}})).revision, 2);
+  const memory = openSqliteMemoryHost(f.database);
+  memory.bindFeed('desktop-private', {consumerId: 'synthetic-illegal-binding', allowedSensitivities: ['private']});
+  memory.close();
+  assert.equal(host.snapshot().writeEnabled, false);
+});
+
+test('withdrawal survives restart, never exposes old preference, and cloud requires exact per-task consent', async t => {
+  let allow = false;
+  let onConsent;
+  const f = await fixture(t, {authorize: async request => {await onConsent?.(request); return allow;}});
+  await f.controller.save(f.source, 'Read plan');
+  const ref = (await f.controller.listSaved()).facts[0].ref;
+  const request = {refs: [ref], taskId: 'synthetic-task', destination: 'agentarts', ...context()};
+  assert.deepEqual(await f.controller.consumeConfirmed(request), {state: 'declined', facts: []});
+  allow = true;
+  const consumed = await f.controller.consumeConfirmed(request);
+  assert.deepEqual(consumed.facts, [{ref, summary: 'Read plan'}]);
+  assert.equal(JSON.stringify(consumed).includes(f.source.path), false);
+  onConsent = async () => {await f.controller.withdraw(ref);};
+  await assert.rejects(f.controller.consumeConfirmed(request), /版本已变化/);
+  assert.equal((await f.controller.listSaved()).facts.length, 0);
+  const withdrawn = {id: ref.id, revision: 2};
+  await assert.rejects(f.controller.consumeConfirmed({...request, refs: [withdrawn]}), /撤回/);
+  f.controller.close();
+  const restarted = createPrivateMemoryController(f.database, async () => false, async () => true);
+  try {
+    assert.equal((await restarted.listSaved()).facts.length, 0);
+    assert.equal((await restarted.delete(withdrawn)).state, 'deleted');
+  } finally {restarted.close();}
+});
+
+test('source reconfiguration during confirmation refuses the formerly selected citation', async t => {
+  let onConfirm;
+  const f = await fixture(t, {confirm: async () => {await onConfirm(); return true;}});
+  onConfirm = async () => {await f.controller.selectVault(f.root);};
+  await assert.rejects(f.controller.save(f.source, 'Should not be saved'), /配置已变化/);
+  assert.equal((await f.controller.listSaved()).facts.length, 0);
+});
+
+test('application restore filter removes old deleted revisions and preserves an independent fact', async t => {
+  const f = await fixture(t);
+  await f.controller.save(f.source, 'Synthetic secret v1');
+  await writeFile(join(f.root, 'other.md'), 'Synthetic independent note.\n');
+  const other = (await f.controller.search('Synthetic independent')).hits[0].source;
+  await f.controller.save(other, 'Keep independent');
+  const backup = join(f.base, 'synthetic-application-copy.sqlite');
+  f.controller.close();
+  await copyFile(f.database, backup);
+  const controller = createPrivateMemoryController(f.database, async () => true, async () => true);
+  try {
+    await controller.selectVault(f.root);
+    await controller.save(f.source, 'Synthetic secret v2');
+    const ref = (await controller.listSaved()).facts.find(fact => fact.summary === 'Synthetic secret v2').ref;
+    await controller.delete(ref);
+    const restored = openSqliteMemoryHost(backup);
+    try {
+      assert.equal(controller.filterRestoredHost(restored).state, 'filtered');
+      assert.equal(restored.readUserFactHead('desktop-private', ref.id), undefined);
+      assert.equal(restored.listFactErasures('desktop-private', {limit: 100, ...context()})[0].expectedRevision, 2);
+      const facts = await restored.bind('desktop-private', {allowedSensitivities: ['private']})
+        .listCurrent({at: new Date().toISOString(), limit: 10, ...context()});
+      assert.deepEqual(facts.facts.map(fact => fact.summary), ['Keep independent']);
+    } finally {restored.close();}
+    const reopened = openSqliteMemoryHost(backup);
+    try {assert.equal(reopened.readUserFactHead('desktop-private', ref.id), undefined);}
+    finally {reopened.close();}
+  } finally {controller.close();}
+});
+
+test('independent control projection escapes text and has no private values or raw Evidence', () => {
+  const html = memoryLearningControlsHtml({status: {writeEnabled: true, learningAvailable: true},
+    refs: [{id: 'opaque-id', revision: 2}], version: {workflowId: '<script>', revision: 1,
+      validation: 'failed', hasEvidence: false, sourceRef: 'must-not-display'}, message: '<img onerror=alert(1)>'});
+  assert.ok(html.includes('&lt;script&gt;'));
+  assert.ok(html.includes('data-ml-action="activate" disabled'));
+  assert.equal(html.includes('must-not-display'), false);
+  assert.equal(html.includes('opaque-id'), false);
+});

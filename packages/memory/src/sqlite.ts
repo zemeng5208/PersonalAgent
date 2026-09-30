@@ -29,6 +29,14 @@ const MAX_SUMMARY = 4096;
 const MAX_SOURCE = 1024;
 const MAX_PAGE = 100;
 
+/** Content-free trusted recovery inventory, never a consumer query or authorization. */
+export interface FactErasureMarker {
+  readonly factId: string;
+  readonly operationId: string;
+  readonly expectedRevision: number;
+  readonly phase: 'pending' | 'completed';
+}
+
 const MIGRATIONS: readonly Migration[] = [{
   version: 1,
   sql: `
@@ -413,6 +421,81 @@ export class SqliteMemoryHost {
     }
   }
 
+  /** Stable ID pagination over durable intents, including completed tombstones. */
+  listFactErasures(namespaceValue: unknown, value: unknown): readonly FactErasureMarker[] {
+    try {
+      const namespace = text(namespaceValue);
+      const record = exact(value, ['limit', 'deadline', 'signal'], ['afterFactId']);
+      const operation = context(record, queryFail);
+      if (!Number.isSafeInteger(record.limit) || (record.limit as number) < 1
+        || (record.limit as number) > MAX_PAGE) return queryFail();
+      const after = record.afterFactId === undefined ? '' : text(record.afterFactId);
+      active(operation, queryFail);
+      const rows = this.db.prepare(`SELECT fact_id, operation_id, expected_revision, phase
+        FROM memory_erasure_intents WHERE namespace = ? AND fact_id > ?
+        ORDER BY fact_id LIMIT ?`).all(namespace, after, record.limit as number) as Row[];
+      return rows.map(row => ({factId: rowText(row, 'fact_id'),
+        operationId: rowText(row, 'operation_id'), expectedRevision: rowNumber(row, 'expected_revision'),
+        phase: rowText(row, 'phase') as FactErasureMarker['phase']}));
+    } catch (error) {
+      if (error instanceof MemoryQueryError) throw error;
+      return queryFail();
+    }
+  }
+
+  /**
+   * Before exposing an application-restored UNBOUND database, reapply markers
+   * read from its still-authoritative original host. No file copy or discovery.
+   * A missing authoritative inventory must be handled as unavailable by the caller.
+   */
+  restoreUnboundErasureMarkers(namespaceValue: unknown, value: unknown): void {
+    try {
+      const namespace = text(namespaceValue);
+      const record = exact(value, ['markers', 'deadline', 'signal']);
+      const operation = context(record, queryFail);
+      if (!Array.isArray(record.markers) || record.markers.length > MAX_PAGE) return queryFail();
+      const markers = record.markers.map(raw => {
+        const marker = exact(raw, ['factId', 'operationId', 'expectedRevision', 'phase']);
+        const factId = text(marker.factId);
+        const operationId = text(marker.operationId, 128);
+        if (!/^[A-Za-z0-9_.-]+$/.test(operationId)
+          || !Number.isSafeInteger(marker.expectedRevision) || (marker.expectedRevision as number) < 1
+          || marker.phase !== 'completed') return queryFail('SCOPE_DENIED');
+        return {factId, operationId, expectedRevision: marker.expectedRevision as number};
+      });
+      transaction(this.db, () => {
+        active(operation, queryFail);
+        if (this.db.prepare('SELECT 1 FROM memory_feed_bindings WHERE namespace = ? LIMIT 1')
+          .get(namespace) !== undefined) return queryFail('SCOPE_DENIED');
+        for (const marker of markers) {
+          const existing = this.db.prepare(`SELECT operation_id, expected_revision, phase
+            FROM memory_erasure_intents WHERE namespace = ? AND fact_id = ?`)
+            .get(namespace, marker.factId) as Row | undefined;
+          if (existing && (existing.operation_id !== marker.operationId
+            || existing.expected_revision !== marker.expectedRevision || existing.phase !== 'completed')) {
+            return queryFail('REVISION_CONFLICT');
+          }
+          const head = this.db.prepare(`SELECT MAX(revision) AS revision FROM memory_facts
+            WHERE namespace = ? AND fact_id = ?`).get(namespace, marker.factId) as Row;
+          if (head.revision !== null && (head.revision as number) > marker.expectedRevision) {
+            return queryFail('REVISION_CONFLICT');
+          }
+          this.invalidateFactSnapshots(namespace, marker.factId);
+          for (const table of ['memory_public_sources', 'memory_user_revisions', 'memory_user_creations', 'memory_facts']) {
+            this.db.prepare(`DELETE FROM ${table} WHERE namespace = ? AND fact_id = ?`).run(namespace, marker.factId);
+          }
+          this.db.prepare(`INSERT OR IGNORE INTO memory_erasure_intents
+            (namespace, fact_id, operation_id, expected_revision, phase) VALUES (?, ?, ?, ?, 'completed')`)
+            .run(namespace, marker.factId, marker.operationId, marker.expectedRevision);
+        }
+      }, () => active(operation, queryFail));
+      this.resumeCompletedErasureMaintenance(namespace);
+    } catch (error) {
+      if (error instanceof MemoryQueryError) throw error;
+      return queryFail('STORAGE_UNAVAILABLE');
+    }
+  }
+
   provision(namespaceValue: unknown): void {
     try {
       const namespace = text(namespaceValue);
@@ -420,6 +503,28 @@ export class SqliteMemoryHost {
     } catch {
       return queryFail();
     }
+  }
+
+  /** Trusted private admin head read; includes withdrawn/expired heads, never older fallback. */
+  readUserFactHead(namespaceValue: unknown, factIdValue: unknown): FactVersion | undefined {
+    const namespace = text(namespaceValue);
+    const factId = text(factIdValue);
+    const row = this.db.prepare(`SELECT f.payload FROM memory_facts f
+      WHERE f.namespace = ? AND f.fact_id = ?
+        AND NOT EXISTS (SELECT 1 FROM memory_erasure_intents e
+          WHERE e.namespace = f.namespace AND e.fact_id = f.fact_id)
+      ORDER BY f.revision DESC LIMIT 1`).get(namespace, factId) as Row | undefined;
+    if (!row) return undefined;
+    const saved = fact(parseJson(rowText(row, 'payload')));
+    if (saved.sensitivity !== 'private' || saved.confirmation !== 'user_confirmed') return queryFail('SCOPE_DENIED');
+    return structuredClone(saved);
+  }
+
+  /** Trusted private composition readiness; a previous feed binding is irreversible here. */
+  assertUnboundNamespace(namespaceValue: unknown): void {
+    const namespace = text(namespaceValue);
+    if (this.db.prepare('SELECT 1 FROM memory_feed_bindings WHERE namespace = ? LIMIT 1')
+      .get(namespace) !== undefined) return queryFail('SCOPE_DENIED');
   }
 
   append(namespaceValue: unknown, value: unknown): FactVersion {
