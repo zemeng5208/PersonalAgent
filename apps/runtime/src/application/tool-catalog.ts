@@ -26,6 +26,12 @@ export interface CompetitionAvailableTool {
   inputSchema: Record<string, unknown>;
 }
 
+export interface CompetitionWorkerCapability {
+  toolName:string;toolVersion:string;publicEnumPaths:readonly string[];
+  requiredTool:{name:string;version:string};
+  describe(input:{taskId:string;revision:number;deadline:string;signal:AbortSignal}):Promise<CompetitionAvailableTool|undefined>;
+}
+
 interface CatalogCheckpoint {
   revision: number;
   deadline: string;
@@ -93,7 +99,8 @@ export class RuntimeCompetitionToolCatalog {
     const allowed=(name:string,version:string)=>descriptors.some(tool=>tool.name===name&&tool.version===version);
     return new RuntimeCompetitionToolCatalog(this.runtime,tools,
       this.exports.filter(item=>allowed(item.toolName,item.toolVersion)),
-      this.availability.filter(item=>allowed(item.toolName,item.toolVersion)));
+      this.availability.filter(item=>allowed(item.toolName,item.toolVersion)),
+      this.workers.filter(item=>allowed(item.requiredTool.name,item.requiredTool.version)));
   }
 
   constructor(
@@ -101,6 +108,7 @@ export class RuntimeCompetitionToolCatalog {
     private readonly tools: AgentToolPort,
     private readonly exports: readonly CompetitionToolExport[],
     private readonly availability: readonly CompetitionToolAvailability[],
+    private readonly workers:readonly CompetitionWorkerCapability[] = [],
   ) {
     const names = new Set<string>();
     for (const entry of availability) {
@@ -112,6 +120,11 @@ export class RuntimeCompetitionToolCatalog {
             || !/^\/(?:[A-Za-z][A-Za-z0-9_.:-]*|\*)(?:\/(?:[A-Za-z][A-Za-z0-9_.:-]*|\*))*$/.test(value))))) {
         throw new ProtocolError('INVALID_ARGUMENT', 'Invalid Competition tool availability binding');
       }
+      names.add(key);
+    }
+    for(const worker of workers) {
+      const key=JSON.stringify([worker.toolName,worker.toolVersion]);
+      if(names.has(key) || !NAME.test(worker.toolName) || !VERSION.test(worker.toolVersion))throw new ProtocolError('INVALID_ARGUMENT','Duplicate worker capability');
       names.add(key);
     }
     const selectable = this.tools.list().filter(descriptor => !descriptor.requiresPresence
@@ -177,6 +190,13 @@ export class RuntimeCompetitionToolCatalog {
         throw new ProtocolError('INVALID_ARGUMENT', 'Competition tool catalog exceeds its limit');
       }
     }
+    for(const worker of this.workers) {
+      const descriptor=await worker.describe({...input,revision});
+      if(!descriptor)continue;
+      if(descriptor.name!==worker.toolName || descriptor.version!==worker.toolVersion)throw new ProtocolError('UNAUTHORIZED','Worker descriptor identity changed');
+      selected.push({...descriptor,inputSchema:safeSchema(descriptor.inputSchema,0,new Set(worker.publicEnumPaths))});
+    }
+    if(selected.length>MAX_AVAILABLE_TOOLS || Buffer.byteLength(JSON.stringify(selected),'utf8')>MAX_AVAILABLE_TOOLS_JSON_BYTES)throw new ProtocolError('INVALID_ARGUMENT','Worker catalog exceeds its limit');
     this.assertCurrent({...input, revision});
     this.runtime.saveCheckpoint(input.taskId, CHECKPOINT, {revision, deadline: input.deadline, entries: selected});
     return structuredClone(selected);
@@ -190,6 +210,16 @@ export class RuntimeCompetitionToolCatalog {
     this.assertCurrent(input);
     const saved = this.runtime.loadCheckpoint(input.taskId, CHECKPOINT) as CatalogCheckpoint | undefined;
     const entry = saved?.entries.find(item => item.name === input.toolName && item.version === input.toolVersion);
+    const worker=this.workers.find(item=>item.toolName===input.toolName && item.toolVersion===input.toolVersion);
+    if(worker) {
+      const fresh=await worker.describe(input);
+      if(!entry || !fresh || saved?.deadline!==input.deadline
+        || (input.firstCloudRequest && saved.revision!==revision)
+        || !isDeepStrictEqual(safeSchema(fresh.inputSchema,0,new Set(worker.publicEnumPaths)),entry.inputSchema)) {
+        throw new ProtocolError('UNAUTHORIZED','Worker selection is no longer available');
+      }
+      validateToolValue(fresh.inputSchema,input.arguments);this.assertCurrent(input);return;
+    }
     const binding = this.availability.find(item => item.toolName === input.toolName && item.toolVersion === input.toolVersion);
     const descriptor: ToolDescriptor | undefined = this.tools.list().find(item => item.name === input.toolName && item.version === input.toolVersion);
     if (!entry || !binding || !descriptor || descriptor.requiresPresence
@@ -213,6 +243,12 @@ export class RuntimeCompetitionToolCatalog {
       throw new ProtocolError('UNAUTHORIZED', 'Competition tool catalog changed before export');
     }
     for (const item of saved.entries) {
+      const worker=this.workers.find(worker=>worker.toolName===item.name && worker.toolVersion===item.version);
+      if(worker) {
+        const fresh=await worker.describe(input);
+        if(!fresh || !isDeepStrictEqual(safeSchema(fresh.inputSchema,0,new Set(worker.publicEnumPaths)),item.inputSchema))throw new ProtocolError('UNAUTHORIZED','Worker became unavailable before send');
+        continue;
+      }
       const binding = this.availability.find(entry => entry.toolName === item.name && entry.toolVersion === item.version);
       const descriptor = this.tools.list().find(entry => entry.name === item.name && entry.version === item.version);
       if (!binding || !descriptor || descriptor.requiresPresence

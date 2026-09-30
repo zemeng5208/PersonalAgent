@@ -1,5 +1,6 @@
 import type {DatabaseSync} from 'node:sqlite';
 import {ProtocolError} from '@personal-agent/contracts';
+import {isDeepStrictEqual} from 'node:util';
 
 export interface TrustedHostStateStore {
   get(key:string):unknown;
@@ -29,6 +30,7 @@ export function bindHostStateStore(db:DatabaseSync,namespace:string):TrustedHost
       let encoded:string|undefined;
       try {encoded=JSON.stringify(value);} catch {throw new ProtocolError('INVALID_ARGUMENT','Host state must be JSON');}
       if(encoded===undefined || Buffer.byteLength(encoded)>1048576)throw new ProtocolError('INVALID_ARGUMENT','Invalid host state size');
+      if(!isDeepStrictEqual(value,JSON.parse(encoded)))throw new ProtocolError('INVALID_ARGUMENT','Host state must be lossless JSON');
       db.prepare('INSERT INTO trusted_host_state (namespace,state_key,value_json) VALUES (?,?,?) ON CONFLICT(namespace,state_key) DO UPDATE SET value_json=excluded.value_json')
         .run(namespace,key,encoded);
     },

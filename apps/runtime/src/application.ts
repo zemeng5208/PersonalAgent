@@ -1,9 +1,13 @@
-export {createRuntimeApplication, RuntimeApplication} from './application/runtime-application.js';
+export {createRuntimeApplication, RuntimeApplication,createRuntimeKnowledgeReevaluator,REFERENCE_SKILL_WORKER_TOOL} from './application/runtime-application.js';
+export type {KnowledgeRecheckContext,KnowledgeRecheckOptions,KnowledgeRecheckResult} from './application/runtime-application.js';
+export type {CloudSkillRuntimeHostPort} from './application/runtime-application.js';
+export type {PrepareCompetitionToolExport,CompetitionToolExport,CoordinationWorkerCapabilityPort} from './application/coordination.js';
 export type {StartSystemObservationSessionRequest, SystemObservationSession} from './application/system-observation-session.js';
 export {createSystemObservationTool} from '@personal-agent/windows-client';
 export type {RuntimeApplicationOptions, RuntimeApplicationTransport, SubmitHostToolTaskRequest,
   PrepareHostToolTaskRequest, FinalizeHostToolTaskRequest, HostToolTaskReadback,
   RevokeHostAuthorizationRequest, RevokeHostAuthorizationResult,
+  CoordinationGoalScope, CoordinationInputHooks, ConversationContextMessage, WindowsHostTaskReconciliation,
   ConfirmedSystemObservationSample} from './application/runtime-application.js';
 export type {LocalRepairHostOptions, LocalRepairBinding, SubmitLocalRepairRequest} from './application/local-repair.js';
 export type {CompetitionAvailableTool, CompetitionToolAvailability} from './application/tool-catalog.js';
@@ -23,7 +27,7 @@ export type {ConfirmedPrivateFact} from './application/private-source.js';
 export {createWindowsHostBridgeTransport, createWindowsHostNotepadAdapter} from './application/windows-host-adapter.js';
 export {createRuntimeWindowsHostAttemptStore} from './application/windows-host-attempt-store.js';
 export type {WindowsHostTransport, VerifiedWindowsHostConnection, WindowsHostAttemptStore,
-  WindowsHostAdapterOptions, WindowsHostRunIdentity, ObservedNotepad} from './application/windows-host-adapter.js';
+  WindowsHostAdapterOptions, WindowsHostRunIdentity, WindowsHostRecovery, ObservedNotepad} from './application/windows-host-adapter.js';
 export {ScopedEvidenceReader} from './application/evidence-reader.js';
 export type {EvidenceReadScope, EvidenceReaderOptions, EvidencePage} from './application/evidence-reader.js';
 export type {
