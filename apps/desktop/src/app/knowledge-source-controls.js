@@ -28,7 +28,7 @@ export function mountKnowledgeSourceControls(root, invoke) {
     <p class="notice" data-knowledge-source="write-status" role="status"></p>`;
   root.append(section);
   const field = name => section.querySelector(`[data-knowledge-source="${name}"]`);
-  let state = {}, busy = false, noteVersion;
+  let state = {}, busy = false, noteVersion, settingsDirty = false;
   const binding = () => ({sourceId: state.sourceId, configRevision: state.configRevision});
   function buttons() {
     for (const button of section.querySelectorAll('button')) button.disabled = busy;
@@ -39,14 +39,16 @@ export function mountKnowledgeSourceControls(root, invoke) {
   }
   function clearNote() {noteVersion = undefined; field('preview').textContent = ''; field('old').value = ''; field('new').value = '';}
   function render(next) {
-    if (state.sourceId !== next.sourceId || state.configRevision !== next.configRevision) clearNote();
+    if (state.sourceId !== next.sourceId || state.configRevision !== next.configRevision) {clearNote(); settingsDirty = false;}
     state = next;
     field('name').textContent = state.configured ? `${state.displayName} · 配置版本 ${state.configRevision}` : '尚未选择知识库';
-    field('enabled').checked = state.enabled === true;
-    field('level').value = state.dataLevel === 'public' ? 'public' : 'private';
-    field('write').checked = state.writeAvailable === true;
-    field('cloud').checked = state.cloudExportAllowed === true;
-    field('queries').value = (state.publicQueries ?? []).join('\n');
+    if (!settingsDirty) {
+      field('enabled').checked = state.enabled === true;
+      field('level').value = state.dataLevel === 'public' ? 'public' : 'private';
+      field('write').checked = state.writeAvailable === true;
+      field('cloud').checked = state.cloudExportAllowed === true;
+      field('queries').value = (state.publicQueries ?? []).join('\n');
+    }
     const selected = field('note').value;
     field('note').replaceChildren(...(state.allowedNotePaths ?? []).map(value => {
       const option = document.createElement('option'); option.value = value; option.textContent = value; return option;
@@ -68,7 +70,10 @@ export function mountKnowledgeSourceControls(root, invoke) {
     enabled: field('enabled').checked, dataLevel: field('level').value, writeAllowed: field('write').checked,
     cloudExportAllowed: field('level').value === 'public' && field('cloud').checked,
     publicQueries: field('queries').value.split(/\r?\n/).map(value => value.trim()).filter(Boolean)}));
-  field('level').addEventListener('change', () => {if (field('level').value !== 'public') field('cloud').checked = false; buttons();});
+  for (const name of ['enabled', 'level', 'write', 'cloud', 'queries']) {
+    field(name).addEventListener('input', () => {settingsDirty = true;});
+  }
+  field('level').addEventListener('change', () => {settingsDirty = true; if (field('level').value !== 'public') field('cloud').checked = false; buttons();});
   field('note').addEventListener('change', () => {clearNote(); buttons();});
   field('read').addEventListener('click', () => act('knowledge.source.readNote', {...binding(), path: field('note').value}, result => {
     if (result.sourceId !== state.sourceId || result.configRevision !== state.configRevision || result.path !== field('note').value) return;

@@ -14,7 +14,7 @@ function fixture() {
     const initial = binding.configRevision;
     return {binding: {...binding}, signal, release() {}, assertCurrent() {if (initial !== binding.configRevision) throw Error('revoked');},
       reconcileWrite: async original => {reconciliations++; return {state: 'not_applied', operationId: 'c'.repeat(64),
-        backupId: 'local-only', currentSha256: 'a'.repeat(64), original};},
+        backupId: 'local-only', currentSha256: 'a'.repeat(64), lockRetained: false, original};},
       read: {search: async () => {reads++; return {hits: [{source: {vaultId: binding.sourceId, path: 'demo.md', line: 1,
         revision: 'a'.repeat(64)}, excerpt: '合成资料'}], truncated: false};}},
       write: {apply: async input => {writes++; return {sourceId: input.sourceId, configRevision: input.configRevision,

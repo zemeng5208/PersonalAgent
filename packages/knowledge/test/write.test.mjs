@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {createHash, randomUUID} from 'node:crypto';
-import {existsSync} from 'node:fs';
+import {existsSync, realpathSync, writeFileSync} from 'node:fs';
 import {mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile} from 'node:fs/promises';
 import {join, resolve, delimiter} from 'node:path';
 import test from 'node:test';
@@ -123,4 +123,50 @@ test('a selected note replaced with a symlink cannot redirect a write', {skip: !
   await assert.rejects(writer.apply(input, context()));
   assert.equal(await readFile(outside, 'utf8'), original);
   assert.deepEqual(await readdir(recovery), []);
+});
+
+test('nested, escaped and shortcut links cannot be altered by a paragraph patch', {skip: !windows}, async t => {
+  const {root, recovery, writer, input, context} = await fixture(t);
+  for (const [before, after] of [
+    ['[guide](https://example.com/a(b)c)', '[guide](https://example.com/a(b)evil)'],
+    ['[guide](https://example.com/a\\(b\\)c)', '[guide](https://example.com/a\\(b\\)evil)'],
+    ['[shortcut]', '[changed]']
+  ]) {
+    const content = before + '\n待整理段落\n'; await writeFile(join(root, 'demo.md'), content);
+    const patch = {...input, expectedSha256: digest(content), edits: [{oldText: before, newText: after}]};
+    await assert.rejects(writer.apply(patch, context({argumentsDigest: inputDigest(patch)})), error => error.code === 'SCOPE_DENIED');
+    assert.equal(await readFile(join(root, 'demo.md'), 'utf8'), content);
+  }
+  assert.deepEqual(await readdir(recovery), []);
+});
+
+test('empty frontmatter remains byte-for-byte intact when the selected body paragraph is written and read back', {skip: !windows}, async t => {
+  const {root, writer, input, context} = await fixture(t);
+  const content = '---\n---\n正文\n待整理段落\n'; await writeFile(join(root, 'demo.md'), content);
+  const patch = {...input, expectedSha256: digest(content)};
+  const receipt = await writer.apply(patch, context({argumentsDigest: inputDigest(patch)}));
+  assert.equal(receipt.state, 'verified');
+  assert.equal(await readFile(join(root, 'demo.md'), 'utf8'), content.replace('待整理段落', '已整理的合成段落'));
+});
+
+test('a user edit between reconciliation reads returns unknown and retains both durable markers', {skip: !windows}, async t => {
+  const {root, recovery, writer, options, input, context} = await fixture(t);
+  const authorized = context(), receipt = await writer.apply(input, authorized);
+  const canonicalRoot = realpathSync.native(root);
+  const helperMarker = join(recovery, digest(canonicalRoot + '\ndemo.md').slice(0, 32) + '.inflight');
+  const knowledgeMarker = join(recovery, digest(canonicalRoot + '\ndemo.md') + '.knowledge-pending');
+  await writeFile(helperMarker, JSON.stringify({runId: authorized.runId, argumentsDigest: authorized.argumentsDigest,
+    pid: 2147483647, startTimeTicks: '1', beforeSha256: receipt.beforeSha256, afterSha256: receipt.afterSha256}));
+  await writeFile(knowledgeMarker, receipt.operationId);
+  const userEdited = original.replace('待整理段落', '用户在读回中修改');
+  let checks = 0;
+  options.bindingCurrent = () => {if (++checks === 3) writeFileSync(join(root, 'demo.md'), userEdited); return true;};
+  const readback = await writer.reconcile({taskId: authorized.taskId, runId: authorized.runId,
+    argumentsDigest: authorized.argumentsDigest}, context());
+  assert.equal(readback.state, 'unknown'); assert.equal(readback.lockRetained, true);
+  assert.equal(readback.currentSha256, digest(userEdited));
+  assert.equal(existsSync(helperMarker), true); assert.equal(existsSync(knowledgeMarker), true);
+  assert.equal(await readFile(join(root, 'demo.md'), 'utf8'), userEdited);
+  const retry = {...input, expectedSha256: digest(userEdited)};
+  await assert.rejects(writer.apply(retry, context({argumentsDigest: inputDigest(retry)})), error => error.code === 'RESULT_UNKNOWN');
 });

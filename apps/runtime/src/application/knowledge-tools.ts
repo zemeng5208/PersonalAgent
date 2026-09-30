@@ -4,8 +4,6 @@ import type {KnowledgePort} from '@personal-agent/knowledge';
 import {createKnowledgeSearchTool} from '@personal-agent/knowledge/tool';
 import {createKnowledgeWriteTool} from '@personal-agent/knowledge/write';
 import type {KnowledgeWritePort} from '@personal-agent/knowledge/write';
-import type {CompetitionToolAvailability} from './tool-catalog.js';
-import type {CompetitionToolExport} from './coordination.js';
 
 export interface TrustedKnowledgeBinding {
   sourceId: string; namespace: string; configRevision: number; available: boolean;
@@ -88,24 +86,24 @@ export function createTrustedKnowledgeTools(source: TrustedKnowledgeSource) {
     return current.dataLevel === 'public' && current.cloudExportAllowed && bound(taskId);
   };
   const tools = [search, write];
-  const availability: CompetitionToolAvailability[] = tools.map(tool => ({
+  const availability = tools.map(tool => ({
     toolName: tool.descriptor.name, toolVersion: tool.descriptor.version,
     publicEnumPaths: tool === search ? ['/sourceId', '/configRevision', '/query'] : ['/sourceId', '/configRevision', '/path'],
-    available: ({taskId, signal}) => !signal.aborted && source.snapshot().dataLevel === 'public'
+    available: ({taskId, signal}: {taskId: string; revision: number; deadline: string; signal: AbortSignal}) => !signal.aborted && source.snapshot().dataLevel === 'public'
       && source.snapshot().cloudExportAllowed && (tool === search || source.snapshot().writeAvailable)
       && bound(taskId, true)
   }));
-  const exports: CompetitionToolExport[] = tools.map(tool => ({
+  const exports = tools.map(tool => ({
     toolName: tool.descriptor.name, toolVersion: tool.descriptor.version,
     exportPolicyVersion: 'knowledge-explicit-public-query-v1',
-    accepts: ({taskId, arguments: args}) => {
+    accepts: ({taskId, arguments: args}: {taskId: string; proposalId: string; arguments: Record<string, unknown>}) => {
       const current = source.snapshot();
       if (!permitted(taskId) || args.sourceId !== current.sourceId || args.configRevision !== current.configRevision) return false;
       if (tool === write) return current.writeAvailable && typeof args.path === 'string' && current.allowedNotePaths.includes(args.path);
       return typeof args.query === 'string' && current.publicQueries.includes(args.query)
         && Number.isSafeInteger(args.limit) && Number(args.limit) >= 1 && Number(args.limit) <= 5;
     },
-    project: ({taskId, result, signal}) => {
+    project: ({taskId, result, signal}: {taskId: string; proposalId: string; result: unknown; signal: AbortSignal}) => {
       if (signal.aborted || !permitted(taskId)) throw new ProtocolError('SCOPE_DENIED', 'Knowledge cloud export revoked');
       if (tool === write) {
         const value = result as {sourceId?: string; configRevision?: number; state?: string; changed?: boolean};

@@ -40,6 +40,8 @@ Schema 拒未知字段，最多 16 个精确替换，每段 16 Ki 字符、单�
 baseline 是原始文件字节的 SHA-256。工具只接受宿主通过原生文件选择器选定的普通 Markdown，
 拒越界、链接、硬链接、配置/文件变更及不唯一匹配。保留 BOM、换行、原有 frontmatter、
 wikilink、Markdown 内联/引用链接、引用定义与块 ID，不能删除笔记或目录。
+链接保护采用保守平衡括号/转义扫描，连快捷引用及代码中的完整方括号文本也保留；
+无法完整解析的括号跨度明确拒绝整理，不猜测链接目标。
 Policy 必须授权 `knowledge:read`、`knowledge:write` 及底层明确声明的
 `workspace:read`、`workspace:write`、`workspace:apply`；适配器不补造 scope、不自行签发授权。
 Runtime/ToolGateway 的审批摘要绑定完整 sourceId/configRevision/baseline/精确 edits。
@@ -50,7 +52,10 @@ Runtime/ToolGateway 的审批摘要绑定完整 sourceId/configRevision/baseline
 成功回执应由 Runtime 重放，底层同 task/run 不重复执行；取消、超时或未确认结果不自动重试。
 未知结果保留 pending 锁，由 host-only `reconcile({taskId,runId,argumentsDigest},context)`
 确认 helper 退出并重新读回，返回 applied / not_applied / in_progress / unknown。
-unknown 不清锁、不回滚、不覆盖用户后续改动。恢复备份必须是另外一次明确审批的操作，
+两次受信读回不一致时返回 unknown；unknown 不清锁、不回滚、不覆盖用户后续改动。
+仍存在共享 helper marker 时只读桥保留两种锁并返回 `lockRetained:true`，即便已观察 applied/not_applied，
+也须由可信 Runtime 另行核对持久执行记录后完成最终释放，不能调用会清 unknown marker 的共享默认清理。
+恢复备份必须是另外一次明确审批的操作，
 本包不增加自动回滚。备份正文和本机 receipt 留在独立的当前用户受保护 ACL 目录，
 同一物理 Vault 重选也复用恢复目录和 pending 锁。
 Runtime 工厂还提供 host-only `reconcileWrite({sourceId,configRevision,taskId,runId,argumentsDigest},context)`，
@@ -84,6 +89,15 @@ P7 knowledge-controls / knowledge-watch-host、private-memory/learning 与 Potat
 定向检查入口：`packages/knowledge/test/write.test.mjs`、
 `apps/desktop/test/knowledge-source-config.test.mjs`、`apps/runtime/test/knowledge-tools.test.mjs`。
 不新增 wire Schema、数据库迁移、账户调用或付费模型依赖。
+
+本工作包必要验证（2026-09-30）：现有 Node 24.19.0 / npm 11.16.0 与仓库要求
+24.15.x / 11.12.x 有差异；未安装版本，也未宣称指定版本验收。
+本树最少依赖安装后 contracts/coding-tools/knowledge/policy/tool-gateway 定向 tsc 通过，
+Runtime 工厂以仓库相同 strict / NodeNext 选项单文件类型检查和发射通过。
+首轮配置/Windows 真实合成文件写入 12/12 通过；独立评审新增 4/4 失败边界用例通过，
+Runtime 工厂 Policy / 私人拒出机 / 公开绑定 / host-only 读回 4/4 通过，未跳过 Windows symlink 用例。
+架构依赖门禁、JS 语法和 diff 检查通过。不运行全仓 check、旧只读搜索全套、旧 Desktop smoke、
+真实私人 Vault 或真实云 API；最终共享接线、界面和 CI 由 P8 与唯一 PR 队列验收。
 
 ## 历史只读分片
 
