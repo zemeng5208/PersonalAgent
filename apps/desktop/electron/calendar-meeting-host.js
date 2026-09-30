@@ -9,7 +9,8 @@ const terminal = new Set(['succeeded', 'failed', 'cancelled']);
 const error = (code, message) => Object.assign(new Error(message), {code});
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
-const configurationId = binding => createHash('sha256').update(JSON.stringify(binding)).digest('hex');
+export const calendarConfigurationId = binding => createHash('sha256').update(JSON.stringify(binding)).digest('hex');
+const configurationId = calendarConfigurationId;
 export const calendarMeetingSourceRef = (accountRef, externalId) =>
   `calendar:${createHash('sha256').update(JSON.stringify([accountRef, externalId])).digest('hex')}`;
 
@@ -46,7 +47,7 @@ export function createDesktopCalendarMeetingHost({config, namespace, readTool,
     || typeof readArguments !== 'function')) {
     throw error('INVALID_ARGUMENT', '日历读取必须保留受控只读范围');
   }
-  let application, store, closed = false, activePair, tail = Promise.resolve();
+  let application, store, closed = false, activePair, lastTaskId, tail = Promise.resolve();
   const controllers = new Set();
   const publish = () => {try {onUpdate();} catch {}};
   const binding = () => {
@@ -112,13 +113,40 @@ export function createDesktopCalendarMeetingHost({config, namespace, readTool,
       if (application) throw error('REVISION_CONFLICT', '日历宿主已装配');
       application = value;
       store = value.runtime.bindCoordinationStore(namespace);
+      if (readTool) {
+        let beforeSequence, snapshotSequence;
+        do {
+          const page = application.runtime.listTasks({conversationId: `host-tool:${namespace}`, limit: 100,
+            ...(beforeSequence === undefined ? {} : {beforeSequence}),
+            ...(snapshotSequence === undefined ? {} : {snapshotSequence})});
+          snapshotSequence = page.snapshotSequence;
+          for (const task of page.items) {
+            const intent = application.runtime.loadCheckpoint(task.taskId, READ_CHECKPOINT);
+            const account = config.binding();
+            if (intent?.version !== 1 || intent.namespace !== namespace || !account
+              || intent.configurationId !== configurationId(account)) continue;
+            const readback = application.readHostToolTask(task.taskId);
+            if (readback.toolName !== descriptor.name || readback.toolVersion !== descriptor.version) continue;
+            lastTaskId ??= task.taskId;
+            if (task.state === 'waiting_approval' && readback.approval?.state === 'allowed') {
+              application.resumeHostToolTask(task.taskId);
+            }
+          }
+          beforeSequence = page.nextBeforeSequence;
+        } while (beforeSequence !== undefined);
+      }
     },
     snapshot() {
       const saved = config.snapshot();
       const available = !closed && Boolean(application && readTool && saved.configured);
+      let readTask;
+      if (available && lastTaskId) {
+        try {readTask = host.readTask(lastTaskId);} catch {readTask = {state: 'unavailable', calendarWriteVerified: false};}
+      }
       return {...saved, readAvailable: available, sessionAllowed: false,
         reason: available ? '单条读取逐次经过 Runtime 审批；会议变化还需匹配现有事实'
           : saved.reason, meetingBindingAvailable: available,
+        ...(readTask ? {readTask} : {}),
         calendarWriteVerified: false};
     },
     read(payload) {
@@ -139,7 +167,7 @@ export function createDesktopCalendarMeetingHost({config, namespace, readTool,
         try {application.cancelPreparedHostToolTask(task.taskId, commandId, task.revision);} catch {}
         throw cause;
       }
-      publish();
+      lastTaskId = task.taskId; publish();
       return host.readTask(task.taskId);
     },
     readTask(taskId) {
@@ -214,6 +242,7 @@ export function createDesktopCalendarMeetingHost({config, namespace, readTool,
       return operation;
     },
     invalidate() {
+      lastTaskId = undefined;
       for (const controller of controllers) controller.abort();
       if (application) {
         let beforeSequence, snapshotSequence;

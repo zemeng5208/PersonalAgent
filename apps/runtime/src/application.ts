@@ -8,6 +8,8 @@ export type {RuntimeApplicationOptions, RuntimeApplicationTransport, SubmitHostT
 export type {LocalRepairHostOptions, LocalRepairBinding, SubmitLocalRepairRequest} from './application/local-repair.js';
 export type {CompetitionAvailableTool, CompetitionToolAvailability} from './application/tool-catalog.js';
 export {createAgentArtsRuntimeApplication} from './application/agentarts.js';
+export {createCalendarEventReadTool, CALENDAR_EVENT_READ_TOOL, CALENDAR_EVENT_READ_VERSION} from './application/calendar-read.js';
+export type {CalendarReadBinding, CalendarEventReadOptions} from './application/calendar-read.js';
 export type {AgentArtsRuntimeApplicationOptions} from './application/agentarts.js';
 export {createMemoryProjectionApplication, createPendingImpactApplication} from './application/memory.js';
 export {createSqliteFactProjectionHost} from './application/sqlite-fact-projection.js';

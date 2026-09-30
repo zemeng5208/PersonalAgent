@@ -35,7 +35,7 @@ import {createAgentArtsConfig} from './agentarts-config.js';
 import {createDeferredRuntimeStartup} from './runtime-startup.js';
 import {createMailConfig} from './mail-config.js';
 import {createCalendarConfig} from './calendar-config.js';
-import {createDesktopCalendarMeetingHost} from './calendar-meeting-host.js';
+import {createDesktopCalendarMeetingHost,calendarConfigurationId} from './calendar-meeting-host.js';
 import {createDesktopMailAnalysisHost} from './mail-analysis-host.js';
 import {createDesktopFeedsHost} from './feeds-host.js';
 import {createDesktopNotepadHost} from './notepad-host.js';
@@ -264,6 +264,22 @@ async function refreshP5DeviceFeedback() {
   finally {p5FeedbackReading = false; publish();}
 }
 
+async function reconcileDeviceDeliveries() {
+  const service = p5Cognition?.deviceAnomalyService;
+  if (!service || !p5DeviceReceiptStore) return;
+  try {
+    for (const pending of await service.readFeedback()) {
+      if (!pending.pendingDeliveryId) continue;
+      const receipt = p5DeviceReceiptStore.read(pending.pendingDeliveryId);
+      if (receipt?.source === pending.source && ['delivered', 'failed'].includes(receipt.deliveryState)) {
+        await service.reconcileDelivery(pending.source, pending.pendingDeliveryId, receipt.deliveryState === 'delivered');
+      }
+    }
+    p5ReceiptFailure = '';
+  } catch {p5ReceiptFailure = 'P5 通知回执核实未完成，保持待核实状态';}
+  publish();
+}
+
 function p5StatusSnapshot() {
   const laya = localLaya?.snapshot() ?? {state: 'unavailable', reason: '本地 Laya 宿主尚未装配'};
   if (!p5Cognition) return {state: 'unavailable', ready: false,
@@ -307,6 +323,8 @@ async function startP5DeviceTelemetry() {
     || !proactiveHost?.snapshot().enabled || localLaya?.snapshot().state !== 'ready') return false;
   try {
     if (p5Cognition.snapshot().state !== 'running') await p5Cognition.start();
+    await reconcileDeviceDeliveries();
+    await refreshP5DeviceFeedback();
     if (!proactiveHost?.snapshot().enabled || localLaya?.snapshot().state !== 'ready') {
       await p5Cognition.stop();
       return false;
@@ -333,6 +351,7 @@ async function startP5DeviceTelemetry() {
 async function stopP5DeviceTelemetry() {
   const subscription = p5DeviceTelemetrySubscription;
   p5DeviceTelemetrySubscription = undefined;
+  p5DeviceNotificationHost?.stop?.();
   try {
     if (typeof subscription === 'function') subscription();
     else subscription?.unsubscribe?.();
@@ -1001,11 +1020,23 @@ async function initializeRuntime() {
       const {createDesktopCompetitionToolCatalog} = await import('./competition-tool-catalog.js');
       const namespace = desktopHost.userNamespace;
       goalHost = createGoalHost(namespace);
-      if (!syntheticMvp && calendarConfig) calendarMeetingHost = createDesktopCalendarMeetingHost({
-        config: calendarConfig, namespace, onUpdate: publish,
-        // P1's controlled single-read factory is not published yet. No direct
-        // CalendarService/Connector call or implicit read grant substitutes for it.
-      });
+      if (!syntheticMvp && calendarConfig) {
+        const calendarReadTool = runtimeModule.createCalendarEventReadTool({
+          getBinding: () => {
+            const binding = calendarConfig.binding();
+            return binding ? {configurationId: calendarConfigurationId(binding), accountRef: binding.accountRef,
+              calendarUrl: binding.calendarUrl, calendarName: binding.calendarName} : undefined;
+          },
+          readAuthorization: request => {
+            const binding = calendarConfig.binding();
+            if (!binding || calendarConfigurationId(binding) !== request.configurationId) throw Error('日历配置已变更或撤销');
+            return calendarConfig.readAuthorization(binding);
+          },
+        });
+        calendarMeetingHost = createDesktopCalendarMeetingHost({config: calendarConfig, namespace,
+          readTool: calendarReadTool, readArguments: (binding,externalId) => ({configurationId:calendarConfigurationId(binding),externalId}),
+          onUpdate: publish});
+      }
       if (!syntheticMvp) goalCloudHost = createDesktopGoalCloudHost({goalHost, namespace,
         readProactiveBinding: taskId => proactiveHost?.readRepairBinding?.(taskId)});
       if (!syntheticMvp) {
@@ -1236,7 +1267,7 @@ async function initializeRuntime() {
           }
           mailAnalysisHost?.assertCloudSend(request);
         },
-        tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...(goalCloudHost?.tools ?? goalHost.tools), ...productTools.tools, ...(mailHost?.tools ?? []), ...(feedsHost?.tools ?? []), ...(notepadHost?.tools ?? []), ...(todoHost?.tools ?? []), ...(subagentTool ? [subagentTool] : []), ...(knowledgeTool ? [knowledgeTool] : [])],
+        tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...(goalCloudHost?.tools ?? goalHost.tools), ...productTools.tools, ...(mailHost?.tools ?? []), ...(calendarMeetingHost?.tools ?? []), ...(feedsHost?.tools ?? []), ...(notepadHost?.tools ?? []), ...(todoHost?.tools ?? []), ...(subagentTool ? [subagentTool] : []), ...(knowledgeTool ? [knowledgeTool] : [])],
         ...(codingWorkspace.patchReconciliation ? {workspacePatchReconciliation: codingWorkspace.patchReconciliation} : {}),
         ...(syntheticMvp ? {localRepair: syntheticRepairHost.localRepair} : {}),
         ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
@@ -1332,21 +1363,6 @@ async function initializeRuntime() {
       }
       p5SystemObservationSource = createP5SystemObservationSource({application: runtimeApplication});
       const {createCognitionP5Composition} = await import('./cognition-p5-composition.js');
-      async function reconcileDeviceDeliveries() {
-        const service = p5Cognition?.deviceAnomalyService;
-        if (!service || !p5DeviceReceiptStore) return;
-        try {
-          for (const pending of await service.readFeedback()) {
-            if (!pending.pendingDeliveryId) continue;
-            const receipt = p5DeviceReceiptStore.read(pending.pendingDeliveryId);
-            if (receipt?.source === pending.source && ['delivered', 'failed'].includes(receipt.deliveryState)) {
-              await service.reconcileDelivery(pending.source, pending.pendingDeliveryId, receipt.deliveryState === 'delivered');
-            }
-          }
-          p5ReceiptFailure = '';
-        } catch { p5ReceiptFailure = 'P5 通知回执核实未完成，保持待核实状态'; }
-        publish();
-      }
       p5DeviceNotificationHost = p5DeviceReceiptStore ? createP5DeviceNotificationHost({
         Notification, store: p5DeviceReceiptStore,
         isActive: () => Boolean(p5DeviceTelemetrySubscription && p5Cognition?.snapshot().state === 'running'),
