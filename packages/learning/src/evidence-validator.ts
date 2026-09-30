@@ -13,12 +13,21 @@ export interface WorkflowEvidenceBinding {
   toolVersion: string;
   inputDigest: string;
 }
+export interface WorkflowEvidenceSkill {
+  id: string; revision: string; contentSha256: string; enabled: boolean;
+}
+export interface WorkflowEvidenceCurrent {
+  binding: WorkflowEvidenceBinding | null;
+  skill: WorkflowEvidenceSkill | null;
+}
 export interface WorkflowEvidencePorts {
   /** Host-owned binding, not an agent's proposed proof. Null means deleted/withdrawn/unavailable. */
   readBinding(candidate: WorkflowCandidate, context: LearningContext): Promise<WorkflowEvidenceBinding | null>;
-  readSkill(skillId: string, context: LearningContext): Promise<{
-    id: string; revision: string; contentSha256: string; enabled: boolean;
-  } | null>;
+  readSkill(skillId: string, context: LearningContext): Promise<WorkflowEvidenceSkill | null>;
+  /** Trusted coherent current source/Skill gate, under the host's original mutation fences.
+   * Must read both authorities synchronously; never combine cached async snapshots or re-enable a source. */
+  readCurrent(candidate: WorkflowCandidate, binding: WorkflowEvidenceBinding,
+    context: LearningContext): WorkflowEvidenceCurrent | null;
   /** Adapt TaskRuntime.getTask/readToolExecutions; never use cloud self-reported success. */
   readExecution(taskId: string, evidenceId: string, context: LearningContext): Promise<{
     task: {taskId: string; state: string; evidenceRefs: readonly string[]};
@@ -46,7 +55,7 @@ export function createEvidenceWorkflowValidator(ports: WorkflowEvidencePorts): W
     const binding = structuredClone(bound);
     const skill = await ports.readSkill(binding.skillId, context);
     check(context);
-    const matchesSkill = (value: typeof skill): boolean => Boolean(value && value.enabled === true
+    const matchesSkill = (value: WorkflowEvidenceSkill | null): boolean => Boolean(value && value.enabled === true
       && value.id === binding.skillId && value.revision === binding.skillRevision
       && value.contentSha256 === binding.skillContentSha256);
     if (!matchesSkill(skill)) throw new LearningError('NOT_VALIDATED');
@@ -69,6 +78,18 @@ export function createEvidenceWorkflowValidator(ports: WorkflowEvidencePorts): W
     const currentSkill = await ports.readSkill(binding.skillId, context);
     check(context);
     if (!matchesSkill(currentSkill)) throw new LearningError('NOT_VALIDATED');
+    // No await follows this joint gate. An async source/Skill read would reopen the opposite race.
+    if (typeof ports.readCurrent !== 'function') throw new LearningError('NOT_VALIDATED');
+    const current: unknown = ports.readCurrent(structuredClone(candidate), structuredClone(binding), context);
+    check(context);
+    if (current && typeof current === 'object' && 'then' in current && typeof current.then === 'function') {
+      void Promise.resolve(current).catch(() => undefined);
+      throw new LearningError('NOT_VALIDATED');
+    }
+    if (!current || typeof current !== 'object' || Array.isArray(current)) throw new LearningError('NOT_VALIDATED');
+    const joint = current as WorkflowEvidenceCurrent;
+    if (JSON.stringify(joint.binding) !== JSON.stringify(binding)) throw new LearningError('REVISION_CONFLICT');
+    if (!matchesSkill(joint.skill)) throw new LearningError('NOT_VALIDATED');
     return {passed: true, evidenceRef: binding.evidenceId};
   }});
 }

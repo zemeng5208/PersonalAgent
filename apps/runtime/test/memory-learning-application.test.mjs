@@ -149,7 +149,7 @@ test('invalidated workflow source blocks new validation submission and the origi
   f.learning.invalidateSource({namespace: 'desktop-learning', sourceRef: candidate.sourceRef,
     operationId: 'revoke-original-source', invalidatedAt: new Date().toISOString(), ...context()});
   assert.equal(f.app.readVersion('reference-review', 1).validation, 'candidate');
-  await assert.rejects(f.app.startValidation({workflowId: 'reference-review', revision: 1,
+  assert.throws(() => f.app.startValidation({workflowId: 'reference-review', revision: 1,
     operationId: 'rejected-after-source-revocation', ...context()}), {code: 'NOT_FOUND'});
   assert.equal(f.runtime.listTasks({conversationId: 'learning:desktop-learning', limit: 10}).items.length, 1);
   assert.throws(() => f.app.assertDispatchBinding(binding), {code: 'NOT_FOUND'});
