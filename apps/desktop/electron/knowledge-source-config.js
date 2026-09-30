@@ -118,26 +118,31 @@ export async function createKnowledgeSourceConfig({userData, safeStorage, namesp
   async function bind(record, permissions = {}) {
     const port = record.enabled ? await openReadOnlyVault({vaultId: record.sourceId, rootPath: record.rootPath}) : undefined;
     saved = record; vault = port; failure = '';
-    if (permissions.writeAllowed && record.enabled && record.allowedNotePaths.length) {
+    if (record.enabled && record.allowedNotePaths.length && powerShellPath) {
       try {
         // Same physical Vault always uses the same durable note locks, across selection and source-ID changes.
-        const recoveryKey = createHash('sha256').update(JSON.stringify([hostIdentity, record.rootPath, record.rootIdentity])).digest('hex');
+        const recoveryKey = createHash('sha256').update(JSON.stringify([namespace, hostIdentity, record.rootPath, record.rootIdentity])).digest('hex');
         const recoveryRootPath = prepareRecoveryDirectory(userData, recoveryKey, powerShellPath);
         writer = openControlledVaultWriter({rootPath: record.rootPath, recoveryRootPath, powerShellPath,
           sourceId: record.sourceId, configRevision: record.configRevision, allowedNotePaths: record.allowedNotePaths,
-          bindingCurrent: () => current() && saved === record && writeAllowed
+          bindingCurrent: () => current() && saved === record
             && (verifyWindowsRecoveryAcl(recoveryRootPath, powerShellPath), true)});
-        writeAllowed = true;
-      } catch {failure = '只读已连接；安全整理宿主不可用，写入未启用';}
+        writeAllowed = permissions.writeAllowed === true;
+      } catch {if (permissions.writeAllowed) failure = '只读已连接；安全整理宿主不可用，写入未启用';}
     }
+    if (permissions.writeAllowed && !writer) failure = '只读已连接；安全整理宿主不可用，写入未启用';
     cloudExportAllowed = permissions.cloudExportAllowed === true && record.enabled && record.dataLevel === 'public';
     publicQueries = cloudExportAllowed ? [...permissions.publicQueries] : [];
   }
   try {
     if (existsSync(file)) {
       const stored = JSON.parse(readFileSync(file, 'utf8'));
-      if (stored.version !== 1 || typeof stored.encrypted !== 'string' || !safeStorage.isEncryptionAvailable()) throw Error();
-      await bind(validateSaved(JSON.parse(safeStorage.decryptString(Buffer.from(stored.encrypted, 'base64'))), namespace, hostIdentity));
+      if (stored.version === 1 && stored.revoked === true && Object.keys(stored).length === 2) {
+        failure = '知识源已撤销，请重新选择';
+      } else {
+        if (stored.version !== 1 || typeof stored.encrypted !== 'string' || !safeStorage.isEncryptionAvailable()) throw Error();
+        await bind(validateSaved(JSON.parse(safeStorage.decryptString(Buffer.from(stored.encrypted, 'base64'))), namespace, hostIdentity));
+      }
     }
   } catch {invalidate(); saved = undefined; failure = '已保存知识源不可用，请重新选择；不会使用旧目录';}
   async function mutate(action) {
@@ -190,7 +195,17 @@ export async function createKnowledgeSourceConfig({userData, safeStorage, namesp
       invalidate(); persist(record); await bind(record, input); return snapshot();
     });},
     async revoke() {return mutate(async () => {
-      invalidate(); if (saved) {saved = {...saved, configRevision: saved.configRevision + 1, enabled: false}; persist(saved);}
+      invalidate();
+      if (saved) {
+        saved = {...saved, configRevision: saved.configRevision + 1, enabled: false};
+        try {persist(saved);}
+        catch {
+          // Revocation must persist even if OS encryption becomes unavailable; tombstone contains no source data.
+          mkdirSync(userData, {recursive: true});
+          writeFileSync(file + '.tmp', JSON.stringify({version: 1, revoked: true}), {encoding: 'utf8', mode: 0o600});
+          renameSync(file + '.tmp', file); saved = undefined;
+        }
+      }
       failure = ''; return snapshot();
     });},
     /** Trusted local admin consumers use this same binding as the Runtime tool factory. */
@@ -199,6 +214,7 @@ export async function createKnowledgeSourceConfig({userData, safeStorage, namesp
       const controller = new AbortController(); inflight.add(controller);
       const binding = snapshot(), selectedVault = vault, selectedWriter = writer;
       return {binding, read: selectedVault, write: writeAllowed ? selectedWriter : undefined,
+        reconcileWrite: selectedWriter ? (input, context) => selectedWriter.reconcile(input, context) : undefined,
         signal: AbortSignal.any([signal, controller.signal]),
         assertCurrent() {checkBinding(expected); if (controller.signal.aborted) throw Error('知识源调用已撤销');},
         release() {inflight.delete(controller);}};

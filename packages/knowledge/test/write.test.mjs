@@ -51,6 +51,9 @@ test('selected-note locked write preserves BOM/frontmatter/links and keeps a rec
   const reconciliation = await writer.reconcile({taskId: authorized.taskId, runId: authorized.runId,
     argumentsDigest: authorized.argumentsDigest}, authorized);
   assert.equal(reconciliation.state, 'applied');
+  const reselected = openControlledVaultWriter({...options, sourceId: 'reselected', configRevision: 2});
+  assert.equal((await reselected.reconcile({taskId: authorized.taskId, runId: authorized.runId,
+    argumentsDigest: authorized.argumentsDigest}, authorized)).state, 'applied');
   assert.equal(JSON.stringify(result).includes(root), false);
 });
 

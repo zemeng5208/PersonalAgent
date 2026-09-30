@@ -99,3 +99,15 @@ test('corrupt storage, mismatched host identity and replaced root remain unavail
   const corrupt = await createKnowledgeSourceConfig(options); t.after(() => corrupt.close());
   assert.equal(corrupt.snapshot().configured, false); assert.equal(corrupt.snapshot().available, false);
 });
+
+test('revocation persists a data-free tombstone if encryption becomes unavailable', async t => {
+  const {host, options, userData} = await fixture(t); await host.select();
+  let encrypting = true;
+  const changing = await createKnowledgeSourceConfig({...options,
+    safeStorage: {...safeStorage, isEncryptionAvailable: () => encrypting}});
+  t.after(() => changing.close());
+  encrypting = false; await changing.revoke();
+  assert.deepEqual(JSON.parse(await readFile(join(userData, 'knowledge-source-config.json'), 'utf8')), {version: 1, revoked: true});
+  const restarted = await createKnowledgeSourceConfig(options); t.after(() => restarted.close());
+  assert.equal(restarted.snapshot().configured, false); assert.equal(restarted.snapshot().available, false);
+});

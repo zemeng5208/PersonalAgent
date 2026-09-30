@@ -7,6 +7,7 @@ import type {RegisteredTool, ToolContext, ToolDescriptor, ToolHost} from '@perso
 import {createWorkspaceReadTool, createWorkspacePatchPreviewTool, createWorkspacePatchApplyTool,
   reconcileWorkspacePatchApply} from '@personal-agent/coding-tools';
 import type {WorkspaceReadResult, WorkspacePatchPreviewResult} from '@personal-agent/coding-tools';
+import {openReadOnlyVault} from './filesystem.js';
 
 export const KNOWLEDGE_WRITE_TOOL_NAME = 'knowledge.apply_note_patch';
 export const KNOWLEDGE_WRITE_TOOL_VERSION = '1.0.0';
@@ -83,11 +84,10 @@ function notePath(value: string): string {
 function metadata(content: string): string {
   // Exact frontmatter preservation, including BOM and line endings.
   if (!/^(?:\uFEFF)?---\r?\n/.test(content)) return '';
-  const end = /\r?\n(?:---|\.\.\.)(?:\r?\n|$)/g;
-  end.lastIndex = content.indexOf('\n') + 1;
-  const match = end.exec(content);
+  const bodyOffset = content.indexOf('\n') + 1;
+  const match = /^(?:---|\.\.\.)(?:\r?\n|$)/m.exec(content.slice(bodyOffset));
   if (!match) deny('INVALID_ARGUMENT');
-  return content.slice(0, match.index + match[0].length);
+  return content.slice(0, bodyOffset + match.index + match[0].length);
 }
 function links(content: string): string[] {
   // Preserve wikilinks, Markdown inline/reference links, definitions and block IDs.
@@ -201,7 +201,7 @@ export function openControlledVaultWriter(options: {
       const operationId = hash(input.taskId + '\n' + input.runId);
       const record = JSON.parse(readFileSync(receiptFile(operationId), 'utf8')) as PendingWrite;
       if (record.taskId !== input.taskId || record.runId !== input.runId
-        || record.argumentsDigest !== input.argumentsDigest || record.sourceId !== options.sourceId
+        || record.argumentsDigest !== input.argumentsDigest
         || !allowed.has(notePath(record.path))) deny('SCOPE_DENIED');
       const helper = await reconcileWorkspacePatchApply({rootPath: root, recoveryRootPath: recovery,
         relativePath: record.path, powerShellPath: options.powerShellPath,
@@ -209,10 +209,10 @@ export function openControlledVaultWriter(options: {
         expectedBeforeSha256: record.beforeSha256, retainMarker: true});
       active(context); assertBinding();
       if (helper.state === 'in_progress') return {state: 'in_progress', operationId, backupId: record.backupId};
-      const result = await reader.execute({path: record.path}, {...context, taskId: input.taskId,
-        runId: input.runId, argumentsDigest: input.argumentsDigest, authorizationRef: 'trusted-readback',
-        scopes: ['workspace:read']}) as WorkspaceReadResult;
-      const currentSha256 = hash(Buffer.from(result.content, 'utf8'));
+      // Host-authorized read-only port, not an invented ToolContext or a write authorization.
+      const readback = await openReadOnlyVault({vaultId: options.sourceId, rootPath: root});
+      const result = await readback.readNote({path: record.path, ...context});
+      const currentSha256 = result.revision;
       const state = currentSha256 === record.afterSha256 ? 'applied'
         : currentSha256 === record.beforeSha256 ? 'not_applied' : 'unknown';
       // Preserve unknown lock and all backups. A separate newly approved operation is required to restore.

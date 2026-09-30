@@ -5,7 +5,7 @@ import {ToolGateway, toolArgumentsDigest} from '@personal-agent/tool-gateway';
 import {createTrustedKnowledgeTools} from '../dist/application/knowledge-tools.js';
 
 function fixture() {
-  let reads = 0, writes = 0;
+  let reads = 0, writes = 0, reconciliations = 0;
   let binding = {sourceId: 'synthetic', namespace: 'admin', configRevision: 1, available: true,
     writeAvailable: true, dataLevel: 'private', cloudExportAllowed: false, publicQueries: ['公开查询'], allowedNotePaths: ['demo.md']};
   const checkpoints = new Map();
@@ -13,6 +13,8 @@ function fixture() {
     if (expected.sourceId !== binding.sourceId || expected.configRevision !== binding.configRevision || !binding.available) throw Error('revoked');
     const initial = binding.configRevision;
     return {binding: {...binding}, signal, release() {}, assertCurrent() {if (initial !== binding.configRevision) throw Error('revoked');},
+      reconcileWrite: async original => {reconciliations++; return {state: 'not_applied', operationId: 'c'.repeat(64),
+        backupId: 'local-only', currentSha256: 'a'.repeat(64), original};},
       read: {search: async () => {reads++; return {hits: [{source: {vaultId: binding.sourceId, path: 'demo.md', line: 1,
         revision: 'a'.repeat(64)}, excerpt: '合成资料'}], truncated: false};}},
       write: {apply: async input => {writes++; return {sourceId: input.sourceId, configRevision: input.configRevision,
@@ -33,7 +35,7 @@ function fixture() {
     return {toolName: tool.descriptor.name, toolVersion: tool.descriptor.version, arguments: args,
       taskId, runId: 'run-' + taskId, authorizationRef, deadline, signal: new AbortController().signal};
   }
-  return {factory, gateway, policy, read, write, input, invocation, counts: () => ({reads, writes}),
+  return {factory, gateway, policy, read, write, input, invocation, counts: () => ({reads, writes, reconciliations}),
     change: patch => {binding = {...binding, ...patch};}, binding: () => binding};
 }
 
@@ -47,6 +49,20 @@ test('private local search needs Policy and exports no cloud content, including 
   assert.throws(() => exported.project({taskId: 'task', proposalId: 'p', result,
     signal: new AbortController().signal}), error => error.code === 'SCOPE_DENIED');
   assert.equal(await f.factory.competitionToolAvailability[0].available({taskId: 'task', signal: new AbortController().signal}), false);
+});
+
+test('host-only unknown-result readback neither executes a tool nor grants scopes or changes task state', async () => {
+  const f = fixture();
+  const original = {sourceId: 'synthetic', configRevision: 1, taskId: 'original-task', runId: 'original-run',
+    argumentsDigest: 'd'.repeat(64)};
+  const context = {signal: new AbortController().signal, deadline: new Date(Date.now() + 30000).toISOString()};
+  const result = await f.factory.reconcileWrite(original, context);
+  assert.equal(result.state, 'not_applied');
+  assert.deepEqual(result.original, {taskId: original.taskId, runId: original.runId, argumentsDigest: original.argumentsDigest});
+  assert.deepEqual(f.counts(), {reads: 0, writes: 0, reconciliations: 1});
+  await assert.rejects(f.factory.reconcileWrite({...original, execute: true}, context));
+  f.change({configRevision: 2});
+  await assert.rejects(f.factory.reconcileWrite(original, context));
 });
 
 test('public exact query/source revision projects bounded data; switch rejects old approvals and export', async () => {

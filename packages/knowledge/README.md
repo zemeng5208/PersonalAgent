@@ -53,6 +53,10 @@ Runtime/ToolGateway 的审批摘要绑定完整 sourceId/configRevision/baseline
 unknown 不清锁、不回滚、不覆盖用户后续改动。恢复备份必须是另外一次明确审批的操作，
 本包不增加自动回滚。备份正文和本机 receipt 留在独立的当前用户受保护 ACL 目录，
 同一物理 Vault 重选也复用恢复目录和 pending 锁。
+Runtime 工厂还提供 host-only `reconcileWrite({sourceId,configRevision,taskId,runId,argumentsDigest},context)`，
+使用当前已选知识源读取原操作回执；本机重选同一物理 Vault 可核实旧 sourceId 下的操作。
+该桥不注册新工具，不消耗或签发写权限，也不更新 Runtime 任务终态；
+`waiting_reconciliation` 必须由受信 Runtime 另行核对持久执行记录和读回，不能直接改为 succeeded。
 
 准确限制：现有底层是锁内原地写入，**不是崩溃原子的文件替换**；应用/主机中断可能留下
 部分结果，必须通过保留备份和 unknown 读回处理。路径/身份检查不是对恶意并发操作者的

@@ -17,6 +17,7 @@ export interface TrustedKnowledgeSource {
   snapshot(): TrustedKnowledgeBinding;
   acquire(expected: {sourceId: string; configRevision: number}, signal: AbortSignal): {
     binding: TrustedKnowledgeBinding; read: KnowledgePort; write?: KnowledgeWritePort;
+    reconcileWrite?: KnowledgeWritePort['reconcile'];
     signal: AbortSignal; assertCurrent(): void; release(): void;
   };
 }
@@ -134,6 +135,24 @@ export function createTrustedKnowledgeTools(source: TrustedKnowledgeSource) {
     bindApplication(value: KnowledgeToolTaskBindings) {application = value;},
     /** Trusted local submitters pin the same checkpoint before requesting approval. */
     bindTask(taskId: string): boolean {return bound(taskId, true);},
+    /** Host-only readback. Never changes Runtime records, approves, retries or restores a note. */
+    async reconcileWrite(input: {sourceId: string; configRevision: number;
+      taskId: string; runId: string; argumentsDigest: string},
+    context: Pick<ToolContext, 'signal' | 'deadline'>) {
+      if (!input || Object.keys(input).some(name => !['sourceId', 'configRevision', 'taskId', 'runId', 'argumentsDigest'].includes(name))
+        || typeof input.taskId !== 'string' || !input.taskId || typeof input.runId !== 'string' || !input.runId
+        || !/^[a-f0-9]{64}$/.test(input.argumentsDigest)) {
+        throw new ProtocolError('INVALID_ARGUMENT', 'Invalid knowledge readback identity');
+      }
+      const lease = source.acquire(input, context.signal);
+      try {
+        if (!lease.reconcileWrite) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Knowledge readback unavailable');
+        lease.assertCurrent();
+        const result = await lease.reconcileWrite({taskId: input.taskId, runId: input.runId,
+          argumentsDigest: input.argumentsDigest}, {...context, signal: lease.signal});
+        lease.assertCurrent(); return result;
+      } finally {lease.release();}
+    },
     register(host: ToolHost) {
       const undo: (() => void)[] = [];
       try {for (const tool of tools) undo.push(host.register(tool));}
