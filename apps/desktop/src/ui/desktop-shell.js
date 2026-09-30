@@ -1,4 +1,3 @@
-// Pure desktop shell preferences; do not touch the orb or conversation panel.
 export function mountDesktopShell() {
   const mode = new URLSearchParams(location.search).get('mode');
   if (!['admin','workspace'].includes(mode) || !window.desktop?.preferences) return;

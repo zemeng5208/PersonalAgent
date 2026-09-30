@@ -8,8 +8,7 @@ export function appliedGoalRef(task) {
     && Number.isSafeInteger(ref.revision) && ref.revision > 0 ? ref : null;
 }
 
-// User goals are explicit graph changes. A conversation task never creates one.
-// All calls go through the trusted Desktop bridge; this module has no store access.
+// Goal changes use the trusted Desktop bridge.
 export function createGoalControl(invoke, getDraftSummary = () => '') {
   if (!document.querySelector('link[data-goal-view]')) {
     const stylesheet = element('link');
@@ -18,7 +17,7 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
     stylesheet.dataset.goalView = '';
     document.head.append(stylesheet);
   }
-  const button = element('button', '持续目标（未接通）');
+  const button = element('button', '持续目标');
   button.type = 'button';
   button.className = 'goal-open';
   button.setAttribute('aria-haspopup', 'dialog');
@@ -80,7 +79,7 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
 
   function setAvailable(next, message = '') {
     available = next;
-    button.textContent = next ? '持续目标' : '持续目标（未接通）';
+    button.textContent = '持续目标';
     form.hidden = !next;
     list.hidden = !next;
     newGoal.hidden = !next;
