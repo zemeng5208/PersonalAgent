@@ -14,7 +14,7 @@
 `p5-reviewed-goal.mjs` 导出两函数，import 不启动模型、创建 Runtime、读取凭据或调用云。
 
 1. `createReviewedGoalChoiceAudit(layaHost)`：创建透明 chooser。每次调用必须已有 ready 的 owned host/稳定 identity；原请求原样委派 `layaHost.choose`、原结果原样返回。记录本地候选与真实结果，不修改分数、选项、描述、阈值或 selected。P8 构造隔离正式会话时将 `audit.chooser` 放进既有 chooser 端口；禁止以 chooser-double 替换。
-2. `runReviewedGoalAcceptance({application,goalHost,proactiveHost,namespace,choiceAudit,reopen,signal,deadline})`：消费 P8 已装配的生产公开端口。要求新隔离 namespace 的图 revision 0；不能指向用户数据库。`reopen()` 由 P8 关闭并用原 SQLite/目录/namespace 重新构造，返回 `{application,proactiveHost}`；不启用新许可、不再次启动模型。
+2. `runReviewedGoalAcceptance({application,goalHost,proactiveHost,namespace,choiceAudit,reopen,signal,deadline})`：消费 P8 已装配的生产公开端口。要求新隔离 namespace 的图 revision 0；不能指向用户数据库。`reopen()` 由 P8 先关闭旧隔离实例，再用原 SQLite/目录/namespace 和同一个 `audit.chooser` 重新构造，返回 `{application,proactiveHost}`；不启用新许可、不再次启动模型。恢复后的 chooser 也必须经过同一 audit，count=1 才覆盖整个恢复阶段。
 
 调用形态（session 与 reopen 来自 P8 的现有正式装配，不是新增生产 factory）：
 
@@ -39,7 +39,7 @@ const result=await runReviewedGoalAcceptance({
 
 `semanticTextChanged` 只检查云候选是否改变 baseline 文案，不能判断五页计划语义正确。`cloudSourceVerified` 固定 false：P8 还必须把同次真实云调用的公开请求/trace 与实际 published source/deployment 读回关联，并审阅 updatedSummaries 与五页要求；不能将 candidate checkpoint 当绑定证明。缺语义改变返回 semantic_text_unchanged，不重复请求云来“刷成功”。失败/取消/未知审批均保留原任务，不重放。
 
-`onProgress` 在得到 Goal/review/source/repair task ID 时同步交付脱敏进度。调用方可落 ignored cache，断言、deadline 或取消异常也能结合原 SQLite 继续读回；调用方负责停止隔离会话并收集实际云失败，不新增重试。
+`onProgress` 在得到 Goal/review/source/repair task ID 时同步交付脱敏进度。调用方可落 ignored cache，断言、deadline 或取消异常也能结合原 SQLite 继续读回。signal/deadline 只中止本消费者轮询，不等于 Runtime 工具已取消；调用方须通过已有公开端口关闭或撤销隔离会话，并读回真实任务状态、收集实际云失败，不新增重试。调用方不能把消费者退出写成已取消或已停止执行。
 
 ## P8 仍需的前提
 
