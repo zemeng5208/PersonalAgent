@@ -1,9 +1,11 @@
 /** Native show acknowledgement is delivery proof. A saved panel card is only intent. */
 export function createP5DeviceNotificationHost({Notification, store, readProvenance, isActive,
+  readDeliveryPolicy = () => ({allowed: false, reason: 'unavailable'}),
   onUpdate = () => {}, onLateOutcome = async () => {}, timeoutMs = 5000} = {}) {
   if (typeof Notification !== 'function' || typeof Notification.isSupported !== 'function'
     || !store || typeof store.recordDelivery !== 'function' || typeof store.addNotification !== 'function'
-    || typeof readProvenance !== 'function' || typeof isActive !== 'function'
+    || typeof store.read !== 'function' || typeof readProvenance !== 'function' || typeof isActive !== 'function'
+    || typeof readDeliveryPolicy !== 'function'
     || typeof onUpdate !== 'function' || typeof onLateOutcome !== 'function'
     || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
     throw new Error('Invalid P5 notification host');
@@ -12,6 +14,18 @@ export function createP5DeviceNotificationHost({Notification, store, readProvena
   let disposed = false;
   let generation = 0;
   const publish = () => { if (!disposed) { try { onUpdate(); } catch {} } };
+  const policy = () => {
+    try {
+      const value = readDeliveryPolicy();
+      if (value && typeof value === 'object' && !Array.isArray(value)
+        && [Object.prototype, null].includes(Object.getPrototypeOf(value))
+        && Object.keys(value).every(key => ['allowed', 'reason'].includes(key))) {
+        if (value.allowed === true && (value.reason === undefined || value.reason === null)) return value;
+        if (value.allowed === false && ['quiet_hours', 'paused', 'unavailable'].includes(value.reason)) return value;
+      }
+    } catch {}
+    return {allowed: false, reason: 'unavailable'};
+  };
   const stop = () => {
     generation++;
     for (const item of [...active.values()]) item.stop();
@@ -26,6 +40,12 @@ export function createP5DeviceNotificationHost({Notification, store, readProvena
         try { return !disposed && generation === sendGeneration && isActive() && Boolean(readProvenance(notification)); }
         catch { return false; }
       };
+      // Quiet time is not delivery failure or an unknown OS side effect. Suppress
+      // new intent without filling the panel with one card per high-load sample.
+      if (!store.read(notification.id)) {
+        const decision = policy();
+        if (!decision.allowed) return {delivered: false, error: decision.reason};
+      }
       const saved = store.addNotification(notification, provenance);
       publish();
       if (saved.duplicate) {
@@ -35,12 +55,14 @@ export function createP5DeviceNotificationHost({Notification, store, readProvena
         }
         return {delivered: saved.record.deliveryState === 'delivered'};
       }
-      const notSent = () => {
+      const notSent = error => {
         store.recordDelivery(notification.id, 'failed');
         publish();
-        return {delivered: false};
+        return error ? {delivered: false, error} : {delivered: false};
       };
       if (!authorized()) return notSent();
+      const decision = policy();
+      if (!decision.allowed) return notSent(decision.reason);
       let native;
       try {
         if (!Notification.isSupported()) return notSent();
@@ -98,9 +120,28 @@ export function createP5DeviceNotificationHost({Notification, store, readProvena
         resolveResult(result);
         return promise;
       }
+      const beforeShow = policy();
+      if (!beforeShow.allowed) {
+        detach();
+        resolveResult(notSent(beforeShow.reason));
+        return promise;
+      }
       try { native.show(); } catch { unknown(); detach(); }
       return promise;
     },
+    /** Host-only receipt readback, independent of a restarted sampling cache. */
+    readDeliveryOutcome(id) {
+      const record = store.read(id);
+      if (!record) return undefined;
+      if (!['pending', 'unknown', 'delivered', 'failed'].includes(record.deliveryState)) {
+        throw new Error('Invalid P5 delivery readback');
+      }
+      return structuredClone({id: record.id, source: record.source, sourceTaskId: record.sourceTaskId,
+        evidenceRefs: record.evidenceRefs, persisted: true, queued: record.deliveryState === 'pending',
+        deliveryState: record.deliveryState, delivered: record.deliveryState === 'delivered',
+        deliveredAt: record.deliveredAt, userRead: 'unobserved'});
+    },
+    readDeliveryPolicy: policy,
     // The trusted owner controls reactivation through isActive, not a second switch.
     stop,
     dispose() {
