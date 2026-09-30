@@ -1179,7 +1179,6 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     if (this.runtime.getTask(binding.parentTaskId).state === 'waiting_approval'
       && this.confirmedSubagentWait(binding.parentTaskId)) this.resumeTask(binding.parentTaskId);
   }
-
   private confirmedSubagentWait(taskId: string): boolean {
     const wait = this.runtime.loadCheckpoint(taskId, 'subagent-parent-wait') as
       {runId?: string; argumentsDigest?: string; toolVersion?: string} | undefined;
@@ -1212,7 +1211,6 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       .finally(()=>this.activeTextTasks.delete(taskId));
     this.activeTextTasks.set(taskId,execution);void execution.catch(()=>{});return execution;
   }
-
   dispatchKnowledgeRecheckTask(
     taskId: string,
     options: KnowledgeRecheckOptions,
