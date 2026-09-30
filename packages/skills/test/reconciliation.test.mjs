@@ -46,5 +46,8 @@ test('started Skill restores only the bound trusted confirmed read, with zero re
   const restored=await skill.invoke(input,resumedContext);assert.equal(restored.state,'confirmed');assert.match(restored.resultSummary,/Trusted public recovery reference/);
   assert.deepEqual(restored.evidenceRefs,[runId]);assert.equal(calls,1);assert.equal(checkpoints.get(key).phase,'complete');
   const readsBeforeReplay=reads;assert.deepEqual(await skill.invoke(input,resumedContext),restored);assert.equal(reads,readsBeforeReplay);assert.equal(calls,1);
+  configurationRef='synthetic-config-2';await assert.rejects(skill.invoke(input,resumedContext),{code:'REVISION_CONFLICT'});
+  configurationRef=undefined;await assert.rejects(skill.invoke(input,resumedContext),{code:'UNSUPPORTED_CAPABILITY'});
+  assert.equal(reads,readsBeforeReplay);assert.equal(calls,1); // No old-summary replay across revoked sessions.
   skill.dispose();
 });

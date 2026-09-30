@@ -9,6 +9,8 @@ import {StdioClientTransport, DEFAULT_INHERITED_ENV_VARS} from '@modelcontextpro
 import {CallToolResultSchema} from '@modelcontextprotocol/sdk/types.js';
 import {ProtocolError, validateToolValue} from '@personal-agent/contracts';
 import type {RegisteredTool, ToolContext, ToolHost} from '@personal-agent/contracts';
+export {createPublicReferenceExport} from './public-export.js';
+export type {PublicReferenceExportQuery, PublicReferenceExportAuthorization, PublicReferenceExportOptions} from './public-export.js';
 
 export const MCP_READ_TOOL_NAME = 'mcp.workspace.read_text';
 export const MCP_READ_TOOL_VERSION = '1.0.0';

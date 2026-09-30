@@ -28,6 +28,8 @@ const outcome = await skill.invoke({
 
 `health()` 投影 configured/connected(enabled dependency)/disabled/unavailable，带公开 ID/version/digest。缺配置/服务断连为 unavailable，不自动 Fake。`setEnabled(false)` / `dispose()` 中断在途 signal；取消、deadline、版本内容变更、依赖断连在步骤边界重新检查。若取消时已得到确认读取，保存确认记录后停止摘要；用户明确重新启用并恢复同一任务可继续剩余纯步骤。同任务并行 invoke 拒绝；不另建资源锁或调度器。
 
+最终结果 checkpoint 的重复读取也检查其原配置引用；即使新会话服务仍 connected，不能跨被撤销/替换的许可返回旧摘要。此检查只读既有 checkpoint/configuration，不重新读取文件或新增 Evidence。
+
 打包时保留 `workspace-reference-summary/SKILL.md`（相对 dist）。内容 digest 规范化 CRLF/LF，绑定 manifest+完整正文。当前只加载这一份受信自有 bundle；不宣称导入任意社区 Skill。官方规范用于可移植格式，无额外 parser 依赖/源码复制；版本附加 metadata 不授权。
 
 ## 验证
