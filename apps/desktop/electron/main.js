@@ -18,7 +18,7 @@ import {createPrivateMemoryController} from './private-memory.js';
 import {createMemoryLearningHost} from './memory-learning-host.js';
 import {createKnowledgeSourceConfig} from './knowledge-source-config.js';
 import {createMicrophoneCaptureHost} from './microphone-capture-host.js';
-import {createDesktopEvidenceHost} from './evidence-host.js';
+import {createDesktopEvidenceHost, ownsDesktopReferenceSkillTask} from './evidence-host.js';
 import {createDesktopCompetitionFactBridge} from './competition-fact-bridge.js';
 import {createDesktopSisPlaybackHost} from './huawei-sis-playback.js';
 import {createDesktopSisConfigHost} from './huawei-sis-config.js';
@@ -391,34 +391,40 @@ function privateMemoryController() {
   if (!privateMemory) {
     mkdirSync(path.dirname(dataPaths.privateMemory), {recursive: true});
     privateMemory = createPrivateMemoryController(dataPaths.privateMemory, async details => {
-      const answer = await dialog.showMessageBox(admin, {
+      const originAdmin=admin;if(!originAdmin || originAdmin.isDestroyed())return false;
+      const answer = await dialog.showMessageBox(originAdmin, {
         type: 'question', title: '确认私人记忆',
         message: details.previous ? '确认更正这条私人记忆？' : '确认保存这条私人记忆？',
         detail: `来源：${details.source.path}:${details.source.line}\n摘录：${details.citation}\n\n拟保存：${details.summary}`,
         buttons: ['确认保存', '取消'], defaultId: 1, cancelId: 1, noLink: true,
       });
-      return answer.response === 0 && admin && !admin.isDestroyed();
+      return answer.response === 0 && admin===originAdmin && !originAdmin.isDestroyed();
     }, async current => {
-      const answer = await dialog.showMessageBox(admin, {
+      const originAdmin=admin;if(!originAdmin || originAdmin.isDestroyed())return false;
+      const answer = await dialog.showMessageBox(originAdmin, {
         type: 'warning', title: '删除私人记忆', message: '删除这条私人记忆的全部版本？',
         detail: `当前摘要：${current.summary}\n来源：${current.sourceRef}`,
         buttons: ['删除所有版本', '取消'], defaultId: 1, cancelId: 1, noLink: true,
       });
-      return answer.response === 0 && admin && !admin.isDestroyed();
+      return answer.response === 0 && admin===originAdmin && !originAdmin.isDestroyed();
     }, {confirmWithdraw:async current=>{
-      const answer=await dialog.showMessageBox(admin,{type:'question',title:'撤回私人记忆',
+      const originAdmin=admin;if(!originAdmin || originAdmin.isDestroyed())return false;
+      const answer=await dialog.showMessageBox(originAdmin,{type:'question',title:'撤回私人记忆',
         message:'停止后续任务消费这条私人记忆？',detail:`版本 ${current.ref?.revision??current.revision}`,
         buttons:['撤回','取消'],defaultId:1,cancelId:1,noLink:true});
-      return answer.response===0 && admin && !admin.isDestroyed();
+      return answer.response===0 && admin===originAdmin && !originAdmin.isDestroyed();
     },authorizeConsumption:async scope=>{
       if(!admin || admin.isDestroyed() || !runtimeApplication || !scope.taskId) return false;
+      const originAdmin=admin,originApplication=runtimeApplication;
       const task=runtimeApplication.runtime.getTask(scope.taskId);
-      if(['succeeded','failed','cancelled'].includes(task.state)) return false;
-      const answer=await dialog.showMessageBox(admin,{type:'question',title:'本次任务使用私人记忆',
+      if(task.cancelRequested || ['succeeded','failed','cancelled'].includes(task.state)) return false;
+      const answer=await dialog.showMessageBox(originAdmin,{type:'question',title:'本次任务使用私人记忆',
         message:scope.destination==='agentarts'?'允许本次任务把所选记忆摘要发送给 AgentArts？':'允许本次任务使用所选记忆摘要？',
         detail:`任务：${scope.taskId}\n${scope.facts.map(f=>`版本 ${f.ref.revision}：${f.summary}`).join('\n')}`,
         buttons:['仅本次允许','取消'],defaultId:1,cancelId:1,noLink:true});
-      return answer.response===0 && admin && !admin.isDestroyed();
+      if(answer.response!==0 || admin!==originAdmin || originAdmin.isDestroyed() || runtimeApplication!==originApplication)return false;
+      const current=originApplication.runtime.getTask(scope.taskId);
+      return !current.cancelRequested && !['succeeded','failed','cancelled'].includes(current.state);
     }});
   }
   return privateMemory;
@@ -1394,7 +1400,7 @@ async function initializeRuntime() {
       memoryLearningHost=createMemoryLearningHost({profile:'huawei_ict_agentarts',privateMemory:privateMemoryController(),
         learningApplication,managedPrivateCopies:[]});
       await memoryLearningHost.recover();
-      feedsHost?.bindApplication(runtimeApplication);
+      feedsHost?.bindApplication(runtimeApplication, namespace);
       todoHost?.bindApplication(runtimeApplication);
       goalHost.bind(runtimeApplication);
       calendarMeetingHost?.bindApplication(runtimeApplication);
@@ -1467,6 +1473,7 @@ async function initializeRuntime() {
       try {
         p5DeviceReceiptStore = createP5DeviceReceiptStore({
           filePath: path.join(app.getPath('userData'), 'p5-device-receipts.json'),
+          storage:runtimeApplication.createHostStateStore('device-notifications'),
         });
       } catch {
         p5UnavailableReason = 'P5 本地提醒回执文件损坏或不可用，设备提醒不会启用';
@@ -1477,6 +1484,16 @@ async function initializeRuntime() {
         Notification, store: p5DeviceReceiptStore,
         isActive: () => Boolean(p5DeviceTelemetrySubscription && p5Cognition?.snapshot().state === 'running'),
         readProvenance: notification => p5SystemObservationSource?.readCurrentProvenance(notification),
+        readDeliveryPolicy:()=>{
+          const status=todoHost?.snapshot().notificationStatus;
+          if(!status || !['pausedUntil','quietUntil'].every(key=>status[key]===null
+            || (typeof status[key]==='string' && Number.isFinite(Date.parse(status[key]))))) {
+            return {allowed:false,reason:'unavailable'};
+          }
+          if(status.pausedUntil && Date.parse(status.pausedUntil)>Date.now())return {allowed:false,reason:'paused'};
+          if(status.quietUntil && Date.parse(status.quietUntil)>Date.now())return {allowed:false,reason:'quiet_hours'};
+          return {allowed:true,reason:null};
+        },
         onUpdate: publish, onLateOutcome: reconcileDeviceDeliveries,
       }) : undefined;
       const notificationPort = p5DeviceNotificationHost;
@@ -1630,6 +1647,10 @@ async function action(event, name, payload) {
     if ((sender !== admin && sender !== workspace) || !notepadHost || notepadClosing) throw Error('请从电脑操控设置操作记事本');
     return name === 'notepad.start' ? notepadHost.start(payload) : notepadHost.cancel();
   }
+  if (name === 'notepad.reconcile') {
+    if (sender !== admin || !notepadHost || notepadClosing) throw Error('请从可信后台核实原始记事本任务');
+    return notepadHost.recover(payload);
+  }
   if (name === 'admin.open') { openAdmin(payload?.page); return; }
   if (name === 'workspace.open' && sender === panel) { openWorkspace(); return; }
   if (name === 'workspace.close' && sender === workspace) { workspace.close(); return; }
@@ -1689,8 +1710,25 @@ async function action(event, name, payload) {
     if(sender!==admin || !competitionMode || syntheticMvp || !goalCloudHost) throw Error('请从正式应用目标管理设置操作');
     const result=goalCloudHost[name.slice('goalCloud.'.length)](payload);publish();return result;
   }
-  if (['feeds.add','feeds.remove','feeds.authorize','feeds.revoke','feeds.refresh'].includes(name)) {
+  if (['feeds.add','feeds.remove','feeds.authorize','feeds.revoke','feeds.refresh','feeds.classify'].includes(name)) {
     if (sender !== admin || !competitionMode || syntheticMvp || !feedsHost) throw Error('请从正式应用订阅设置操作');
+    if (name === 'feeds.classify') {
+      if (!payload || Object.keys(payload).length !== 2 || typeof payload.subscriptionId !== 'string'
+        || typeof payload.taskId !== 'string') throw Error('请选择订阅和原始任务');
+      const originAdmin=admin, originApplication=runtimeApplication, originFeeds=feedsHost;
+      const choice=originFeeds.prepareNativeSourceChoice(payload);
+      const answer=await dialog.showMessageBox(originAdmin,{type:'question',title:'订阅来源与持续跟踪许可',
+        message:`订阅：${choice.title}\n原任务：${choice.taskId}`,
+        detail:`实际地址：${choice.url}\n许可到期：${choice.deadline}\n公开选择只适用于无需凭据的公共资料，并允许该原任务持续跟踪；来源获取仍需真实读取证据。分类改变后需重启接入新目录。`,
+        buttons:choice.containsCredentials ? ['取消','保持私人'] : ['取消','公开并允许本任务跟踪','保持私人'],
+        defaultId:0,cancelId:0,noLink:true});
+      if (admin !== originAdmin || originAdmin.isDestroyed() || runtimeApplication !== originApplication
+        || feedsHost !== originFeeds) throw Error('订阅许可窗口已经改变');
+      if (answer.response === 0) return originFeeds.snapshot();
+      const result=originFeeds.applyNativeSourceChoice(choice,
+        !choice.containsCredentials && answer.response === 1 ? 'public' : 'private');
+      publish();return result;
+    }
     if (name !== 'feeds.revoke' && name !== 'feeds.refresh' && (runtimeApplication?.activeTaskCount || runtimeStartup.snapshot().state==='starting')) {
       throw Error('请等待当前任务和启动结束后修改订阅');
     }
@@ -1970,6 +2008,7 @@ async function action(event, name, payload) {
     throw Error('Unsupported voice action');
   }
   if (name === 'live.configure') {
+    if (payload?.hotkey === 'F9') throw Error('F9 用于记事本本次写入确认，请为 Live 选择其他快捷键');
     if ((sender !== panel && sender !== admin) || !competitionMode) throw Error('Live 配置只能从可信面板或设置提交');
     if (liveVoice?.hasActive() || voiceInput?.hasActive()) throw Error('请先结束语音再修改配置');
     const result = liveConfig.configure(payload);
@@ -2068,6 +2107,7 @@ async function action(event, name, payload) {
       isAdminSession: () => admin === sender && !sender.isDestroyed()
         && sender.webContents === event.sender && !sender.webContents.isDestroyed(),
       ownsTask: task => {
+        if (ownsDesktopReferenceSkillTask(runtimeApplication, namespace, task)) return true;
         const turn = conversations?.turns.get(task.taskId);
         if (turn && ['panel', 'workspace'].includes(turn.surface)
           && task.conversationId === `desktop-${turn.surface}`) return true;
@@ -2197,8 +2237,8 @@ async function initializeSisVoice() {
         }
       },
       onTaskSubmitted: ({taskId, goal}) => {
-        conversations.add(taskId, 'panel', goal);
         taskGoals.set(taskId, goal);
+        conversations.add(taskId, 'panel', goal);
       }});
     voicePcmSource = source;
     sisPlaybackHost = playback;
@@ -2221,6 +2261,10 @@ async function toggleLive() {
 function registerLiveShortcut() {
   if (liveShortcut.registered) globalShortcut.unregister(liveShortcut.key);
   const key = liveConfig.snapshot().hotkey;
+  if (key === 'F9') {
+    liveShortcut={key,registered:false,reason:'F9 用于记事本写入确认，请在 Live 设置中更换快捷键'};
+    return;
+  }
   const registered = globalShortcut.register(key, () => {
     if (Date.now() - lastLiveShortcutAt < 400) return;
     lastLiveShortcutAt = Date.now();
@@ -2240,14 +2284,14 @@ async function initializeLiveVoice() {
     createGateway: config => runtimeApplication.createLiveVoiceModel(config),
     createConsumer: createRuntimeClientTranscriptConsumer, client, onUpdate: publish,
     onTranscript: message => conversations.addLiveMessage(message),
-    onTaskSubmitted: ({taskId, goal}) => {conversations.add(taskId, 'panel', goal); taskGoals.set(taskId, goal);},
+    onTaskSubmitted: ({taskId, goal}) => {taskGoals.set(taskId, goal);conversations.add(taskId, 'panel', goal);},
     readContext: () => JSON.stringify({profile: 'huawei_ict_agentarts',
       agentArts:{configured:agentArtsConfig.snapshot().configured,reason:agentArtsConfig.snapshot().reason},
       tasks: orderedTasks().filter(task => taskSurface(task) === 'panel').slice(-10)
         .map(task => ({taskId: task.taskId, goal: (taskGoals.get(task.taskId) ?? conversations.goal(task.taskId) ?? '').slice(0, 800),
           state: task.state, failureReason: task.error?.message, result: resultText(task.resultSummary,taskResultMetadata(task)).slice(0, 1600),
           createdAt: conversations?.turns.get(task.taskId)?.createdAt ?? task.createdAt ?? task.updatedAt})),
-      messages: conversations.messagesFor('panel').slice(-20).map(({role, text, createdAt}) => ({role, text: text.slice(0, 1600), createdAt})),
+      messages: conversations.messagesFor('panel').slice(-20).map(({id,role, text, createdAt}) => ({id,role, text: text.slice(0, 1600), createdAt})),
       capabilities: capabilities.map(item => ({name: item.name ?? item.id, version: item.version})),
       tools: (competitionToolAvailabilityList.length ? competitionToolAvailabilityList : [
         ...(codingWorkspace?.competitionToolAvailability ?? []),
