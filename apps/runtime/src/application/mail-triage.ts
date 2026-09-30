@@ -26,6 +26,7 @@ export interface QQMailTriageHostOptions {
   readonly labels: Readonly<Record<string, string>>;
   readonly meetingLabels?: readonly string[];
   readonly classifierFingerprint?: string;
+  readonly getClassifierFingerprint?: () => string | undefined;
   readonly isSessionAllowed: () => boolean;
 }
 
@@ -44,6 +45,7 @@ export function createQQMailTriageHost(options: QQMailTriageHostOptions) {
     namespace: options.namespace, triage: options.triage, labels: options.labels,
     ...(options.meetingLabels ? {meetingLabels: options.meetingLabels} : {}),
     ...(options.classifierFingerprint ? {classifierFingerprint: options.classifierFingerprint} : {}),
+    ...(options.getClassifierFingerprint !== undefined ? {getClassifierFingerprint: options.getClassifierFingerprint} : {}),
     authorizeRead: scope => allowed() && scope.accountRef === options.accountRef && scope.folder === 'INBOX'}) : undefined;
   const tools: RegisteredTool[] = [];
   const disposeRegistration = registerMail({register(implementation) {
