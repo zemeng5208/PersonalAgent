@@ -229,6 +229,19 @@ export function createWorkflowLearningApplication(options: WorkflowLearningOptio
       const candidate = learning.readVersion(namespace, request.workflowId, request.expectedRevision);
       if (await options.confirmDeletion(structuredClone(candidate)) !== true) return {state: 'declined'};
       active(request);
+      // The store's single transaction checks the actual head and removes the
+      // versions BEFORE any task cancellation. A stale request has zero effects
+      // on Runtime, including when a new head was proposed during native consent.
+      let maintenanceError: unknown;
+      try { learning.eraseWorkflow({...request, namespace}); }
+      catch (error) {
+        const accepted = learning.readErasureReceipt(namespace, request.workflowId);
+        if (accepted?.operationId !== request.operationId
+          || accepted.expectedRevision !== request.expectedRevision) throw error;
+        // The deletion committed, but WAL maintenance failed. Dispatch bindings
+        // are already invalid; cancel related work, then preserve the exact error.
+        maintenanceError = error;
+      }
       let beforeSequence: number | undefined;
       let snapshotSequence: number | undefined;
       for (;;) {
@@ -244,7 +257,7 @@ export function createWorkflowLearningApplication(options: WorkflowLearningOptio
         beforeSequence = page.nextBeforeSequence;
         snapshotSequence = page.snapshotSequence;
       }
-      learning.eraseWorkflow({...request, namespace});
+      if (maintenanceError !== undefined) throw maintenanceError;
       if (learning.readActive(namespace, request.workflowId) !== null) fail('EXTERNAL_FAILURE', 'Learning deletion readback failed');
       return {state: 'deleted', coverage: 'active_learning_database'};
     },
