@@ -1,5 +1,7 @@
 export {analyzeImpact, proposePlanRevision, CognitionError} from './impact.js';
 export {buildMinimalRepairCandidate} from './minimal-repair.js';
+export {prepareReviewedRepair} from './reviewed-repair.js';
+export type {ReviewedRepairSelection, ReviewedRepairBinding, ReviewedRepairPreparation} from './reviewed-repair.js';
 export type {MinimalRepairSelection, MinimalRepairResult} from './minimal-repair.js';
 export {buildInterestOptions, LayaInterestDecisionService} from './interest-options.js';
 export type {InterestApproachId, InterestApproach, InterestOptions,

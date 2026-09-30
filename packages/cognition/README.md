@@ -4,6 +4,14 @@ Owner: zemeng. Profile: huawei_ict_agentarts. Pure local domain increment with
 an optional host-bound persistent-store consumer; no AgentArts, Memory,
 scheduler, tool execution or TaskRuntime state transition.
 
+`prepareReviewedRepair(snapshot, at, review, candidate?)` validates an exact
+offered, eligible REVISE candidate against the current affected scope. It uses
+the existing repair preflight and binds target/dependency refs and canonical
+digests; uncertain/RECHECK/unsupported scopes cannot create an execution binding.
+Runtime composes the resulting trusted adapter into the existing
+`cognition.commit_repair` Policy/CAS path. It is not a wire operation or authority.
+See [`MOD-28-REVIEWED-REPAIR-01`](../../docs/modules/MOD-28-REVIEWED-REPAIR-01.md).
+
 `buildMinimalRepairCandidate(snapshot, at, {expectedGraphRevision, targets})`
 builds an isolated dependency-only repair for a trusted RECHECK subset. It
 orders changes by dependency, retains text and dependency identities, and
