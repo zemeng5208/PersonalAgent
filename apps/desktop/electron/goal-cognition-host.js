@@ -3,12 +3,20 @@ import {toolArgumentsDigest} from '@personal-agent/tool-gateway';
 
 const VERSION='desktop-goal-analysis-v1';
 const MARKER='desktop-goal-cognition-review';
+const HANDOFF_TASK_MARKER='desktop-goal-cognition-handoff-task-v1';
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const sameRef=(a,b)=>a?.id===b?.id && a?.revision===b?.revision;
 const machineReview=review=>!review?.selectedOption && review?.machineReview?.reason==='uncertain'
   && review.machineReview.action==='RECHECK' && review.selection?.state==='review'
-  && review.selection.reason==='uncertain' && review.selection.eligibleForRuntime===false;
-const canHandoff=review=>Boolean(review?.selectedOption)||machineReview(review);
+  && review.selection.reason==='uncertain' && review.selection.eligibleForRuntime===false
+  && review.options?.some(option=>sameRef(option,review.selection.selected))
+  && review.options?.some(option=>sameRef(option,review.machineReview.option)
+    && option.id==='recheck' && option.action==='RECHECK' && option.repair===undefined);
+const canHandoff=review=>machineReview(review) || Boolean(review?.selectedOption
+  && review.selection?.state==='selected' && review.selection.eligibleForRuntime===true
+  && sameRef(review.selectedOption,review.selection.selected)
+  && review.options?.some(option=>sameRef(option,review.selectedOption)
+    && toolArgumentsDigest(option)===toolArgumentsDigest(review.selectedOption)));
 
 /** Local Laya chooses; existing Runtime/AgentArts orchestrates. No direct repair execution. */
 export function createDesktopGoalCognitionHost({application,client,facts,namespace,goalHost,
@@ -21,7 +29,7 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
   const context=()=>({signal:controller.signal,deadline:new Date(now()+180_000).toISOString()});
   const allowed=()=>enabled && cloudAllowed && !closed && !controller.signal.aborted;
   function project(review) {
-    if (!allowed() || !canHandoff(review)) return;
+    if (!allowed() || review.graphNamespace!==namespace || review.bindingVersion!==VERSION || !canHandoff(review)) return;
     const snapshot=store.read();
     if (snapshot.revision!==review.graphRevision) return;
     const strategies={plan:'目标已登记；请制定第一步计划、所需工具与待确认事项，尚未创建 Plan 或执行目标',
@@ -80,6 +88,20 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
   cognition=createHost({application,facts,graphNamespace:namespace,bindingVersion:VERSION,chooser,selectionHandoff:handoff});
   function record(value) {
     if (!value?.review) return;
+    if (value.handoff?.state==='submitted') {
+      application.runtime.saveCheckpoint(value.task.taskId,HANDOFF_TASK_MARKER,{version:1,
+        namespace,bindingVersion:VERSION,reviewTaskId:value.task.taskId,
+        selectionDigest:toolArgumentsDigest(value.review),taskId:value.handoff.task.taskId});
+    } else {
+      const saved=application.runtime.loadCheckpoint(value.task.taskId,HANDOFF_TASK_MARKER);
+      if (saved?.version===1 && saved.namespace===namespace && saved.bindingVersion===VERSION
+        && saved.reviewTaskId===value.task.taskId && saved.selectionDigest===toolArgumentsDigest(value.review)
+        && typeof saved.taskId==='string') {
+        const task=application.runtime.getTask(saved.taskId);
+        if (task.conversationId!==conversationId) throw Error('目标分析回执绑定不匹配');
+        value={...value,handoff:{state:'submitted',task}};
+      }
+    }
     reviews.set(value.task.taskId,value);
     if (store.read().revision!==value.review.graphRevision && value.handoff?.state!=='submitted') {
       status='outdated';reason='旧决策已被新的目标或事实版本替代，等待分析新变化';return;
@@ -89,6 +111,27 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
       :machineReview(value.review)?'Laya 尚不确定，等待有效云端分析许可后交 AgentArts 复核'
       :value.review.selectedOption?'Laya 已选择方案，等待有效云端分析许可':'本地分析已记录；未选择可自动推进的方案';
   }
+  function restoreMarkers() {
+    for (const item of goalHost.listTasks()) {
+      const prior=application.runtime.loadCheckpoint(item.taskId,MARKER);
+      if (typeof prior==='string') record(cognition.readReview(prior));
+    }
+  }
+  function execution(value) {
+    if (value.handoff?.state!=='submitted') return {state:value.handoff?.state??value.review?.selection?.state??'local',
+      executionStatus:value.handoff?.state==='pending'?'编排受理结果待核实，尚未确认执行'
+        :value.review?.selection?.state==='review'?'等待复核，尚未执行':'本地决策建议，尚未执行'};
+    const task=application.runtime.getTask(value.handoff.task.taskId);
+    const labels={created:'编排任务已受理，尚未执行完成',planning:'AgentArts 编排准备中，尚未执行完成',
+      running:'AgentArts 编排进行中，执行结果尚未核实',waiting_external:'等待外部编排结果，尚未执行完成',
+      verifying:'编排结果核实中，尚未确认目标更新',cancelling:'正在取消编排，尚未确认停止',
+      waiting_approval:'等待本地审批，尚未执行完成',waiting_reconciliation:'执行结果待核实',
+      succeeded:'AgentArts 编排任务已完成；目标更新尚未核实',failed:'编排任务失败，未确认目标更新',
+      cancelled:'编排任务已取消，未确认目标更新'};
+    return {state:task.state,taskId:task.taskId,
+      executionStatus:labels[task.state]??'编排任务已受理，执行结果尚未核实'};
+  }
+  try {restoreMarkers();} catch {status='recovery_pending';reason='既有决策记录尚未读回，保留持久回执等待核实';}
   return {
     configure(input) {
       if (typeof input.enabled!=='boolean'||typeof input.cloudAllowed!=='boolean') throw Error('目标分析设置无效');
@@ -121,17 +164,14 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
         '事实或目标变更';
       const choice = r?.selectedOption ? `${r.selectedOption.id} · ${r.selectedOption.description}` :
         machineReview(r) ? 'Laya 置信不足，转人工复核 (RECHECK)' : (r?.action === 'KEEP' ? '保持现状 (KEEP)' : '本地建议方案');
-      const executionStatus = value.executionStatus || (value.handoff?.state === 'submitted' ? '已提交 AgentArts 编排' :
-        value.review?.selection?.state === 'review' ? '等待复核' : '本地决策建议');
+      const feedback=execution(value);
       return {
         reviewTaskId: value.task.taskId,
         action: r?.action,
         selected: r?.selectedOption?.id,
         trigger,
         choice,
-        executionStatus,
-        taskId: value.handoff?.state === 'submitted' ? value.handoff.task.taskId : value.appliedTaskId,
-        state: value.state ?? value.handoff?.state ?? value.review?.selection?.state ?? 'local',
+        ...feedback,executionVerified:false,graphUpdateVerified:false,
       };
     })}),
     async tick() {
@@ -148,6 +188,7 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
           const prior=application.runtime.loadCheckpoint(item.taskId,MARKER);
           if (typeof prior==='string') {
             const readback=cognition.readReview(prior);
+            record(readback);
             if (cloudAllowed && canHandoff(readback.review) && readback.review.graphRevision===store.read().revision
               && !['submitted','expired'].includes(reviews.get(prior)?.handoff?.state)) record(await cognition.handoffReview(prior,current));
             // Old Desktop versions persisted this marker even when Laya was temporarily unavailable.
@@ -168,57 +209,28 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
       finally {busy=false;onUpdate();}
     },
     async applyDecision(reviewTaskId) {
-      const value = reviews.get(reviewTaskId);
-      if (!value?.review) throw Error('未找到对应决策记录');
-      const r = value.review;
-      if (!r.selectedOption && !machineReview(r)) throw Error('当前决策没有可执行的确定方案');
-      const graph = store.read();
-      let targetId = r.subjectGoal?.id;
-      if (!targetId && Array.isArray(r.affected)) {
-        for (const item of r.affected) {
-          if (item.node?.kind === 'goal') { targetId = item.node.id; break; }
-          const causeGoal = item.causes?.find(c => {
-            const n = graph.history.find(node => node.id === c.reference?.id);
-            return n?.kind === 'goal';
-          });
-          if (causeGoal) { targetId = causeGoal.reference.id; break; }
-        }
-        if (!targetId && r.affected[0]?.node?.id) {
-          const nodeInGraph = graph.history.findLast(n => n.id === r.affected[0].node.id);
-          if (nodeInGraph?.kind === 'goal') targetId = nodeInGraph.id;
-        }
+      if (closed) throw Error('目标分析已关闭');
+      const readback=cognition.readReview(reviewTaskId);
+      const r=readback.review;
+      if (readback.task.state!=='succeeded' || !r || r.graphNamespace!==namespace || r.bindingVersion!==VERSION) {
+        throw Error('当前决策尚无可验证的完成回执');
       }
-      if (!targetId) {
-        const lastGoal = graph.history.findLast(n => n.kind === 'goal');
-        if (lastGoal) targetId = lastGoal.id;
+      record(readback);
+      let value=reviews.get(reviewTaskId);
+      if (value.handoff?.state!=='submitted') {
+        if (!canHandoff(r)) throw Error('当前决策没有合法选择或可交接的复核方案');
+        if (store.read().revision!==r.graphRevision) throw Error('决策来源版本已变化，请重新评估');
+        if (!allowed()) throw Error('目标云端分析许可未开启，尚未提交编排');
+        value=await cognition.handoffReview(reviewTaskId,context());
+        record(value);
       }
-      if (!targetId) throw Error('无法定位目标节点');
-      const existing = graph.history.findLast(node => node.id === targetId && node.kind === 'goal');
-      if (!existing) throw Error('本地图谱中未找到目标节点');
-
-      const newSummary = r.selectedOption?.description || existing.summary;
-      if (typeof goalHost?.revise !== 'function') throw Error('目标更新服务不可用');
-      const task = goalHost.revise({
-        expectedGraphRevision: graph.revision,
-        expectedGoalRevision: existing.revision,
-        goal: {
-          id: existing.id,
-          summary: newSummary,
-          sourceRef: existing.sourceRef || 'desktop/cognition-host',
-          validFrom: existing.validFrom,
-          validUntil: existing.validUntil,
-          sensitivity: existing.sensitivity,
-          state: 'active',
-          reason: `已按决策方案【${r.selectedOption?.id || 'RECHECK'}】执行调整：${newSummary}`,
-          dependencies: existing.dependencies ?? [],
-        },
-      });
-      value.executionStatus = `已在本地执行更新：${newSummary}`;
-      value.state = 'applied';
-      value.appliedTaskId = task.taskId;
-      record(value);
       onUpdate();
-      return {status: 'applied', reviewTaskId, taskId: task.taskId};
+      const feedback=execution(value);
+      return {status:value.handoff?.state==='submitted'
+        ? ['succeeded','failed','cancelled','waiting_approval','waiting_reconciliation'].includes(feedback.state)
+          ? feedback.state : 'submitted'
+        : value.handoff?.state??'unavailable',reviewTaskId,...feedback,
+        executionVerified:false,graphUpdateVerified:false};
     },
     close(){closed=true;enabled=false;cloudAllowed=false;controller.abort();cognition.close();},
   };
