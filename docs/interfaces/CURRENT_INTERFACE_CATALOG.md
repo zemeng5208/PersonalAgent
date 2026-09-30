@@ -26,6 +26,14 @@
 
 ## 2. 状态定义与冻结门槛
 
+### MOD-30-WORKFLOW-INPUT-01 开发增量
+
+`AgentArtsRuntimeConfig` 和可信 Runtime 工厂新增可选 `workflowGoalInput`，将适配器构造的
+请求文本映射为一个 Workflow 开始变量的 `inputs`；未配置继续使用智能体 `query`。此选项是
+provisional 进程内配置，不是 wire operation、完整多输入映射或云端可用性证明。适配器与
+工厂合成验证不冻结 CloudAgentPort，也不证明工具提案/恢复或真实 Workflow 接通。详见
+[工作包与官方依据](../modules/MOD-30-WORKFLOW-INPUT-01.md)。
+
 ### 事实变化消费开发增量
 
 PR #89～#91 已合入 provisional 的 `MemoryQueryPort`、`FactChangeFeedPort`、批次解析、
@@ -191,6 +199,19 @@ PR #36、#49 已进入 main，提供文字 Coordination/CloudAgent 与 Runtime �
 ### 6.2 世界状态与认知面（provisional）
 
 main 已包含版本化 CoordinationStore、SQLite/Fake `AtomicCoordinationStorePort.appendBatch`、事务 revision 校验与 rollback，以及通过该原子端口执行的显式修复预览/提交；PR #89～#91 已合并 provisional Memory 端口/Fake、SQLite 查询与 delivery checkpoint、Goal 侧未生效暂存及确认后原子激活投影。生产自动消费、真实事实来源、删除和 AgentArts/Evidence 闭环仍未交付。
+
+堆叠 PR #203 的 MOD-09G 增加受信宿主的删除发起、预检和恢复路径；`MemoryQueryErrorCode`
+增补 `STORAGE_UNAVAILABLE` 表示 WAL 截断未完成。无 wire operation/capability，
+Goal 稀疏 revision 仍需非作者语义评审，Memory/Goal/Runtime 均不因此冻结。
+
+MOD-09H 继续在可信 `SqliteMemoryHost` 增加 `reviseUserFact` 与迁移 4：用户确认的更正或
+撤回通过精确头版本和操作 ID 在同一事务写入事实、feed 事件及无正文回执；重试幂等，
+来源拥有权冲突及待删除事实拒绝。它未注册 Desktop/wire capability，也不承担用户认证与
+授权校验；真实私人来源和用户侧验收仍 `unavailable`。
+
+MOD-09I 新增 `@personal-agent/learning` 的受信 SQLite 宿主：描述性候选版本、注入式验证、
+验证通过后启用、旧已验证版本回退及工作流历史删除。该 API 为 `provisional`，
+验证器和授权入口尚无生产装配；不暴露执行工具或 wire capability，也不等同 AgentArts Workflow。
 
 ### 6.3 桌面、语音、工具与通知增量（provisional）
 

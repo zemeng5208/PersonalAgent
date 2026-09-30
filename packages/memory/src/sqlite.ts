@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {createHash, randomUUID} from 'node:crypto';
 import type {DatabaseSync} from 'node:sqlite';
 import {openStorage, type Migration} from '@personal-agent/storage';
 import {FactChangeFeedError, MemoryQueryError, parseFactChangeBatch} from './index.js';
@@ -130,6 +130,20 @@ const MIGRATIONS: readonly Migration[] = [{
       phase TEXT NOT NULL CHECK (phase IN ('pending', 'completed')),
       PRIMARY KEY (namespace, fact_id),
       FOREIGN KEY (namespace) REFERENCES memory_namespaces(namespace)
+    ) STRICT;
+  `,
+}, {
+  version: 4,
+  sql: `
+    CREATE TABLE memory_user_revisions (
+      operation_id TEXT PRIMARY KEY,
+      namespace TEXT NOT NULL,
+      fact_id TEXT NOT NULL,
+      expected_revision INTEGER NOT NULL CHECK (expected_revision >= 1),
+      fact_revision INTEGER NOT NULL CHECK (fact_revision >= 2),
+      fingerprint TEXT NOT NULL,
+      FOREIGN KEY (namespace, fact_id, fact_revision)
+        REFERENCES memory_facts(namespace, fact_id, revision)
     ) STRICT;
   `,
 }];
@@ -351,6 +365,19 @@ export class SqliteMemoryHost {
     this.db.close();
   }
 
+  /** Post-commit WAL maintenance; a busy checkpoint must be retried. */
+  private checkpointErasureWal(): void {
+    try {
+      const mode = this.db.prepare('PRAGMA journal_mode').get() as {journal_mode?: string} | undefined;
+      const result = this.db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as
+        {busy?: number; log?: number; checkpointed?: number} | undefined;
+      if (mode?.journal_mode !== 'wal' || result?.busy !== 0
+        || result.log !== 0 || result.checkpointed !== 0) return queryFail('STORAGE_UNAVAILABLE');
+    } catch {
+      return queryFail('STORAGE_UNAVAILABLE');
+    }
+  }
+
   provision(namespaceValue: unknown): void {
     try {
       const namespace = text(namespaceValue);
@@ -405,6 +432,8 @@ export class SqliteMemoryHost {
           .get(namespace) !== undefined) return queryFail('SCOPE_DENIED');
         this.db.prepare('DELETE FROM memory_public_sources WHERE namespace = ? AND fact_id = ?')
           .run(namespace, factId);
+        this.db.prepare('DELETE FROM memory_user_revisions WHERE namespace = ? AND fact_id = ?')
+          .run(namespace, factId);
         this.invalidateFactSnapshots(namespace, factId);
         this.db.prepare('DELETE FROM memory_facts WHERE namespace = ? AND fact_id = ?')
           .run(namespace, factId);
@@ -413,6 +442,7 @@ export class SqliteMemoryHost {
         ).run(namespace, factId, operationId, expectedRevision);
         active(operation, queryFail);
       }, () => active(operation, queryFail));
+      this.checkpointErasureWal();
     } catch (error) {
       if (error instanceof MemoryQueryError) throw error;
       return queryFail();
@@ -517,6 +547,82 @@ export class SqliteMemoryHost {
     }
   }
 
+  /** Host-only second phase after a durable Runtime receipt has been read back. */
+  completeFactErasure(namespaceValue: unknown, value: unknown): void {
+    try {
+      const namespace = text(namespaceValue);
+      const record = exact(value, ['factId', 'expectedRevision', 'operationId', 'runtimeReceipt',
+        'deadline', 'signal']);
+      const factId = text(record.factId);
+      const operationId = text(record.operationId, 128);
+      const expectedRevision = record.expectedRevision;
+      const proof = exact(record.runtimeReceipt, ['graphNamespace', 'memoryNamespace', 'factId',
+        'operationId', 'expectedGraphRevision', 'committedAt']);
+      text(proof.graphNamespace);
+      time(proof.committedAt);
+      if (!/^[A-Za-z0-9_.-]+$/.test(operationId)
+        || !Number.isSafeInteger(expectedRevision) || (expectedRevision as number) < 1
+        || proof.memoryNamespace !== namespace
+        || proof.factId !== factId || proof.operationId !== operationId
+        || !Number.isSafeInteger(proof.expectedGraphRevision)
+        || (proof.expectedGraphRevision as number) < 0) return queryFail();
+      const operation = context(record, queryFail);
+      transaction(this.db, () => {
+        active(operation, queryFail);
+        const intent = this.db.prepare(
+          'SELECT operation_id, expected_revision, phase FROM memory_erasure_intents WHERE namespace = ? AND fact_id = ?',
+        ).get(namespace, factId) as Row | undefined;
+        if (intent === undefined) return queryFail('NOT_FOUND');
+        if (intent.operation_id !== operationId || intent.expected_revision !== expectedRevision) {
+          return queryFail('REVISION_CONFLICT');
+        }
+        if (intent.phase === 'completed') {
+          if (this.db.prepare('SELECT 1 FROM memory_facts WHERE namespace = ? AND fact_id = ? LIMIT 1')
+            .get(namespace, factId) !== undefined
+            || this.db.prepare('SELECT 1 FROM memory_public_sources WHERE namespace = ? AND fact_id = ? LIMIT 1')
+              .get(namespace, factId) !== undefined) return queryFail('SCOPE_DENIED');
+          return;
+        }
+        if (intent.phase !== 'pending') return queryFail();
+        const head = this.db.prepare('SELECT MAX(revision) AS revision FROM memory_facts WHERE namespace = ? AND fact_id = ?')
+          .get(namespace, factId) as Row;
+        if (head.revision !== expectedRevision) return queryFail('REVISION_CONFLICT');
+        const bindings = this.db.prepare('SELECT bootstrap_entries_json FROM memory_feed_bindings WHERE namespace = ?')
+          .all(namespace) as Row[];
+        for (const binding of bindings) {
+          if (binding.bootstrap_entries_json !== null
+            && parseJson<FactChangeEntry[]>(rowText(binding, 'bootstrap_entries_json'))
+              .some(entry => entry.fact.id === factId)) return queryFail('SCOPE_DENIED');
+        }
+        const deliveries = this.db.prepare(
+          'SELECT batch_json, confirmed, confirmed_handled_key FROM memory_feed_deliveries WHERE namespace = ?',
+        ).all(namespace) as Row[];
+        for (const delivery of deliveries) {
+          const batch = parseJson<FactChangeBatch>(rowText(delivery, 'batch_json'));
+          if (batch.entries.some(entry => entry.fact.id === factId)
+            || (delivery.confirmed === 1
+              && delivery.confirmed_handled_key !== handledKey(batch.entries))) {
+            return queryFail('SCOPE_DENIED');
+          }
+        }
+        this.db.prepare('DELETE FROM memory_public_sources WHERE namespace = ? AND fact_id = ?')
+          .run(namespace, factId);
+        this.db.prepare('DELETE FROM memory_user_revisions WHERE namespace = ? AND fact_id = ?')
+          .run(namespace, factId);
+        const removed = this.db.prepare('DELETE FROM memory_facts WHERE namespace = ? AND fact_id = ?')
+          .run(namespace, factId);
+        if (Number(removed.changes) !== expectedRevision) return queryFail('SCOPE_DENIED');
+        this.db.prepare("UPDATE memory_erasure_intents SET phase = 'completed' WHERE namespace = ? AND fact_id = ?")
+          .run(namespace, factId);
+        active(operation, queryFail);
+      }, () => active(operation, queryFail));
+      this.checkpointErasureWal();
+    } catch (error) {
+      if (error instanceof MemoryQueryError) throw error;
+      return queryFail();
+    }
+  }
+
   private appendFact(namespace: string, next: FactVersion): FactVersion {
     if (this.db.prepare('SELECT 1 FROM memory_erasure_intents WHERE namespace = ? AND fact_id = ?')
       .get(namespace, next.ref.id) !== undefined) return queryFail('SCOPE_DENIED');
@@ -557,6 +663,66 @@ export class SqliteMemoryHost {
       }
     }
     return structuredClone(next);
+  }
+
+  /** Host-only user-confirmed correction or withdrawal after authorization outside this port. */
+  reviseUserFact(namespaceValue: unknown, value: unknown): {
+    readonly fact: FactVersion;
+    readonly appended: boolean;
+  } {
+    try {
+      const namespace = text(namespaceValue);
+      const record = exact(value, ['factId', 'expectedRevision', 'operationId', 'summary',
+        'sourceRef', 'observedAt', 'validFrom', 'validUntil', 'sensitivity', 'state',
+        'deadline', 'signal']);
+      const factId = text(record.factId);
+      const operationId = text(record.operationId, 128);
+      const expected = record.expectedRevision;
+      if (!/^[A-Za-z0-9_.-]+$/.test(operationId)
+        || typeof expected !== 'number' || !Number.isSafeInteger(expected)
+        || expected < 1 || expected >= Number.MAX_SAFE_INTEGER) return queryFail();
+      const operation = context(record, queryFail);
+      const next = fact({ref: {id: factId, revision: expected + 1},
+        summary: record.summary, sourceRef: record.sourceRef,
+        observedAt: record.observedAt, validFrom: record.validFrom,
+        validUntil: record.validUntil, sensitivity: record.sensitivity,
+        state: record.state, confirmation: 'user_confirmed',
+        corrects: {id: factId, revision: expected}});
+      const fingerprint = createHash('sha256').update(JSON.stringify(next)).digest('hex');
+      return transaction(this.db, () => {
+        active(operation, queryFail);
+        if (this.db.prepare('SELECT 1 FROM memory_erasure_intents WHERE namespace = ? AND fact_id = ?')
+          .get(namespace, factId) !== undefined) return queryFail('SCOPE_DENIED');
+        const receipt = this.db.prepare(`SELECT namespace, fact_id, expected_revision,
+          fact_revision, fingerprint FROM memory_user_revisions WHERE operation_id = ?`)
+          .get(operationId) as Row | undefined;
+        if (receipt !== undefined) {
+          if (receipt.namespace !== namespace || receipt.fact_id !== factId
+            || receipt.expected_revision !== expected || receipt.fingerprint !== fingerprint
+            || receipt.fact_revision !== next.ref.revision) return queryFail('REVISION_CONFLICT');
+          const saved = this.db.prepare(`SELECT payload FROM memory_facts
+            WHERE namespace = ? AND fact_id = ? AND revision = ?`)
+            .get(namespace, factId, next.ref.revision) as Row | undefined;
+          if (saved === undefined) return queryFail('SCOPE_DENIED');
+          return {fact: fact(parseJson(rowText(saved, 'payload'))), appended: false};
+        }
+        if (this.db.prepare('SELECT 1 FROM memory_public_sources WHERE namespace = ? AND fact_id = ?')
+          .get(namespace, factId) !== undefined) return queryFail('SCOPE_DENIED');
+        const head = this.db.prepare(`SELECT MAX(revision) AS revision FROM memory_facts
+          WHERE namespace = ? AND fact_id = ?`).get(namespace, factId) as Row;
+        if (head.revision === null) return queryFail('NOT_FOUND');
+        if (head.revision !== expected) return queryFail('REVISION_CONFLICT');
+        const saved = this.appendFact(namespace, next);
+        this.db.prepare(`INSERT INTO memory_user_revisions(
+          operation_id, namespace, fact_id, expected_revision, fact_revision, fingerprint
+        ) VALUES (?, ?, ?, ?, ?, ?)`).run(operationId, namespace, factId,
+          expected, next.ref.revision, fingerprint);
+        return {fact: saved, appended: true};
+      }, () => active(operation, queryFail));
+    } catch (error) {
+      if (error instanceof MemoryQueryError) throw error;
+      return queryFail();
+    }
   }
 
   readPublicSourceHead(namespaceValue: unknown, keyValue: unknown): number | null {
@@ -1173,5 +1339,14 @@ function parseHandled(value: unknown): readonly FactChangeEntry[] {
 }
 
 export function openSqliteMemoryHost(path: string): SqliteMemoryHost {
-  return new SqliteMemoryHost(openStorage(path, MIGRATIONS));
+  const db = openStorage(path, MIGRATIONS);
+  try {
+    db.exec('PRAGMA secure_delete = ON');
+    const setting = db.prepare('PRAGMA secure_delete').get() as {secure_delete?: number} | undefined;
+    if (setting?.secure_delete !== 1) return queryFail('STORAGE_UNAVAILABLE');
+    return new SqliteMemoryHost(db);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
 }

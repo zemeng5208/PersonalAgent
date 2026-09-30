@@ -47,6 +47,8 @@ export {
   UnavailableTranscriptConsumerPort,
   UnavailableSpeechKeywordDetectorPort,
 } from './unavailable.js';
+export {bindVoiceWake} from './wake-binding.js';
+export type {VoiceWakeBinding, VoiceWakeBindingOptions} from './wake-binding.js';
 export {
   RuntimeClientTranscriptConsumer,
   createRuntimeClientTranscriptConsumer,

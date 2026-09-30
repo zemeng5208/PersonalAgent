@@ -40,6 +40,14 @@ test('public source append is retry-safe across restart and concurrent stale obs
   const first = host.appendPublicSource(namespace, observation('a'));
   assert.equal(first.appended, true);
   assert.deepEqual(first.fact.ref, {id: key.factId, revision: 1});
+  assert.throws(() => host.reviseUserFact(namespace, {
+    factId: key.factId, expectedRevision: 1, operationId: 'source-user-edit',
+    summary: 'User edit', sourceRef: 'user-action-1',
+    observedAt: '2026-09-24T01:00:00.000Z',
+    validFrom: first.fact.validFrom, validUntil: first.fact.validUntil,
+    sensitivity: 'public', state: 'active',
+    deadline: '2099-01-01T00:00:00.000Z', signal: new AbortController().signal,
+  }), fails('SCOPE_DENIED'));
   assert.throws(() => host.append(namespace, {...first.fact,
     ref: {id: key.factId, revision: 2}, corrects: first.fact.ref}),
   fails('INVALID_ARGUMENT'));

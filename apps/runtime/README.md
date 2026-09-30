@@ -94,6 +94,7 @@ presence through the trusted host callback and keeps the descriptor's wire
 presence flag false. MOD16 separately verified the native Pipe PID and hello
 boundary; Node transport/bridge composition, Desktop, bind/observe and real
 Notepad UIA execution remain unverified. The product capability is unavailable.
+
 Optional `competitionToolAvailability` requires a trusted, task-specific readiness check for
 each advertised tool. Runtime selects only registered descriptors with an explicit
 result export binding and a ready provider, stores that selection with task revision/deadline,
@@ -108,25 +109,6 @@ advertised only through these explicit bindings; each proposal still needs Polic
 and an unknown write result waits for reconciliation. Tools requiring a live presence signal
 are omitted until the Runtime invocation carries that signal. The trusted AgentArts factory
 requires `initialRequestMode: 'goal-with-tools-json'` whenever a catalog is configured.
-
-The trusted Windows composition may create a Notepad `RegisteredTool` with
-`createWindowsHostNotepadAdapter`, pass `adapter.tool` in Runtime Application's
-`tools`, and keep `adapter.observe`/`releaseObservation`/`recover` host-only. The bridge transport
-starts the exact native PipeBridge executable, which launches the Host with a
-random named pipe and verifies the connected server PID before exposing the
-unchanged bounded JSONL frame stream. The adapter requires a
-live local-presence callback, a short-lived Host target and a create-only Runtime
-attempt checkpoint (`createRuntimeWindowsHostAttemptStore`). The mutually
-authenticated Host issues `verified` only after its own same-target UIA text
-readback; Runtime correlates that result and records the formal tool Evidence.
-ToolGateway consumes the
-one-use Policy grant before `RegisteredTool.execute`; a disconnect, cancel,
-`not_found`, or uncertain write remains unknown and never triggers a replay.
-Current `tool.invoke` has no trusted `userPresent` field, so this adapter checks
-presence through the trusted host callback and keeps the descriptor's wire
-presence flag false. MOD16 separately verified the native Pipe PID and hello
-boundary; Node transport/bridge composition, Desktop, bind/observe and real
-Notepad UIA execution remain unverified. The product capability is unavailable.
 
 - SQLite-backed tasks, checkpoints, events and one-shot schedules.
 - `createSqliteFactProjectionHost` binds a pre-provisioned public Memory namespace
@@ -145,6 +127,27 @@ Notepad UIA execution remain unverified. The product capability is unavailable.
   exact token and atomically replaces stale, unactivated staging before replaying
   its surviving facts, including a batch confirmed before a crash. Already
   activated graph history and receipts still require separate erasure handling.
+  After a trusted Memory erasure intent, `preflightErasure(factId, context)`
+  reads the rewritten durable delivery and exact surviving FactVersions for
+  activated receipts. It inventories stale staged batches, graph dependencies, other graph bindings,
+  all graph impact records and untraced surviving text without writing either
+  database. Missing delivery or mismatched survivor content fails closed. The
+  graph-scoped result is evidence for planning, not permission to finalize
+  deletion; cross-graph coordination and free-text source lineage remain unresolved.
+  The trusted `FactProjectionStore.commitErasure` now performs the Runtime-only
+  atomic cleanup for a verified single-graph subset: it keeps the graph revision
+  high-water mark, removes target mappings, rewrites mixed receipts and impact
+  records, and saves a content-free retry receipt. It rejects stale staging,
+  every other populated graph or projection staging, and surviving text without
+  proven lineage. The trusted
+  `resumeFactErasure` host path reads back that receipt and then removes the
+  pending fact's active Memory history and public-source mapping in a second
+  transaction. A failure between commits stays pending and can be retried after
+  restart with the same operation ID. The deletion path verifies SQLite
+  `secure_delete=ON` before writes and requires successful `TRUNCATE` checkpoints
+  of both WAL files before returning; a busy reader keeps the operation retryable.
+  This is not a public deletion capability and does not clear older free-page
+  traces or backups.
   A trusted host must trigger it after verified source
   changes and on startup recovery; it does not poll private sources or publish to
   AgentArts. Source correction and withdrawal remain append-only Fact revisions.
