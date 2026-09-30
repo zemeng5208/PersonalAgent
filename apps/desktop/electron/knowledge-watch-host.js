@@ -1464,17 +1464,22 @@ export function createKnowledgeWatchHost({
         return {accepted: true, reason: 'feed_page_incomplete', provider: 'feeds', availability: 'unavailable'};
       }
       if (collected.collection.state === 'unchanged') {
-        const head = document.sources[subscriptionId];
-        if (!text(head?.revision) || !sha(head?.contentSha256)) {
-          return {accepted: false, availability: 'unavailable', reason: 'source_body_not_read', provider: 'feeds'};
-        }
-        const observation = await consumeSourceUpdate({namespace, sourceId: subscriptionId, availability: 'available',
-          revision: head.revision, contentSha256: head.contentSha256, fetchedAt: collected.collection.fetchedAt,
-          provider: 'feeds', feedCursor: collected.nextCursor,
-          ...(text(head.citation) ? {citation: {locator: head.citation}} : {}),
-          check: {outcome: 'unchanged', checkedAt: collected.collection.fetchedAt, sourceId: subscriptionId,
-            sourceRevision: head.revision, cachedContentSha256: head.contentSha256}});
-        return {...observation, notified: observation.notified === true};
+        return lock(() => {
+          if (!running || !document || ticket !== life) return {accepted: false, reason: 'stopped'};
+          const head = document.sources[subscriptionId];
+          if (head?.availability !== 'available' || !text(head.revision) || !sha(head.contentSha256)) {
+            return {accepted: false, availability: 'unavailable', reason: 'source_body_not_read', provider: 'feeds'};
+          }
+          // A conditional response contains no new body or source-read proof. Keep the
+          // original observation/context and binding validity; only advance pagination.
+          if (head.feedCursor !== collected.nextCursor) {
+            const next = clone(document);
+            next.sources[subscriptionId].feedCursor = collected.nextCursor;
+            persist(next);
+          }
+          return {accepted: true, reason: 'unchanged', duplicate: true, notified: false,
+            availability: 'available', provider: 'feeds', revision: head.revision, submitted: []};
+        });
       }
       const identities = [];
       for (const item of collected.items) {

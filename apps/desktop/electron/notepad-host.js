@@ -6,7 +6,7 @@ const END = new Set(['succeeded', 'failed', 'cancelled', 'waiting_reconciliation
 /** Local user gesture -> existing prepared Runtime task -> Policy -> native adapter.
  * No model can supply the presence gesture, target reference or authorization decision. */
 export function createDesktopNotepadHost({createAdapter, createAttempts, transport,
-  registerConfirmation, openNotepad, respond, cancelTask, onUpdate = () => {}, now = Date.now}) {
+  registerConfirmation, openNotepad, respond, cancelTask, onUpdate = () => {}, onTask = () => {}, now = Date.now}) {
   let application, current, closed = false, refreshing = false;
   let state = {available: true, busy: false, state: 'ready',
     reason: '填写文本后，新建并确认一个空白记事本窗口。'};
@@ -65,6 +65,8 @@ export function createDesktopNotepadHost({createAdapter, createAttempts, transpo
       operation.text = '';
       const task = application.runtime.getTask(operation.taskId);
       update({busy: false, state: task.state, taskId: operation.taskId,
+        failureCode: ['UNAUTHORIZED','NOT_FOUND','CANCELLED','TIMEOUT','PROTOCOL_MISMATCH'].includes(error?.code)
+          ? error.code : 'EXTERNAL_FAILURE',
         reason: error?.code === 'UNAUTHORIZED' || error?.code === 'NOT_FOUND'
           ? '窗口不满足条件，未获准写入。请使用确认后新建的独立空白单标签窗口。'
           : '准备未完成，已停止本次操作；不会自动重试。'});
@@ -79,8 +81,14 @@ export function createDesktopNotepadHost({createAdapter, createAttempts, transpo
     const task = application.prepareHostToolTask({commandId, toolName: TOOL, toolVersion: '1.0.0', deadline});
     current = {taskId: task.taskId, revision: task.revision, commandId, deadline, text: payload.text,
       controller: new AbortController(), finalized: false, confirmedUntil: 0, approvalSent: false};
+    try { onTask({taskId: task.taskId, goal: '向新空白记事本写入本次文本'}); }
+    catch (error) {
+      current.controller.abort(); current = undefined;
+      application.cancelPreparedHostToolTask(task.taskId, commandId, task.revision);
+      throw error;
+    }
     update({busy: true, state: 'preparing', taskId: task.taskId,
-      reason: '正在连接本机执行宿主；尚未写入。', evidenceRefs: []});
+      reason: '正在连接本机执行宿主；尚未写入。', evidenceRefs: [], failureCode: null});
     current.job = finishPreparation(current);
     return snapshot();
   }
@@ -132,8 +140,22 @@ export function createDesktopNotepadHost({createAdapter, createAttempts, transpo
     await refresh();
     return snapshot();
   }
+  function projectTask(task) {
+    if (!application || task?.goal !== `Host tool ${TOOL}`) return null;
+    const userMessage = '向新空白记事本写入本次文本';
+    try {
+      const readback = application.readHostToolTask(task.taskId);
+      if (readback.toolName !== TOOL || readback.task.revision !== task.revision) return {userMessage};
+      const verified = readback.task.state === 'succeeded' && readback.confirmed?.result?.state === 'verified'
+        && readback.confirmed.evidenceRefs.length > 0;
+      return {userMessage, ...(verified ? {resultSummary:
+        '记事本写入已完成，原生宿主已读回匹配的文本，执行证据已保存。文件尚未保存。'}
+        : task.state === 'cancelled' ? {resultSummary: '本次记事本操作已取消，写入未获确认；请核对窗口内容。'} : {})};
+    } catch { return {userMessage, ...(task.state === 'cancelled'
+      ? {resultSummary: '本次记事本操作已取消，未确认写入；请核对窗口内容。'} : {})}; }
+  }
   return {tools: [adapter.tool], bind(value) {if (application) throw Error('Already bound'); application = value;},
-    start, refresh, cancel, snapshot,
+    start, refresh, cancel, snapshot, projectTask,
     async close() {closed = true; await cancel(); await adapter.close();},
   };
 }

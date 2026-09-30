@@ -187,7 +187,8 @@ export interface WindowsHostAdapterOptions {
   attempts: WindowsHostAttemptStore;
   now?: () => number;
   /** Trusted Desktop may open a new target and wait for a local confirmation gesture.
-   * Runs before opening the pipe so confirmation does not retain a Host session.
+   * Runs after hello/bind so the Host's old-window baseline precedes target creation.
+   * Cancellation/deadline closes this reserved connection without observation or execution.
    * This is not tool authorization and must not inspect or select private windows. */
   prepareObservation?(input: {taskId: string; deadline: string; signal: AbortSignal}): Promise<void>;
   /** Desktop derives live local presence for this task. Checked at observation and again before execution. */
@@ -287,6 +288,9 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
       if (!await presenceAllowed({taskId, deadline, signal})) {
         throw new ProtocolError('UNAUTHORIZED', 'Local user presence was not authorized');
       }
+      bound = await open(options.transport);
+      ensureOpen();
+      active({deadline, signal}, now);
       if (options.prepareObservation) {
         const preparation = new AbortController();
         const abort = () => preparation.abort();
@@ -309,9 +313,6 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
           preparation.abort();
         }
       }
-      ensureOpen();
-      active({deadline, signal}, now);
-      bound = await open(options.transport);
       ensureOpen();
       active({deadline, signal}, now);
       const request = {kind: 'observe' as const, ...frameBase(bound.sessionId), deadline,

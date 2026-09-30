@@ -102,19 +102,19 @@ test('registered Notepad tool binds observed target and run identity to Host UIA
     ['hello', 'bind', 'observe', 'target_ready', 'execute']);
 });
 
-test('trusted target preparation runs before a Host session is opened', async () => {
+test('trusted target preparation runs after the Host baseline handshake and before observe', async () => {
   let f;
   f = fixture({prepareObservation: async ({taskId, signal}) => {
     assert.equal(taskId, 'task-1');
     assert.equal(signal.aborted, false);
-    assert.deepEqual(f.sent, []);
+    assert.deepEqual(f.sent.map(frame => frame.kind), ['hello', 'bind']);
   }});
   await f.adapter.observe('task-1', deadline(), new AbortController().signal);
   assert.deepEqual(f.sent.slice(0, 3).map(frame => frame.kind), ['hello', 'bind', 'observe']);
   await f.adapter.releaseObservation('task-1');
 });
 
-test('cancelling target preparation opens no Host session', async () => {
+test('cancelling target preparation closes the baseline session without observing or executing', async () => {
   const controller = new AbortController();
   const f = fixture({prepareObservation: async ({signal}) => {
     controller.abort();
@@ -122,11 +122,11 @@ test('cancelling target preparation opens no Host session', async () => {
     await new Promise(() => {});
   }});
   await assert.rejects(f.adapter.observe('task-1', deadline(), controller.signal), {code: 'CANCELLED'});
-  assert.deepEqual(f.sent, []);
-  assert.equal(f.closes, 0);
+  assert.deepEqual(f.sent.map(frame => frame.kind), ['hello', 'bind']);
+  assert.equal(f.closes, 1);
 });
 
-test('closing the adapter cancels target preparation before opening a Host session', async () => {
+test('closing the adapter cancels target preparation and releases the baseline session', async () => {
   let entered;
   let signal;
   const waiting = new Promise(resolve => { entered = resolve; });
@@ -139,7 +139,8 @@ test('closing the adapter cancels target preparation before opening a Host sessi
   await waiting;
   await f.adapter.close();
   await assert.rejects(observation, {code: 'CANCELLED'});
-  assert.deepEqual(f.sent, []);
+  assert.deepEqual(f.sent.map(frame => frame.kind), ['hello', 'bind']);
+  assert.equal(f.closes, 1);
 });
 
 test('stale Host target readiness releases the observation before authorization', async () => {
