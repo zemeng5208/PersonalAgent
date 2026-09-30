@@ -164,6 +164,8 @@ PA_WEATHER_LIVE=1 PA_GEONAMES_USERNAME=<geonames 账号> node --test packages/co
 
 `纽约` 与 `首尔` 不带提示串时是**零候选**（`NOT_FOUND`），带提示串后正确；表中只列带提示串的一行。显示名的简繁混杂（`東京`/`倫敦` 繁体、`罗马市`/`首尔特别市` 简体、`New York` 未翻译）在同一次运行里同时出现，见已知限制。
 
+**2026-09-30 置信度收口后复测**（次级席位下限 + 已证名佐证落地后，真实端点重跑 live）：48 项 47 过 0 失败 1 跳过（GeoNames 端到端项无账号自动跳过，其余 3 项 live 全过）。真实端点上的行为变化与预期一致——上一轮实测中判 `high` 的五个误解析（东京→江苏、伦敦→安大略、罗马→昆士兰、丽江→湖南、广东→重庆同名地）**现在全部判 `low`**；提示串救回路径全部正常（东京+Tokyo→`Asia/Tokyo`、伦敦+London→`Europe/London`、罗马+Rome、丽江+Lijiang、纽约+New York、首尔+Seoul）；北京当日预报取值与目标地时区日界读回正常（北京/纽约当日 `differsFromUtcDay` 均为 `false`，与执行时刻相符）。
+
 ## 已知限制
 
 - **Open-Meteo 不提供预报发布时间**，`occurredAt` 是覆盖日起点而非真实发布时刻，已由 `publishedTimeKind: 'coverage_start'` 显式标注。需要真实发布时间的提供商（如和风天气返回 `forecastStartTime`）可作为第二个 `WeatherProvider` 实现接入，届时标注为 `provider_published`。
