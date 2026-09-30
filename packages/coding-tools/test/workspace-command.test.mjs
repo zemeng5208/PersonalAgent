@@ -371,3 +371,40 @@ test('WindowsJobProcessHost terminates grandchild process tree on deadline timeo
   }
   assert.ok(grandchildDied, 'grandchild process must be terminated by Job Object after timeout');
 });
+
+test('WindowsJobProcessHost closes its job when the root exits, before draining inherited output', {
+  skip: process.platform !== 'win32' ? 'Windows only test' : false,
+}, async t => {
+  const root = await fixture(t);
+  const jobHostExe = resolveJobHostExe();
+  if (!existsSync(jobHostExe)) {
+    t.skip('WindowsJobProcessHost.exe not compiled');
+    return;
+  }
+  const pidPath = join(root, 'inherited-output-child.pid');
+  const tool = createWorkspaceCommandTool({rootPath: root, maxDurationMs: 5_000,
+    recipes: [{id: 'root-exits', executable: jobHostExe,
+      args: ['--cwd', root, '--exe', process.execPath, '--', '-e', `
+        const {spawn} = require('node:child_process');
+        const child = spawn(process.execPath, ['-e',
+          'require("node:fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => process.stdout.write(""), 1000)',
+          process.argv[1]], {
+          stdio: ['ignore', 'inherit', 'inherit'], detached: false,
+        });
+        child.unref();
+        const ready = setInterval(() => {
+          if (!require('node:fs').existsSync(process.argv[1])) return;
+          clearInterval(ready);
+          process.stdout.write('ROOT_EXITED\\n');
+          process.exitCode = 7;
+        }, 10);
+      `, pidPath]}],
+  });
+  const result = await tool.execute({recipeId: 'root-exits'}, context());
+  assert.deepEqual(result, {recipeId: 'root-exits', exitCode: 7,
+    stdout: 'ROOT_EXITED\n', stderr: ''});
+  const childPid = Number(await readFile(pidPath, 'utf8'));
+  assert.ok(Number.isSafeInteger(childPid) && childPid > 0);
+  assert.throws(() => process.kill(childPid, 0), {code: 'ESRCH'},
+    'root completion must leave no child holding output pipes');
+});
