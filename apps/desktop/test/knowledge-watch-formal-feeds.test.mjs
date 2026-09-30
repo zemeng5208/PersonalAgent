@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {mkdtempSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {createDesktopFeedsHost} from '../electron/feeds-host.js';
-import {createKnowledgeWatchHost} from '../electron/knowledge-watch-host.js';
+import {createKnowledgeWatchHost, createProductionKnowledgeReevaluator} from '../electron/knowledge-watch-host.js';
 import {TaskRuntime} from '@personal-agent/runtime';
 import {createRuntimeApplication} from '@personal-agent/runtime/application';
 import {FakeFeedProvider} from '@personal-agent/feeds';
@@ -15,7 +16,7 @@ const safeStorage = {
   decryptString: buf => Buffer.from(buf).reverse().toString(),
 };
 
-test('Formal desktop feeds.collect path through session consent, genuine recheck dispatch and revision binding', async t => {
+test('Conditional feeds.collect, production reevaluator, Runtime receipt validation and revision binding', async t => {
   const dir = mkdtempSync(path.join(tmpdir(), 'pa-kw-formal-feeds-'));
   const runtimeDb = path.join(dir, 'runtime.sqlite');
 
@@ -29,9 +30,9 @@ test('Formal desktop feeds.collect path through session consent, genuine recheck
   const runtime = runtimeApp.runtime;
 
   const rootTask = runtime.submitTask({
-    goal: 'Knowledge Watch Root Task',
+    goal: 'Knowledge Watch Root Task (test-user)',
     conversationId: 'knowledge-watch:test-user',
-    idempotencyKey: 'kw-root',
+    idempotencyKey: 'knowledge-watch-root:test-user',
   });
 
   const feedUrl = 'https://devblogs.microsoft.com/typescript/feed/';
@@ -180,52 +181,62 @@ test('Formal desktop feeds.collect path through session consent, genuine recheck
   assert.ok(recheckContext, 'getRecheckContext must resolve context for submitted work key');
   assert.equal(recheckContext.topicId, 'typescript');
   assert.equal(recheckContext.sourceId, subscriptionId);
+  assert.ok(Date.parse(recheckContext.boundValidUntil) > Date.parse(recheckContext.boundLastSuccessfulCheck),
+    JSON.stringify(recheckContext));
   const expectedObservedRevision = recheckContext.observedRevision;
   assert.ok(expectedObservedRevision, 'observedRevision must be present');
   assert.equal(recheckContext.citation, 'https://example.com/ts58');
 
   // Verify that dispatching without reevaluator fails with UNSUPPORTED_CAPABILITY and cannot self-sign
   const rejectedTask = runtime.submitTask({
-    goal: `RECHECK test-unsupported`,
+    goal: `RECHECK ${'c'.repeat(64)}`,
     conversationId: 'knowledge-watch:test-user',
-    idempotencyKey: 'kw-unsupported',
+    idempotencyKey: 'c'.repeat(64),
   });
-  await runtimeApp.dispatchKnowledgeRecheckTask(rejectedTask.taskId, recheckContext);
+  await runtimeApp.dispatchKnowledgeRecheckTask(rejectedTask.taskId, {...recheckContext, workKey: 'c'.repeat(64)});
   assert.equal(runtime.getTask(rejectedTask.taskId).state, 'failed');
   assert.equal(runtime.getTask(rejectedTask.taskId).error?.code, 'UNSUPPORTED_CAPABILITY');
   assert.equal(runtime.loadCheckpoint(rejectedTask.taskId, 'knowledge-recheck-result'), undefined);
 
-  // Now execute the genuine recheck task with the production-aligned reevaluator:
-  let reevaluatorExecuted = false;
-  await runtimeApp.dispatchKnowledgeRecheckTask(recheckTask.taskId, {
-    ...recheckContext,
-    reevaluator: async ctx => {
-      reevaluatorExecuted = true;
-      assert.equal(ctx.topicId, 'typescript');
-      assert.equal(ctx.citation, 'https://example.com/ts58');
-      assert.equal(ctx.observedRevision, expectedObservedRevision);
-      return {
-        status: 'completed',
-        outcome: {
-          analyzedImpact: 'verified_update',
-          recheckedVersion: ctx.observedRevision,
-        },
-        evaluation: {
-          outcome: 'verified_update',
-          statement: 'TypeScript 5.8 经认知重评确认已发布且影响本项关注',
-          observedSummary: 'TypeScript 5.8 发布',
-          citation: ctx.citation,
-        },
-        summary: '知识重评确认：TypeScript 5.8 发布，实际重评分析已完成',
-        evidenceRefs: ['https://example.com/ts58'],
-      };
+  // Exercise the production reevaluator and Runtime binding with an explicitly synthetic Laya chooser.
+  // The FeedProvider below is also a Fake, so this remains conditional integration evidence.
+  let layaCalls = 0;
+  const productionReevaluator = createProductionKnowledgeReevaluator({
+    layaChooser: {
+      async choose(request) {
+        layaCalls += 1;
+        const context = JSON.parse(request.context);
+        assert.equal(context.topicId, 'typescript');
+        assert.equal(context.sourceId, subscriptionId);
+        assert.equal(context.observedRevision, expectedObservedRevision);
+        assert.equal(context.sourceTextIsUntrusted, true);
+        assert.ok(context.publicFeedExcerpt.includes('TypeScript'));
+        assert.deepEqual(request.candidates.map(candidate => candidate.id), ['relevant_update', 'not_relevant']);
+        return {
+          state: 'selected',
+          selected: {id: 'relevant_update', revision: 1},
+          receipt: {id: 'a'.repeat(64), contextDigest: 'b'.repeat(64)},
+        };
+      },
     },
   });
-  assert.equal(reevaluatorExecuted, true);
+  await runtimeApp.dispatchKnowledgeRecheckTask(recheckTask.taskId, {
+    ...recheckContext,
+    revalidateCurrent: () => host.getRecheckContext(recheckWorkKey),
+    reevaluator: ctx => {
+      assert.equal(ctx.boundValidUntil, recheckContext.boundValidUntil, JSON.stringify(ctx));
+      assert.equal(ctx.boundLastSuccessfulCheck, recheckContext.boundLastSuccessfulCheck, JSON.stringify(ctx));
+      return productionReevaluator(ctx);
+    },
+  });
+  assert.equal(layaCalls, 1, JSON.stringify(runtime.getTask(recheckTask.taskId)));
 
   const confirmedTask = runtime.getTask(recheckTask.taskId);
-  assert.equal(confirmedTask.state, 'succeeded');
-  assert.deepEqual(confirmedTask.evidenceRefs, ['https://example.com/ts58']);
+  assert.equal(confirmedTask.state, 'succeeded', JSON.stringify(confirmedTask));
+  assert.deepEqual(confirmedTask.evidenceRefs, [
+    `knowledge-watch-source-read:${recheckContext.sourceReadReceiptId}`,
+    `knowledge-recheck-judgment:${recheckTask.taskId}`,
+  ]);
 
   const checkpoint = runtime.loadCheckpoint(recheckTask.taskId, 'knowledge-recheck-result');
   assert.ok(checkpoint, 'Knowledge recheck result checkpoint must be saved');
@@ -235,8 +246,11 @@ test('Formal desktop feeds.collect path through session consent, genuine recheck
   assert.equal(checkpoint.citation, 'https://example.com/ts58');
   assert.equal(checkpoint.observedRevision, expectedObservedRevision);
   assert.ok(checkpoint.evaluation && Object.keys(checkpoint.evaluation).length > 0);
+  assert.equal(checkpoint.sourceReadReceiptId, recheckContext.sourceReadReceiptId);
+  assert.equal(checkpoint.evaluation.outcome, 'relevant_update');
+  assert.equal(runtime.loadCheckpoint(recheckTask.taskId, 'knowledge-recheck-judgment').provider, 'local_laya');
 
-  // 9. Now bindObservedRevision succeeds with genuine confirmed reevaluation!
+  // 9. The conditional, source-bound synthetic judgment can now be read back and bound.
   const bound = await host.bindObservedRevision('typescript');
   assert.equal(bound.accepted, true);
   assert.equal(bound.reason, 'bound');
@@ -264,9 +278,9 @@ test('Legacy empty succeeded task is rejected by bindObservedRevision and cannot
   const runtime = new TaskRuntime(runtimeDb);
 
   const rootTask = runtime.submitTask({
-    goal: 'Knowledge Watch Root Task',
+    goal: 'Knowledge Watch Root Task (test-user)',
     conversationId: 'knowledge-watch:test-user',
-    idempotencyKey: 'kw-root',
+    idempotencyKey: 'knowledge-watch-root:test-user',
   });
 
   const feedUrl = 'https://devblogs.microsoft.com/typescript/feed/';

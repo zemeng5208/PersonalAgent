@@ -25,7 +25,7 @@ import {createLiveVoiceHost} from './live-voice-host.js';
 import {createDesktopProactiveHost} from './proactive-host.js';
 import {createP5SystemObservationSource} from './p5-system-observation-source.js';
 import {createP5DeviceReceiptStore} from './p5-device-receipt-store.js';
-import {createKnowledgeWatchHost} from './knowledge-watch-host.js';
+import {createKnowledgeWatchHost, createProductionKnowledgeReevaluator} from './knowledge-watch-host.js';
 import {createPublicConnectorHost} from './public-connector-host.js';
 import {createWorkspaceConfigHost} from './workspace-config-host.js';
 import {createWorkspaceCommandRecipeTool} from './workspace-command-recipes.js';
@@ -730,74 +730,6 @@ function clearInactiveTaskExitWarning() {
   }
 }
 
-function createProductionKnowledgeReevaluator() {
-  return async function reevaluateKnowledge(ctx) {
-    if (ctx.signal?.aborted) {
-      const error = new Error('Reevaluation cancelled');
-      error.code = 'CANCELLED';
-      throw error;
-    }
-    const { planKnowledgeReevaluation } = await import('@personal-agent/cognition');
-    const nowIso = new Date().toISOString();
-    const plan = planKnowledgeReevaluation({
-      namespace: ctx.namespace || 'default',
-      freshness: {
-        at: nowIso,
-        maxAgeMs: 24 * 60 * 60 * 1000,
-        requestedVersion: ctx.boundRevision || ctx.observedRevision,
-        sourceState: 'available',
-        cache: {
-          version: '1',
-          sourceId: ctx.sourceId,
-          sourceRevision: ctx.boundRevision || ctx.observedRevision,
-          contentSha256: ctx.boundContentSha256 || ctx.observedContentSha256 || '0'.repeat(64),
-          lastSuccessfulCheck: nowIso,
-          validUntil: new Date(Date.now() + 86400000).toISOString(),
-        },
-        check: {
-          outcome: 'changed',
-          checkedAt: nowIso,
-          sourceId: ctx.sourceId,
-          sourceRevision: ctx.boundRevision || ctx.observedRevision,
-          cachedContentSha256: ctx.boundContentSha256 || ctx.observedContentSha256 || '0'.repeat(64),
-        },
-      },
-      dependencies: [{
-        consumer: { id: ctx.topicId, revision: ctx.consumerRevision || 1 },
-        sourceId: ctx.sourceId,
-        sourceRevision: ctx.boundRevision || ctx.observedRevision,
-        contentSha256: ctx.boundContentSha256 || ctx.observedContentSha256 || '0'.repeat(64),
-      }],
-    });
-
-    const evaluatedOutcome = plan.knowledge.action === 'refresh_required'
-      ? 'verified_update'
-      : plan.knowledge.action;
-
-    const evaluation = {
-      outcome: evaluatedOutcome,
-      action: plan.knowledge.action,
-      reason: plan.knowledge.reason,
-      topicId: ctx.topicId,
-      consumerRevision: ctx.consumerRevision || 1,
-      sourceId: ctx.sourceId,
-      observedRevision: ctx.observedRevision,
-      citation: ctx.citation,
-      statement: `订阅源 ${ctx.sourceId} 观察版本 ${ctx.observedRevision} 经认知评估确认影响关注事项 ${ctx.topicId}。`,
-      observedSummary: ctx.summary || '来源内容已观察并验证变更',
-      evaluatedAt: nowIso,
-    };
-
-    return {
-      status: 'completed',
-      outcome: evaluatedOutcome,
-      summary: `知识重评确认：事项 ${ctx.topicId}，来源 ${ctx.sourceId} 新版本 ${ctx.observedRevision} 已由正式认知重评器验证完毕。`,
-      evaluation,
-      evidenceRefs: [ctx.citation],
-    };
-  };
-}
-
 const inFlightRechecks = new Set();
 async function dispatchKnowledgeRecheckTask(task) {
   if (!task || inFlightRechecks.has(task.taskId) || task.state !== 'created') return;
@@ -819,11 +751,18 @@ async function dispatchKnowledgeRecheckTask(task) {
       sourceId: recheck.sourceId,
       boundRevision: recheck.boundRevision,
       boundContentSha256: recheck.boundContentSha256,
+      boundCacheVersion: recheck.boundCacheVersion,
+      boundLastSuccessfulCheck: recheck.boundLastSuccessfulCheck,
+      boundValidUntil: recheck.boundValidUntil,
       observedRevision: recheck.observedRevision,
       observedContentSha256: recheck.observedContentSha256,
+      observedAt: recheck.observedAt,
       citation: recheck.citation,
+      sourceReadTaskId: recheck.sourceReadTaskId,
+      sourceReadReceiptId: recheck.sourceReadReceiptId,
       summary: recheck.summary,
-      reevaluator: createProductionKnowledgeReevaluator(),
+      revalidateCurrent: () => knowledgeWatchHost?.getRecheckContext(workKey) ?? null,
+      reevaluator: createProductionKnowledgeReevaluator({layaChooser: localLaya}),
     });
   } catch (error) {
     console.error('dispatchKnowledgeRecheckTask failed:', error);
