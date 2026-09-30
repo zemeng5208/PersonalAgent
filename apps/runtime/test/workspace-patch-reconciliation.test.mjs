@@ -87,8 +87,8 @@ test('workspace patch reconciliation projects applied once and preserves the ori
     assert.equal(first.result.outcome, 'applied');
     assert.equal(first.task.state, 'succeeded');
     assert.equal(f.calls.tool, 1);
-    assert.deepEqual(f.calls.paths, ['src/app.js', 'src/app.js', 'src/app.js', 'src/app.js']);
-    assert.deepEqual(f.calls.inputs.map(input => input.retainMarker), [true, undefined, undefined, undefined]);
+    assert.deepEqual(f.calls.paths, ['src/app.js', 'src/app.js', 'src/app.js']);
+    assert.deepEqual(f.calls.inputs.map(input => input.retainMarker), [true, undefined, undefined]);
     const record = f.app.runtime.readToolExecutions(taskId)[0];
     assert.equal(record.state, 'confirmed');
     assert.equal(record.reconciliationOutcome, 'applied');
@@ -96,7 +96,7 @@ test('workspace patch reconciliation projects applied once and preserves the ori
     assert.equal(f.app.readHostToolTask(taskId).confirmed.result.outcome, 'applied');
     const second = await f.app.reconcileWorkspacePatchTask(taskId);
     assert.equal(second.result.outcome, 'applied');
-    assert.equal(f.calls.reconcile, 4, 'saved reads retry only acknowledgement, never helper execution');
+    assert.equal(f.calls.reconcile, 3, 'saved reads retry only acknowledgement, never helper execution');
   } finally {
     await waitForIdle(f.app);
     f.app.close();
