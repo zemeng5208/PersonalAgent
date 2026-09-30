@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {mkdirSync, mkdtempSync, rmSync} from 'node:fs';
+import path from 'node:path';
 import {createLiveVoiceHistory} from '../electron/live-voice-history.js';
+import {Conversations} from '../electron/conversations.js';
 
 const message = (id, text = id, role = 'user') => ({id, sessionId:'session-a', role, text,
   createdAt:'2026-09-30T10:00:00.000Z'});
@@ -58,4 +61,35 @@ test('store read failures still retain unsaved history and snapshots cannot muta
   history.record(message('u1'));
   history.snapshot().transcripts[0].text='changed';
   assert.equal(history.context()[0].text,'u1');
+});
+
+test('recovered user and assistant transcripts persist in the same real Conversations file and reload once', () => {
+  const cache=path.resolve('apps/desktop/.cache');
+  mkdirSync(cache,{recursive:true});
+  const directory=mkdtempSync(path.join(cache,'live-history-'));
+  try {
+    const file=path.join(directory,'conversations.json');
+    const conversations=new Conversations(file);
+    conversations.add('text-task','panel','已有文字问题');
+    let failed=true;
+    const history=createLiveVoiceHistory({save:value=>{
+      if(failed) throw Error('simulated write failure');
+      conversations.addLiveMessage(value);
+    }});
+    history.record(message('u1','语音问题'));
+    history.record(message('a1','语音回答','assistant'));
+    failed=false;
+    assert.equal(history.flush(),true);
+    history.record(message('a1','修正语音回答','assistant'));
+    const restored=new Conversations(file);
+    assert.equal(restored.goal('text-task'),'已有文字问题');
+    assert.deepEqual(restored.messagesFor('panel').map(value=>[value.id,value.role,value.text]),
+      [['u1','user','语音问题'],['a1','assistant','修正语音回答']]);
+    const restarted=createLiveVoiceHistory({save:value=>restored.addLiveMessage(value),
+      readContext:()=>({messages:restored.messagesFor('panel')})});
+    assert.deepEqual(restarted.context().map(value=>value.text),['语音问题','修正语音回答']);
+  } finally {
+    if(path.dirname(directory)!==cache) throw Error('test fixture escaped cache');
+    rmSync(directory,{recursive:true,force:true});
+  }
 });
