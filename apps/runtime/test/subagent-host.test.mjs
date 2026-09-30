@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {TaskRuntime} from '../dist/index.js';
-import {createRuntimeSubagentDispatchTool} from '../dist/application.js';
+import {createRuntimeSubagentDispatchTool, createDesktopSubagentDispatchTool} from '../dist/application.js';
 import {createRuntimeApplication} from '../dist/application/runtime-application.js';
 import {ModelGateway, FakeModelProvider} from '@personal-agent/models';
 
@@ -250,4 +250,60 @@ test('subagent execution propagates parent cancellation to cancel inflight runti
   const childTask = runtime.findTaskByIdempotencyKey(`subagent-dispatch-${parent.taskId}-sub-inflight-cancel`);
   assert.ok(childTask);
   assert.equal(childTask.state, 'cancelled');
+});
+
+test('model registry resolves requested names to real gateways; unknown names refuse without assuming pangu', async () => {
+  const runtime = new TaskRuntime(':memory:');
+  const parent = runtime.submitTask({conversationId: 'desktop-panel', goal: '注册表解析验收', idempotencyKey: 'registry-parent-1'});
+  const gateways = new Map();
+  const tool = createDesktopSubagentDispatchTool({
+    getRuntime: () => runtime,
+    modelRegistry: {
+      'deepseek-chat': name => {
+        const gateway = new ModelGateway(new FakeModelProvider([() => ({kind: 'final', text: `由 ${name} 执行完成`})],
+          {provider: 'openai-compatible', deployment: name, model: name, verification: 'conditional',
+            capabilities: {text: true, streaming: false, toolCalling: true, structuredOutput: true, vision: false}}));
+        gateways.set(name, gateway);
+        return gateway;
+      },
+      'default': () => new ModelGateway(new FakeModelProvider([() => ({kind: 'final', text: '默认模型完成'})],
+        {provider: 'openai-compatible', deployment: 'fallback', model: 'default', verification: 'conditional',
+          capabilities: {text: true, streaming: false, toolCalling: true, structuredOutput: true, vision: false}})),
+    },
+  });
+  const context = {taskId: parent.taskId, runId: 'registry-run-1', signal: new AbortController().signal,
+    deadline: new Date(Date.now() + 60_000).toISOString(), authorizationRef: `auth-${parent.taskId}`,
+    scopes: ['agent:delegate']};
+
+  // 注册过的名字 → 解析到对应网关（真实 provider 标识）。
+  const named = await tool.execute({subtasks: [{subtaskId: 'sub-named', role: 'researcher', goal: 'x', model: 'deepseek-chat'}]}, context);
+  assert.equal(named.succeeded, 1);
+  assert.ok(gateways.has('deepseek-chat'), 'the requested model resolved through the registry');
+  assert.match(named.subtasks[0].result, /openai-compatible\/deepseek-chat/);
+
+  // 未指名 → default 回退。
+  const fallback = await tool.execute({subtasks: [{subtaskId: 'sub-fallback', role: 'researcher', goal: 'x'}]}, context);
+  assert.equal(fallback.succeeded, 1);
+  assert.match(fallback.subtasks[0].result, /默认模型完成/);
+
+  // 未注册且无匹配 → 子任务 failed，错误明确指向未注册模型（不假定盘古）。
+  const unknown = await tool.execute({subtasks: [{subtaskId: 'sub-unknown', role: 'researcher', goal: 'x', model: 'not-registered'}]}, context);
+  assert.equal(unknown.failed, 1);
+  assert.match(unknown.subtasks[0].error, /not-registered 未配置或不受支持/);
+});
+
+test('registry lookup ignores inherited object properties', async () => {
+  const runtime = new TaskRuntime(':memory:');
+  const parent = runtime.submitTask({conversationId: 'desktop-panel', goal: '拒绝原型键模型', idempotencyKey: 'registry-prototype-parent'});
+  const tool = createDesktopSubagentDispatchTool({getRuntime: () => runtime, modelRegistry: {
+    'configured-model': () => new ModelGateway(new FakeModelProvider([() => ({kind: 'final', text: 'ok'})],
+      {provider: 'openai-compatible', deployment: 'configured-model', model: 'configured-model', verification: 'conditional',
+        capabilities: {text: true, streaming: false, toolCalling: true, structuredOutput: true, vision: false}})),
+  }});
+  const result = await tool.execute({subtasks: [{subtaskId: 'sub-prototype', role: 'researcher', goal: 'x', model: 'constructor'}]}, {
+    taskId: parent.taskId, runId: 'registry-prototype-run', signal: new AbortController().signal,
+    deadline: new Date(Date.now() + 60_000).toISOString(), authorizationRef: 'auth-prototype', scopes: ['agent:delegate'],
+  });
+  assert.equal(result.failed, 1);
+  assert.match(result.subtasks[0].error, /constructor 未配置或不受支持/);
 });

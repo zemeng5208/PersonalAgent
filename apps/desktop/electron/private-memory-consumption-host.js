@@ -30,6 +30,9 @@ export function createPrivateMemoryConsumptionHost({profile, privateMemory, read
     return ref;
   };
   const checkLease = (lease, request) => {
+    if (typeof assertCopyManagement !== 'function') throw Error('私人任务副本清除未接通');
+    const gate = assertCopyManagement();
+    if (gate && typeof gate.then === 'function') throw Error('私人副本门禁必须同步完成');
     checkTask(request.taskId, lease.conversationId, lease.binding.deadline, request.signal);
     if (request.deadline !== lease.binding.deadline || request.goal !== lease.goal
       || configuration() !== lease.binding.configurationRef

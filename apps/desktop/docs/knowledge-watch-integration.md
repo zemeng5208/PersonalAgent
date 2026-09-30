@@ -158,11 +158,57 @@ citation/来源回执/判断 Evidence；`succeeded`、已读、系统已投递�
 
 ### 引用限制与实际验证
 
-当前 Runtime 来源回执 v1 只校验单一 citation，且要求等于第一项 contentRef。
-若采集结果包含多个不同 contentRef，本增量返回 `feed_citation_ambiguous`，保留旧来源头/
-绑定/任务，不把其他文章归到第一篇。旧的这种多文章回执也不能在本宿主提升为 current_fact。
-真实全源 RSS 的多文章重评仍需 P8/公共接口负责人交付多引用或准确 item 绑定契约；
-不能通过放宽验证器解决。单一文章、同源多个 topic 仍分别按 consumer/workKey 绑定。
+未注入 v2 回执端口时，v1 单一 citation 仍只表示第一项 contentRef；多个不同
+contentRef 返回 `feed_citation_ambiguous` 并保留旧来源头/绑定/任务。
+已注入端口的多文章路径使用下述逐项引用；单一文章和同源多个 topic 仍按 consumer/workKey 绑定。
+
+### 多文章来源回执 v2（P7 实现，P8 公共导出与接线）
+
+P7 新增 `createKnowledgeFeedReceiptFromCollectResult({namespace, sourceId, result})`，
+作为原始 `feeds.collect` 返回到 v2 的同一确定性映射入口。只接受 `fetched`、完整单页
+（`hasMore: false`）、非空 items、准确 subscriptionId 和合法 validators；不接受 304 或
+分页未完成结果作为新来源回执。存在原 record.accountRef/fetchedAt 时须与这次 collection
+一致。沿用标题 200、摘要 500 字符截断、dedupeKey 排序、原内容哈希和 validator revision。
+无法构造时返回 undefined；结构与映射通过不代表 HostTool/Policy 已执行。
+P8 在公开 application exports 增补此函数；Host 注入端口包含它时直接复用，旧四函数端口仍兼容。
+Runtime 应从实际 confirmed HostTool result 调用相同 helper，并将重建的 receiptId 与 root
+来源回执准确比较，保留真实 task/run/argumentsDigest/query/result 与 receipt 的持久关联。
+本增量定向验证：严格单文件编译、raw mapper 正向及十类失败路径 1/1、双 consumer
+宿主/回执恢复使用该 mapper 1/1、host 语法和 diff check；没有重跑旧全套或真实模型。
+
+`apps/runtime/src/application/knowledge-feed-receipt.ts` 提供纯确定性构造与验证。
+沿用 feeds.collect 的五个条目字段和整页哈希，增加逐项
+`citationItems: [{itemKey, contentRef, itemContentSha256}]`；receiptId 包含该映射。
+每条 summary 记录原始标题、摘录、定位符和条目哈希，不把生成摘要作为来源内容。
+多定位符页面的 citation 为内部 `knowledge-feed-citations:<hash>` 身份，不能作为网页引用。
+主对话 answer 将它放入 citationBundleRef，citation 为 null；items/citations 各带原文、
+自己的定位符和来源版本。知识页将每条摘录紧邻其对应引用显示，通知同样使用逐项引用。
+
+P8 在 `@personal-agent/runtime/application` 公开导出以下四个函数，替换生产 evaluator
+的手写 v1 来源校验，同时保留根任务、consumer/binding、授权、deadline、取消和 Evidence 门槛。
+`verifyKnowledgeFeedReceiptBinding(raw, {namespace, sourceId, observedAt, revision,
+contentSha256, citation, receiptId, summary})` 要求当前 context 精确一致；summary 为回执前 2000 字符。
+main 通过 `knowledgeFeedReceipts` 注入以下同名函数，不经跨应用私有路径导入：
+
+```js
+knowledgeFeedReceipts: {
+  createKnowledgeFeedReceipt,
+  parseKnowledgeFeedReceipt,
+  verifyKnowledgeFeedReceiptBinding,
+  knowledgeFeedReceiptItems,
+}
+```
+
+旧 v1 单文章回执保持可恢复；旧 v1 多文章回执保持结构可读，但不能提升为当前事实。
+不覆写旧 unknown 工作或已有回执；获取 v2 需合法的新采集与重评上下文。
+来源头缺失回执字段时只从同一根任务、准确 source/revision/hash/time/citation 的唯一
+持久 context 恢复映射，不能用别的根任务或模型声明替代。篡改映射/摘录/哈希、缺定位符、
+来源或版本不匹配均拒绝。重评结果仍沿用既有 v2/Evidence，未修改公共请求 Schema 或数据库迁移。
+
+本增量局部验证：单文件 TypeScript 严格编译；回执测试 3/3，覆盖逐项映射、篡改拒绝和 v1 恢复；
+宿主/展示测试 2/2，覆盖两个 consumer、合成 judgment/Evidence 门槛、检查点恢复与逐项引用转义。
+宿主测试直接注入该纯 helper，仅为离线组合夹具；P8 公共导出及实际生产 evaluator 接线尚待读回。
+此次没有重跑浏览器、模型或 Desktop 冒烟，真实 RSS/用户会话/Laya/AgentArts 仍未验收。
 
 局部验证：新增 due/取消/暂停恢复/准确 grant/已读/v2 门槛 8 项离线端口测试；
 既有相关 5 项测试；两个 owned JS 的语法检查和 `git diff --check`。
@@ -175,6 +221,9 @@ citation/来源回执/判断 Evidence；`succeeded`、已读、系统已投递�
 取消链补充：due worker 的 signal 和精确绑定重验贯穿来源消费、workPort read/submit、
 来源/提醒落盘及通知前后；每次 await 后、下一提交和同步落盘前再次检查。
 已经开始而回执未确认的提交/投递保留 unknown，不在取消后盲重试。
+通知发送资格在持久记录锁内从最新 notice 原子领取；并发消费只允许一次 send，
+已领取的其他消费只能读回或跳过，迟到的读回不会覆盖已确认投递。
+新增单项并发回归覆盖两个来源消费同时领取同一 notice，确认 send 次数为 1；通过。
 新增单项局部回归覆盖 feed 返回后 read/submit 挂起再取消两种情况，通过；
 仅运行这项和宿主语法/diff 检查，没有重跑上述浏览器或旧测试。
 

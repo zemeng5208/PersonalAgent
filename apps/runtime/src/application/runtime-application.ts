@@ -26,7 +26,9 @@ import {SystemObservationSessions, SYSTEM_OBSERVATION_SESSION_CHECKPOINT,
 import type {StartSystemObservationSessionRequest, SystemObservationSession} from './system-observation-session.js';
 import {MailReadSessions, MAIL_READ_SESSION_CHECKPOINT, MAIL_READ_TOOL, MAIL_READ_VERSION} from './mail-read-session.js';
 import type {StartMailReadSessionRequest, MailReadSession} from './mail-read-session.js';
-import {createRuntimeSubagentDispatchTool} from './subagent-host.js';
+import {createRuntimeSubagentDispatchTool, resumeRuntimeSubagentTask, readRuntimeSubagentSummary,
+  SUBAGENT_DISPATCH_TOOL_NAME} from './subagent-host.js';
+import type {SubagentHostOptions} from './subagent-host.js';
 import {WORKSPACE_PATCH_APPLY_TOOL_NAME, WorkspacePatchReconciliationAdapter} from './workspace-patch-reconciliation.js';
 import type {WorkspacePatchReconciliationPort, WorkspacePatchReconciliationReadback} from './workspace-patch-reconciliation.js';
 type SuccessfulResponse = Extract<Response, {outcome: 'ok'}>;
@@ -195,6 +197,8 @@ export interface RuntimeApplicationOptions { path: string; now?: () => Date; idF
   thinking?: ThinkingConfig;
   /** Trusted host policy for routine operations inside already enabled module scopes. */
   automaticTools?: readonly {toolName: string; toolVersion: string}[];
+  /** Trusted current configuration, shared by initial child dispatch and recovery. */
+  subagentModels?: Pick<SubagentHostOptions, 'getModelGateway' | 'getModelReasoningEfforts'>;
   /** Trusted Desktop-only recovery port; paths and process identity stay in its closure. */
   workspacePatchReconciliation?: WorkspacePatchReconciliationPort;
 }
@@ -212,6 +216,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   private thinkingConfig: ThinkingConfig = {depth: 1, fast: false};
   private readonly repairCandidateVersion: '1.0' | undefined;
   private readonly localRepair: LocalRepairHostOptions | undefined;
+  private readonly subagentModels: RuntimeApplicationOptions['subagentModels'];
   private readonly hostUserNamespace: string | undefined;
   private readonly now: () => Date;
   private readonly competitionToolCatalog?: RuntimeCompetitionToolCatalog;
@@ -241,6 +246,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     this.now = options.now ?? (() => new Date());
     this.repairCandidateVersion = options.repairCandidateVersion;
     this.localRepair = options.localRepair;
+    this.subagentModels = options.subagentModels;
     if (options.hostUserNamespace !== undefined && !HOST_ID.test(options.hostUserNamespace)) {
       throw new ProtocolError('INVALID_ARGUMENT', 'Invalid trusted host user namespace');
     }
@@ -254,7 +260,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     if (this.localRepair) {
       // Compatible with the reviewed Goal source adapter while preserving the
       // complete original Fact/tool-Evidence source configuration.
-      const reviewedSource = (this.localRepair as unknown as {reviewedSource?: {resolve?: unknown}}).reviewedSource;
+      const reviewedSource = this.localRepair.reviewedSource;
       const factSource = this.localRepair.sourceTool
         && typeof this.localRepair.resolveBinding === 'function' && typeof this.localRepair.matchesSource === 'function'
         && typeof this.localRepair.memory?.listCurrent === 'function';
@@ -350,7 +356,19 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
           this.mailReadSessions.assertPage(mailSession, invocation.taskId);
         }
         const ref = invocation.runId;
-        if (!this.runtime.policy.get(ref) && automaticTools.has(JSON.stringify([tool.name, tool.version]))) {
+        const confirmedDispatch = tool.name === SUBAGENT_DISPATCH_TOOL_NAME
+          && this.runtime.readToolExecutions(invocation.taskId).some(record => record.evidenceId === ref
+            && record.state === 'confirmed' && record.executionStarted && record.policyDecision === 'allow'
+            && this.runtime.matchesToolExecutionInput(record, {arguments: invocation.arguments as Record<string, unknown>, scopeRef: ref}));
+        let routineEligible = automaticTools.has(JSON.stringify([tool.name, tool.version]));
+        if (routineEligible && tool.name === 'cognition.commit_repair') {
+          const intent = this.runtime.loadCheckpoint(invocation.taskId, LOCAL_REPAIR_CHECKPOINT) as
+            {sourceKind?: string; sourceTaskId: string; reviewTaskId: string; binding: unknown} | undefined;
+          const prepared = intent?.sourceKind === 'goal_review' ? this.localRepair?.reviewedSource?.resolve(intent) : undefined;
+          routineEligible = prepared?.kind === 'prepared' && isDeepStrictEqual(prepared.binding, intent?.binding)
+            && isDeepStrictEqual(invocation.arguments, {intentDigest: toolArgumentsDigest(intent!)});
+        }
+        if (!confirmedDispatch && !this.runtime.policy.get(ref) && routineEligible) {
           const decisionKey = `routine-tool-policy:${ref}`;
           if (this.runtime.loadCheckpoint(invocation.taskId, decisionKey)) {
             throw new ProtocolError('UNAUTHORIZED', 'Routine tool grant was revoked');
@@ -365,14 +383,32 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
           this.runtime.policy.grant({authorizationRef:ref,taskId:invocation.taskId,toolName:tool.name,
             scopes:tool.requiredScopes,argumentsDigest,maxUses:1,expiresAt:invocation.deadline});
         }
-        if (!this.runtime.policy.get(ref)) {
+        if (!confirmedDispatch && !this.runtime.policy.get(ref)) {
           const expiresAt = new Date((options.now?.() ?? new Date()).getTime() + 600_000).toISOString();
           const approval = this.runtime.requestToolApproval(ref, invocation.taskId, tool, expiresAt, toolArgumentsDigest(invocation.arguments));
           if (approval.state === 'denied') throw new ProtocolError('UNAUTHORIZED', 'Tool approval was denied');
           if (approval.state === 'allowed') throw new ProtocolError('UNAUTHORIZED', 'Tool grant was revoked');
           return {state: 'pending', evidenceRefs: []};
         }
-        return invoker.invoke({...invocation, authorizationRef: ref});
+        const result = await invoker.invoke({...invocation, authorizationRef: ref});
+        if (tool.name !== SUBAGENT_DISPATCH_TOOL_NAME || result.state !== 'confirmed') return result;
+        // Dispatch was confirmed; aggregate actual children without executing it again.
+        const summary = readRuntimeSubagentSummary(this.runtime, invocation.taskId);
+        this.runtime.saveCheckpoint(invocation.taskId, 'subagent-current-summary', summary);
+        const children = this.runtime.listTasks({conversationId: `desktop-subtask:${invocation.taskId}`, limit: 100}).items;
+        const unresolved = children.filter(child => !['succeeded', 'failed', 'cancelled'].includes(child.state));
+        if (unresolved.length) {
+          this.runtime.saveCheckpoint(invocation.taskId, 'subagent-parent-wait', {
+            runId: invocation.runId, argumentsDigest: toolArgumentsDigest(invocation.arguments),
+            toolVersion: tool.version,
+          });
+          const unknown = unresolved.some(child => child.state === 'waiting_reconciliation');
+          this.runtime.transitionTask(invocation.taskId, unknown ? 'waiting_reconciliation' : 'waiting_approval',
+            {resultSummary: summary.summary});
+          return {state: unknown ? 'unknown' : 'pending', evidenceRefs: result.evidenceRefs};
+        }
+        return {...result, result: summary,
+          evidenceRefs: [...new Set([...result.evidenceRefs, ...children.flatMap(child => child.evidenceRefs)])]};
       }};
     }
     if (options.competitionToolAvailability !== undefined) {
@@ -477,6 +513,11 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   async send(request: Request, signal: AbortSignal): Promise<Response> {
     const response = await this.runtime.send(request, signal);
     if (request.operation === 'task.submit' && response.outcome === 'ok') this.dispatchSubmittedTextTask(request, response);
+    if (request.operation === 'task.cancel' && response.outcome === 'ok') {
+      for (const child of this.runtime.listTasks({conversationId: `desktop-subtask:${request.payload.taskId}`, limit: 100}).items) {
+        if (!['succeeded', 'failed', 'cancelled'].includes(child.state)) this.runtime.requestCancel(child.taskId, 'Parent task cancelled');
+      }
+    }
     if (request.operation === 'authorization.respond' && response.outcome === 'ok' && request.payload.decision === 'allow_once') {
       const approval = this.runtime.getApproval(request.payload.approvalId);
       await this.activeTextTasks.get(approval.taskId);
@@ -915,6 +956,20 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   resumeTask(taskId: string): void {
     if (this.activeTextTasks.has(taskId)) return;
     if (this.runtime.getTask(taskId).state !== 'waiting_approval') throw new ProtocolError('REVISION_CONFLICT', 'Task is not awaiting approval');
+    const childBinding = this.runtime.loadCheckpoint(taskId, 'subtask-parent') as {parentTaskId?: string} | undefined;
+    if (childBinding !== undefined) {
+      const execution = resumeRuntimeSubagentTask({getRuntime: () => this.runtime, getTools: () => this.tools,
+        ...this.subagentModels}, taskId).then(async () => {
+        const parentTaskId = childBinding.parentTaskId;
+        if (typeof parentTaskId !== 'string') return;
+        await this.activeTextTasks.get(parentTaskId);
+        const parent = this.runtime.getTask(parentTaskId);
+        if (parent.state === 'waiting_approval' && this.confirmedSubagentWait(parentTaskId)) this.resumeTask(parentTaskId);
+      }).finally(() => this.activeTextTasks.delete(taskId));
+      this.activeTextTasks.set(taskId, execution);
+      void execution.catch(() => {});
+      return;
+    }
     if (this.runtime.loadCheckpoint(taskId, HOST_TOOL_CHECKPOINT) !== undefined) {
       const runId = `host-tool-${taskId}`;
       if (this.runtime.getApproval(runId).state !== 'allowed') throw new ProtocolError('UNAUTHORIZED', 'Host tool is not approved');
@@ -935,8 +990,10 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       const deadline = this.runtime.loadCheckpoint(taskId, 'application-deadline');
       if (typeof deadline !== 'string') throw new ProtocolError('NOT_FOUND', 'Task has no deadline checkpoint');
       const competition = this.runtime.loadCheckpoint(taskId, 'competition-loop') as {step: number} | undefined;
-      const competitionApproval = this.runtime.getApproval(`competition-tool-${taskId}-${competition?.step}`);
-      if (competitionApproval.state !== 'allowed') throw new ProtocolError('UNAUTHORIZED', 'Task approval has not been allowed');
+      if (!this.confirmedSubagentWait(taskId)) {
+        const competitionApproval = this.runtime.getApproval(`competition-tool-${taskId}-${competition?.step}`);
+        if (competitionApproval.state !== 'allowed') throw new ProtocolError('UNAUTHORIZED', 'Task approval has not been allowed');
+      }
       const execution = startCoordinationTask(
         this.runtime, this.coordination, this.tools, taskId, goal, deadline,
         {resume: true, toolExports: this.competitionToolExports,
@@ -959,6 +1016,23 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     }).finally(() => this.activeTextTasks.delete(taskId));
     this.activeTextTasks.set(taskId, execution);
     void execution.catch(() => {});
+  }
+
+  private confirmedSubagentWait(taskId: string): boolean {
+    const wait = this.runtime.loadCheckpoint(taskId, 'subagent-parent-wait') as
+      {runId?: string; argumentsDigest?: string; toolVersion?: string} | undefined;
+    if (!wait || typeof wait.runId !== 'string') return false;
+    const loop = this.runtime.loadCheckpoint(taskId, 'competition-loop') as
+      {step?: number; pending?: {toolName?: string; toolVersion?: string; arguments?: Record<string, unknown>}} | undefined;
+    if (wait.runId !== `competition-tool-${taskId}-${loop?.step}`
+      || loop?.pending?.toolName !== SUBAGENT_DISPATCH_TOOL_NAME || loop.pending.toolVersion !== wait.toolVersion
+      || !loop.pending.arguments || toolArgumentsDigest(loop.pending.arguments) !== wait.argumentsDigest) return false;
+    const record = this.runtime.readToolExecutions(taskId).find(item => item.evidenceId === wait.runId);
+    if (!record || record.state !== 'confirmed' || !record.executionStarted || record.policyDecision !== 'allow'
+      || record.toolName !== SUBAGENT_DISPATCH_TOOL_NAME || record.toolVersion !== wait.toolVersion
+      || !this.runtime.matchesToolExecutionInput(record, {arguments: loop.pending.arguments, scopeRef: wait.runId})) return false;
+    return this.runtime.listTasks({conversationId: `desktop-subtask:${taskId}`, limit: 100}).items
+      .every(child => ['succeeded', 'failed', 'cancelled'].includes(child.state));
   }
 
   dispatchKnowledgeRecheckTask(
