@@ -454,6 +454,7 @@ export function createKnowledgeWatchHost({
   policyToolName = null,
   policyScopes = null,
   readTrackingGrant = null,
+  readInterestSignal = null,
   feedCollect = null,
   feedSubscriptionId = null,
   scheduler = null,
@@ -483,6 +484,7 @@ export function createKnowledgeWatchHost({
   if (policyConfigured && (!text(authorizationRef) || !text(policyToolName) || !Array.isArray(policyScopes)
     || policyScopes.length === 0 || policyScopes.some(scope => !text(scope)))) fail('INVALID_ARGUMENT');
   if (readTrackingGrant && typeof readTrackingGrant !== 'function') fail('INVALID_ARGUMENT');
+  if (readInterestSignal && typeof readInterestSignal !== 'function') fail('INVALID_ARGUMENT');
   if (knowledgeFeedReceipts && ['createKnowledgeFeedReceipt', 'parseKnowledgeFeedReceipt',
     'verifyKnowledgeFeedReceiptBinding', 'knowledgeFeedReceiptItems']
     .some(name => typeof knowledgeFeedReceipts[name] !== 'function')) fail('INVALID_ARGUMENT');
@@ -513,6 +515,7 @@ export function createKnowledgeWatchHost({
   let life = 0;
   let feedReading = false;
   const activeFeedChecks = new Set();
+  const activeInterestTasks = new Set();
 
   function clock() {
     const value = now();
@@ -1336,6 +1339,9 @@ export function createKnowledgeWatchHost({
       try { return buildInterestOptions(policyInput(signal, userEnable)); }
       catch { fail('INVALID_ARGUMENT'); }
     });
+    if (request.revalidate && await request.revalidate() !== true) {
+      return {accepted: false, reason: 'interest_context_invalidated'};
+    }
     if (preview.policy.state === 'watch_public' && interestDecider) {
       if (!text(request.deadline) || !(request.signal instanceof AbortSignal)) fail('INVALID_ARGUMENT');
       const listen = AbortSignal.any([request.signal, controller.signal]);
@@ -1346,12 +1352,98 @@ export function createKnowledgeWatchHost({
       if (!again) return lock(() => recordGrantUnreadable(signal));
       signal = again;
     }
+    if (request.revalidate && await request.revalidate() !== true) {
+      return {accepted: false, reason: 'interest_context_invalidated'};
+    }
     const result = await lock(() => commitInterest(signal, choice, userEnable));
     if (result.watch?.state === 'tracked' && request.feedCheck) {
       result.feedCheck = registerFeedCheck({...request.feedCheck,
         subscriptionId: result.watch.boundSource?.sourceId, topicIds: [result.watch.topicId]});
     }
     return result;
+  }
+  /** Consume a trusted Runtime-backed interaction once; Renderer supplies neither signal nor grant. */
+  async function consumeInterestTask(taskId, request = {}) {
+    requireReady();
+    if (!identifier(taskId) || !(request.signal instanceof AbortSignal)
+      || !Number.isFinite(instant(request.deadline))) fail('INVALID_ARGUMENT');
+    if (typeof runtime?.getTask !== 'function' || typeof readInterestSignal !== 'function'
+      || typeof readTrackingGrant !== 'function') return {accepted: false, reason: 'interest_task_provider_missing'};
+    if (activeInterestTasks.has(taskId)) return {accepted: false, reason: 'interest_task_in_progress'};
+    activeInterestTasks.add(taskId);
+    const operation = sourceOperation(request);
+    try {
+      let task;
+      try {task = runtime.getTask(taskId);}
+      catch (error) {
+        if (error?.code !== 'NOT_FOUND') throw error;
+        return {accepted: false, reason: 'interest_task_unavailable'};
+      }
+      if (!task || task.taskId !== taskId || task.cancelRequested || ['failed', 'cancelled'].includes(task.state)) {
+        return {accepted: false, reason: 'interest_task_unavailable'};
+      }
+      let raw;
+      try {raw = await readInterestSignal({namespace, taskId});}
+      catch (error) {
+        return {accepted: false, reason: 'interest_signal_unavailable', code: text(error?.code) ? error.code : 'EXTERNAL_FAILURE'};
+      }
+      if (!raw) return {accepted: false, reason: 'interest_signal_unavailable'};
+      const signal = pickInterest(raw);
+      const enablement = value => {
+        if (value === undefined || value === null) return null;
+        if (!plain(value) || !identifier(value.id) || value.topicId !== signal.topicId
+          || !Number.isFinite(instant(value.occurredAt))) fail('INVALID_ARGUMENT');
+        return {id: value.id, topicId: value.topicId, occurredAt: value.occurredAt};
+      };
+      const nativeEnable = enablement(raw.explicitEnable);
+      const signalDigest = digest({...signal, explicitEnable: nativeEnable});
+      const taskIdentity = value => digest({taskId: value?.taskId, conversationId: value?.conversationId ?? null,
+        goal: value?.goal ?? null});
+      const expectedTask = taskIdentity(task);
+      const revalidate = async () => {
+        if (!operation.current() || clock() >= instant(request.deadline)) return false;
+        try {
+          const current = runtime.getTask(taskId);
+          if (!current || current.cancelRequested || ['failed', 'cancelled'].includes(current.state)
+            || taskIdentity(current) !== expectedTask) return false;
+          const currentSignal = await readInterestSignal({namespace, taskId});
+          return !!currentSignal && digest({...pickInterest(currentSignal), explicitEnable: enablement(currentSignal.explicitEnable)})
+            === signalDigest && operation.current();
+        } catch { return false; }
+      };
+      if (!(await revalidate())) return {accepted: false, reason: 'interest_context_invalidated'};
+      const key = `knowledge-watch-interest-task:${digest([namespace, taskId])}`;
+      const previous = checkpoints.loadCheckpoint(checkpointTaskId, key);
+      if (previous !== undefined) {
+        if (!plain(previous) || previous.version !== 1 || previous.namespace !== namespace || previous.taskId !== taskId
+          || previous.signalDigest !== signalDigest || previous.taskIdentity !== expectedTask || previous.topicId !== signal.topicId) {
+          return {accepted: false, reason: 'interest_receipt_conflict'};
+        }
+        if (previous.state !== 'completed') return {accepted: false, reason: 'interest_consumption_unknown'};
+        // Read the current watch: an old accepted receipt never reactivates a revoked/paused watch.
+        return {accepted: true, duplicate: true, taskId, watch: clone(document.watches[signal.topicId] ?? null)};
+      }
+      const receipt = {version: 1, namespace, taskId, topicId: signal.topicId, signalDigest,
+        taskIdentity: expectedTask, state: 'unknown'};
+      const prepared = await lock(() => {
+        if (!operation.current()) return false;
+        checkpoints.saveCheckpoint(checkpointTaskId, key, receipt);
+        return JSON.stringify(checkpoints.loadCheckpoint(checkpointTaskId, key)) === JSON.stringify(receipt);
+      });
+      if (!prepared) return {accepted: false, reason: 'interest_receipt_unavailable'};
+      if (!operation.current()) return {accepted: false, reason: 'stopped'};
+      const result = await consumeInterestSignal(signal, {...request, userEnable: nativeEnable,
+        signal: operation.signal, revalidate});
+      if (!result.accepted || !operation.current()) return {...result, taskId};
+      const saved = await lock(() => {
+        if (!operation.current()) return false;
+        checkpoints.saveCheckpoint(checkpointTaskId, key, {...receipt, state: 'completed',
+          modelReceiptId: result.watch?.modelReceiptId ?? null, consumerRevision: result.watch?.consumer?.revision ?? null});
+        const readback = checkpoints.loadCheckpoint(checkpointTaskId, key);
+        return readback?.state === 'completed' && readback.signalDigest === signalDigest && readback.taskIdentity === expectedTask;
+      });
+      return saved ? {...result, taskId} : {accepted: false, reason: 'interest_consumption_unknown', taskId};
+    } finally { activeInterestTasks.delete(taskId); }
   }
   function sourceOperation(request = {}) {
     if (request.signal !== undefined && !(request.signal instanceof AbortSignal)) fail('INVALID_ARGUMENT');
@@ -2069,7 +2161,7 @@ export function createKnowledgeWatchHost({
 
   load();
   return Object.freeze({start, stop, dispose, snapshot, listPending, listWatches, dialogueProjection,
-    consumeInterestSignal, consumeSourceUpdate, refreshSource, refreshSubscribedFeed,
+    consumeInterestSignal, consumeInterestTask, consumeSourceUpdate, refreshSource, refreshSubscribedFeed,
     registerFeedCheck, cancelFeedChecks, restoreFeedChecks, getFeedCheckContext, consumeFeedCheck,
     observeNotificationAcknowledgement, markNoticeRead,
     getRecheckContext, bindObservedRevision,
