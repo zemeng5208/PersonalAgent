@@ -78,7 +78,7 @@ manifest：`id=calendar`、`accountTypes=['fixture']`（随提供商 `providerKi
 
 ## 测试
 
-`node --test test/*.test.mjs`（34 项）：DST 事件字段、connectorItem 契约校验、dedupeKey 稳定性与变更换键、分页聚合与排序、搜索/单条、respond 幂等与键冲突、连接器健康状态与游标、工具 schema/scope、缺 provider 拒绝、窗口校验；iCal 订阅与 CalDAV——ctag/etag 轮询、REPORT 时间窗与客户端二次过滤、TZID/DST 换算、单条取消读回、分页、错误映射（429/401/5xx/网络/畸形响应）、构造校验、服务层规范化。全部离线（真实 HTTP 路径经注入 fetch 夹具）。
+`node --test test/*.test.mjs`（37 项；35 项离线用例，2 项真实读回门控默认跳过）：DST 事件字段、connectorItem 契约校验、dedupeKey 稳定性与变更换键、分页聚合与排序、搜索/单条、respond 幂等与键冲突、连接器健康状态与游标、工具 schema/scope、缺 provider 拒绝、窗口校验；iCal 订阅与 CalDAV——ctag/etag 轮询、REPORT 时间窗与客户端二次过滤、TZID/DST 换算、单条取消读回、分页、错误映射（429/401/5xx/网络/畸形响应）、构造校验、服务层规范化。夹具用例无需联网；真实 HTTP 读回默认跳过，仅在显式设置 `PA_CALDAV_LIVE=1` 时运行。
 
 ## 已知限制与 Fake/真实验收边界
 
