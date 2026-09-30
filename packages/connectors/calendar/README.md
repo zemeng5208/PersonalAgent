@@ -28,7 +28,7 @@ MOD-20 · 日历连接器（PA-013，P1；Fake 提供商先行）。负责人 `P
 - 输入：日历集合完整 URL（HTTPS）＋宿主注入的 `authorization` 头值（本包不保存凭据本体）＋可注入 `CalDavFetchLike`（PROPFIND/REPORT，离线测试用）。
 - **变更轮询**：`pollChanges()` 一次 Depth:1 PROPFIND 同时取集合 `getctag` 与全部子资源 `getetag`（href→etag 表）。变更检测 = ctag 或 etag 变化，随后按需 `fetchWindow`/`getEvent`。P5 消费方式见 Issue #212 的 P1 形状确认。
 - **时间窗查询**：`fetchWindow` 走 `calendar-query` REPORT（time-range），并在客户端二次过滤（服务器 time-range 实现质量参差）；cancelled 剔除与 iCal 一致。
-- **时区**：`DTSTART;TZID=<IANA>` 经 Intl 定点迭代换算为 UTC（秋季回拨歧义取较早、春季空洞收敛到切换后偏移，均有测试）；非法 TZID 的事件整条剔除。记录的 `timeZone` 恒为 `UTC`，墙上时间成对保留。
+- **时区**：`DTSTART;TZID=<IANA>` 经 Intl 定点迭代换算为 UTC（秋季回拨歧义取较早、春季空洞收敛到切换后偏移，均有测试）；非法 TZID 的事件整条剔除。每条事件保留 `DTSTART` 的 IANA 时区与起止本地墙上时间；UTC 瞬间单独用于排序与窗口过滤。
 - **错误映射**：207 Multi-Status 显式按成功处理；429→`RATE_LIMITED`（60s）；401/403→`UNAUTHORIZED`；5xx/网络失败→`EXTERNAL_FAILURE` 可重试；4xx/响应非 multistatus→不可重试。
 - **限制**：`respond` 显式 `UNSUPPORTED_CAPABILITY`（CalDAV 写侧/If-Match 更新留待独立工作包）；单条 `getEvent` 为全量拉取后按 UID 过滤（MVP 规模可接受）；`DURATION`（无 `DTEND`）事件不支持；未做日历集发现（`/.well-known/caldav`、`calendar-home-set`）——需直接给集合 URL；multistatus 用宽容正则解析（本地名匹配任意前缀），异常服务器形态宁可 fail-fast。
 - `verification: 'conditional'`——离线夹具测试全绿，真实 CalDAV 服务器（Nextcloud/Radicale 等）读回验收待真实账号（见下方真实验收边界）。
