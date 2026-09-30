@@ -17,6 +17,7 @@ export function mountModelApiControls(root, invoke) {
   settings.className = 'sis-settings';
   settings.innerHTML = `<summary>辅助子任务模型</summary><div class="sis-fields">
     <p class="notice">由主智能体委派时使用；保存配置不会发起模型调用。</p>
+    <p data-model-api="defaultExecution" class="notice"></p>
     <label>已保存模型<select data-model-api="saved"><option value="">添加模型</option></select></label>
     <label>供应商<select data-model-api="provider"><option value="pangu">盘古</option><option value="openai-compatible">OpenAI 兼容</option></select></label>
     <label>显示名称<input data-model-api="displayName" maxlength="200" autocomplete="off"></label>
@@ -24,7 +25,7 @@ export function mountModelApiControls(root, invoke) {
     <label>模型 ID<input data-model-api="model" maxlength="200" autocomplete="off"></label>
     <label>API Key<input data-model-api="key" type="password" maxlength="8192" autocomplete="new-password" placeholder="同一目的地留空保留，修改目的地需重新填写"></label>
     <label><input data-model-api="enabled" type="checkbox" checked>启用</label>
-    <label><input data-model-api="default" type="checkbox">设为默认辅助模型</label>
+    <label><input data-model-api="default" type="checkbox">设为独立 API 默认选项</label>
     <fieldset><legend>当前模型支持的 reasoning_effort</legend>
       <p class="notice">请根据供应商文档或已有验证声明；未知模型保持不选。更改供应商、Endpoint 或模型后需重新确认。</p>
       ${['none', 'low', 'medium', 'high'].map(effort => `<label><input data-model-effort="${effort}" type="checkbox">${effort}</label>`).join('')}
@@ -60,6 +61,8 @@ export function mountModelApiControls(root, invoke) {
   function render(value = {}, selectedId = field('saved').value) {
     if (closed) return;
     state = value;
+    field('defaultExecution').textContent = value.defaultExecution?.reason
+      ?? '默认 AgentArts 子任务执行器尚未公布；独立 API 按子对话明确选型使用';
     field('saved').replaceChildren();
     for (const entry of [{id: '', displayName: '添加模型'}, ...(value.models ?? [])]) {
       const option = document.createElement('option');
