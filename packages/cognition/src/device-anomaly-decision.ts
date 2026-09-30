@@ -36,6 +36,7 @@ export interface DeviceNotificationPort {
 }
 
 export interface DeviceAnomalyOptions {
+  readonly checkpoint?: DeviceAnomalyCheckpointPort | undefined;
   /** Alert trigger threshold for CPU percentage (default: 90). */
   readonly cpuThresholdPercent?: number | undefined;
   /** Alert trigger threshold for Memory percentage (default: 90). */
@@ -82,6 +83,13 @@ interface SourceState {
   lastAlertTimestampMs: number | null;
   lastSampleTimestampMs: number | null;
   sampleCounter: number;
+  pendingDelivery?: {id: string; timestampMs: number} | undefined;
+  lastReceipt?: DeviceAnomalyDecisionReceipt | undefined;
+}
+
+export interface DeviceAnomalyCheckpointPort {
+  load(): unknown | Promise<unknown>;
+  save(value: {version: 1; configDigest: string; sources: Record<string, SourceState>}): void | Promise<void>;
 }
 
 const hash = (text: string): string => createHash('sha256').update(text).digest('hex');
@@ -106,6 +114,10 @@ export class DeviceAnomalyDecisionService {
   private readonly notificationPort?: DeviceNotificationPort | undefined;
   private readonly now: () => number;
   private readonly sourceStates = new Map<string, SourceState>();
+  private readonly checkpoint?: DeviceAnomalyCheckpointPort | undefined;
+  private readonly configDigest: string;
+  private loaded = false;
+  private tail: Promise<void> = Promise.resolve();
 
   constructor(
     inferenceOrChooser: LayaInferencePort | DeviceAnomalyActionChoicePort,
@@ -127,12 +139,79 @@ export class DeviceAnomalyDecisionService {
     this.maxGapMultiplier = options.maxSamplingGapMultiplier ?? 2.5;
     this.notificationPort = options.notificationPort;
     this.now = options.now ?? Date.now;
+    this.checkpoint = options.checkpoint;
+    this.configDigest = hash(JSON.stringify([this.cpuThreshold, this.memoryThreshold,
+      this.recoveryThreshold, this.sustainedCount, this.cooldownMs, this.maxGapMultiplier]));
 
     if (!Number.isFinite(this.cpuThreshold) || !Number.isFinite(this.memoryThreshold)
       || !Number.isFinite(this.recoveryThreshold) || this.cpuThreshold > 100 || this.memoryThreshold > 100
+      || this.cpuThreshold <= 0 || this.memoryThreshold <= 0 || this.recoveryThreshold < 0
+      || !Number.isSafeInteger(this.sustainedCount) || this.sustainedCount < 1
+      || !Number.isFinite(this.cooldownMs) || this.cooldownMs < 0
+      || !Number.isFinite(this.maxGapMultiplier) || this.maxGapMultiplier < 1
       || this.recoveryThreshold >= this.cpuThreshold || this.recoveryThreshold >= this.memoryThreshold) {
       throw new CognitionError('INVALID_ARGUMENT');
     }
+  }
+
+  private async load(): Promise<void> {
+    if (this.loaded) return;
+    const value = await this.checkpoint?.load();
+    if (value !== undefined && value !== null) {
+      const saved = value as {version: number; configDigest: string; sources: Record<string, SourceState>};
+      if (saved.version !== 1 || saved.configDigest !== this.configDigest
+        || !saved.sources || typeof saved.sources !== 'object' || Array.isArray(saved.sources)) {
+        throw new CognitionError('INVALID_ARGUMENT');
+      }
+      for (const [source, state] of Object.entries(saved.sources)) {
+        if (!source.trim() || !Number.isSafeInteger(state.consecutiveElevatedCount)
+          || state.consecutiveElevatedCount < 0 || typeof state.isAlertActive !== 'boolean'
+          || !Number.isSafeInteger(state.sampleCounter) || state.sampleCounter < 0
+          || ![state.lastAlertTimestampMs, state.lastSampleTimestampMs].every(time => time === null || Number.isFinite(time))
+          || (state.pendingDelivery && (typeof state.pendingDelivery.id !== 'string'
+            || !Number.isFinite(state.pendingDelivery.timestampMs)))) throw new CognitionError('INVALID_ARGUMENT');
+        this.sourceStates.set(source, structuredClone(state));
+      }
+    }
+    this.loaded = true;
+  }
+
+  private async save(): Promise<void> {
+    await this.checkpoint?.save({version: 1, configDigest: this.configDigest,
+      sources: structuredClone(Object.fromEntries(this.sourceStates))});
+  }
+
+  /** Local feedback readback; pending delivery never counts as delivered. */
+  async readFeedback(): Promise<readonly {source: string; pendingDeliveryId?: string | undefined;
+    receipt?: DeviceAnomalyDecisionReceipt | undefined}[]> {
+    const operation = this.tail.then(async () => {
+      await this.load();
+      return [...this.sourceStates].map(([source, state]) => ({source,
+        pendingDeliveryId: state.pendingDelivery?.id, receipt: structuredClone(state.lastReceipt)}));
+    });
+    this.tail = operation.then(() => {}, () => {});
+    return operation;
+  }
+
+  /** Only the trusted notification host may reconcile an interrupted delivery. */
+  async reconcileDelivery(source: string, deliveryId: string, delivered: boolean): Promise<void> {
+    const operation = this.tail.then(async () => {
+      await this.load();
+      const state = this.sourceStates.get(source);
+      if (!state?.pendingDelivery || state.pendingDelivery.id !== deliveryId || typeof delivered !== 'boolean') {
+        throw new CognitionError('INVALID_ARGUMENT');
+      }
+      if (delivered) state.lastAlertTimestampMs = state.pendingDelivery.timestampMs;
+      if (state.lastReceipt) state.lastReceipt = {...state.lastReceipt,
+        status: delivered ? 'alert_triggered' : 'monitoring', notificationDelivered: delivered,
+        safeAdvice: delivered ? '受信通知宿主已读回确认投递，冷却状态已持久化'
+          : '受信通知宿主确认未投递，后续新采样可以重试'};
+      state.pendingDelivery = undefined;
+      try {await this.save();}
+      catch (error) {if (this.checkpoint) {this.loaded = false; this.sourceStates.clear();} throw error;}
+    });
+    this.tail = operation.then(() => {}, () => {});
+    return operation;
   }
 
   private getSourceState(source: string): SourceState {
@@ -157,6 +236,29 @@ export class DeviceAnomalyDecisionService {
     sample: DeviceSample,
     layaRequest?: {deadline: string; signal: AbortSignal}
   ): Promise<DeviceAnomalyDecisionReceipt> {
+    const operation = this.tail.then(async () => {
+      await this.load();
+      try {
+        const receipt = await this.evaluateSerial(sample, layaRequest);
+        if (receipt.status !== 'replayed') {
+          this.getSourceState(sample.source).lastReceipt = receipt;
+          await this.save();
+        }
+        return receipt;
+      } catch (error) {
+        if (this.checkpoint) {this.loaded = false; this.sourceStates.clear();}
+        throw error;
+      }
+    });
+    this.tail = operation.then(() => {}, () => {});
+    return operation;
+  }
+
+  private async evaluateSerial(sample: DeviceSample,
+    layaRequest?: {deadline: string; signal: AbortSignal}): Promise<DeviceAnomalyDecisionReceipt> {
+    if (layaRequest && (!(layaRequest.signal instanceof AbortSignal) || layaRequest.signal.aborted
+      || !Number.isFinite(Date.parse(layaRequest.deadline))
+      || this.now() >= Date.parse(layaRequest.deadline))) throw new CognitionError('INVALID_ARGUMENT');
     if (!sample || typeof sample.source !== 'string' || !sample.source.trim()
       || !Number.isFinite(Date.parse(sample.timestamp))
       || !Number.isFinite(sample.cpuPercent) || sample.cpuPercent < 0 || sample.cpuPercent > 100
@@ -167,6 +269,12 @@ export class DeviceAnomalyDecisionService {
 
     const sampleTimeMs = Date.parse(sample.timestamp);
     const state = this.getSourceState(sample.source);
+    if (state.pendingDelivery) {
+      return {...state.lastReceipt, receiptId: state.pendingDelivery.id, source: sample.source, status: 'indeterminate',
+        isAlertActive: state.isAlertActive, consecutiveElevatedCount: state.consecutiveElevatedCount,
+        sample: state.lastReceipt?.sample ?? sample, notificationDelivered: false,
+        safeAdvice: '上次通知投递结果待受信宿主核实，保留反馈且不重复投递'};
+    }
 
     // Monotonicity / Replay check for this source
     if (state.lastSampleTimestampMs !== null && sampleTimeMs <= state.lastSampleTimestampMs) {
@@ -196,6 +304,7 @@ export class DeviceAnomalyDecisionService {
 
     // Both key metrics unavailable: indeterminate status
     if (isCpuUnavailable && isMemoryUnavailable) {
+      state.consecutiveElevatedCount = 0;
       return {
         receiptId: hash(`indeterminate:${sample.source}:${sample.timestamp}:${state.sampleCounter}`),
         source: sample.source,
@@ -275,12 +384,31 @@ export class DeviceAnomalyDecisionService {
         const selectedCandidate = candidates.find(c => c.id === selection.selected?.id);
         const safeAdvice = this.formatAdvice(selectedCandidate, selection);
 
+        if (selection.state !== 'selected' || !selection.eligibleForRuntime || !selectedCandidate
+          || selectedCandidate.revision !== selection.selected?.revision || signal.aborted
+          || this.now() >= Date.parse(deadline)) {
+          return {receiptId: hash(`review:${sample.source}:${sample.timestamp}`), source: sample.source,
+            status: 'monitoring', isAlertActive: state.isAlertActive,
+            consecutiveElevatedCount: state.consecutiveElevatedCount, sample, selection, candidates,
+            safeAdvice: 'Laya 选择待复核或已取消，未执行动作，未锁定冷却窗口', notificationDelivered: false};
+        }
+
         let deliveryConfirmed = false;
         let notificationDelivered: boolean | undefined = undefined;
         if (this.notificationPort) {
+          const deliveryId = hash(`notify:${sample.source}:${sample.timestamp}:${state.sampleCounter}`);
+          state.isAlertActive = true;
+          state.pendingDelivery = {id: deliveryId, timestampMs: sampleTimeMs};
+          state.lastReceipt = {receiptId: deliveryId, source: sample.source, status: 'indeterminate',
+            isAlertActive: true, consecutiveElevatedCount: state.consecutiveElevatedCount,
+            sample, selection, selectedCandidate, candidates, notificationDelivered: false,
+            safeAdvice: '通知投递意图已保存，结果尚待宿主确认'};
+          // Persist intent before delivery. A crash or final checkpoint failure
+          // retains an unknown result that requires host readback, never resend.
+          await this.save();
           try {
             const deliveryResult = await this.notificationPort.sendAdvisoryNotification({
-              id: hash(`notify:${sample.source}:${sample.timestamp}:${state.sampleCounter}`),
+              id: deliveryId,
               source: sample.source,
               title: `系统资源高负荷告警 (${sample.source})`,
               message: `CPU使用率: ${sample.cpuPercent}%, 内存使用率: ${sample.memoryPercent}%`,
@@ -291,8 +419,10 @@ export class DeviceAnomalyDecisionService {
             deliveryConfirmed = deliveryResult.delivered === true;
             notificationDelivered = deliveryConfirmed;
           } catch {
-            deliveryConfirmed = false;
-            notificationDelivered = false;
+            return {receiptId: deliveryId, source: sample.source, status: 'indeterminate',
+              isAlertActive: true, consecutiveElevatedCount: state.consecutiveElevatedCount,
+              sample, selection, candidates, safeAdvice: '通知端口异常，投递结果待受信宿主核实，未锁定冷却且不盲目重发',
+              notificationDelivered: false};
           }
         } else {
           deliveryConfirmed = false;
@@ -303,6 +433,7 @@ export class DeviceAnomalyDecisionService {
         if (deliveryConfirmed) {
           state.lastAlertTimestampMs = sampleTimeMs;
         }
+        state.pendingDelivery = undefined;
 
         let adviceText = safeAdvice;
         if (!this.notificationPort) {
@@ -416,7 +547,7 @@ export class DeviceAnomalyDecisionService {
       id: 'defer_background_tasks',
       revision: 1,
       kind: 'defer',
-      description: '建议暂缓非关键后台同步与索引，待系统负荷下降后自动恢复',
+      description: '通知用户建议暂缓非关键后台任务；本候选只投递建议，不调用调度器或自动暂停任务',
       sources: [sourceRef],
       scopeRef: 'agent:background_scheduler_advisory',
       expiresAt,
@@ -451,7 +582,7 @@ export class DeviceAnomalyDecisionService {
       case 'remind_user_inspect':
         return 'Laya 建议通过桌面通知提醒用户检查资源占用情况；仅生成建议卡片，未中止任何应用或进程。';
       case 'defer_background_tasks':
-        return 'Laya 建议暂缓非关键后台同步以降低资源开销；该动作完全可逆，待负荷回落后恢复。';
+        return 'Laya 建议用户暂缓非关键后台同步；当前只投递建议，尚未暂停或修改任何任务。';
       case 'escalate_diagnostics':
         return 'Laya 建议记录诊断指标快照供用户复核，不对系统环境做任何非授权修改。';
       default:
