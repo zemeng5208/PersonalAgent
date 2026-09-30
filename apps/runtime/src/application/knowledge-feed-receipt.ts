@@ -133,6 +133,40 @@ export function createKnowledgeFeedReceipt(input: {
   return receipt;
 }
 
+/** Normalize one complete feeds.collect body. Execution/Policy provenance remains a host responsibility. */
+export function createKnowledgeFeedReceiptFromCollectResult(input: {
+  namespace: string; sourceId: string; result: unknown;
+}): KnowledgeFeedReceiptV2 | undefined {
+  const result = input.result;
+  if (!identifier(input.namespace) || !identifier(input.sourceId) || !object(result)
+    || !object(result.collection) || result.collection.state !== 'fetched'
+    || result.collection.subscriptionId !== input.sourceId || !instant(result.collection.fetchedAt)
+    || result.hasMore !== false || !text(result.nextCursor) || !Array.isArray(result.items)
+    || !result.items.length || !object(result.collection.validators)) return undefined;
+  const validators = result.collection.validators;
+  if (!['etag', 'lastModified'].every(key => Object.hasOwn(validators, key)
+    && (validators[key] === null || text(validators[key])))) return undefined;
+  const items: KnowledgeFeedItem[] = [];
+  for (const raw of result.items) {
+    if (!object(raw) || !object(raw.record) || !text(raw.record.dedupeKey)
+      || !text(raw.record.contentRef) || !instant(raw.record.occurredAt) || !text(raw.title)
+      || (Object.hasOwn(raw.record, 'accountRef') && raw.record.accountRef !== input.sourceId)
+      || (Object.hasOwn(raw.record, 'fetchedAt') && raw.record.fetchedAt !== result.collection.fetchedAt)) return undefined;
+    items.push({dedupeKey: raw.record.dedupeKey, occurredAt: raw.record.occurredAt as string,
+      contentRef: raw.record.contentRef, title: raw.title.slice(0, 200),
+      summary: typeof raw.summary === 'string' ? raw.summary.slice(0, 500) : ''});
+  }
+  items.sort((a, b) => a.dedupeKey < b.dedupeKey ? -1 : a.dedupeKey > b.dedupeKey ? 1 : 0);
+  const contentSha256 = hash(items);
+  const revision = text(validators.etag) || text(validators.lastModified)
+    ? hash({etag: validators.etag ?? null, lastModified: validators.lastModified ?? null})
+    : hash({body: contentSha256});
+  try {
+    return createKnowledgeFeedReceipt({namespace: input.namespace, sourceId: input.sourceId,
+      observedAt: result.collection.fetchedAt as string, revision, items});
+  } catch { return undefined; }
+}
+
 /** Bind a structurally valid receipt to the exact consumer's observed context. Keep Runtime ownership checks outside. */
 export function verifyKnowledgeFeedReceiptBinding(raw: unknown, expected: KnowledgeFeedReceiptBinding): KnowledgeFeedReceipt | undefined {
   const receipt = parseKnowledgeFeedReceipt(raw);
