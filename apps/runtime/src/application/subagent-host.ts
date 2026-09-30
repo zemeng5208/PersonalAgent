@@ -1,5 +1,5 @@
 import {ProtocolError} from '@personal-agent/contracts';
-import type {RegisteredTool, TaskSnapshot, ToolContext} from '@personal-agent/contracts';
+import type {RegisteredTool, TaskSnapshot, ToolContext, ToolDescriptor} from '@personal-agent/contracts';
 import {
   createSubagentDispatchTool,
   dispatchSubtasks,
@@ -15,6 +15,7 @@ import {
   type SubtaskProgressRecord,
 } from '@personal-agent/agents';
 import {runAgent} from '@personal-agent/agents';
+import {CLOUD_SKILL_TOOL_NAME} from '@personal-agent/skills';
 import {
   ModelGateway,
   FakeModelProvider,
@@ -64,6 +65,8 @@ export interface SubagentHostOptions {
   getModelGateway?: ((modelName?: string) => ModelGateway | undefined) | undefined;
   /** Only explicitly supported provider parameters; step budgets are separate. */
   getModelReasoningEfforts?: ((modelName?: string) => readonly ReasoningEffort[]) | undefined;
+  /** Opaque config SHA/ref supplied by native config; never contains credentials. */
+  getModelConfigurationRef?: ((modelName?:string,taskId?:string)=>string|undefined) | undefined;
   /** Trusted Competition worker; it must reuse the original loop without calling runTask again. */
   runDefaultWorker?: ((subtask: SubtaskDefinition, worker: WorkerContext, tools: AgentToolPort) => Promise<WorkerResult>) | undefined;
   /** Trusted host may narrow tools per role/child; this never creates authorization. */
@@ -95,14 +98,25 @@ function childBinding(runtime: TaskRuntime, taskId: string): ChildBinding {
   return binding;
 }
 
+function subagentSideEffect(options:SubagentHostOptions,runtime:TaskRuntime,taskId:string):'read'|'local_write'|'external_write' {
+  const frozen=runtime.loadCheckpoint(taskId,'subtask-tools-binding') as ToolDescriptor[]|undefined;
+  const tools=frozen??options.getTools?.()?.list()??[];
+  const selectable=tools.filter(tool=>tool.name!==SUBAGENT_DISPATCH_TOOL_NAME);
+  return selectable.some(tool=>tool.sideEffect==='external_write')?'external_write'
+    :selectable.some(tool=>tool.sideEffect==='local_write')?'local_write':'read';
+}
+
 async function runSubagentWorker(options: SubagentHostOptions, subtask: SubtaskDefinition,
   childWorker: WorkerContext): Promise<WorkerResult> {
   if (childWorker.signal.aborted) throw new ProtocolError('CANCELLED', 'Subtask cancelled during execution');
   const runtime = options.getRuntime();
   const roleLabel = subtask.roleLabel?.trim() || DEFAULT_ROLE_LABELS[subtask.role];
   childWorker.reportProgress({stepId: `child-${subtask.subtaskId}`, label: `[${roleLabel}] 正在执行: ${subtask.goal}`});
-  const kind = subtask.model === undefined && options.runDefaultWorker ? 'competition' : 'model';
-  const priorExecution = childWorker.loadCheckpoint('subtask-execution-binding');
+  const priorExecution = childWorker.loadCheckpoint('subtask-execution-binding') as {kind?:string}|undefined;
+  const kind = priorExecution?.kind ?? (subtask.model === undefined && options.runDefaultWorker ? 'competition' : 'model');
+  if(!['competition','model'].includes(kind) || (kind==='competition' && (subtask.model!==undefined || !options.runDefaultWorker))) {
+    throw new ProtocolError('UNSUPPORTED_CAPABILITY','Original subagent execution strategy is unavailable');
+  }
   if (priorExecution !== undefined && !isDeepStrictEqual(priorExecution, {kind})) {
     throw new ProtocolError('REVISION_CONFLICT', 'Subagent execution strategy changed');
   }
@@ -141,11 +155,13 @@ async function runSubagentWorker(options: SubagentHostOptions, subtask: SubtaskD
     throw new ProtocolError('UNSUPPORTED_CAPABILITY',
       `子任务无法执行：${modelLabel} 未配置或不受支持。请在受信设置中配置模型后重试`);
   }
-  const identity = {provider: model.deployment.provider, deployment: model.deployment.deployment, model: model.deployment.model};
+  const identity = {provider: model.deployment.provider, deployment: model.deployment.deployment, model: model.deployment.model,
+    configurationRef:options.getModelConfigurationRef?.(subtask.model,childWorker.taskId)??null};
   const previousIdentity = childWorker.loadCheckpoint('subtask-model-binding') as typeof identity | undefined;
   const pendingLoop = childWorker.loadCheckpoint('agent-loop') as {pending?: import('@personal-agent/models').ModelResult} | undefined;
   const expected = previousIdentity ?? pendingLoop?.pending?.deployment;
-  if (expected && (expected.provider !== identity.provider || expected.deployment !== identity.deployment || expected.model !== identity.model)) {
+  if (expected && (expected.provider !== identity.provider || expected.deployment !== identity.deployment || expected.model !== identity.model
+    || (previousIdentity && previousIdentity.configurationRef!==identity.configurationRef))) {
     throw new ProtocolError('REVISION_CONFLICT', 'Subagent model configuration changed; the prior proposal cannot be resumed');
   }
   if (!previousIdentity) childWorker.saveCheckpoint('subtask-model-binding', identity);
@@ -193,6 +209,14 @@ export async function resumeRuntimeSubagentTask(options: SubagentHostOptions, ch
   }
   const execution = runtime.loadCheckpoint(childTaskId, 'subtask-execution-binding') as {kind?: string} | undefined;
   const defaultChild = execution?.kind === 'competition' || runtime.loadCheckpoint(childTaskId, 'subtask-coordination-binding') !== undefined;
+  const competition=runtime.loadCheckpoint(childTaskId,'competition-loop') as {pending?:unknown;continuation?:unknown}|undefined;
+  const replay=runtime.loadCheckpoint(childTaskId,'competition-confirmed-replay') as {runId:string;inputDigest:string}|undefined;
+  if(defaultChild && !competition?.pending && competition?.continuation && replay
+    && runtime.readToolExecutions(childTaskId).some(record=>record.evidenceId===replay.runId && record.inputDigest===replay.inputDigest
+      && record.state==='confirmed' && record.executionStarted && record.policyDecision==='allow')) {
+    return runtime.runTask(childTaskId,worker=>runSubagentWorker(options,binding,worker),
+      {deadline:binding.parentDeadline,sideEffect:subagentSideEffect(options,runtime,childTaskId),resume:true});
+  }
   let runId: string, toolName: string, argumentsValue: Record<string, unknown>;
   if (defaultChild) {
     const loop = runtime.loadCheckpoint(childTaskId, 'competition-loop') as {step?: number; pending?: {toolName?: string; arguments?: Record<string, unknown>}} | undefined;
@@ -210,11 +234,21 @@ export async function resumeRuntimeSubagentTask(options: SubagentHostOptions, ch
     runId = `agent-run-${childTaskId}-${loop.step}`;
     toolName = loop.pending.response.proposal.toolName; argumentsValue = loop.pending.response.proposal.arguments;
   }
+  if(toolName===CLOUD_SKILL_TOOL_NAME) {
+    const intent=runtime.loadCheckpoint(childTaskId,'application-reference-skill-v1') as {input:{digest:string;path:string}}|undefined;
+    const selection=runtime.loadCheckpoint(childTaskId,'skill:cloud-selection:v1') as {choice:unknown;source:{path:string}}|undefined;
+    if(!intent || !selection || !isDeepStrictEqual(argumentsValue,selection.choice) || intent.input.path!==selection.source.path)throw new ProtocolError('UNAUTHORIZED','Skill pending binding changed');
+    runId=`skill-read-${childTaskId}-${intent.input.digest.slice(0,16)}`;
+    toolName='mcp.workspace.read_text';argumentsValue={path:intent.input.path};
+  }
   const approval = runtime.getApproval(runId);
+  const confirmed=runtime.readToolExecutions(childTaskId).some(record=>record.evidenceId===runId
+    && record.state==='confirmed' && record.executionStarted && record.policyDecision==='allow'
+    && record.toolName===toolName && runtime.matchesToolExecutionInput(record,{arguments:argumentsValue,scopeRef:runId}));
   if (approval.taskId !== childTaskId || approval.state !== 'allowed'
     || approval.toolName !== toolName
     || approval.argumentsDigest !== toolArgumentsDigest(argumentsValue)
-    || !runtime.policy.get(runId)) {
+    || (!confirmed && !runtime.policy.get(runId))) {
     throw new ProtocolError('UNAUTHORIZED', 'Subagent invocation is not approved or grant was revoked');
   }
   const cancel = () => {
@@ -224,7 +258,7 @@ export async function resumeRuntimeSubagentTask(options: SubagentHostOptions, ch
   parentSignal?.addEventListener('abort', cancel, {once: true});
   try {
     return await runtime.runTask(childTaskId, worker => runSubagentWorker(options, binding, worker),
-      {deadline: binding.parentDeadline, sideEffect: 'read', resume: true});
+      {deadline: binding.parentDeadline, sideEffect: subagentSideEffect(options,runtime,childTaskId), resume: true});
   } finally {parentSignal?.removeEventListener('abort', cancel);}
 }
 
@@ -348,6 +382,13 @@ export function createRuntimeSubagentDispatchTool(options: SubagentHostOptions):
       let taskSnapshot: TaskSnapshot;
       if (existing) {
         taskSnapshot = existing;
+        const original=childBinding(runtime,existing.taskId);
+        if(original.parentTaskId!==context.taskId || original.subtaskId!==subtask.subtaskId
+          || original.goal!==subtask.goal || original.role!==subtask.role || original.model!==subtask.model
+          || original.thinkingDepth!==subtask.thinkingDepth || original.parentDeadline!==context.deadline
+          || (original.roleLabel?.trim()||DEFAULT_ROLE_LABELS[original.role])!==roleLabel) {
+          throw new ProtocolError('REVISION_CONFLICT','Existing child is bound to a different dispatch');
+        }
       } else {
         const subtaskInput: SubmitTaskInput = {
           conversationId: `desktop-subtask:${context.taskId}`,
@@ -407,7 +448,7 @@ export function createRuntimeSubagentDispatchTool(options: SubagentHostOptions):
           },
           {
             deadline: childDeadline,
-            sideEffect: 'read',
+            sideEffect: subagentSideEffect(options,runtime,taskSnapshot.taskId),
           },
         );
 
@@ -458,6 +499,7 @@ export interface DesktopSubagentDispatchToolOptions {
   getModelReasoningEfforts?: ((modelName?: string) => readonly ReasoningEffort[]) | undefined;
   runDefaultWorker?: SubagentHostOptions['runDefaultWorker'];
   getToolsForSubtask?: SubagentHostOptions['getToolsForSubtask'];
+  getModelConfigurationRef?:SubagentHostOptions['getModelConfigurationRef'];
   modelConfig?: {
     baseUrl?: string;
     model?: string;
@@ -480,6 +522,7 @@ export function createDesktopSubagentDispatchTool(options: DesktopSubagentDispat
     getModelReasoningEfforts: options.getModelReasoningEfforts,
     runDefaultWorker: fakeModelMode ? undefined : options.runDefaultWorker,
     getToolsForSubtask: options.getToolsForSubtask,
+    getModelConfigurationRef:options.getModelConfigurationRef,
     getModelGateway: (modelName?: string) => {
       if (fakeModelMode) {
         return new ModelGateway(new FakeModelProvider(

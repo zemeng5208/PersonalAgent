@@ -60,6 +60,11 @@ export function createPrivateMemoryController(databasePath, confirm, confirmDele
         throw Error('私人记忆消费绑定已变化');
       }
     },
+    /** Durable, content-free deletion authority, readable even while WAL maintenance is pending. */
+    listErasureMarkers(request) {
+      if (closed) throw Error('私人记忆控制器已关闭');
+      return (memory ?? memoryHost()).listFactErasures(namespace, request);
+    },
     prepareWrite() {
       const store = memoryHost();
       store.assertUnboundNamespace(namespace);

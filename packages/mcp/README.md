@@ -25,13 +25,16 @@ stop/dispose 先撤销在途、移除连接，在 Windows 用已持有的参考�
 
 ### 公开参考结果出机
 
-`createPublicReferenceExport(options?)` 与现有 trusted `CompetitionToolExport` 结构兼容，固定 MCP 工具和 `exportPolicyVersion:'2.0.0'`，无 options 默认拒绝。options 只由原生受信宿主注入：
+`createPublicReferenceExport`（MCP，policy `3.0.0`）与 `createWorkspaceReferenceExport`（workspace，policy `workspace-reference-3.0.0`）复用现有 trusted `CompetitionToolExport.accepts/project`。无配置默认拒绝。保留原 MCP / `WorkspaceReadResult` schema，workspace 支持安全相对 `.js` 等路径和精确 `maxBytes` 参数，不冒 MCP。
 
-- `currentConfigurationRef()`：当前许可会话的不透明配置引用；撤销/断连为 undefined。
-- `readAuthorization({taskId,proposalId,path,configurationRef})`：同步读明确的公开/合成资料出机许可，返回 `{authorizationId,contentDigest,expiresAt}`。许可绑定文件内容 SHA，不能用工作区读取许可代替，也不能由 Renderer、云声明或文件名自动授予。
-- `readConfirmed({...query,contentDigest})`：同步读原 Runtime 记录，返回 `{runId,result:McpReadResult}`；宿主须核对原 proposal→run、工具/版本、参数/scope、Policy、confirmed execution、原 checkpoint 与任务 Evidence。该回调不调用工具/签授权，不接受外部 receipt。
+- `currentConfigurationRef()`：当前会话/root/configGeneration 的不透明引用，撤销/断连为 undefined。
+- `readPreflight(query)`：query 为 `{taskId,proposalId,path,configurationRef,arguments}`。只读原生 PUBLIC 来源/目的预许可和原任务读取资格，返回 `{authorizationId,expiresAt,sensitivity:'PUBLIC',purpose:'reference-summary'|'coding-reference',maxExportBytes}`；没有 digest、没有 receipt 也能完成首读检查。缺明确 PUBLIC/目的/上限拒绝，不能由 Renderer 字段、文件名、云或工作区读取许可代替。
+- `readConfirmed({...query,contentDigest})`：只读原 Runtime 的 `{runId,result}`，adapter 必须验证 proposal→run、工具/版本、完整参数（含 maxBytes）/scope、Policy allow、confirmed execution、原结果 checkpoint 和同任务 Evidence，不执行/签权。
+- `readAuthorization({...query,contentDigest,byteLength})`：确认原读取后，原生对确切内容的许可；返回相同 preflight scope/id/expiry 加 `contentDigest`。原 PUBLIC 预许可可依法具体化原 SHA；进一步 native 确认仍由 P8 承担，不能伪造或默认批准。
 
-`accepts` 保留任务/提案/相对 path/配置/许可身份，拒绝同提案替换绑定；每次调用及 `project` 前后重查配置、许可和期限。project 核对实际 result 与原 confirmed receipt 的路径/正文/SHA及稳定 run，仅返回 `{source:'approved-reference',contentDigest,readConfirmed:true}`，原文、路径、授权、run 和 raw Evidence 不出机。宿主在真正云请求前仍调用原 Competition export guard；撤销不能依赖缓存的投影。`dispose()` 清会话绑定并永久拒绝。原生许可 UI、持久任务和云调用由 P8 装配，本包不新增公共 wire、数据库或审批机制。
+读前 `accepts({...input,phase:'preflight'})` 只查预许可。执行仍经过原 ToolGateway/Policy。`project` 核对原结果 path/字节/SHA/稳定 run、精确许可及当前 scope，导出 `{source,content,byteLength,contentDigest,truncated:false,readConfirmed:true}`。source 为 `approved-reference` 或 `approved-workspace-reference`；content 是明确批准、完整且有界的 PUBLIC 内容，超 native 上限拒绝，不截断、不猜长度。上限由原生许可给定且不超过原读取的 256 KiB。路径、许可身份、run 和 raw Evidence 不出机。
+
+真正云 I/O、异步凭据读取后和恢复 continuation，必须 `accepts({...原proposal,phase:'final',projection:原Runtime保存的continuation.result,signal})`。即使新进程没有 session map，也要重新核原 confirmed 内容和精确原生许可，不能用默认 preflight 代替 final。拒绝/待确认时原 Runtime 保存 confirmed result/pending proposal，恢复只重投影、不重 execute、不重建任务；shared loop/终态归 Runtime。`dispose()` 永久拒绝。原生许可、持久任务和云调用由 P8/CloudRuntime 接线，无新数据库、授权机制或模型 loop。详细端口与统一验收入口见 [交接](../skills/CLOUD_HANDOFF.md)。本增量未 build/测试。
 
 构建现有 contracts/policy/tool-gateway 依赖产物后 `npm run build --workspace=@personal-agent/mcp`；`npm run test:real --workspace=@personal-agent/mcp` 启动实际官方服务，只读取仓库忽略目录的公开合成资料并关闭子进程。真实握手/读取、内存 Policy、Runtime/SQLite/AgentArts/UI 的验收层级分别记录，见 [交接](../../docs/modules/MOD-06-07-MVP.md)。本模块不读取凭据/私有目录、不调用模型。
 

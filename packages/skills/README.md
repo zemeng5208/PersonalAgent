@@ -4,6 +4,12 @@
 
 ## 公开入口
 
+云显式选择新增 `createCloudSkillSelectionPort`，注入**同一已有 worker**；`describe()` 返回现有
+CoordinationAvailableTool 的可投影 type+enum schema，`dispatch()` 接原 CoordinationToolProposalResult，
+由现协调 worker 在 tools.invoke 之前分派，不注册成 RegisteredTool。PUBLIC许可缺失不可公布，
+`assertReceiptAllowed` 在真实 cloud I/O 前复查原任务/提案/版本/config/许可/receipt。
+新代码与 prepared cases 本轮未 build/测试；准确 P8/P6/CloudRuntime 接线见 [云交接](CLOUD_HANDOFF.md)。
+
 ```ts
 import {createReferenceSummarySkill} from '@personal-agent/skills';
 const skill = createReferenceSummarySkill({
@@ -33,6 +39,10 @@ const outcome = await skill.invoke({
 打包时保留 `workspace-reference-summary/SKILL.md`（相对 dist）。内容 digest 规范化 CRLF/LF，绑定 manifest+完整正文。当前只加载这一份受信自有 bundle；不宣称导入任意社区 Skill。官方规范用于可移植格式，无额外 parser 依赖/源码复制；版本附加 metadata 不授权。
 
 ## 验证
+
+云目录使用 `describe(sourceRefs:readonly string[]=[])`，只公布 Native 刚确认的公开别名 enum。Desktop host 注入同步 `readPublicSkillSourceRefs(input)`，在原生可发现性确认后取别名并复查当前 task/config/deadline/cancel；缺来源保持 unavailable。`CLOUD_SKILL_PUBLIC_ENUM_PATHS` 包含 `/sourceRef`，不发布本地路径。目录发现不授予读取或正文外发权限，仍由原 native PUBLIC 两阶段切面和 Runtime/Policy 执行。
+
+云选择器复用原 worker/checkpoint，额外注入 `publicReferenceExport: PublicReferenceExportOptions`。`PublicSkillSource` 为明确 PUBLIC/reference-summary 的预许可加本地 path/公开 sourceRef/config/revision，首读前不要求内容 SHA。确认后只读原 MCP execution/结果，经同两阶段 native 精确内容 gate，才返回实际有界摘要 `content/byteLength/summaryDigest/truncated`；receipt 的 `contentDigest` 仍指原文件 SHA。不从带本地路径的 resultSummary 拼云正文。`assertReceiptAllowed` 在真实 I/O 前重核原内容、许可并重投影比对 persisted receipt；pending/unknown 不外发 confirmed。拒绝精确内容许可后 worker 已保存的 read-confirmed/complete 留在原任务，恢复不重复读取。端口缺失保持 unavailable，源/config/版本/许可变化拒绝。该增量 prepared cases 尚未执行，见 [CLOUD_HANDOFF](CLOUD_HANDOFF.md)。
 
 依赖产物就绪后构建新 workspace，再运行模块测试。`skills.test.mjs` 明确使用内存 checkpoint 和受控 test tool port；`real-skill.test.mjs` 实际调用官方 stdio 服务，经现有 ToolGateway 与真实 Policy 实现读取公开合成资料，checkpoint/AgentToolPort 是测试装配、`evidenceRefs:[]`，不冒充真实 SQLite Evidence。P8 的生产 worker、审批恢复、Evidence/Competition/管理 UI 另验收，见 [交接](../../docs/modules/MOD-06-07-MVP.md)。
 

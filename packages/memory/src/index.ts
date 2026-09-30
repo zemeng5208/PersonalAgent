@@ -1,5 +1,6 @@
 /** Provisional in-process fact query boundary. It is not a wire protocol. */
 export * from './feed.js';
+export * from './controlled-read.js';
 export type FactSensitivity = 'public' | 'private' | 'restricted';
 export type FactState = 'active' | 'withdrawn';
 export type FactConfirmation = 'external_observation' | 'model_inference' | 'user_confirmed';
