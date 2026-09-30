@@ -240,12 +240,17 @@ test('live CalDAV read-back: ctag/etag poll, wide window, single-event roundtrip
   const authorization = process.env.PA_CALDAV_USER !== undefined && process.env.PA_CALDAV_PASSWORD !== undefined
     ? `Basic ${Buffer.from(`${process.env.PA_CALDAV_USER}:${process.env.PA_CALDAV_PASSWORD}`, 'utf8').toString('base64')}`
     : undefined;
-  const provider = new CalDavProvider({calendarUrl: process.env.PA_CALDAV_URL, authorization});
+  const calendarUrl = process.env.PA_CALDAV_URL;
+  // 本机回环的明文 http://（本地 Radicale 等验收服务器）需显式放行；其余仍要求 HTTPS。
+  const allowLoopbackHttp = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/u.test(calendarUrl);
+  const provider = new CalDavProvider({calendarUrl, authorization, allowLoopbackHttp});
 
   const snapshot = await provider.pollChanges();
-  assert.equal(typeof snapshot.ctag, 'string', 'collection must return a ctag');
-  assert.ok(snapshot.ctag.length > 0);
-  console.log('live CalDAV ctag returned; etag entries:', Object.keys(snapshot.etags).length);
+  // ctag 是 Apple 扩展（Radicale 不支持）；至少要有一种变更信号：ctag 或非空 etag 表。
+  assert.ok(typeof snapshot.ctag === 'string' && snapshot.ctag.length > 0
+    || Object.keys(snapshot.etags).length > 0, 'poll must return a ctag or a non-empty etag map');
+  console.log('live CalDAV ctag:', snapshot.ctag ?? '(unsupported by server)',
+    '/ etag entries:', Object.keys(snapshot.etags).length);
 
   const page = await provider.fetchWindow('live', {fromUtc: '2000-01-01T00:00:00.000Z', toUtc: '2100-01-01T00:00:00.000Z'});
   console.log('live CalDAV events in first page:', page.events.length);
@@ -271,7 +276,10 @@ test('live CalDAV wrong credentials are refused as UNAUTHORIZED without retry', 
     ? false
     : 'requires PA_CALDAV_LIVE=1, PA_CALDAV_URL and PA_CALDAV_USER (a server that enforces authentication)',
 }, async () => {
-  const provider = new CalDavProvider({calendarUrl: process.env.PA_CALDAV_URL,
+  const calendarUrl = process.env.PA_CALDAV_URL;
+  const allowLoopbackHttp = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/u.test(calendarUrl);
+  const provider = new CalDavProvider({calendarUrl,
+    allowLoopbackHttp,
     authorization: `Basic ${Buffer.from('definitely-not:the-password', 'utf8').toString('base64')}`});
   await assert.rejects(provider.pollChanges(), error => {
     assert.equal(error.code, 'UNAUTHORIZED');

@@ -342,11 +342,17 @@ export class CalDavProvider implements CalendarProvider {
   async pollChanges(): Promise<CalDavChangeSnapshot> {
     const body = await this.request('PROPFIND', PROP_BOTH, '1');
     const responses = parseMultistatus(body);
-    const collection = this.calendarUrl.endsWith('/') ? this.calendarUrl : `${this.calendarUrl}/`;
+    // href 可能是绝对 URL 也可能只有路径（Radicale 只给路径），按解析后的 pathname 归一化比较。
+    const collectionPath = new URL(this.calendarUrl).pathname.replace(/\/+$/, '');
     const etags: Record<string, string> = {};
     let ctag: string | undefined;
     for (const item of responses) {
-      if (item.ctag !== undefined || item.href.replace(/\/$/, '') === collection.replace(/\/$/, '')) {
+      let itemPath = item.href;
+      try { itemPath = new URL(item.href, this.calendarUrl).pathname; } catch { /* keep raw */ }
+      const isCollection = itemPath.replace(/\/+$/, '') === collectionPath;
+      // ctag 是 Apple 扩展，Radicale 等服务器不支持（propstat 404、解析为缺失）——
+      // 此时子资源 etag 表（或集合自身 etag）就是变更信号，ctag 保持可选。
+      if (item.ctag !== undefined || isCollection) {
         if (item.ctag !== undefined) ctag = item.ctag;
         continue;
       }
