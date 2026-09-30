@@ -69,6 +69,8 @@ only its knowledge host, dedicated intake cases and this handoff. All async and 
 use the same complete native tuple. Awaited reads are followed by exact current consumer/lease checks;
 the queued interest commit rereads the grant and synchronous lease before checking task/cancellation/deadline.
 No Renderer fields attach authority, no database or public Runtime wire schema was added.
+The private intake ID stays in host persistence/schedule identity. Cognition RECHECK dependencies retain
+the strict public `{id, revision}` consumer shape; the revision fences each original intake/lease binding.
 
 Feed/source refresh and 304/recheck reuse require existing exact tracked consumer bindings. Native initial
 source acquisition stays a separately admitted Runtime/ToolGateway read; a caller-supplied new task ID

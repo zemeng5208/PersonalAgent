@@ -188,6 +188,25 @@ test('replacing the original intake increments consumer revision and invalidates
   } finally {host.dispose();}
 });
 
+test('persisted intake identity stays host-only while source changes use the strict public consumer contract', async () => {
+  const fx=fixture();fx.sustained();fx.host.dispose();
+  const submitted=[];
+  const host=createKnowledgeWatchHost({...fx.options,workPort:{
+    async read(){return {state:'absent'};},
+    async submit(input){submitted.push(structuredClone(input.work));return {accepted:true,taskId:'recheck-work-task'};},
+  }});host.start();
+  try {
+    await host.consumeInterestTask('followup-task',request());
+    const update=await host.consumeSourceUpdate({namespace:'fixture-user',sourceId:'feed-a',availability:'available',
+      revision:'source-v2',contentSha256:'b'.repeat(64),fetchedAt:iso(at),citation:{locator:'https://example.test/update'}},request());
+    assert.equal(update.accepted,true);
+    assert.equal(submitted.length,1);
+    assert.deepEqual(submitted[0].consumer,{id:'typescript',revision:1});
+    assert.equal(host.snapshot().watches[0].consumer.intakeTaskId,'followup-task');
+    assert.ok(fx.grantReads.every(input=>input.taskId === 'followup-task'));
+  } finally {host.dispose();}
+});
+
 test('Runtime interest source changes during judgment leave unknown intake and prevent a blind retry', async () => {
   let started; let release;
   const ready = new Promise(resolve=>{started=resolve;}); const waiting = new Promise(resolve=>{release=resolve;});

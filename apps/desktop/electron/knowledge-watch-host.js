@@ -1056,7 +1056,7 @@ export function createKnowledgeWatchHost({
       try {
         plan = planKnowledgeReevaluation({namespace, freshness: freshnessFor(group, event),
           dependencies: group.watches.filter(watch => watch.consumer).map(watch => ({
-            consumer: clone(watch.consumer), sourceId: group.binding.sourceId,
+            consumer: {id: watch.consumer.id, revision: watch.consumer.revision}, sourceId: group.binding.sourceId,
             sourceRevision: group.binding.revision, contentSha256: group.binding.contentSha256})),
           ...(prior ? {checkpoint: clone(prior)} : {})});
       } catch { return {accepted: false, reason: 'invalid_source_event'}; }
