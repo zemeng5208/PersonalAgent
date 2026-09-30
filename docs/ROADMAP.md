@@ -82,7 +82,7 @@
 | MOD-02 | M1 起步门槛 | done | goo122 / PR #1 原始 14 operation；PR #34 增至 17 operation 并完成 Desktop 消费验证；只冻结 Core Runtime Profile 1，不冻结整包 |
 | MOD-03 | M1/M2 | done | goo122 / PR #5 / 合并提交 e14aebf / 7 项 Runtime 测试及评审通过 |
 | MOD-04A | Local Profile 可选模型层 | review | `goo122` / 历史 PR #10、#11、#26 已合并；ModelGateway、Pangu 文本 Provider、JSON 提案适配离线通过；代码保留，但新增 Local 能力不进入当前比赛优先级 |
-| MOD-04B | Competition Coordination；Local Agent 可选 | review | `zemeng` / PR #36、#49 已进入 main，离线审批工具循环已验证；Workflow 输入 #72 和 continuation 边界 #80 仅在堆叠分支，真实 AgentArts 调用和多 Agent 结果仍未验收 |
+| MOD-04B | Competition Coordination；Local Agent 可选 | review | `zemeng` / PR #36、#49、#72（Workflow 输入）、#80（continuation 边界）均已进入 main（2026-09-30 台账核对），离线审批工具循环已验证；真实 AgentArts 调用和多 Agent 结果仍未验收 |
 | MOD-05 | M1/M2 | review | goo122 / PR #7、#26、#49 已合并；任务级 SQLite 授权、参数绑定、审批恢复、工具 Evidence、幂等重放和 Competition 离线工具循环已验证；跨任务持续授权、真实 SecretStore 和真实写入恢复尚未完成 |
 | MOD-06 | M2 | todo | 未启动 |
 | MOD-07 | M2 | todo | 未启动 |
@@ -92,8 +92,8 @@
 | MOD-11 | M1 | in_progress | `zemeng` / PR #54 已进入 main 并修复取消受理；转写任务消费 #75 仅合并到语音堆叠分支，DPI/透明命中及比赛实机验收仍未完成 |
 | MOD-12 | M1 | in_progress | `zemeng` / 文字交互、会话恢复、状态展示、取消和大工作区可用；真实 AgentArts 对话、工具回传与语音组合尚未完成端到端验收 |
 | MOD-13 | M1 基础页面、M2 配置闭环 | in_progress | `zemeng` / PR #77 增加过期审批 fail-closed；设置/连接器生产 API、只读 AgentArts 配置状态和完整授权管理仍未完成 |
-| MOD-14 | M1 基础、M2 验收 | in_progress | `zemeng` / 会话、唤醒组合、Runtime 转写消费与合成记录仅在 #61/#70/#75/#79 堆叠分支，尚未进入 main；真实麦克风、ASR/TTS 和 Desktop 组合未验收 |
-| MOD-15 | M4 后扩展 | in_progress | `zemeng` / 有界授权唤醒生命周期位于冲突的 #65/#70 堆叠分支，尚未进入 main；真实唤醒算法、设备、误触和回声测试未完成 |
+| MOD-14 | M1 基础、M2 验收 | in_progress | `zemeng` / 会话生命周期、唤醒组合、Runtime 转写消费与合成语音可行性探针已由 PR #61/#70/#75/#79 进入 main（#184 补 Huawei SIS 桌面接线；2026-09-30 台账核对）；真实麦克风采集、ASR/TTS 与 Desktop 组合验收未完成 |
+| MOD-15 | M4 后扩展 | in_progress | `zemeng` / 有界授权唤醒生命周期已由 PR #70 进入 main（#65 被其覆盖后关闭；2026-09-30 台账核对）；真实唤醒算法、设备、误触和回声测试未完成 |
 | MOD-16 | M2 TraceGuard 所需只读端口、M4 电脑操作 | todo | `zemeng` 已确定，未启动 |
 | MOD-17 | M2 只读、M4 治理 | todo | `zemeng` 已确定，未启动 |
 | MOD-18 | M4 | in_progress | `zemeng` / PR #83 已将受限 `workspace.list` 与 `workspace.read_text` 重建到 main；PR #84 已合入 Competition 审批消费链，证据仍仅为 provisional/mock；写入、命令和 Artifact 未交付 |
@@ -108,7 +108,7 @@
 | MOD-27 | M1.6 | review | `zemeng` / main 已有版本图及 SQLite/Fake 原子 `appendBatch`；事实查询/变化流与自动事实投影的后续增量仍在堆叠分支，真实事实来源、确认消费和数据删除未完成 |
 | MOD-28 | M1.6 | in_progress | `zemeng` / main 已有离线影响分析、显式修复预览/提交和原子 CAS；自动事实投影、外部事实身份落地、真实 AgentArts 驱动和 Evidence 闭环未完成 |
 | MOD-29 | M1.5 第一优先 | in_progress | `zemeng` / AgentArts Runtime 适配与配置入口已有 provisional 实现；真实项目、版本、部署、API 和 trace 读回仍无成功证据 |
-| MOD-30 | M1.5 第一优先 | in_progress | `zemeng` / PR #49 已进入 main，工具提案/审批/continuation 离线链可用；Workflow 输入 #72 和载荷边界 #80 尚未进入 main，真实 MCP/Skill 与目标系统读回未完成 |
+| MOD-30 | M1.5 第一优先 | in_progress | `zemeng` / PR #49、#72（Workflow 输入）、#80（载荷边界）均已进入 main（2026-09-30 台账核对），工具提案/审批/continuation 离线链可用；真实 MCP/Skill 与目标系统读回未完成 |
 | MOD-31 | M1.5/M3 | in_progress | `zemeng` / PR #58 已合并固定合成评估 runner；真实多 Agent 角色、重复运行指标和平台评估未完成 |
 | MOD-32 | M1.5/M5 第一优先 | in_progress | `zemeng` / 手动验收脚手架和失败诊断已有记录；真实发布、健康读回、trace、成本、回滚和端到端成功证据未提供 |
 
