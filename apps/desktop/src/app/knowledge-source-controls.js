@@ -86,9 +86,10 @@ export function mountKnowledgeSourceControls(root, invoke) {
     void act('knowledge.source.submitPatch', payload, result => {
       // Runtime readback alone determines task/approval state. Submission is never displayed as a write success.
       clearNote();
-      field('write-status').textContent = result?.task?.state === 'waiting_approval' ? '已提交，等待审批'
-        : result?.task?.state === 'waiting_reconciliation' ? '写入结果待核实，请查看任务状态'
-          : `已受理整理任务：${result?.task?.state ?? 'pending'}；以任务读回为准`;
+      const taskState = result?.state ?? result?.task?.state ?? 'pending';
+      field('write-status').textContent = taskState === 'waiting_approval' ? '已提交，等待审批'
+        : taskState === 'waiting_reconciliation' ? '写入结果待核实，请查看任务状态'
+          : `已受理整理任务：${taskState}；以任务读回为准`;
     });
   });
   return {element: section, update(snapshot) {render(snapshot?.knowledgeSource ?? snapshot ?? {});},
