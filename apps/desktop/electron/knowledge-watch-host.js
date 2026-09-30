@@ -8,6 +8,7 @@ const KNOWLEDGE_RECHECK_RESULT_KEY = 'knowledge-recheck-result';
 const KNOWLEDGE_RECHECK_RESULT_VERSION = 2;
 const KNOWLEDGE_SOURCE_READ_PREFIX = 'knowledge-watch-source-read:';
 const KNOWLEDGE_RECHECK_JUDGMENT_KEY = 'knowledge-recheck-judgment';
+const FEED_CHECK_PREFIX = 'knowledge-watch-feed-check:';
 const LABELS = {
   suggested: '待建议',
   tracked: '已跟踪',
@@ -279,6 +280,7 @@ function validFeedSourceReadReceipt(value) {
   const sorted = [...value.items].sort((left, right) => left.dedupeKey < right.dedupeKey ? -1
     : left.dedupeKey > right.dedupeKey ? 1 : 0);
   if (new Set(sorted.map(item => item.dedupeKey)).size !== sorted.length
+    || new Set(sorted.map(item => item.contentRef)).size !== 1
     || JSON.stringify(sorted) !== JSON.stringify(value.items)
     || digest(value.items) !== value.contentSha256
     || value.items[0].contentRef !== value.citation
@@ -411,6 +413,9 @@ function readableCheckpoint(raw, namespace) {
     if (!plain(notice) || !sha(notice.id) || notice.delivered === true && !text(notice.receiptId)) {
       return {ok: false, reason: 'checkpoint_notice_unreadable'};
     }
+    if (notice.readAt !== undefined && !Number.isFinite(instant(notice.readAt))) {
+      return {ok: false, reason: 'checkpoint_notice_unreadable'};
+    }
   }
   for (const [workKey, submission] of Object.entries(raw.submissions)) {
     if (!plain(submission) || !['unknown', 'accepted'].includes(submission.state)
@@ -502,6 +507,7 @@ export function createKnowledgeWatchHost({
   let registeredSchedule = false;
   let life = 0;
   let feedReading = false;
+  const activeFeedChecks = new Set();
 
   function clock() {
     const value = now();
@@ -605,6 +611,7 @@ export function createKnowledgeWatchHost({
         sourceRevision: notice.latest?.revision ?? null, contentSha256: notice.latest?.contentSha256 ?? null,
         fetchedAt: notice.latest?.fetchedAt ?? null, availability: notice.latest?.availability ?? null,
         delivered: notice.delivered === true, deliveryReason: notice.deliveryReason ?? null,
+        readAt: notice.readAt ?? null,
         usableAsLatestObservation: bound && projected.state === 'tracked'
           && text(notice.citation) && notice.latest?.availability === 'available' && !unknown,
         dataClass: 'untrusted_source_text',
@@ -637,7 +644,7 @@ export function createKnowledgeWatchHost({
         boundSource: bound ? {sourceId: binding.sourceId, revision: binding.revision,
           contentSha256: binding.contentSha256, validUntil: binding.validUntil,
           lastSuccessfulCheck: binding.lastSuccessfulCheck} : null,
-        latestObservation, update};
+        latestObservation, update, binding: bindingReadiness(projected, head)};
     }).sort((left, right) => left.topicId < right.topicId ? -1 : left.topicId > right.topicId ? 1 : 0);
     return {namespace, generatedAt: iso(clock()), dataClass: 'knowledge_watch_dialogue', items};
   }
@@ -663,7 +670,7 @@ export function createKnowledgeWatchHost({
     return {
       watches: view.watches.filter(watch => ['suggested', 'authorization_required',
         'source_unavailable', 'paused'].includes(watch.state)),
-      notices: view.notices.filter(notice => notice.delivered !== true),
+      notices: view.notices.filter(notice => notice.delivered !== true || !notice.readAt),
       submissions: Object.values(view.submissions).filter(item => item.state === 'unknown'),
     };
   }
@@ -997,7 +1004,11 @@ export function createKnowledgeWatchHost({
       if (!running || !document) return false;
       const topicId = work?.consumer?.id;
       if (!identifier(topicId) || document.tombstones[topicId]) return false;
-      return document.watches[topicId]?.state === 'tracked';
+      const watch = document.watches[topicId];
+      return watch?.state === 'tracked' && watch.consumer?.revision === work.consumer?.revision
+        && watch.boundSource?.sourceId === work.source?.id
+        && watch.boundSource?.revision === work.source?.revision
+        && watch.boundSource?.contentSha256 === work.source?.contentSha256;
     });
   }
   async function submitKeys(keys, plans) {
@@ -1261,6 +1272,10 @@ export function createKnowledgeWatchHost({
       signal = again;
     }
     const result = await lock(() => commitInterest(signal, choice, userEnable));
+    if (result.watch?.state === 'tracked' && request.feedCheck) {
+      result.feedCheck = registerFeedCheck({...request.feedCheck,
+        subscriptionId: result.watch.boundSource?.sourceId, topicIds: [result.watch.topicId]});
+    }
     return result;
   }
   async function consumeSourceUpdate(raw) {
@@ -1331,6 +1346,9 @@ export function createKnowledgeWatchHost({
       const watch = next.watches[id];
       if (!watch) fail('NOT_FOUND');
       if (watch.state === 'revoked') return;
+      if (watch.state === 'paused') return;
+      watch.revision += 1;
+      if (watch.consumer) watch.consumer.revision = watch.revision;
       watch.state = 'paused';
       watch.label = LABELS.paused;
       watch.reason = 'user_paused';
@@ -1355,6 +1373,8 @@ export function createKnowledgeWatchHost({
         watch.reason = 'watch_expired';
         watch.policyState = 'decay';
       } else if (watch.selectedApproach === 'track_public' && watch.boundSource) {
+        watch.revision += 1;
+        if (watch.consumer) watch.consumer.revision = watch.revision;
         watch.state = 'tracked';
         watch.label = LABELS.tracked;
         watch.reason = 'user_resumed';
@@ -1411,6 +1431,13 @@ export function createKnowledgeWatchHost({
   }
   async function refreshSubscribedFeed(request = {}) {
     requireReady();
+    if (request.signal !== undefined && !(request.signal instanceof AbortSignal)) fail('INVALID_ARGUMENT');
+    const signal = request.signal ? AbortSignal.any([controller.signal, request.signal]) : controller.signal;
+    const stillCurrent = async () => {
+      if (signal.aborted || ticket !== life || !running) return false;
+      const valid = !request.revalidate || await request.revalidate() === true;
+      return valid && !signal.aborted && ticket === life && running;
+    };
     if (typeof feedCollect !== 'function') {
       return {accepted: false, availability: 'unavailable', reason: 'source_provider_missing'};
     }
@@ -1423,26 +1450,29 @@ export function createKnowledgeWatchHost({
       const grant = await grantStatus();
       if (grant === 'revoked') return {accepted: false, availability: 'unavailable', reason: 'authorization_required'};
       if (grant === 'unreadable') return {accepted: false, availability: 'unavailable', reason: 'grant_unreadable'};
+      if (!(await stillCurrent())) return {accepted: false, reason: 'feed_check_invalidated'};
       const cursor = document?.sources?.[subscriptionId]?.feedCursor;
       const query = {subscriptionId};
       if (text(cursor)) query.cursor = cursor;
       let result;
-      try { result = await feedCollect(query, controller.signal); }
+      try { result = await feedCollect(query, signal); }
       catch (error) {
-        if (ticket !== life || !running || controller.signal.aborted || error?.code === 'CANCELLED') {
+        if (ticket !== life || !running || signal.aborted || error?.code === 'CANCELLED') {
           return {accepted: false, reason: 'stopped'};
         }
         if (['TIMEOUT', 'EXTERNAL_FAILURE', 'RATE_LIMITED'].includes(error?.code)) {
           return {accepted: false, availability: 'unavailable', reason: 'source_transient_failure', code: error.code};
         }
         if (error?.code === 'NOT_FOUND') {
+          if (!(await stillCurrent())) return {accepted: false, reason: 'feed_check_invalidated'};
           return consumeSourceUpdate({namespace, sourceId: subscriptionId, availability: 'withdrawn',
             fetchedAt: iso(clock()), reason: 'source_withdrawn', provider: 'feeds'});
         }
         return {accepted: false, availability: 'unavailable', reason: 'source_unavailable',
           code: text(error?.code) ? error.code : 'EXTERNAL_FAILURE'};
       }
-      if (ticket !== life || !running || controller.signal.aborted) return {accepted: false, reason: 'stopped'};
+      if (ticket !== life || !running || signal.aborted) return {accepted: false, reason: 'stopped'};
+      if (!(await stillCurrent())) return {accepted: false, reason: 'feed_check_invalidated'};
       const collected = readCollectResult(result);
       if (!collected || collected.collection.subscriptionId !== subscriptionId) {
         return {accepted: false, availability: 'unavailable', reason: 'invalid_feed_result'};
@@ -1488,6 +1518,11 @@ export function createKnowledgeWatchHost({
         identities.push(identity);
       }
       identities.sort((left, right) => left.dedupeKey < right.dedupeKey ? -1 : left.dedupeKey > right.dedupeKey ? 1 : 0);
+      // The current Runtime receipt has one citation. Do not attribute other articles
+      // to the first item while that public receipt contract remains singular.
+      if (new Set(identities.map(item => item.contentRef)).size > 1) {
+        return {accepted: false, availability: 'unavailable', reason: 'feed_citation_ambiguous', provider: 'feeds'};
+      }
       const contentSha256 = digest(identities);
       const revision = opaqueFeedRevision(collected.collection.validators, contentSha256);
       const summary = identities.flatMap(item => [item.title, item.summary]).filter(Boolean).join('\n');
@@ -1508,15 +1543,43 @@ export function createKnowledgeWatchHost({
     } finally { feedReading = false; }
   }
   function registerFeedCheck(input) {
+    requireReady();
     if (!boundScheduler) return {accepted: false, reason: 'scheduler_missing'};
     let schedule;
     try { schedule = knowledgeWatchScheduleInput({namespace, runAt: input?.runAt, checkId: input?.checkId}); }
     catch (error) { return {accepted: false, reason: text(error?.code) ? error.code : 'INVALID_ARGUMENT'}; }
+    const subscriptionId = input?.subscriptionId ?? feedSubscriptionId;
+    let binding = null;
+    if (subscriptionId !== null && subscriptionId !== undefined) {
+      if (!identifier(subscriptionId)) return {accepted: false, reason: 'INVALID_ARGUMENT'};
+      const candidates = Object.values(document.watches).filter(watch =>
+        watch.state === 'tracked' && watch.boundSource?.sourceId === subscriptionId);
+      const topicIds = input?.topicIds ?? candidates.map(watch => watch.topicId);
+      if (!Array.isArray(topicIds) || !topicIds.length || new Set(topicIds).size !== topicIds.length
+        || topicIds.some(id => !identifier(id))) return {accepted: false, reason: 'feed_check_consumers_missing'};
+      const consumers = topicIds.map(id => candidates.find(watch => watch.topicId === id));
+      if (consumers.some(watch => !activeTracking(watch))) {
+        return {accepted: false, reason: 'feed_check_consumers_invalid'};
+      }
+      binding = {version: 1, namespace, schedule: clone(schedule), subscriptionId,
+        consumers: consumers.map(watch => trackingIdentity(watch)).sort((a, b) => a.topicId.localeCompare(b.topicId))};
+      const key = FEED_CHECK_PREFIX + digest(schedule.scheduleId);
+      try {
+        const previous = checkpoints.loadCheckpoint(checkpointTaskId, key);
+        if (previous !== undefined && JSON.stringify(previous) !== JSON.stringify(binding)) {
+          return {accepted: false, reason: 'REVISION_CONFLICT'};
+        }
+        if (previous === undefined) checkpoints.saveCheckpoint(checkpointTaskId, key, binding);
+        if (JSON.stringify(checkpoints.loadCheckpoint(checkpointTaskId, key)) !== JSON.stringify(binding)) {
+          return {accepted: false, reason: 'feed_check_binding_unreadable'};
+        }
+      } catch { return {accepted: false, reason: 'feed_check_binding_unreadable'}; }
+    }
     try {
       const saved = boundScheduler.createSchedule(schedule);
       if (!plain(saved) || saved.scheduleId !== schedule.scheduleId) return {accepted: false, reason: 'scheduler_rejected'};
       registeredSchedule = true;
-      return {accepted: true, schedule: clone(saved)};
+      return {accepted: true, schedule: clone(saved), bound: Boolean(binding)};
     } catch (error) {
       return {accepted: false, reason: text(error?.code) ? error.code : 'scheduler_failed'};
     }
@@ -1545,10 +1608,123 @@ export function createKnowledgeWatchHost({
     try {
       const saved = boundScheduler.listSchedules(knowledgeWatchConversationId(namespace));
       if (!Array.isArray(saved)) return {accepted: false, reason: 'scheduler_rejected'};
+      registeredSchedule = saved.some(item => item.status === 'pending'
+        && item.scheduleId?.startsWith(`knowledge-watch:${namespace}:`));
       return {accepted: true, schedules: clone(saved)};
     } catch (error) {
       return {accepted: false, reason: text(error?.code) ? error.code : 'scheduler_failed'};
     }
+  }
+  function bindingReadiness(watch, head) {
+    if (watch.state !== 'tracked' || !head || typeof runtime?.findTaskByIdempotencyKey !== 'function'
+      || typeof runtime?.loadCheckpoint !== 'function') return {ready: false, reason: 'reevaluation_unavailable'};
+    const keys = Object.entries(document.submissions).filter(([, item]) => {
+      const ctx = item.recheckContext;
+      return ctx?.topicId === watch.topicId && ctx.consumerRevision === watch.consumer?.revision
+        && ctx.observedRevision === head.revision && ctx.observedContentSha256 === head.contentSha256;
+    });
+    if (keys.length !== 1) return {ready: false, reason: 'reevaluation_missing'};
+    const [workKey, submission] = keys[0];
+    const context = getRecheckContext(workKey);
+    if (!context) return {ready: false, reason: 'reevaluation_binding_invalid'};
+    try {
+      const task = runtime.findTaskByIdempotencyKey(workKey);
+      if (!task || task.taskId !== submission.taskId || task.state !== 'succeeded') {
+        return {ready: false, reason: 'reevaluation_unconfirmed', taskState: task?.state ?? 'unknown'};
+      }
+      const result = runtime.loadCheckpoint(task.taskId, KNOWLEDGE_RECHECK_RESULT_KEY);
+      const read = {taskId: task.taskId, knowledgeRecheckResult: result,
+        knowledgeRecheckJudgment: runtime.loadCheckpoint(task.taskId, KNOWLEDGE_RECHECK_JUDGMENT_KEY),
+        taskEvidenceRefs: task.evidenceRefs};
+      if (!validKnowledgeRecheckResult(read, context, {...head, sourceId: context.sourceId})) {
+        return {ready: false, reason: 'reevaluation_result_unavailable', taskState: task.state};
+      }
+      return {ready: result.evaluation.outcome === 'relevant_update',
+        reason: result.evaluation.outcome === 'relevant_update' ? 'reevaluation_confirmed' : 'reevaluation_not_relevant',
+        taskState: task.state};
+    } catch { return {ready: false, reason: 'reevaluation_unavailable'}; }
+  }
+  function activeTracking(watch) {
+    return watch?.state === 'tracked' && !document.tombstones[watch.topicId]
+      && watch.consumer?.id === watch.topicId && Number.isSafeInteger(watch.consumer.revision)
+      && watch.consumer.revision >= 1 && watch.scope?.state === 'granted'
+      && watch.scope.publicLowRiskTracking === true
+      && instant(watch.scope.expiresAt) > clock() && instant(watch.expiresAt) > clock();
+  }
+  function trackingIdentity(watch) {
+    return {topicId: watch.topicId, consumer: clone(watch.consumer),
+      boundSource: clone(watch.boundSource), scope: clone(watch.scope), expiresAt: watch.expiresAt};
+  }
+  /** Resolve only a task actually fired by this Runtime schedule; never trust event payload text. */
+  function getFeedCheckContext(taskId) {
+    if (!identifier(taskId) || !running || disposed || !document || health.status !== 'ready'
+      || typeof runtime?.getTask !== 'function' || !boundScheduler) return null;
+    try {
+      const task = runtime.getTask(taskId);
+      if (!['created', 'planning', 'running'].includes(task.state) || task.cancelRequested
+        || task.conversationId !== knowledgeWatchConversationId(namespace)) return null;
+      const matches = boundScheduler.listSchedules(task.conversationId).filter(schedule =>
+        schedule.status === 'fired' && schedule.taskId === taskId
+        && schedule.scheduleId?.startsWith(`knowledge-watch:${namespace}:`));
+      if (matches.length !== 1) return null;
+      const schedule = matches[0];
+      const {status, taskId: firedTaskId, ...input} = schedule;
+      const binding = checkpoints.loadCheckpoint(checkpointTaskId, FEED_CHECK_PREFIX + digest(schedule.scheduleId));
+      if (!plain(binding) || binding.version !== 1 || binding.namespace !== namespace
+        || !identifier(binding.subscriptionId) || JSON.stringify(binding.schedule) !== JSON.stringify(input)
+        || task.goal !== schedule.goal || instant(schedule.runAt) > clock()
+        || runtime.findTaskByIdempotencyKey(schedule.taskIdempotencyKey)?.taskId !== taskId
+        || !Array.isArray(binding.consumers) || !binding.consumers.length
+        || new Set(binding.consumers.map(item => item.topicId)).size !== binding.consumers.length) return null;
+      if (binding.consumers.some(item => {
+        const watch = document.watches[item.topicId];
+        return !activeTracking(watch) || watch.boundSource?.sourceId !== binding.subscriptionId
+          || JSON.stringify(item) !== JSON.stringify(trackingIdentity(watch));
+      })) return null;
+      return {...clone(binding), taskId};
+    } catch { return null; }
+  }
+  /** Called by the Runtime Application worker with its cancellation signal. No task submission/terminal mutation. */
+  async function consumeFeedCheck(taskId, {signal} = {}) {
+    requireReady();
+    if (!(signal instanceof AbortSignal)) fail('INVALID_ARGUMENT');
+    const context = getFeedCheckContext(taskId);
+    if (!context) return {accepted: false, reason: 'feed_check_binding_invalid'};
+    if (activeFeedChecks.has(taskId)) return {accepted: false, reason: 'feed_check_in_progress'};
+    activeFeedChecks.add(taskId);
+    try {
+      const result = await refreshSubscribedFeed({subscriptionId: context.subscriptionId, signal,
+        revalidate: async () => {
+          if (JSON.stringify(getFeedCheckContext(taskId)) !== JSON.stringify(context)) return false;
+          if (typeof readTrackingGrant === 'function') {
+            for (const consumer of context.consumers) {
+              let grant;
+              try { grant = await readTrackingGrant({namespace, topicId: consumer.topicId, sourceId: context.subscriptionId}); }
+              catch { return false; }
+              if (grant?.state !== 'granted' || grant.publicLowRiskTracking !== true
+                || grant.id !== consumer.scope.id || grant.revision !== consumer.scope.revision
+                || grant.expiresAt !== consumer.scope.expiresAt || instant(grant.expiresAt) <= clock()) return false;
+            }
+          }
+          return JSON.stringify(getFeedCheckContext(taskId)) === JSON.stringify(context);
+        }});
+      return {...result, taskId, scheduleId: context.schedule.scheduleId, subscriptionId: context.subscriptionId};
+    } finally { activeFeedChecks.delete(taskId); }
+  }
+  /** A user reading a notice never supplies an OS delivery receipt or promotes a source revision. */
+  function markNoticeRead(id) {
+    if (!sha(id)) fail('INVALID_ARGUMENT');
+    return lock(() => {
+      requireReady();
+      const notice = document.notices[id];
+      if (!notice) return {accepted: false, reason: 'notice_not_found'};
+      if (notice.readAt) return {accepted: true, reason: 'already_read', id, readAt: notice.readAt};
+      const next = clone(document);
+      const readAt = iso(clock());
+      next.notices[id].readAt = readAt;
+      persist(next);
+      return {accepted: true, reason: 'read', id, readAt};
+    });
   }
   function getRecheckContext(workKey) {
     if (!sha(workKey) || !document || health.status !== 'ready') return null;
@@ -1774,7 +1950,8 @@ export function createKnowledgeWatchHost({
   load();
   return Object.freeze({start, stop, dispose, snapshot, listPending, listWatches, dialogueProjection,
     consumeInterestSignal, consumeSourceUpdate, refreshSource, refreshSubscribedFeed,
-    registerFeedCheck, cancelFeedChecks, restoreFeedChecks, observeNotificationAcknowledgement,
+    registerFeedCheck, cancelFeedChecks, restoreFeedChecks, getFeedCheckContext, consumeFeedCheck,
+    observeNotificationAcknowledgement, markNoticeRead,
     getRecheckContext, bindObservedRevision,
     revoke, pause, resume, enable});
 }
