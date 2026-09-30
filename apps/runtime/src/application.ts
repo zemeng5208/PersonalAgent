@@ -3,7 +3,8 @@ export type {StartSystemObservationSessionRequest, SystemObservationSession} fro
 export {createSystemObservationTool} from '@personal-agent/windows-client';
 export type {RuntimeApplicationOptions, RuntimeApplicationTransport, SubmitHostToolTaskRequest,
   PrepareHostToolTaskRequest, FinalizeHostToolTaskRequest, HostToolTaskReadback,
-  RevokeHostAuthorizationRequest, RevokeHostAuthorizationResult} from './application/runtime-application.js';
+  RevokeHostAuthorizationRequest, RevokeHostAuthorizationResult,
+  ConfirmedSystemObservationSample} from './application/runtime-application.js';
 export type {LocalRepairHostOptions, LocalRepairBinding, SubmitLocalRepairRequest} from './application/local-repair.js';
 export type {CompetitionAvailableTool, CompetitionToolAvailability} from './application/tool-catalog.js';
 export {createAgentArtsRuntimeApplication} from './application/agentarts.js';

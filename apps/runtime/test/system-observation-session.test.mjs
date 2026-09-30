@@ -19,11 +19,11 @@ async function idle(app) {
   }
   assert.fail('Runtime did not become idle');
 }
-async function setup(execute) {
+async function setup(execute, toolDescriptor = descriptor) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'pa-observation-lease-'));
   let time = Date.now();
   const options = {path: path.join(directory, 'runtime.sqlite'), profile: 'huawei_ict_agentarts',
-    hostUserNamespace: 'fixture-user', now: () => new Date(time), tools: [{descriptor, execute}]};
+    hostUserNamespace: 'fixture-user', now: () => new Date(time), tools: [{descriptor: toolDescriptor, execute}]};
   const app = createRuntimeApplication(options);
   return {app, options, advance: ms => { time += ms; },
     request: () => ({expiresAt: new Date(time + 60_000).toISOString(), intervalMs: 1000}),
@@ -57,6 +57,36 @@ test('fixed read-only consent creates independent Policy-backed samples and dura
     assert.equal(count, 2);
     assert.equal(f.app.stopSystemObservationSession(session.sessionId).stopped, true);
     assert.throws(() => f.app.sampleSystemObservationSession(session.sessionId), {code: 'UNAUTHORIZED'});
+  } finally { await f.dispose(); }
+});
+
+test('current observation readback binds only confirmed node metrics to the active consent lease', async () => {
+  const observationDescriptor = {...descriptor, outputSchema: {type: 'object', additionalProperties: true}};
+  const f = await setup(async () => ({source: 'node:os', capturedAt: new Date().toISOString(),
+    cpu: {logicalProcessorCount: 4, utilizationPercent: 92},
+    memory: {totalBytes: 1000, freeBytes: 250, usedBytes: 750, utilizationPercent: 75},
+    uptimeSeconds: 10, unavailable: ['process_breakdown', 'disk_io', 'thermal', 'network_activity']}), observationDescriptor);
+  try {
+    const session = f.app.startSystemObservationSession(f.request());
+    const first = f.app.sampleSystemObservationSession(session.sessionId);
+    await idle(f.app);
+    const confirmed = f.app.readHostToolTask(first.sample.task.taskId).confirmed;
+    assert.deepEqual(f.app.readCurrentSystemObservationSample(first.sample.task.taskId), {
+      taskId: first.sample.task.taskId, source: 'node:os',
+      timestamp: confirmed.result.capturedAt,
+      cpuPercent: 92, memoryPercent: 75, samplingIntervalMs: 1000,
+      evidenceRefs: confirmed.evidenceRefs,
+    });
+
+    f.advance(1000);
+    const second = f.app.sampleSystemObservationSession(session.sessionId);
+    await idle(f.app);
+    assert.ok(f.app.readCurrentSystemObservationSample(first.sample.task.taskId),
+      'older confirmed samples remain valid while their consent lease is active');
+    assert.equal(f.app.readCurrentSystemObservationSample(second.sample.task.taskId).samplingIntervalMs, 1000);
+    f.app.stopSystemObservationSession(session.sessionId);
+    assert.equal(f.app.readCurrentSystemObservationSample(first.sample.task.taskId), undefined);
+    assert.equal(f.app.readCurrentSystemObservationSample(second.sample.task.taskId), undefined);
   } finally { await f.dispose(); }
 });
 
