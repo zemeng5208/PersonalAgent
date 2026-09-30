@@ -4,7 +4,7 @@ import {mkdir,mkdtemp,rm} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {Client} from '@personal-agent/client';
-import {LayaActionChoiceService} from '@personal-agent/cognition';
+import {LayaActionChoiceService,createCommittedMeetingProjectionReader,selectProjectedRepairScope} from '@personal-agent/cognition';
 import {createAgentArtsRuntimeApplication,createProactiveCognitionHost} from '@personal-agent/runtime/application';
 import {createDesktopGoalCognitionHost} from '../electron/goal-cognition-host.js';
 import {createGoalHostCore} from '../electron/goal-host-core.js';
@@ -81,7 +81,7 @@ async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCred
     createHost:input=>createProactiveCognitionHost({...input,now:()=>time}),onTask:item=>announced.push(item),now:()=>time};
   host=createDesktopGoalCognitionHost(options);
   t.after(async()=>{host.close();facts.close();application.close();await rm(directory,{recursive:true,force:true});});
-  return {application,client,sent,announced,store,sourceTaskId:sourceTask.taskId,host:()=>host,layaCalls:()=>layaCalls,
+  return {application,client,facts,sent,announced,store,sourceTaskId:sourceTask.taskId,host:()=>host,layaCalls:()=>layaCalls,
     goalWrites:()=>goalWrites,releaseFetch:()=>releaseFetch?.(),
     restoreLaya:()=>{unavailable=false;},advance:(ms=1100)=>{time+=ms;},restart:()=>{host.close();host=createDesktopGoalCognitionHost(options);return host;}};
 }
@@ -327,6 +327,108 @@ test('Desktop reports applied only after real Runtime repair approval, CAS, Evid
   f.store.append(7,node('plan','plan',[ref('decision',2)],'Subsequent explicit Plan'));
   const changed=f.host().snapshot().reviews[0];assert.equal(changed.executionVerified,true);assert.equal(changed.graphUpdateVerified,false);
   assert.notEqual(changed.status,'applied');assert.equal(f.store.read().revision,8);
+});
+
+async function mixedMeeting(t,options={}) {
+  const f=await fixture(t,options),at=new Date().toISOString();
+  const context=()=>({deadline:new Date(Date.now()+60_000).toISOString(),signal:new AbortController().signal});
+  const keys=['meeting','other'].map(id=>({vaultId:'public-demo',path:`${id}.md`,factId:`${id}/update`}));
+  const record=(key,revision,summary)=>f.facts.recordPublicSource({...key,sourceRevision:revision.repeat(64),line:1,summary,
+    observedAt:at,validFrom:'2026-01-01T00:00:00.000Z',validUntil:'2099-01-01T00:00:00.000Z',
+    expectedFactRevision:f.facts.readPublicSourceHead(key)},context()).fact.ref;
+  const initialRefs=keys.map(key=>record(key,'a',`${key.path} initial`));
+  await f.facts.drain({limit:10,maxBatches:2,...context()});
+  f.facts.processImpacts({at,limit:10,...context()});
+  const initial=f.facts.listImpactReceipts({afterGraphRevision:0,limit:10}).at(-1);
+  const nodeRefs=initialRefs.map(fact=>initial.projection.links.find(link=>same(link.fact,fact)).node);
+  for(let i=0;i<2;i++) {
+    const id=i===0?'meeting':'other';
+    f.store.append(f.store.read().revision,node(`${id}-goal`,'goal',[nodeRefs[i]]));
+    f.store.append(f.store.read().revision,node(`${id}-plan`,'plan',[ref(`${id}-goal`)]));
+  }
+  const priorRevision=f.store.read().revision;
+  const changed=keys.map(key=>record(key,'b',`${key.path} changed`));
+  await f.facts.drain({limit:10,maxBatches:2,...context()});
+  f.facts.processImpacts({at,limit:10,...context()});
+  const receipt=f.facts.listImpactReceipts({afterGraphRevision:priorRevision,limit:10})[0];
+  assert.equal(receipt.projection.links.length,2);
+  const meetingFact=receipt.projection.links.find(link=>same(link.fact,changed[0])).node;
+  const fact=f.store.read().history.findLast(item=>same(item,meetingFact));
+  const event={eventId:'public-mixed-meeting',source:fact.sourceRef,meetingFactId:meetingFact.id,
+    originalSummary:'meeting.md initial',newSummary:fact.summary,sourceRevision:'b'.repeat(64),detectedAt:at,...context()};
+  const input={graphNamespace:namespace,projection:receipt.projection};
+  const reader=createCommittedMeetingProjectionReader({namespace,store:f.store,facts:f.facts,
+    readSourceRevision:async()=>({source:event.source,sourceRevision:event.sourceRevision,meetingFact})});
+  const request=()=>({...input,meetingFact,sourceRevision:event.sourceRevision,at,workKey:'public-mixed-meeting',...context()});
+  const port=()=>f.host().meetingReviewedRepairPort(reader);
+  return {...f,at,context,event,input,meetingFact,reader,request,port};
+}
+const same=(a,b)=>a.id===b.id && a.revision===b.revision;
+
+test('mixed Fact batch meeting review uses original proof, exact one-chain candidate, same Runtime identity and restart scope',async t=>{
+  const f=await mixedMeeting(t),before=f.store.read();
+  f.host().configure({enabled:true,cloudAllowed:false});
+  const port=f.port();await port.readCommittedProjection(f.event,f.context());
+  const value=await port.reviewCommittedFact(f.request());
+  assert.equal(value.task.state,'succeeded');
+  assert.deepEqual(value.review.affected.map(item=>item.node.id),['meeting-goal','meeting-plan']);
+  assert.deepEqual(value.review.selectedOption.repair.changes.map(item=>item.node.id),['meeting-goal','meeting-plan']);
+  const proof=f.application.runtime.loadCheckpoint(value.task.taskId,'desktop-meeting-review-scope-v1');
+  assert.deepEqual(proof.input,f.input);assert.deepEqual(proof.meetingFact,f.meetingFact);
+  assert.equal(proof.sourceRevision,f.event.sourceRevision);assert.equal(f.layaCalls(),1);
+  f.restart().configure({enabled:true,cloudAllowed:false});
+  const reopened=f.port();await reopened.readCommittedProjection(f.event,f.context());
+  const replay=await reopened.reviewCommittedFact(f.request());
+  assert.equal(replay.task.taskId,value.task.taskId);assert.equal(f.layaCalls(),1);
+  assert.deepEqual(reopened.readReview(value.task.taskId).review.affected,value.review.affected);
+  const legacy=f.application.runtime.submitTaskWithCheckpoint({goal:'Legacy full batch review',
+    conversationId:`proactive-cognition:${namespace}`,idempotencyKey:'synthetic-legacy-full-batch'},'proactive-cognition-intent-v1',
+    {version:1,graphNamespace:namespace,bindingVersion:'desktop-goal-analysis-v1',evaluatedAt:f.at,trigger:{kind:'fact',input:f.input}});
+  assert.throws(()=>reopened.readReview(legacy.taskId),/缺少原批次范围凭据/);
+  f.application.runtime.saveCheckpoint(value.task.taskId,'proactive-cognition-review-v1',
+    {...value.review,affected:selectProjectedRepairScope(before,f.at,f.input).items});
+  assert.throws(()=>reopened.readReview(value.task.taskId),/范围绑定/);
+  await assert.rejects(reopened.applyDecision(value.task.taskId,f.context()),/范围绑定/);
+  assert.equal(f.sent.length,0);assert.deepEqual(f.store.read(),before);
+});
+
+test('meeting full proof rejects unrelated link tampering before choose and rejects source revision substitution on recovery',async t=>{
+  const f=await mixedMeeting(t),before=f.store.read();
+  f.host().configure({enabled:true,cloudAllowed:false});
+  const altered=structuredClone(f.input);altered.projection.links.find(link=>!same(link.node,f.meetingFact)).node.revision=99;
+  const invalid=f.host().meetingReviewedRepairPort(async()=>({sourceRevision:f.event.sourceRevision,
+    meetingFact:f.meetingFact,input:altered}));
+  await invalid.readCommittedProjection(f.event,f.context());
+  await assert.rejects(invalid.reviewCommittedFact({...f.request(),projection:altered.projection}),/投影尚未完成或已经变化/);
+  assert.equal(f.layaCalls(),0);assert.deepEqual(f.store.read(),before);
+  const valid=f.port();await valid.readCommittedProjection(f.event,f.context());
+  const original=await valid.reviewCommittedFact(f.request());
+  const changedSource=f.host().meetingReviewedRepairPort(async()=>({sourceRevision:'c'.repeat(64),meetingFact:f.meetingFact,input:f.input}));
+  await changedSource.readCommittedProjection(f.event,f.context());
+  await assert.rejects(changedSource.reviewCommittedFact({...f.request(),sourceRevision:'c'.repeat(64)}),/凭据不能替换/);
+  assert.equal(f.layaCalls(),1);assert.equal(valid.readReview(original.task.taskId).task.taskId,original.task.taskId);
+  assert.deepEqual(f.store.read(),before);
+});
+
+test('meeting reviewed repair CAS leaves the other Fact Goal and Plan in the same completed batch unchanged',async t=>{
+  const f=await mixedMeeting(t,{controlledRepair:true}),before=f.store.read();
+  const unrelated=before.history.filter(item=>item.id==='other-goal'||item.id==='other-plan'
+    || item.id===f.input.projection.links.find(link=>!same(link.node,f.meetingFact)).node.id);
+  f.host().configure({enabled:true,cloudAllowed:true});
+  const port=f.port();await port.readCommittedProjection(f.event,f.context());
+  const value=await port.reviewCommittedFact(f.request());
+  await terminal(f.application,value.handoff.task.taskId);
+  assert.doesNotMatch(f.sent[0].query,/other-goal|other-plan|other\.md changed/);
+  const accepted=await port.applyDecision(value.task.taskId,f.context());
+  for(let n=0;n<100 && f.application.runtime.getTask(accepted.taskId).state!=='waiting_approval';n++) await new Promise(resolve=>setTimeout(resolve,5));
+  const approval=(await f.client.call('approval.list',{taskId:accepted.taskId})).items[0];assert.ok(approval);
+  await f.client.call('authorization.respond',{approvalId:approval.approvalId,expectedRevision:approval.revision,decision:'allow_once'});
+  assert.equal((await terminal(f.application,accepted.taskId)).state,'succeeded');
+  const result=await port.applyDecision(value.task.taskId,f.context());
+  assert.equal(result.status,'applied');assert.equal(result.executionVerified,true);assert.equal(result.graphUpdateVerified,true);
+  assert.deepEqual(result.updatedNodes.map(item=>[item.id,item.revision]),[['meeting-goal',2],['meeting-plan',2]]);
+  assert.deepEqual(f.store.read().history.filter(item=>unrelated.some(original=>original.id===item.id)),unrelated);
+  assert.equal(f.layaCalls(),1);assert.ok(result.evidenceRefs.length);
 });
 
 

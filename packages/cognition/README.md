@@ -4,6 +4,19 @@ Owner: zemeng. Profile: huawei_ict_agentarts. Pure local domain increment with
 an optional host-bound persistent-store consumer; no AgentArts, Memory,
 scheduler, tool execution or TaskRuntime state transition.
 
+`ReviewedMeetingFactConsumer` consumes a trusted completed Fact projection and
+the existing Runtime reviewedRepair host. It persists the original review/tool
+identity and impact digest, keeps uncertainty unchanged, and requires tool
+Evidence plus graph readback before reporting applied. It never writes the graph
+from a policy callback. `createCommittedMeetingProjectionReader` binds existing
+Fact receipts to an authorized source revision readback.
+
+`createInboxPageConsumer` adds bounded page backpressure and pause/resume to the
+existing Runtime InboxTriagePipeline. Cursor, fingerprint, receipt cache and
+private storage remain with that pipeline. `measureTriageClassifier` measures
+actual public classify awaits only. See [cloud ports and local acceptance](CLOUD-MVP-COGNITION.md)
+for exact caller injection, migration and verification limits.
+
 `prepareReviewedRepair(snapshot, at, review, candidate?)` validates an exact
 offered, eligible REVISE candidate against the current affected scope. It uses
 the existing repair preflight and binds target/dependency refs and canonical

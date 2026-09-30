@@ -57,7 +57,8 @@ export interface MeetingDecisionReceipt {
   readonly meetingFactId: string;
   readonly selectedCandidateId: string;
   readonly actionId: string;
-  readonly status: 'applied' | 'proposal' | 'requires_review' | 'deferred' | 'already_processed' | 'conflict';
+  readonly status: 'applied' | 'proposal' | 'requires_review' | 'deferred' | 'already_processed' | 'conflict'
+    | 'submitted' | 'waiting_approval' | 'waiting_reconciliation' | 'kept';
   readonly confidence: number | null;
   readonly reason: string;
   readonly graphRevisionBefore: number;
@@ -68,6 +69,14 @@ export interface MeetingDecisionReceipt {
   readonly proposedModifications?: readonly NodeInput[] | undefined;
   /** Trusted receipt marker: inference failed before any proposal or execution. Legacy receipts do not opt in. */
   readonly retryableInference?: true | undefined;
+  /** Existing Runtime review/tool identity. Model text cannot populate execution evidence. */
+  readonly reviewTaskId?: string | undefined;
+  readonly reviewScopeDigest?: string | undefined;
+  readonly repairTaskId?: string | undefined;
+  readonly decisionAction?: 'KEEP' | 'RECHECK' | 'REVISE' | undefined;
+  readonly executionVerified?: boolean | undefined;
+  readonly graphUpdateVerified?: boolean | undefined;
+  readonly evidenceRefs?: readonly string[] | undefined;
 }
 
 export interface MeetingReceiptRecord {
@@ -633,7 +642,7 @@ export class MeetingRescheduleCoordinator {
         selectedCandidateId: 'cand-adjust-schedule',
         actionId: 'adjust_schedule',
         status: 'already_processed',
-        confidence: 1.0,
+        confidence: null,
         reason: '图谱已在历史事务中持久化该改期事件（崩溃恢复去重保护）',
         graphRevisionBefore: initialSnapshot.revision - 1,
         graphRevisionAfter: initialSnapshot.revision,
@@ -717,7 +726,13 @@ export class MeetingRescheduleCoordinator {
 
     // 5. Impact analysis on prospective graph
     const impactReport = analyzeImpact(prospectiveGraph, event.detectedAt);
-    const recheckItems = impactReport.items.filter(item => item.action === 'RECHECK');
+    // Full impact replay also contains older, unrelated invalid dependencies.
+    // This consumer may repair only dependents of the exact meeting Fact update.
+    const recheckItems = impactReport.items.filter(item => item.action === 'RECHECK'
+      && item.causes.some(cause => cause.reason === 'superseded'
+        && cause.reference.id === currentMeetingFact.id
+        && cause.reference.revision === currentMeetingFact.revision
+        && cause.currentRevision === prospectiveFact.revision));
 
     // 6. Generate candidates with topological dependency preservation
     const candidates = this.buildCandidates(prospectiveGraph, prospectiveFact, recheckItems, event);
