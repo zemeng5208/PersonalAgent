@@ -4,6 +4,12 @@
 
 ## 公开入口
 
+云显式选择新增 `createCloudSkillSelectionPort`，注入**同一已有 worker**；`describe()` 返回现有
+CoordinationAvailableTool 的可投影 type+enum schema，`dispatch()` 接原 CoordinationToolProposalResult，
+由现协调 worker 在 tools.invoke 之前分派，不注册成 RegisteredTool。PUBLIC许可缺失不可公布，
+`assertReceiptAllowed` 在真实 cloud I/O 前复查原任务/提案/版本/config/许可/receipt。
+新代码与 prepared cases 本轮未 build/测试；准确 P8/P6/CloudRuntime 接线见 [云交接](CLOUD_HANDOFF.md)。
+
 ```ts
 import {createReferenceSummarySkill} from '@personal-agent/skills';
 const skill = createReferenceSummarySkill({

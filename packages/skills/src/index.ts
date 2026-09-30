@@ -2,9 +2,12 @@ import {createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {ProtocolError, validateToolValue} from '@personal-agent/contracts';
 import type {AgentToolInvocation, AgentToolPort, AgentWorkerContext, ToolInvocationResult} from '@personal-agent/agents';
+export {createCloudSkillSelectionPort, CLOUD_SKILL_CHOICE_SCHEMA, CLOUD_SKILL_TOOL_NAME, CLOUD_SKILL_TOOL_VERSION, CLOUD_SKILL_PUBLIC_ENUM_PATHS} from './cloud-selection.js';
+export type {VersionedSkillWorkerPort, PublicSkillSource, CloudSkillChoice, CloudSkillContext, CloudSkillSelection, CloudSkillReceipt, CloudSkillSelectionOptions} from './cloud-selection.js';
 
 export const REFERENCE_SUMMARY_SKILL_ID='workspace-reference-summary';
 export const REFERENCE_SUMMARY_SKILL_VERSION='1.0.0';
+export const REFERENCE_SUMMARY_BODY_SHA256='652c3a39baceac9d4508d9aef2b034e98f579c59bfc5589d382cdd11d51969e5';
 const TOOL_NAME='mcp.workspace.read_text';
 const TOOL_VERSION='1.0.0';
 const CHECKPOINT='skill:workspace-reference-summary:v1';
@@ -82,7 +85,8 @@ export function createReferenceSummarySkill(options?:ReferenceSummaryOptions) {
     try {body=readFileSync(new URL('../workspace-reference-summary/SKILL.md',import.meta.url),'utf8').replace(/\r\n/g,'\n');}
     catch {return fail('UNSUPPORTED_CAPABILITY','Skill bundle could not be loaded');}
     // This is an owned fixed Agent Skills bundle, not a general YAML/script loader.
-    if(!body.startsWith('---\nname: workspace-reference-summary\ndescription: ') || body.length>16384) fail('PROTOCOL_MISMATCH','Skill bundle metadata is incompatible');
+    if(!body.startsWith('---\nname: workspace-reference-summary\ndescription: ') || body.length>16384
+      || hash(body)!==REFERENCE_SUMMARY_BODY_SHA256) fail('PROTOCOL_MISMATCH','Skill bundle metadata or body digest is incompatible');
     const base={id:REFERENCE_SUMMARY_SKILL_ID,version:REFERENCE_SUMMARY_SKILL_VERSION,
       name:'Workspace reference summary',description:'Read approved text and return two source lines with provenance.',
       capabilities:[{toolName:TOOL_NAME,toolVersion:TOOL_VERSION,sideEffect:'read' as const}],inputSchema:parameters,
@@ -123,9 +127,16 @@ export function createReferenceSummarySkill(options?:ReferenceSummaryOptions) {
     const binding=JSON.stringify({taskId:context.taskId,skillId:input.skillId,version:input.version,digest:input.digest,path:input.path});
     let saved=context.loadCheckpoint(CHECKPOINT) as Checkpoint|undefined;
     if(saved && (typeof saved!=='object' || saved.binding!==binding)) fail('REVISION_CONFLICT','Skill task is bound to different input or version');
+    if(saved?.configurationRef && configurationRef()!==saved.configurationRef) fail('REVISION_CONFLICT','Skill configuration changed');
+    if(saved?.read) {
+      if(saved.read.path!==input.path || typeof saved.read.text!=='string' || Buffer.byteLength(saved.read.text)>262144
+        || hash(saved.read.text)!==saved.read.contentDigest) fail('RESULT_UNKNOWN','Saved Skill body does not match its digest');
+    }
     if(saved?.phase==='complete') {
-      if(saved.configurationRef && configurationRef()!==saved.configurationRef) fail('REVISION_CONFLICT','Skill configuration changed');
-      return structuredClone(saved.outcome!);
+      if(!saved.read || saved.outcome?.state!=='confirmed' || saved.outcome.sources?.length!==1
+        || saved.outcome.sources[0]?.path!==input.path || saved.outcome.sources[0]?.contentDigest!==saved.read.contentDigest
+        || JSON.stringify(saved.outcome.evidenceRefs)!==JSON.stringify(saved.evidenceRefs)) fail('RESULT_UNKNOWN','Saved Skill receipt is inconsistent');
+      return structuredClone(saved.outcome);
     }
     const runId=`skill-read-${context.taskId}-${input.digest.slice(0,16)}`;
     if(saved?.phase==='started' || saved?.phase==='unknown') {

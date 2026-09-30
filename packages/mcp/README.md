@@ -25,6 +25,14 @@ stop/dispose 先撤销在途、移除连接，在 Windows 用已持有的参考�
 
 ### 公开参考结果出机
 
+编码工作区请使用新增 `createWorkspaceReferenceExport` / `WorkspaceReferenceExportOptions`，源码
+`src/workspace-export.ts`。复用以下 Query/Authorization DTO，但 readConfirmed 返回原
+`@personal-agent/coding-tools` 的 `{runId,result:WorkspaceReadResult}`，不冒 MCP。
+支持安全相对 `.js` 等路径；结果要求 utf-8/byteLength/content/sha256 一致；固定只出
+`{source:'approved-workspace-reference',contentDigest,readConfirmed:true}`。
+native root/configGeneration、task/proposal、Policy/原确认/作用域/Evidence 核实和 cloudExport 许可由 P6/P8 提供。
+该新增源码/prepared case 本轮未 build/测试；详细统一接线和验收入口见 [云交接](../skills/CLOUD_HANDOFF.md)。
+
 `createPublicReferenceExport(options?)` 与现有 trusted `CompetitionToolExport` 结构兼容，固定 MCP 工具和 `exportPolicyVersion:'2.0.0'`，无 options 默认拒绝。options 只由原生受信宿主注入：
 
 - `currentConfigurationRef()`：当前许可会话的不透明配置引用；撤销/断连为 undefined。
