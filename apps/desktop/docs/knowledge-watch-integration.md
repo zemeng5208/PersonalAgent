@@ -7,7 +7,10 @@ P7 宿主及测试由 zemeng 维护；`apps/desktop/electron/main.js`、Runtime 
 拥有文件：
 
 - `apps/desktop/electron/knowledge-watch-host.js`
+- `apps/desktop/src/app/knowledge-controls.js`
 - `apps/desktop/test/knowledge-watch-host.test.mjs`
+- `apps/desktop/test/knowledge-watch-due.test.mjs`
+- `apps/desktop/test/knowledge-controls.test.mjs`
 - `apps/desktop/docs/knowledge-watch-integration.md`
 
 ## 公开导出
@@ -67,6 +70,150 @@ import {
 - `createDesktopTodoHost` 内部的 `NotificationService` 没有公开句柄。没有可传入的实例时就省略 `notificationService`。提醒保持 `delivered: false`，原因 `notification_port_missing`。不要在总装里伪造 `{delivered: true}`。
 - `localLaya.choose` 不是兴趣决策。兴趣决策必须经过 `LayaInterestDecisionService`。模型进程仍只有现有的 `localLaya.start` / `localLaya.stop`。
 - 桌面没有来源推送总线。不要为了本宿主新增 `setInterval`。到点后由现有 Runtime `dispatchDueSchedules` / `recoverMissedSchedules` 产生任务，再显式调用 `refreshSubscribedFeed`。宿主自己不调用这两个分发方法。
+
+## 2026-09-30 专属到期消费接口（P8 挂载）
+
+本增量基于 main `dedd52c5`；仅修改 P7 owned 宿主、知识页和专属测试/本说明。
+保留 Runtime checkpoint v2、真实来源回执与本地判断 Evidence 门槛。宿主没有执行循环、
+轮询、任务库或模型进程，不调用 `runTask`，也不改变任务终态。下面接口需由 P8
+接入共享 main / Runtime Application；本 PR 的局部通过不证明接线已生效。
+
+1. 可信主对话持续兴趣证据仍调用 `consumeInterestSignal(signal, {deadline, signal})`，
+   `signal` 中的 source/scope/evidence 来自已有宿主。外部 excerpt 不进 `task.goal`，
+   不允许 Renderer 自报授权、来源版本或兴趣证据。一次搜索仍 `suggested`。
+2. 已有合法公开低风险范围且 Laya 真正选中后，可在 request 附上
+   `feedCheck: {checkId, runAt}`。仅结果为 `tracked` 时自动调用现有 Runtime schedule；
+   返回 `result.feedCheck`，失败不冒充已注册。`runAt` 必须由可信 Runtime 调度策略提供，
+   本宿主不推算下一次时间，不启动周期任务。
+3. 显式注册为 `registerFeedCheck({checkId, runAt, subscriptionId, topicIds?})`。
+   `subscriptionId` 必须等于每个消费者现有 `boundSource.sourceId`，省略 `topicIds`
+   取这个来源的当前 tracked 消费者。当前 scope/expiresAt 必须有效。公开 Runtime
+   `ScheduleInput` 不变；精确 schedule、subscriptionId、consumer revision、boundSource、
+   scope 和期限写入同一 root task 的 `knowledge-watch-feed-check:<scheduleId 的 SHA256>`
+   检查点，写后回读。相同 checkId 改输入或消费者返回 `REVISION_CONFLICT`。
+   旧调用未提供 subscriptionId 且构造未配置默认 id 时仍可注册，`bound:false`；
+   这种旧记录不能触发来源读取，需以新 checkId 注册明确绑定。
+4. Runtime 原有 due 分发后，`getFeedCheckContext(taskId)` 只认**真实 fired schedule**、
+   同一 taskId/idempotencyKey/conversation/goal，以及完整 durable 消费者绑定。
+   不匹配返回 `null`。main 的 `task.created` 及启动恢复遍历均可用它路由；
+   执行前读 `runtime.getTask`，已 running/终态/unknown 的任务不能重新提交或重跑。
+5. Runtime Application 的受控 worker 调用
+   `consumeFeedCheck(taskId, {signal: context.signal})`。这只执行 `feedCollect`，
+   后者仍须使用已 prepare 的 `feeds.collect.execute(query, {taskId: rootTaskId, signal})`
+   和现有 availability/授权门槛。返回 `accepted/reason/availability/notified/submitted` 与
+   `taskId/scheduleId/subscriptionId`。任务 `succeeded` 只表示该 worker 完成来源检查；
+   不能把它当语义重评或新版本已绑定。失败返回必须由 Application 映射明确错误，
+   `feed_page_incomplete` 也不能写成完整来源检查成功。
+6. 同一个 feed check 在途重复调用返回 `feed_check_in_progress`。取消、stop、pause/revoke、
+   scope 变化、消费者变化会阻止迟到读取落入事实投影。注入 `readTrackingGrant` 时，
+   读取前后针对每个 `{namespace, topicId, sourceId}` 重读准确 grant 的 id/revision/expiry。
+   此处是重验已有授权，不是为每次公开读取新增审批。
+7. 初始化 `start()` 后调用 `restoreFeedChecks()`，只列出既有 Runtime schedules，
+   并恢复 pending 调度的取消责任。`cancelFeedChecks()` / `stop()` / `dispose()` 保留
+   原有专属对话取消边界；不会取消他人的 schedules。暂停/恢复增加 consumer revision，
+   旧 due 与旧重评任务不再恢复有效，恢复后需要新 checkId。
+
+精确接线入口（伪代码中的 dispatch 函数需由 P8 在 Runtime Application 中提供）：
+
+```js
+// task.created / 启动恢复；只路由公开 Runtime 返回的 taskId。
+const context = knowledgeWatchHost.getFeedCheckContext(task.taskId);
+if (task.state === 'created' && context) {
+  // Application 负责状态、deadline、取消、错误与 Evidence；main 不直接 runTask。
+  dispatchKnowledgeFeedCheckTask(task.taskId, {
+    consume: workerContext => knowledgeWatchHost.consumeFeedCheck(task.taskId, {
+      signal: workerContext.signal,
+    }),
+  });
+}
+// 原有 RECHECK <workKey> 路由仍使用 getRecheckContext(workKey)、
+// createProductionKnowledgeReevaluator({layaChooser: localLaya}) 和现有 checkpoint v2。
+```
+
+本宿主不提供伪成功的 dispatch 函数；P8 尚未挂载上述 Application 回调。
+回调读到 `observed/unchanged` 与 `submitted` 以后，仍由既有真实 RECHECK 路径完成重评。
+绑定动作仍由 `bindObservedRevision(topicId)` 严格校验准确 consumer/workKey/版本/hash/
+citation/来源回执/判断 Evidence；`succeeded`、已读、系统已投递都不能代替它。
+
+### 知识页动作与 P8 IPC
+
+| UI 动作 | main 必须调用 | 含义 |
+| --- | --- | --- |
+| `knowledge.watch.refresh`，`{subscriptionId}` | `refreshSubscribedFeed(payload)` | 按 tracked source ID 串行读取，未变化不报更新 |
+| `knowledge.watch.read`，`{id}` | `await markNoticeRead(id)` | 宿主时间记录用户已读，幂等；不修改 delivered/boundSource |
+| `knowledge.watch.pause`，`{topicId}` | `await pause(topicId)` | 暂停并使旧 consumer 失效 |
+| `knowledge.watch.resume`，`{topicId}` | `await resume(topicId)` | 恢复合法未过期关注；不重开撤销墓碑 |
+| `knowledge.watch.bind`，`{topicId}` | 既有 `bindObservedRevision(topicId)` | 精确 v2/Evidence 读回后绑定 |
+
+所有动作由 P8 在现有 Competition IPC 白名单接线，校验 payload，仅传规定字段，
+`await` 后 `publish()`。UI 每次动作后回读 `knowledge.watch.status`，不先改本地事实。
+`dialogue.items[].binding` 新增 `{ready, reason, taskState?}` 展示字段，只在宿主同步读回
+准确 v2/Evidence 后 ready；绑定方法仍做完整异步重验。未知/不相关/不完整结果按钮禁用。
+保留玻璃/CSS；不安全引用协议只显示文字，错误/外部字符串先转义。
+
+`observeNotificationAcknowledgement(batch)` 仅由可信系统通知适配器提供真实 batch 回执。
+用户界面不再调用 `knowledge.watch.acknowledge`，P8 应移除此 Renderer IPC 权限。
+旧 IPC 不能继续接受 Renderer 提供的 `state:delivered`。已读通过 notice 的可选 `readAt`
+保存于现有检查点，无公共 Schema/数据库迁移，也不创建另一份通知库。
+
+### 引用限制与实际验证
+
+未注入 v2 回执端口时，v1 单一 citation 仍只表示第一项 contentRef；多个不同
+contentRef 返回 `feed_citation_ambiguous` 并保留旧来源头/绑定/任务。
+已注入端口的多文章路径使用下述逐项引用；单一文章和同源多个 topic 仍按 consumer/workKey 绑定。
+
+### 多文章来源回执 v2（P7 实现，P8 公共导出与接线）
+
+`apps/runtime/src/application/knowledge-feed-receipt.ts` 提供纯确定性构造与验证。
+沿用 feeds.collect 的五个条目字段和整页哈希，增加逐项
+`citationItems: [{itemKey, contentRef, itemContentSha256}]`；receiptId 包含该映射。
+每条 summary 记录原始标题、摘录、定位符和条目哈希，不把生成摘要作为来源内容。
+多定位符页面的 citation 为内部 `knowledge-feed-citations:<hash>` 身份，不能作为网页引用。
+主对话 answer 将它放入 citationBundleRef，citation 为 null；items/citations 各带原文、
+自己的定位符和来源版本。知识页将每条摘录紧邻其对应引用显示，通知同样使用逐项引用。
+
+P8 在 `@personal-agent/runtime/application` 公开导出以下四个函数，替换生产 evaluator
+的手写 v1 来源校验，同时保留根任务、consumer/binding、授权、deadline、取消和 Evidence 门槛。
+`verifyKnowledgeFeedReceiptBinding(raw, {namespace, sourceId, observedAt, revision,
+contentSha256, citation, receiptId, summary})` 要求当前 context 精确一致；summary 为回执前 2000 字符。
+main 通过 `knowledgeFeedReceipts` 注入以下同名函数，不经跨应用私有路径导入：
+
+```js
+knowledgeFeedReceipts: {
+  createKnowledgeFeedReceipt,
+  parseKnowledgeFeedReceipt,
+  verifyKnowledgeFeedReceiptBinding,
+  knowledgeFeedReceiptItems,
+}
+```
+
+旧 v1 单文章回执保持可恢复；旧 v1 多文章回执保持结构可读，但不能提升为当前事实。
+不覆写旧 unknown 工作或已有回执；获取 v2 需合法的新采集与重评上下文。
+来源头缺失回执字段时只从同一根任务、准确 source/revision/hash/time/citation 的唯一
+持久 context 恢复映射，不能用别的根任务或模型声明替代。篡改映射/摘录/哈希、缺定位符、
+来源或版本不匹配均拒绝。重评结果仍沿用既有 v2/Evidence，未修改公共请求 Schema 或数据库迁移。
+
+本增量局部验证：单文件 TypeScript 严格编译；回执测试 3/3，覆盖逐项映射、篡改拒绝和 v1 恢复；
+宿主/展示测试 2/2，覆盖两个 consumer、合成 judgment/Evidence 门槛、检查点恢复与逐项引用转义。
+宿主测试直接注入该纯 helper，仅为离线组合夹具；P8 公共导出及实际生产 evaluator 接线尚待读回。
+此次没有重跑浏览器、模型或 Desktop 冒烟，真实 RSS/用户会话/Laya/AgentArts 仍未验收。
+
+局部验证：新增 due/取消/暂停恢复/准确 grant/已读/v2 门槛 8 项离线端口测试；
+既有相关 5 项测试；两个 owned JS 的语法检查和 `git diff --check`。
+知识页使用已有 Playwright 和已安装 Chrome、1100×1050 合成 fixture 实际渲染，
+检查来源 ID、已读/系统投递分离、暂停/恢复/撤销、绑定按钮门槛、注入转义与无控制台错误。
+渲染测试显式 `PA_KNOWLEDGE_UI_TEST=1`；可用 `PA_KNOWLEDGE_UI_BROWSER` 指向已安装浏览器，
+默认测试不会安装或下载浏览器。它不是 Electron/Live/真实 RSS/Laya/AgentArts 端到端验收；
+未启动模型、未改 Live/SIS 配置，P8 统一接线与整体验收仍待完成。
+
+取消链补充：due worker 的 signal 和精确绑定重验贯穿来源消费、workPort read/submit、
+来源/提醒落盘及通知前后；每次 await 后、下一提交和同步落盘前再次检查。
+已经开始而回执未确认的提交/投递保留 unknown，不在取消后盲重试。
+通知发送资格在持久记录锁内从最新 notice 原子领取；并发消费只允许一次 send，
+已领取的其他消费只能读回或跳过，迟到的读回不会覆盖已确认投递。
+新增单项并发回归覆盖两个来源消费同时领取同一 notice，确认 send 次数为 1；通过。
+新增单项局部回归覆盖 feed 返回后 read/submit 挂起再取消两种情况，通过；
+仅运行这项和宿主语法/diff 检查，没有重跑上述浏览器或旧测试。
 
 ## 初始化和生命周期
 
