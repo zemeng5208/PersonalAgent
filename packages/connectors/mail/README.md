@@ -69,9 +69,11 @@ PA_MAIL_LIVE=1 PA_MAIL_LIVE_SEND=1 PA_QQ_MAIL_USER=… PA_QQ_MAIL_AUTH_CODE=… 
 
 **真实读回证据（2026-09-13）**：用户 QQ 邮箱开启 IMAP/SMTP 并提供授权码后执行上述命令，`22/22` 全过（0 失败 0 跳过）——只读读回（真实 IMAP 列文件夹＋拉 5 封、uidValidity 捕获）与真实 SMTP 发送（自发自收一封验证邮件，SMTP 返回 messageId，`state: 'confirmed'`）均成功。imapflow/nodemailer 与 QQ 服务器的协议对接得到生产端点验证；`verification` 维持 `conditional`（网络依赖型提供商的诚实标注，不因一次读回翻转）。
 
+**复跑证据（2026-09-30，新授权码）**：用户重新生成授权码后（凭据仅入本地 `.pa-secrets`，不进仓库/聊天记录归档），`PA_MAIL_LIVE=1` 只读读回复跑 **23 项 22 过 0 失败 1 跳过**——跳过项为真实发送（`PA_MAIL_LIVE_SEND` 独立门控，未开启）。即：真实 IMAP 列文件夹＋拉信＋uidValidity 捕获在新凭据下通过；SMTP 发送链路未用新码复验（旧证据为 2026-09-13，发送语义 unknown→先核对不盲重发不受影响）。
+
 ## 已知限制
 
-- `QQMailProvider` 真实网络路径已于 **2026-09-13** 完成一次门控读回验证（`PA_MAIL_LIVE=1`，22/22：IMAP 列文件夹＋拉信＋uidValidity 捕获、SMTP 自发自收 `confirmed`，证据见上方「真实读回证据」段）。**当时使用的授权码已作废**——当前为条件性可用：需用户重新生成有效授权码后方可复跑 live 或生产使用，不偷偷复用旧码。协议映射逻辑（envelope→条目、游标、错误映射）离线固定。
+- `QQMailProvider` 真实网络路径已于 **2026-09-13** 完成门控验证（22/22 含 SMTP 发送），**2026-09-30 用户新授权码复跑只读读回通过**（23 项 22 过 1 跳＝未开启的真实发送，见上方证据段）——当前凭据有效、条件性可用；SMTP 发送未用新码复验，需要时经 `PA_MAIL_LIVE_SEND=1` 独立开启并明确收件地址。协议映射逻辑（envelope→条目、游标、错误映射）离线固定。
 - QQ 邮箱 IMAP 有连接频率限制，连接为惰性单例（复用直至不可用）；无 IDLE 推送（增量靠游标轮询，调度建议由宿主给出）。
 - 搜索为客户端过滤（拉全量窗口后按主题/发件人匹配），未用 IMAP SEARCH；大邮箱应改服务端搜索。
 - 文件夹列表的 `uidValidity` 仅在 `fetchPage` 打开邮箱时可得，`listFolders` 返回 0 占位。
