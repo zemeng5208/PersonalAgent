@@ -52,7 +52,7 @@ export function createLiveVoiceHistory({save, readContext = () => '', recentLimi
       const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) data = parsed;
     } catch { /* A store read failure must not discard the unsaved overlay. */ }
-    const entries = [], messages = new Map();
+    const entries = [], messagesById = new Map();
     for (const task of (Array.isArray(data.tasks) ? data.tasks : [])) {
       const time = Date.parse(task?.createdAt) || 0;
       if (typeof task?.goal === 'string' && task.goal.trim()) entries.push({time, role:'user', text:task.goal});
@@ -68,9 +68,9 @@ export function createLiveVoiceHistory({save, readContext = () => '', recentLimi
         || typeof message.text !== 'string' || !message.text.trim()) continue;
       // Identity dedup preserves intentional repeated sentences in separate turns.
       const id = typeof message.id === 'string' ? message.id : `unidentified:${index++}`;
-      messages.set(id, {time:Date.parse(message.createdAt)||0, role:message.role, text:message.text});
+      messagesById.set(id, {time:Date.parse(message.createdAt)||0, role:message.role, text:message.text});
     }
-    entries.push(...messages.values());
+    entries.push(...messagesById.values());
     return entries.sort((a,b)=>a.time-b.time).slice(-10)
       .map(({role,text})=>({role,text:String(text).slice(0,1600)}));
   }
