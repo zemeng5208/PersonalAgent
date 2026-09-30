@@ -344,8 +344,6 @@ export function mountAdmin(root, invoke, escape) {
       content = memoryPage(data);
     } else if (section === 'computer') {
       content = '';
-    } else if (section === 'memory') {
-      content = memoryPage(data);
     } else if (featureSections.includes(section)) {
       content = featurePage(data, section);
     } else {

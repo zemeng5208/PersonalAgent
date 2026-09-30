@@ -38,7 +38,6 @@ import {createDesktopGoalCloudHost} from './goal-cloud-host.js';
 import {createMailMetadataStorage} from './mail-metadata-storage.js';
 import {createLocalLayaHost} from './laya-local-host.js';
 import {resultText} from '../src/features/conversation/result-text.js';
-import {createPrivateMemoryController} from './private-memory.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
@@ -215,8 +214,6 @@ function orderedTasks() {
   return [...tasks.values()].sort((a, b) => String(conversations?.turns.get(a.taskId)?.createdAt ?? a.createdAt ?? a.updatedAt ?? '')
     .localeCompare(String(conversations?.turns.get(b.taskId)?.createdAt ?? b.createdAt ?? b.updatedAt ?? '')));
 }
-let privateMemory;
-let privateMemoryFixtureWrite = false;
 
 function snapshot(surface) {
   return {
@@ -1764,7 +1761,6 @@ app.whenReady().then(async () => {
       goalCloudHost?.close();
       mailAnalysisHost?.close();
       competitionFactBridge?.close();
-      privateMemory?.close();
       if (runtimeApplication) runtimeApplication.close();
       else runtime?.close?.();
       competitionCatalog?.close();
