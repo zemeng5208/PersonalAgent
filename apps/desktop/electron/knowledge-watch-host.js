@@ -54,6 +54,15 @@ export function knowledgeWatchConversationId(namespace) {
   return `knowledge-watch:${namespace}`;
 }
 
+/** Compose only existing native readers and the advisory chooser; this adapter cannot issue grants. */
+export function createKnowledgeTrackingPorts({readTrackingGrant, readTrackingGrantSnapshot,
+  layaChooser, now = Date.now} = {}) {
+  if (typeof readTrackingGrant !== 'function' || typeof readTrackingGrantSnapshot !== 'function'
+    || typeof layaChooser?.choose !== 'function' || typeof now !== 'function') fail('INVALID_ARGUMENT');
+  return Object.freeze({readTrackingGrant, readTrackingGrantSnapshot,
+    interestDecider: new LayaInterestDecisionService(layaChooser, now)});
+}
+
 /** One Runtime schedule. The host does not compute the next run or dispatch it. */
 export function knowledgeWatchScheduleInput({namespace, runAt, checkId} = {}) {
   if (!identifier(namespace) || !identifier(checkId) || !Number.isFinite(instant(runAt))) fail('INVALID_ARGUMENT');
@@ -454,6 +463,9 @@ export function createKnowledgeWatchHost({
   policyToolName = null,
   policyScopes = null,
   readTrackingGrant = null,
+  readTrackingGrantSnapshot = null,
+  readFeedReceiptEvidence = null,
+  readInterestSignal = null,
   feedCollect = null,
   feedSubscriptionId = null,
   scheduler = null,
@@ -483,6 +495,9 @@ export function createKnowledgeWatchHost({
   if (policyConfigured && (!text(authorizationRef) || !text(policyToolName) || !Array.isArray(policyScopes)
     || policyScopes.length === 0 || policyScopes.some(scope => !text(scope)))) fail('INVALID_ARGUMENT');
   if (readTrackingGrant && typeof readTrackingGrant !== 'function') fail('INVALID_ARGUMENT');
+  if (readTrackingGrantSnapshot && typeof readTrackingGrantSnapshot !== 'function') fail('INVALID_ARGUMENT');
+  if (readFeedReceiptEvidence && typeof readFeedReceiptEvidence !== 'function') fail('INVALID_ARGUMENT');
+  if (readInterestSignal && typeof readInterestSignal !== 'function') fail('INVALID_ARGUMENT');
   if (knowledgeFeedReceipts && ['createKnowledgeFeedReceipt', 'parseKnowledgeFeedReceipt',
     'verifyKnowledgeFeedReceiptBinding', 'knowledgeFeedReceiptItems']
     .some(name => typeof knowledgeFeedReceipts[name] !== 'function')) fail('INVALID_ARGUMENT');
@@ -513,6 +528,7 @@ export function createKnowledgeWatchHost({
   let life = 0;
   let feedReading = false;
   const activeFeedChecks = new Set();
+  const activeInterestTasks = new Set();
 
   function clock() {
     const value = now();
@@ -601,11 +617,32 @@ export function createKnowledgeWatchHost({
     if (taskId !== checkpointTaskId) return null;
     return readFeedSourceReceipt(checkpoints, taskId, receiptId, knowledgeFeedReceipts);
   }
+  function trustedReceiptEvidence(head, sourceId, receipt = receiptForHead(head, sourceId)) {
+    if (!receipt || receipt.version !== 2 || typeof readFeedReceiptEvidence !== 'function') return false;
+    try {
+      // P8 owns run/query/task binding. This synchronous reader rebuilds the receipt from actual Runtime records.
+      const verified = readFeedReceiptEvidence({namespace, sourceId,
+        sourceReadTaskId: checkpointTaskId, receiptId: receipt.receiptId});
+      const parsed = knowledgeFeedReceipts?.parseKnowledgeFeedReceipt(verified);
+      return parsed?.version === 2 && JSON.stringify(parsed) === JSON.stringify(receipt);
+    } catch { return false; }
+  }
   function dialogueView() {
     if (!document) return null;
     const items = Object.values(document.watches).map(watch => {
       const projected = projectWatch(watch);
       const binding = projected.boundSource;
+      let grantCurrent = !readTrackingGrant || typeof readTrackingGrantSnapshot === 'function';
+      if (projected.scope?.state === 'granted' && instant(projected.scope.expiresAt) <= clock()) grantCurrent = false;
+      if (readTrackingGrantSnapshot && projected.state === 'tracked') {
+        try {
+          const identity = grantIdentity(projected);
+          const grant = identity && readTrackingGrantSnapshot(identity);
+          grantCurrent = plain(grant) && grant.state === 'granted' && grant.publicLowRiskTracking === true
+            && grant.id === projected.scope?.id && grant.revision === projected.scope?.revision
+            && grant.expiresAt === projected.scope?.expiresAt && instant(grant.expiresAt) > clock();
+        } catch { grantCurrent = false; }
+      }
       const bound = binding && text(binding.sourceId) && text(binding.revision) && sha(binding.contentSha256)
         && text(binding.cacheVersion) && Number.isFinite(instant(binding.lastSuccessfulCheck))
         && Number.isFinite(instant(binding.validUntil));
@@ -631,7 +668,8 @@ export function createKnowledgeWatchHost({
         && (!item.recheckContext || item.recheckContext.topicId === projected.topicId
           && item.recheckContext.consumerRevision === projected.consumer?.revision));
       const usableAsCurrentFact = projected.state === 'tracked' && freshness.action === 'use_cache'
-        && text(citation) && !unknown && receiptMatchesHead;
+        && Boolean(readTrackingGrant && readTrackingGrantSnapshot) && grantCurrent && text(citation) && !unknown && receiptMatchesHead
+        && trustedReceiptEvidence(head, binding.sourceId, sourceReceipt);
       const notice = Object.values(document.notices)
         .filter(item => Array.isArray(item.topicIds) && item.topicIds.includes(projected.topicId))
         .sort((left, right) => instant(right.latest?.fetchedAt) - instant(left.latest?.fetchedAt))[0] ?? null;
@@ -652,7 +690,7 @@ export function createKnowledgeWatchHost({
         readAt: notice.readAt ?? null,
         usableAsLatestObservation: bound && projected.state === 'tracked'
           && text(notice.citation) && notice.latest?.availability === 'available' && !unknown
-          && receiptMatchesHead && noticeMatchesHead,
+          && grantCurrent && receiptMatchesHead && noticeMatchesHead,
         dataClass: 'untrusted_source_text',
         untrustedExcerpt: projected.state === 'revoked' ? null : notice.untrustedExcerpt ?? null} : null;
       let answer;
@@ -661,9 +699,13 @@ export function createKnowledgeWatchHost({
       else if (projected.state === 'suggested') answer = {kind: 'withheld', reason: 'suggested_only'};
       else if (projected.state === 'paused') answer = {kind: 'withheld', reason: 'user_paused'};
       else if (projected.state === 'authorization_required') answer = {kind: 'withheld', reason: projected.reason};
+      else if (!grantCurrent) answer = {kind: 'withheld', reason: 'authorization_required'};
       else if (!receiptMatchesHead) answer = {kind: 'withheld', reason: 'source_receipt_unavailable'};
       else if (projected.state === 'source_unavailable') answer = {kind: 'withheld', reason: freshness.reason};
       else if (unknown) answer = {kind: 'withheld', reason: 'submission_unknown'};
+      else if (same && receiptMatchesHead && !trustedReceiptEvidence(head, binding.sourceId, sourceReceipt)) {
+        answer = {kind: 'withheld', reason: 'source_evidence_unavailable'};
+      }
       else if (usableAsCurrentFact) answer = {kind: 'current_fact', sourceId: binding.sourceId,
         sourceRevision: binding.revision, contentSha256: binding.contentSha256,
         fetchedAt: head.observedAt, citation};
@@ -825,7 +867,10 @@ export function createKnowledgeWatchHost({
       state = 'revoked';
       reason = 'user_revoked';
     }
-    const revision = state === 'tracked' && previous?.state !== 'tracked' ? (previous?.revision ?? 0) + 1
+    const revision = state === 'tracked' && (previous?.state !== 'tracked'
+      || previous?.consumer?.intakeTaskId !== signal.intakeTaskId
+      || ['id', 'revision', 'state', 'publicLowRiskTracking', 'expiresAt']
+        .some(key => previous?.scope?.[key] !== signal.scope[key])) ? (previous?.revision ?? 0) + 1
       : previous?.revision ?? 1;
     const watch = {
       topicId: signal.topicId,
@@ -847,7 +892,8 @@ export function createKnowledgeWatchHost({
         contentSha256: signal.sourceContent.contentSha256, cacheVersion: signal.sourceContent.cacheVersion,
         lastSuccessfulCheck: signal.sourceContent.lastSuccessfulCheck,
         validUntil: signal.sourceContent.validUntil};
-      watch.consumer = {id: signal.topicId, revision};
+      watch.consumer = {id: signal.topicId, revision,
+        ...(identifier(signal.intakeTaskId) ? {intakeTaskId: signal.intakeTaskId} : {})};
     } else if (previous?.boundSource && state !== 'tracked') {
       watch.boundSource = clone(previous.boundSource);
       watch.consumer = previous.consumer ? clone(previous.consumer) : {id: signal.topicId, revision: previous.revision};
@@ -989,11 +1035,12 @@ export function createKnowledgeWatchHost({
     expireDue();
     const head = document.sources[event.sourceId];
     if (head && instant(head.observedAt) > at) return {accepted: false, reason: 'stale_event', duplicate: false};
-    if (head && head.observedAt === event.fetchedAt && head.revision === (event.revision ?? null)
-      && head.contentSha256 === (event.contentSha256 ?? null) && head.availability === event.availability) {
+    const duplicate = !!(head && head.observedAt === event.fetchedAt && head.revision === (event.revision ?? null)
+      && head.contentSha256 === (event.contentSha256 ?? null) && head.availability === event.availability);
+    if (duplicate && !trustedReceiptEvidence(head, event.sourceId)) {
       return {accepted: true, reason: 'duplicate_event', duplicate: true, notified: false};
     }
-    if (head && head.observedAt === event.fetchedAt) return {accepted: false, reason: 'ambiguous_timestamp'};
+    if (!duplicate && head && head.observedAt === event.fetchedAt) return {accepted: false, reason: 'ambiguous_timestamp'};
     if (event.availability === 'available' && event.revision && event.contentSha256
       && head?.revision === event.revision && head.contentSha256 && head.contentSha256 !== event.contentSha256) {
       return {accepted: false, reason: 'revision_hash_conflict'};
@@ -1009,7 +1056,7 @@ export function createKnowledgeWatchHost({
       try {
         plan = planKnowledgeReevaluation({namespace, freshness: freshnessFor(group, event),
           dependencies: group.watches.filter(watch => watch.consumer).map(watch => ({
-            consumer: clone(watch.consumer), sourceId: group.binding.sourceId,
+            consumer: {id: watch.consumer.id, revision: watch.consumer.revision}, sourceId: group.binding.sourceId,
             sourceRevision: group.binding.revision, contentSha256: group.binding.contentSha256})),
           ...(prior ? {checkpoint: clone(prior)} : {})});
       } catch { return {accepted: false, reason: 'invalid_source_event'}; }
@@ -1025,7 +1072,12 @@ export function createKnowledgeWatchHost({
           || !sameRecheckIdentity(existing.recheckContext, recheckContext))) {
           return {accepted: false, reason: 'reevaluation_identity_conflict'};
         }
-        if (work.duplicate || existing?.state === 'accepted') continue;
+        if (duplicate && existing?.state === 'unknown' && !work.duplicate) {
+          work.duplicate = true;
+          item.plan.checkpoint.submittedWorkKeys = item.plan.checkpoint.submittedWorkKeys.filter(key => key !== work.workKey);
+        }
+        // Replaying a durable head may fill only a NEW consumer's work key. Never retry old unknown work.
+        if (work.duplicate || existing?.state === 'accepted' || duplicate && existing) continue;
         next.submissions[work.workKey] = {...(existing ?? {}), state: 'unknown', namespace,
           attemptedAt: event.fetchedAt, sourceId: event.sourceId,
           ...((existing?.recheckContext ?? recheckContext)
@@ -1040,32 +1092,81 @@ export function createKnowledgeWatchHost({
     if (keys.length && workPort) persist(next);
     return {accepted: true, proceed: true, plans, event, keys: workPort ? keys : [], skipWork};
   }
-  async function grantStatus() {
+  // Only the trusted Runtime intake entry point can attach a task identity to a signal.
+  const intakeTaskBinding = Symbol('knowledge-watch-intake-task');
+  function grantIdentity(watch) {
+    const sourceId = watch?.boundSource?.sourceId;
+    const taskId = watch?.consumer?.intakeTaskId;
+    return identifier(sourceId) && identifier(taskId) ? {namespace, sourceId, taskId} : null;
+  }
+  function grantMatches(grant, scope) {
+    return plain(grant) && grant.state === 'granted' && grant.publicLowRiskTracking === true
+      && identifier(grant.id) && Number.isSafeInteger(grant.revision) && grant.revision >= 1
+      && Number.isFinite(instant(grant.expiresAt)) && instant(grant.expiresAt) > clock()
+      && (!scope || grant.id === scope.id && grant.revision === scope.revision && grant.expiresAt === scope.expiresAt);
+  }
+  function sourceGrantWatches(sourceId) {
+    return Object.values(document?.watches ?? {}).filter(watch => watch.state === 'tracked'
+      && !document.tombstones[watch.topicId] && watch.boundSource?.sourceId === sourceId);
+  }
+  function sourceGrantCurrent(sourceId) {
+    if (!readTrackingGrant) return true;
+    if (!readTrackingGrantSnapshot) return false;
+    const watches = sourceGrantWatches(sourceId);
+    return watches.length > 0 && watches.every(watch => {
+      const identity = grantIdentity(watch);
+      try { return !!identity && activeTracking(watch) && grantMatches(readTrackingGrantSnapshot(identity), watch.scope); }
+      catch { return false; }
+    });
+  }
+  async function grantStatus(sourceId) {
     if (typeof readTrackingGrant !== 'function') return 'unchecked';
+    if (!identifier(sourceId)) return 'revoked';
+    const watches = sourceGrantWatches(sourceId).map(clone);
+    if (!watches.length) return 'revoked';
     try {
-      const grant = await readTrackingGrant({namespace});
-      if (!plain(grant) || grant.state !== 'granted' || grant.publicLowRiskTracking !== true) return 'revoked';
-      return 'granted';
+      for (const watch of watches) {
+        const identity = grantIdentity(watch);
+        if (!identity || !activeTracking(watch)) return 'revoked';
+        const grant = await readTrackingGrant(identity);
+        const current = document?.watches[watch.topicId];
+        if (!grantMatches(grant, watch.scope) || !activeTracking(current)
+          || JSON.stringify(trackingIdentity(current)) !== JSON.stringify(trackingIdentity(watch))) {
+          return 'revoked';
+        }
+      }
+      return sourceGrantCurrent(sourceId) ? 'granted' : 'revoked';
     } catch { return 'unreadable'; }
   }
   async function boundStillTracked(work) {
-    return lock(() => {
+    const watch = await lock(() => {
       if (!running || !document) return false;
       const topicId = work?.consumer?.id;
       if (!identifier(topicId) || document.tombstones[topicId]) return false;
       const watch = document.watches[topicId];
-      return watch?.state === 'tracked' && watch.consumer?.revision === work.consumer?.revision
+      return watch?.state === 'tracked' && (!watch.expiresAt || instant(watch.expiresAt) > clock())
+        && instant(watch.scope?.expiresAt) > clock() && watch.consumer?.revision === work.consumer?.revision
+        && (work.consumer?.intakeTaskId === undefined || watch.consumer?.intakeTaskId === work.consumer.intakeTaskId)
         && watch.boundSource?.sourceId === work.source?.id
         && watch.boundSource?.revision === work.source?.revision
-        && watch.boundSource?.contentSha256 === work.source?.contentSha256;
+        && watch.boundSource?.contentSha256 === work.source?.contentSha256 ? clone(watch) : false;
     });
+    if (!watch) return false;
+    if (!readTrackingGrant) return true;
+    try {
+      const identity = grantIdentity(watch);
+      if (!identity) return false;
+      const grant = await readTrackingGrant(identity);
+      const current = document?.watches[watch.topicId];
+      return activeTracking(current) && JSON.stringify(trackingIdentity(current)) === JSON.stringify(trackingIdentity(watch))
+        && grantMatches(grant, watch.scope);
+    } catch { return false; }
   }
   async function submitKeys(keys, plans, operation) {
     const accepted = new Set();
     const unknown = new Set();
     const skipped = new Set();
     const works = new Map();
-    const grant = await grantStatus();
     for (const item of plans) for (const work of item.plan.affected) works.set(work.workKey, work);
     for (const workKey of keys) {
       if (!(await operation.revalidate())) { unknown.add(workKey); continue; }
@@ -1089,8 +1190,8 @@ export function createKnowledgeWatchHost({
           continue;
         }
       } catch { verdict = 'unknown'; }
-      if (verdict === 'unknown' || grant === 'unreadable') { unknown.add(workKey); continue; }
-      if (grant === 'revoked' || !(await boundStillTracked(works.get(workKey)))) {
+      if (verdict === 'unknown') { unknown.add(workKey); continue; }
+      if (!(await boundStillTracked(works.get(workKey)))) {
         skipped.add(workKey);
         continue;
       }
@@ -1160,8 +1261,9 @@ export function createKnowledgeWatchHost({
       const fresh = item.plan.affected.filter(work => !work.duplicate);
       if (!fresh.length || item.plan.knowledge.action === 'use_cache') continue;
       const topicIds = item.group.watches.map(watch => watch.topicId)
-        .filter(topicId => next.watches[topicId]?.state === 'tracked'
-          || event.availability !== 'available' && next.watches[topicId]?.state !== 'revoked');
+        .filter(topicId => fresh.some(work => work.consumer.id === topicId)
+          && (next.watches[topicId]?.state === 'tracked'
+          || event.availability !== 'available' && next.watches[topicId]?.state !== 'revoked'));
       if (!topicIds.length) continue;
       const id = digest({namespace, sourceId: event.sourceId, binding: item.group.binding.revision,
         content: item.group.binding.contentSha256, reason: item.plan.knowledge.reason,
@@ -1305,9 +1407,10 @@ export function createKnowledgeWatchHost({
 
   async function scopeFromGrant(signal) {
     if (typeof readTrackingGrant !== 'function') return signal;
+    if (!identifier(signal.intakeTaskId) || !identifier(signal.source?.id)) return null;
     let grant;
     try {
-      grant = await readTrackingGrant({namespace, topicId: signal.topicId, sourceId: signal.source?.id ?? null});
+      grant = await readTrackingGrant({namespace, sourceId: signal.source.id, taskId: signal.intakeTaskId});
     } catch { return null; }
     if (!plain(grant) || !['granted', 'none', 'revoked'].includes(grant.state) || !identifier(grant.id)
       || !Number.isSafeInteger(grant.revision) || grant.revision < 1
@@ -1316,19 +1419,13 @@ export function createKnowledgeWatchHost({
     return {...signal, scope: {state: grant.state, id: grant.id, revision: grant.revision,
       publicLowRiskTracking: grant.publicLowRiskTracking, expiresAt: grant.expiresAt}};
   }
-  function recordGrantUnreadable(signal) {
-    requireReady();
-    const watch = writeWatch({...signal, at: iso(clock())},
-      {state: 'abstain', reason: 'grant_unreadable', evidence: []},
-      'authorization_required', 'grant_unreadable', null, {allowed: false, reason: 'grant_unreadable'}, null);
-    return {accepted: true, watch};
-  }
   async function consumeInterestSignal(raw, request = {}) {
     let signal = pickInterest(raw);
+    if (identifier(request[intakeTaskBinding])) signal.intakeTaskId = request[intakeTaskBinding];
     const userEnable = request.userEnable ?? null;
     await lock(() => { requireReady(); });
     const granted = await scopeFromGrant(signal);
-    if (!granted) return lock(() => recordGrantUnreadable(signal));
+    if (!granted) return {accepted: false, reason: 'grant_unreadable'};
     signal = granted;
     let choice = null;
     const preview = await lock(() => {
@@ -1336,41 +1433,160 @@ export function createKnowledgeWatchHost({
       try { return buildInterestOptions(policyInput(signal, userEnable)); }
       catch { fail('INVALID_ARGUMENT'); }
     });
+    if (request.revalidate && await request.revalidate() !== true) {
+      return {accepted: false, reason: 'interest_context_invalidated'};
+    }
     if (preview.policy.state === 'watch_public' && interestDecider) {
       if (!text(request.deadline) || !(request.signal instanceof AbortSignal)) fail('INVALID_ARGUMENT');
       const listen = AbortSignal.any([request.signal, controller.signal]);
       choice = await interestDecider.choose(policyInput(signal, userEnable),
         {deadline: request.deadline, signal: listen});
       if (!running || controller.signal.aborted || request.signal.aborted) return {accepted: false, reason: 'stopped'};
+      if (!Number.isFinite(instant(request.deadline)) || instant(request.deadline) <= clock()) {
+        return {accepted: false, reason: 'deadline_expired'};
+      }
       const again = await scopeFromGrant(signal);
-      if (!again) return lock(() => recordGrantUnreadable(signal));
+      if (!again) return {accepted: false, reason: 'grant_unreadable'};
+      if (JSON.stringify(again.scope) !== JSON.stringify(signal.scope)) return {accepted: false, reason: 'grant_changed'};
       signal = again;
     }
-    const result = await lock(() => commitInterest(signal, choice, userEnable));
+    if (request.revalidate && await request.revalidate() !== true) {
+      return {accepted: false, reason: 'interest_context_invalidated'};
+    }
+    const result = await lock(async () => {
+      const fresh = await scopeFromGrant(signal);
+      if (!fresh || JSON.stringify(fresh.scope) !== JSON.stringify(signal.scope)) {
+        return {accepted: false, reason: 'grant_changed'};
+      }
+      if (readTrackingGrantSnapshot) {
+        try {
+          const grant = readTrackingGrantSnapshot({namespace, sourceId: signal.source.id, taskId: signal.intakeTaskId});
+          if (!grantMatches(grant, signal.scope)) return {accepted: false, reason: 'grant_changed'};
+        } catch { return {accepted: false, reason: 'grant_changed'}; }
+      }
+      if (request.commitCurrent && request.commitCurrent() !== true) {
+        return {accepted: false, reason: 'interest_context_invalidated'};
+      }
+      if (request.signal?.aborted || request.deadline && clock() >= instant(request.deadline)) {
+        return {accepted: false, reason: 'interest_context_invalidated'};
+      }
+      return commitInterest(signal, choice, userEnable);
+    });
     if (result.watch?.state === 'tracked' && request.feedCheck) {
       result.feedCheck = registerFeedCheck({...request.feedCheck,
         subscriptionId: result.watch.boundSource?.sourceId, topicIds: [result.watch.topicId]});
     }
     return result;
   }
+  /** Consume a trusted Runtime-backed interaction once; Renderer supplies neither signal nor grant. */
+  async function consumeInterestTask(taskId, request = {}) {
+    requireReady();
+    if (!identifier(taskId) || !(request.signal instanceof AbortSignal)
+      || !Number.isFinite(instant(request.deadline))) fail('INVALID_ARGUMENT');
+    if (typeof runtime?.getTask !== 'function' || typeof readInterestSignal !== 'function'
+      || typeof readTrackingGrant !== 'function') return {accepted: false, reason: 'interest_task_provider_missing'};
+    if (activeInterestTasks.has(taskId)) return {accepted: false, reason: 'interest_task_in_progress'};
+    activeInterestTasks.add(taskId);
+    const operation = sourceOperation({...request, sourceId: undefined});
+    try {
+      let task;
+      try {task = runtime.getTask(taskId);}
+      catch (error) {
+        if (error?.code !== 'NOT_FOUND') throw error;
+        return {accepted: false, reason: 'interest_task_unavailable'};
+      }
+      if (!task || task.taskId !== taskId || task.cancelRequested || ['failed', 'cancelled'].includes(task.state)) {
+        return {accepted: false, reason: 'interest_task_unavailable'};
+      }
+      let raw;
+      try {raw = await readInterestSignal({namespace, taskId});}
+      catch (error) {
+        return {accepted: false, reason: 'interest_signal_unavailable', code: text(error?.code) ? error.code : 'EXTERNAL_FAILURE'};
+      }
+      if (!raw) return {accepted: false, reason: 'interest_signal_unavailable'};
+      const signal = pickInterest(raw);
+      const enablement = value => {
+        if (value === undefined || value === null) return null;
+        if (!plain(value) || !identifier(value.id) || value.topicId !== signal.topicId
+          || !Number.isFinite(instant(value.occurredAt))) fail('INVALID_ARGUMENT');
+        return {id: value.id, topicId: value.topicId, occurredAt: value.occurredAt};
+      };
+      const nativeEnable = enablement(raw.explicitEnable);
+      const signalDigest = digest({...signal, explicitEnable: nativeEnable});
+      const taskIdentity = value => digest({taskId: value?.taskId, conversationId: value?.conversationId ?? null,
+        goal: value?.goal ?? null});
+      const expectedTask = taskIdentity(task);
+      const taskCurrent = () => {
+        if (!operation.current() || clock() >= instant(request.deadline)) return false;
+        try {
+          const current = runtime.getTask(taskId);
+          return !!current && !current.cancelRequested && !['failed', 'cancelled', 'cancelling'].includes(current.state)
+            && taskIdentity(current) === expectedTask;
+        } catch { return false; }
+      };
+      const revalidate = async () => {
+        if (!taskCurrent()) return false;
+        try {
+          const currentSignal = await readInterestSignal({namespace, taskId});
+          return !!currentSignal && digest({...pickInterest(currentSignal), explicitEnable: enablement(currentSignal.explicitEnable)})
+            === signalDigest && taskCurrent();
+        } catch { return false; }
+      };
+      if (!(await revalidate())) return {accepted: false, reason: 'interest_context_invalidated'};
+      const key = `knowledge-watch-interest-task:${digest([namespace, taskId])}`;
+      const previous = checkpoints.loadCheckpoint(checkpointTaskId, key);
+      if (previous !== undefined) {
+        if (!plain(previous) || previous.version !== 1 || previous.namespace !== namespace || previous.taskId !== taskId
+          || previous.signalDigest !== signalDigest || previous.taskIdentity !== expectedTask || previous.topicId !== signal.topicId) {
+          return {accepted: false, reason: 'interest_receipt_conflict'};
+        }
+        if (previous.state !== 'completed') return {accepted: false, reason: 'interest_consumption_unknown'};
+        // Read the current watch: an old accepted receipt never reactivates a revoked/paused watch.
+        return {accepted: true, duplicate: true, taskId, watch: clone(document.watches[signal.topicId] ?? null)};
+      }
+      const receipt = {version: 1, namespace, taskId, topicId: signal.topicId, signalDigest,
+        taskIdentity: expectedTask, state: 'unknown'};
+      const prepared = await lock(() => {
+        if (!taskCurrent()) return false;
+        checkpoints.saveCheckpoint(checkpointTaskId, key, receipt);
+        return JSON.stringify(checkpoints.loadCheckpoint(checkpointTaskId, key)) === JSON.stringify(receipt);
+      });
+      if (!prepared) return {accepted: false, reason: 'interest_receipt_unavailable'};
+      if (!operation.current()) return {accepted: false, reason: 'stopped'};
+      const result = await consumeInterestSignal(signal, {...request, userEnable: nativeEnable,
+        signal: operation.signal, revalidate, commitCurrent: taskCurrent, [intakeTaskBinding]: taskId});
+      if (!result.accepted || !taskCurrent()) return {...result, accepted: false, taskId};
+      const saved = await lock(() => {
+        if (!taskCurrent()) return false;
+        checkpoints.saveCheckpoint(checkpointTaskId, key, {...receipt, state: 'completed',
+          modelReceiptId: result.watch?.modelReceiptId ?? null, consumerRevision: result.watch?.consumer?.revision ?? null});
+        const readback = checkpoints.loadCheckpoint(checkpointTaskId, key);
+        return readback?.state === 'completed' && readback.signalDigest === signalDigest && readback.taskIdentity === expectedTask;
+      });
+      return saved ? {...result, taskId} : {accepted: false, reason: 'interest_consumption_unknown', taskId};
+    } finally { activeInterestTasks.delete(taskId); }
+  }
   function sourceOperation(request = {}) {
     if (request.signal !== undefined && !(request.signal instanceof AbortSignal)) fail('INVALID_ARGUMENT');
     const signal = request.signal ? AbortSignal.any([request.signal, controller.signal]) : controller.signal;
     const ticket = life;
     const current = () => running && ticket === life && !signal.aborted
+      && (!request.deadline || Number.isFinite(instant(request.deadline)) && clock() < instant(request.deadline))
+      && (!request.sourceId || sourceGrantCurrent(request.sourceId))
       && (!request.isCurrent || request.isCurrent() === true);
     return {signal, current, async revalidate() {
       if (!current()) return false;
       let valid;
       try { valid = !request.revalidate || await request.revalidate() === true; }
       catch { valid = false; }
-      return valid && current();
+      const grant = await grantStatus(request.sourceId);
+      return valid && !['revoked', 'unreadable'].includes(grant) && current();
     }};
   }
   async function consumeSourceUpdate(raw, request = {}) {
     requireReady();
-    const operation = sourceOperation(request);
     const event = pickSource(raw);
+    const operation = sourceOperation({...request, sourceId: event.sourceId});
     const invalidated = () => ({accepted: false, reason: 'source_operation_invalidated', notified: false});
     if (!(await operation.revalidate())) return invalidated();
     const prepared = await lock(() => operation.current() ? prepareSource(event) : invalidated());
@@ -1385,14 +1601,16 @@ export function createKnowledgeWatchHost({
     if (!(await operation.revalidate())) return invalidated();
     return result;
   }
-  async function refreshSource(sourceId) {
+  async function refreshSource(sourceId, request = {}) {
     requireReady();
     if (!identifier(sourceId)) fail('INVALID_ARGUMENT');
     if (typeof sourcePort?.read !== 'function') {
       return {accepted: false, availability: 'unavailable', reason: 'source_provider_missing'};
     }
+    const operation = sourceOperation({...request, sourceId});
+    if (!await operation.revalidate()) return {accepted: false, reason: 'source_operation_invalidated'};
     let reading;
-    try { reading = await sourcePort.read({namespace, sourceId, signal: controller.signal}); }
+    try { reading = await sourcePort.read({namespace, sourceId, signal: operation.signal}); }
     catch (error) {
       if (!running || controller?.signal.aborted || error?.code === 'CANCELLED') {
         return {accepted: false, reason: 'stopped'};
@@ -1403,15 +1621,15 @@ export function createKnowledgeWatchHost({
       return {accepted: false, availability: 'unavailable', reason: 'source_unavailable',
         ...(text(error?.code) ? {code: error.code} : {})};
     }
-    if (!running || controller.signal.aborted) return {accepted: false, reason: 'stopped'};
+    if (!await operation.revalidate()) return {accepted: false, reason: 'source_operation_invalidated'};
     const availability = reading?.availability === 'withdrawn' ? 'withdrawn'
       : reading?.availability === 'available' ? 'available' : 'unavailable';
     const provider = text(reading?.provider) ? reading.provider : 'port';
     if (availability !== 'available') {
       return consumeSourceUpdate({namespace, sourceId, availability, fetchedAt: iso(clock()),
-        reason: text(reading?.reason) ? reading.reason : 'source_unavailable', provider});
+        reason: text(reading?.reason) ? reading.reason : 'source_unavailable', provider}, request);
     }
-    return consumeSourceUpdate({...reading, namespace, sourceId, availability, provider});
+    return consumeSourceUpdate({...reading, namespace, sourceId, availability, provider}, request);
   }
 
   function mutateWatch(topicId, change) {
@@ -1457,6 +1675,12 @@ export function createKnowledgeWatchHost({
       const watch = next.watches[id];
       if (!watch) fail('NOT_FOUND');
       if (watch.state !== 'paused') return;
+      if (readTrackingGrant) {
+        const identity = grantIdentity(watch);
+        try {
+          if (!identity || !readTrackingGrantSnapshot || !grantMatches(readTrackingGrantSnapshot(identity), watch.scope)) return;
+        } catch { return; }
+      }
       if (next.tombstones[id]) {
         watch.state = 'revoked';
         watch.label = LABELS.revoked;
@@ -1492,7 +1716,8 @@ export function createKnowledgeWatchHost({
   function feedItemIdentity(item) {
     const record = item?.record;
     if (!plain(record) || !text(record.dedupeKey) || !text(record.contentRef)
-      || !Number.isFinite(instant(record.occurredAt)) || !text(item.title)) return null;
+      || !Number.isFinite(instant(record.occurredAt)) || !text(item.title)
+      || own(item, 'summary') && typeof item.summary !== 'string') return null;
     return {dedupeKey: record.dedupeKey, occurredAt: record.occurredAt, contentRef: record.contentRef,
       title: clip(item.title, 200), summary: typeof item.summary === 'string' ? clip(item.summary, 500) : ''};
   }
@@ -1502,13 +1727,13 @@ export function createKnowledgeWatchHost({
     }
     return digest({body: contentSha256});
   }
-  function persistFeedReadReceipt(sourceId, collected, identities, revision, contentSha256, citation, summary) {
+  function persistFeedReadReceipt(sourceId, collected, identities, revision, contentSha256, citation, summary, preparedReceipt = null) {
     const core = {version: 1, kind: 'feeds.collect', namespace, sourceId,
       observedAt: collected.collection.fetchedAt, revision, contentSha256, citation, summary, items: identities};
-    const receipt = knowledgeFeedReceipts
+    const receipt = preparedReceipt ?? (knowledgeFeedReceipts
       ? knowledgeFeedReceipts.createKnowledgeFeedReceipt({namespace, sourceId,
         observedAt: collected.collection.fetchedAt, revision, items: identities})
-      : {...core, receiptId: digest(core)};
+      : {...core, receiptId: digest(core)});
     const key = KNOWLEDGE_SOURCE_READ_PREFIX + receipt.receiptId;
     const previous = checkpoints.loadCheckpoint(checkpointTaskId, key);
     if (previous !== undefined && JSON.stringify(previous) !== JSON.stringify(receipt)) fail('REVISION_CONFLICT');
@@ -1533,12 +1758,14 @@ export function createKnowledgeWatchHost({
     requireReady();
     if (request.signal !== undefined && !(request.signal instanceof AbortSignal)) fail('INVALID_ARGUMENT');
     const signal = request.signal ? AbortSignal.any([controller.signal, request.signal]) : controller.signal;
-    const feedCurrent = () => !signal.aborted && ticket === life && running
+    const feedCurrent = () => !signal.aborted && ticket === life && running && sourceGrantCurrent(subscriptionId)
+      && (!request.deadline || Number.isFinite(instant(request.deadline)) && clock() < instant(request.deadline))
       && (!request.isCurrent || request.isCurrent() === true);
     const stillCurrent = async () => {
       if (!feedCurrent()) return false;
       const valid = !request.revalidate || await request.revalidate() === true;
-      return valid && feedCurrent();
+      const grant = await grantStatus(subscriptionId);
+      return valid && !['revoked', 'unreadable'].includes(grant) && feedCurrent();
     };
     if (typeof feedCollect !== 'function') {
       return {accepted: false, availability: 'unavailable', reason: 'source_provider_missing'};
@@ -1549,7 +1776,7 @@ export function createKnowledgeWatchHost({
     feedReading = true;
     const ticket = life;
     try {
-      const grant = await grantStatus();
+      const grant = await grantStatus(subscriptionId);
       if (grant === 'revoked') return {accepted: false, availability: 'unavailable', reason: 'authorization_required'};
       if (grant === 'unreadable') return {accepted: false, availability: 'unavailable', reason: 'grant_unreadable'};
       if (!(await stillCurrent())) return {accepted: false, reason: 'feed_check_invalidated'};
@@ -1596,7 +1823,7 @@ export function createKnowledgeWatchHost({
         });
       }
       if (collected.collection.state === 'unchanged') {
-        return lock(() => {
+        const unchanged = await lock(() => {
           if (!document || !feedCurrent()) return {accepted: false, reason: 'feed_check_invalidated'};
           const head = document.sources[subscriptionId];
           if (head?.availability !== 'available' || !text(head.revision) || !sha(head.contentSha256)) {
@@ -1612,12 +1839,23 @@ export function createKnowledgeWatchHost({
           return {accepted: true, reason: 'unchanged', duplicate: true, notified: false,
             availability: 'available', provider: 'feeds', revision: head.revision, submitted: []};
         });
+        if (!unchanged.accepted || !(await stillCurrent())) return unchanged;
+        const recovered = await recheckCurrentSource(subscriptionId, {...request, signal});
+        return {...unchanged, recovery: recovered, submitted: recovered.submitted ?? []};
       }
-      const identities = [];
-      for (const item of collected.items) {
-        const identity = feedItemIdentity(item);
-        if (!identity) return {accepted: false, availability: 'unavailable', reason: 'invalid_feed_result'};
-        identities.push(identity);
+      let preparedReceipt = null;
+      if (typeof knowledgeFeedReceipts?.createKnowledgeFeedReceiptFromCollectResult === 'function') {
+        preparedReceipt = knowledgeFeedReceipts.createKnowledgeFeedReceiptFromCollectResult({namespace,
+          sourceId: subscriptionId, result: collected});
+        if (!preparedReceipt) return {accepted: false, availability: 'unavailable', reason: 'invalid_feed_result'};
+      }
+      const identities = preparedReceipt?.items ?? [];
+      if (!preparedReceipt) {
+        for (const item of collected.items) {
+          const identity = feedItemIdentity(item);
+          if (!identity) return {accepted: false, availability: 'unavailable', reason: 'invalid_feed_result'};
+          identities.push(identity);
+        }
       }
       identities.sort((left, right) => left.dedupeKey < right.dedupeKey ? -1 : left.dedupeKey > right.dedupeKey ? 1 : 0);
       // A v2 receipt port binds each article. Without it, the singular v1 locator
@@ -1625,8 +1863,8 @@ export function createKnowledgeWatchHost({
       if (!knowledgeFeedReceipts && new Set(identities.map(item => item.contentRef)).size > 1) {
         return {accepted: false, availability: 'unavailable', reason: 'feed_citation_ambiguous', provider: 'feeds'};
       }
-      const contentSha256 = digest(identities);
-      const revision = opaqueFeedRevision(collected.collection.validators, contentSha256);
+      const contentSha256 = preparedReceipt?.contentSha256 ?? digest(identities);
+      const revision = preparedReceipt?.revision ?? opaqueFeedRevision(collected.collection.validators, contentSha256);
       const summary = identities.flatMap(item => [item.title, item.summary]).filter(Boolean).join('\n');
       if (!identities.length || !text(identities[0]?.contentRef)) {
         return {accepted: false, availability: 'unavailable', reason: 'source_body_not_read', provider: 'feeds'};
@@ -1635,7 +1873,7 @@ export function createKnowledgeWatchHost({
       try {
         if (!feedCurrent()) return {accepted: false, reason: 'feed_check_invalidated'};
         sourceReadReceipt = persistFeedReadReceipt(subscriptionId, collected, identities, revision,
-          contentSha256, identities[0].contentRef, summary);
+          contentSha256, identities[0].contentRef, summary, preparedReceipt);
       } catch {
         return {accepted: false, availability: 'unavailable', reason: 'source_read_receipt_failed', provider: 'feeds'};
       }
@@ -1644,6 +1882,30 @@ export function createKnowledgeWatchHost({
         citation: {locator: sourceReadReceipt.citation}, summary: sourceReadReceipt.summary,
         sourceReadTaskId: checkpointTaskId, sourceReadReceiptId: sourceReadReceipt.receiptId}, request);
     } finally { feedReading = false; }
+  }
+  /** Reuse the exact persisted body for new consumer revisions; no 304 receipt or validity extension. */
+  async function recheckCurrentSource(sourceId, request = {}) {
+    if (!identifier(sourceId)) fail('INVALID_ARGUMENT');
+    const operation = sourceOperation({...request, sourceId});
+    if (!await operation.revalidate()) return {accepted: false, reason: 'source_operation_invalidated'};
+    const saved = await lock(() => {
+      requireReady();
+      const head = document.sources[sourceId];
+      const receipt = receiptForHead(head, sourceId);
+      if (head?.availability !== 'available' || !trustedReceiptEvidence(head, sourceId, receipt)) return null;
+      if (clock() - instant(receipt.observedAt) > knowledgeMaxAgeMs) return null;
+      return {head: clone(head), receipt};
+    });
+    if (!saved) return {accepted: false, reason: 'source_evidence_unavailable'};
+    const {head, receipt} = saved;
+    return consumeSourceUpdate({namespace, sourceId, availability: 'available',
+      revision: receipt.revision, contentSha256: receipt.contentSha256, fetchedAt: receipt.observedAt,
+      provider: head.provider, ...(text(head.feedCursor) ? {feedCursor: head.feedCursor} : {}),
+      citation: {locator: receipt.citation}, summary: receipt.summary,
+      sourceReadTaskId: checkpointTaskId, sourceReadReceiptId: receipt.receiptId}, {...request,
+        isCurrent: () => operation.current() && document?.sources[sourceId]?.revision === head.revision
+          && document?.sources[sourceId]?.contentSha256 === head.contentSha256
+          && document?.sources[sourceId]?.observedAt === head.observedAt});
   }
   function registerFeedCheck(input) {
     requireReady();
@@ -1749,6 +2011,7 @@ export function createKnowledgeWatchHost({
   }
   function activeTracking(watch) {
     return watch?.state === 'tracked' && !document.tombstones[watch.topicId]
+      && (!readTrackingGrant || !!grantIdentity(watch))
       && watch.consumer?.id === watch.topicId && Number.isSafeInteger(watch.consumer.revision)
       && watch.consumer.revision >= 1 && watch.scope?.state === 'granted'
       && watch.scope.publicLowRiskTracking === true
@@ -1784,6 +2047,7 @@ export function createKnowledgeWatchHost({
         return !activeTracking(watch) || watch.boundSource?.sourceId !== binding.subscriptionId
           || JSON.stringify(item) !== JSON.stringify(trackingIdentity(watch));
       })) return null;
+      if (!sourceGrantCurrent(binding.subscriptionId)) return null;
       return {...clone(binding), taskId};
     } catch { return null; }
   }
@@ -1803,7 +2067,9 @@ export function createKnowledgeWatchHost({
           if (typeof readTrackingGrant === 'function') {
             for (const consumer of context.consumers) {
               let grant;
-              try { grant = await readTrackingGrant({namespace, topicId: consumer.topicId, sourceId: context.subscriptionId}); }
+              const identity = grantIdentity(consumer);
+              if (!identity) return false;
+              try { grant = await readTrackingGrant(identity); }
               catch { return false; }
               if (grant?.state !== 'granted' || grant.publicLowRiskTracking !== true
                 || grant.id !== consumer.scope.id || grant.revision !== consumer.scope.revision
@@ -1851,6 +2117,12 @@ export function createKnowledgeWatchHost({
       || watch.expiresAt && (!Number.isFinite(instant(watch.expiresAt)) || instant(watch.expiresAt) <= clock())) {
       return null;
     }
+    if (readTrackingGrant) {
+      const identity = grantIdentity(watch);
+      if (!identity || !readTrackingGrantSnapshot) return null;
+      try { if (!grantMatches(readTrackingGrantSnapshot(identity), watch.scope)) return null; }
+      catch { return null; }
+    }
     const head = document.sources[context.sourceId];
     if (head) {
       const headAt = instant(head.observedAt);
@@ -1874,6 +2146,17 @@ export function createKnowledgeWatchHost({
   }
   async function bindObservedRevision(topicId) {
     if (!identifier(topicId)) fail('INVALID_ARGUMENT');
+    if (!readTrackingGrant || !readTrackingGrantSnapshot) return {accepted: false, reason: 'authorization_required'};
+    const tracked = await lock(() => {
+      requireReady();
+      const watch = document.watches[topicId];
+      return watch?.consumer && watch.boundSource ? {consumer: clone(watch.consumer),
+        source: {id: watch.boundSource.sourceId, revision: watch.boundSource.revision,
+          contentSha256: watch.boundSource.contentSha256}} : null;
+    });
+    if (readTrackingGrant && (!tracked || !await boundStillTracked(tracked))) {
+      return {accepted: false, reason: 'authorization_required'};
+    }
     const prepared = await lock(() => {
       requireReady();
       if (document.tombstones[topicId]) return {accepted: false, reason: 'user_revoked'};
@@ -1961,6 +2244,10 @@ export function createKnowledgeWatchHost({
     if (outcomes.includes('not_relevant')) {
       return {accepted: false, reason: 'reevaluation_not_relevant', taskIds};
     }
+    if (readTrackingGrant && !await boundStillTracked(tracked)) return {accepted: false, reason: 'authorization_required'};
+    if (!trustedReceiptEvidence(document.sources[prepared.binding.sourceId], prepared.binding.sourceId)) {
+      return {accepted: false, reason: 'source_evidence_unavailable'};
+    }
     return lock(() => {
       requireReady();
       if (document.tombstones[topicId]) return {accepted: false, reason: 'user_revoked'};
@@ -1980,10 +2267,20 @@ export function createKnowledgeWatchHost({
         || binding.validUntil !== prepared.binding.validUntil
         || watch.consumer?.id !== prepared.consumer?.id
         || watch.consumer?.revision !== prepared.consumer?.revision
+        || watch.consumer?.intakeTaskId !== prepared.consumer?.intakeTaskId
         || head?.revision !== prepared.head.revision || head?.contentSha256 !== prepared.head.contentSha256
         || head?.observedAt !== prepared.head.observedAt || head?.citation !== prepared.head.citation) {
         return {accepted: false, reason: 'observation_changed'};
       }
+      try {
+        const identity = grantIdentity(watch);
+        const grant = identity && readTrackingGrantSnapshot(identity);
+        if (!plain(grant) || grant.state !== 'granted' || grant.publicLowRiskTracking !== true
+          || grant.id !== watch.scope?.id || grant.revision !== watch.scope?.revision
+          || grant.expiresAt !== watch.scope?.expiresAt || instant(grant.expiresAt) <= clock()) {
+          return {accepted: false, reason: 'authorization_required'};
+        }
+      } catch { return {accepted: false, reason: 'authorization_required'}; }
       const next = clone(document);
       const target = next.watches[topicId];
       target.boundSource = {...clone(target.boundSource), revision: head.revision,
@@ -2061,7 +2358,8 @@ export function createKnowledgeWatchHost({
 
   load();
   return Object.freeze({start, stop, dispose, snapshot, listPending, listWatches, dialogueProjection,
-    consumeInterestSignal, consumeSourceUpdate, refreshSource, refreshSubscribedFeed,
+    consumeInterestSignal, consumeInterestTask, consumeSourceUpdate, refreshSource, refreshSubscribedFeed,
+    recheckCurrentSource,
     registerFeedCheck, cancelFeedChecks, restoreFeedChecks, getFeedCheckContext, consumeFeedCheck,
     observeNotificationAcknowledgement, markNoticeRead,
     getRecheckContext, bindObservedRevision,

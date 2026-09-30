@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto';
+import type {TaskRuntime} from '../index.js';
 
 export interface KnowledgeFeedItem {
   dedupeKey: string;
@@ -48,6 +49,8 @@ export interface KnowledgeFeedQuotedItem {
   title: string;
   excerpt: string;
   occurredAt: string;
+  fetchedAt: string;
+  sourceId: string;
   sourceRevision: string;
   pageContentSha256: string;
   dataClass: 'untrusted_source_text';
@@ -133,6 +136,71 @@ export function createKnowledgeFeedReceipt(input: {
   return receipt;
 }
 
+/** Normalize one complete feeds.collect body. Execution/Policy provenance remains a host responsibility. */
+export function createKnowledgeFeedReceiptFromCollectResult(input: {
+  namespace: string; sourceId: string; result: unknown;
+}): KnowledgeFeedReceiptV2 | undefined {
+  const result = input.result;
+  if (!identifier(input.namespace) || !identifier(input.sourceId) || !object(result)
+    || !object(result.collection) || result.collection.state !== 'fetched'
+    || result.collection.subscriptionId !== input.sourceId || !instant(result.collection.fetchedAt)
+    || result.hasMore !== false || !text(result.nextCursor) || !Array.isArray(result.items)
+    || !result.items.length || !object(result.collection.validators)) return undefined;
+  const validators = result.collection.validators;
+  if (!['etag', 'lastModified'].every(key => Object.hasOwn(validators, key)
+    && (validators[key] === null || text(validators[key])))) return undefined;
+  const items: KnowledgeFeedItem[] = [];
+  for (const raw of result.items) {
+    if (!object(raw) || !object(raw.record) || !text(raw.record.dedupeKey)
+      || !text(raw.record.contentRef) || !instant(raw.record.occurredAt) || !text(raw.title)
+      || (Object.hasOwn(raw, 'summary') && typeof raw.summary !== 'string')
+      || (Object.hasOwn(raw.record, 'accountRef') && raw.record.accountRef !== input.sourceId)
+      || (Object.hasOwn(raw.record, 'fetchedAt') && raw.record.fetchedAt !== result.collection.fetchedAt)) return undefined;
+    items.push({dedupeKey: raw.record.dedupeKey, occurredAt: raw.record.occurredAt as string,
+      contentRef: raw.record.contentRef, title: raw.title.slice(0, 200),
+      summary: typeof raw.summary === 'string' ? raw.summary.slice(0, 500) : ''});
+  }
+  items.sort((a, b) => a.dedupeKey < b.dedupeKey ? -1 : a.dedupeKey > b.dedupeKey ? 1 : 0);
+  const contentSha256 = hash(items);
+  const revision = text(validators.etag) || text(validators.lastModified)
+    ? hash({etag: validators.etag ?? null, lastModified: validators.lastModified ?? null})
+    : hash({body: contentSha256});
+  try {
+    return createKnowledgeFeedReceipt({namespace: input.namespace, sourceId: input.sourceId,
+      observedAt: result.collection.fetchedAt as string, revision, items});
+  } catch { return undefined; }
+}
+
+/** Trusted root reader: rebuild ONLY from the original confirmed tool result and persisted input identity. */
+export function createKnowledgeFeedReceiptFromConfirmedExecution(input: {
+  namespace: string; sourceId: string; taskId: string; runId: string; toolVersion: string;
+  query: Record<string, unknown>; scopeRef: string;
+  runtime: Pick<TaskRuntime, 'getTask' | 'readToolExecutions' | 'matchesToolExecutionInput' | 'loadCheckpoint' | 'readEvidence'>;
+}): KnowledgeFeedReceiptV2 | undefined {
+  const {namespace, sourceId, taskId, runId, toolVersion, query, scopeRef, runtime} = input;
+  if (!identifier(namespace) || !identifier(sourceId) || !text(taskId) || !text(runId)
+    || !text(toolVersion) || !text(scopeRef) || !object(query) || query.subscriptionId !== sourceId
+    || Object.keys(query).some(key => !['subscriptionId', 'cursor', 'limit'].includes(key))) return undefined;
+  try {
+    const task = runtime.getTask(taskId);
+    const record = runtime.readToolExecutions(taskId).find(item => item.evidenceId === runId);
+    if (task.taskId !== taskId || task.cancelRequested || ['failed', 'cancelled'].includes(task.state)
+      || !task.evidenceRefs.includes(runId) || !record || record.taskId !== taskId
+      || record.evidenceId !== runId || record.toolName !== 'feeds.collect' || record.toolVersion !== toolVersion
+      || record.policyDecision !== 'allow' || record.executionStarted !== true || record.state !== 'confirmed'
+      || !instant(record.finishedAt) || !runtime.matchesToolExecutionInput(record, {arguments: query, scopeRef})
+      || !runtime.readEvidence(taskId).some(item => item.evidenceId === runId && item.kind === 'execution'
+        && item.sourceRef === 'feeds.collect')) return undefined;
+    const saved = runtime.loadCheckpoint(taskId, `tool-result-${runId}`);
+    if (!object(saved) || !object(saved.result) || !Array.isArray(saved.result.items)) return undefined;
+    // Preserve original classification. Neither a locator nor sessionAllowed makes an item PUBLIC.
+    if (saved.result.items.some(item => !object(item) || !object(item.record)
+      || item.record.accountRef !== sourceId || !instant(item.record.fetchedAt)
+      || !['public', 'private', 'restricted'].includes(item.record.sensitivity as string))) return undefined;
+    return createKnowledgeFeedReceiptFromCollectResult({namespace, sourceId, result: saved.result});
+  } catch { return undefined; }
+}
+
 /** Bind a structurally valid receipt to the exact consumer's observed context. Keep Runtime ownership checks outside. */
 export function verifyKnowledgeFeedReceiptBinding(raw: unknown, expected: KnowledgeFeedReceiptBinding): KnowledgeFeedReceipt | undefined {
   const receipt = parseKnowledgeFeedReceipt(raw);
@@ -151,5 +219,6 @@ export function knowledgeFeedReceiptItems(raw: unknown): KnowledgeFeedQuotedItem
   if (!receipt || receipt.version === 1 && new Set(receipt.items.map(item => item.contentRef)).size > 1) return undefined;
   return receipt.items.map(item => ({itemKey: item.dedupeKey, contentSha256: hash(itemCore(item)),
     citation: item.contentRef, title: item.title, excerpt: item.summary, occurredAt: item.occurredAt,
+    fetchedAt: receipt.observedAt, sourceId: receipt.sourceId,
     sourceRevision: receipt.revision, pageContentSha256: receipt.contentSha256, dataClass: 'untrusted_source_text'}));
 }

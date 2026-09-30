@@ -26,6 +26,8 @@ export interface NotificationBatch {
    * acknowledge() 置 delivered。drain 不会删除未确认批次——崩溃重启后原样取回。
    */
   state: 'ready_for_delivery' | 'delivered';
+  /** Written only after the trusted delivery consumer acknowledges its receipt. */
+  deliveredAt?: string;
 }
 
 export interface DrainReport {
@@ -84,7 +86,7 @@ export class NotificationService {
   ) {
     if (!storage) throw new ProtocolError('INVALID_ARGUMENT', 'Notification storage must be explicitly provided');
     if (!policy || typeof policy !== 'object') throw new ProtocolError('INVALID_ARGUMENT', 'Notification policy must be provided');
-    this.policy = policy;
+    this.policy = structuredClone(policy);
   }
 
   /** 接收标准事件。重复 dedupeKey 静默忽略（计数披露在返回值）。单次状态写入，原子。 */
@@ -191,7 +193,11 @@ export class NotificationService {
 
     // 恢复语义优先：未确认批次排在本次新裁定之前返回；不重复生成（id 不变）。
     // 输出边界深拷贝：调用方改动返回批次不得影响存储内的状态（返回对象可能携带内部引用）。
-    const prior = state.batches.filter(batch => batch.state === 'ready_for_delivery');
+    const outstanding = state.batches.filter(batch => batch.state === 'ready_for_delivery');
+    const quiet = this.policy.quietHours !== undefined && quietHoursActive(this.policy.quietHours, now);
+    const prior = this.paused(now) || quiet ? [] : outstanding;
+    if (this.paused(now)) held.paused += outstanding.reduce((sum, batch) => sum + batch.itemRefs.length, 0);
+    else if (quiet) held.quiet += outstanding.reduce((sum, batch) => sum + batch.itemRefs.length, 0);
     return {batches: structuredClone([...prior, ...decided]), held};
   }
 
@@ -205,6 +211,7 @@ export class NotificationService {
     if (target === undefined) throw new ProtocolError('NOT_FOUND', `No notification batch ${batchId}`);
     if (target.state === 'ready_for_delivery') {
       target.state = 'delivered';
+      target.deliveredAt = this.isoNow();
       this.writeState({...state, batches: trimBatches(state.batches)});
     }
     return structuredClone(target);
@@ -249,6 +256,14 @@ export class NotificationService {
       });
     }
     const status = this.status();
+    if (status.pausedUntil !== null && (status.pending > 0 || status.unacknowledgedBatches > 0)) {
+      plans.push({
+        scheduleId: `notifications:pause-end:${status.pausedUntil}`,
+        goal: '通知暂停结束，重新裁定待投递通知',
+        conversationId, runAt: status.pausedUntil, timeZone: 'UTC',
+        missedRunPolicy: 'run_once', taskIdempotencyKey: `notifications:pause-end:${status.pausedUntil}`,
+      });
+    }
     if (status.nextDigestCloseAt !== null) {
       plans.push({
         scheduleId: `notifications:digest:${status.nextDigestCloseAt}`,

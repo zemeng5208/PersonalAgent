@@ -18,7 +18,7 @@ import {performance} from 'node:perf_hooks';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {ModelGateway, OpenAICompatibleModelProvider, StructuredToolProvider} from '@personal-agent/models';
-import {createRuntimeApplication, createRuntimeSubagentDispatchTool} from '@personal-agent/runtime/application';
+import {createRuntimeApplication} from '@personal-agent/runtime/application';
 
 if (process.env.PA_MODEL_LIVE !== '1') {
   console.error('真实模型验收默认关闭；显式设置 PA_MODEL_LIVE=1 后才会读取凭据或发起请求。');
@@ -117,8 +117,7 @@ try {
   parent = runtime.submitTask({conversationId: 'manual-public-acceptance',
     goal: 'Synthetic explicit API child acceptance', idempotencyKey: 'openai-live-parent-1'});
   const deadline = new Date(Date.now() + 120_000).toISOString();
-  const tool = createRuntimeSubagentDispatchTool({getRuntime: () => runtime, getTools: () => app.tools,
-    getModelGateway: name => name === 'live-configured-api' ? gateway : undefined});
+  const tool = app.createSubagentDispatchTool(name => name === 'live-configured-api' ? gateway : undefined);
   const dispatchStarted = performance.now();
   const parentOutcome = await runtime.runTask(parent.taskId, async worker => {
     const summary = await tool.execute({subtasks: [{subtaskId: 'live-1', role: 'researcher', model: 'live-configured-api',
@@ -140,7 +139,7 @@ try {
   assert.equal(binding.parentTaskId, parent.taskId); assert.equal(binding.parentDeadline, deadline);
   assert.equal(binding.model, 'live-configured-api');
   const identity = runtime.loadCheckpoint(child.taskId, 'subtask-model-binding');
-  assert.deepEqual(identity, {provider: gateway.deployment.provider, deployment: gateway.deployment.deployment, model});
+  assert.deepEqual(identity, {provider: gateway.deployment.provider, deployment: gateway.deployment.deployment, model,configurationRef:null});
   const records = runtime.readToolExecutions(child.taskId);
   assert.equal(records.length, 1, 'Exactly one local read must be recorded');
   const record = records[0];

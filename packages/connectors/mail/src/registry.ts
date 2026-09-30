@@ -1,9 +1,11 @@
 import { ProtocolError } from '@personal-agent/contracts';
+import type { ProtocolContracts } from '@personal-agent/contracts';
 import type {
   MailFetchInput,
   MailFolder,
   MailMarkSeenInput,
   MailMessage,
+  MailOperationContext,
   MailPage,
   MailProvider,
   MailSendInput,
@@ -100,11 +102,29 @@ export class RegistryMailProvider implements MailProvider {
     return this.registry.resolve(accountRef).getMessage(accountRef, folder, uid);
   }
 
-  markSeen(accountRef: string, input: MailMarkSeenInput): {uid: number; seen: boolean} | Promise<{uid: number; seen: boolean}> {
-    return this.registry.resolve(accountRef).markSeen(accountRef, input);
+  markSeen(accountRef: string, input: MailMarkSeenInput, context?: MailOperationContext): {uid: number; seen: boolean} | Promise<{uid: number; seen: boolean}> {
+    return this.registry.resolve(accountRef).markSeen(accountRef, input, context);
   }
 
   send(accountRef: string, input: MailSendInput & {idempotencyKey: string}): MailSendResult | Promise<MailSendResult> {
     return this.registry.resolve(accountRef).send(accountRef, input);
+  }
+
+  async saveDraft(accountRef: string, input: MailSendInput & {idempotencyKey: string}, context?: MailOperationContext): Promise<ProtocolContracts['connectorAction']> {
+    const provider = this.registry.resolve(accountRef);
+    if (!provider.saveDraft) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'This mail provider cannot save drafts');
+    return provider.saveDraft(accountRef, input, context);
+  }
+
+  async reconcileSend(accountRef: string, messageId: string, idempotencyKey: string): Promise<MailSendResult> {
+    const provider = this.registry.resolve(accountRef);
+    if (!provider.reconcileSend) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'This mail provider cannot reconcile sent mail');
+    return provider.reconcileSend(accountRef, messageId, idempotencyKey);
+  }
+
+  assertSendIdentity(accountRef: string, messageId: string, idempotencyKey: string): void {
+    const provider = this.registry.resolve(accountRef);
+    if (!provider.assertSendIdentity) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Original send identity binding is unavailable');
+    provider.assertSendIdentity(accountRef, messageId, idempotencyKey);
   }
 }

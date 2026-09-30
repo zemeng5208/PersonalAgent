@@ -7,6 +7,8 @@ import { appendSeen, CURSOR_VERSION, decodeCursor, encodeCursor } from './cursor
 import type { CursorState, PassState } from './cursor.js';
 import type { FeedFetch, FeedFetchRequest, FeedProvider } from './provider.js';
 import { makeContentRedactor } from './redact.js';
+import {feedConfigBinding, feedItemContentSha256, feedSha256, readFeedTransportReceipt} from './provenance.js';
+import type {FeedSourceReceipt} from './provenance.js';
 
 export type FeedRecord = ProtocolContracts['connectorItem'];
 
@@ -60,6 +62,8 @@ export interface CollectResult {
   collection: CollectionState;
   nextCursor: string;
   hasMore: boolean;
+  /** Optional transport-backed source fact. Fake/custom Provider properties cannot fabricate it. */
+  sourceReceipt?: FeedSourceReceipt;
 }
 
 export interface CollectQuery {
@@ -73,6 +77,10 @@ export interface FeedServiceOptions {
   subscriptions: FeedSubscription[];
   now: () => number;
   defaultLimit?: number;
+  /** Trusted host reads persisted pause settings; no cursor is consumed while paused. */
+  isPaused?: (subscriptionId: string) => boolean;
+  /** Opt-in revision keys preserve legacy cursor/key semantics for existing consumers. */
+  trackRevisions?: boolean;
 }
 
 export const DEFAULT_LIMIT = 50;
@@ -112,6 +120,7 @@ interface ConfiguredSubscription {
  * missed or duplicated delivery at the seam.
  */
 export class FeedService {
+  private readonly sourceReceipts = new Map<string, FeedSourceReceipt>();
   private readonly subscriptions: Map<string, {subscription: ConfiguredSubscription; url: URL}>;
   private readonly defaultLimit: number;
 
@@ -147,6 +156,12 @@ export class FeedService {
 
   get providerVerification(): FeedProvider['verification'] { return this.options.provider.verification; }
 
+  /** Host-only observation getter. A 304 never refreshes the last full-body receipt. Not authorization. */
+  readSourceReceipt(subscriptionId: string): FeedSourceReceipt | undefined {
+    const receipt = this.sourceReceipts.get(subscriptionId);
+    return receipt === undefined ? undefined : structuredClone(receipt);
+  }
+
   /** Id, configured title and sensitivity only. The URL is never returned: it may carry a token. */
   listSubscriptions(): {id: string; title: string; sensitivity: string}[] {
     return [...this.subscriptions.values()].map(({subscription}) => ({
@@ -160,6 +175,9 @@ export class FeedService {
     const configured = this.subscriptions.get(query.subscriptionId);
     if (!configured) {
       throw new ProtocolError('NOT_FOUND', `No feed subscription is configured with id ${query.subscriptionId}`, false);
+    }
+    if (this.options.isPaused?.(query.subscriptionId)) {
+      throw new ProtocolError('CANCELLED', 'Feed subscription is paused; retain the existing cursor', false);
     }
     const limit = query.limit ?? this.defaultLimit;
     if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
@@ -176,6 +194,9 @@ export class FeedService {
 
     const fetched = await this.options.provider.fetchFeed(request, signal ?? new AbortController().signal);
     if (signal?.aborted) throw new ProtocolError('CANCELLED', 'Feed collection cancelled', false);
+    if (this.options.isPaused?.(query.subscriptionId)) {
+      throw new ProtocolError('CANCELLED', 'Feed subscription was paused during collection; retain the existing cursor', false);
+    }
     const fetchedAt = new Date(this.options.now()).toISOString();
     const conditional = cursor.etag !== undefined || cursor.lastModified !== undefined;
 
@@ -215,7 +236,12 @@ export class FeedService {
         skipped.push({index: entry.index, reason: skipReason(occurred === null, identified === null)});
         continue;
       }
-      const dedupeKey = `${this.options.provider.source}:${subscription.id}:${identified.kind}:${identified.externalId}`;
+      const baseKey = `${this.options.provider.source}:${subscription.id}:${identified.kind}:${identified.externalId}`;
+      const revision = createHash('sha256').update(JSON.stringify([
+        occurred.at, entry.updatedText, redact(toPlainText(entry.title, TITLE_LIMIT)),
+        redact(toPlainText(entry.bodyText)), redact(entry.link),
+      ])).digest('hex');
+      const dedupeKey = this.options.trackRevisions === true ? `${baseKey}:revision:${revision}` : baseKey;
       resolved.push({
         index: entry.index,
         externalId: identified.externalId,
@@ -310,7 +336,7 @@ export class FeedService {
       if (fetched.lastModified !== undefined) nextState.lastModified = fetched.lastModified;
     }
 
-    return {
+    const result: CollectResult = {
       items,
       hasMore,
       nextCursor: encodeCursor(nextState),
@@ -328,6 +354,25 @@ export class FeedService {
         skipped,
       },
     };
+    const transport = readFeedTransportReceipt(fetched);
+    if (transport?.state === 'fetched' && transport.decodedBodySha256 !== null
+      && transport.requestBinding === feedSha256(new URL(subscription.url).href)
+      && transport.decodedBodySha256 === feedSha256(fetched.body)) {
+      const sourceRevision = transport.decodedBodySha256;
+      const citations = items.map(item => ({externalId: item.record.externalId, contentRef: item.record.contentRef,
+        sourceRevision, contentSha256: feedItemContentSha256(item)}));
+      const receipt: FeedSourceReceipt = {
+        version: 1, providerId: transport.providerId, source: this.options.provider.source,
+        subscriptionId: subscription.id, configBinding: feedConfigBinding(subscription, this.options.provider.source),
+        sensitivity: subscription.sensitivity,
+        publicFetch: subscription.sensitivity === 'public' && transport.nativeFetch && transport.credentialFree,
+        sourceRevision, contentSha256: feedSha256(JSON.stringify(citations.map(item => item.contentSha256))),
+        transport, citations,
+      };
+      this.sourceReceipts.set(subscription.id, structuredClone(receipt));
+      result.sourceReceipt = structuredClone(receipt);
+    }
+    return result;
   }
 
   /** Re-fetches and locates one entry by `externalId`, matching `getItem`'s contract rather than `dedupeKey`. */

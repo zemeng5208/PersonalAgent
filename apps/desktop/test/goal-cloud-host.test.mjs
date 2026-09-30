@@ -6,6 +6,7 @@ import {createRuntimeApplication} from '@personal-agent/runtime/application';
 import {createGoalTools} from '@personal-agent/goals/tool';
 import {getGoal,listGoals} from '@personal-agent/goals/commands';
 import {createDesktopGoalCloudHost} from '../electron/goal-cloud-host.js';
+import {createGoalHost} from '../electron/goal-host.js';
 
 const cache=new URL('../../../.cache/goal-cloud-host-tests/',import.meta.url);
 mkdirSync(cache,{recursive:true});
@@ -14,6 +15,42 @@ const goal=(summary,sensitivity='private')=>({id:'goal-one',summary,
   validFrom:'2026-09-27T00:00:00.000Z',validUntil:'2026-10-27T00:00:00.000Z',
   sensitivity,state:'active',reason:'User selected this goal',dependencies:[]});
 async function until(predicate){for(let n=0;n<100;n++){if(await predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}throw Error('State did not arrive');}
+
+test('routine local Goal writes retain exact consumed Policy binding without cloud consent',async t=>{
+  const namespace='routine-goal-user';
+  const file=path.join(mkdtempSync(new URL('routine-',cache)),'runtime.sqlite');
+  const host=createGoalHost(namespace);
+  const cloud=createDesktopGoalCloudHost({goalHost:host,namespace});
+  const app=createRuntimeApplication({path:file,profile:'huawei_ict_agentarts',hostUserNamespace:namespace,
+    tools:cloud.tools,automaticTools:cloud.tools.filter(tool=>tool.descriptor.sideEffect==='local_write')
+      .map(tool=>({toolName:tool.descriptor.name,toolVersion:tool.descriptor.version}))});
+  t.after(()=>{cloud.close();app.close();});
+  host.bind(app);cloud.bindApplication(app);
+  const created=host.create({expectedGraphRevision:0,goal:goal('Three slides','public')});
+  await until(()=>app.activeTaskCount===0);
+  assert.equal(host.readTask(created.taskId).state,'succeeded');
+  const revised=host.revise({expectedGraphRevision:1,expectedGoalRevision:1,
+    goal:goal('Five slides','public')});
+  await until(()=>app.activeTaskCount===0);
+  assert.equal(host.readTask(revised.taskId).state,'succeeded');
+  assert.equal(host.get('goal-one').goal.revision,2);
+  assert.equal(host.get('goal-one').goal.summary,'Five slides');
+  assert.equal(cloud.snapshot().sessionAllowed,false);
+  const runId=`host-tool-${revised.taskId}`;
+  assert.throws(()=>app.runtime.getApproval(runId),/not found/i);
+  const records=app.runtime.readToolExecutions(revised.taskId);
+  assert.equal(records.length,1);assert.equal(records[0].state,'confirmed');
+  assert.equal(records[0].policyDecision,'allow');
+  const intent=app.runtime.loadCheckpoint(revised.taskId,'host-tool-intent');
+  const context={taskId:revised.taskId,runId,authorizationRef:runId,signal,
+    deadline:intent.deadline,scopes:['goals:write']};
+  const tool=cloud.tools.find(item=>item.descriptor.name==='goals.revise');
+  await assert.rejects(()=>tool.execute({...intent.arguments,
+    goal:{...intent.arguments.goal,summary:'Changed arguments'}},context),/unavailable/);
+  app.runtime.policy.revoke(runId);
+  await assert.rejects(()=>tool.execute(intent.arguments,context),/unavailable/);
+  assert.equal(host.get('goal-one').goal.summary,'Five slides');
+});
 
 test('public Goal tools retain CAS while read projection and consent guard cloud export',async t=>{
   const file=path.join(mkdtempSync(new URL('run-',cache)),'runtime.sqlite');

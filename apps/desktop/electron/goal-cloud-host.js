@@ -110,13 +110,26 @@ export function createDesktopGoalCloudHost({goalHost,namespace,readProactiveBind
     try {
       const intent=application.runtime.loadCheckpoint(context.taskId,'host-tool-intent');
       const readback=application.readHostToolTask(context.taskId);
+      const grant=application.runtime.policy.get(runId);
+      const routine=application.runtime.loadCheckpoint(context.taskId,`routine-tool-policy:${runId}`);
+      const authorizedRoutine=routine?.source==='trusted-routine-tool-policy'
+        && routine.toolName===toolName && routine.toolVersion===GOAL_TOOL_VERSION
+        && routine.argumentsDigest===intent?.argumentsDigest
+        && grant?.taskId===context.taskId && grant.toolName===toolName
+        && grant.authorizationRef===runId && grant.argumentsDigest===intent?.argumentsDigest
+        && grant.usesRemaining===0 && grant.expiresAt===context.deadline
+        && Date.parse(grant.expiresAt)>Date.now()
+        && isDeepStrictEqual(grant.scopes,['goals:write'])
+        && isDeepStrictEqual(context.scopes,['goals:write']);
+      let authorizedApproval=false;
+      try {authorizedApproval=application.runtime.getApproval(runId).state==='allowed';} catch {}
       return intent?.toolName===toolName && intent.toolVersion===GOAL_TOOL_VERSION
         && intent.commandId===readback.commandId && intent.namespace
         && readback.task.conversationId===`host-tool:${intent.namespace}`
         && readback.toolName===toolName && readback.toolVersion===GOAL_TOOL_VERSION
         && input?.goal?.sourceRef===`desktop-goal:${intent.commandId}`
         && isDeepStrictEqual(intent.arguments,input)
-        && application.runtime.getApproval(runId).state==='allowed';
+        && (authorizedRoutine || authorizedApproval);
     } catch {return false;}
   }
   function writeArguments(input,toolName) {

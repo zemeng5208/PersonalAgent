@@ -1,7 +1,8 @@
 import { ProtocolError } from '@personal-agent/contracts';
 import type { FeedFetch, FeedFetchRequest, FeedProvider, FeedVerification } from './provider.js';
 import { parseFeedDate } from './dates.js';
-import { makeErrorRedactor } from './redact.js';
+import { makeContentRedactor, makeErrorRedactor } from './redact.js';
+import {credentialFreePublicUrl, feedSha256, sealFeedTransportReceipt} from './provenance.js';
 
 export interface FeedBodyReader {
   read(): Promise<{done: boolean; value?: Uint8Array}>;
@@ -18,7 +19,7 @@ export interface FeedResponseLike {
 
 export type FeedFetchLike = (
   url: string,
-  init: {signal: AbortSignal; headers: Record<string, string>; redirect: 'manual'},
+  init: {signal: AbortSignal; headers: Record<string, string>; redirect: 'manual'; credentials: 'omit'},
 ) => Promise<FeedResponseLike>;
 
 export interface HttpFeedOptions {
@@ -84,9 +85,11 @@ export class HttpFeedProvider implements FeedProvider {
   private readonly userAgent: string;
   private readonly maxBodyBytes: number;
   private readonly maxRedirects: number;
+  private readonly nativeFetch: boolean;
 
   constructor(options: HttpFeedOptions = {}) {
     this.fetchImpl = options.fetchImpl ?? (fetch as unknown as FeedFetchLike);
+    this.nativeFetch = options.fetchImpl === undefined;
     this.userAgent = options.userAgent ?? USER_AGENT;
     this.maxBodyBytes = options.maxBodyBytes ?? MAX_BODY_BYTES;
     this.maxRedirects = options.maxRedirects ?? MAX_REDIRECTS;
@@ -112,10 +115,11 @@ export class HttpFeedProvider implements FeedProvider {
     if (request.lastModified !== undefined) headers['if-modified-since'] = request.lastModified;
 
     let current = target;
+    let credentialFree = credentialFreePublicUrl(target);
     for (let hop = 0;; hop++) {
       let response: FeedResponseLike;
       try {
-        response = await this.fetchImpl(current.href, {signal, headers, redirect: 'manual'});
+        response = await this.fetchImpl(current.href, {signal, headers, redirect: 'manual', credentials: 'omit'});
       } catch (error) {
         throw this.transportFailure(error, signal, redact);
       }
@@ -139,11 +143,22 @@ export class HttpFeedProvider implements FeedProvider {
         if (!ALLOWED_PROTOCOLS.has(next.protocol)) {
           throw new ProtocolError('EXTERNAL_FAILURE', 'Feed redirected to a URL that is not http or https', false);
         }
+        if (next.username || next.password || [...next.searchParams.keys()].some(key => /(?:token|session|key|secret|passw|auth|signature|sig|access)/iu.test(key))) {
+          throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Credential-bearing feed redirects require a host-managed private transport', false);
+        }
         current = next;
+        credentialFree = credentialFree && credentialFreePublicUrl(next);
         continue;
       }
 
-      return this.readResponse(response, request, signal, redact);
+      const result = await this.readResponse(response, request, signal, redact);
+      sealFeedTransportReceipt(result, {
+        providerId: 'http-feed-provider-v1', nativeFetch: this.nativeFetch, credentialFree,
+        state: result.state, transportFetchedAt: new Date().toISOString(),
+        requestBinding: feedSha256(target.href),
+        decodedBodySha256: result.body === undefined ? null : feedSha256(result.body),
+      });
+      return result;
     }
   }
 
@@ -162,8 +177,11 @@ export class HttpFeedProvider implements FeedProvider {
 
   private async readResponse(response: FeedResponseLike, request: FeedFetchRequest, signal: AbortSignal, redact: (text: string) => string): Promise<FeedFetch> {
     const status = response.status;
-    const etag = response.headers.get('etag') ?? undefined;
-    const lastModified = response.headers.get('last-modified') ?? undefined;
+    const contentRedact = makeContentRedactor(new URL(request.url));
+    const safeValidator = (value: string | null): string | undefined =>
+      value !== null && contentRedact(value) === value ? value : undefined;
+    const etag = safeValidator(response.headers.get('etag'));
+    const lastModified = safeValidator(response.headers.get('last-modified'));
 
     if (status === 304) {
       // A 304 may omit the validators, in which case the ones we sent still describe the document.

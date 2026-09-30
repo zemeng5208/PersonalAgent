@@ -168,8 +168,12 @@ export class ProactiveDecisionService implements DecisionPort {
     });
     let choices: readonly ModelChoice[];
     let failed = false;
-    const timeout = AbortSignal.timeout(Math.max(1, Math.min(30_000, deadlineMs - Date.now())));
-    const signal = AbortSignal.any([request.signal, timeout]);
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    request.signal.addEventListener('abort', cancel, {once: true});
+    // This awaited operation must remain alive even when the model owns no handles.
+    const timer = setTimeout(cancel, Math.max(1, Math.min(30_000, deadlineMs - Date.now())));
+    const signal = controller.signal;
     try {
       choices = await chooseBeforeAbort(this.model, unique, signal, request.signal);
       checkLifecycle(request.signal, deadlineMs);
@@ -187,6 +191,9 @@ export class ProactiveDecisionService implements DecisionPort {
       failed = true;
       choices = unique.map(() => ({intervention: 'ESCALATE_AGENTARTS', confidence: 0}));
       void error;
+    } finally {
+      clearTimeout(timer);
+      request.signal.removeEventListener('abort', cancel);
     }
     let next = 0;
     return events.map((event, index) => {

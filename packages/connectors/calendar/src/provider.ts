@@ -31,6 +31,12 @@ export interface CalendarWindow {
   toUtc: string;
 }
 
+/** Optional trusted-host read lifetime; deadline is an absolute ISO UTC instant. */
+export interface CalendarReadContext {
+  readonly signal?: AbortSignal;
+  readonly deadline?: string;
+}
+
 export interface CalendarFetchPage {
   events: CalendarEventRecord[];
   nextCursor?: string;
@@ -55,7 +61,7 @@ export interface CalendarProvider {
   /** 提供商验证等级（透传到连接器 manifest.verification）：Fake 为 'mock'，网络型真实源为 'conditional'。 */
   readonly verification: 'mock' | 'verified' | 'conditional';
   listCalendars(accountRef: string): CalendarSummary[] | Promise<CalendarSummary[]>;
-  fetchWindow(accountRef: string, window: CalendarWindow, cursor?: string): CalendarFetchPage | Promise<CalendarFetchPage>;
-  getEvent(accountRef: string, externalId: string): CalendarEventRecord | undefined | Promise<CalendarEventRecord | undefined>;
+  fetchWindow(accountRef: string, window: CalendarWindow, cursor?: string, context?: CalendarReadContext): CalendarFetchPage | Promise<CalendarFetchPage>;
+  getEvent(accountRef: string, externalId: string, context?: CalendarReadContext): CalendarEventRecord | undefined | Promise<CalendarEventRecord | undefined>;
   respond(input: CalendarRespondInput): CalendarRespondResult | Promise<CalendarRespondResult>;
 }

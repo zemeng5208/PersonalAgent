@@ -1,7 +1,9 @@
 import {existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {createHash, randomUUID} from 'node:crypto';
+import {isDeepStrictEqual} from 'node:util';
 import path from 'node:path';
+import {PROTOCOL_VERSION, ProtocolError, validateToolValue} from '@personal-agent/contracts';
 import * as coding from '@personal-agent/coding-tools';
 import {createDesktopCodingToolHost} from './coding-tool-host.js';
 
@@ -88,12 +90,16 @@ Set-Acl -LiteralPath $target -AclObject $acl`;
  */
 export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
   selectNodeExecutable,selectCheckFile,selectNpmCli,jobHelperExecutable,
-  projectScriptEnvSource,createCommandRecipeTool}) {
+  projectScriptEnvSource,createCommandRecipeTool,createWorkspaceReferenceExport,
+  readWorkspaceExportPreflight,readWorkspaceExportAuthorization}) {
   const file = path.join(userData,'coding-workspace.json');
   let savedRoot,savedNode,savedCheckFile,savedNpmCli,boundRoot,boundNode,boundProjectHelper,rootIdentity,nodeIdentity,application,active=true,consent,applyHost,failure='',commandFailure='',projectFailure='';
   let generation=randomUUID();
   const implementations=[];
   const inflight=new Set();
+  const workspaceExportProposals=new Map();
+  const confirmedWorkspaceReads=new Map();
+  let workspaceReferenceExport;
   try {
     if (existsSync(file)) {
       if (!safeStorage.isEncryptionAvailable()) throw Error();
@@ -261,6 +267,156 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
     if (previous===undefined && claim) application.runtime.saveCheckpoint(taskId,key,generation);
     return application.runtime.loadCheckpoint(taskId,key)===generation;
   };
+  // These ports are Main-only. Session scope never grants PUBLIC export, and
+  // only the original Runtime result checkpoint supplies bytes for confirmation.
+  const readTool=implementations.find(tool=>tool.descriptor.name==='workspace.read_text');
+  const readWorkspaceExportConfigurationRef=() => readTool && enabled(readTool) ? generation : undefined;
+  const readQuery=(query,withDigest=false,withArguments=false) => {
+    if(!query || typeof query!=='object' || Array.isArray(query)
+      || ![Object.prototype,null].includes(Object.getPrototypeOf(query))) return false;
+    const keys=['taskId','proposalId','path','configurationRef',...(withDigest?['contentDigest']:[]),
+      ...(withArguments?['arguments']:[])];
+    const fields=Object.getOwnPropertyDescriptors(query),own=Reflect.ownKeys(query);
+    return own.length===keys.length && keys.every(key=>own.includes(key)
+      && 'value' in fields[key] && (key==='arguments'
+        ? fields[key].value && typeof fields[key].value==='object' && !Array.isArray(fields[key].value)
+        : typeof fields[key].value==='string' && fields[key].value.length>0));
+  };
+  const taskLive=taskId => {
+    const runtime=application?.runtime,task=runtime?.getTask(taskId);
+    const deadline=runtime?.loadCheckpoint(taskId,'application-deadline');
+    return task?.taskId===taskId && task.state==='running' && task.cancelRequested!==true && bound(taskId)
+      && runtime.loadCheckpoint(taskId,'application-profile')==='huawei_ict_agentarts'
+      && typeof deadline==='string' && Number.isFinite(Date.parse(deadline)) && Date.parse(deadline)>Date.now()
+      ? {task,deadline} : undefined;
+  };
+  const readOriginalWorkspaceProposal=query => {
+    try {
+      if(!readQuery(query) || query.configurationRef!==readWorkspaceExportConfigurationRef()) return undefined;
+      const live=taskLive(query.taskId),runtime=application?.runtime;
+      if(!live || !readTool || readTool.descriptor.version!=='1.0.0'
+        || readTool.descriptor.sideEffect!=='read'
+        || !isDeepStrictEqual(readTool.descriptor.requiredScopes,['workspace:read'])) return undefined;
+      const loop=runtime.loadCheckpoint(query.taskId,'competition-loop');
+      if(!loop || !Number.isSafeInteger(loop.step) || loop.step<1) return undefined;
+      const key=JSON.stringify([query.taskId,query.proposalId]),saved=workspaceExportProposals.get(key);
+      const receipts=(loop.receipts??[]).filter(item=>item.proposal?.proposalId===query.proposalId);
+      if(receipts.length>1) return undefined;
+      const pending=loop.pending?.proposalId===query.proposalId ? loop.pending : undefined;
+      const proposal=pending??receipts[0]?.proposal;
+      if(!proposal || proposal.kind!=='tool_proposal' || proposal.verification!=='unverified'
+        || proposal.toolName!==readTool.descriptor.name || proposal.toolVersion!==readTool.descriptor.version
+        || (pending && receipts.length && !isDeepStrictEqual(pending,receipts[0].proposal))) return undefined;
+      validateToolValue(readTool.descriptor.inputSchema,proposal.arguments);
+      if(proposal.arguments.path!==query.path || query.path.includes('\\') || query.path.includes(':')
+        || query.path.split('/').some(part=>!part || part==='.' || part==='..')) return undefined;
+      // A pending original proposal supplies the exact run mapping. Historical
+      // receipts without that mapping cannot be guessed from matching arguments.
+      const runId=pending ? `competition-tool-${query.taskId}-${loop.step}` : saved?.runId;
+      if(!runId || (saved && (saved.runId!==runId || saved.deadline!==live.deadline
+        || !isDeepStrictEqual(saved.proposal,proposal)))) return undefined;
+      if(!saved) workspaceExportProposals.set(key,{runId,proposal:structuredClone(proposal),deadline:live.deadline});
+      return {runId,proposal,deadline:live.deadline,task:live.task};
+    } catch {return undefined;}
+  };
+  const readWorkspaceExportPreflightCandidate=query => {
+    const original=readOriginalWorkspaceProposal(query);
+    return original ? Object.freeze({query:Object.freeze({...query}),runId:original.runId,
+      toolName:original.proposal.toolName,toolVersion:original.proposal.toolVersion,
+      arguments:Object.freeze(structuredClone(original.proposal.arguments)),deadline:original.deadline}) : undefined;
+  };
+  const readOriginalWorkspaceReceipt=query => {
+    try {
+      const original=readOriginalWorkspaceProposal(query),runtime=application?.runtime;
+      if(!original) return undefined;
+      const {runId,proposal,deadline,task}=original;
+      const key=JSON.stringify([query.taskId,query.proposalId]),saved=confirmedWorkspaceReads.get(key);
+      const records=runtime.readToolExecutions(query.taskId).filter(record=>record.evidenceId===runId);
+      const record=records[0];
+      if(records.length!==1 || record.taskId!==query.taskId || record.protocolVersion!==PROTOCOL_VERSION
+        || record.toolName!==proposal.toolName || record.toolVersion!==proposal.toolVersion
+        || record.state!=='confirmed' || record.policyDecision!=='allow' || record.executionStarted!==true
+        || !Number.isFinite(Date.parse(record.startedAt)) || !Number.isFinite(Date.parse(record.finishedAt))
+        || Date.parse(record.finishedAt)<Date.parse(record.startedAt) || Date.parse(record.finishedAt)>Date.now()
+        || Date.parse(record.finishedAt)>Date.parse(deadline)
+        || !runtime.matchesToolExecutionInput(record,{arguments:proposal.arguments,scopeRef:runId})
+        || !task.evidenceRefs.includes(runId)) return undefined;
+      const evidence=runtime.readEvidence(query.taskId).filter(item=>item.evidenceId===runId);
+      if(evidence.length!==1 || evidence[0].kind!=='execution' || evidence[0].sourceRef!==proposal.toolName
+        || evidence[0].capturedAt!==record.finishedAt) return undefined;
+      const checkpoint=runtime.loadCheckpoint(query.taskId,`tool-result-${runId}`);
+      if(!checkpoint || !Object.hasOwn(checkpoint,'result')) return undefined;
+      const result=checkpoint.result;
+      validateToolValue(readTool.descriptor.outputSchema,result);
+      if(!isDeepStrictEqual(Object.keys(result).sort(),['byteLength','content','encoding','path','sha256'])
+        || result.path!==query.path || result.encoding!=='utf-8' || !/^[a-f0-9]{64}$/.test(result.sha256)
+        || result.byteLength>Math.min(proposal.arguments.maxBytes??262144,262144)
+        || Buffer.byteLength(result.content,'utf8')!==result.byteLength
+        || createHash('sha256').update(result.content,'utf8').digest('hex')!==result.sha256
+        || (saved && !isDeepStrictEqual(saved.result,result))) return undefined;
+      const current=readOriginalWorkspaceProposal(query);
+      if(!current || current.deadline!==deadline || current.runId!==runId
+        || !isDeepStrictEqual(current.proposal,proposal)) return undefined;
+      const receipt={runId,proposal:structuredClone(proposal),result:structuredClone(result),deadline};
+      if(!saved) confirmedWorkspaceReads.set(key,receipt);
+      return receipt;
+    } catch {return undefined;}
+  };
+  const readWorkspaceExportCandidate=query => {
+    const original=readOriginalWorkspaceReceipt(query);
+    return original ? Object.freeze({query:Object.freeze({...query}),runId:original.runId,
+      toolName:original.proposal.toolName,toolVersion:original.proposal.toolVersion,
+      arguments:Object.freeze(structuredClone(original.proposal.arguments)),contentDigest:original.result.sha256,
+      byteLength:original.result.byteLength,deadline:original.deadline}) : undefined;
+  };
+  const readConfirmedWorkspaceExport=query => {
+    if(!readQuery(query,true,true)) return undefined;
+    const {contentDigest,arguments:args,...reference}=query,original=readOriginalWorkspaceReceipt(reference);
+    try {validateToolValue(readTool.descriptor.inputSchema,args);} catch {return undefined;}
+    return original && original.result.sha256===contentDigest && isDeepStrictEqual(original.proposal.arguments,args)
+      ? {runId:original.runId,result:structuredClone(original.result)} : undefined;
+  };
+  const currentWorkspaceReferenceExport=() => {
+    if(!readWorkspaceExportConfigurationRef() || typeof createWorkspaceReferenceExport!=='function'
+      || typeof readWorkspaceExportPreflight!=='function' || typeof readWorkspaceExportAuthorization!=='function') return undefined;
+    if(!workspaceReferenceExport) {
+      try {
+        // Consume the public factory, not a second helper/result/permission DTO.
+        const exported=createWorkspaceReferenceExport({currentConfigurationRef:readWorkspaceExportConfigurationRef,
+          readConfirmed:readConfirmedWorkspaceExport,
+          readPreflight:input=> {
+            try {
+              const {arguments:args,...query}=input,candidate=readWorkspaceExportPreflightCandidate(query);
+              if(!candidate || !isDeepStrictEqual(candidate.arguments,args)) return undefined;
+              const permission=readWorkspaceExportPreflight(structuredClone(input));
+              if(!permission || Date.parse(permission.expiresAt)>Date.parse(candidate.deadline)
+                || !isDeepStrictEqual(candidate,readWorkspaceExportPreflightCandidate(query))) return undefined;
+              return permission;
+            } catch {return undefined;}
+          },
+          readAuthorization:input=> {
+            try {
+              const {contentDigest,byteLength,arguments:args,...query}=input;
+              const candidate=readWorkspaceExportCandidate(query);
+              if(!candidate || contentDigest!==candidate.contentDigest || byteLength!==candidate.byteLength
+                || !isDeepStrictEqual(candidate.arguments,args)) return undefined;
+              const permission=readWorkspaceExportAuthorization(structuredClone(input));
+              if(!permission || permission.contentDigest!==candidate.contentDigest
+                || Date.parse(permission.expiresAt)>Date.parse(candidate.deadline)
+                || !isDeepStrictEqual(candidate,readWorkspaceExportCandidate(query))) return undefined;
+              return permission;
+            } catch {return undefined;}
+          }});
+        if(exported?.toolName!=='workspace.read_text' || exported.toolVersion!=='1.0.0'
+          || exported.exportPolicyVersion!=='workspace-reference-3.0.0'
+          || ['accepts','project','dispose'].some(name=>typeof exported[name]!=='function')) {
+          exported?.dispose?.();return undefined;
+        }
+        workspaceReferenceExport=exported;
+      } catch {return undefined;}
+    }
+    return workspaceReferenceExport;
+  };
   const tools=implementations.map(tool => ({descriptor:tool.descriptor,execute:async(input,context) => {
     if (!enabled(tool) || !bound(context.taskId)) throw Error('工作区许可已撤销或任务绑定已改变');
     const controller=new AbortController();inflight.add(controller);
@@ -284,6 +440,8 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
       : savedRoot?'请为本次应用会话授权工作区；重启后需要重新授权':'请选择编程工作区')});
   const revoke=() => {
     consent=undefined;generation=randomUUID();
+    try {workspaceReferenceExport?.dispose();} catch { /* No host details escape. */ }
+    workspaceReferenceExport=undefined;workspaceExportProposals.clear();confirmedWorkspaceReads.clear();
     for (const controller of inflight) controller.abort();
     return snapshot();
   };
@@ -305,8 +463,10 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
     },
   };
   return {tools,snapshot,readWorkspaceBinding,isWorkspaceBindingCurrent,
+    readWorkspaceExportConfigurationRef,readWorkspaceExportPreflightCandidate,
+    readWorkspaceExportCandidate,readConfirmedWorkspaceExport,
     get patchReconciliation() { return applyHost ? patchReconciliation : undefined; },
-    bindApplication(value){application=value;},
+    bindApplication(value){if(application && application!==value) revoke();application=value;},
     async select() {
       const selected=await selectDirectory();
       if (!selected) return snapshot();
@@ -356,18 +516,48 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
     competitionToolExports:tools.map(tool=>({toolName:tool.descriptor.name,toolVersion:tool.descriptor.version,
       exportPolicyVersion:isProject(tool)?'authorized-project-script-redacted-v1'
         :tool.descriptor.name==='workspace.node_check'
-          ? 'authorized-node-check-redacted-v1':'authorized-coding-session-v1',
-      accepts:({taskId})=>enabled(tool) && bound(taskId),
-      project:({taskId,result,signal})=> {
-        if (signal.aborted || !enabled(tool) || !bound(taskId)) throw Error('工作区出云许可已失效');
+          ? 'authorized-node-check-redacted-v1':tool.descriptor.name==='workspace.read_text'
+            ? 'workspace-reference-3.0.0':'coding-local-result-redacted-v2',
+      accepts:input=> {
+        if(!enabled(tool) || !bound(input.taskId)) return false;
+        if(tool.descriptor.name!=='workspace.read_text') return true;
+        try {
+          if(!['preflight','final'].includes(input.phase)) return false;
+          const candidate=readWorkspaceExportPreflightCandidate({taskId:input.taskId,proposalId:input.proposalId,
+            path:input.arguments?.path,configurationRef:generation});
+          return Boolean(candidate && isDeepStrictEqual(candidate.arguments,input.arguments)
+            && currentWorkspaceReferenceExport()?.accepts(input));
+        } catch {return false;}
+      },
+      project:({taskId,proposalId,result,signal})=> {
+        if(signal.aborted) throw new ProtocolError('CANCELLED','Workspace result export cancelled');
+        if(!enabled(tool) || !bound(taskId)) throw new ProtocolError('UNAUTHORIZED','Workspace result export consent changed');
         if (tool.descriptor.name==='workspace.node_check' || isProject(tool)) {
           const recipeId=isProject(tool)
             ? tool.descriptor.name==='workspace.npm_build'?'npm-build':'npm-test':'node-check';
           if (result?.recipeId!==recipeId || !Number.isSafeInteger(result.exitCode)) throw Error('命令结果无效');
           return {recipeId,exitCode:result.exitCode,passed:result.exitCode===0};
         }
-        if (Buffer.byteLength(JSON.stringify(result),'utf8')>coding.MAX_SERIALIZED_WORKSPACE_TOOL_RESULT_BYTES) throw Error('工具结果超过传输上限，请缩小范围');
-        return structuredClone(result);
+        // Session read consent permits local execution, not PUBLIC source export.
+        // Keep the real RegisteredTool result local; never relabel it as MCP data.
+        if(tool.descriptor.name==='workspace.read_text') {
+          const exported=currentWorkspaceReferenceExport();
+          if(!exported) throw new ProtocolError('UNSUPPORTED_CAPABILITY','Exact native-confirmed workspace read export is unavailable');
+          const projection=exported.project({taskId,proposalId,result,signal});
+          if(signal.aborted) throw new ProtocolError('CANCELLED','Workspace result export cancelled');
+          if(!taskLive(taskId) || !enabled(tool)) throw new ProtocolError('UNAUTHORIZED','Workspace result export consent changed');
+          return projection;
+        }
+        validateToolValue(tool.descriptor.outputSchema,result);
+        if(tool.descriptor.name==='workspace.git_diff_check') {
+          if(result.recipeId!=='git-diff-check') throw Error('命令结果无效');
+          return {recipeId:'git-diff-check',exitCode:result.exitCode,passed:result.exitCode===0};
+        }
+        if(tool.descriptor.name==='workspace.list_entries') return {listed:true,truncated:result.truncated};
+        if(tool.descriptor.name==='workspace.preview_text_patch') return {previewed:true,changed:result.changed};
+        if(tool.descriptor.name==='workspace.stage_text_patch') return {staged:true,changed:result.changed};
+        if(tool.descriptor.name==='workspace.apply_text_patch') return {applied:result.applied,changed:result.changed};
+        throw new ProtocolError('UNSUPPORTED_CAPABILITY','Workspace result export is unavailable');
       }})),
     close(){active=false;revoke();applyHost?.close();},
   };

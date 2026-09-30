@@ -8,9 +8,16 @@ export class Conversations {
     this.file = file;
     this.turns = new Map();
     this.messages = new Map();
+    this.preferences = new Map();
     if (file && existsSync(file)) {
       const data = JSON.parse(readFileSync(file, 'utf8'));
-      if (![1,2].includes(data.version) || !Array.isArray(data.turns) || (data.version === 2 && !Array.isArray(data.messages))) throw Error('对话记录格式无法读取');
+      if (![1,2,3].includes(data.version) || !Array.isArray(data.turns) || (data.version >= 2 && !Array.isArray(data.messages))) throw Error('对话记录格式无法读取');
+      if (data.version === 3) {
+        if (!Array.isArray(data.preferences)) throw Error('对话偏好格式无法读取');
+        for (const [conversationId, preference] of data.preferences) {
+          this.preferences.set(conversationId, this.validatePreference(conversationId, preference));
+        }
+      }
       for (const turn of data.turns) {
         if (typeof turn.taskId === 'string' && ['panel','workspace'].includes(turn.surface) && typeof turn.goal === 'string') this.turns.set(turn.taskId, turn);
       }
@@ -23,6 +30,23 @@ export class Conversations {
   }
   surface(taskId) { return this.turns.get(taskId)?.surface ?? 'panel'; }
   goal(taskId) { return this.turns.get(taskId)?.goal; }
+  validatePreference(conversationId, input) {
+    if (typeof conversationId !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(conversationId)
+      || !input || Object.keys(input).some(key => !['modelId','depth','fast'].includes(key))
+      || !Number.isInteger(input.depth) || input.depth < 0 || input.depth > 5 || typeof input.fast !== 'boolean'
+      || (input.modelId !== undefined && (typeof input.modelId !== 'string' || input.modelId.length > 100
+        || /[\u0000-\u001f\u007f]/.test(input.modelId)))) throw Error('对话模型或思考偏好无效');
+    return {depth:input.depth,fast:input.fast,...(input.modelId ? {modelId:input.modelId} : {})};
+  }
+  preference(conversationId, fallback = {depth:1,fast:false}) {
+    return {...(this.preferences.get(conversationId) ?? fallback)};
+  }
+  setPreference(conversationId, input) {
+    const value = this.validatePreference(conversationId, input);
+    const next = new Map(this.preferences);next.set(conversationId,value);
+    this.save(this.turns,this.messages,next);this.preferences=next;
+    return {...value};
+  }
   add(taskId, surface, goal) {
     const turns = new Map(this.turns);
     turns.set(taskId, {taskId, surface, goal, createdAt:new Date().toISOString()});
@@ -63,11 +87,11 @@ export class Conversations {
     return [...this.messages.values()].filter(message => surface === undefined || message.surface === surface)
       .sort((a,b) => Date.parse(a.createdAt)-Date.parse(b.createdAt)).map(message => ({...message}));
   }
-  save(turns, messages) {
+  save(turns, messages, preferences = this.preferences) {
     if (!this.file) return;
     mkdirSync(path.dirname(this.file), {recursive:true});
     const temporary = `${this.file}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const content = JSON.stringify({version:2,turns:[...turns.values()],messages:[...messages.values()]});
+    const content = JSON.stringify({version:3,turns:[...turns.values()],messages:[...messages.values()],preferences:[...preferences]});
     writeFileSync(temporary, content, 'utf8');
     try {
       renameSync(temporary, this.file);

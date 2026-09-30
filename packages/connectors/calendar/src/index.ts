@@ -2,7 +2,7 @@ import { ProtocolError } from '@personal-agent/contracts';
 import type { RegisteredTool, ToolDescriptor, ToolHost } from '@personal-agent/contracts';
 import { CalendarConnector, CALENDAR_CONNECTOR_VERSION } from './connector.js';
 import { CalendarService } from './service.js';
-import type { CalendarWindow } from './provider.js';
+import type { CalendarReadContext, CalendarWindow } from './provider.js';
 import type { CalendarProvider } from './provider.js';
 
 export { CalendarConnector, CALENDAR_CONNECTOR_VERSION } from './connector.js';
@@ -12,7 +12,7 @@ export { CalDavProvider, parseCalDavEvents, zonedWallToUtc } from './caldav.js';
 export type { CalDavFetchLike, CalDavFetchResponseLike, CalDavReadProviderOptions, CalDavChangeSnapshot } from './caldav.js';
 export { CalendarService, eventToItem } from './service.js';
 export { FakeCalendarProvider, defaultCalendarFixtures } from './fake-provider.js';
-export type { CalendarEventRecord, CalendarFetchPage, CalendarProvider, CalendarRespondInput, CalendarRespondResult, CalendarSummary, CalendarWindow } from './provider.js';
+export type { CalendarEventRecord, CalendarFetchPage, CalendarProvider, CalendarReadContext, CalendarRespondInput, CalendarRespondResult, CalendarSummary, CalendarWindow } from './provider.js';
 export type { CalendarServiceOptions, EventPage } from './service.js';
 
 const PROTOCOL_ID = 'https://personalagent.local/protocol/1.0.0';
@@ -78,10 +78,10 @@ export function register(host: ToolHost, options: CalendarModuleOptions): () => 
       recoverySupport: true,
       requiresPresence: false,
     },
-    execute: async (input: unknown) => {
+    execute: async (input: unknown, context) => {
       const raw = input as {fromUtc?: string; toUtc?: string; limit?: number; cursor?: string};
       const window = resolveWindow(raw, options.defaultWindowDays ?? 7, options.now ?? Date.now);
-      const listArgs: {cursor?: string; limit?: number} = {};
+      const listArgs: CalendarReadContext & {cursor?: string; limit?: number} = {signal: context.signal, deadline: context.deadline};
       if (typeof raw.cursor === 'string' && raw.cursor.length > 0) listArgs.cursor = cursorToOffset(raw.cursor);
       if (raw.limit !== undefined) listArgs.limit = raw.limit;
       const page = await service.listEvents(accountRef, window, listArgs);

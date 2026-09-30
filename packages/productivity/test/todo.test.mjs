@@ -133,6 +133,36 @@ test('dispatch 回执映射：fired → delivered，skipped → missed（不重�
   assert.throws(() => service.save(item), /Revision must increase/);
 });
 
+test('late dispatch ignores completed or cancelled todo items', () => {
+  const {service} = makeService();
+  for (const status of ['done', 'cancelled']) {
+    const item = service.create({title: status, reminder: {remindAt: {utc: '2026-09-20T01:00:00.000Z'}}});
+    const terminal = service.update(item.id, {status});
+    const before = structuredClone(terminal);
+    const scheduleId = reminderScheduleId(item.id, item.reminder.remindAt.utc);
+    assert.deepEqual(applyReminderDispatches([terminal], [{scheduleId, status: 'fired'}], () => NOW), []);
+    assert.deepEqual(terminal, before);
+    assert.deepEqual(service.get(item.id), before);
+  }
+});
+
+test('duplicate dispatch updates a todo at most once per batch', () => {
+  const {service} = makeService();
+  const item = service.create({title: 'once', reminder: {remindAt: {utc: '2026-09-20T01:00:00.000Z'}}});
+  const scheduleId = reminderScheduleId(item.id, item.reminder.remindAt.utc);
+  const staleScheduleId = reminderScheduleId(item.id, '2026-09-19T01:00:00.000Z');
+  const updated = applyReminderDispatches([item], [
+    {scheduleId: staleScheduleId, status: 'fired'},
+    {scheduleId, status: 'fired'},
+    {scheduleId, status: 'fired'},
+    {scheduleId, status: 'skipped'},
+  ], () => NOW);
+  assert.equal(updated.length, 1);
+  assert.equal(updated[0].revision, item.revision + 1);
+  assert.equal(updated[0].reminder.state, 'delivered');
+  assert.deepEqual(applyReminderDispatches(updated, [{scheduleId, status: 'fired'}], () => NOW), []);
+});
+
 test('工具注册：todo.list / todo.create / todo.update 的 scope 与 schema 全部过 FakeToolHost', async () => {
   const host = new FakeToolHost(() => NOW);
   const storage = new FakeStorage().namespace('todo');

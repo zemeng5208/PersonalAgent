@@ -1,6 +1,7 @@
 import {createHash} from 'node:crypto';
 import type {DatabaseSync} from 'node:sqlite';
 import {openStorage, type Migration} from '@personal-agent/storage';
+export * from './evidence-validator.js';
 
 const UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const MIGRATIONS: readonly Migration[] = [{version: 1, sql: `
@@ -35,6 +36,18 @@ const MIGRATIONS: readonly Migration[] = [{version: 1, sql: `
     operation_id TEXT NOT NULL UNIQUE,
     expected_revision INTEGER NOT NULL CHECK (expected_revision >= 1),
     PRIMARY KEY (namespace, workflow_id)
+  ) STRICT;
+`}, {version: 3, sql: `
+  CREATE TABLE learning_stops (
+    namespace TEXT NOT NULL, workflow_id TEXT NOT NULL,
+    operation_id TEXT NOT NULL UNIQUE, expected_revision INTEGER,
+    through_sequence INTEGER NOT NULL, stopped_at TEXT NOT NULL
+  ) STRICT;
+  CREATE INDEX learning_stops_current_idx ON learning_stops(namespace, workflow_id, through_sequence DESC);
+  CREATE TABLE learning_invalidated_sources (
+    namespace TEXT NOT NULL, source_ref TEXT NOT NULL,
+    operation_id TEXT NOT NULL UNIQUE, invalidated_at TEXT NOT NULL,
+    PRIMARY KEY (namespace, source_ref)
   ) STRICT;
 `}];
 
@@ -110,6 +123,22 @@ export interface EraseWorkflowRequest extends LearningContext {
   readonly workflowId: string;
   readonly expectedRevision: number;
   readonly operationId: string;
+}
+
+export interface StopWorkflowRequest extends LearningContext {
+  readonly namespace: string;
+  readonly workflowId: string;
+  readonly expectedActiveRevision: number | null;
+  readonly operationId: string;
+  readonly stoppedAt: string;
+}
+
+export interface InvalidateWorkflowSourceRequest extends LearningContext {
+  readonly namespace: string;
+  /** Exact source binding used by propose; never a model-generated removal instruction. */
+  readonly sourceRef: string;
+  readonly operationId: string;
+  readonly invalidatedAt: string;
 }
 
 type Row = Record<string, unknown>;
@@ -190,6 +219,39 @@ export class SqliteLearningHost {
 
   close(): void { this.db.close(); }
 
+  private sourceAvailable(namespace: string, sourceRef: string): void {
+    if (this.db.prepare(`SELECT 1 FROM learning_invalidated_sources
+      WHERE namespace = ? AND source_ref = ?`).get(namespace, sourceRef)) return fail('NOT_FOUND');
+  }
+
+  /** Read-only trusted-host fence for dispatch/resume; never restores an invalidated source. */
+  assertSourceAvailable(namespace: string, sourceRef: string): void {
+    this.sourceAvailable(label(namespace), label(sourceRef, 1024));
+  }
+
+  /** Content-free readback distinguishes accepted deletion from a rejected head. */
+  readErasureReceipt(namespaceValue: string, workflowIdValue: string): {
+    readonly operationId: string; readonly expectedRevision: number;
+  } | null {
+    const row = this.db.prepare(`SELECT operation_id, expected_revision FROM learning_erasures
+      WHERE namespace = ? AND workflow_id = ?`)
+      .get(label(namespaceValue), label(workflowIdValue)) as Row | undefined;
+    return row ? {operationId: row.operation_id as string, expectedRevision: row.expected_revision as number} : null;
+  }
+
+  /** Retry only post-commit maintenance, never propose/validate/execute on startup. */
+  resumeErasureMaintenance(namespaceValue: string): void {
+    const namespace = label(namespaceValue);
+    const marker = this.db.prepare('SELECT 1 FROM learning_erasures WHERE namespace = ? LIMIT 1').get(namespace);
+    if (!marker) return;
+    const surviving = this.db.prepare(`SELECT 1 FROM learning_erasures e WHERE e.namespace = ? AND (
+      EXISTS (SELECT 1 FROM learning_versions v WHERE v.namespace = e.namespace AND v.workflow_id = e.workflow_id)
+      OR EXISTS (SELECT 1 FROM learning_activations a WHERE a.namespace = e.namespace AND a.workflow_id = e.workflow_id)
+    ) LIMIT 1`).get(namespace);
+    if (surviving) return fail('STORAGE_UNAVAILABLE');
+    this.checkpointErasureWal();
+  }
+
   private ensureNotErased(namespace: string, workflowId: string): void {
     if (this.db.prepare(`SELECT 1 FROM learning_erasures
       WHERE namespace = ? AND workflow_id = ?`).get(namespace, workflowId) !== undefined) {
@@ -218,6 +280,7 @@ export class SqliteLearningHost {
     const fingerprint = createHash('sha256').update(JSON.stringify(value)).digest('hex');
     return inTransaction(this.db, request, () => {
       this.ensureNotErased(value.namespace, value.workflowId);
+      this.sourceAvailable(value.namespace, value.sourceRef);
       const previous = this.db.prepare(`SELECT * FROM learning_versions WHERE operation_id = ?`)
         .get(op) as Row | undefined;
       if (previous !== undefined) {
@@ -251,6 +314,7 @@ export class SqliteLearningHost {
     validator: WorkflowValidatorPort, context: LearningContext): Promise<WorkflowVersion> {
     active(context);
     const existing = this.readVersion(namespace, workflowId, version);
+    this.sourceAvailable(namespace, existing.sourceRef);
     if (existing.validation !== 'candidate') return existing;
     const {validation: _validation, evidenceRef: _evidenceRef, ...proposal} = existing;
     const outcome = await validator.validate(structuredClone(proposal), context);
@@ -261,6 +325,7 @@ export class SqliteLearningHost {
     const evidenceRef = label(outcome.evidenceRef, 512);
     return inTransaction(this.db, context, () => {
       const current = this.readVersion(namespace, workflowId, version);
+      this.sourceAvailable(namespace, current.sourceRef);
       if (current.validation !== 'candidate') return current;
       const validation = outcome.passed ? 'passed' : 'failed';
       this.db.prepare(`UPDATE learning_versions SET validation = ?, evidence_ref = ?
@@ -274,7 +339,14 @@ export class SqliteLearningHost {
     const row = this.db.prepare(`SELECT v.* FROM learning_activations a
       JOIN learning_versions v ON v.namespace = a.namespace
         AND v.workflow_id = a.workflow_id AND v.revision = a.to_revision
-      WHERE a.namespace = ? AND a.workflow_id = ? ORDER BY a.sequence DESC LIMIT 1`)
+      WHERE a.namespace = ? AND a.workflow_id = ?
+        AND a.sequence > COALESCE((SELECT MAX(s.through_sequence) FROM learning_stops s
+          WHERE s.namespace = a.namespace AND s.workflow_id = a.workflow_id), 0)
+        AND NOT EXISTS (SELECT 1 FROM learning_invalidated_sources i
+          WHERE i.namespace = v.namespace AND i.source_ref = json_extract(v.candidate_json, '$.sourceRef'))
+        AND a.sequence = (SELECT MAX(latest.sequence) FROM learning_activations latest
+          WHERE latest.namespace = a.namespace AND latest.workflow_id = a.workflow_id)
+      ORDER BY a.sequence DESC LIMIT 1`)
       .get(label(namespace), label(workflowId)) as Row | undefined;
     return row === undefined ? null : storedVersion(row);
   }
@@ -299,6 +371,7 @@ export class SqliteLearningHost {
         return receipt(previous);
       }
       const selected = this.readVersion(namespace, workflowId, target);
+      this.sourceAvailable(namespace, selected.sourceRef);
       if (selected.validation !== 'passed') return fail('NOT_VALIDATED');
       const current = this.readActive(namespace, workflowId);
       if ((current?.revision ?? null) !== expected) return fail('REVISION_CONFLICT');
@@ -309,6 +382,53 @@ export class SqliteLearningHost {
         .run(namespace, workflowId, op, expected, target, at);
       return {sequence: Number(inserted.lastInsertRowid), operationId: op,
         fromRevision: expected, toRevision: target, activatedAt: at};
+    });
+  }
+
+  /** Disable selection only; this never claims an already running tool was cancelled. */
+  stopWorkflow(request: StopWorkflowRequest): void {
+    active(request);
+    const namespace = label(request.namespace);
+    const workflowId = label(request.workflowId);
+    const expected = request.expectedActiveRevision === null ? null : revision(request.expectedActiveRevision);
+    const op = operation(request.operationId);
+    const at = time(request.stoppedAt);
+    inTransaction(this.db, request, () => {
+      this.ensureNotErased(namespace, workflowId);
+      const previous = this.db.prepare('SELECT * FROM learning_stops WHERE operation_id = ?').get(op) as Row | undefined;
+      if (previous) {
+        if (previous.namespace !== namespace || previous.workflow_id !== workflowId
+          || previous.expected_revision !== expected || previous.stopped_at !== at) return fail('REVISION_CONFLICT');
+        return;
+      }
+      if ((this.readActive(namespace, workflowId)?.revision ?? null) !== expected) return fail('REVISION_CONFLICT');
+      const row = this.db.prepare(`SELECT MAX(sequence) AS sequence FROM learning_activations
+        WHERE namespace = ? AND workflow_id = ?`).get(namespace, workflowId) as Row;
+      this.db.prepare(`INSERT INTO learning_stops(namespace, workflow_id, operation_id,
+        expected_revision, through_sequence, stopped_at) VALUES (?, ?, ?, ?, ?, ?)`)
+        .run(namespace, workflowId, op, expected, (row.sequence as number | null) ?? 0, at);
+    });
+  }
+
+  /** Durable revocation fence; deletions/corrections may not restore an older workflow implicitly. */
+  invalidateSource(request: InvalidateWorkflowSourceRequest): void {
+    active(request);
+    const namespace = label(request.namespace);
+    const source = label(request.sourceRef, 1024);
+    const op = operation(request.operationId);
+    const at = time(request.invalidatedAt);
+    inTransaction(this.db, request, () => {
+      const previous = this.db.prepare(`SELECT * FROM learning_invalidated_sources
+        WHERE namespace = ? AND source_ref = ?`).get(namespace, source) as Row | undefined;
+      if (previous) {
+        if (previous.operation_id !== op) return fail('REVISION_CONFLICT');
+        return;
+      }
+      if (this.db.prepare('SELECT 1 FROM learning_invalidated_sources WHERE operation_id = ?').get(op)) {
+        return fail('REVISION_CONFLICT');
+      }
+      this.db.prepare(`INSERT INTO learning_invalidated_sources(namespace, source_ref, operation_id, invalidated_at)
+        VALUES (?, ?, ?, ?)`).run(namespace, source, op, at);
     });
   }
 
@@ -335,6 +455,8 @@ export class SqliteLearningHost {
       if (head.revision === null) return fail('NOT_FOUND');
       if (head.revision !== expected) return fail('REVISION_CONFLICT');
       this.db.prepare(`DELETE FROM learning_activations WHERE namespace = ? AND workflow_id = ?`)
+        .run(namespace, workflowId);
+      this.db.prepare(`DELETE FROM learning_stops WHERE namespace = ? AND workflow_id = ?`)
         .run(namespace, workflowId);
       this.db.prepare(`DELETE FROM learning_versions WHERE namespace = ? AND workflow_id = ?`)
         .run(namespace, workflowId);
