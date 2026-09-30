@@ -91,8 +91,8 @@ def goal_route(goal):
         if (not isinstance(node, dict)
                 or set(node) != {"id", "revision", "kind", "summary", "state", "validFrom", "validUntil"}
                 or not valid_ref({"id": node.get("id"), "revision": node.get("revision")}, True)
-                or node["kind"] not in {"fact", "goal", "decision", "plan"}
-                or node["state"] not in {"active", "withdrawn"} or not text(node["summary"], 8192)
+                or node["kind"] not in ("fact", "goal", "decision", "plan")
+                or node["state"] not in ("active", "withdrawn") or not text(node["summary"], 8192)
                 or not valid_timestamp(node["validFrom"]) or not valid_timestamp(node["validUntil"])
                 or node["validFrom"] >= node["validUntil"]):
             return direct_text("RECHECK：目标节点投影无效，不能生成候选。")

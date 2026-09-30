@@ -36,6 +36,12 @@ check(request(changed), 'text')
 changed = copy.deepcopy(payload)
 changed['action'] = 'RECHECK'
 check(request(changed), 'text')
+changed = copy.deepcopy(payload)
+changed['nodes'][0]['kind'] = []
+check(request(changed), 'text')
+changed = copy.deepcopy(payload)
+changed['nodes'][0]['state'] = {}
+check(request(changed), 'text')
 check(router.GOAL_PREFIX.replace('本地 Laya 已选择下述方案。', '本地 Laya 尚未确定选择，宿主将本次变化交给 AgentArts 复核；这不是执行授权。') + json.dumps(payload), 'text')
 
 receipt = dict(continuation=dict(proposalId='real-receipt-synthetic-test', state='confirmed', result=dict(recipeId='node-check', exitCode=0, passed=True)))
