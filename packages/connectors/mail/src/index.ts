@@ -15,7 +15,7 @@ export { MailAccountRegistry, RegistryMailProvider } from './registry.js';
 export type { BoundMailAccount } from './registry.js';
 export { decodeMailCursor, encodeMailCursor } from './provider.js';
 export type {
-  MailCursor, MailFetchInput, MailFolder, MailMarkSeenInput, MailMessage, MailPage,
+  MailCursor, MailFetchInput, MailFolder, MailMarkSeenInput, MailMessage, MailOperationContext, MailPage,
   MailProvider, MailSendInput, MailSendResult,
 } from './provider.js';
 
@@ -161,7 +161,7 @@ export function register(host: ToolHost, options: MailModuleOptions): () => void
     execute: async (input, context) => {
       if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Mail mark_seen cancelled before execution');
       const raw = input as {account?: string; folder: string; uid: number};
-      return service.markSeen(resolveAccount(raw), {folder: raw.folder, uid: raw.uid, idempotencyKey: context.runId});
+      return service.markSeen(resolveAccount(raw), {folder: raw.folder, uid: raw.uid, idempotencyKey: context.runId}, context);
     },
   }));
   if (options.provider.saveDraft) {
@@ -178,7 +178,7 @@ export function register(host: ToolHost, options: MailModuleOptions): () => void
       execute: async (input, context) => {
         if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Mail draft cancelled before execution');
         const raw = input as {account?: string; to: string; subject: string; text: string};
-        return service.saveDraft(resolveAccount(raw), {...raw, idempotencyKey: context.runId});
+        return service.saveDraft(resolveAccount(raw), {...raw, idempotencyKey: context.runId}, context);
       },
     }));
   }

@@ -64,18 +64,36 @@ export interface MailMarkSeenInput {
   idempotencyKey: string;
 }
 
+/** Trusted execution context; kept separate from mail content and idempotency fingerprints. */
+export interface MailOperationContext {
+  signal?: AbortSignal;
+  deadline?: string;
+  now?: () => number;
+}
+
+export function guardMailWrite(context?: MailOperationContext): void {
+  if (context?.signal?.aborted) throw new ProtocolError('CANCELLED', 'Mail write cancelled before execution');
+  if (context?.deadline !== undefined) {
+    const deadline = Date.parse(context.deadline);
+    if (!Number.isFinite(deadline)) throw new ProtocolError('INVALID_ARGUMENT', 'Invalid mail write deadline');
+    if ((context.now ?? Date.now)() >= deadline) throw new ProtocolError('TIMEOUT', 'Mail write deadline expired before execution', false);
+  }
+}
+
 export interface MailProvider {
   /** 提供商标识（进 manifest.accountTypes），Fake 为 'fixture'，QQ 为 'qq'。 */
   readonly providerKind: string;
   listFolders(accountRef: string): MailFolder[] | Promise<MailFolder[]>;
   fetchPage(accountRef: string, input: MailFetchInput): MailPage | Promise<MailPage>;
   getMessage(accountRef: string, folder: string, uid: number): MailMessage | undefined | Promise<MailMessage | undefined>;
-  markSeen(accountRef: string, input: MailMarkSeenInput): {uid: number; seen: boolean} | Promise<{uid: number; seen: boolean}>;
+  markSeen(accountRef: string, input: MailMarkSeenInput, context?: MailOperationContext): {uid: number; seen: boolean} | Promise<{uid: number; seen: boolean}>;
   send(accountRef: string, input: MailSendInput & {idempotencyKey: string}): MailSendResult | Promise<MailSendResult>;
   /** Optional real draft capability; absent providers remain unsupported. No SMTP delivery. */
-  saveDraft?(accountRef: string, input: MailSendInput & {idempotencyKey: string}): Promise<ProtocolContracts['connectorAction']>;
-  /** Read-only Sent-folder reconciliation. A missing match remains unknown, never means failed. */
-  reconcileSend?(accountRef: string, messageId: string): Promise<MailSendResult>;
+  saveDraft?(accountRef: string, input: MailSendInput & {idempotencyKey: string}, context?: MailOperationContext): Promise<ProtocolContracts['connectorAction']>;
+  /** Synchronous trusted binding check, needed when the service has no original send record. */
+  assertSendIdentity?(accountRef: string, messageId: string, idempotencyKey: string): void;
+  /** Validate original key/Message-ID binding before any Sent read. Missing matches remain unknown. */
+  reconcileSend?(accountRef: string, messageId: string, idempotencyKey: string): Promise<MailSendResult>;
 }
 
 export function encodeMailCursor(cursor: MailCursor): string {

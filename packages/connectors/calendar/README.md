@@ -4,14 +4,16 @@ MOD-20 · 日历连接器（PA-013，P1；Fake 提供商先行）。负责人 `P
 
 ## 2026-09-30 云端业务增量（待本地统一验收）
 
-CalDAV 在窗口过滤前按 UID 选择最高 SEQUENCE、再以 LAST-MODIFIED 判定版本；同版本内容冲突明确报错。
-列表与单 UID 读回共用选版路径，较新取消不会让旧事件重新出现在列表。
+CalDAV 的 time-range REPORT 只发现候选 UID；有候选时追加一次无窗口 REPORT，按精确 UID 确认当前最高 SEQUENCE、再以 LAST-MODIFIED 判定版本，最后过滤窗口与取消。
+无窗口确认沿用单 UID 读回的集合查询与选版路径，同轮所有候选共用一次结果；新版移出窗口或取消不会让旧事件重新出现在列表。
+确认缺失、修订倒退或同版本内容冲突抛 EXTERNAL_FAILURE，不返回旧快照，也不据此推断取消。没有候选时不做额外查询；两次 REPORT 不构成服务器事务快照。
 含 RECURRENCE-ID 的实例当前明确 UNSUPPORTED_CAPABILITY，避免将重复实例当同 UID 的修订。
 
 新增公开 CalendarService.refreshKnownItems(accountRef, previousConnectorItems)，返回现有 ConnectorItem[]：
 包括显式取消、改时或内容变化，保存新基线后重复调用不再产出；未知 UID 抛 NOT_FOUND，不能推断撤回。
 P5 仍负责语义事件与依赖图投影，本包不创建新公共事件 DTO。
-本轮没有运行新增用例或真实 CalDAV；账号未配置时 unavailable，不使用 Fake 生产账号。
+返修夹具实际读取并应用 REPORT time-range 请求体，覆盖窗内旧 UID/新版同 UID 移窗外、确认缺失/倒退/冲突及取消/deadline。
+本轮只做源码检查、JavaScript 语法与差异检查；未构建或运行新增用例，未调用真实 CalDAV。账号未配置时 unavailable，不使用 Fake 生产账号。
 统一交接见 [业务接线说明](../mail/docs/cloud-business-handoff.md)。
 
 ## 职责
@@ -39,7 +41,7 @@ P5 仍负责语义事件与依赖图投影，本包不创建新公共事件 DTO�
 
 - 输入：日历集合完整 URL（HTTPS）＋宿主注入的 `authorization` 头值（本包不保存凭据本体）＋可注入 `CalDavFetchLike`（PROPFIND/REPORT，离线测试用）。`allowLoopbackHttp: true` 仅放行本机回环（localhost/127.0.0.1/[::1]）的明文 `http://`，供本地验收服务器（如 Radicale）使用；非回环明文一律拒绝。
 - **变更轮询**：`pollChanges()` 一次 Depth:1 PROPFIND 同时取集合 `getctag` 与全部子资源 `getetag`（href→etag 表）。变更检测 = ctag 或 etag 变化，随后按需 `fetchWindow`/`getEvent`。P5 消费方式见 Issue #212 的 P1 形状确认。
-- **时间窗查询**：`fetchWindow` 走 `calendar-query` REPORT（time-range），并在客户端二次过滤（服务器 time-range 实现质量参差）；cancelled 剔除与 iCal 一致。
+- **时间窗查询**：`fetchWindow` 走 `calendar-query` REPORT（time-range）发现候选，再用一次无窗口 REPORT 确认每个候选的精确 UID 当前版本，之后客户端二次过滤；cancelled 剔除与 iCal 一致。有候选时每次 provider 分页调用最多两次 REPORT；MVP 复用集合读回，尚无 sync-token 增量或事务一致快照。
 - **时区**：`DTSTART;TZID=<IANA>` 经 Intl 定点迭代换算为 UTC（秋季回拨歧义取较早、春季空洞收敛到切换后偏移，均有测试）；非法 TZID 的事件整条剔除。每条事件保留 `DTSTART` 的 IANA 时区与起止本地墙上时间；UTC 瞬间单独用于排序与窗口过滤。
 - **错误映射**：207 Multi-Status 显式按成功处理；429→`RATE_LIMITED`（60s）；401/403→`UNAUTHORIZED`；5xx/网络失败→`EXTERNAL_FAILURE` 可重试；4xx/响应非 multistatus→不可重试。
 - **限制**：`respond` 显式 `UNSUPPORTED_CAPABILITY`（CalDAV 写侧/If-Match 更新留待独立工作包）；单条 `getEvent` 为全量拉取后按 UID 过滤（MVP 规模可接受）；`DURATION`（无 `DTEND`）事件不支持；未做日历集发现（`/.well-known/caldav`、`calendar-home-set`）——需直接给集合 URL；multistatus 用宽容正则解析（本地名匹配任意前缀），异常服务器形态宁可 fail-fast。
@@ -74,8 +76,8 @@ manifest 随**实际 Provider** 声明（不保留把真实提供者标为 fixtu
 
 ## 取消、超时与重试
 
-- 取消：工具入 ToolContext.signal 后由宿主门禁（FakeToolHost 语义）；连接器方法为同步短调用，无悬挂请求。
-- 超时：由宿主 deadline 控制。
+- 取消/超时：CalendarService 的只读方法接受可选 `CalendarReadContext {signal?, deadline?}`；`listEvents` 在已有分页 options 中接收。`calendar.events` 透传 ToolContext。CalDAV 的窗口、无窗口确认、单 UID 读回及 `pollChanges(context?)` 贯穿同一个绝对 deadline 和取消信号，fetch/响应体均受限，取消返回 CANCELLED、宿主 deadline 返回 TIMEOUT；原有单请求 timeout 保留。ConnectorPort 的公共签名与公共条目 Schema 未变。
+- 其他 Provider 仍维持已有传输行为；service 在读前、分页之间和读后检查 lifetime，不把返回时已取消或超时的结果当成功。
 - 重试：`fetchChanges`/`search`/`getItem` 只读可重试；`performAction` 重试必须携带**同一幂等键**，重复响应由幂等表去重。
 
 ## 证据

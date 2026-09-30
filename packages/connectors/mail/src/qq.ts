@@ -9,11 +9,13 @@ import type {
   MailFolder,
   MailMarkSeenInput,
   MailMessage,
+  MailOperationContext,
   MailPage,
   MailProvider,
   MailSendInput,
   MailSendResult,
 } from './provider.js';
+import { guardMailWrite } from './provider.js';
 
 export interface QQMailOptions {
   /** 完整 QQ 邮箱地址，如 3468788554@qq.com。装配层从环境注入，不进仓库。 */
@@ -106,14 +108,18 @@ export class QQMailProvider implements MailProvider {
     return client;
   }
 
-  async listFolders(): Promise<MailFolder[]> {
+  async listFolders(_accountRef?: string, context?: MailOperationContext): Promise<MailFolder[]> {
+    guardMailWrite(context);
     const client = await this.connect();
+    guardMailWrite(context);
     try {
       const boxes = await client.list();
+      guardMailWrite(context);
       return boxes
         .map(box => ({path: box.path, role: roleOf(box.specialUse), uidValidity: 0}))
         .filter(folder => folder.role !== 'other' || !folder.path.includes('.'));
     } catch (error) {
+      if (error instanceof ProtocolError) throw error;
       throw mapImapError(error);
     }
   }
@@ -181,18 +187,24 @@ export class QQMailProvider implements MailProvider {
     }
   }
 
-  async markSeen(_accountRef: string, input: MailMarkSeenInput): Promise<{uid: number; seen: boolean}> {
+  async markSeen(_accountRef: string, input: MailMarkSeenInput, context?: MailOperationContext): Promise<{uid: number; seen: boolean}> {
+    guardMailWrite(context);
     if (input.idempotencyKey.length === 0) throw new ProtocolError('INVALID_ARGUMENT', 'idempotencyKey is required');
     const client = await this.connect();
+    guardMailWrite(context);
     const lock = await client.getMailboxLock(input.folder);
+    let storeStarted = false;
     try {
+      guardMailWrite(context);
+      storeStarted = true;
       await client.messageFlagsAdd(String(input.uid), ['\\Seen'], {uid: true});
       const readback = await client.fetchOne(String(input.uid), {flags: true}, {uid: true});
       if (!readback || !readback.flags?.has('\\Seen')) {
-        throw new ProtocolError('EXTERNAL_FAILURE', 'Mail seen flag could not be verified; reconcile before continuing', false);
+        throw new ProtocolError('RESULT_UNKNOWN', 'Mail seen flag could not be verified; reconcile before continuing', false);
       }
       return {uid: input.uid, seen: true};
     } catch (error) {
+      if (storeStarted) throw new ProtocolError('RESULT_UNKNOWN', 'Mail seen write result unknown; reconcile before continuing', false);
       if (error instanceof ProtocolError) throw error;
       throw mapImapError(error);
     } finally {
@@ -251,8 +263,17 @@ export class QQMailProvider implements MailProvider {
     return `<pa-${digest}@personalagent.local>`;
   }
 
-  async reconcileSend(_accountRef: string, messageId: string): Promise<MailSendResult> {
-    if (!/^<[^<>\s]+>$/u.test(messageId)) throw new ProtocolError('INVALID_ARGUMENT', 'Invalid Message-ID');
+  assertSendIdentity(_accountRef: string, messageId: string, idempotencyKey: string): void {
+    if (typeof messageId !== 'string' || !/^<[^<>\s]+>$/u.test(messageId)
+      || typeof idempotencyKey !== 'string' || !idempotencyKey) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Original send key and valid Message-ID are required');
+    }
+    const expected = this.sendActions.get(idempotencyKey)?.messageId ?? this.operationMessageId('send', idempotencyKey);
+    if (messageId !== expected) throw new ProtocolError('INVALID_ARGUMENT', 'Message-ID does not belong to the original send key');
+  }
+
+  async reconcileSend(accountRef: string, messageId: string, idempotencyKey: string): Promise<MailSendResult> {
+    this.assertSendIdentity(accountRef, messageId, idempotencyKey);
     const folder = (await this.listFolders()).find(entry => entry.role === 'sent');
     if (!folder) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Mailbox does not advertise a Sent folder');
     const client = await this.connect();
@@ -270,7 +291,8 @@ export class QQMailProvider implements MailProvider {
     finally { lock.release(); }
   }
 
-  async saveDraft(_accountRef: string, input: MailSendInput & {idempotencyKey: string}): Promise<ProtocolContracts['connectorAction']> {
+  async saveDraft(_accountRef: string, input: MailSendInput & {idempotencyKey: string}, context?: MailOperationContext): Promise<ProtocolContracts['connectorAction']> {
+    guardMailWrite(context);
     if (!input.idempotencyKey) throw new ProtocolError('INVALID_ARGUMENT', 'idempotencyKey is required');
     const fingerprint = JSON.stringify([input.to, input.subject, input.text]);
     const prior = this.draftInflight.get(input.idempotencyKey);
@@ -278,34 +300,42 @@ export class QQMailProvider implements MailProvider {
       if (prior.fingerprint !== fingerprint) throw new ProtocolError('INVALID_ARGUMENT', 'Draft key was used with different content');
       return prior.inflight;
     }
-    const inflight = this.appendDraft(input);
+    const inflight = this.appendDraft(input, context);
     this.draftInflight.set(input.idempotencyKey, {fingerprint, inflight});
     return inflight;
   }
 
-  private async appendDraft(input: MailSendInput & {idempotencyKey: string}): Promise<ProtocolContracts['connectorAction']> {
-    const folder = (await this.listFolders()).find(entry => entry.role === 'drafts');
+  private async appendDraft(input: MailSendInput & {idempotencyKey: string}, context?: MailOperationContext): Promise<ProtocolContracts['connectorAction']> {
+    const folder = (await this.listFolders(undefined, context)).find(entry => entry.role === 'drafts');
+    guardMailWrite(context);
     if (!folder) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Mailbox does not advertise a Drafts folder');
     const messageId = this.operationMessageId('draft', input.idempotencyKey);
     const client = await this.connect();
+    guardMailWrite(context);
     const lock = await client.getMailboxLock(folder.path);
     const actionId = `mail-draft:${input.idempotencyKey}`;
     let appendStarted = false;
     try {
+      guardMailWrite(context);
       const existing = await client.search({header: {'message-id': messageId}}, {uid: true});
+      guardMailWrite(context);
       if (Array.isArray(existing) && existing.length > 0) {
         for await (const message of client.fetch(existing, {envelope: true}, {uid: true})) {
+          guardMailWrite(context);
           if (message.envelope?.messageId === messageId) {
             return {actionId, state: 'confirmed', externalId: `${folder.path}:${message.uid}`, evidenceRefs: []};
           }
         }
+        guardMailWrite(context);
         throw new ProtocolError('EXTERNAL_FAILURE', 'Draft identity search could not be verified', false);
       }
       // streamTransport generates MIME in memory; it never connects to SMTP.
       const composer = nodemailer.createTransport({streamTransport: true, buffer: true, newline: 'windows'});
       const mime = await composer.sendMail({from: this.options.user, to: input.to,
         subject: input.subject, text: input.text, messageId});
+      guardMailWrite(context);
       if (!Buffer.isBuffer(mime.message)) throw new ProtocolError('EXTERNAL_FAILURE', 'Draft MIME was not buffered', false);
+      guardMailWrite(context);
       appendStarted = true;
       const appended = await client.append(folder.path, mime.message, ['\\Draft']);
       if (!appended || appended.uid === undefined) return {actionId, state: 'unknown', externalId: messageId, evidenceRefs: []};

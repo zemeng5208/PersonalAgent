@@ -1,6 +1,7 @@
 import { ProtocolError } from '@personal-agent/contracts';
 import type { ProtocolContracts } from '@personal-agent/contracts';
-import type { MailCursor, MailMessage, MailProvider, MailSendResult } from './provider.js';
+import type { MailCursor, MailMessage, MailOperationContext, MailProvider, MailSendResult } from './provider.js';
+import { guardMailWrite } from './provider.js';
 
 type ConnectorItem = ProtocolContracts['connectorItem'];
 type ConnectorAction = ProtocolContracts['connectorAction'];
@@ -130,11 +131,13 @@ export class MailService {
     return messageToItem(message, accountRef, this.isoNow());
   }
 
-  async markSeen(accountRef: string, input: {folder: string; uid: number; idempotencyKey: string}): Promise<ConnectorAction> {
+  async markSeen(accountRef: string, input: {folder: string; uid: number; idempotencyKey: string}, context?: MailOperationContext): Promise<ConnectorAction> {
+    const execution = {...context, now: this.options.now};
+    guardMailWrite(execution);
     if (typeof input.folder !== 'string' || input.folder.length === 0) throw new ProtocolError('INVALID_ARGUMENT', 'folder is required');
     if (!Number.isSafeInteger(input.uid) || input.uid < 1) throw new ProtocolError('INVALID_ARGUMENT', 'uid must be a positive integer');
     if (typeof input.idempotencyKey !== 'string' || input.idempotencyKey.length === 0) throw new ProtocolError('INVALID_ARGUMENT', 'idempotencyKey is required');
-    const result = await this.provider.markSeen(accountRef, input);
+    const result = await this.provider.markSeen(accountRef, input, execution);
     return {
       actionId: `mail-mark-seen:${input.idempotencyKey}`,
       state: 'confirmed',
@@ -143,14 +146,16 @@ export class MailService {
     };
   }
 
-  async saveDraft(accountRef: string, input: {to: string; subject: string; text: string; idempotencyKey: string}): Promise<ConnectorAction> {
+  async saveDraft(accountRef: string, input: {to: string; subject: string; text: string; idempotencyKey: string}, context?: MailOperationContext): Promise<ConnectorAction> {
+    const execution = {...context, now: this.options.now};
+    guardMailWrite(execution);
     if (!this.provider.saveDraft) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Mail drafts are unavailable for this provider');
     if (typeof input.to !== 'string' || !input.to.includes('@') || typeof input.subject !== 'string'
       || !input.subject.trim() || input.subject.length > 500 || typeof input.text !== 'string'
       || typeof input.idempotencyKey !== 'string' || !input.idempotencyKey) {
       throw new ProtocolError('INVALID_ARGUMENT', 'Draft requires to, subject, text and idempotencyKey');
     }
-    return structuredClone(await this.provider.saveDraft(accountRef, {...input, timeoutMs: 30_000}));
+    return structuredClone(await this.provider.saveDraft(accountRef, {...input, timeoutMs: 30_000}, execution));
   }
 
   async reconcileSend(accountRef: string, messageId: string, idempotencyKey: string): Promise<ConnectorAction> {
@@ -159,7 +164,19 @@ export class MailService {
       || typeof idempotencyKey !== 'string' || !idempotencyKey) {
       throw new ProtocolError('INVALID_ARGUMENT', 'Reconciliation requires an RFC Message-ID and original idempotencyKey');
     }
-    const result = await this.provider.reconcileSend(accountRef, messageId);
+    const prior = this.sendIdempotency.get(JSON.stringify([accountRef, idempotencyKey]));
+    if (prior !== undefined && (await prior.inflight).messageId !== messageId) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Message-ID does not belong to the original send key');
+    }
+    if (this.provider.assertSendIdentity) {
+      this.provider.assertSendIdentity(accountRef, messageId, idempotencyKey);
+    } else if (prior === undefined) {
+      throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Original send identity binding is unavailable');
+    }
+    const result = await this.provider.reconcileSend(accountRef, messageId, idempotencyKey);
+    if (result.messageId !== messageId) {
+      throw new ProtocolError('EXTERNAL_FAILURE', 'Mail reconciliation returned a different Message-ID', false);
+    }
     return this.actionFromResult(idempotencyKey, '', result);
   }
 
