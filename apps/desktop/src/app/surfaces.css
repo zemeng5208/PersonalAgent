@@ -155,7 +155,11 @@
 /* Keep compact controls usable while preserving the existing glass layers. */
 .panel .composer textarea {box-sizing:border-box;min-width:0;field-sizing:content;max-height:min(160px,28vh);overflow-y:auto}
 .panel .model-box {position:static}
-.panel .model-menu {right:14px;bottom:80px;width:252px;max-width:calc(100% - 28px)}
+.panel .model-menu {right:14px;bottom:80px;width:252px;max-width:calc(100% - 28px);max-height:calc(100vh - 104px);overflow:auto;overscroll-behavior:contain;scrollbar-width:thin}
+.panel .model-menu .mm-model {min-width:0;align-items:flex-start}
+.panel .model-menu #mm-model-label {min-width:0;flex:1;overflow-wrap:anywhere}
+.panel .model-menu .model-tag {flex:0 0 auto}
+.panel .mic-state,.panel .who,.panel .notice {overflow-wrap:anywhere}
 .panel .model-menu .mm-card>label {display:grid;gap:5px;min-width:0;margin:8px 2px 2px;color:var(--muted);font-size:11px;line-height:1.4}
 .conversation-model-choice {box-sizing:border-box;min-width:0;max-width:100%;border:1px solid var(--glass-border);border-radius:8px;background:var(--surface-2);color:var(--fg);font:inherit;font-size:12px}
 .panel .model-menu .conversation-model-choice {display:block;width:100%;height:32px;padding:5px 8px}
