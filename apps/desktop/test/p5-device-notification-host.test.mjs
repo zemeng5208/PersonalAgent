@@ -15,16 +15,18 @@ async function fixture(t, options = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'pa-p5-native-notify-'));
   const filePath = path.join(directory, 'receipts.json');
   const store = createP5DeviceReceiptStore({filePath});
-  let native, showCount = 0;
+  let native, showCount = 0, closeCount = 0;
   class FakeNotification extends EventEmitter {
     static isSupported() { return options.supported !== false; }
     constructor() { super(); native = this; }
     show() { showCount++; }
+    close() { closeCount++; }
   }
   const host = createP5DeviceNotificationHost({Notification: FakeNotification, store,
     readProvenance: () => provenance, isActive: () => true, ...options});
   t.after(async () => { host.dispose(); await rm(directory, {recursive: true, force: true}); });
-  return {host, store, filePath, get native() {return native;}, get showCount() {return showCount;}};
+  return {host, store, filePath, get native() {return native;}, get showCount() {return showCount;},
+    get closeCount() {return closeCount;}};
 }
 
 test('only native show confirms delivery, deduplicates and persists proof', async t => {
@@ -74,4 +76,118 @@ test('restart converts pending intent to unknown and never sends it again', asyn
   await assert.rejects(restarted.sendAdvisoryNotification(notification), /reconciliation/);
   assert.equal(store.read(notification.id).deliveryState, 'unknown');
   restarted.dispose();
+});
+
+test('stop settles pending sends as unknown, releases listeners and permits only new intent after resume', async t => {
+  let enabled = true;
+  const late = [];
+  const fx = await fixture(t, {isActive: () => enabled, onLateOutcome: (...args) => late.push(args)});
+  const delivery = fx.host.sendAdvisoryNotification(notification);
+  const rejected = assert.rejects(delivery, /unknown/);
+  const oldNative = fx.native;
+  const oldShown = oldNative.listeners('show')[0];
+  enabled = false;
+  fx.host.stop();
+  fx.host.stop();
+  await rejected;
+  assert.equal(fx.store.read(notification.id).deliveryState, 'unknown');
+  assert.equal(oldNative.listenerCount('show'), 0);
+  assert.equal(oldNative.listenerCount('failed'), 0);
+  assert.equal(fx.closeCount, 1);
+  oldNative.emit('show');
+  oldShown(); // Even an already queued callback cannot alter a stopped receipt.
+  assert.equal(fx.store.read(notification.id).deliveryState, 'unknown');
+  assert.deepEqual(await fx.host.sendAdvisoryNotification({...notification, id: 'stopped'}), {delivered: false});
+  assert.equal(fx.store.read('stopped'), undefined);
+  enabled = true;
+  await assert.rejects(fx.host.sendAdvisoryNotification(notification), /reconciliation/);
+  const resumed = fx.host.sendAdvisoryNotification({...notification, id: 'resumed'});
+  fx.native.emit('show');
+  assert.deepEqual(await resumed, {delivered: true});
+  assert.equal(fx.showCount, 2);
+  assert.deepEqual(late, []);
+});
+
+test('active or provenance revocation prevents a pending outcome from confirming delivery', async t => {
+  for (const revoked of ['active', 'provenance']) {
+    let enabled = true, trusted = true;
+    const fx = await fixture(t, {isActive: () => enabled,
+      readProvenance: () => trusted ? provenance : undefined});
+    const delivery = fx.host.sendAdvisoryNotification(notification);
+    const rejected = assert.rejects(delivery, /unknown/);
+    if (revoked === 'active') enabled = false;
+    else trusted = false;
+    fx.native.emit('show');
+    await rejected;
+    assert.equal(fx.store.read(notification.id).deliveryState, 'unknown');
+    assert.equal(fx.native.listenerCount('failed'), 0);
+    assert.equal(fx.closeCount, 1);
+  }
+});
+
+test('dispose settles pending delivery and permanently disables sends and callbacks', async t => {
+  let updates = 0;
+  const fx = await fixture(t, {onUpdate: () => updates++});
+  const delivery = fx.host.sendAdvisoryNotification(notification);
+  const rejected = assert.rejects(delivery, /unknown/);
+  const beforeDispose = updates;
+  fx.host.dispose();
+  fx.host.dispose();
+  await rejected;
+  fx.native.emit('show');
+  fx.native.emit('failed');
+  assert.equal(updates, beforeDispose);
+  assert.equal(fx.store.read(notification.id).deliveryState, 'unknown');
+  assert.equal(fx.native.listenerCount('show'), 0);
+  assert.equal(fx.native.listenerCount('failed'), 0);
+  assert.deepEqual(await fx.host.sendAdvisoryNotification({...notification, id: 'disposed'}), {delivered: false});
+  assert.equal(fx.store.read('disposed'), undefined);
+  assert.equal(fx.showCount, 1);
+});
+
+test('stop, dispose or revocation suppress a late reconciliation already queued for dispatch', async t => {
+  for (const action of ['stop', 'dispose', 'active', 'provenance']) {
+    let enabled = true, trusted = true;
+    const late = [];
+    const fx = await fixture(t, {timeoutMs: 5, isActive: () => enabled,
+      readProvenance: () => trusted ? provenance : undefined,
+      onLateOutcome: (...args) => late.push(args)});
+    await assert.rejects(fx.host.sendAdvisoryNotification(notification), /unknown/);
+    fx.native.emit('show');
+    assert.equal(fx.store.read(notification.id).deliveryState, 'delivered');
+    if (action === 'stop') fx.host.stop();
+    else if (action === 'dispose') fx.host.dispose();
+    else if (action === 'active') enabled = false;
+    else trusted = false;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(late, []);
+    // Native proof received before stop remains proof, without consuming cognition while stopped.
+    assert.equal(fx.store.read(notification.id).deliveryState, 'delivered');
+  }
+});
+
+test('observer errors do not lose native delivery and consent is rechecked before show', async t => {
+  const fx = await fixture(t, {onUpdate: () => { throw Error('observer failed'); }});
+  const delivery = fx.host.sendAdvisoryNotification(notification);
+  fx.native.emit('show');
+  assert.deepEqual(await delivery, {delivered: true});
+  let enabled = true;
+  const revoked = await fixture(t, {isActive: () => enabled, onUpdate: () => { enabled = false; }});
+  assert.deepEqual(await revoked.host.sendAdvisoryNotification(notification), {delivered: false});
+  assert.equal(revoked.showCount, 0);
+  assert.equal(revoked.store.read(notification.id).deliveryState, 'failed');
+});
+
+test('in-flight duplicates await the same native outcome and late failure reconciles once', async t => {
+  const late = [];
+  const fx = await fixture(t, {timeoutMs: 5, onLateOutcome: (...args) => late.push(args)});
+  const first = assert.rejects(fx.host.sendAdvisoryNotification(notification), /unknown/);
+  const second = assert.rejects(fx.host.sendAdvisoryNotification(notification), /unknown/);
+  await Promise.all([first, second]);
+  assert.equal(fx.showCount, 1);
+  fx.native.emit('failed');
+  fx.native.emit('show');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(fx.store.read(notification.id).deliveryState, 'failed');
+  assert.deepEqual(late, [['node:os', notification.id, false]]);
 });
