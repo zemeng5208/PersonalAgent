@@ -1,0 +1,221 @@
+import {execFileSync} from 'node:child_process';
+import {createHash, randomUUID} from 'node:crypto';
+import {existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync} from 'node:fs';
+import path from 'node:path';
+import {openReadOnlyVault} from '@personal-agent/knowledge/filesystem';
+import {openControlledVaultWriter} from '@personal-agent/knowledge/write';
+import {verifyWindowsRecoveryAcl} from './coding-tool-host.js';
+
+function directory(value) {
+  if (typeof value !== 'string' || !path.isAbsolute(value) || value.startsWith('\\\\')) throw Error('请选择本机普通知识库目录');
+  const full = path.resolve(value), volume = path.parse(full).root;
+  if (full === volume) throw Error('不能选择整个磁盘');
+  let cursor = volume;
+  for (const part of path.relative(volume, full).split(path.sep)) {
+    cursor = path.join(cursor, part);
+    if (lstatSync(cursor).isSymbolicLink()) throw Error('知识库路径不能包含链接');
+  }
+  const root = realpathSync.native(full);
+  if (!statSync(root).isDirectory()) throw Error('知识库目录不可用');
+  return root;
+}
+function identity(root) {
+  const stat = statSync(root, {bigint: true});
+  return {dev: String(stat.dev), ino: String(stat.ino), birthtimeNs: String(stat.birthtimeNs)};
+}
+function sameIdentity(left, right) {
+  return left && ['dev', 'ino', 'birthtimeNs'].every(key => left[key] === right[key]);
+}
+function note(root, selected) {
+  if (typeof selected !== 'string' || !path.isAbsolute(selected)) throw Error('请选择知识库内的 Markdown 笔记');
+  const full = path.resolve(selected), relative = path.relative(root, full).split(path.sep).join('/');
+  if (!relative || relative.startsWith('../') || path.isAbsolute(relative) || !/\.md$/i.test(relative)
+    || relative.includes(':') || relative.split('/').some(part => !part || part.startsWith('.') || /[. ]$/.test(part))) {
+    throw Error('整理范围必须是已选知识库内的笔记');
+  }
+  let cursor = root;
+  for (const part of relative.split('/')) {
+    cursor = path.join(cursor, part);
+    if (lstatSync(cursor).isSymbolicLink()) throw Error('整理范围不能包含链接');
+  }
+  const stat = statSync(full);
+  if (!stat.isFile() || stat.nlink !== 1 || realpathSync.native(full) !== full) throw Error('请选择普通笔记文件');
+  return relative;
+}
+function validateSaved(record, namespace, hostIdentity) {
+  if (!record || record.version !== 1 || record.namespace !== namespace || record.hostIdentity !== hostIdentity
+    || !/^[a-f0-9-]{36}$/.test(record.sourceId) || !Number.isSafeInteger(record.configRevision)
+    || record.configRevision < 1 || typeof record.enabled !== 'boolean'
+    || !['private', 'public'].includes(record.dataLevel) || !Array.isArray(record.allowedNotePaths)
+    || record.allowedNotePaths.length > 32) throw Error('知识源配置无效');
+  const root = directory(record.rootPath);
+  if (root !== record.rootPath || !sameIdentity(identity(root), record.rootIdentity)) throw Error('知识库身份已改变');
+  for (const relative of record.allowedNotePaths) {
+    if (typeof relative !== 'string' || note(root, path.join(root, relative)) !== relative) throw Error('笔记范围已改变');
+  }
+  return record;
+}
+function prepareRecovery(userData, sourceId, powerShellPath) {
+  if (process.platform !== 'win32' || typeof powerShellPath !== 'string'
+    || path.basename(powerShellPath).toLowerCase() !== 'pwsh.exe') throw Error('安全整理需要可信 PowerShell 7');
+  const target = path.join(userData, 'knowledge-recovery', sourceId);
+  if (!existsSync(target)) {
+    mkdirSync(target, {recursive: true});
+    const script = String.raw`$ErrorActionPreference='Stop'
+$target=[Console]::In.ReadToEnd()
+$self=[System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl=[System.Security.AccessControl.DirectorySecurity]::new()
+$acl.SetOwner($self)
+$acl.SetAccessRuleProtection($true,$false)
+$acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($self,'FullControl','ContainerInherit,ObjectInherit','None','Allow'))
+Set-Acl -LiteralPath $target -AclObject $acl`;
+    execFileSync(powerShellPath, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand',
+      Buffer.from(script, 'utf16le').toString('base64')],
+    {input: target, encoding: 'utf8', timeout: 10000, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe']});
+  }
+  verifyWindowsRecoveryAcl(target, powerShellPath);
+  return directory(target);
+}
+
+/** Main-process only. Native pickers supply paths; snapshots never expose roots or host identity.
+ * No environment/default-directory fallback. Write/export consent always expires on restart.
+ */
+export async function createKnowledgeSourceConfig({userData, safeStorage, namespace, hostIdentity,
+  selectDirectory, selectNoteFiles, confirmPermissions = async () => false, powerShellPath,
+  prepareRecoveryDirectory = prepareRecovery}) {
+  if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(namespace ?? '') || typeof hostIdentity !== 'string' || !hostIdentity) {
+    throw Error('缺少受信知识源身份');
+  }
+  const file = path.join(userData, 'knowledge-source-config.json');
+  let saved, vault, writer, busy = false, closed = false, failure = '';
+  let writeAllowed = false, cloudExportAllowed = false, publicQueries = [];
+  const inflight = new Set();
+  const invalidate = () => {
+    for (const controller of inflight) controller.abort();
+    vault = undefined; writer = undefined; writeAllowed = false; cloudExportAllowed = false; publicQueries = [];
+  };
+  const current = () => {
+    try {return !closed && Boolean(saved?.enabled && vault)
+      && directory(saved.rootPath) === saved.rootPath && sameIdentity(identity(saved.rootPath), saved.rootIdentity);}
+    catch {return false;}
+  };
+  const snapshot = () => ({configured: Boolean(saved), enabled: saved?.enabled === true,
+    available: current(), sourceId: saved?.sourceId ?? '', namespace,
+    configRevision: saved?.configRevision ?? 0, dataLevel: saved?.dataLevel ?? 'private',
+    displayName: saved ? path.basename(saved.rootPath) : '',
+    allowedNotePaths: [...(saved?.allowedNotePaths ?? [])], writeAvailable: current() && writeAllowed && Boolean(writer),
+    cloudExportAllowed: current() && cloudExportAllowed && saved.dataLevel === 'public',
+    publicQueries: cloudExportAllowed ? [...publicQueries] : [],
+    reason: failure || (!saved ? '请选择知识库；尚未配置' : !saved.enabled ? '知识源已停用'
+      : !current() ? '知识库身份已改变，请重新选择' : writeAllowed ? '已连接；整理仍需逐次 Policy 审批' : '已连接，只读；私人内容仅留本机')});
+  const persist = record => {
+    if (!safeStorage.isEncryptionAvailable()) throw Error('本机安全存储不可用，未保存知识源');
+    const encrypted = safeStorage.encryptString(JSON.stringify(record)).toString('base64');
+    mkdirSync(userData, {recursive: true});
+    writeFileSync(file + '.tmp', JSON.stringify({version: 1, encrypted}), {encoding: 'utf8', mode: 0o600});
+    renameSync(file + '.tmp', file);
+  };
+  async function bind(record, permissions = {}) {
+    const port = record.enabled ? await openReadOnlyVault({vaultId: record.sourceId, rootPath: record.rootPath}) : undefined;
+    saved = record; vault = port; failure = '';
+    if (permissions.writeAllowed && record.enabled && record.allowedNotePaths.length) {
+      try {
+        // Same physical Vault always uses the same durable note locks, across selection and source-ID changes.
+        const recoveryKey = createHash('sha256').update(JSON.stringify([hostIdentity, record.rootPath, record.rootIdentity])).digest('hex');
+        const recoveryRootPath = prepareRecoveryDirectory(userData, recoveryKey, powerShellPath);
+        writer = openControlledVaultWriter({rootPath: record.rootPath, recoveryRootPath, powerShellPath,
+          sourceId: record.sourceId, configRevision: record.configRevision, allowedNotePaths: record.allowedNotePaths,
+          bindingCurrent: () => current() && saved === record && writeAllowed
+            && (verifyWindowsRecoveryAcl(recoveryRootPath, powerShellPath), true)});
+        writeAllowed = true;
+      } catch {failure = '只读已连接；安全整理宿主不可用，写入未启用';}
+    }
+    cloudExportAllowed = permissions.cloudExportAllowed === true && record.enabled && record.dataLevel === 'public';
+    publicQueries = cloudExportAllowed ? [...permissions.publicQueries] : [];
+  }
+  try {
+    if (existsSync(file)) {
+      const stored = JSON.parse(readFileSync(file, 'utf8'));
+      if (stored.version !== 1 || typeof stored.encrypted !== 'string' || !safeStorage.isEncryptionAvailable()) throw Error();
+      await bind(validateSaved(JSON.parse(safeStorage.decryptString(Buffer.from(stored.encrypted, 'base64'))), namespace, hostIdentity));
+    }
+  } catch {invalidate(); saved = undefined; failure = '已保存知识源不可用，请重新选择；不会使用旧目录';}
+  async function mutate(action) {
+    if (closed || busy) throw Error('知识源正在变更，请稍后重试');
+    busy = true;
+    try {return await action();}
+    catch {failure = '知识源操作未完成，请检查配置或冲突后重试'; throw Error(failure);}
+    finally {busy = false;}
+  }
+  const checkBinding = expected => {
+    if (!current() || expected?.sourceId !== saved.sourceId || expected?.configRevision !== saved.configRevision) {
+      throw Error('知识源已停用、撤销或版本改变');
+    }
+  };
+  return {
+    snapshot,
+    async select() {return mutate(async () => {
+      const selected = await selectDirectory(); if (!selected) return snapshot();
+      const rootPath = directory(selected), revision = (saved?.configRevision ?? 0) + 1;
+      invalidate();
+      const record = {version: 1, namespace, hostIdentity, sourceId: randomUUID(), configRevision: revision,
+        rootPath, rootIdentity: identity(rootPath), enabled: true, dataLevel: 'private', allowedNotePaths: []};
+      persist(record); await bind(record); return snapshot();
+    });},
+    async selectNotes(expected) {return mutate(async () => {
+      checkBinding(expected);
+      const selected = await selectNoteFiles(saved.rootPath); if (!selected?.length) return snapshot();
+      checkBinding(expected);
+      if (selected.length > 32) throw Error('一次最多选择 32 篇笔记');
+      const record = {...saved, configRevision: saved.configRevision + 1,
+        allowedNotePaths: [...new Set(selected.map(value => note(saved.rootPath, value)))]};
+      invalidate(); persist(record); await bind(record); return snapshot();
+    });},
+    async configure(input) {return mutate(async () => {
+      if (!input || Object.keys(input).some(key => !['sourceId', 'configRevision', 'enabled', 'dataLevel',
+        'writeAllowed', 'cloudExportAllowed', 'publicQueries'].includes(key)) || !saved
+        || input.sourceId !== saved.sourceId || input.configRevision !== saved.configRevision
+        || typeof input.enabled !== 'boolean' || !['private', 'public'].includes(input.dataLevel)
+        || typeof input.writeAllowed !== 'boolean' || typeof input.cloudExportAllowed !== 'boolean'
+        || !Array.isArray(input.publicQueries) || input.publicQueries.length > 16
+        || input.publicQueries.some(value => typeof value !== 'string' || !value.trim() || value.length > 128)) throw Error();
+      if (input.writeAllowed && (!input.enabled || !saved.allowedNotePaths.length)
+        || input.cloudExportAllowed && (!input.enabled || input.dataLevel !== 'public' || !input.publicQueries.length)) throw Error();
+      if ((input.writeAllowed || input.cloudExportAllowed) && !await confirmPermissions({
+        displayName: path.basename(saved.rootPath), noteCount: saved.allowedNotePaths.length,
+        writeAllowed: input.writeAllowed, cloudExportAllowed: input.cloudExportAllowed,
+        publicQueries: [...input.publicQueries]})) return snapshot();
+      const record = {...saved, configRevision: saved.configRevision + 1,
+        enabled: input.enabled, dataLevel: input.dataLevel};
+      invalidate(); persist(record); await bind(record, input); return snapshot();
+    });},
+    async revoke() {return mutate(async () => {
+      invalidate(); if (saved) {saved = {...saved, configRevision: saved.configRevision + 1, enabled: false}; persist(saved);}
+      failure = ''; return snapshot();
+    });},
+    /** Trusted local admin consumers use this same binding as the Runtime tool factory. */
+    acquire(expected, signal) {
+      checkBinding(expected);
+      const controller = new AbortController(); inflight.add(controller);
+      const binding = snapshot(), selectedVault = vault, selectedWriter = writer;
+      return {binding, read: selectedVault, write: writeAllowed ? selectedWriter : undefined,
+        signal: AbortSignal.any([signal, controller.signal]),
+        assertCurrent() {checkBinding(expected); if (controller.signal.aborted) throw Error('知识源调用已撤销');},
+        release() {inflight.delete(controller);}};
+    },
+    async readSelectedNote(input) {
+      if (!input || Object.keys(input).some(key => !['sourceId', 'configRevision', 'path'].includes(key))) throw Error('无效的笔记请求');
+      checkBinding(input);
+      if (!saved.allowedNotePaths.includes(input.path)) throw Error('请先通过本机选择器选定笔记');
+      const lease = this.acquire(input, new AbortController().signal);
+      try {
+        const result = await lease.read.readNote({path: input.path, signal: lease.signal,
+          deadline: new Date(Date.now() + 30000).toISOString()});
+        lease.assertCurrent();
+        return {sourceId: input.sourceId, configRevision: input.configRevision,
+          path: input.path, revision: result.revision, content: result.content};
+      } finally {lease.release();}
+    },
+    close() {closed = true; invalidate();}
+  };
+}

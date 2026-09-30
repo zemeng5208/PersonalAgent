@@ -1,0 +1,101 @@
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import test from 'node:test';
+import {createKnowledgeSourceConfig} from '../electron/knowledge-source-config.js';
+
+// Encryption fake is explicit; no real credentials or private Vault are used.
+const safeStorage = {isEncryptionAvailable: () => true, encryptString: value => Buffer.from('synthetic:' + value),
+  decryptString: value => value.toString().replace(/^synthetic:/, '')};
+async function fixture(t) {
+  const parent = fileURLToPath(new URL('../../../data/test-tmp/', import.meta.url));
+  await mkdir(parent, {recursive: true});
+  const base = await mkdtemp(join(parent, 'knowledge-source-'));
+  const userData = join(base, 'host'), first = join(base, 'first'), second = join(base, 'second');
+  await mkdir(userData); await mkdir(first); await mkdir(second);
+  await writeFile(join(first, 'one.md'), '公开合成 first\n'); await writeFile(join(second, 'two.md'), '公开合成 second\n');
+  t.after(() => rm(base, {recursive: true, force: true}));
+  let selected = first;
+  const options = {userData, safeStorage, namespace: 'synthetic-admin', hostIdentity: randomUUID(),
+    selectDirectory: async () => selected, selectNoteFiles: async root => [join(root, root === first ? 'one.md' : 'two.md')],
+    confirmPermissions: async () => true};
+  const host = await createKnowledgeSourceConfig(options);
+  t.after(() => host.close());
+  return {userData, first, second, options, host, select: value => {selected = value;}};
+}
+const binding = host => ({sourceId: host.snapshot().sourceId, configRevision: host.snapshot().configRevision});
+
+test('missing config is unavailable; native selection persists a host-bound root without snapshot paths', async t => {
+  const {host, userData, first, options} = await fixture(t);
+  assert.equal(host.snapshot().available, false);
+  assert.throws(() => host.acquire({sourceId: '', configRevision: 0}, new AbortController().signal));
+  await host.select();
+  const current = host.snapshot();
+  assert.equal(current.available, true); assert.equal(current.dataLevel, 'private');
+  assert.equal(current.cloudExportAllowed, false); assert.equal(current.writeAvailable, false);
+  assert.equal(JSON.stringify(current).includes(first), false);
+  const stored = JSON.parse(await readFile(join(userData, 'knowledge-source-config.json'), 'utf8'));
+  assert.deepEqual(Object.keys(stored).sort(), ['encrypted', 'version']);
+  const restarted = await createKnowledgeSourceConfig(options); t.after(() => restarted.close());
+  assert.equal(restarted.snapshot().sourceId, current.sourceId);
+  assert.equal(restarted.snapshot().configRevision, current.configRevision);
+  assert.equal(restarted.snapshot().available, true);
+});
+
+test('switch and revoke abort old leases; old source/version never silently binds the next Vault', async t => {
+  const {host, second, select} = await fixture(t);
+  await host.select();
+  const old = binding(host), lease = host.acquire(old, new AbortController().signal);
+  select(second); await host.select();
+  assert.equal(lease.signal.aborted, true); assert.throws(() => lease.assertCurrent());
+  lease.release(); assert.throws(() => host.acquire(old, new AbortController().signal));
+  const current = binding(host), secondLease = host.acquire(current, new AbortController().signal);
+  const result = await secondLease.read.search({query: 'second', limit: 1,
+    deadline: new Date(Date.now() + 30000).toISOString(), signal: secondLease.signal});
+  assert.equal(result.hits[0].source.path, 'two.md');
+  await host.revoke(); assert.equal(secondLease.signal.aborted, true); secondLease.release();
+  assert.equal(host.snapshot().available, false); assert.throws(() => host.acquire(current, new AbortController().signal));
+});
+
+test('only native-selected note is readable locally; config changes invalidate its baseline view', async t => {
+  const {host} = await fixture(t); await host.select();
+  await assert.rejects(host.readSelectedNote({...binding(host), path: 'one.md'}));
+  await host.selectNotes(binding(host));
+  const old = binding(host);
+  const result = await host.readSelectedNote({...old, path: 'one.md'});
+  assert.match(result.revision, /^[a-f0-9]{64}$/); assert.equal(result.content, '公开合成 first\n');
+  await host.configure({...old, enabled: true, dataLevel: 'private', writeAllowed: false,
+    cloudExportAllowed: false, publicQueries: []});
+  await assert.rejects(host.readSelectedNote({...old, path: 'one.md'}));
+  await assert.rejects(host.readSelectedNote({...binding(host), path: '../one.md'}));
+});
+
+test('public export requires exact native-confirmed consent and expires on restart; private cannot export', async t => {
+  const {host, options} = await fixture(t); await host.select();
+  await assert.rejects(host.configure({...binding(host), enabled: true, dataLevel: 'private', writeAllowed: false,
+    cloudExportAllowed: true, publicQueries: ['公开合成']}));
+  await host.configure({...binding(host), enabled: true, dataLevel: 'public', writeAllowed: false,
+    cloudExportAllowed: true, publicQueries: ['公开合成']});
+  assert.equal(host.snapshot().cloudExportAllowed, true);
+  const restarted = await createKnowledgeSourceConfig(options); t.after(() => restarted.close());
+  assert.equal(restarted.snapshot().available, true); assert.equal(restarted.snapshot().cloudExportAllowed, false);
+  const declined = await createKnowledgeSourceConfig({...options, confirmPermissions: async () => false});
+  t.after(() => declined.close());
+  const before = declined.snapshot().configRevision;
+  await declined.configure({...binding(declined), enabled: true, dataLevel: 'public', writeAllowed: false,
+    cloudExportAllowed: true, publicQueries: ['公开合成']});
+  assert.equal(declined.snapshot().cloudExportAllowed, false); assert.equal(declined.snapshot().configRevision, before);
+});
+
+test('corrupt storage, mismatched host identity and replaced root remain unavailable without fallback', async t => {
+  const {host, options, userData, first} = await fixture(t); await host.select();
+  const other = await createKnowledgeSourceConfig({...options, hostIdentity: 'other-host'}); t.after(() => other.close());
+  assert.equal(other.snapshot().available, false);
+  await rm(first, {recursive: true}); await mkdir(first);
+  assert.equal(host.snapshot().available, false);
+  await writeFile(join(userData, 'knowledge-source-config.json'), '{broken');
+  const corrupt = await createKnowledgeSourceConfig(options); t.after(() => corrupt.close());
+  assert.equal(corrupt.snapshot().configured, false); assert.equal(corrupt.snapshot().available, false);
+});

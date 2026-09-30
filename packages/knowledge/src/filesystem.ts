@@ -12,6 +12,9 @@ const MAX_DEPTH = 16;
 const MAX_FILE_BYTES = 512 * 1024;
 
 export interface ReadOnlyVaultPort extends KnowledgePort {
+  /** Host-only selected-note view. No write or cloud-export permission is implied. */
+  readNote(request: {readonly path: string; readonly deadline: string; readonly signal: AbortSignal}):
+    Promise<{content: string; revision: string}>;
   readCitation(request: {
     readonly source: KnowledgeSource;
     readonly deadline: string;
@@ -145,6 +148,10 @@ export async function openReadOnlyVault(options: {vaultId: string; rootPath: str
   }
 
   return Object.freeze({
+    readNote: async (request: {path: string; deadline: string; signal: AbortSignal}) => {
+      const deadline = checkContext(request);
+      return readNote(request.path, request.signal, deadline);
+    },
     search: async (request: KnowledgeSearchRequest) => {
       const deadline = checkContext(request);
       if (typeof request.query !== 'string' || !request.query.trim() || request.query.length > 128
