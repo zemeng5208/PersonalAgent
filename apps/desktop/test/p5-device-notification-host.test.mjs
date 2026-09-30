@@ -23,7 +23,8 @@ async function fixture(t, options = {}) {
     close() { closeCount++; }
   }
   const host = createP5DeviceNotificationHost({Notification: FakeNotification, store,
-    readProvenance: () => provenance, isActive: () => true, ...options});
+    readProvenance: () => provenance, isActive: () => true,
+    readDeliveryPolicy: () => ({allowed: true}), ...options});
   t.after(async () => { host.dispose(); await rm(directory, {recursive: true, force: true}); });
   return {host, store, filePath, get native() {return native;}, get showCount() {return showCount;},
     get closeCount() {return closeCount;}};
@@ -190,4 +191,78 @@ test('in-flight duplicates await the same native outcome and late failure reconc
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(fx.store.read(notification.id).deliveryState, 'failed');
   assert.deepEqual(late, [['node:os', notification.id, false]]);
+});
+
+test('delivery policy quiet and pause suppress new intent without OS calls or panel card spam', async t => {
+  for (const reason of ['quiet_hours', 'paused', 'unavailable']) {
+    const fx = await fixture(t, {readDeliveryPolicy: () => ({allowed: false, reason})});
+    assert.deepEqual(await fx.host.sendAdvisoryNotification(notification), {delivered: false, error: reason});
+    assert.deepEqual(await fx.host.sendAdvisoryNotification({...notification, id: 'new-sample'}), {delivered: false, error: reason});
+    assert.equal(fx.showCount, 0);
+    assert.deepEqual(fx.store.list(), []);
+    assert.deepEqual(fx.host.readDeliveryPolicy(), {allowed: false, reason});
+  }
+});
+
+test('delivery policy absent, async, corrupt or failing is unavailable and never calls native show', async t => {
+  for (const readDeliveryPolicy of [undefined, () => Promise.resolve({allowed: true}),
+    () => ({allowed: true, reason: 'quiet_hours'}), () => ({allowed: true, fromModel: true}),
+    () => {throw Error('not configured');}]) {
+    const fx = await fixture(t, {readDeliveryPolicy});
+    assert.deepEqual(await fx.host.sendAdvisoryNotification(notification), {delivered: false, error: 'unavailable'});
+    assert.equal(fx.showCount, 0);
+    assert.deepEqual(fx.store.list(), []);
+  }
+});
+
+test('delivery policy is reread immediately before native show and known suppression is not unknown', async t => {
+  let reads = 0;
+  const fx = await fixture(t, {readDeliveryPolicy: () => ++reads < 3
+    ? {allowed: true} : {allowed: false, reason: 'paused'}});
+  assert.deepEqual(await fx.host.sendAdvisoryNotification(notification), {delivered: false, error: 'paused'});
+  assert.equal(reads, 3);
+  assert.equal(fx.showCount, 0);
+  assert.equal(fx.store.read(notification.id).deliveryState, 'failed');
+  assert.equal(fx.native.listenerCount('show'), 0);
+  assert.equal(fx.native.listenerCount('failed'), 0);
+});
+
+test('quiet policy never hides delivered proof or converts a saved unknown into known failure', async t => {
+  let allowed = true;
+  const fx = await fixture(t, {readDeliveryPolicy: () => allowed
+    ? {allowed: true} : {allowed: false, reason: 'quiet_hours'}});
+  const delivery = fx.host.sendAdvisoryNotification(notification);
+  fx.native.emit('show');
+  assert.deepEqual(await delivery, {delivered: true});
+  allowed = false;
+  assert.deepEqual(await fx.host.sendAdvisoryNotification(notification), {delivered: true});
+  fx.store.addNotification({...notification, id: 'unknown'}, provenance);
+  fx.store.recordDelivery('unknown', 'unknown');
+  await assert.rejects(fx.host.sendAdvisoryNotification({...notification, id: 'unknown'}), /reconciliation/);
+  assert.equal(fx.store.read('unknown').deliveryState, 'unknown');
+  assert.equal(fx.showCount, 1);
+});
+
+test('readback distinguishes queued, native-delivered, failed and user-read without sampling replay', async t => {
+  const fx = await fixture(t);
+  assert.equal(fx.host.readDeliveryOutcome('missing'), undefined);
+  const delivery = fx.host.sendAdvisoryNotification(notification);
+  const queued = fx.host.readDeliveryOutcome(notification.id);
+  assert.equal(queued.persisted, true);
+  assert.equal(queued.queued, true);
+  assert.equal(queued.delivered, false);
+  assert.equal(queued.deliveredAt, null);
+  assert.equal(queued.userRead, 'unobserved');
+  queued.evidenceRefs.push('tampered');
+  assert.deepEqual(fx.host.readDeliveryOutcome(notification.id).evidenceRefs, provenance.evidenceRefs);
+  fx.native.emit('show');
+  await delivery;
+  const confirmed = fx.host.readDeliveryOutcome(notification.id);
+  assert.equal(confirmed.deliveryState, 'delivered');
+  assert.equal(confirmed.queued, false);
+  assert.equal(confirmed.delivered, true);
+  assert.equal(confirmed.userRead, 'unobserved');
+  assert.equal(confirmed.sourceTaskId, provenance.taskId);
+  fx.host.dispose();
+  assert.deepEqual(fx.host.readDeliveryOutcome(notification.id), confirmed);
 });
