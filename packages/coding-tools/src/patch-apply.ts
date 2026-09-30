@@ -20,6 +20,7 @@ export const WORKSPACE_PATCH_APPLY_SCOPE = 'workspace:apply';
 const helperPath = fileURLToPath(new URL('../scripts/locked-apply.ps1', import.meta.url));
 const MAX_HELPER_OUTPUT_BYTES = 8192;
 const STOP_GRACE_MS = 2000;
+const INPUT_DIGEST = /^[a-f0-9]{64}$/u;
 
 export interface WorkspacePatchApplyResult {
   path: string;
@@ -72,6 +73,10 @@ function check(context: ToolContext, now: () => number): number {
     || !context.scopes.includes(WORKSPACE_PATCH_APPLY_SCOPE)) {
     throw new ProtocolError('SCOPE_DENIED', 'Workspace patch apply requires read, write and apply scopes');
   }
+  if (typeof context.runId !== 'string' || !context.runId.trim()
+    || !INPUT_DIGEST.test(context.argumentsDigest ?? '')) {
+    throw new ProtocolError('INVALID_ARGUMENT', 'Workspace patch execution identity is unavailable');
+  }
   if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Workspace patch apply was cancelled');
   const deadline = Date.parse(context.deadline);
   const remaining = deadline - now();
@@ -89,7 +94,7 @@ async function invokeHelper(
   context: ToolContext,
   now: () => number,
 ): Promise<HelperResponse> {
-  check(context, now);
+  let remaining = check(context, now);
   let child: ReturnType<typeof spawn>;
   try {
     child = spawn(executable, ['-NoProfile', '-NonInteractive', '-File', script], {
@@ -121,17 +126,11 @@ async function invokeHelper(
     if (earlyChildError || child.exitCode !== null) {
       throw new ProtocolError('RESULT_UNKNOWN', 'Workspace patch helper identity is unavailable');
     }
-    // Identity lookup is asynchronous; do not dispatch an expired or cancelled write.
-    check(context, now);
+    remaining = check(context, now);
   } catch (error) {
+    child.once('error', () => {});
     child.removeListener('error', onEarlyChildError);
-    // A failed spawn may report its asynchronous error after pid validation.
-    // Keep cleanup observed until close rather than crashing the host process.
-    child.on('error', () => {});
-    child.stdin?.on('error', () => {});
-    if (typeof child.pid === 'number' && Number.isSafeInteger(child.pid) && child.pid > 0) {
-      try { child.kill('SIGKILL'); } catch { /* identity failure is already unknown */ }
-    }
+    try { child.kill('SIGKILL'); } catch { /* identity failure is already unknown */ }
     await new Promise<void>(resolveResult => {
       if (child.exitCode !== null) { resolveResult(); return; }
       const timer = setTimeout(resolveResult, STOP_GRACE_MS);
@@ -147,6 +146,8 @@ async function invokeHelper(
     try {
       markerFd = openSync(inflightPath, 'wx', 0o600);
       writeSync(markerFd, JSON.stringify({
+        runId: context.runId,
+        argumentsDigest: context.argumentsDigest,
         pid: processIdentity.pid,
         startTimeTicks: processIdentity.startTimeTicks,
         beforeSha256: request.beforeSha256,
@@ -234,13 +235,9 @@ async function invokeHelper(
       }
     });
     context.signal.addEventListener('abort', onAbort, {once: true});
-    let remaining: number;
-    try {
-      // Marker persistence can also consume the remaining budget. Recheck at
-      // the actual side-effect boundary, before any candidate bytes leave stdin.
-      remaining = check(context, now);
-    } catch {
-      stop(new ProtocolError('RESULT_UNKNOWN', 'Workspace patch apply preconditions changed before dispatch'));
+    try { remaining = check(context, now); }
+    catch (error) {
+      stop(error instanceof ProtocolError ? error : new ProtocolError('RESULT_UNKNOWN', 'Workspace patch apply preflight failed'));
       return;
     }
     deadlineTimer = setTimeout(() => stop(new ProtocolError('RESULT_UNKNOWN', 'Workspace patch apply deadline expired')), Math.min(remaining, 2_147_483_647));

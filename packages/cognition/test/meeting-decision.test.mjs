@@ -11,7 +11,53 @@ import {
   InMemoryMeetingDecisionReceiptStore,
   FileMeetingDecisionReceiptStore,
   CognitionError,
+  LayaActionChoiceService,
 } from '../dist/index.js';
+
+const guardedEvent = extra => ({eventId: 'guarded-meeting', source: 'calendar:work',
+  meetingFactId: 'meeting-sync-1', originalSummary: '周四下午 15:00 项目架构同步会',
+  newSummary: '周四下午 17:00 项目架构同步会', sourceRevision: 'rev-guarded',
+  detectedAt: '2026-09-29T11:00:00.000Z', deadline: new Date(Date.now() + 60_000).toISOString(),
+  signal: new AbortController().signal, ...extra});
+
+test('meeting changes require the exact current source, original content and requested baseline', async () => {
+  for (const extra of [{source: 'calendar:foreign'}, {originalSummary: 'old unrelated meeting'},
+    {expectedBaseRevision: 'missing-baseline'}]) {
+    const {store} = createMeetingFixture();
+    const inference = createMockLaya();
+    const coordinator = new MeetingRescheduleCoordinator({store, inference,
+      executionPort: createStoreExecutionPort(store)});
+    const before = store.read();
+    const receipt = await coordinator.processEvent(guardedEvent(extra));
+    assert.equal(receipt.status, 'conflict');
+    assert.deepEqual(store.read(), before);
+    assert.equal(inference.getCallCount(), 0);
+  }
+});
+
+test('concurrent delivery of the same meeting event infers and commits once', async () => {
+  const {store} = createMeetingFixture();
+  const inference = createMockLaya();
+  const coordinator = new MeetingRescheduleCoordinator({store, inference,
+    executionPort: createStoreExecutionPort(store)});
+  const event = guardedEvent();
+  const receipts = await Promise.all([coordinator.processEvent(event), coordinator.processEvent(event)]);
+  assert.deepEqual(receipts.map(receipt => receipt.status), ['applied', 'already_processed']);
+  assert.equal(inference.getCallCount(), 1);
+});
+
+test('selected-but-ineligible meeting candidate cannot execute or cross coordinator namespace', async () => {
+  const {store} = createMeetingFixture();
+  const chooser = new LayaActionChoiceService(createMockLaya());
+  const coordinator = new MeetingRescheduleCoordinator({store,
+    chooser: {choose: async request => ({...await chooser.choose(request), eligibleForRuntime: false})},
+    executionPort: createStoreExecutionPort(store)});
+  const before = store.read();
+  assert.equal((await coordinator.processEvent(guardedEvent())).status, 'requires_review');
+  assert.deepEqual(store.read(), before);
+  await assert.rejects(coordinator.applyApprovedProposal({eventId: 'guarded-meeting',
+    source: 'calendar:work', namespace: 'foreign'}), error => error.code === 'INVALID_ARGUMENT');
+});
 
 function createMeetingFixture() {
   const storeHost = new FakeCoordinationStoreHost();

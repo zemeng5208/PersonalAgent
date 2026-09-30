@@ -834,8 +834,8 @@ test('delivery acknowledgement is not a read or a re-evaluation result', async (
   for (const injected of injectedTasks.values()) injected.state = 'succeeded';
   const injectedUnverified = await injectedHost.bindObservedRevision('typescript');
   assert.equal(injectedUnverified.accepted, false);
-  assert.equal(injectedUnverified.reason, 'reevaluation_result_unavailable');
-  assert.equal(injectedUnverified.taskState, 'succeeded');
+  assert.equal(injectedUnverified.reason, 'reevaluation_missing');
+  assert.equal([...injectedTasks.values()][0].state, 'succeeded');
   assert.equal(injectedHost.listWatches()[0].boundSource.revision, 'source-v1');
   injectedHost.dispose();
 

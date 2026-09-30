@@ -64,6 +64,21 @@ Stale proposals fail with `REVISION_CONFLICT`. Source-owned facts cannot be chan
 through ordinary `append`. These host methods do not register a Runtime capability
 or authorize private data or cloud transfer.
 
+Migration 4 adds a content-free operation receipt for host-only `reviseUserFact`.
+After the trusted caller obtains user authorization, it supplies an exact head revision,
+operation ID, user-action source reference and full next fact fields. A correction or
+withdrawal appends one `user_confirmed` version and feed event in the same transaction
+as the receipt. Exact retries return the saved version; stale heads or altered retries
+fail. Public-source-owned facts require a separate source ownership decision and are
+rejected here. Physical fact erasure removes these receipts with the fact. This port
+does not authenticate a user or expose a Desktop/Runtime capability.
+
+Migration 5 adds a content-free operation receipt for host-only `createUserFact`.
+After the trusted caller confirms one private excerpt, this method appends its first
+`user_confirmed` fact and feed event atomically. Exact retries return revision 1;
+altered operation IDs or existing fact IDs cannot overwrite a fact. Physical fact
+erasure removes the creation receipt. No Vault text is imported automatically.
+
 `withdrawPublicSource` records an append-only public tombstone with an expected Fact
 revision and an idempotent withdrawal ID. The caller must first verify source removal
 through its trusted source adapter and obtain authorization for that source; search
@@ -97,6 +112,11 @@ projection remain unavailable. See
 [ADR-0008](../../docs/adr/0008-fact-feed-consumption.md) (proposed) and
 [ADR-0010](../../docs/adr/0010-memory-erasure.md) (proposed) and
 [MOD-09C](../../docs/modules/MOD-09C-MEMORY-SQLITE-01.md).
+
+For an isolated unbound namespace, `resumeCompletedErasureMaintenance(namespace)`
+checks committed deletion markers for surviving fact/source/confirmation rows and
+retries the WAL truncation after restart. It does not complete pending cross-store
+erasures or manage backup copies. A busy reader keeps the call unavailable.
 
 Feed transactions check cancellation/deadline after acquiring the write lock and
 immediately before commit. Expired or cancelled work rolls back; a committed

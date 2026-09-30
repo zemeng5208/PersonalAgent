@@ -3,7 +3,7 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 import {createHash, randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import path from 'node:path';
-import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync} from 'node:fs';
 import {EventCursor} from '@personal-agent/client';
 import {register, requestTaskCancellation, submitConversationTask} from './runtime.js';
 import {panelBounds, clampOrb, draggedGroupBounds} from './placement.js';
@@ -14,6 +14,7 @@ import {restoreSyntheticRepairSubmission} from './competition-repair-submission.
 import {readCapabilityDirectory} from './capability-directory.js';
 import {createMicrophonePermissionGate} from './microphone-permission.js';
 import {readApprovalPage} from './approval-history.js';
+import {createPrivateMemoryController} from './private-memory.js';
 import {createMicrophoneCaptureHost} from './microphone-capture-host.js';
 import {createDesktopEvidenceHost} from './evidence-host.js';
 import {createDesktopCompetitionFactBridge} from './competition-fact-bridge.js';
@@ -147,6 +148,8 @@ let runtimeApplication;
 let syntheticRepairHost;
 const repairPrompts = new Set();
 let microphonePermissionGate;
+let privateMemory;
+let privateMemoryFixtureWrite = false;
 let microphoneCaptureHost;
 let voicePcmSource;
 let voiceInput;
@@ -333,6 +336,28 @@ function orderedTasks() {
   return [...tasks.values()].sort((a, b) => String(conversations?.turns.get(a.taskId)?.createdAt ?? a.createdAt ?? a.updatedAt ?? '')
     .localeCompare(String(conversations?.turns.get(b.taskId)?.createdAt ?? b.createdAt ?? b.updatedAt ?? '')));
 }
+function privateMemoryController() {
+  if (!privateMemory) {
+    mkdirSync(path.dirname(dataPaths.privateMemory), {recursive: true});
+    privateMemory = createPrivateMemoryController(dataPaths.privateMemory, async details => {
+      const answer = await dialog.showMessageBox(admin, {
+        type: 'question', title: '确认私人记忆',
+        message: details.previous ? '确认更正这条私人记忆？' : '确认保存这条私人记忆？',
+        detail: `来源：${details.source.path}:${details.source.line}\n摘录：${details.citation}\n\n拟保存：${details.summary}`,
+        buttons: ['确认保存', '取消'], defaultId: 1, cancelId: 1, noLink: true,
+      });
+      return answer.response === 0 && admin && !admin.isDestroyed();
+    }, async current => {
+      const answer = await dialog.showMessageBox(admin, {
+        type: 'warning', title: '删除私人记忆', message: '删除这条私人记忆的全部版本？',
+        detail: `当前摘要：${current.summary}\n来源：${current.sourceRef}`,
+        buttons: ['删除所有版本', '取消'], defaultId: 1, cancelId: 1, noLink: true,
+      });
+      return answer.response === 0 && admin && !admin.isDestroyed();
+    });
+  }
+  return privateMemory;
+}
 
 function snapshot(surface) {
   return {
@@ -352,6 +377,8 @@ function snapshot(surface) {
     capabilities: structuredClone(capabilities),
     health: structuredClone(health),
     capabilityDirectory: {...capabilityDirectory},
+    privateMemory: {available: competitionMode && Boolean(runtimeApplication),
+      vaultSelected: Boolean(privateMemory?.selected), writeEnabled: privateMemoryFixtureWrite},
     approvals: [...approvals.values()],
     notifications: [...notifications.values(),...(todoHost?.snapshot().notifications ?? [])],
     model: structuredClone(model),
@@ -464,7 +491,7 @@ function movePanelGroup(point) {
 }
 
 function openAdmin(page) {
-  if (page && ['settings','profile','models','tasks','capabilities','authorizations','git','connections'].includes(page)) {
+  if (page && ['settings','profile','models','tasks','capabilities','authorizations','git','connections','memory'].includes(page)) {
     adminNavigation = {page, revision:adminNavigation.revision + 1};
   }
   if (admin && !admin.isDestroyed()) { admin.show(); admin.focus(); publish(); return; }
@@ -1697,6 +1724,46 @@ async function action(event, name, payload) {
     if (sender !== admin) throw Error('模型启停只能从管理后台调用');
     return toggleModel(payload);
   }
+  if (typeof name === 'string' && name.startsWith('memory.')) {
+    if (sender !== admin || !competitionMode || !runtimeApplication) {
+      throw Error('私人记忆仅在 Competition 管理后台可用');
+    }
+    if (name === 'memory.selectVault') {
+      const selected = await dialog.showOpenDialog(admin, {properties: ['openDirectory'],
+        title: '选择只读知识库文件夹'});
+      if (selected.canceled || selected.filePaths.length !== 1) return {selected: false};
+      await privateMemoryController().selectVault(selected.filePaths[0]);
+      privateMemoryFixtureWrite = false;
+      if (!app.isPackaged && process.env.PA_DESKTOP_TEST_USER_DATA
+        && process.env.PA_DESKTOP_PRIVATE_MEMORY_FIXTURE_ROOT) {
+        try {
+          const chosen = realpathSync.native(selected.filePaths[0]);
+          const fixture = realpathSync.native(process.env.PA_DESKTOP_PRIVATE_MEMORY_FIXTURE_ROOT);
+          const temp = realpathSync.native(app.getPath('temp'));
+          const relativeFixture = path.relative(temp, fixture);
+          privateMemoryFixtureWrite = process.platform === 'win32'
+            ? chosen.toLowerCase() === fixture.toLowerCase() : chosen === fixture;
+          privateMemoryFixtureWrite &&= Boolean(relativeFixture)
+            && relativeFixture !== '..' && !relativeFixture.startsWith(`..${path.sep}`)
+            && !path.isAbsolute(relativeFixture);
+        } catch { /* Invalid fixture configuration remains read only. */ }
+      }
+      publish();
+      return {selected: true};
+    }
+    if (name === 'memory.search') {
+      if (!privateMemory) throw Error('请先选择本机 Vault');
+      return privateMemory.search(payload?.query);
+    }
+    if (name === 'memory.listSaved') return privateMemoryController().listSaved(payload);
+    if (name === 'memory.delete') return privateMemoryController().delete(payload?.ref);
+    if (name === 'memory.save') {
+      if (!privateMemoryFixtureWrite) throw Error('真实私人记忆写入等待完整删除保障验收');
+      if (!privateMemory) throw Error('请先选择本机 Vault');
+      return privateMemory.save(payload?.source, payload?.summary);
+    }
+    throw Error('不支持的私人记忆操作');
+  }
   if (name === 'thinking.update') {
     if (sender !== panel && sender !== admin && sender !== workspace) throw Error('思考设置来源不受信任');
     return updateThinking(payload);
@@ -2064,6 +2131,7 @@ app.whenReady().then(async () => {
       p5Cognition?.dispose();
       p5SystemObservationSource?.dispose();
       knowledgeWatchHost?.dispose();
+      privateMemory?.close();
       proactiveHost?.close();
       goalCloudHost?.close();
       mailAnalysisHost?.close();

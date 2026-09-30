@@ -157,6 +157,19 @@ export function createCognitionP5Composition({
 
   // 6. Device Anomaly Decision Service with confirmed delivery
   const anomalyChooser = resolvedChooser ?? inference;
+  const deviceCheckpointFile = path.join(userData, 'device-anomaly-checkpoint.json');
+  const deviceCheckpoint = {
+    load() {
+      if (!existsSync(deviceCheckpointFile)) return undefined;
+      return JSON.parse(readFileSync(deviceCheckpointFile, 'utf8'));
+    },
+    save(value) {
+      mkdirSync(userData, {recursive: true});
+      const tmp = `${deviceCheckpointFile}.tmp-${process.pid}`;
+      writeFileSync(tmp, JSON.stringify(value), 'utf8');
+      renameSync(tmp, deviceCheckpointFile);
+    },
+  };
   const deviceAnomalyService = anomalyChooser ? new DeviceAnomalyDecisionService(anomalyChooser, {
     cpuThresholdPercent: 90,
     memoryThresholdPercent: 90,
@@ -164,6 +177,7 @@ export function createCognitionP5Composition({
     sustainedSampleCount: 3,
     cooldownMs: 300_000,
     notificationPort,
+    checkpoint: deviceCheckpoint,
     now,
   }) : undefined;
 
@@ -171,9 +185,31 @@ export function createCognitionP5Composition({
   let state = autoStart ? 'running' : 'idle';
   const activeSubscriptions = new Set();
   const activeControllers = new Set();
+  const failures = {};
 
   const publish = () => {
     try { onUpdate(); } catch {}
+  };
+  const tracked = async (chain, options, operation) => {
+    if (state !== 'running') throw new Error(`Cognition P5 composition is not running (state: ${state})`);
+    const controller = new AbortController();
+    activeControllers.add(controller);
+    let signal = controller.signal;
+    try {
+      if (options?.signal) signal = AbortSignal.any([options.signal, controller.signal]);
+      const result = await operation({...options, signal,
+        deadline: options?.deadline ?? new Date(now() + 60_000).toISOString()});
+      delete failures[chain];
+      return result;
+    } catch (error) {
+      // Source text, credentials and absolute storage paths are not UI errors.
+      failures[chain] = signal.aborted ? 'cancelled'
+        : layaHost && layaHost.snapshot?.()?.ready !== true ? 'model_unavailable' : 'processing_failed';
+      throw error;
+    } finally {
+      activeControllers.delete(controller);
+      publish();
+    }
   };
 
   const instance = {
@@ -195,6 +231,8 @@ export function createCognitionP5Composition({
         hasPolicyEvaluator: Boolean(policyEvaluator),
         hasNotificationPort: Boolean(notificationPort),
         layaHostState: layaHost?.snapshot?.()?.state ?? null,
+        modelReady: layaHost ? layaHost.snapshot?.()?.ready === true : Boolean(inference || chooser || classifier),
+        failures: {...failures},
         namespace,
       };
     },
@@ -202,12 +240,8 @@ export function createCognitionP5Composition({
     async start() {
       if (state === 'disposed') throw new Error('Cognition P5 composition has been disposed');
       if (state === 'running') return this.snapshot();
-      if (layaHost && typeof layaHost.start === 'function') {
-        const hostSnap = layaHost.snapshot?.();
-        if (hostSnap?.state === 'stopped') {
-          await layaHost.start();
-        }
-      }
+      // The shared model owner controls start/stop. Resuming P5 subscriptions
+      // must not load weights or restart a model the user explicitly stopped.
       state = 'running';
       publish();
       return this.snapshot();
@@ -246,7 +280,7 @@ export function createCognitionP5Composition({
       const unbind = registerSourceListener(calendarSource, ['reschedule', 'meeting_reschedule', 'event'], async (event) => {
         if (state !== 'running') return;
         try {
-          await meetingCoordinator.processEvent(event);
+          await instance.processMeetingEvent(event);
         } catch {
           // Isolate listener failure to protect source loop
         }
@@ -265,15 +299,10 @@ export function createCognitionP5Composition({
           ? batchOrMessages
           : (batchOrMessages?.messages ?? [batchOrMessages]);
         if (!Array.isArray(messages) || messages.length === 0) return;
-        const ac = new AbortController();
-        activeControllers.add(ac);
         try {
-          const deadline = new Date(now() + 60_000).toISOString();
-          await mailPipeline.processBatch({ messages, deadline, signal: ac.signal });
+          await instance.triageMails(messages);
         } catch {
           // Isolate listener failure
-        } finally {
-          activeControllers.delete(ac);
         }
       });
 
@@ -287,15 +316,10 @@ export function createCognitionP5Composition({
       const unbind = registerSourceListener(telemetrySource, ['sample', 'telemetry', 'metric'], async (sample) => {
         if (state !== 'running') return;
         if (!sample) return;
-        const ac = new AbortController();
-        activeControllers.add(ac);
         try {
-          const deadline = new Date(now() + 60_000).toISOString();
-          await deviceAnomalyService.evaluateSample(sample, { deadline, signal: ac.signal });
+          await instance.evaluateDeviceSample(sample);
         } catch {
           // Isolate listener failure
-        } finally {
-          activeControllers.delete(ac);
         }
       });
 
@@ -306,13 +330,13 @@ export function createCognitionP5Composition({
       if (state === 'disposed') throw new Error('Cognition P5 composition has been disposed');
       if (state !== 'running') throw new Error(`Cognition P5 composition is not running (state: ${state})`);
       if (!meetingCoordinator) throw new Error('Meeting coordinator unavailable: Laya inference/chooser not connected');
-      return meetingCoordinator.processEvent(event);
+      return tracked('meeting', event, context => meetingCoordinator.processEvent({...event, ...context}));
     },
 
     async applyMeetingProposal(query, options) {
       if (state === 'disposed') throw new Error('Cognition P5 composition has been disposed');
       if (!meetingCoordinator) throw new Error('Meeting coordinator unavailable: Laya inference/chooser not connected');
-      return meetingCoordinator.applyApprovedProposal(query, options);
+      return tracked('meeting', options, context => meetingCoordinator.applyApprovedProposal(query, context));
     },
 
     async getMeetingReceipt(eventId, source) {
@@ -324,25 +348,40 @@ export function createCognitionP5Composition({
       if (state === 'disposed') throw new Error('Cognition P5 composition has been disposed');
       if (state !== 'running') throw new Error(`Cognition P5 composition is not running (state: ${state})`);
       if (!mailPipeline) throw new Error('Mail pipeline unavailable: Laya inference/classifier not connected');
-      const deadline = options.deadline ?? new Date(now() + 60_000).toISOString();
-      const signal = options.signal ?? new AbortController().signal;
-      return mailPipeline.processBatch({messages, deadline, signal, onProgress: options.onProgress});
+      return tracked('mail', options, context => mailPipeline.processBatch({...context, messages}));
     },
 
     async triagePagedMails(pagedRequest) {
       if (state === 'disposed') throw new Error('Cognition P5 composition has been disposed');
       if (state !== 'running') throw new Error(`Cognition P5 composition is not running (state: ${state})`);
       if (!mailPipeline) throw new Error('Mail pipeline unavailable: Laya inference/classifier not connected');
-      const deadline = pagedRequest.deadline ?? new Date(now() + 60_000).toISOString();
-      const signal = pagedRequest.signal ?? new AbortController().signal;
-      return mailPipeline.processPagedStream({...pagedRequest, deadline, signal});
+      return tracked('mail', pagedRequest, context => mailPipeline.processPagedStream(context));
     },
 
     async evaluateDeviceSample(sample, layaRequest) {
       if (state === 'disposed') throw new Error('Cognition P5 composition has been disposed');
       if (state !== 'running') throw new Error(`Cognition P5 composition is not running (state: ${state})`);
       if (!deviceAnomalyService) throw new Error('Device anomaly service unavailable: Laya inference/chooser not connected');
-      return deviceAnomalyService.evaluateSample(sample, layaRequest);
+      return tracked('device', layaRequest, context => deviceAnomalyService.evaluateSample(sample, context));
+    },
+
+    async readDeviceFeedback() {
+      return deviceAnomalyService?.readFeedback() ?? [];
+    },
+
+    async dialogueProjection() {
+      const records = await instance.listMeetingReceipts();
+      const devices = await instance.readDeviceFeedback();
+      return {state, modelReady: instance.snapshot().modelReady, failures: {...failures},
+        meetings: records.slice(-20).map(({receipt}) => ({eventId: receipt.eventId,
+          status: receipt.status, graphRevisionAfter: receipt.graphRevisionAfter,
+          confidence: receipt.confidence, actionId: receipt.actionId,
+          // This is an internal graph commit, never proof of provider reschedule.
+          calendarWriteVerified: false})),
+        devices: devices.map(({source, pendingDeliveryId, receipt}) => ({source,
+          status: receipt?.status ?? 'unobserved', notificationDelivered: receipt?.notificationDelivered === true,
+          deliveryNeedsReconciliation: Boolean(pendingDeliveryId), receiptId: receipt?.receiptId})),
+      };
     },
 
     async getPendingProposals() {

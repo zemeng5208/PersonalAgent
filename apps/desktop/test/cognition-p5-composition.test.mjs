@@ -1,11 +1,44 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {mkdir, mkdtemp, rm} from 'node:fs/promises';
 import {existsSync, readFileSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {FakeCoordinationStoreHost} from '@personal-agent/goals/store';
 import {createCognitionP5Composition} from '../electron/cognition-p5-composition.js';
+
+test('P5 stop cancels direct classification; failed source state is visible and resume does not start shared weights', async t => {
+  const root = fileURLToPath(new URL('../../../.cache/cognition-p5-test/', import.meta.url));
+  await mkdir(root, {recursive: true});
+  const userData = await mkdtemp(path.join(root, 'case-stop-'));
+  t.after(() => rm(userData, {recursive: true, force: true}));
+  const storeHost = new FakeCoordinationStoreHost();
+  storeHost.provision('default');
+  const application = {runtime: {bindCoordinationStore: ns => storeHost.bind(ns)}};
+  let signal, entered, starts = 0;
+  const waitEntered = new Promise(resolve => {entered = resolve;});
+  const layaHost = {snapshot: () => ({state: 'stopped', ready: false}),
+    start: () => {starts++;}, choose: () => {throw Error('not ready');},
+    classify: async request => {
+      signal = request.signal; entered();
+      await new Promise(resolve => signal.addEventListener('abort', resolve, {once: true}));
+      throw Error('private source text and absolute path must not reach snapshot');
+    }};
+  const composition = createCognitionP5Composition({application, userData, layaHost});
+  const operation = composition.triageMails([{source: 'mail', messageId: 'direct', sourceRevision: '1', text: 'hello'}]);
+  await waitEntered;
+  await composition.stop();
+  assert.equal(signal.aborted, true);
+  await assert.rejects(operation);
+  assert.deepEqual(composition.snapshot().failures, {mail: 'cancelled'});
+  assert.equal(JSON.stringify(composition.snapshot()).includes('private source text'), false);
+  await composition.start();
+  assert.equal(starts, 0);
+  assert.equal(composition.snapshot().modelReady, false);
+  await composition.stop();
+  await assert.rejects(composition.applyMeetingProposal({eventId: 'x', source: 'calendar'}), /not running/);
+});
 
 function createMockLayaInference(preferredIndex = 0) {
   return {
@@ -323,7 +356,7 @@ test('cognition-p5-composition: integrates createLocalLayaHost public ports with
           model: 'multilingual',
           candidateLabels: Object.keys(req.labels),
           criteriaDigest: 'crit',
-          contextDigest: 'ctx',
+          contextDigest: createHash('sha256').update(m.text).digest('hex'),
         },
       }));
     },
@@ -469,7 +502,7 @@ test('cognition-p5-composition: event consumption, lifecycle (stop/start/dispose
           model: 'multilingual',
           candidateLabels: Object.keys(req.labels),
           criteriaDigest: 'crit',
-          contextDigest: 'ctx',
+          contextDigest: createHash('sha256').update(m.text).digest('hex'),
         },
       }));
     },

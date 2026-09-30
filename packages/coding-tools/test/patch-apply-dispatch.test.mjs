@@ -12,7 +12,9 @@ const checkStart = source.indexOf('function check(');
 const helperStart = source.indexOf('async function invokeHelper(');
 const helperEnd = source.indexOf('export function createWorkspacePatchApplyToolFromPreview(');
 assert.ok(checkStart >= 0 && helperStart > checkStart && helperEnd > helperStart);
-const helperSource = `${source.slice(checkStart, helperEnd)}\ninvokeHelper;`;
+const inputDigest = source.match(/^const INPUT_DIGEST = .*;$/m)?.[0];
+assert.ok(inputDigest);
+const helperSource = `${inputDigest}\n${source.slice(checkStart, helperEnd)}\ninvokeHelper;`;
 
 function createHarness({duringMarker} = {}) {
   const controller = new AbortController();
@@ -48,6 +50,7 @@ function createHarness({duringMarker} = {}) {
     constructor(code, message) { super(message); this.code = code; }
   }
   const context = {
+    taskId: 'task-dispatch-synthetic', runId: 'run-dispatch-synthetic', argumentsDigest: 'c'.repeat(64),
     scopes: ['workspace:read', 'workspace:write', 'workspace:apply'],
     signal: controller.signal,
     deadline: new Date(11_000).toISOString(),
@@ -159,6 +162,7 @@ test('failed helper spawn rejects without an unhandled process error', () => {
     try {
       await invoke(join(tmpdir(), 'pa-missing-helper-' + randomUUID() + '.exe'),
         'unused.ps1', {rootPath: process.cwd()}, 'unused.inflight', {
+          taskId: 'task-dispatch-synthetic', runId: 'run-dispatch-synthetic', argumentsDigest: 'c'.repeat(64),
           scopes: ['workspace:read', 'workspace:write', 'workspace:apply'],
           signal: controller.signal, deadline: new Date(Date.now() + 10000).toISOString(),
         }, Date.now);

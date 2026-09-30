@@ -37,6 +37,7 @@ async function fixture(t) {
 const context = (overrides = {}) => ({
   taskId: 'task-apply-synthetic',
   runId: 'run-apply-synthetic',
+  argumentsDigest: 'c'.repeat(64),
   authorizationRef: 'authorization-apply-synthetic',
   scopes: ['workspace:read', 'workspace:write', WORKSPACE_PATCH_APPLY_SCOPE],
   signal: new AbortController().signal,

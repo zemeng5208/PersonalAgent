@@ -111,6 +111,12 @@ are omitted until the Runtime invocation carries that signal. The trusted AgentA
 requires `initialRequestMode: 'goal-with-tools-json'` whenever a catalog is configured.
 
 - SQLite-backed tasks, checkpoints, events and one-shot schedules.
+- `ingestConfirmedPrivateCitation` is a trusted-host bridge for one exact
+  read-only Vault citation. Its injected confirmation callback must obtain a
+  real user decision for that citation and the proposed summary. A decline
+  writes nothing; a changed citation is rejected before a private Memory
+  creation or revision. This does not register a Desktop or wire capability,
+  authenticate the caller, or authorize cloud transfer.
 - `createSqliteFactProjectionHost` binds a pre-provisioned public Memory namespace
   to one fixed consumer, the SQLite feed/query, durable Runtime graph projection,
   host-only confirmation and pending impact processor. `consume` advances one exact

@@ -87,7 +87,7 @@
 | MOD-06 | M2 | todo | 未启动 |
 | MOD-07 | M2 | todo | 未启动 |
 | MOD-08 | M2 | in_progress | `goo122` / PR #93～#95、#97、#98 已经非作者评审并合并；只读端口、脱机及 Obsidian 只读适配器、Policy 检索工具和公开演示资料的 Competition Fake 审批链均完成离线验收。真实私人 Vault 授权/验收、生产注册、可安装插件、私人结果出机控制和 LLM Wiki 未完成 |
-| MOD-09 | M1.6/M4 | in_progress | `goo122` / PR #89～#91、#118、#126 已合并 provisional 端口、Fake、SQLite 重启恢复、确认后原子激活投影与公开来源增量；09D 离线工作片已完成，生产 capability、真实私人来源和完整删除仍 unavailable |
+| MOD-09 | M1.6/M4 | in_progress | `goo122` / PR #89～#91、#118、#126 已合并 provisional 端口、Fake、SQLite 恢复、投影与公开来源；#202～#208 堆叠经 #209 对当前 main 集成，待非作者评审；MOD-09L 增加独立私人库的分页列表与合成事实逐条删除读回，MOD-09M 补已提交删除的跨重启 WAL 恢复；真实 Vault 写入仍禁用，真实用户确认的持久验收、出机控制及完整备份删除仍 unavailable |
 | MOD-10 | M4 后研究，无交付日期承诺 | todo | 未启动 |
 | MOD-11 | M1 | in_progress | `zemeng` / PR #54 已进入 main 并修复取消受理；转写任务消费 #75 仅合并到语音堆叠分支，DPI/透明命中及比赛实机验收仍未完成 |
 | MOD-12 | M1 | in_progress | `zemeng` / 文字交互、会话恢复、状态展示、取消和大工作区可用；真实 AgentArts 对话、工具回传与语音组合尚未完成端到端验收 |

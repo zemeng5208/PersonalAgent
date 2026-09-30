@@ -40,37 +40,26 @@ async function waitForIdle(app) {
 
 async function fixture(resultFactory) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'personal-agent-patch-reconcile-'));
-  const calls = {tool: 0, reconcile: 0, paths: []};
-  let markerCleared = false;
-  const app = createRuntimeApplication({path: path.join(directory, 'runtime.sqlite'),
+  const calls = {tool: 0, reconcile: 0, paths: [], inputs: [], bindingId: 'd'.repeat(64), markerPresent: true};
+  const createApp = () => createRuntimeApplication({path: path.join(directory, 'runtime.sqlite'),
     profile: 'huawei_ict_agentarts', hostUserNamespace: 'user-1',
     tools: [{descriptor, execute: async () => {
       calls.tool++;
       throw new ProtocolError('RESULT_UNKNOWN', 'helper outcome is unknown');
     }}],
-    workspacePatchReconciliation: {
-      bindingId: 'c'.repeat(64),
-      reconcile: async input => {
-        if (!input.retainMarker) {
-          markerCleared = true;
-          return {path: input.relativePath, state: 'clear'};
-        }
-        if (markerCleared) {
-          return {path: input.relativePath, state: 'clear'};
-        }
-        calls.reconcile++;
-        calls.paths.push(input.relativePath);
-        const res = resultFactory(input);
-        if (res.state === 'clear') return res;
-        return {
-          runId: input.expectedRunId,
-          argumentsDigest: input.expectedArgumentsDigest,
-          ...res,
-        };
-      },
-    },
+    workspacePatchReconciliation: {get bindingId() { return calls.bindingId; }, reconcile: async input => {
+      calls.reconcile++;
+      calls.inputs.push(input);
+      calls.paths.push(input.relativePath);
+      if (!calls.markerPresent) return {path: input.relativePath, state: 'clear'};
+      const result = {path: input.relativePath, runId: input.expectedRunId,
+        argumentsDigest: input.expectedArgumentsDigest, beforeSha256: input.expectedBeforeSha256,
+        ...resultFactory(input)};
+      if (result.state === 'reconciled' && input.retainMarker !== true) calls.markerPresent = false;
+      return result;
+    }},
   });
-  return {directory, app, calls};
+  return {directory, app: createApp(), createApp, calls};
 }
 
 async function startUnknown(f, commandId = 'patch-1') {
@@ -98,7 +87,8 @@ test('workspace patch reconciliation projects applied once and preserves the ori
     assert.equal(first.result.outcome, 'applied');
     assert.equal(first.task.state, 'succeeded');
     assert.equal(f.calls.tool, 1);
-    assert.deepEqual(f.calls.paths, ['src/app.js']);
+    assert.deepEqual(f.calls.paths, ['src/app.js', 'src/app.js', 'src/app.js']);
+    assert.deepEqual(f.calls.inputs.map(input => input.retainMarker), [true, undefined, undefined]);
     const record = f.app.runtime.readToolExecutions(taskId)[0];
     assert.equal(record.state, 'confirmed');
     assert.equal(record.reconciliationOutcome, 'applied');
@@ -106,7 +96,7 @@ test('workspace patch reconciliation projects applied once and preserves the ori
     assert.equal(f.app.readHostToolTask(taskId).confirmed.result.outcome, 'applied');
     const second = await f.app.reconcileWorkspacePatchTask(taskId);
     assert.equal(second.result.outcome, 'applied');
-    assert.equal(f.calls.reconcile, 1, 'duplicate reconciliation must not call the helper API again');
+    assert.equal(f.calls.reconcile, 4, 'saved reads retry only acknowledgement, never helper execution');
   } finally {
     await waitForIdle(f.app);
     f.app.close();
@@ -122,7 +112,7 @@ test('not_applied is terminal and unknown stays in reconciliation without reopen
     assert.equal(result.task.state, 'failed');
     assert.equal(f.app.runtime.readToolExecutions(taskId)[0].reconciliationOutcome, 'not_applied');
     assert.equal(f.calls.tool, 1);
-    assert.equal(f.calls.reconcile, 1);
+    assert.equal(f.calls.reconcile, 2);
   } finally {
     await waitForIdle(f.app);
     f.app.close();
@@ -137,10 +127,67 @@ test('not_applied is terminal and unknown stays in reconciliation without reopen
     assert.equal(unknown.app.runtime.readToolExecutions(taskId)[0].reconciliationOutcome, 'unknown');
     assert.match(unknown.app.runtime.readEvidence(taskId)[0].summary, /reconciliation=unknown/);
     assert.equal(unknown.calls.tool, 1);
+    assert.equal(unknown.calls.reconcile, 2);
   } finally {
     await waitForIdle(unknown.app);
     unknown.app.close();
     await rm(unknown.directory, {recursive: true, force: true});
+  }
+});
+
+test('Runtime commit failure preserves the marker across restart and retries one projection', async () => {
+  const f = await fixture(() => ({path: 'src/app.js', state: 'reconciled', outcome: 'applied', ...hashes}));
+  let taskId;
+  try {
+    taskId = await startUnknown(f, 'patch-restart');
+    f.app.runtime.reconcileToolExecution = () => { throw new Error('injected Runtime persistence failure'); };
+    await assert.rejects(f.app.reconcileWorkspacePatchTask(taskId), /injected Runtime persistence failure/u);
+    assert.equal(f.app.runtime.getTask(taskId).state, 'waiting_reconciliation');
+    assert.equal(f.calls.markerPresent, true);
+    assert.deepEqual(f.calls.inputs.map(input => input.retainMarker), [true]);
+    f.app.close();
+    f.app = f.createApp();
+    const recovered = await f.app.reconcileWorkspacePatchTask(taskId);
+    assert.equal(recovered.task.state, 'succeeded');
+    assert.equal(f.calls.markerPresent, false);
+    assert.equal(f.calls.tool, 1);
+    assert.equal(f.app.runtime.readToolExecutions(taskId)[0].reconciliationOutcome, 'applied');
+    assert.equal(f.app.runtime.readEvidence(taskId).filter(item => item.kind === 'execution').length, 1);
+    assert.deepEqual(f.calls.inputs.map(input => input.retainMarker), [true, true, undefined]);
+  } finally {
+    await waitForIdle(f.app);
+    f.app.close();
+    await rm(f.directory, {recursive: true, force: true});
+  }
+});
+
+test('workspace binding and original source hash must match before marker reconciliation', async () => {
+  const wrongWorkspace = await fixture(() => ({path: 'src/app.js', state: 'reconciled', outcome: 'applied', ...hashes}));
+  try {
+    const taskId = await startUnknown(wrongWorkspace, 'patch-wrong-workspace');
+    wrongWorkspace.calls.bindingId = 'e'.repeat(64);
+    await assert.rejects(wrongWorkspace.app.reconcileWorkspacePatchTask(taskId), {code: 'REVISION_CONFLICT'});
+    assert.equal(wrongWorkspace.app.runtime.getTask(taskId).state, 'waiting_reconciliation');
+    assert.equal(wrongWorkspace.calls.reconcile, 0);
+  } finally {
+    await waitForIdle(wrongWorkspace.app);
+    wrongWorkspace.app.close();
+    await rm(wrongWorkspace.directory, {recursive: true, force: true});
+  }
+
+  const wrongHash = await fixture(() => ({path: 'src/app.js', state: 'reconciled',
+    outcome: 'applied', beforeSha256: 'e'.repeat(64), afterSha256: hashes.afterSha256, currentSha256: hashes.currentSha256}));
+  try {
+    const taskId = await startUnknown(wrongHash, 'patch-wrong-hash');
+    await assert.rejects(wrongHash.app.reconcileWorkspacePatchTask(taskId), {code: 'REVISION_CONFLICT'});
+    assert.equal(wrongHash.app.runtime.getTask(taskId).state, 'waiting_reconciliation');
+    assert.equal(wrongHash.calls.markerPresent, true);
+    assert.equal(wrongHash.app.runtime.readToolExecutions(taskId)[0].reconciliationOutcome, undefined);
+    assert.deepEqual(wrongHash.calls.inputs.map(input => input.retainMarker), [true]);
+  } finally {
+    await waitForIdle(wrongHash.app);
+    wrongHash.app.close();
+    await rm(wrongHash.directory, {recursive: true, force: true});
   }
 });
 
@@ -152,6 +199,7 @@ test('running, absent marker and changed intent remain conservative', async () =
     assert.equal(result.result.state, 'in_progress');
     assert.equal(result.task.state, 'waiting_reconciliation');
     assert.equal(running.app.runtime.readToolExecutions(taskId)[0].reconciliationOutcome, undefined);
+    assert.deepEqual(running.calls.inputs.map(input => input.retainMarker), [true]);
   } finally {
     await waitForIdle(running.app);
     running.app.close();
