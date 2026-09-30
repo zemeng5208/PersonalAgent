@@ -56,8 +56,25 @@ function Check-Deadline($Request) {
     else{[DateTimeOffset]::Parse([string]$Request.deadline).UtcDateTime}
   if($expires -le [DateTime]::UtcNow){throw 'Expired'}
 }
+function Check-Finalization($Request, $Expected) {
+  $stream=$null
+  try {
+    $stream=[IO.FileStream]::new($Request.finalizationPath,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::None)
+    [KnowledgeFinalizeIdentity]::Check($stream.SafeFileHandle,$Request.finalizationPath)
+    $stored=[Text.UTF8Encoding]::new($false,$true).GetString((Read-Bytes $stream 1048576)) | ConvertFrom-Json -AsHashtable
+    if($stored.Count -ne $Expected.Count){throw 'Finalization changed'}
+    foreach($name in $Expected.Keys) {
+      if($name -eq 'readbackEvidenceRefs') {
+        if($stored[$name] -isnot [array] -or $stored[$name].Count -ne $Expected[$name].Count){throw 'Evidence changed'}
+        for($index=0;$index -lt $Expected[$name].Count;$index++) {
+          if($stored[$name][$index] -cne $Expected[$name][$index]){throw 'Evidence changed'}
+        }
+      } elseif($stored[$name] -cne $Expected[$name]){throw 'Finalization changed'}
+    }
+  } finally {if($null -ne $stream){$stream.Dispose()}}
+}
 function Invoke-Finalize($Request) {
-  $source=$null; $operation=$null; $knowledge=$null; $shared=$null
+  $source=$null; $operation=$null; $knowledge=$null; $shared=$null; $temporary=$null; $temporaryPath=$null
   $a=$Request.accepted
   $unknown=@{state='still_unknown';operationId=[string]$a.operationId}
   try {
@@ -68,7 +85,7 @@ function Invoke-Finalize($Request) {
     [KnowledgeFinalizeIdentity]::Check($source.SafeFileHandle,$Request.sourcePath)
     $current=Hash-Bytes (Read-Bytes $source 524288)
     if($current -ne $a.currentSha256 -or $current -ne $(if($a.outcome -eq 'applied'){$Request.afterSha256}else{$Request.beforeSha256})){return $unknown}
-    $operation=[IO.FileStream]::new($Request.operationPath,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+    $operation=[IO.FileStream]::new($Request.operationPath,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::None)
     [KnowledgeFinalizeIdentity]::Check($operation.SafeFileHandle,$Request.operationPath)
     $record=[Text.UTF8Encoding]::new($false,$true).GetString((Read-Bytes $operation 1048576)) | ConvertFrom-Json -AsHashtable
     if($record.version -ne 1 -or $record.taskId -ne $a.taskId -or $record.runId -ne $a.runId -or
@@ -94,18 +111,33 @@ function Invoke-Finalize($Request) {
     }
     Check-Deadline $Request
     if((Hash-Bytes (Read-Bytes $source 524288)) -ne $current){return $unknown}
-    # Persist trusted Runtime acceptance before releasing any marker. Keep all original bytes and backups.
-    $record.finalization=@{executionRecordId=$a.executionRecordId;readbackEvidenceRefs=$a.readbackEvidenceRefs;
+    # Never modify the original journal: interruption during metadata persistence must leave its identity readable.
+    $acceptance=@{taskId=$a.taskId;runId=$a.runId;operationId=$a.operationId;argumentsDigest=$a.argumentsDigest;
+      sourceId=$record.sourceId;configRevision=$record.configRevision;path=$record.path;
+      beforeSha256=$record.beforeSha256;afterSha256=$record.afterSha256;
+      executionRecordId=$a.executionRecordId;readbackEvidenceRefs=$a.readbackEvidenceRefs;
       toolName=$a.toolName;toolVersion=$a.toolVersion;outcome=$a.outcome;currentSha256=$current}
-    $bytes=[Text.UTF8Encoding]::new($false).GetBytes(($record | ConvertTo-Json -Depth 32 -Compress))
-    $operation.Position=0;$operation.Write($bytes,0,$bytes.Length);$operation.SetLength($bytes.Length);$operation.Flush($true)
-    if((Hash-Bytes (Read-Bytes $operation 1048576)) -ne (Hash-Bytes $bytes)){return $unknown}
+    if(-not [IO.File]::Exists($Request.finalizationPath)) {
+      $temporaryPath=$Request.finalizationPath+'.'+[Guid]::NewGuid().ToString('N')+'.tmp'
+      $temporary=[IO.FileStream]::new($temporaryPath,[IO.FileMode]::CreateNew,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+      [KnowledgeFinalizeIdentity]::Check($temporary.SafeFileHandle,$temporaryPath)
+      $bytes=[Text.UTF8Encoding]::new($false).GetBytes(($acceptance | ConvertTo-Json -Depth 32 -Compress))
+      $temporary.Write($bytes,0,$bytes.Length);$temporary.Flush($true)
+      if((Hash-Bytes (Read-Bytes $temporary 1048576)) -ne (Hash-Bytes $bytes)){return $unknown}
+      Check-Deadline $Request
+      $temporary.Dispose();$temporary=$null
+      # Same-directory rename publishes only complete bytes. Existing acceptance is immutable and checked below.
+      [IO.File]::Move($temporaryPath,$Request.finalizationPath,$false);$temporaryPath=$null
+    }
+    Check-Finalization $Request $acceptance
     Check-Deadline $Request
     if($null -ne $shared){[KnowledgeFinalizeIdentity]::DeleteHeldMarker($shared.SafeFileHandle)}
     if($null -ne $knowledge){[KnowledgeFinalizeIdentity]::DeleteHeldMarker($knowledge.SafeFileHandle)}
     return @{state='finalized';operationId=[string]$a.operationId;outcome=[string]$a.outcome;currentSha256=$current}
   } catch {return $unknown}
   finally {
+    if($null -ne $temporary){$temporary.Dispose()}
+    if($null -ne $temporaryPath -and [IO.File]::Exists($temporaryPath)){[IO.File]::Delete($temporaryPath)}
     if($null -ne $shared){$shared.Dispose()};if($null -ne $knowledge){$knowledge.Dispose()}
     if($null -ne $operation){$operation.Dispose()};if($null -ne $source){$source.Dispose()}
   }

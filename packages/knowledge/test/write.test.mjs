@@ -222,15 +222,24 @@ async function finalizationFixture(t) {
 test('trusted original execution finalization clears matching stopped-helper markers under source lock without another write', {skip: !windows}, async t => {
   const f = await finalizationFixture(t);
   const before = await readFile(join(f.root, 'demo.md'));
+  const operationPath = join(f.recovery, f.receipt.operationId + '.knowledge-operation.json');
+  const originalJournal = await readFile(operationPath);
   const result = await f.writer.finalize(f.accepted, f.context());
   assert.deepEqual(result, {state: 'finalized', operationId: f.receipt.operationId,
     outcome: 'applied', currentSha256: f.receipt.afterSha256});
   assert.equal(existsSync(f.sharedMarker), false); assert.equal(existsSync(f.knowledgeMarker), false);
   assert.deepEqual(await readFile(join(f.root, 'demo.md')), before);
   assert.equal(await readFile(join(f.recovery, f.receipt.backupId), 'utf8'), original);
-  const stored = JSON.parse(await readFile(join(f.recovery, f.receipt.operationId + '.knowledge-operation.json'), 'utf8'));
+  assert.deepEqual(await readFile(operationPath), originalJournal);
+  const finalizationPath = join(f.recovery, f.receipt.operationId + '.knowledge-finalization.json');
+  const stored = {finalization: JSON.parse(await readFile(finalizationPath, 'utf8'))};
   assert.equal(stored.finalization.executionRecordId, f.accepted.executionRecordId);
   assert.deepEqual(stored.finalization.readbackEvidenceRefs, f.accepted.readbackEvidenceRefs);
+  assert.equal((await f.writer.finalize(f.accepted, f.context())).state, 'finalized');
+  assert.deepEqual(await readFile(operationPath), originalJournal);
+  await writeFile(finalizationPath, JSON.stringify({...stored.finalization, executionRecordId: 'other-execution'}));
+  assert.equal((await f.writer.finalize(f.accepted, f.context())).state, 'still_unknown');
+  assert.deepEqual(await readFile(operationPath), originalJournal);
   await assert.rejects(f.writer.apply(f.input, f.authorized), error => error.code === 'RESULT_UNKNOWN');
 });
 
