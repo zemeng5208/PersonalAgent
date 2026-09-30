@@ -82,11 +82,17 @@ only query snapshots that contained the fact and rejects bound
 namespaces. Host-only `beginFactErasure` records a durable pending intent for a
 bound fact. It hides the fact from Memory queries and new feed reads, rewrites
 mixed deliveries entry by entry, and keeps unrelated checkpoints. The fact's
-rows remain until Runtime projections and source re-import are handled. A trusted
-consumer can read the revised durable delivery by exact token and atomically
-replace an unactivated Runtime staging record before replay; this
-method is not a completed deletion operation. Deletion of projected facts,
-retention/backup policy, real ingestion and production cognition/Runtime
+  rows remain until Runtime projections are handled. A trusted
+  consumer can read the revised durable delivery by exact token and atomically
+  replace an unactivated Runtime staging record before replay. Host-only
+  `completeFactErasure` accepts the matching durable Runtime receipt after its
+  graph cleanup, checks that no target feed entry survives, and deletes all
+  target versions and public-source mapping in one Memory transaction. Its
+  `completed` marker describes the active Memory database, not user-level
+  deletion. The SQLite host verifies `secure_delete=ON` and requires a successful
+  `TRUNCATE` WAL checkpoint after the purge; a busy checkpoint is retryable with
+  `STORAGE_UNAVAILABLE`. Older free-page traces and backup copies remain outside
+  this guarantee. Retention/backup policy, real ingestion and production cognition/Runtime
 projection remain unavailable. See
 [ADR-0008](../../docs/adr/0008-fact-feed-consumption.md) (proposed) and
 [ADR-0010](../../docs/adr/0010-memory-erasure.md) (proposed) and

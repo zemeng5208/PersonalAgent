@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import {mkdtemp, rm} from 'node:fs/promises';
+import {mkdtemp, rm, stat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
+import {DatabaseSync} from 'node:sqlite';
 import {openSqliteMemoryHost} from '@personal-agent/memory/sqlite';
 import {TaskRuntime} from '../dist/index.js';
 import {createRuntimeApplication, createSqliteFactProjectionHost} from '../dist/application.js';
@@ -124,6 +125,186 @@ test('trusted SQLite feed binding confirms public source corrections across rest
       new Map(completed.map(item => [item.batchToken, item])));
     assert.deepEqual(bind().listImpactReceipts({afterGraphRevision: completedReceipts.at(-1).projection.graphRevision,
       limit: 10}), []);
+  } finally {
+    memory.close(); runtime.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('trusted host preflights a pending erasure against the rewritten durable delivery after restart', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'personal-agent-erasure-preflight-'));
+  const memoryPath = join(directory, 'memory.sqlite');
+  const runtimePath = join(directory, 'runtime.sqlite');
+  let memory = openSqliteMemoryHost(memoryPath);
+  let runtime = new TaskRuntime(runtimePath);
+  try {
+    memory.provision(namespace);
+    const append = (factId, path, sourceRevision) => memory.appendPublicSource(namespace, {
+      vaultId: 'public-demo', path, factId, sourceRevision: sourceRevision.repeat(64),
+      line: 1, summary: `Synthetic ${factId}`, observedAt: '2026-09-25T00:00:00.000Z',
+      validFrom: '2026-09-25T00:00:00.000Z', validUntil: '2027-01-01T00:00:00.000Z',
+      expectedFactRevision: null, ...context(),
+    });
+    append('a-target', 'target.md', 'a');
+    append('b-other', 'other.md', 'b');
+    let host = createSqliteFactProjectionHost({memory, runtime,
+      memoryNamespace: namespace, graphNamespace: graph, consumerKey});
+    assert.deepEqual(await host.drain({limit: 10, maxBatches: 2, ...context()}),
+      {batches: 1, atWatermark: true});
+    memory.beginFactErasure(namespace, {factId: 'a-target', expectedRevision: 1,
+      operationId: 'synthetic-delete-1', ...context()});
+    memory.close(); runtime.close();
+    memory = openSqliteMemoryHost(memoryPath);
+    runtime = new TaskRuntime(runtimePath);
+    host = createSqliteFactProjectionHost({memory, runtime,
+      memoryNamespace: namespace, graphNamespace: graph, consumerKey});
+    const before = runtime.bindCoordinationStore(graph).read();
+    const result = await host.preflightErasure('a-target', context());
+    assert.equal(result.targetVersions, 1);
+    assert.equal(result.affectedReceipts.length, 1);
+    assert.deepEqual(result.affectedReceipts[0].survivingFacts, [{id: 'b-other', revision: 1}]);
+    assert.equal(result.affectedReceipts[0].impact, 'pending');
+    assert.deepEqual(runtime.bindCoordinationStore(graph).read(), before);
+  } finally {
+    memory.close(); runtime.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('Runtime erasure transaction preserves a mixed activated receipt and replays after restart', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'personal-agent-erasure-commit-'));
+  const memoryPath = join(directory, 'memory.sqlite');
+  const runtimePath = join(directory, 'runtime.sqlite');
+  let memory = openSqliteMemoryHost(memoryPath);
+  let runtime = new TaskRuntime(runtimePath);
+  try {
+    memory.provision(namespace);
+    const append = (factId, path, sourceRevision) => memory.appendPublicSource(namespace, {
+      vaultId: 'public-demo', path, factId, sourceRevision: sourceRevision.repeat(64),
+      line: 1, summary: `Synthetic ${factId}`, observedAt: '2026-09-25T00:00:00.000Z',
+      validFrom: '2026-09-25T00:00:00.000Z', validUntil: '2027-01-01T00:00:00.000Z',
+      expectedFactRevision: null, ...context(),
+    });
+    append('a-target', 'target.md', 'a');
+    append('b-other', 'other.md', 'b');
+    let host = createSqliteFactProjectionHost({memory, runtime,
+      memoryNamespace: namespace, graphNamespace: graph, consumerKey});
+    await host.drain({limit: 10, maxBatches: 2, ...context()});
+    const original = host.listImpactReceipts({afterGraphRevision: 0, limit: 10})[0].projection;
+    assert.deepEqual(original.links.map(link => link.fact.id), ['a-target', 'b-other']);
+    memory.beginFactErasure(namespace, {factId: 'a-target', expectedRevision: 1,
+      operationId: 'synthetic-delete-commit', ...context()});
+    const erasure = () => runtime.bindFactProjectionStore(graph).commitErasure({
+      memoryNamespace: namespace, factId: 'a-target', operationId: 'synthetic-delete-commit',
+      expectedGraphRevision: 2, ...context(),
+      readDelivery: (consumer, batchToken, scope) =>
+        memory.readFeedDelivery(namespace, consumer, {batchToken, ...scope}),
+      readVersion: (fact, scope) =>
+        memory.bind(namespace, {allowedSensitivities: ['public']}).getVersion({fact, ...scope}),
+    });
+    const fault = new DatabaseSync(runtimePath);
+    try {
+      fault.exec("CREATE TRIGGER abort_erasure BEFORE INSERT ON coordination_fact_erasure_receipts BEGIN SELECT RAISE(ABORT, 'synthetic rollback'); END;");
+      await assert.rejects(erasure(), {code: 'STORAGE_UNAVAILABLE'});
+      assert.equal(runtime.bindCoordinationStore(graph).read().history.length, 2);
+      assert.deepEqual(host.listImpactReceipts({afterGraphRevision: 0, limit: 10})[0].projection,
+        original);
+      assert.deepEqual(runtime.bindFactProjectionStore(graph).readPending()[0].links
+        .map(link => link.fact.id), ['a-target', 'b-other']);
+      fault.exec('DROP TRIGGER abort_erasure');
+    } finally {
+      fault.close();
+    }
+    const complete = () => host.resumeFactErasure({factId: 'a-target', expectedRevision: 1,
+      operationId: 'synthetic-delete-commit', expectedGraphRevision: 2, ...context()});
+    const runtimeReader = new DatabaseSync(runtimePath);
+    let reading = false;
+    try {
+      runtimeReader.exec('BEGIN');
+      reading = true;
+      runtimeReader.prepare('SELECT snapshot_json FROM coordination_graphs WHERE namespace = ?')
+        .get(graph);
+      await erasure();
+      await assert.rejects(complete(), {code: 'STORAGE_UNAVAILABLE'});
+    } finally {
+      if (reading) runtimeReader.exec('ROLLBACK');
+      runtimeReader.close();
+    }
+    const graphAfter = runtime.bindCoordinationStore(graph).read();
+    assert.equal(graphAfter.revision, 2);
+    assert.deepEqual(graphAfter.erasedGraphRevisions, [1]);
+    assert.equal(graphAfter.history.length, 1);
+    assert.equal(graphAfter.history[0].graphRevision, 2);
+    assert.deepEqual(runtime.bindCoordinationStore(graph).read(1).history, []);
+    const kept = host.listImpactReceipts({afterGraphRevision: 0, limit: 10})[0].projection;
+    assert.deepEqual(kept.links.map(link => link.fact.id), ['b-other']);
+    assert.deepEqual(runtime.bindFactProjectionStore(graph).readPending()[0].links
+      .map(link => link.fact.id), ['b-other']);
+    const readback = new DatabaseSync(runtimePath);
+    try {
+      assert.deepEqual(readback.prepare('SELECT fact_id FROM coordination_fact_projections WHERE graph_namespace = ? ORDER BY fact_id').all(graph)
+        .map(row => row.fact_id), ['b-other']);
+      assert.equal(readback.prepare('SELECT count(*) AS total FROM coordination_fact_erasure_receipts WHERE graph_namespace = ?').get(graph).total, 1);
+    } finally {
+      readback.close();
+    }
+    assert.equal(JSON.stringify(graphAfter).includes('Synthetic a-target'), false);
+    memory.close(); runtime.close();
+    memory = openSqliteMemoryHost(memoryPath);
+    runtime = new TaskRuntime(runtimePath);
+    host = createSqliteFactProjectionHost({memory, runtime,
+      memoryNamespace: namespace, graphNamespace: graph, consumerKey});
+    await erasure();
+    assert.deepEqual(runtime.bindCoordinationStore(graph).read(), graphAfter);
+    assert.deepEqual(host.listImpactReceipts({afterGraphRevision: 0, limit: 10})[0].projection, kept);
+    await assert.rejects(runtime.bindFactProjectionStore(graph).commitErasure({
+      memoryNamespace: namespace, factId: 'a-target', operationId: 'different-operation',
+      expectedGraphRevision: 2, ...context(), readDelivery: () => { throw new Error('unused'); },
+      readVersion: () => { throw new Error('unused'); },
+    }), {code: 'INTEGRITY_CONFLICT'});
+    const memoryFault = new DatabaseSync(memoryPath);
+    const checkpoint = memoryFault.prepare('SELECT checkpoint FROM memory_feed_bindings WHERE namespace = ? AND consumer_id = ?')
+      .get(namespace, consumerKey).checkpoint;
+    try {
+      memoryFault.exec("CREATE TRIGGER abort_memory_completion BEFORE UPDATE ON memory_erasure_intents WHEN NEW.phase = 'completed' BEGIN SELECT RAISE(ABORT, 'synthetic memory rollback'); END;");
+      await assert.rejects(complete(), {code: 'INVALID_ARGUMENT'});
+      assert.equal(memoryFault.prepare('SELECT count(*) AS total FROM memory_facts WHERE namespace = ? AND fact_id = ?')
+        .get(namespace, 'a-target').total, 1);
+      assert.equal(memoryFault.prepare('SELECT phase FROM memory_erasure_intents WHERE namespace = ? AND fact_id = ?')
+        .get(namespace, 'a-target').phase, 'pending');
+      memoryFault.exec('DROP TRIGGER abort_memory_completion');
+    } finally {
+      memoryFault.close();
+    }
+    memory.close(); runtime.close();
+    memory = openSqliteMemoryHost(memoryPath);
+    runtime = new TaskRuntime(runtimePath);
+    host = createSqliteFactProjectionHost({memory, runtime,
+      memoryNamespace: namespace, graphNamespace: graph, consumerKey});
+    await complete();
+    await complete();
+    for (const path of [runtimePath, memoryPath]) {
+      const wal = await stat(`${path}-wal`).catch(error => {
+        if (error.code === 'ENOENT') return undefined;
+        throw error;
+      });
+      assert.equal(wal?.size ?? 0, 0);
+    }
+    const memoryReadback = new DatabaseSync(memoryPath);
+    try {
+      assert.deepEqual(memoryReadback.prepare('SELECT fact_id FROM memory_facts WHERE namespace = ? ORDER BY fact_id')
+        .all(namespace).map(row => row.fact_id), ['b-other']);
+      assert.equal(memoryReadback.prepare('SELECT count(*) AS total FROM memory_public_sources WHERE namespace = ? AND fact_id = ?')
+        .get(namespace, 'a-target').total, 0);
+      assert.equal(memoryReadback.prepare('SELECT phase FROM memory_erasure_intents WHERE namespace = ? AND fact_id = ?')
+        .get(namespace, 'a-target').phase, 'completed');
+      assert.equal(memoryReadback.prepare('SELECT checkpoint FROM memory_feed_bindings WHERE namespace = ? AND consumer_id = ?')
+        .get(namespace, consumerKey).checkpoint, checkpoint);
+    } finally {
+      memoryReadback.close();
+    }
+    assert.deepEqual(memory.readFeedDelivery(namespace, consumerKey,
+      {batchToken: original.batchToken, ...context()}).entries.map(entry => entry.fact.id), ['b-other']);
   } finally {
     memory.close(); runtime.close();
     await rm(directory, {recursive: true, force: true});

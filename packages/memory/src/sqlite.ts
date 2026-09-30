@@ -351,6 +351,19 @@ export class SqliteMemoryHost {
     this.db.close();
   }
 
+  /** Post-commit WAL maintenance; a busy checkpoint must be retried. */
+  private checkpointErasureWal(): void {
+    try {
+      const mode = this.db.prepare('PRAGMA journal_mode').get() as {journal_mode?: string} | undefined;
+      const result = this.db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as
+        {busy?: number; log?: number; checkpointed?: number} | undefined;
+      if (mode?.journal_mode !== 'wal' || result?.busy !== 0
+        || result.log !== 0 || result.checkpointed !== 0) return queryFail('STORAGE_UNAVAILABLE');
+    } catch {
+      return queryFail('STORAGE_UNAVAILABLE');
+    }
+  }
+
   provision(namespaceValue: unknown): void {
     try {
       const namespace = text(namespaceValue);
@@ -413,6 +426,7 @@ export class SqliteMemoryHost {
         ).run(namespace, factId, operationId, expectedRevision);
         active(operation, queryFail);
       }, () => active(operation, queryFail));
+      this.checkpointErasureWal();
     } catch (error) {
       if (error instanceof MemoryQueryError) throw error;
       return queryFail();
@@ -511,6 +525,80 @@ export class SqliteMemoryHost {
         }
         active(operation, queryFail);
       }, () => active(operation, queryFail));
+    } catch (error) {
+      if (error instanceof MemoryQueryError) throw error;
+      return queryFail();
+    }
+  }
+
+  /** Host-only second phase after a durable Runtime receipt has been read back. */
+  completeFactErasure(namespaceValue: unknown, value: unknown): void {
+    try {
+      const namespace = text(namespaceValue);
+      const record = exact(value, ['factId', 'expectedRevision', 'operationId', 'runtimeReceipt',
+        'deadline', 'signal']);
+      const factId = text(record.factId);
+      const operationId = text(record.operationId, 128);
+      const expectedRevision = record.expectedRevision;
+      const proof = exact(record.runtimeReceipt, ['graphNamespace', 'memoryNamespace', 'factId',
+        'operationId', 'expectedGraphRevision', 'committedAt']);
+      text(proof.graphNamespace);
+      time(proof.committedAt);
+      if (!/^[A-Za-z0-9_.-]+$/.test(operationId)
+        || !Number.isSafeInteger(expectedRevision) || (expectedRevision as number) < 1
+        || proof.memoryNamespace !== namespace
+        || proof.factId !== factId || proof.operationId !== operationId
+        || !Number.isSafeInteger(proof.expectedGraphRevision)
+        || (proof.expectedGraphRevision as number) < 0) return queryFail();
+      const operation = context(record, queryFail);
+      transaction(this.db, () => {
+        active(operation, queryFail);
+        const intent = this.db.prepare(
+          'SELECT operation_id, expected_revision, phase FROM memory_erasure_intents WHERE namespace = ? AND fact_id = ?',
+        ).get(namespace, factId) as Row | undefined;
+        if (intent === undefined) return queryFail('NOT_FOUND');
+        if (intent.operation_id !== operationId || intent.expected_revision !== expectedRevision) {
+          return queryFail('REVISION_CONFLICT');
+        }
+        if (intent.phase === 'completed') {
+          if (this.db.prepare('SELECT 1 FROM memory_facts WHERE namespace = ? AND fact_id = ? LIMIT 1')
+            .get(namespace, factId) !== undefined
+            || this.db.prepare('SELECT 1 FROM memory_public_sources WHERE namespace = ? AND fact_id = ? LIMIT 1')
+              .get(namespace, factId) !== undefined) return queryFail('SCOPE_DENIED');
+          return;
+        }
+        if (intent.phase !== 'pending') return queryFail();
+        const head = this.db.prepare('SELECT MAX(revision) AS revision FROM memory_facts WHERE namespace = ? AND fact_id = ?')
+          .get(namespace, factId) as Row;
+        if (head.revision !== expectedRevision) return queryFail('REVISION_CONFLICT');
+        const bindings = this.db.prepare('SELECT bootstrap_entries_json FROM memory_feed_bindings WHERE namespace = ?')
+          .all(namespace) as Row[];
+        for (const binding of bindings) {
+          if (binding.bootstrap_entries_json !== null
+            && parseJson<FactChangeEntry[]>(rowText(binding, 'bootstrap_entries_json'))
+              .some(entry => entry.fact.id === factId)) return queryFail('SCOPE_DENIED');
+        }
+        const deliveries = this.db.prepare(
+          'SELECT batch_json, confirmed, confirmed_handled_key FROM memory_feed_deliveries WHERE namespace = ?',
+        ).all(namespace) as Row[];
+        for (const delivery of deliveries) {
+          const batch = parseJson<FactChangeBatch>(rowText(delivery, 'batch_json'));
+          if (batch.entries.some(entry => entry.fact.id === factId)
+            || (delivery.confirmed === 1
+              && delivery.confirmed_handled_key !== handledKey(batch.entries))) {
+            return queryFail('SCOPE_DENIED');
+          }
+        }
+        this.db.prepare('DELETE FROM memory_public_sources WHERE namespace = ? AND fact_id = ?')
+          .run(namespace, factId);
+        const removed = this.db.prepare('DELETE FROM memory_facts WHERE namespace = ? AND fact_id = ?')
+          .run(namespace, factId);
+        if (Number(removed.changes) !== expectedRevision) return queryFail('SCOPE_DENIED');
+        this.db.prepare("UPDATE memory_erasure_intents SET phase = 'completed' WHERE namespace = ? AND fact_id = ?")
+          .run(namespace, factId);
+        active(operation, queryFail);
+      }, () => active(operation, queryFail));
+      this.checkpointErasureWal();
     } catch (error) {
       if (error instanceof MemoryQueryError) throw error;
       return queryFail();
@@ -1173,5 +1261,14 @@ function parseHandled(value: unknown): readonly FactChangeEntry[] {
 }
 
 export function openSqliteMemoryHost(path: string): SqliteMemoryHost {
-  return new SqliteMemoryHost(openStorage(path, MIGRATIONS));
+  const db = openStorage(path, MIGRATIONS);
+  try {
+    db.exec('PRAGMA secure_delete = ON');
+    const setting = db.prepare('PRAGMA secure_delete').get() as {secure_delete?: number} | undefined;
+    if (setting?.secure_delete !== 1) return queryFail('STORAGE_UNAVAILABLE');
+    return new SqliteMemoryHost(db);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
 }

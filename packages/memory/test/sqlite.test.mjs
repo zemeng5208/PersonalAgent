@@ -432,6 +432,82 @@ test('erasure intent rewrites confirmed and changes batches without losing an un
   host.close();
 });
 
+test('host-only completion purges every target version and refuses a stale mixed delivery', async t => {
+  const path = databasePath(t);
+  const host = openSqliteMemoryHost(path);
+  host.provision('personal');
+  host.append('personal', version('erase-target', 1));
+  host.append('personal', version('erase-target', 2));
+  host.append('personal', version('keep-other', 1));
+  const feed = host.bindFeed('personal', {consumerId: 'cognition', allowedSensitivities: ['public']});
+  const original = await feed.read(request({limit: 10}));
+  host.beginFactErasure('personal', request({factId: 'erase-target', expectedRevision: 2,
+    operationId: 'synthetic-completion'}));
+  const revised = host.readFeedDelivery('personal', 'cognition', request({batchToken: original.batchToken}));
+  const completion = request({factId: 'erase-target', expectedRevision: 2,
+    operationId: 'synthetic-completion', runtimeReceipt: {graphNamespace: 'synthetic-graph',
+      memoryNamespace: 'personal', factId: 'erase-target', operationId: 'synthetic-completion',
+      expectedGraphRevision: 1, committedAt: at}});
+  const db = new DatabaseSync(path);
+  try {
+    assert.throws(() => host.completeFactErasure('personal', {...completion,
+      runtimeReceipt: {...completion.runtimeReceipt, operationId: 'wrong'}}),
+    {code: 'INVALID_ARGUMENT'});
+    db.prepare('UPDATE memory_feed_deliveries SET batch_json = ? WHERE batch_token = ?')
+      .run(JSON.stringify(original), original.batchToken);
+    assert.throws(() => host.completeFactErasure('personal', completion), {code: 'SCOPE_DENIED'});
+    assert.equal(db.prepare('SELECT count(*) AS total FROM memory_facts WHERE namespace = ? AND fact_id = ?')
+      .get('personal', 'erase-target').total, 2);
+    db.prepare('UPDATE memory_feed_deliveries SET batch_json = ? WHERE batch_token = ?')
+      .run(JSON.stringify(revised), original.batchToken);
+    host.completeFactErasure('personal', completion);
+    host.completeFactErasure('personal', completion);
+    assert.deepEqual(db.prepare('SELECT fact_id FROM memory_facts WHERE namespace = ? ORDER BY fact_id')
+      .all('personal').map(row => row.fact_id), ['keep-other']);
+    assert.equal(db.prepare('SELECT phase FROM memory_erasure_intents WHERE namespace = ? AND fact_id = ?')
+      .get('personal', 'erase-target').phase, 'completed');
+    assert.deepEqual(host.readFeedDelivery('personal', 'cognition',
+      request({batchToken: original.batchToken})).entries.map(entry => entry.fact.id), ['keep-other']);
+  } finally {
+    db.close();
+    host.close();
+  }
+});
+
+test('a busy WAL checkpoint keeps the completed purge retryable', t => {
+  const path = databasePath(t);
+  const host = openSqliteMemoryHost(path);
+  const reader = new DatabaseSync(path);
+  let reading = false;
+  try {
+    host.provision('personal');
+    host.append('personal', version('erase-target', 1));
+    host.beginFactErasure('personal', request({factId: 'erase-target', expectedRevision: 1,
+      operationId: 'synthetic-wal-retry'}));
+    const completion = request({factId: 'erase-target', expectedRevision: 1,
+      operationId: 'synthetic-wal-retry', runtimeReceipt: {graphNamespace: 'synthetic-graph',
+        memoryNamespace: 'personal', factId: 'erase-target', operationId: 'synthetic-wal-retry',
+        expectedGraphRevision: 1, committedAt: at}});
+    reader.exec('BEGIN');
+    reading = true;
+    assert.equal(reader.prepare('SELECT count(*) AS total FROM memory_facts WHERE namespace = ?')
+      .get('personal').total, 1);
+    assert.throws(() => host.completeFactErasure('personal', completion),
+      {code: 'STORAGE_UNAVAILABLE'});
+    reader.exec('ROLLBACK');
+    reading = false;
+    assert.equal(reader.prepare('SELECT phase FROM memory_erasure_intents WHERE namespace = ? AND fact_id = ?')
+      .get('personal', 'erase-target').phase, 'completed');
+    assert.equal(reader.prepare('SELECT count(*) AS total FROM memory_facts WHERE namespace = ? AND fact_id = ?')
+      .get('personal', 'erase-target').total, 0);
+    assert.doesNotThrow(() => host.completeFactErasure('personal', completion));
+  } finally {
+    if (reading) reader.exec('ROLLBACK');
+    reader.close();
+    host.close();
+  }
+});
+
 test('SQLite feed invalidates a binding when a visible fact becomes hidden', async t => {
   const path = databasePath(t);
   const host = openSqliteMemoryHost(path);

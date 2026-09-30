@@ -316,6 +316,14 @@ function validRecheckContext(value, workKey, namespace) {
   return Object.keys(value).every(key => allowed.has(key));
 }
 
+function sameRecheckIdentity(left, right) {
+  const keys = ['version', 'namespace', 'workKey', 'topicId', 'consumerRevision', 'sourceId',
+    'boundRevision', 'boundContentSha256', 'boundCacheVersion', 'boundLastSuccessfulCheck',
+    'boundValidUntil', 'observedRevision', 'observedContentSha256', 'observedAt', 'availability',
+    'citation', 'sourceReadTaskId', 'sourceReadReceiptId', 'summary'];
+  return plain(left) && plain(right) && keys.every(key => left[key] === right[key]);
+}
+
 function validKnowledgeRecheckResult(read, context, head) {
   const result = read?.knowledgeRecheckResult;
   const judgment = read?.knowledgeRecheckJudgment;
@@ -404,9 +412,13 @@ function readableCheckpoint(raw, namespace) {
       return {ok: false, reason: 'checkpoint_notice_unreadable'};
     }
   }
-  for (const submission of Object.values(raw.submissions)) {
+  for (const [workKey, submission] of Object.entries(raw.submissions)) {
     if (!plain(submission) || !['unknown', 'accepted'].includes(submission.state)
       || submission.state === 'accepted' && !text(submission.taskId)) {
+      return {ok: false, reason: 'checkpoint_submission_unreadable'};
+    }
+    if (submission.recheckContext !== undefined
+      && !validRecheckContext(submission.recheckContext, workKey, namespace)) {
       return {ok: false, reason: 'checkpoint_submission_unreadable'};
     }
   }
@@ -889,11 +901,12 @@ export function createKnowledgeWatchHost({
   function freshnessFor(group, event) {
     const binding = group.binding;
     const changed = event.availability === 'available'
-      && (event.revision !== binding.revision || event.contentSha256 !== binding.contentSha256);
+      && (event.contentSha256 ? event.contentSha256 !== binding.contentSha256
+        : event.revision !== binding.revision);
     const check = changed ? {outcome: 'changed', checkedAt: event.fetchedAt, sourceId: binding.sourceId,
       sourceRevision: binding.revision, cachedContentSha256: binding.contentSha256} : event.check;
     return {at: event.fetchedAt, maxAgeMs: event.maxAgeMs ?? knowledgeMaxAgeMs,
-      requestedVersion: event.requestedVersion ?? binding.cacheVersion,
+      requestedVersion: event.requestedVersion ?? (changed && event.revision ? event.revision : binding.cacheVersion),
       sourceState: event.availability, cache: {version: binding.cacheVersion, sourceId: binding.sourceId,
         sourceRevision: binding.revision, contentSha256: binding.contentSha256,
         lastSuccessfulCheck: binding.lastSuccessfulCheck, validUntil: binding.validUntil},
@@ -950,16 +963,17 @@ export function createKnowledgeWatchHost({
     const next = clone(document);
     for (const item of plans) {
       for (const work of item.plan.affected) {
-        if (work.duplicate || next.submissions[work.workKey]?.state === 'accepted') continue;
         const recheckContext = recheckContextFor(work, event, item.group.binding);
         const existing = next.submissions[work.workKey];
         if (existing?.recheckContext && (!recheckContext
-          || JSON.stringify(existing.recheckContext) !== JSON.stringify(recheckContext))) {
+          || !sameRecheckIdentity(existing.recheckContext, recheckContext))) {
           return {accepted: false, reason: 'reevaluation_identity_conflict'};
         }
+        if (work.duplicate || existing?.state === 'accepted') continue;
         next.submissions[work.workKey] = {...(existing ?? {}), state: 'unknown', namespace,
           attemptedAt: event.fetchedAt, sourceId: event.sourceId,
-          ...(recheckContext ? {recheckContext} : {})};
+          ...((existing?.recheckContext ?? recheckContext)
+            ? {recheckContext: existing?.recheckContext ?? recheckContext} : {})};
         keys.push(work.workKey);
       }
     }
@@ -1601,9 +1615,15 @@ export function createKnowledgeWatchHost({
       }
       const keys = submittedKeys.filter(key => {
         const context = document.submissions[key]?.recheckContext;
-        return context ? context.topicId === topicId : true;
+        return validRecheckContext(context, key, namespace)
+          && context.topicId === topicId && context.consumerRevision === watch.consumer.revision
+          && context.sourceId === binding.sourceId && context.boundRevision === binding.revision
+          && context.boundContentSha256 === binding.contentSha256
+          && context.observedRevision === head.revision
+          && context.observedContentSha256 === head.contentSha256
+          && context.citation === head.citation;
       });
-      if (!keys.length) return {accepted: false, reason: 'reevaluation_missing'};
+      if (keys.length !== 1) return {accepted: false, reason: 'reevaluation_missing'};
       const submissions = Object.fromEntries(keys.map(key => [key, clone(document.submissions[key] ?? null)]));
       if (Object.values(submissions).some(submission => submission?.state !== 'accepted'
         || !text(submission.taskId) || submission.sourceId !== binding.sourceId
