@@ -1542,6 +1542,26 @@ async function initializeRuntime() {
           idempotencyKey: knowledgeWatchIdempotency,
         });
       }
+      const feedProofStore=runtimeApplication.createHostStateStore('knowledge-tracking');
+      const proofKey=receiptId=>'feed-confirmed-read:'+receiptId;
+      const rebuildFeedReceipt=binding=>{
+        if (!binding || binding.namespace !== namespace || binding.containerTaskId !== knowledgeWatchTask.taskId
+          || typeof runtimeModule.createKnowledgeFeedReceiptFromConfirmedExecution !== 'function') return undefined;
+        const intent=runtimeApplication.runtime.loadCheckpoint(binding.sourceReadTaskId,'host-tool-intent');
+        if (!intent || intent.namespace !== namespace || intent.toolName !== 'feeds.collect'
+          || intent.toolVersion !== binding.toolVersion || intent.arguments?.subscriptionId !== binding.sourceId) return undefined;
+        return runtimeModule.createKnowledgeFeedReceiptFromConfirmedExecution({namespace,sourceId:binding.sourceId,
+          taskId:binding.sourceReadTaskId,runId:binding.runId,toolVersion:binding.toolVersion,
+          query:intent.arguments,scopeRef:binding.runId,runtime:runtimeApplication.runtime});
+      };
+      const readFeedReceiptEvidence=query=>{
+        if (query?.namespace !== namespace || query.sourceReadTaskId !== knowledgeWatchTask.taskId
+          || typeof query.receiptId !== 'string' || !/^[a-f0-9]{64}$/.test(query.receiptId)) return undefined;
+        const binding=feedProofStore.get(proofKey(query.receiptId));
+        if (!binding || binding.sourceId !== query.sourceId || binding.receiptId !== query.receiptId) return undefined;
+        const receipt=rebuildFeedReceipt(binding);
+        return receipt?.receiptId === query.receiptId ? receipt : undefined;
+      };
       const feedCollect = async (query, signal) => {
         const collectTool = feedsHost?.tools?.find(tool => tool.descriptor?.name === 'feeds.collect');
         const availability = feedsHost?.competitionToolAvailability?.find(item => item.toolName === 'feeds.collect');
@@ -1569,7 +1589,20 @@ async function initializeRuntime() {
           for (;;) {
             if (signal.aborted) {cancel();throw Object.assign(Error('订阅检查已取消'),{code:'CANCELLED'});}
             const read=runtimeApplication.readHostToolTask(prepared.taskId);
-            if (read.task.state==='succeeded' && read.confirmed) return read.confirmed.result;
+            if (read.task.state==='succeeded' && read.confirmed) {
+              const binding={version:1,namespace,sourceId:query.subscriptionId,containerTaskId:knowledgeWatchTask.taskId,
+                sourceReadTaskId:prepared.taskId,runId:read.confirmed.runId,toolVersion:collectTool.descriptor.version};
+              const receipt=rebuildFeedReceipt(binding);
+              if (receipt) {
+                const key=proofKey(receipt.receiptId),previous=feedProofStore.get(key);
+                // One receipt retains its original actual execution; a later read cannot replace it.
+                if (!previous) feedProofStore.set(key,{...binding,receiptId:receipt.receiptId});
+                const saved=readFeedReceiptEvidence({namespace,sourceId:query.subscriptionId,
+                  sourceReadTaskId:knowledgeWatchTask.taskId,receiptId:receipt.receiptId});
+                if (!saved) throw Object.assign(Error('订阅原始执行证据绑定未获确认'),{code:'RESULT_UNKNOWN'});
+              }
+              return read.confirmed.result;
+            }
             if (['failed','cancelled','waiting_reconciliation','waiting_approval'].includes(read.task.state)) {
               throw Object.assign(Error('订阅工具读取未确认'),{code:read.task.error?.code??'RESULT_UNKNOWN'});
             }
@@ -1586,6 +1619,7 @@ async function initializeRuntime() {
         layaChooser: localLaya,
         runtime: runtimeApplication.runtime,
         feedCollect,
+        readFeedReceiptEvidence,
         knowledgeFeedReceipts:runtimeModule,
       });
       await knowledgeWatchHost.start();
@@ -1718,7 +1752,7 @@ async function action(event, name, payload) {
       const originAdmin=admin, originApplication=runtimeApplication, originFeeds=feedsHost;
       const choice=originFeeds.prepareNativeSourceChoice(payload);
       const answer=await dialog.showMessageBox(originAdmin,{type:'question',title:'订阅来源与持续跟踪许可',
-        message:`订阅：${choice.title}\n原任务：${choice.taskId}`,
+        message:`订阅：${choice.title}\n原任务：${choice.taskId}\n用途：${choice.goal}`,
         detail:`实际地址：${choice.url}\n许可到期：${choice.deadline}\n公开选择只适用于无需凭据的公共资料，并允许该原任务持续跟踪；来源获取仍需真实读取证据。分类改变后需重启接入新目录。`,
         buttons:choice.containsCredentials ? ['取消','保持私人'] : ['取消','公开并允许本任务跟踪','保持私人'],
         defaultId:0,cancelId:0,noLink:true});

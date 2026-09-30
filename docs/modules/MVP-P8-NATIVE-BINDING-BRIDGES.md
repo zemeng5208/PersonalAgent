@@ -12,10 +12,12 @@
 - `prepareNativeSourceChoice({subscriptionId, taskId})` 只给原生对话框提供实际配置地址和真实任务绑定；地址不进入 Renderer、云端或 Evidence。
 - `applyNativeSourceChoice(choice, classification)` 只能从可信主进程消费原生选择；前后重验配置 generation、原任务 conversation 与期限。含查询参数的来源保守拒绝公开分类。默认保持 private。
 - 公开分类保存在原加密订阅配置中。现有 FeedService 在构造时固定订阅分类，因此分类变更需重启装配；界面明确提示。不能用会话读取许可自动替代公开分类。
-- 精确跟踪 grant 保存在原 Runtime SQLite 的 `knowledge-tracking` host store，键使用 `feed-source-grant:` 前缀；绑定 namespace/source/config/task/conversation/expiry/revision。显式撤销或配置变更会持久撤销，普通关闭只关闭会话读取许可。
+- 精确跟踪 grant 保存在原 Runtime SQLite 的 `knowledge-tracking` host store，键使用 `feed-source-grant:` 前缀；绑定 namespace/source/config/task/conversation/用途 SHA/expiry/revision。显式撤销或配置变更会持久撤销，普通关闭只关闭会话读取许可。成功的原 intake task 在期限内仍可使用原许可；失败、取消、用途改变或超期均拒绝。
 - `readTrackingGrant({namespace, sourceId, taskId})` 缺任一绑定时返回 none。现有 P7 仅 namespace/source 的查询不足以消费该许可，必须由知识工作包用原任务真实绑定接线。不得改成整个 namespace 的 blanket grant。
 
 真实 fetch receipt、来源获取时间/传输证明、完整内容与 citation 由 feeds Provider/Service 工作包提供；本 getter 不签发这些事实。
+
+`main.feedCollect` 在正式 Gateway host read 确认后保存 `feed-confirmed-read:<receiptId>` 元数据，绑定知识宿主的 receipt 容器到实际原 feed task/run/version；不在该索引复制正文或凭据。同步 `readFeedReceiptEvidence` 通过公开 `createKnowledgeFeedReceiptFromConfirmedExecution` 从原 intent、ToolRecord、结果 checkpoint 和真实 Evidence 重建，再核 receiptId。缺公开 helper/原证明时不补造证明；partial/304 没有新正文 receipt。相同 receipt 保留最初执行绑定，重启后只读核实，不再执行工具。
 
 ## 记事本原始执行核实
 
