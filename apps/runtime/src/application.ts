@@ -3,7 +3,8 @@ export type {StartSystemObservationSessionRequest, SystemObservationSession} fro
 export {createSystemObservationTool} from '@personal-agent/windows-client';
 export type {RuntimeApplicationOptions, RuntimeApplicationTransport, SubmitHostToolTaskRequest,
   PrepareHostToolTaskRequest, FinalizeHostToolTaskRequest, HostToolTaskReadback,
-  RevokeHostAuthorizationRequest, RevokeHostAuthorizationResult} from './application/runtime-application.js';
+  RevokeHostAuthorizationRequest, RevokeHostAuthorizationResult,
+  ConfirmedSystemObservationSample} from './application/runtime-application.js';
 export type {LocalRepairHostOptions, LocalRepairBinding, SubmitLocalRepairRequest} from './application/local-repair.js';
 export type {CompetitionAvailableTool, CompetitionToolAvailability} from './application/tool-catalog.js';
 export {createAgentArtsRuntimeApplication} from './application/agentarts.js';
@@ -15,6 +16,8 @@ export type {CompetitionFactHost, CompetitionFactHostOptions, PublicSourceKey,
   TrustedPublicSource, TrustedPublicWithdrawal} from './application/competition-fact-host.js';
 export type {FactImpactReceipt, FactProjectionReceipt, CompletedFactImpact} from './fact-projection-store.js';
 export {ingestPublicSource} from './application/public-source.js';
+export {ingestConfirmedPrivateCitation} from './application/private-source.js';
+export type {ConfirmedPrivateFact} from './application/private-source.js';
 export {createWindowsHostBridgeTransport, createWindowsHostNotepadAdapter} from './application/windows-host-adapter.js';
 export {createRuntimeWindowsHostAttemptStore} from './application/windows-host-attempt-store.js';
 export type {WindowsHostTransport, VerifiedWindowsHostConnection, WindowsHostAttemptStore,
@@ -37,6 +40,16 @@ export type {ProactiveCognitionHost, ProactiveCognitionHostOptions, ProactiveCog
   ProactiveSelectionHandoff, ProactiveSelectionHandoffPort} from './application/proactive-cognition-host.js';
 export type {QQMailTriageHostOptions} from './application/mail-triage.js';
 export type {StartMailReadSessionRequest, MailReadSession} from './application/mail-read-session.js';
+export {
+  WORKSPACE_PATCH_APPLY_TOOL_NAME,
+  WORKSPACE_PATCH_APPLY_TOOL_VERSION,
+  WorkspacePatchReconciliationAdapter,
+} from './application/workspace-patch-reconciliation.js';
+export type {
+  WorkspacePatchReconciliationPort,
+  WorkspacePatchReconciliationResult,
+  WorkspacePatchReconciliationReadback,
+} from './application/workspace-patch-reconciliation.js';
 export {createReminderDeliveryHost} from './application/reminder-delivery.js';
 export {
   createRuntimeSubagentDispatchTool,

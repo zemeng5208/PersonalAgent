@@ -15,6 +15,15 @@ isolated historical snapshot; restore content through a new append to retain aud
 history. `currentNodes` includes withdrawal records. `isEffective` evaluates the
 half-open validity interval. These functions do not infer that claims are true.
 
+For trusted physical erasure, a snapshot may also carry `erasedGraphRevisions`:
+an ordered list of content-free missing graph positions. Legacy three-field
+snapshots remain valid. Surviving nodes retain their exact revisions;
+`graphAt(oldRevision)` returns the original time boundary without erased nodes,
+and later appends continue above the prior revision high-water mark. The parser
+rejects unaccounted gaps, duplicates and reused positions. Only a trusted host
+may persist an erased graph; parsing one is not deletion authorization. This
+provisional cross-module change requires the Goal owner's semantic review.
+
 The pure expectedRevision check alone is not a concurrency lock. The provisional
 `@personal-agent/goals/store` port and Fake now allow a host-bound namespace;
 Runtime supplies atomic SQLite persistence using its existing database. Only the

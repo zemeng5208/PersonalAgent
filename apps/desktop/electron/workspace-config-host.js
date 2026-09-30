@@ -131,7 +131,8 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
         try {
           applyHost=createDesktopCodingToolHost({workspaceRoot:boundRoot,authorizedWorkspaceRoot:boundRoot,
             recoveryRootPath:recoveryDirectory(userData,boundRoot,pwsh),powerShellPath:pwsh,
-            createWorkspacePatchApplyTool:coding.createWorkspacePatchApplyTool});
+            createWorkspacePatchApplyTool:coding.createWorkspacePatchApplyTool,
+            reconcileWorkspacePatchApply:coding.reconcileWorkspacePatchApply});
           implementations.push(...applyHost.tools);
         } catch {failure='读取和候选生成可用；安全应用补丁所需的目录或 PowerShell 检查未通过';}
       } else failure='读取和候选生成可用；安全应用补丁需要 PowerShell 7';
@@ -265,7 +266,16 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
     mkdirSync(userData,{recursive:true});
     writeFileSync(file+'.tmp',JSON.stringify(record),'utf8');renameSync(file+'.tmp',file);
   }
+  const patchReconciliation = {
+    get bindingId() { return applyHost?.patchReconciliation?.bindingId; },
+    reconcile(input) {
+      const current = applyHost?.patchReconciliation;
+      if (!current) throw Error('Workspace patch reconciliation is unavailable');
+      return current.reconcile(input);
+    },
+  };
   return {tools,snapshot,
+    get patchReconciliation() { return applyHost ? patchReconciliation : undefined; },
     bindApplication(value){application=value;},
     async select() {
       const selected=await selectDirectory();

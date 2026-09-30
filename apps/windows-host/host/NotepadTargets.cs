@@ -13,11 +13,12 @@ internal sealed class NotepadTargets
 {
     private readonly HashSet<(nint Window, int Pid, DateTime StartUtc)> _existing = [];
     private readonly Dictionary<string, ObservedNotepadTarget> _current = new(StringComparer.Ordinal);
+    private readonly bool _baselineComplete = true;
 
-    internal NotepadTargets()
+    internal NotepadTargets(Func<Process[]>? baselineProcesses = null)
     {
         var currentSession = Process.GetCurrentProcess().SessionId;
-        foreach (var process in Process.GetProcessesByName("notepad"))
+        foreach (var process in (baselineProcesses ?? (() => Process.GetProcessesByName("notepad")))())
         {
             using (process)
             {
@@ -31,7 +32,10 @@ internal sealed class NotepadTargets
                 catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or
                                            System.ComponentModel.Win32Exception)
                 {
-                    // Skip unqueryable processes in baseline snapshot.
+                    // A skipped old window could become queryable later and be
+                    // mistaken for a new target. This session cannot observe
+                    // safely unless its entire baseline was established.
+                    _baselineComplete = false;
                 }
             }
         }
@@ -41,6 +45,7 @@ internal sealed class NotepadTargets
     {
         var now = DateTime.UtcNow;
         if (deadlineUtc <= now) return (null, "TIMEOUT");
+        if (!_baselineComplete) return (null, "UNAUTHORIZED");
         var currentSession = Process.GetCurrentProcess().SessionId;
         var candidates = new List<(nint Window, int Pid, DateTime StartUtc)>();
         var unverifiable = false;

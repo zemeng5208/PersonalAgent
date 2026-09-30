@@ -10,6 +10,8 @@ export function desktopDataPaths({electronDir, userData, packaged = false, fakeR
           ? path.join(userData, 'fake-runtime-application.sqlite')
           : path.resolve(electronDir, '../.cache/fake-runtime-application.sqlite'))
       : (isolated ? path.join(userData, 'runtime.sqlite') : path.resolve(electronDir, '../.cache/runtime.sqlite')),
+    privateMemory: isolated ? path.join(userData, 'private-memory.sqlite')
+      : path.resolve(electronDir, '../.cache/private-memory.sqlite'),
     conversations: fakeRuntime || fakeModel || ephemeral ? null
       : (packaged || testUserData
           ? path.join(userData, 'conversations.json')

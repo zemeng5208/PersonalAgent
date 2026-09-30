@@ -25,6 +25,7 @@ Notepad 顶层窗口；跨会话进程、旧 HWND 中的新标签、多标签及
 的可选 `prepareObservation` 等待用户创建和确认新窗口，再发送 `observe`。
 准备过程不授予执行权限；取消或期限到达会关闭本次连接，不消耗短期 targetRef 的有效期。
 Host 只返回短期随机 `targetRef`，不返回或记录标题、正文、HWND/PID。
+若既有进程/窗口基线查询不完整，整次会话明确拒绝 `UNAUTHORIZED`；不能跳过旧窗口后在查询恢复时把它视为新目标。可信调用方可结束这次准备并重新握手，不盲目重试写入。
 无法观察时使用 Schema 中的 `observation_refused`（包含 `UNAUTHORIZED`、`TARGET_AMBIGUOUS`、
 `TARGET_STALE`、`TIMEOUT`），不会用断连伪造拒绝。断连后目标引用立即失去执行效力。
 

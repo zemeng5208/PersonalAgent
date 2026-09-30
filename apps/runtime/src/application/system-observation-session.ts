@@ -18,6 +18,7 @@ export interface SystemObservationSession {
 interface Lease extends SystemObservationSession {
   lastSampleAt?: number;
   taskId?: string;
+  sampleTaskIds: Set<string>;
   sequence: number;
 }
 
@@ -42,7 +43,7 @@ export class SystemObservationSessions {
       else throw new ProtocolError('REVISION_CONFLICT', 'Observation session is already active');
     }
     const lease: Lease = {sessionId: randomUUID(), expiresAt: request.expiresAt,
-      intervalMs: request.intervalMs, sequence: 0};
+      intervalMs: request.intervalMs, sampleTaskIds: new Set(), sequence: 0};
     this.leases.set(lease.sessionId, lease);
     return {sessionId: lease.sessionId, expiresAt: lease.expiresAt, intervalMs: lease.intervalMs};
   }
@@ -68,9 +69,18 @@ export class SystemObservationSessions {
       deadline: new Date(Math.min(Date.parse(lease.expiresAt), this.now() + 30_000)).toISOString()};
   }
 
-  bind(sessionId: string, taskId: string): void { this.require(sessionId).taskId = taskId; }
+  bind(sessionId: string, taskId: string): void {
+    const lease = this.require(sessionId);
+    lease.taskId = taskId;
+    lease.sampleTaskIds.add(taskId);
+  }
   assertSample(sessionId: string, taskId: string): void {
     if (this.require(sessionId).taskId !== taskId) throw new ProtocolError('UNAUTHORIZED', 'Observation sample is not bound to this session');
+  }
+  sampleIntervalMs(sessionId: string, taskId: string): number {
+    const lease = this.require(sessionId);
+    if (!lease.sampleTaskIds.has(taskId)) throw new ProtocolError('UNAUTHORIZED', 'Observation sample is not bound to this session');
+    return lease.intervalMs;
   }
   stop(sessionId: string): {stopped: boolean} {
     const lease = this.leases.get(sessionId);

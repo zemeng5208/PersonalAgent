@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {appendVersion, createGraph, parseGraph} from '@personal-agent/goals';
+import {appendVersion, createGraph, graphAt, parseGraph} from '@personal-agent/goals';
 import {eraseDependentGraphHistory} from '../dist/fact-erasure.js';
 
 function add(graph, id, kind, dependencies = [], summary = id) {
@@ -26,12 +26,21 @@ test('erasure removes every target version and transitive dependent history, kee
 
   const erased = eraseDependentGraphHistory(graph, 'target');
   assert.deepEqual(erased.history.map(node => [node.id, node.graphRevision]), [
-    ['other-fact', 1], ['independent-goal', 2],
+    ['other-fact', 4], ['independent-goal', 5],
   ]);
+  assert.equal(erased.revision, 9);
+  assert.deepEqual(erased.erasedGraphRevisions, [1, 2, 3, 6, 7, 8, 9]);
+  assert.deepEqual(graphAt(erased, 4).history.map(node => node.id), ['other-fact']);
+  assert.deepEqual(graphAt(erased, 3).history, []);
   assert.deepEqual(erased.history[1].dependencies, [{id: 'other-fact', revision: 1}]);
   assert.deepEqual(parseGraph(erased), erased);
   assert.deepEqual(graph, original);
   assert.equal(JSON.stringify(erased).includes('secret'), false);
+  const again = eraseDependentGraphHistory(erased, 'other-fact');
+  assert.equal(again.revision, 9);
+  assert.deepEqual(again.history, []);
+  assert.deepEqual(again.erasedGraphRevisions, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.equal(add(again, 'fresh', 'fact').history[0].graphRevision, 10);
 });
 
 test('erasure of a node absent from this graph leaves the validated graph unchanged', () => {

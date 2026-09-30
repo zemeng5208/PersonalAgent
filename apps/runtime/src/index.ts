@@ -40,7 +40,11 @@ export interface ToolExecutionRecord {
   finishedAt?: string;
   state: 'started' | 'confirmed' | 'failed' | 'unknown';
   errorCode?: string;
+  /** A trusted host may persist a tri-state reconciliation classification without creating a new run. */
+  reconciliationOutcome?: 'applied' | 'not_applied' | 'unknown';
 }
+
+export type ToolExecutionReconciliationOutcome = NonNullable<ToolExecutionRecord['reconciliationOutcome']>;
 
 export interface SubmitTaskInput {
   goal: string;
@@ -65,7 +69,7 @@ export interface ProgressInput {
 export interface TransitionPatch {
   resultSummary?: string;
   evidenceRefs?: readonly string[];
-  error?: TaskError;
+  error?: TaskError | null;
   cancelRequested?: boolean;
 }
 
@@ -267,6 +271,9 @@ export const RUNTIME_MIGRATIONS: readonly Migration[] = [{
     'CREATE INDEX task_schedules_due ON task_schedules(status, run_at);',
     'CREATE INDEX task_schedules_conversation ON task_schedules(conversation_id);'
   ].join('\n')
+}, {
+  version: 9,
+  sql: 'CREATE TABLE coordination_fact_erasure_receipts (graph_namespace TEXT NOT NULL, memory_namespace TEXT NOT NULL, fact_id TEXT NOT NULL, operation_id TEXT NOT NULL, expected_graph_revision INTEGER NOT NULL CHECK (expected_graph_revision >= 0), committed_at TEXT NOT NULL, PRIMARY KEY (graph_namespace, memory_namespace, fact_id), UNIQUE (graph_namespace, operation_id)) STRICT;'
 }];
 
 export class RuntimeError extends Error {
@@ -503,7 +510,8 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
       const evidence: import('@personal-agent/contracts').ProtocolContracts['evidence'] = {
         evidenceId: record.evidenceId, kind: 'execution', sourceRef: record.toolName,
         capturedAt: record.finishedAt ?? record.startedAt,
-        summary: 'Tool execution ' + record.state + '; policy=' + record.policyDecision,
+        summary: 'Tool execution ' + record.state + '; policy=' + record.policyDecision
+          + (record.reconciliationOutcome ? '; reconciliation=' + record.reconciliationOutcome : ''),
         verification: 'conditional', sensitivity: 'internal',
       };
       validateContract('evidence', evidence);
@@ -827,6 +835,96 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     });
   }
 
+  /**
+   * Atomically projects a trusted host reconciliation into the original run,
+   * its Evidence record and the existing task recovery state. This method never
+   * creates a second run or changes the authorization/idempotency identity.
+   */
+  reconcileToolExecution(taskId: string, evidenceId: string,
+    outcome: ToolExecutionReconciliationOutcome, result?: unknown): TaskSnapshot {
+    requireText(taskId, 'taskId');
+    requireText(evidenceId, 'evidenceId');
+    if (!['applied', 'not_applied', 'unknown'].includes(outcome)) {
+      throw new RuntimeError('INVALID_ARGUMENT', 'Invalid tool reconciliation outcome');
+    }
+    let encodedResult: string | undefined;
+    try { encodedResult = result === undefined ? undefined : JSON.stringify(result); }
+    catch { throw new RuntimeError('INVALID_ARGUMENT', 'Tool reconciliation result must be JSON serializable'); }
+    if (result !== undefined && encodedResult === undefined) {
+      throw new RuntimeError('INVALID_ARGUMENT', 'Tool reconciliation result must be JSON serializable');
+    }
+    return structuredClone(this.transaction(() => {
+      const task = taskFromRow(this.taskRow(taskId));
+      const row = this.db.prepare('SELECT record_json FROM tool_execution_records WHERE evidence_id = ? AND task_id = ?')
+        .get(evidenceId, taskId) as {record_json?: string} | undefined;
+      if (!row?.record_json) throw new RuntimeError('NOT_FOUND', 'Tool execution record not found');
+      const record = JSON.parse(row.record_json) as ToolExecutionRecord;
+      if (record.taskId !== taskId || record.evidenceId !== evidenceId) {
+        throw new RuntimeError('REVISION_CONFLICT', 'Tool execution identity mismatch');
+      }
+      if (record.reconciliationOutcome !== undefined) {
+        if (record.reconciliationOutcome !== outcome) {
+          throw new RuntimeError('REVISION_CONFLICT', 'Tool execution was reconciled with a different outcome');
+        }
+        return task;
+      }
+      if (task.state !== 'waiting_reconciliation') {
+        throw new RuntimeError('REVISION_CONFLICT', 'Task is not waiting for reconciliation');
+      }
+      if (record.state !== 'started' && record.state !== 'unknown') {
+        throw new RuntimeError('REVISION_CONFLICT', 'Tool execution is not recoverable');
+      }
+      const finishedAt = this.timestamp();
+      const nextRecord: ToolExecutionRecord = {
+        ...record,
+        finishedAt,
+        reconciliationOutcome: outcome,
+        state: outcome === 'applied' ? 'confirmed' : outcome === 'not_applied' ? 'failed' : 'unknown',
+      };
+      if (outcome === 'applied') delete nextRecord.errorCode;
+      else nextRecord.errorCode = outcome === 'not_applied' ? 'NOT_APPLIED' : 'RESULT_UNKNOWN';
+      if (encodedResult !== undefined) {
+        this.db.prepare('INSERT INTO task_checkpoints (task_id, checkpoint_key, value_json, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(task_id, checkpoint_key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at').run(
+          taskId, 'tool-reconciliation-' + evidenceId, JSON.stringify({result}), finishedAt);
+        if (outcome === 'applied') {
+          this.db.prepare('INSERT INTO task_checkpoints (task_id, checkpoint_key, value_json, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(task_id, checkpoint_key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at').run(
+            taskId, 'tool-result-' + evidenceId, JSON.stringify({result}), finishedAt);
+        }
+      }
+      this.db.prepare('UPDATE tool_execution_records SET record_json = ? WHERE evidence_id = ? AND task_id = ?')
+        .run(JSON.stringify(nextRecord), evidenceId, taskId);
+      if (outcome === 'applied') {
+        this.updateTask(taskId, 'verifying', {
+          resultSummary: 'Workspace patch reconciliation confirmed the earlier result',
+          error: null,
+          evidenceRefs: task.evidenceRefs.includes(evidenceId) ? task.evidenceRefs : [...task.evidenceRefs, evidenceId],
+        }, true);
+        return this.updateTask(taskId, 'succeeded', {
+          resultSummary: 'Workspace patch reconciliation confirmed the earlier result',
+          error: null,
+          evidenceRefs: task.evidenceRefs.includes(evidenceId) ? task.evidenceRefs : [...task.evidenceRefs, evidenceId],
+        }, true);
+      }
+      if (outcome === 'not_applied') {
+        if (task.cancelRequested) {
+          return this.updateTask(taskId, 'cancelled', {
+            error: null,
+            evidenceRefs: task.evidenceRefs.includes(evidenceId) ? task.evidenceRefs : [...task.evidenceRefs, evidenceId],
+            cancelRequested: true,
+          }, true);
+        }
+        return this.updateTask(taskId, 'failed', {
+          error: {code: 'EXTERNAL_FAILURE', message: 'Workspace patch reconciliation found no applied result', retryable: false},
+          evidenceRefs: task.evidenceRefs.includes(evidenceId) ? task.evidenceRefs : [...task.evidenceRefs, evidenceId],
+        }, true);
+      }
+      return this.updateTask(taskId, 'waiting_reconciliation', {
+        error: {code: 'RESULT_UNKNOWN', message: 'Workspace patch reconciliation could not confirm the result', retryable: false},
+        evidenceRefs: task.evidenceRefs.includes(evidenceId) ? task.evidenceRefs : [...task.evidenceRefs, evidenceId],
+      }, false);
+    }));
+  }
+
   private writeSnapshot(snapshot: TaskSnapshot): void {
     this.db.prepare('UPDATE tasks SET state = ?, revision = ?, updated_at = ?, steps_json = ?, evidence_refs_json = ?, result_summary = ?, error_json = ?, cancel_requested = ? WHERE task_id = ?').run(
       snapshot.state,
@@ -852,7 +950,10 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     next.updatedAt = this.timestamp();
     if (patch.resultSummary !== undefined) next.resultSummary = patch.resultSummary;
     if (patch.evidenceRefs !== undefined) next.evidenceRefs = [...patch.evidenceRefs];
-    if (patch.error !== undefined) next.error = structuredClone(patch.error);
+    if (patch.error !== undefined) {
+      if (patch.error === null) delete next.error;
+      else next.error = structuredClone(patch.error);
+    }
     if (patch.cancelRequested !== undefined) next.cancelRequested = patch.cancelRequested;
     validateContract('snapshot', next);
     this.writeSnapshot(next);
