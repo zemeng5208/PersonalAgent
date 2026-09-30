@@ -81,7 +81,20 @@ const {_electron} = require('playwright');
     await admin.locator('[data-memory-save="0"]').click();
     await admin.waitForFunction(() => document.querySelector('[role="status"]')?.textContent.includes('版本 2'));
     assert.equal((await read())[0].ref.revision, 2);
-    console.log('PASS: Competition admin confirms one synthetic private citation and correction without submitting a cloud task');
+    assert.equal((await panel.evaluate(() => window.desktop.invoke('memory.listSaved'))).ok, false);
+    assert.equal((await panel.evaluate(() => window.desktop.invoke('memory.delete',
+      {ref: {id: 'forged', revision: 1}}))).ok, false);
+    await admin.locator('#memory-list-saved').click();
+    await admin.waitForSelector('[data-memory-delete="0"]');
+    await app.evaluate(({dialog}) => { dialog.showMessageBox = async () => ({response: 1}); });
+    await admin.locator('[data-memory-delete="0"]').click();
+    await admin.waitForFunction(() => document.querySelector('#memory-saved-status')?.textContent.includes('已取消'));
+    assert.equal((await read())[0].ref.revision, 2);
+    await app.evaluate(({dialog}) => { dialog.showMessageBox = async () => ({response: 0}); });
+    await admin.locator('[data-memory-delete="0"]').click();
+    await admin.waitForFunction(() => document.querySelector('#memory-saved-status')?.textContent.includes('已删除'));
+    assert.equal((await read()).length, 0);
+    console.log('PASS: Competition admin confirms, corrects, and deletes synthetic private memory without submitting a cloud task');
   } finally {
     if (app) await app.close();
     const relation = path.relative(os.tmpdir(), base);

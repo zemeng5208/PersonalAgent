@@ -215,7 +215,7 @@ MOD-09I 新增 `@personal-agent/learning` 的受信 SQLite 宿主：描述性候
 
 MOD-09J 在受信宿主增加单条私人 Vault 引文的确认写入桥接，以及 Memory 迁移 5 的首次事实
 创建回执。拒绝确认不写入；确认后只写 `private`、`user_confirmed` 事实，更正仍走精确头版本。
-接口保持 `provisional`：尚无生产确认 UI、身份/授权装配或私人数据出机控制；真实 Vault 的
+接口保持 `provisional`：尚无生产可用的私人确认写入、身份/授权装配或私人数据出机控制；真实 Vault 的
 只读检索不等于已确认持久写入。
 
 MOD-09K 为 Desktop Competition 管理后台增加本机会话 Vault 选择和只读搜索；
@@ -223,6 +223,16 @@ MOD-09K 为 Desktop Competition 管理后台增加本机会话 Vault 选择和�
 写入在完整删除保障前保持禁用。此本机管理入口为 `provisional`，并非 Runtime
 wire capability；私人事实不进入当前仅公开敏感级别的 Goal 投影或 AgentArts 请求。
 真实 Vault 已验证只读搜索和拒绝确认；真实用户确认的持久写入、生产身份与完整删除未验收。
+
+MOD-09L 为独立 Desktop 私人库增加分页列出已保存当前事实和原生逐条确认删除。
+受信宿主按当前 revision 清除全部历史与受影响快照，WAL 截断后读回；合成数据验证旧
+版本、旧快照不可读且无关事实保留。该入口不接入 Runtime 公共事实或 Vault 原文件删除；
+真实写入继续禁用，应用管理备份和公共事实跨库删除仍待全链路验收。
+
+MOD-09M 在 Memory 受信 SQLite 宿主增加已提交删除回执的重启维护：若目标行仍存则拒绝，
+否则重试 WAL 截断。Desktop 私人控制器在首次读取及提交后失败的后续操作前执行该检查。
+合成旧读者测试验证恢复前拒绝、释放后完成且无关事实保留；不处理应用管理备份或
+Runtime 公共事实的 `pending` 跨库对账。
 
 ### 6.3 桌面、语音、工具与通知增量（provisional）
 
