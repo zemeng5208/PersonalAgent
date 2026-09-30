@@ -103,9 +103,8 @@ export function createCognitionP5Composition({
 
   // 1. Production state shares the existing TaskRuntime SQLite and namespace.
   // Minimal offline hosts without checkpoint APIs retain the explicit legacy file ports.
-  const runtimeCheckpoints = ['submitTask', 'findTaskByIdempotencyKey', 'loadCheckpoint', 'saveCheckpoint', 'saveCheckpointOnce']
-    .every(name => typeof application.runtime[name] === 'function')
-    ? createP5RuntimeCheckpoints({runtime: application.runtime, namespace, userData}) : undefined;
+  const runtimeCheckpoints = typeof application.createHostStateStore === 'function'
+    ? createP5RuntimeCheckpoints({storage: application.createHostStateStore('proactive-receipts'), namespace, userData}) : undefined;
   const receiptStore = runtimeCheckpoints?.meetings ?? new FileMeetingDecisionReceiptStore({storageDir: receiptsDir});
 
   // 2. Production composition injects its Runtime/Policy/ToolGateway execution port.

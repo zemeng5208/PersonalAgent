@@ -7,28 +7,14 @@ const copy = value => value === undefined ? undefined : structuredClone(value);
 const text = value => typeof value === 'string' && value.trim().length > 0;
 const fail = () => {throw Error('P5 持久认知状态需要核实，原文件已保留');};
 
-/** One checkpoint anchor in the existing TaskRuntime, never a new database or execution loop. */
-export function createP5RuntimeCheckpoints({runtime, namespace, userData}) {
+/** Namespace-bound KV supplied by the existing Runtime; never creates a task or database. */
+export function createP5RuntimeCheckpoints({storage, namespace, userData}) {
   if (!text(namespace) || !text(userData)
-    || !['submitTask', 'findTaskByIdempotencyKey', 'loadCheckpoint', 'saveCheckpoint', 'saveCheckpointOnce']
-      .every(name => typeof runtime?.[name] === 'function')) fail();
-  const identity = hash(namespace);
-  const conversationId = `desktop-cognition-state:${identity}`;
-  const key = `desktop-cognition-state:${identity}`;
-  const task = runtime.findTaskByIdempotencyKey(key) ?? runtime.submitTask({
-    goal: 'PersonalAgent local cognition checkpoint anchor', conversationId, idempotencyKey: key,
-  });
-  if (task.conversationId !== conversationId) fail();
-  const marker = 'desktop-cognition-state-v1';
-  const binding = runtime.loadCheckpoint(task.taskId, marker);
-  if (binding === undefined) runtime.saveCheckpointOnce(task.taskId, marker, {version: 1, namespace});
-  const actual = runtime.loadCheckpoint(task.taskId, marker);
-  if (actual?.version !== 1 || actual.namespace !== namespace) fail();
-
-  const load = name => copy(runtime.loadCheckpoint(task.taskId, name));
-  const save = (name, value) => runtime.saveCheckpoint(task.taskId, name, copy(value));
+    || !['get', 'set'].every(name => typeof storage?.[name] === 'function')) fail();
+  const load = name => copy(storage.get(name));
+  const save = (name, value) => storage.set(name, copy(value));
   const migrateOnce = (name, readLegacy) => {
-    if (load(name) === undefined) runtime.saveCheckpointOnce(task.taskId, name, readLegacy());
+    if (load(name) === undefined) save(name, readLegacy());
     return load(name);
   };
   const deviceKey = 'p5-device-anomaly-v1';
@@ -60,7 +46,7 @@ export function createP5RuntimeCheckpoints({runtime, namespace, userData}) {
     return state;
   };
   return Object.freeze({
-    taskId: task.taskId, persistence: 'runtime_sqlite',
+    persistence: 'runtime_sqlite',
     device: {
       load() {
         const envelope = migrateOnce(deviceKey, () => {
