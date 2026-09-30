@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Security.Principal;
 using System.Text;
 using System.Windows.Automation;
+using Microsoft.Win32.SafeHandles;
 
 [assembly: InternalsVisibleTo("WindowsHost.Timing")]
 [assembly: InternalsVisibleTo("ManualNotepadProbe")]
@@ -160,35 +161,53 @@ public static class NotepadAction
 
     internal static bool IsTrustedNotepadProcess(Process process)
     {
-        if (!string.Equals(process.ProcessName, "notepad", StringComparison.OrdinalIgnoreCase)) return false;
+        // Anchor image and package queries to this Process handle, rather than
+        // reopen its numeric PID after reading the original start time.
+        var image = ReadProcessImagePath(process);
+        if (image is null ||
+            !string.Equals(Path.GetFileName(image), "notepad.exe", StringComparison.OrdinalIgnoreCase))
+            return false;
         var packageResult = ReadPackageFamily(process, out var family);
+        if (process.HasExited) return false;
         if (packageResult == 0)
             return string.Equals(family, "Microsoft.WindowsNotepad_8wekyb3d8bbwe",
                 StringComparison.OrdinalIgnoreCase);
         if (packageResult != 15700) return false; // APPMODEL_ERROR_NO_PACKAGE
         var trustedPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
             "System32", "notepad.exe");
-        return string.Equals(process.MainModule?.FileName, trustedPath, StringComparison.OrdinalIgnoreCase);
+        return string.Equals(image, trustedPath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static string? ReadProcessImagePath(Process process)
+    {
+        try
+        {
+            var handle = process.SafeHandle;
+            if (process.HasExited || handle.IsInvalid) return null;
+            var image = new StringBuilder(32768);
+            var length = (uint)image.Capacity;
+            if (!QueryFullProcessImageName(handle, 0, image, ref length) || process.HasExited) return null;
+            return image.ToString();
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or
+                                   System.ComponentModel.Win32Exception)
+        { return null; }
     }
 
     private static int ReadPackageFamily(Process process, out string? family)
     {
         family = null;
-        var handle = OpenProcess(0x1000, false, process.Id); // PROCESS_QUERY_LIMITED_INFORMATION
-        if (handle == 0) return -1;
-        try
+        var handle = process.SafeHandle;
+        if (process.HasExited || handle.IsInvalid) return -1;
+        var familyLength = 0u;
+        var packageResult = GetPackageFamilyName(handle, ref familyLength, null);
+        if (packageResult == 122 && familyLength is > 1 and <= 256)
         {
-            var familyLength = 0u;
-            var packageResult = GetPackageFamilyName(handle, ref familyLength, null);
-            if (packageResult == 122 && familyLength is > 1 and <= 256)
-            {
-                var buffer = new StringBuilder((int)familyLength);
-                packageResult = GetPackageFamilyName(handle, ref familyLength, buffer);
-                if (packageResult == 0) family = buffer.ToString();
-            }
-            return packageResult;
+            var buffer = new StringBuilder((int)familyLength);
+            packageResult = GetPackageFamilyName(handle, ref familyLength, buffer);
+            if (packageResult == 0) family = buffer.ToString();
         }
-        finally { CloseHandle(handle); }
+        return process.HasExited ? -1 : packageResult;
     }
 
     private static bool SameElement(AutomationElement? first, AutomationElement? second) =>
@@ -212,8 +231,8 @@ public static class NotepadAction
         {
             try
             {
-                if (process.StartTime.ToUniversalTime() != startUtc) return (false, "TARGET_STALE");
                 if (!IsTrustedNotepadProcess(process)) return (false, "UNAUTHORIZED");
+                if (process.StartTime.ToUniversalTime() != startUtc) return (false, "TARGET_STALE");
             }
             catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or
                                        System.ComponentModel.Win32Exception)
@@ -302,7 +321,9 @@ public static class NotepadAction
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(nint window, out int processId);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool GetLastInputInfo(ref LastInputInfo info);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-    private static extern int GetPackageFamilyName(nint process, ref uint length, StringBuilder? familyName);
-    [DllImport("kernel32.dll", SetLastError = true)] private static extern nint OpenProcess(uint access, bool inherit, int pid);
-    [DllImport("kernel32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool CloseHandle(nint handle);
+    private static extern int GetPackageFamilyName(SafeProcessHandle process, ref uint length, StringBuilder? familyName);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryFullProcessImageName(SafeProcessHandle process, uint flags,
+        StringBuilder imageName, ref uint size);
 }

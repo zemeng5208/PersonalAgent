@@ -1,8 +1,43 @@
 # Windows Host 内部进程（provisional）
 
+## P6 当前消费入口（Competition Profile）
+
+#114 所需的受限 Notepad 契约现由 `@personal-agent/contracts/windows-host` 提供内部 Pipe 帧
+`0.1.0`，不是通用 `DesktopActionPort` 或公共 wire 1.0.0 的新 operation。Runtime/Application
+公开工厂 `createWindowsHostBridgeTransport({hostPath, bridgePath, timeoutMs?})` 与
+`createWindowsHostNotepadAdapter({transport, attempts, authorizePresence, prepareObservation?, now?})`
+已在当前 Desktop 装配；本包不重复实现 Runtime 的授权、任务循环或装配。
+
+| 端口 | 参数与读回 | 调用方责任 |
+| --- | --- | --- |
+| `observe` | `(taskId, deadline, signal)` → `{targetRef, expiresAt}` | 先 hello/bind 建基线，再打开独立空白单标签窗口并由用户确认；不读取标题或私人正文 |
+| `checkObservationReady` | 同参数 → `{taskId, targetRef, expiresAt}` | 审批前再次检查，结果不授予授权、不续期 |
+| `adapter.tool` | `computer.notepad.replace_text@1.0.0`，scope `computer:notepad:write`，输入 `{targetRef, expectedText, replacementText}`；成功输出 `{state:'verified', hostEvidenceRef}` | 已注册工具经 Runtime/Policy/ToolGateway；文本最多 4096 UTF-16 code unit，不能由模型提供 presence 或伪造 targetRef |
+| `recover` | `(taskId, runId)`，从 durable attempts 查询原始身份；不确定结果包含 `in_progress` / `not_found` / `host_result` 原因 | 仅状态读回，不重新 execute；not_found 不证明无副作用 |
+| `releaseObservation` / `close` | `(taskId)` / 无参数，均为 Promise | 终态或准备取消后释放目标；关闭 adapter/transport 并确认子进程退出，关闭失败不可当作已释放 |
+
+`attempts` 复用 `createRuntimeWindowsHostAttemptStore`，原始任务、run、工具版本、参数摘要与
+目标引用必须持久绑定；无需第二套身份或授权库。Renderer 只显示安全状态/Runtime Evidence，
+不接收原始 targetRef、HWND/PID、路径、标题或正文读回。设备错误、接管或断连不能静默换目标。
+UIA 仅支持既有受限 Notepad 操作；屏幕截图、通用键鼠、文件保存和其他应用仍未提供。
+
+本轮 Host 收紧执行期限到短期目标失效时间，并通过同一 `Process.SafeHandle` 读取实际映像与包身份；
+StartTime、窗口 owner 与前台仍逐次复核，进程退出或身份不可读即拒绝。PID 复用场景没有实机重现。
+仅在真实设备验收后才能声称现代 Notepad 的目标捕获/就绪、接管、取消与恢复全部可用。
+
+## 内部协议与进程生命周期
+
+本轮定向验证（2026-09-30，基线 `main@58d6752`）：
+`dotnet build apps/windows-host/host/test/WindowsHost.HostFixture.csproj -c Release --no-restore`
+通过，零警告/错误；运行对应 Release fixture 一次，使用当前 contracts Schema/fixture，通过。
+新增检查实际等待目标和任务计时器的取消信号、断连取消及已过期目标无执行 lifetime，
+同时核对当前测试进程的同句柄真实 image path 与 `Environment.ProcessPath` 一致、缺失身份拒绝。
+其余既有契约/持久 run 检查随该 fixture 执行。没有重建 Bridge/Job/Runtime、打开窗口、
+代按 F9 或重跑编码验收；没有实测 UIA 写入、物理 PID 复用或整体设备恢复。
+
 此进程只消费 `packages/contracts/schema/windows-host.json` 的 `0.1.0` 帧。构建时从
 公共 contracts 拷贝该 Schema 到 Host 输出目录；缺失或版本不符时启动前拒绝。
-当前分支叠加 #117/#120；必须与 #168 合并后的同源 Schema 配合，不复制另一份 DTO。
+当前实现复用 #168 合并后的同源 Schema，不复制另一份 DTO。
 
 可信 Desktop/Runtime 组合方启动 `WindowsHost.PipeBridge.exe --host <Host.exe绝对路径>`。
 Bridge 生成随机 `pa_<32位小写十六进制>` Pipe 名，启动 Host 并传入
@@ -31,7 +66,7 @@ Host 只返回短期随机 `targetRef`，不返回或记录标题、正文、HWN
 
 审批前的只读 `target_ready` 帧复用目标的 HWND/PID、进程起始、窗口身份、唯一标签、
 唯一可见启用可写 UIA 文本控件结构（候选异常即 fail closed）、前台与有效期检查。目标有效回 `target_ready_result(ready=true, expiresAt)`，目标失效或结构异常回
-`ready=false, errorCode=TARGET_STALE`，过期回 `ready=false, errorCode=TIMEOUT`。它不读取正文、
+`ready=false, errorCode=TARGET_STALE`（包括目标引用失效），请求期限过期回 `ready=false, errorCode=TIMEOUT`。它不读取正文、
 不新建或续期目标、不激活窗口，也不消费授权。
 
 `execute` 帧中的 `authorizationRef` 不构成授权；正式调用方必须先在 Runtime 的
@@ -47,7 +82,9 @@ argumentsDigest/targetRef` 和本地文本摘要记入用户范围的追加日�
 读回器。`verified` 只证明当前控件文本匹配，不证明文件已保存。
 
 取消只发取消信号，随后以 `status` 查询；Schema 未定义取消确认帧。连接断开时
-取消未结束动作。Host 单次操作另有十分钟看门狗；超过期限同样发取消信号。
+取消未结束动作。Host 执行期限取任务 deadline、目标 `expiresAt` 和十分钟看门狗的最早值；
+目标观察的短期确认不能延长到较长的任务期限。期限到达同样发取消信号，核心写前取消检查
+停止后续 `SetValue`；已经开始变更或不能确认是否变更时仍为 `result_unknown`。
 写入可能已开始、进程崩溃、日志只留开始记录或结果不能确认时
 保持 `result_unknown`，不得盲目重试。新会话 `status` 使用原 run 的历史
 `targetRef` 仅核对身份，不能拿它再次执行；`not_found` 同样不能证明没有写入。
