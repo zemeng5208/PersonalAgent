@@ -35,6 +35,8 @@ import {createReferenceSummarySkill} from '@personal-agent/skills';
 import type {ReferenceSummaryInput, ReferenceSummaryOptions, SkillReadReconciliationQuery} from '@personal-agent/skills';
 import {WORKSPACE_PATCH_APPLY_TOOL_NAME, WorkspacePatchReconciliationAdapter} from './workspace-patch-reconciliation.js';
 import type {WorkspacePatchReconciliationPort, WorkspacePatchReconciliationReadback} from './workspace-patch-reconciliation.js';
+import {KnowledgeWriteReconciliationAdapter} from './knowledge-write-reconciliation.js';
+import type {KnowledgeWriteReconciliationPort} from './knowledge-write-reconciliation.js';
 type SuccessfulResponse = Extract<Response, {outcome: 'ok'}>;
 
 export interface RevokeHostAuthorizationRequest {
@@ -211,6 +213,7 @@ export interface RuntimeApplicationOptions { path: string; now?: () => Date; idF
   readConversationPreference?: (conversationId: string) => (ThinkingConfig & {modelId?: string; configurationRef?:string}) | undefined;
   /** Trusted Desktop-only recovery port; paths and process identity stay in its closure. */
   workspacePatchReconciliation?: WorkspacePatchReconciliationPort;
+  knowledgeWriteReconciliation?: KnowledgeWriteReconciliationPort;
 }
 export interface RuntimeApplicationTransport { send(request: Request, signal: AbortSignal): Promise<Response>; }
 
@@ -238,6 +241,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   private readonly observationSessions: SystemObservationSessions;
   private readonly mailReadSessions: MailReadSessions;
   private readonly workspacePatchReconciliation?: WorkspacePatchReconciliationAdapter;
+  private readonly knowledgeWriteReconciliation?: KnowledgeWriteReconciliationAdapter;
 
   constructor(options: RuntimeApplicationOptions) {
     this.storagePath = resolve(options.path);
@@ -267,6 +271,10 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       throw new ProtocolError('INVALID_ARGUMENT', 'Invalid trusted host user namespace');
     }
     this.hostUserNamespace = options.hostUserNamespace;
+    if(options.knowledgeWriteReconciliation) {
+      if(this.profile!=='huawei_ict_agentarts' || !this.hostUserNamespace)throw new ProtocolError('INVALID_ARGUMENT','Knowledge recovery requires the trusted Competition host');
+      // Assigned after TaskRuntime is constructed below.
+    }
     if (options.workspacePatchReconciliation !== undefined
       && (this.profile !== 'huawei_ict_agentarts' || !this.hostUserNamespace
         || typeof options.workspacePatchReconciliation.reconcile !== 'function'
@@ -445,6 +453,9 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
         this.runtime, this.tools, this.competitionToolExports, options.competitionToolAvailability);
     }
     this.textApplication = createTextApplication({...options.text, ...(this.tools ? {tools: this.tools} : {})});
+    if(options.knowledgeWriteReconciliation && this.hostUserNamespace) {
+      this.knowledgeWriteReconciliation=new KnowledgeWriteReconciliationAdapter(this.runtime,this.hostUserNamespace,options.knowledgeWriteReconciliation);
+    }
   }
 
   get deployment(): TextApplication['deployment'] { this.requireLocalText(); return structuredClone(this.textApplication.deployment); }
@@ -525,6 +536,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     return createRuntimeSubagentDispatchTool({
       getRuntime: () => this.runtime,
       getTools: () => this.tools,
+      ...(this.isDefaultSubagentAvailable()?{runDefaultWorker:(subtask:SubtaskDefinition,worker:WorkerContext,tools:AgentToolPort)=>this.runDefaultSubagentWorker(subtask,worker,tools)}:{}),
       ...(modelGatewayFactory ? {getModelGateway: modelGatewayFactory} : {}),
     });
   }
@@ -532,8 +544,17 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   /** Trusted composition only. Native audio never replaces AgentArts task coordination. */
   isDefaultSubagentAvailable(): boolean {return this.profile==='huawei_ict_agentarts' && this.coordination!==undefined;}
 
+  /** Public host metadata only; private bodies and credentials must stay in their original stores. */
+  createHostStateStore(domain:'device-notifications'|'proactive-receipts'|'knowledge-tracking') {
+    if(!this.hostUserNamespace || !['device-notifications','proactive-receipts','knowledge-tracking'].includes(domain)) {
+      throw new ProtocolError('UNSUPPORTED_CAPABILITY','Host state store is not bound');
+    }
+    const namespace=createHash('sha256').update(JSON.stringify([this.hostUserNamespace,domain])).digest('hex');
+    return this.runtime.bindTrustedHostState(namespace);
+  }
+
   /** Original Competition worker inside the already running child TaskRuntime lifecycle. */
-  async runDefaultSubagentWorker(subtask:SubtaskDefinition,worker:WorkerContext):Promise<WorkerResult> {
+  async runDefaultSubagentWorker(subtask:SubtaskDefinition,worker:WorkerContext,tools:AgentToolPort):Promise<WorkerResult> {
     if(!this.isDefaultSubagentAvailable() || subtask.model!==undefined) {
       throw new ProtocolError('UNSUPPORTED_CAPABILITY','Default Competition child is unavailable');
     }
@@ -541,6 +562,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     const child=this.runtime.getTask(worker.taskId);
     if(!binding?.parentTaskId || binding.parentDeadline!==worker.deadline || binding.subtaskId!==subtask.subtaskId
       || binding.goal!==subtask.goal || binding.role!==subtask.role || child.state!=='running'
+      || typeof child.goal!=='string'
       || child.conversationId!==`desktop-subtask:${binding.parentTaskId}` || worker.signal.aborted) {
       throw new ProtocolError('UNAUTHORIZED','Default child is not bound to its original parent');
     }
@@ -556,19 +578,19 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       worker.saveCheckpoint('application-goal',child.goal);
       worker.saveCheckpoint('application-deadline',worker.deadline);
       worker.saveCheckpoint('competition-max-steps',maxSteps);
-      worker.saveCheckpoint('subtask-thinking-binding',{depth:subtask.thinkingDepth??null,stepBudget:{maxSteps},
-        modelReasoning:{supported:false,effort:null,verification:'unverified',thinkingBudgetSupported:false,
-          reason:'AgentArts child uses a step budget; native reasoning parameter is unavailable'}});
     } else if(worker.loadCheckpoint('application-goal')!==child.goal
       || worker.loadCheckpoint('application-deadline')!==worker.deadline
       || worker.loadCheckpoint('competition-max-steps')!==maxSteps) {
       throw new ProtocolError('REVISION_CONFLICT','Competition child original task binding changed');
     }
-    const tools:AgentToolPort|undefined=this.tools?{list:()=>this.tools!.list().filter(tool=>tool.name!==SUBAGENT_DISPATCH_TOOL_NAME),
-      invoke:invocation=>{if(invocation.toolName===SUBAGENT_DISPATCH_TOOL_NAME)throw new ProtocolError('UNAUTHORIZED','Recursive child dispatch denied');
-        return this.tools!.invoke(invocation);}}:undefined;
+    const descriptors=tools.list();
+    if(descriptors.some(tool=>tool.name===SUBAGENT_DISPATCH_TOOL_NAME)
+      || !isDeepStrictEqual(worker.loadCheckpoint('subtask-tools-binding'),descriptors)) {
+      throw new ProtocolError('UNAUTHORIZED','Default child tool scope changed');
+    }
+    const catalog=this.competitionToolCatalog?.restrict(tools);
     return runCoordinationWorker(this.runtime,this.coordination,tools,worker.taskId,child.goal,worker,
-      {toolExports:this.competitionToolExports,...(this.competitionToolCatalog?{toolCatalog:this.competitionToolCatalog}:{}),
+      {toolExports:this.competitionToolExports,...(catalog?{toolCatalog:catalog}:{}),
         ...(this.repairCandidateVersion?{repairCandidateVersion:this.repairCandidateVersion}:{})});
   }
 
@@ -617,6 +639,11 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   }
 
   /** Trusted UI consent only; no wire operation or generic tool permission. */
+  reconcileKnowledgeWriteTask(taskId:string,context:{deadline:string;signal:AbortSignal}):Promise<TaskSnapshot> {
+    if(!this.knowledgeWriteReconciliation)throw new ProtocolError('UNSUPPORTED_CAPABILITY','Knowledge recovery is unavailable');
+    return this.knowledgeWriteReconciliation.reconcile(taskId,context);
+  }
+
   startSystemObservationSession(request: StartSystemObservationSessionRequest): SystemObservationSession {
     if (this.profile !== 'huawei_ict_agentarts' || !this.hostUserNamespace) {
       throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'System observation is not configured');
@@ -1008,16 +1035,34 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   }
 
   /** Trusted host obtains only the task-selected public tool shape for cloud input construction. */
+  private taskCompetitionCatalog(taskId:string):RuntimeCompetitionToolCatalog|undefined {
+    if(this.runtime.loadCheckpoint(taskId,'subtask-coordination-binding')===undefined)return this.competitionToolCatalog;
+    const descriptors=this.runtime.loadCheckpoint(taskId,'subtask-tools-binding') as ToolDescriptor[]|undefined;
+    if(!Array.isArray(descriptors) || !this.tools || descriptors.some(tool=>tool.name===SUBAGENT_DISPATCH_TOOL_NAME
+      || !this.tools!.list().some(current=>isDeepStrictEqual(current,tool)))) {
+      throw new ProtocolError('UNAUTHORIZED','Competition child tool binding changed');
+    }
+    const tools:AgentToolPort={list:()=>structuredClone(descriptors),invoke:invocation=>{
+      if(!descriptors.some(tool=>tool.name===invocation.toolName&&tool.version===invocation.toolVersion)) {
+        throw new ProtocolError('UNAUTHORIZED','Competition child tool is outside its binding');
+      }
+      return this.tools!.invoke(invocation);
+    }};
+    return this.competitionToolCatalog?.restrict(tools);
+  }
+
   async prepareCompetitionToolCatalog(input: {taskId: string; deadline: string; signal: AbortSignal}): Promise<CompetitionAvailableTool[]> {
-    if (!this.competitionToolCatalog) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition tool catalog is unavailable');
-    return this.competitionToolCatalog.prepare(input);
+    const catalog=this.taskCompetitionCatalog(input.taskId);
+    if (!catalog) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition tool catalog is unavailable');
+    return catalog.prepare(input);
   }
 
   /** The cloud adapter calls this after credential reads, immediately before its initial fetch. */
   async assertCompetitionToolCatalogAllowed(input: {taskId: string; revision: number; deadline: string; signal: AbortSignal;
     availableTools: readonly CompetitionAvailableTool[]}): Promise<void> {
-    if (!this.competitionToolCatalog) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition tool catalog is unavailable');
-    await this.competitionToolCatalog.assertSelectionCurrent(input);
+    const catalog=this.taskCompetitionCatalog(input.taskId);
+    if (!catalog) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition tool catalog is unavailable');
+    await catalog.assertSelectionCurrent(input);
   }
 
   configureText(options: TextApplicationOptions): TextApplication['deployment'] {
@@ -1164,6 +1209,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       const preferred=typeof childBinding.parentTaskId==='string' ? this.runtime.loadCheckpoint(childBinding.parentTaskId,
         'task-model-preference') as {configurationRef?:string}|undefined : undefined;
       const execution = resumeRuntimeSubagentTask({getRuntime: () => this.runtime, getTools: () => this.tools,
+        runDefaultWorker:(subtask,worker,tools)=>this.runDefaultSubagentWorker(subtask,worker,tools),
         getModelGateway:name=>this.subagentModels?.getModelGateway?.(name,preferred?.configurationRef),
         getModelReasoningEfforts:name=>this.subagentModels?.getModelReasoningEfforts?.(name,preferred?.configurationRef)??[]},
         taskId).then(() => this.refreshSubagentParent(taskId))

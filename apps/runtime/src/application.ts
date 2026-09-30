@@ -64,7 +64,7 @@ export {
 } from './application/subagent-host.js';
 export type {SubagentHostOptions, DesktopSubagentDispatchToolOptions} from './application/subagent-host.js';
 export {LOCAL_REPAIR_TOOL} from './application/local-repair.js';
-export {createKnowledgeFeedReceipt, parseKnowledgeFeedReceipt, verifyKnowledgeFeedReceiptBinding,
+export {createKnowledgeFeedReceipt,createKnowledgeFeedReceiptFromCollectResult, parseKnowledgeFeedReceipt, verifyKnowledgeFeedReceiptBinding,
   knowledgeFeedReceiptItems} from './application/knowledge-feed-receipt.js';
 export type {KnowledgeFeedItem, KnowledgeFeedCitation, KnowledgeFeedReceipt, KnowledgeFeedReceiptBinding,
   KnowledgeFeedQuotedItem} from './application/knowledge-feed-receipt.js';
