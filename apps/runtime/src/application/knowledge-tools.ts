@@ -3,7 +3,7 @@ import type {RegisteredTool, ToolContext, ToolHost} from '@personal-agent/contra
 import type {KnowledgePort} from '@personal-agent/knowledge';
 import {createKnowledgeSearchTool} from '@personal-agent/knowledge/tool';
 import {createKnowledgeWriteTool} from '@personal-agent/knowledge/write';
-import type {KnowledgeWritePort} from '@personal-agent/knowledge/write';
+import type {KnowledgeWritePort, KnowledgeWriteFinalizationAcceptance} from '@personal-agent/knowledge/write';
 
 export interface TrustedKnowledgeBinding {
   sourceId: string; namespace: string; configRevision: number; available: boolean;
@@ -16,6 +16,7 @@ export interface TrustedKnowledgeSource {
   acquire(expected: {sourceId: string; configRevision: number}, signal: AbortSignal): {
     binding: TrustedKnowledgeBinding; read: KnowledgePort; write?: KnowledgeWritePort;
     reconcileWrite?: KnowledgeWritePort['reconcile'];
+    finalizeWrite?: KnowledgeWritePort['finalize'];
     signal: AbortSignal; assertCurrent(): void; release(): void;
   };
 }
@@ -41,7 +42,7 @@ export function createTrustedKnowledgeTools(source: TrustedKnowledgeSource) {
   };
   const readTemplate = createKnowledgeSearchTool({search: async () => {throw Error('Unbound knowledge');}});
   const writeTemplate = createKnowledgeWriteTool({apply: async () => {throw Error('Unbound knowledge');},
-    reconcile: async () => {throw Error('Unbound knowledge');}});
+    reconcile: async () => {throw Error('Unbound knowledge');}, finalize: async () => {throw Error('Unbound knowledge');}});
   const searchDescriptor: RegisteredTool['descriptor'] = {...readTemplate.descriptor,
     version: '1.0.0', inputSchema: {...readTemplate.descriptor.inputSchema,
       required: ['query', 'limit', 'sourceId', 'configRevision'], properties: {
@@ -148,6 +149,20 @@ export function createTrustedKnowledgeTools(source: TrustedKnowledgeSource) {
         lease.assertCurrent();
         const result = await lease.reconcileWrite({taskId: input.taskId, runId: input.runId,
           argumentsDigest: input.argumentsDigest}, {...context, signal: lease.signal});
+        lease.assertCurrent(); return result;
+      } finally {lease.release();}
+    },
+    /** Runtime-only finalization; do not expose this method through Renderer IPC or model tools. */
+    async finalizeWrite(input: {sourceId: string; configRevision: number; acceptedOriginal: KnowledgeWriteFinalizationAcceptance},
+    context: Pick<ToolContext, 'signal' | 'deadline'>) {
+      if (!input || Object.keys(input).some(name => !['sourceId', 'configRevision', 'acceptedOriginal'].includes(name))) {
+        throw new ProtocolError('INVALID_ARGUMENT', 'Invalid knowledge finalization binding');
+      }
+      const lease = source.acquire(input, context.signal);
+      try {
+        if (!lease.finalizeWrite) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Knowledge finalization unavailable');
+        lease.assertCurrent();
+        const result = await lease.finalizeWrite(input.acceptedOriginal, {...context, signal: lease.signal});
         lease.assertCurrent(); return result;
       } finally {lease.release();}
     },

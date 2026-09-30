@@ -170,3 +170,62 @@ test('a user edit between reconciliation reads returns unknown and retains both 
   const retry = {...input, expectedSha256: digest(userEdited)};
   await assert.rejects(writer.apply(retry, context({argumentsDigest: inputDigest(retry)})), error => error.code === 'RESULT_UNKNOWN');
 });
+
+test('late binding revocation after the final readback cannot report applied or release the pending note', {skip: !windows}, async t => {
+  const {root, recovery, writer, options, input, context} = await fixture(t);
+  const authorized = context(), receipt = await writer.apply(input, authorized);
+  const marker = join(recovery, digest(realpathSync.native(root) + '\ndemo.md') + '.knowledge-pending');
+  await writeFile(marker, receipt.operationId);
+  // Deterministic host lifetime fault: the final tail guard observes a newly revoked binding.
+  let guards = 0;
+  options.bindingCurrent = () => ++guards < 5;
+  await assert.rejects(writer.reconcile({taskId: authorized.taskId, runId: authorized.runId,
+    argumentsDigest: authorized.argumentsDigest}, context()), error => error.code === 'SCOPE_DENIED');
+  assert.equal(existsSync(marker), true);
+  assert.equal(digest(await readFile(join(root, 'demo.md'))), receipt.afterSha256);
+});
+
+async function finalizationFixture(t) {
+  const f = await fixture(t), authorized = f.context();
+  const receipt = await f.writer.apply(f.input, authorized);
+  const sourceKey = digest(realpathSync.native(f.root) + '\ndemo.md');
+  const sharedMarker = join(f.recovery, sourceKey.slice(0, 32) + '.inflight');
+  const knowledgeMarker = join(f.recovery, sourceKey + '.knowledge-pending');
+  const shared = {runId: authorized.runId, argumentsDigest: authorized.argumentsDigest, pid: 2147483647,
+    startTimeTicks: '1', beforeSha256: receipt.beforeSha256, afterSha256: receipt.afterSha256};
+  await writeFile(sharedMarker, JSON.stringify(shared)); await writeFile(knowledgeMarker, receipt.operationId);
+  const accepted = {taskId: authorized.taskId, runId: authorized.runId, toolName: 'knowledge.apply_note_patch',
+    toolVersion: '1.0.0', argumentsDigest: authorized.argumentsDigest, operationId: receipt.operationId,
+    originalInput: f.input, outcome: 'applied', currentSha256: receipt.afterSha256,
+    executionRecordId: 'synthetic-original-execution', readbackEvidenceRefs: ['synthetic-trusted-readback']};
+  return {...f, receipt, authorized, sharedMarker, knowledgeMarker, shared, accepted};
+}
+
+test('trusted original execution finalization clears matching stopped-helper markers under source lock without another write', {skip: !windows}, async t => {
+  const f = await finalizationFixture(t);
+  const before = await readFile(join(f.root, 'demo.md'));
+  const result = await f.writer.finalize(f.accepted, f.context());
+  assert.deepEqual(result, {state: 'finalized', operationId: f.receipt.operationId,
+    outcome: 'applied', currentSha256: f.receipt.afterSha256});
+  assert.equal(existsSync(f.sharedMarker), false); assert.equal(existsSync(f.knowledgeMarker), false);
+  assert.deepEqual(await readFile(join(f.root, 'demo.md')), before);
+  assert.equal(await readFile(join(f.recovery, f.receipt.backupId), 'utf8'), original);
+  const stored = JSON.parse(await readFile(join(f.recovery, f.receipt.operationId + '.knowledge-operation.json'), 'utf8'));
+  assert.equal(stored.finalization.executionRecordId, f.accepted.executionRecordId);
+  assert.deepEqual(stored.finalization.readbackEvidenceRefs, f.accepted.readbackEvidenceRefs);
+  await assert.rejects(f.writer.apply(f.input, f.authorized), error => error.code === 'RESULT_UNKNOWN');
+});
+
+test('finalization rejects mismatched original markers and unknown user edits while preserving both locks and all bytes', {skip: !windows}, async t => {
+  const f = await finalizationFixture(t);
+  await writeFile(f.sharedMarker, JSON.stringify({...f.shared, argumentsDigest: 'f'.repeat(64)}));
+  assert.equal((await f.writer.finalize(f.accepted, f.context())).state, 'still_unknown');
+  assert.equal(existsSync(f.sharedMarker), true); assert.equal(existsSync(f.knowledgeMarker), true);
+  await writeFile(f.sharedMarker, JSON.stringify(f.shared));
+  const userEdited = original + '用户的并发改动\r\n'; await writeFile(join(f.root, 'demo.md'), userEdited);
+  assert.equal((await f.writer.finalize(f.accepted, f.context())).state, 'still_unknown');
+  assert.equal(existsSync(f.sharedMarker), true); assert.equal(existsSync(f.knowledgeMarker), true);
+  assert.equal(await readFile(join(f.root, 'demo.md'), 'utf8'), userEdited);
+  const stored = JSON.parse(await readFile(join(f.recovery, f.receipt.operationId + '.knowledge-operation.json'), 'utf8'));
+  assert.equal(stored.finalization, undefined);
+});

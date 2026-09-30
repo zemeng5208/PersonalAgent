@@ -63,6 +63,23 @@ Runtime 工厂还提供 host-only `reconcileWrite({sourceId,configRevision,taskI
 该桥不注册新工具，不消耗或签发写权限，也不更新 Runtime 任务终态；
 `waiting_reconciliation` 必须由受信 Runtime 另行核对持久执行记录和读回，不能直接改为 succeeded。
 
+最终释放端口为 `KnowledgeWritePort.finalize(acceptedOriginal,{deadline,signal})`，
+Runtime 工厂的 host-only 桥为 `finalizeWrite({sourceId,configRevision,acceptedOriginal},context)`。
+外层 sourceId/configRevision 绑定当前用户选定的同一物理 Vault；acceptedOriginal 保留**原操作**的：
+`taskId/runId/toolName=knowledge.apply_note_patch/toolVersion=1.0.0/argumentsDigest/operationId`、
+完整 `originalInput`、已核实 `outcome=applied|not_applied/currentSha256`、
+原 `executionRecordId` 和不透明 `readbackEvidenceRefs`。这些接受数据只能由可信 Runtime 核对
+自己的原持久执行记录和读回 Evidence 后构造，不能来自 Renderer、模型、审批复选框或任意新 task。
+桥不注册 model tool，不提供 Renderer 释放 IPC，不签发新 scope。
+
+固定 `scripts/locked-finalize.ps1` 只处理本机恢复元数据：在源文件独占句柄范围重新读哈希，
+独占原操作回执和两 marker、确认共享 marker 的原 run/digest/before/after 与停止进程，
+先写入并 flush/readback 可信 Runtime 接受回执，然后按已锁定句柄标记删除两个 marker。
+它不写笔记正文、不删备份、不执行模型代码、不重试原 write、不改变 Runtime 终态。
+原 marker 错配、当前文件未知、进程尚在/未知或旧 source/config/输入不一致时返回 `still_unknown`，
+保留原现场；成功返回 `finalized` 和原已知 outcome/hash/operationId。
+P8 只有核对该 finalized 元数据回执后才能在原执行记录上完成恢复，不能创建新 operation 代替旧 run。
+
 准确限制：现有底层是锁内原地写入，**不是崩溃原子的文件替换**；应用/主机中断可能留下
 部分结果，必须通过保留备份和 unknown 读回处理。路径/身份检查不是对恶意并发操作者的
 OS 沙箱。本片不把该实现宣称为完整原子写入验收，也不扩展 coding-tools 原源。
@@ -98,6 +115,10 @@ Runtime 工厂以仓库相同 strict / NodeNext 选项单文件类型检查和�
 Runtime 工厂 Policy / 私人拒出机 / 公开绑定 / host-only 读回 4/4 通过，未跳过 Windows symlink 用例。
 架构依赖门禁、JS 语法和 diff 检查通过。不运行全仓 check、旧只读搜索全套、旧 Desktop smoke、
 真实私人 Vault 或真实云 API；最终共享接线、界面和 CI 由 P8 与唯一 PR 队列验收。
+补充最终释放和尾窗检查：最后一次读回后的撤销会保留 pending 锁；受信已知原结果的最终释放
+在真实 Windows 独占句柄下清两 marker 而不再次写笔记；原 marker 错配和用户改动则留两锁，
+这三个新用例分别通过，未重跑旧 12/4/4。必要 root build 顺序与单依赖 lock hunk
+来自 P8 的 `be9c093`，本分支只按授权交换 coding-tools/knowledge 顺序，不带入未合并 MCP/Skills。
 
 ## 历史只读分片
 
