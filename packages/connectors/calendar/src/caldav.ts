@@ -33,6 +33,8 @@ export interface CalDavReadProviderOptions {
   /** 日历展示名（缺省用 URL 尾段）。 */
   readonly calendarName?: string;
   readonly fetchImpl?: CalDavFetchLike;
+  /** 单次 HTTP 请求超时；默认 30 秒。 */
+  readonly requestTimeoutMs?: number;
 }
 
 /** 一次廉价轮询的快照：集合 ctag 与全部子资源 etag（href → etag）。 */
@@ -43,6 +45,7 @@ export interface CalDavChangeSnapshot {
 
 const USER_AGENT = 'personal-agent-calendar/0.1.0-alpha.1';
 const CALDAV_PAGE_SIZE = 100;
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 /** RFC 4791 要求服务器支持 Depth:1 PROPFIND；集合自身返回 ctag，子资源返回 etag。 */
 const PROP_BOTH = '<?xml version="1.0" encoding="utf-8"?>'
   + '<D:propfind xmlns:D="DAV:"><D:prop><D:getctag xmlns="urn:ietf:params:xml:ns:caldav"/>'
@@ -265,6 +268,7 @@ export class CalDavProvider implements CalendarProvider {
   private readonly authorization: string | undefined;
   private readonly calendarName: string | undefined;
   private readonly fetchImpl: CalDavFetchLike;
+  private readonly requestTimeoutMs: number;
 
   constructor(options: CalDavReadProviderOptions) {
     if (typeof options.calendarUrl !== 'string' || !/^https:\/\//u.test(options.calendarUrl)) {
@@ -274,6 +278,10 @@ export class CalDavProvider implements CalendarProvider {
     this.authorization = options.authorization;
     this.calendarName = options.calendarName;
     this.fetchImpl = options.fetchImpl ?? ((url, init) => fetch(url, init));
+    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    if (!Number.isSafeInteger(this.requestTimeoutMs) || this.requestTimeoutMs < 1 || this.requestTimeoutMs > 120_000) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'CalDAV request timeout must be 1..120000 ms');
+    }
   }
 
   listCalendars(): CalendarSummary[] {
@@ -289,26 +297,34 @@ export class CalDavProvider implements CalendarProvider {
       depth,
     };
     if (this.authorization !== undefined) headers.authorization = this.authorization;
-    let response: CalDavFetchResponseLike;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
     try {
-      response = await this.fetchImpl(this.calendarUrl, {method, headers, body,
-        signal: new AbortController().signal, redirect: 'error'});
-    } catch {
-      throw new ProtocolError('EXTERNAL_FAILURE', 'CalDAV 请求失败', true);
+      let response: CalDavFetchResponseLike;
+      try {
+        response = await this.fetchImpl(this.calendarUrl, {method, headers, body,
+          signal: controller.signal, redirect: 'error'});
+      } catch {
+        throw new ProtocolError('EXTERNAL_FAILURE', controller.signal.aborted ? 'CalDAV 请求超时' : 'CalDAV 请求失败', true);
+      }
+      if (response.status === 429) throw new ProtocolError('RATE_LIMITED', 'CalDAV 服务器限流', true, 60_000);
+      if (response.status === 401 || response.status === 403) {
+        throw new ProtocolError('UNAUTHORIZED', `CalDAV 认证被拒绝（HTTP ${response.status}）`);
+      }
+      // PROPFIND/REPORT 的成功状态是 207 Multi-Status（fetch 的 ok 不含 207）。
+      if (response.status !== 207 && !(response.status >= 200 && response.status < 300)) {
+        throw new ProtocolError('EXTERNAL_FAILURE', `CalDAV 服务器返回异常（HTTP ${response.status}）`, response.status >= 500);
+      }
+      let text: string;
+      try { text = await response.text(); }
+      catch {
+        throw new ProtocolError('EXTERNAL_FAILURE', controller.signal.aborted ? 'CalDAV 响应读取超时' : 'CalDAV 响应读取失败', true);
+      }
+      if (text.trim().length === 0) throw new ProtocolError('EXTERNAL_FAILURE', 'CalDAV 响应为空', false);
+      return text;
+    } finally {
+      clearTimeout(timeout);
     }
-    if (response.status === 429) throw new ProtocolError('RATE_LIMITED', 'CalDAV 服务器限流', true, 60_000);
-    if (response.status === 401 || response.status === 403) {
-      throw new ProtocolError('UNAUTHORIZED', `CalDAV 认证被拒绝（HTTP ${response.status}）`);
-    }
-    // PROPFIND/REPORT 的成功状态是 207 Multi-Status（fetch 的 ok 不含 207）。
-    if (response.status !== 207 && !(response.status >= 200 && response.status < 300)) {
-      throw new ProtocolError('EXTERNAL_FAILURE', `CalDAV 服务器返回异常（HTTP ${response.status}）`, response.status >= 500);
-    }
-    let text: string;
-    try { text = await response.text(); }
-    catch { throw new ProtocolError('EXTERNAL_FAILURE', 'CalDAV 响应读取失败', true); }
-    if (text.trim().length === 0) throw new ProtocolError('EXTERNAL_FAILURE', 'CalDAV 响应为空', false);
-    return text;
   }
 
   /** 廉价变更轮询：一次 Depth:1 PROPFIND 同时取 ctag 与全部子资源 etag。 */
