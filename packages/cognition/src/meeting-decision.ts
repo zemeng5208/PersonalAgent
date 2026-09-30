@@ -57,7 +57,8 @@ export interface MeetingDecisionReceipt {
   readonly meetingFactId: string;
   readonly selectedCandidateId: string;
   readonly actionId: string;
-  readonly status: 'applied' | 'proposal' | 'requires_review' | 'deferred' | 'already_processed' | 'conflict';
+  readonly status: 'applied' | 'proposal' | 'requires_review' | 'deferred' | 'already_processed' | 'conflict'
+    | 'submitted' | 'waiting_approval' | 'waiting_reconciliation' | 'kept';
   readonly confidence: number | null;
   readonly reason: string;
   readonly graphRevisionBefore: number;
@@ -68,6 +69,14 @@ export interface MeetingDecisionReceipt {
   readonly proposedModifications?: readonly NodeInput[] | undefined;
   /** Trusted receipt marker: inference failed before any proposal or execution. Legacy receipts do not opt in. */
   readonly retryableInference?: true | undefined;
+  /** Existing Runtime review/tool identity. Model text cannot populate execution evidence. */
+  readonly reviewTaskId?: string | undefined;
+  readonly reviewScopeDigest?: string | undefined;
+  readonly repairTaskId?: string | undefined;
+  readonly decisionAction?: 'KEEP' | 'RECHECK' | 'REVISE' | undefined;
+  readonly executionVerified?: boolean | undefined;
+  readonly graphUpdateVerified?: boolean | undefined;
+  readonly evidenceRefs?: readonly string[] | undefined;
 }
 
 export interface MeetingReceiptRecord {

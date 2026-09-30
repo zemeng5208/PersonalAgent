@@ -1,0 +1,21 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {DatabaseSync} from 'node:sqlite';
+import {mkdirSync,mkdtempSync} from 'node:fs';
+import path from 'node:path';
+import {migrate} from '@personal-agent/storage';
+import {TaskRuntime,RUNTIME_MIGRATIONS} from '../dist/index.js';
+const cache=new URL('../../../.cache/host-state-tests/',import.meta.url);mkdirSync(cache,{recursive:true});
+test('host metadata upgrades existing Runtime and stays scoped and durable without creating tasks',()=>{
+  const file=path.join(mkdtempSync(new URL('run-',cache)),'runtime.sqlite');
+  const old=new DatabaseSync(file);migrate(old,RUNTIME_MIGRATIONS.slice(0,9));
+  const previous=old.prepare('SELECT version,checksum FROM schema_migrations ORDER BY version').all();old.close();
+  let runtime=new TaskRuntime(file);const a=runtime.bindTrustedHostState('one');const b=runtime.bindTrustedHostState('two');
+  a.set('receipt',{state:'unknown',id:'public-notification'});assert.equal(b.get('receipt'),undefined);
+  assert.throws(()=>a.set('invalid',undefined),{code:'INVALID_ARGUMENT'});
+  const copy=a.get('receipt');copy.state='delivered';assert.equal(a.get('receipt').state,'unknown');
+  runtime.close();runtime=new TaskRuntime(file);assert.equal(runtime.bindTrustedHostState('one').get('receipt').state,'unknown');
+  assert.equal(runtime.listTasks({limit:10}).items.length,0);assert.equal(runtime.bindTrustedHostState('two').delete('receipt'),false);
+  assert.equal(runtime.bindTrustedHostState('one').delete('receipt'),true);runtime.close();
+  const db=new DatabaseSync(file,{readOnly:true});assert.deepEqual(db.prepare('SELECT version,checksum FROM schema_migrations WHERE version<=9 ORDER BY version').all(),previous);db.close();
+});

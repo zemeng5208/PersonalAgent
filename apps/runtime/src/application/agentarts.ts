@@ -7,6 +7,7 @@ import {
   type CoordinationRequest,
 } from '@personal-agent/coordination';
 import {ProtocolError} from '@personal-agent/contracts';
+import {createHash} from 'node:crypto';
 import {
   createRuntimeApplication,
   type RuntimeApplication,
@@ -86,6 +87,9 @@ export function createAgentArtsRuntimeApplication(
   application = createRuntimeApplication({
     ...runtimeOptions,
     profile: 'huawei_ict_agentarts',
+    coordinationBinding:createHash('sha256').update(JSON.stringify({gatewayUrl,runtimeName,
+      invokeMode:invokeMode??'published',workflowGoalInput:workflowGoalInput??null,
+      responseMode:responseMode??'text',initialRequestMode:initialRequestMode??'goal'})).digest('hex'),
     coordination: new CompetitionCoordinator(cloud),
   });
   return application;

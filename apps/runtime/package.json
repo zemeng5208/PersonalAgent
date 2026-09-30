@@ -27,6 +27,10 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
+    "@personal-agent/mcp": "0.1.0-alpha.1",
+    "@personal-agent/skills": "0.1.0-alpha.1",
+    "@personal-agent/learning": "0.1.0-alpha.1",
+    "@personal-agent/calendar": "0.1.0-alpha.1",
     "@personal-agent/goals": "0.1.0-alpha.1",
     "@personal-agent/coordination": "0.1.0-alpha.1",
     "@personal-agent/agents": "0.1.0-alpha.1",

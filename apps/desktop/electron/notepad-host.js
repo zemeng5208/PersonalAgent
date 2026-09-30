@@ -1,4 +1,6 @@
 import {randomUUID} from 'node:crypto';
+import {isDeepStrictEqual} from 'node:util';
+import {toolArgumentsDigest} from '@personal-agent/tool-gateway';
 
 const TOOL = 'computer.notepad.replace_text';
 const END = new Set(['succeeded', 'failed', 'cancelled', 'waiting_reconciliation']);
@@ -6,8 +8,9 @@ const END = new Set(['succeeded', 'failed', 'cancelled', 'waiting_reconciliation
 /** Local user gesture -> existing prepared Runtime task -> Policy -> native adapter.
  * No model can supply the presence gesture, target reference or authorization decision. */
 export function createDesktopNotepadHost({createAdapter, createAttempts, transport,
-  registerConfirmation, openNotepad, respond, cancelTask, onUpdate = () => {}, onTask = () => {}, now = Date.now}) {
-  let application, current, closed = false, refreshing = false;
+  registerConfirmation, openNotepad, respond, cancelTask, reconcileTask,
+  onUpdate = () => {}, onTask = () => {}, now = Date.now}) {
+  let application, current, closed = false, refreshing = false, recovering = false;
   let state = {available: true, busy: false, state: 'ready',
     reason: '填写文本后，新建并确认一个空白记事本窗口。'};
   function update(value) { state = {...state, ...value}; onUpdate(); }
@@ -42,7 +45,70 @@ export function createDesktopNotepadHost({createAdapter, createAttempts, transpo
       });
     },
   });
-  function snapshot() { return structuredClone(state); }
+  function pendingTasks() {
+    const tasks=[];
+    if (!application) return tasks;
+    let beforeSequence;
+    do {
+      const page=application.runtime.listTasks({states:['waiting_reconciliation'],limit:100,
+        ...(beforeSequence === undefined ? {} : {beforeSequence})});
+      for (const task of page.items) {
+        try {
+          const read=application.readHostToolTask(task.taskId);
+          if (read.toolName === TOOL && read.toolVersion === '1.0.0') tasks.push({taskId:task.taskId,state:task.state});
+        } catch { /* Only the original host namespace is eligible. */ }
+      }
+      beforeSequence=page.nextBeforeSequence;
+    } while (beforeSequence !== undefined);
+    return tasks;
+  }
+  function snapshot() { return structuredClone({...state,recovering,
+    recoveryAvailable:typeof reconcileTask === 'function',pendingTasks:pendingTasks()}); }
+  /** Host-only status read. Runtime validates and persists any confirmed result. Never execute here. */
+  async function recoverOriginalRun(input, context) {
+    if (closed || !application || current || !input || typeof input.taskId !== 'string'
+      || input.runId !== `host-tool-${input.taskId}` || !(context?.signal instanceof AbortSignal)
+      || !Number.isFinite(Date.parse(context.deadline))) throw Error('原始记事本读回不可用');
+    const read=application.readHostToolTask(input.taskId), intent=application.runtime.loadCheckpoint(input.taskId,'host-tool-intent');
+    const record=application.runtime.readToolExecutions(input.taskId).find(item=>item.evidenceId === input.runId);
+    const attempt=application.runtime.loadCheckpoint(input.taskId,'windows-host-attempt:'+input.runId);
+    if (read.toolName !== TOOL || read.toolVersion !== '1.0.0' || read.task.state !== 'waiting_reconciliation'
+      || !intent || intent.toolName !== TOOL || intent.toolVersion !== '1.0.0'
+      || intent.argumentsDigest !== input.argumentsDigest || intent.argumentsDigest !== toolArgumentsDigest(intent.arguments)
+      || !record || record.taskId !== input.taskId || record.toolName !== TOOL || record.toolVersion !== '1.0.0'
+      || record.policyDecision !== 'allow' || !record.executionStarted || !['started','unknown'].includes(record.state)
+      || !application.runtime.matchesToolExecutionInput(record,{arguments:intent.arguments,scopeRef:input.runId})
+      || !attempt || attempt.taskId !== input.taskId || attempt.runId !== input.runId
+      || attempt.argumentsDigest !== intent.argumentsDigest || attempt.targetRef !== intent.arguments.targetRef) {
+      throw Error('核实请求不匹配原始执行');
+    }
+    function assertCurrent() {
+      if (closed || context.signal.aborted || now() >= Date.parse(context.deadline)
+        || application.runtime.getTask(input.taskId).state !== 'waiting_reconciliation'
+        || !isDeepStrictEqual(application.runtime.loadCheckpoint(input.taskId,'host-tool-intent'),intent)
+        || !isDeepStrictEqual(application.runtime.loadCheckpoint(input.taskId,'windows-host-attempt:'+input.runId),attempt)) {
+        throw Error('原始核实绑定已经改变或到期');
+      }
+    }
+    assertCurrent();const result=await adapter.recover(input.taskId,input.runId);assertCurrent();return result;
+  }
+  async function recover(payload) {
+    if (closed || current || recovering || typeof reconcileTask !== 'function' || !payload
+      || Object.keys(payload).length !== 1 || typeof payload.taskId !== 'string'
+      || !pendingTasks().some(task=>task.taskId === payload.taskId)) throw Error('请选择原始待核实任务');
+    recovering=true;update({reason:'正在读取原始执行状态；不会再次写入记事本。'});
+    try {
+      await reconcileTask(payload.taskId);
+      const read=application.readHostToolTask(payload.taskId);
+      const verified=read.task.state === 'succeeded' && read.confirmed?.result?.state === 'verified'
+        && read.confirmed.evidenceRefs.length > 0;
+      update({taskId:payload.taskId,state:read.task.state,busy:false,
+        evidenceRefs:verified ? read.confirmed.evidenceRefs : [],reason:verified
+          ? '原始执行已核实，原生读回及执行证据已保存。文件尚未保存。'
+          : '原始结果仍未获确认；保留待核实状态，不会重复写入。'});
+    } finally {recovering=false;onUpdate();}
+    return snapshot();
+  }
   async function finishPreparation(operation) {
     try {
       const target = await adapter.observe(operation.taskId, operation.deadline, operation.controller.signal);
@@ -74,7 +140,9 @@ export function createDesktopNotepadHost({createAdapter, createAttempts, transpo
     }
   }
   function start(payload) {
-    if (closed || !application || current) throw Error('记事本操作尚未就绪或已有操作进行中');
+    if (closed || !application || current || recovering || pendingTasks().length) {
+      throw Error('记事本操作尚未就绪或有原始执行等待核实');
+    }
     if (!payload || Object.keys(payload).length !== 1 || typeof payload.text !== 'string'
       || !payload.text.trim() || payload.text.length > 4096) throw Error('请输入 1～4096 个字符');
     const commandId = randomUUID(), deadline = new Date(now() + 300_000).toISOString();
@@ -155,7 +223,7 @@ export function createDesktopNotepadHost({createAdapter, createAttempts, transpo
       ? {resultSummary: '本次记事本操作已取消，未确认写入；请核对窗口内容。'} : {})}; }
   }
   return {tools: [adapter.tool], bind(value) {if (application) throw Error('Already bound'); application = value;},
-    start, refresh, cancel, snapshot, projectTask,
+    start, refresh, cancel, snapshot, projectTask, recover, recoverOriginalRun,
     async close() {closed = true; await cancel(); await adapter.close();},
   };
 }

@@ -115,17 +115,18 @@ test('empty transcript is ignored and persistence failure degrades gracefully wi
   assert.equal(host.snapshot().transcripts.length,1);
   assert.equal(host.snapshot().transcripts[0].text,'遇到磁盘异常的话语');
 
-  // Next successful save clears degraded flag
+  // Recovery first backfills the failed user message, then saves this answer.
   throwOnSave = false;
   request.onEvent({type:'transcript',id:'a1',role:'assistant',text:'回答依然继续'});
   assert.equal(host.snapshot().status,'listening');
   assert.equal(host.snapshot().reason,'就绪');
-  assert.equal(saved.length,1);
-  assert.equal(saved[0].text,'回答依然继续');
+  assert.equal(saved.length,2);
+  assert.equal(saved[0].text,'遇到磁盘异常的话语');
+  assert.equal(saved[1].text,'回答依然继续');
 
   // Updated transcript with same id updates in-memory transcript text
   request.onEvent({type:'transcript',id:'a1',role:'assistant',text:'回答依然继续（修订补充）'});
-  assert.equal(host.snapshot().transcripts.find(t=>t.id===saved[0].id).text,'回答依然继续（修订补充）');
+  assert.equal(host.snapshot().transcripts.find(t=>t.id===saved[1].id).text,'回答依然继续（修订补充）');
   await host.stop();
 });
 
@@ -239,8 +240,8 @@ test('Live initial startup interleaves tasks and messages in chronological order
       ],
       messages: [
         {role: 'user', text: '第二个语音问题', createdAt: '2026-09-27T10:01:00.000Z'},
-        {role: 'assistant', text: '第二个语音回答', createdAt: '2026-09-27T10:01:05.000Z'},
-        {role: 'assistant', text: '第二个语音回答', createdAt: '2026-09-27T10:01:06.000Z'}, // duplicate
+        {id:'a2',role: 'assistant', text: '第二个语音回答', createdAt: '2026-09-27T10:01:05.000Z'},
+        {id:'a2',role: 'assistant', text: '第二个语音回答', createdAt: '2026-09-27T10:01:06.000Z'}, // same-identity replay
       ],
     }),
     onTaskSubmitted() {},
@@ -260,6 +261,124 @@ test('Live initial startup interleaves tasks and messages in chronological order
   const occurrences = (inst.match(/第二个语音回答/g) || []).length;
   assert.equal(occurrences, 1, 'duplicate voice answer must be deduplicated');
   await host.stop();
+});
+
+function harness(overrides = {}) {
+  let host, request;
+  const commands=[];
+  const contents={mainFrame:{},isDestroyed:()=>false,send(_channel,message) {
+    commands.push(message);
+    if (['start','stop'].includes(message.type)) queueMicrotask(()=>host.receive(
+      {sender:contents,senderFrame:contents.mainFrame},{token:message.token,type:message.type==='start'?'ready':'stopped'}));
+  }};
+  host=createLiveVoiceHost({getPanel:()=>({webContents:contents,isDestroyed:()=>false,isVisible:()=>true}),
+    config:{snapshot:()=>({configured:true}),current:()=>({})},
+    microphoneHost:{authorize(){},revoke:async()=>{}},
+    createSource:()=>({subscribe:()=>({ready:Promise.resolve(),closed:Promise.resolve(),unsubscribe(){}}),dispose:async()=>{}}),
+    createGateway:()=>({async connect(value) {request=value;return {sendAudio(){},interrupt(){},close:async()=>{}};}}),
+    createConsumer:()=>({}),client:{},readContext:()=>'',onTaskSubmitted(){},...overrides});
+  return {host,contents,commands,get request(){return request;}};
+}
+
+test('concurrent requests read their own task status and same call replay never resubmits', async () => {
+  const releases=new Map(), submitted=[], read=[];
+  const fixture=harness({client:{async call(op,payload) {
+    if(op==='task.submit') {submitted.push(payload.goal);return {taskId:`task-${payload.goal}`};}
+    if(op==='task.get') {read.push(payload.taskId);return {taskId:payload.taskId,state:payload.taskId==='task-A'?'failed':'waiting_approval',error:{message:'A failed'}};}
+  }},createConsumer:options=>({consume(value) {return {result:(async()=>{
+    await options.client.call('task.submit',{goal:value.text});
+    await new Promise(resolve=>releases.set(value.text,resolve));
+    throw Error('wait failed');
+  })()};}})});
+  await fixture.host.start();
+  const first=fixture.request.onTool('request_work',{goal:'A'},'call-a');
+  const second=fixture.request.onTool('request_work',{goal:'B'},'call-b');
+  const replay=fixture.request.onTool('request_work',{goal:'A'},'call-a');
+  await new Promise(setImmediate);
+  releases.get('B')();
+  assert.match(await second,/等待用户审批/);
+  releases.get('A')();
+  assert.match(await first,/A failed/);
+  assert.equal(await replay,await first);
+  assert.deepEqual(submitted,['A','B']);
+  assert.deepEqual(read,['task-B','task-A']);
+  await assert.rejects(fixture.request.onTool('request_work',{goal:'changed'},'call-a'),/标识冲突/);
+  assert.equal(fixture.host.snapshot().status,'listening');
+  await fixture.host.stop();
+});
+
+test('consumer factory failure does not wedge Live or create a Runtime task', async () => {
+  const fixture=harness({createConsumer:()=>{throw Error('consumer unavailable');}});
+  await fixture.host.start();
+  await assert.rejects(fixture.request.onTool('request_work',{goal:'A'},'call-a'),/consumer unavailable/);
+  assert.equal(fixture.host.snapshot().status,'listening');
+  await fixture.host.stop();
+  await fixture.host.start();
+  await fixture.host.stop();
+});
+
+test('stop awaits an in-flight connection close and forbids duplicate audio sessions', async () => {
+  let resolveConnect,request,closes=0;
+  const fixture=harness({createGateway:()=>({connect(value) {
+    request=value;return new Promise(resolve=>{resolveConnect=resolve;});
+  }})});
+  const starting=fixture.host.start();
+  await new Promise(setImmediate);
+  const stopping=fixture.host.stop();
+  assert.equal(request.signal.aborted,true);
+  await assert.rejects(fixture.host.start(),/会话已存在/);
+  resolveConnect({sendAudio(){},interrupt(){},close:async()=>{closes++;}});
+  await Promise.all([starting,stopping]);
+  assert.equal(closes,1);
+  assert.equal(fixture.host.hasActive(),false);
+});
+
+test('synchronous device release failures still close the session and block unsafe restart', async () => {
+  let closed=false;
+  const fixture=harness({microphoneHost:{authorize(){},revoke(){throw Error('release failed');}},
+    createGateway:()=>({async connect(){return {sendAudio(){},interrupt(){},close:async()=>{closed=true;}};}})});
+  await fixture.host.start();
+  const state=await fixture.host.stop();
+  assert.equal(closed,true);
+  assert.equal(state.active,false);
+  assert.match(state.reason,/释放未确认/);
+  await assert.rejects(fixture.host.start(),/释放未确认/);
+});
+
+test('unsaved transcript survives stop/start and is visible to text consumers and read_context', async () => {
+  const fixture=harness({onTranscript:()=>{throw Error('disk unavailable');}});
+  await fixture.host.start();
+  fixture.request.onEvent({type:'transcript',id:'u1',role:'user',text:'待保存的话语'});
+  const stale=fixture.request;
+  await fixture.host.stop();
+  await fixture.host.start();
+  stale.onEvent({type:'transcript',id:'late',role:'user',text:'旧会话晚到'});
+  assert.match(fixture.request.instructions,/待保存的话语/);
+  assert.equal(fixture.host.historyMessages().length,1);
+  const read=JSON.parse(await fixture.request.onTool('read_context',{},'context'));
+  assert.deepEqual(read.recentDialogue,[{role:'user',text:'待保存的话语'}]);
+  await fixture.host.stop();
+});
+
+test('late consumer success after stop is rejected and never cancels the accepted task', async () => {
+  let resolveWork;
+  const fixture=harness({createConsumer:()=>({consume:()=>({result:new Promise(resolve=>{resolveWork=resolve;})})})});
+  await fixture.host.start();
+  const work=fixture.request.onTool('request_work',{goal:'A'},'call-a');
+  await new Promise(setImmediate);
+  await fixture.host.stop();
+  resolveWork({replyText:'晚到的成功'});
+  await assert.rejects(work,/Live 已停止/);
+});
+
+test('expired session rejects new work even if a deadline timer has not fired', async () => {
+  let clock=Date.now(),consumed=0;
+  const fixture=harness({now:()=>clock,createConsumer:()=>{consumed++;return {};}});
+  await fixture.host.start();
+  clock+=120*60_000;
+  await assert.rejects(fixture.request.onTool('request_work',{goal:'A'},'call-a'),/到期/);
+  assert.equal(consumed,0);
+  await fixture.host.stop();
 });
 
 

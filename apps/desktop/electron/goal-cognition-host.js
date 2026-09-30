@@ -31,6 +31,14 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
   let controller=new AbortController(),generation=randomUUID(),status='disabled',reason='目标主动分析未开启';
   const outgoing=new Map(),reviews=new Map();
   const context=()=>({signal:controller.signal,deadline:new Date(now()+180_000).toISOString()});
+  const callerContext=input=>{
+    const local=context();
+    if (input===undefined) return local;
+    if (!(input.signal instanceof AbortSignal) || input.signal.aborted
+      || !Number.isFinite(Date.parse(input.deadline)) || now()>=Date.parse(input.deadline)) throw Error('认知操作已取消或超过期限');
+    return {signal:AbortSignal.any([local.signal,input.signal]),
+      deadline:new Date(Math.min(Date.parse(local.deadline),Date.parse(input.deadline))).toISOString()};
+  };
   const allowed=()=>enabled && cloudAllowed && !closed && !controller.signal.aborted;
   function repairPreparation(review,candidate) {
     return prepareReviewedRepair(store.read(),new Date(now()).toISOString(),review,candidate);
@@ -138,7 +146,7 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
     if(task.conversationId!==conversationId) throw Error('持久修复任务会话不匹配');
     return {task,intent};
   }
-  function submitRepair(value) {
+  function submitRepair(value,input=context()) {
     if(repairTask(value) || value.handoff?.state!=='submitted' || !allowed()) return;
     const prepared=readPreparedRepair(value.handoff.task.taskId);
     if(prepared.kind!=='prepared') return;
@@ -147,8 +155,9 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
     const saved=prior && application.runtime.loadCheckpoint(prior.taskId,'local-repair-intent');
     if(prior && (saved?.sourceKind!=='goal_review' || saved.sourceTaskId!==value.handoff.task.taskId
       || saved.reviewTaskId!==value.task.taskId || saved.binding?.candidateDigest!==prepared.binding.candidateDigest)) throw Error('修复受理结果需要核实');
+    if(input.signal.aborted || now()>=Date.parse(input.deadline)) throw Error('认知修复已取消或超过期限');
     const task=prior??application.submitLocalRepair({sourceTaskId:value.handoff.task.taskId,reviewTaskId:value.task.taskId,
-      idempotencyKey,deadline:new Date(now()+180_000).toISOString()});
+      idempotencyKey,deadline:input.deadline});
     application.runtime.saveCheckpoint(value.task.taskId,REPAIR_TASK_MARKER,{version:1,namespace,
       reviewTaskId:value.task.taskId,sourceTaskId:value.handoff.task.taskId,taskId:task.taskId,candidateDigest:prepared.binding.candidateDigest});
   }
@@ -226,7 +235,43 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
       ...(task.state==='succeeded' && verified.executionVerified && verified.graphUpdateVerified?{status:'applied'}:{})};
   }
   try {restoreMarkers();} catch {status='recovery_pending';reason='既有决策记录尚未读回，保留持久回执等待核实';}
-  return {
+  const instance = {
+    /** Trusted P5 consumer reuses this exact Fact review/chooser/handoff/repair owner. */
+    meetingReviewedRepairPort(readCommittedProjection) {
+      if(typeof readCommittedProjection!=='function') throw Error('会议需要受信的已提交来源投影');
+      const readReview=taskId=>{
+        const task=application.runtime.getTask(taskId);
+        const intent=application.runtime.loadCheckpoint(taskId,'proactive-cognition-intent-v1');
+        if(task.conversationId!==`proactive-cognition:${namespace}` || intent?.graphNamespace!==namespace
+          || intent.bindingVersion!==VERSION || intent.trigger?.kind!=='fact') throw Error('会议复核任务绑定不匹配');
+        return cognition.readReview(taskId);
+      };
+      return Object.freeze({
+        readCommittedProjection,
+        readReview,
+        async reviewCommittedFact(request) {
+          if(!enabled || closed || !ready() || request.graphNamespace!==namespace) throw Error('会议认知端口尚未获得当前本地分析许可');
+          const current=callerContext(request);
+          const projection=request.projection;
+          if(!projection || !Number.isSafeInteger(projection.graphRevision) || projection.graphRevision<1) throw Error('会议投影无效');
+          const original=facts.listImpactReceipts({afterGraphRevision:projection.graphRevision-1,limit:1})[0];
+          if(!original?.completed || !isDeepStrictEqual(original.projection,projection)) throw Error('会议 Fact 投影尚未完成或已经变化');
+          const batch=await cognition.consumeAndReview({...current,at:request.at,limit:1,
+            afterGraphRevision:projection.graphRevision-1});
+          const value=batch.reviews.find(item=>{
+            const intent=application.runtime.loadCheckpoint(item.task.taskId,'proactive-cognition-intent-v1');
+            return intent?.trigger?.kind==='fact' && isDeepStrictEqual(intent.trigger.input,
+              {graphNamespace:namespace,projection});
+          });
+          if(!value) throw Error('原会议投影尚无可验证的认知任务');
+          record(value);onUpdate();return value;
+        },
+        applyDecision:async (taskId,input)=>{
+          readReview(taskId);
+          return instance.applyDecision(taskId,input);
+        },
+      });
+    },
     /** Trusted host only. No raw source data, authorization or new wire operation. */
     readRepairBinding(taskId) {
       try {
@@ -317,8 +362,9 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
         busy=false;onUpdate();
       }
     },
-    async applyDecision(reviewTaskId) {
+    async applyDecision(reviewTaskId,input) {
       if (closed) throw Error('目标分析已关闭');
+      const current=callerContext(input);
       const readback=cognition.readReview(reviewTaskId);
       const r=readback.review;
       if (readback.task.state!=='succeeded' || !r || r.graphNamespace!==namespace || r.bindingVersion!==VERSION) {
@@ -330,10 +376,10 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
         if (!canHandoff(r)) throw Error('当前决策没有合法选择或可交接的复核方案');
         if (store.read().revision!==r.graphRevision) throw Error('决策来源版本已变化，请重新评估');
         if (!allowed()) throw Error('目标云端分析许可未开启，尚未提交编排');
-        value=await cognition.handoffReview(reviewTaskId,context());
+        value=await cognition.handoffReview(reviewTaskId,current);
         record(value);
       }
-      try {submitRepair(value);} catch(error) {
+      try {submitRepair(value,current);} catch(error) {
         if(error?.code==='UNSUPPORTED_CAPABILITY') return {status:'unavailable',reviewTaskId,
           ...execution(value),executionVerified:false,graphUpdateVerified:false,reason:'受控修复端口尚未装配'};
         throw error;
@@ -348,4 +394,5 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
     },
     close(){closed=true;enabled=false;cloudAllowed=false;controller.abort();cognition.close();},
   };
+  return instance;
 }

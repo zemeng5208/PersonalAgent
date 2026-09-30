@@ -1,10 +1,11 @@
-import path from 'node:path';
-import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
+import {createInboxTriagePipeline} from '@personal-agent/runtime/application';
 import {
-  MeetingRescheduleCoordinator,
-  FileMeetingDecisionReceiptStore,
-  createPolicyGuardedExecutionPort,
-  MailTriagePipeline,
+  ReviewedMeetingFactConsumer,
+  createCommittedMeetingProjectionReader,
+  createInboxPageConsumer,
+  measureTriageClassifier,
+  LayaTriageService,
+  withCognitionDeadline,
   DEFAULT_MAIL_LABELS,
   DeviceAnomalyDecisionService,
 } from '@personal-agent/cognition';
@@ -71,9 +72,8 @@ function createSubscriptionHandle(unbind, activeSubscriptions) {
 
 /**
  * P5 exclusive desktop composition entry:
- * Assembles MeetingRescheduleCoordinator, MailTriagePipeline, and DeviceAnomalyDecisionService
- * with existing Runtime SQLite checkpoints (legacy files for explicit minimal test hosts),
- * an injected execution port, and confirmed notification delivery.
+ * Assembles committed-Fact review, existing InboxTriagePipeline and device advice
+ * with existing Runtime host-state KV, reviewedRepair, and confirmed notification delivery.
  * Reuses existing local Laya model host via public ports (.choose, .classify) without spawning second processes.
  */
 export function createCognitionP5Composition({
@@ -87,6 +87,17 @@ export function createCognitionP5Composition({
   classifier,
   policyEvaluator,
   meetingExecutionPort,
+  reviewedRepair,
+  goalCognitionHost,
+  readCommittedMeetingProjection,
+  facts,
+  readMeetingSourceRevision,
+  hostStateStorage,
+  legacyDeviceNamespace,
+  mailStorage,
+  inboxPipeline,
+  mailReadAuthorization,
+  getClassifierFingerprint,
   notificationPort,
   calendarReadPort,
   autoStart = true,
@@ -98,27 +109,20 @@ export function createCognitionP5Composition({
   }
 
   const store = application.runtime.bindCoordinationStore(namespace);
-  const receiptsDir = path.join(userData, 'meeting-receipts');
-  mkdirSync(receiptsDir, {recursive: true});
-
-  // 1. Production state shares the existing TaskRuntime SQLite and namespace.
-  // Minimal offline hosts without checkpoint APIs retain the explicit legacy file ports.
-  const runtimeCheckpoints = typeof application.createHostStateStore === 'function'
-    ? createP5RuntimeCheckpoints({storage: application.createHostStateStore('proactive-receipts'), namespace, userData}) : undefined;
-  const receiptStore = runtimeCheckpoints?.meetings ?? new FileMeetingDecisionReceiptStore({storageDir: receiptsDir});
-
-  // 2. Production composition injects its Runtime/Policy/ToolGateway execution port.
-  // The older policyEvaluator port is compatibility for isolated domain callers;
-  // its direct CAS is not production execution Evidence. With neither, emit a proposal.
-  const executionPort = meetingExecutionPort ?? (policyEvaluator ? createPolicyGuardedExecutionPort({
-    store,
-    policy: policyEvaluator,
-    receiptStore,
-    namespace,
-    onExecuted: () => {
-      try { onUpdate(); } catch {}
-    },
-  }) : undefined);
+  // e11ac12 public host-state API: same TaskRuntime SQLite/migration 10, zero anchor tasks.
+  const storage = hostStateStorage ?? application.createHostStateStore?.('proactive-receipts');
+  if (typeof storage?.get !== 'function' || typeof storage?.set !== 'function') {
+    throw Error('Runtime createHostStateStore(proactive-receipts) is unavailable');
+  }
+  const runtimeCheckpoints = createP5RuntimeCheckpoints({storage, namespace, userData, legacyDeviceNamespace});
+  const receiptStore = runtimeCheckpoints.meetings;
+  // A function called policyEvaluator cannot impersonate Runtime tools. It is
+  // accepted for source compatibility but never used to append the graph.
+  const executionPort = undefined;
+  const meetingProjectionReader = readCommittedMeetingProjection ?? (facts && readMeetingSourceRevision
+    ? createCommittedMeetingProjectionReader({namespace, store, facts, readSourceRevision: readMeetingSourceRevision}) : undefined);
+  const meetingReviewPort = reviewedRepair ?? (goalCognitionHost && meetingProjectionReader
+    ? goalCognitionHost.meetingReviewedRepairPort(meetingProjectionReader) : undefined);
 
   // 3. Resolve chooser & classifier ports directly from layaHost or explicit arguments
   // Public port reuse: consumes layaHost.choose and layaHost.classify without reading private closures or exposing keys
@@ -128,56 +132,30 @@ export function createCognitionP5Composition({
     ?? (layaHost && typeof layaHost.classify === 'function' ? { classify: req => layaHost.classify(req) } : undefined);
 
   // 4. Meeting Reschedule Coordinator
-  const meetingCoordinator = (resolvedChooser || inference) ? new MeetingRescheduleCoordinator({
+  const meetingCoordinator = new ReviewedMeetingFactConsumer({
     store,
-    ...(resolvedChooser ? { chooser: resolvedChooser } : { inference }),
-    executionPort,
+    reviewedRepair: meetingReviewPort,
     receiptStore,
     namespace,
     now,
-  }) : undefined;
+  });
 
-  // 5. Mail Triage Pipeline with durable file checkpoint
-  const mailCheckpointFile = path.join(userData, 'mail-triage-checkpoint.json');
-  const mailCheckpointPort = {
-    load() {
-      if (!existsSync(mailCheckpointFile)) return {};
-      try {
-        return JSON.parse(readFileSync(mailCheckpointFile, 'utf8'));
-      } catch (err) {
-        throw new Error(`Mail triage checkpoint file corrupt or unavailable (${mailCheckpointFile}): ${err.message}`);
-      }
-    },
-    save(results) {
-      mkdirSync(userData, {recursive: true});
-      const tmp = `${mailCheckpointFile}.tmp-${process.pid}-${Date.now()}`;
-      writeFileSync(tmp, JSON.stringify(results, null, 2), 'utf8');
-      renameSync(tmp, mailCheckpointFile);
-    },
-  };
-
-  const mailPipeline = (resolvedClassifier || inference) ? new MailTriagePipeline({
-    ...(resolvedClassifier ? { classifier: resolvedClassifier } : { inference }),
-    checkpoint: mailCheckpointPort,
-    labels: DEFAULT_MAIL_LABELS,
-    now,
-  }) : undefined;
+  // One existing InboxTriagePipeline/source cursor/fingerprint/cache/outbox.
+  // The trusted loaded-model identity and current local read lease are required.
+  const measuredClassifier = !inboxPipeline && (resolvedClassifier || inference) ? measureTriageClassifier(
+    resolvedClassifier ?? new LayaTriageService(inference)) : undefined;
+  const mailPipeline = inboxPipeline ?? (mailStorage && measuredClassifier && typeof getClassifierFingerprint === 'function'
+    && typeof mailReadAuthorization === 'function' ? createInboxTriagePipeline({
+      // Existing inbox storage retains private approved header projections. Public
+      // host-state metadata KV cannot become a new unencrypted mail-content store.
+      storage: mailStorage, namespace, triage: measuredClassifier,
+      labels: DEFAULT_MAIL_LABELS, meetingLabels: ['meeting'],
+      getClassifierFingerprint, authorizeRead: mailReadAuthorization,
+    }) : undefined);
+  const mailConsumer = mailPipeline ? createInboxPageConsumer({pipeline: mailPipeline, now}) : undefined;
 
   // 6. Device Anomaly Decision Service with confirmed delivery
   const anomalyChooser = resolvedChooser ?? inference;
-  const deviceCheckpointFile = path.join(userData, 'device-anomaly-checkpoint.json');
-  const deviceCheckpoint = {
-    load() {
-      if (!existsSync(deviceCheckpointFile)) return undefined;
-      return JSON.parse(readFileSync(deviceCheckpointFile, 'utf8'));
-    },
-    save(value) {
-      mkdirSync(userData, {recursive: true});
-      const tmp = `${deviceCheckpointFile}.tmp-${process.pid}`;
-      writeFileSync(tmp, JSON.stringify(value), 'utf8');
-      renameSync(tmp, deviceCheckpointFile);
-    },
-  };
   const deviceAnomalyService = anomalyChooser ? new DeviceAnomalyDecisionService(anomalyChooser, {
     cpuThresholdPercent: 90,
     memoryThresholdPercent: 90,
@@ -185,7 +163,7 @@ export function createCognitionP5Composition({
     sustainedSampleCount: 3,
     cooldownMs: 300_000,
     notificationPort,
-    checkpoint: runtimeCheckpoints?.device ?? deviceCheckpoint,
+    checkpoint: runtimeCheckpoints.device,
     now,
   }) : undefined;
 
@@ -193,6 +171,7 @@ export function createCognitionP5Composition({
   let state = autoStart ? 'running' : 'idle';
   const activeSubscriptions = new Set();
   const activeControllers = new Set();
+  const mailControllers = new Set();
   const failures = {};
 
   const publish = () => {
@@ -202,11 +181,12 @@ export function createCognitionP5Composition({
     if (state !== 'running') throw new Error(`Cognition P5 composition is not running (state: ${state})`);
     const controller = new AbortController();
     activeControllers.add(controller);
+    if (chain === 'mail') mailControllers.add(controller);
     let signal = controller.signal;
     try {
       if (options?.signal) signal = AbortSignal.any([options.signal, controller.signal]);
-      const result = await operation({...options, signal,
-        deadline: options?.deadline ?? new Date(now() + 60_000).toISOString()});
+      const deadline = options?.deadline ?? new Date(now() + 60_000).toISOString();
+      const result = await withCognitionDeadline({signal, deadline}, context => operation({...options, ...context}), now);
       delete failures[chain];
       return result;
     } catch (error) {
@@ -216,6 +196,7 @@ export function createCognitionP5Composition({
       throw error;
     } finally {
       activeControllers.delete(controller);
+      mailControllers.delete(controller);
       publish();
     }
   };
@@ -231,6 +212,7 @@ export function createCognitionP5Composition({
 
   const instance = {
     get receiptStore() { return receiptStore; },
+    get checkpointStorage() { return storage; },
     get executionPort() { return executionPort; },
     get meetingCoordinator() { return meetingCoordinator; },
     get mailPipeline() { return mailPipeline; },
@@ -241,14 +223,17 @@ export function createCognitionP5Composition({
         state,
         ready: state === 'running',
         activeSubscriptionCount: activeSubscriptions.size,
-        hasMeetingCoordinator: Boolean(meetingCoordinator),
+        hasMeetingCoordinator: Boolean(meetingReviewPort),
         hasCalendarMeetingSource: Boolean(calendarMeetingSource),
         calendarSource: calendarMeetingSource?.snapshot() ?? {status: 'unavailable', calendarWriteVerified: false},
         hasMailPipeline: Boolean(mailPipeline),
+        mail: mailConsumer?.snapshot() ?? {unavailable: true},
+        mailMetrics: measuredClassifier?.snapshot(),
+        persistence: runtimeCheckpoints.persistence,
         hasDeviceAnomalyService: Boolean(deviceAnomalyService),
-        hasExecutionPort: Boolean(executionPort),
-        hasPolicyEvaluator: Boolean(policyEvaluator),
-        persistence: runtimeCheckpoints?.persistence ?? 'legacy_files',
+        hasExecutionPort: Boolean(meetingReviewPort),
+        hasPolicyEvaluator: false,
+        legacyExecutionPortIgnored: Boolean(policyEvaluator || meetingExecutionPort),
         hasNotificationPort: Boolean(notificationPort),
         layaHostState: layaHost?.snapshot?.()?.state ?? null,
         modelReady: layaHost ? layaHost.snapshot?.()?.ready === true : Boolean(inference || chooser || classifier),
@@ -263,6 +248,7 @@ export function createCognitionP5Composition({
       // The shared model owner controls start/stop. Resuming P5 subscriptions
       // must not load weights or restart a model the user explicitly stopped.
       state = 'running';
+      mailConsumer?.resume();
       publish();
       return this.snapshot();
     },
@@ -271,6 +257,7 @@ export function createCognitionP5Composition({
       if (state === 'disposed') return this.snapshot();
       if (state === 'stopped') return this.snapshot();
       state = 'stopped';
+      mailConsumer?.pause();
       for (const ac of Array.from(activeControllers)) {
         try { ac.abort(); } catch {}
       }
@@ -282,6 +269,7 @@ export function createCognitionP5Composition({
     dispose() {
       if (state === 'disposed') return;
       state = 'disposed';
+      mailConsumer?.close();
       for (const sub of Array.from(activeSubscriptions)) {
         try { sub.unsubscribe(); } catch {}
       }
@@ -295,7 +283,7 @@ export function createCognitionP5Composition({
 
     bindCalendarSource(calendarSource) {
       if (state === 'disposed') throw new Error('Cognition P5 composition has been disposed');
-      if (!meetingCoordinator) throw new Error('Meeting coordinator unavailable: Laya inference/chooser not connected');
+      if (!meetingReviewPort) throw new Error('Committed meeting Fact review port is unavailable');
 
       const unbind = registerSourceListener(calendarSource, ['reschedule', 'meeting_reschedule', 'event'], async (event) => {
         if (state !== 'running') return;
@@ -313,14 +301,10 @@ export function createCognitionP5Composition({
       if (state === 'disposed') throw new Error('Cognition P5 composition has been disposed');
       if (!mailPipeline) throw new Error('Mail pipeline unavailable: Laya inference/classifier not connected');
 
-      const unbind = registerSourceListener(mailSource, ['batch', 'mails', 'mail_batch'], async (batchOrMessages) => {
+      const unbind = registerSourceListener(mailSource, ['page', 'mail_page'], async page => {
         if (state !== 'running') return;
-        const messages = Array.isArray(batchOrMessages)
-          ? batchOrMessages
-          : (batchOrMessages?.messages ?? [batchOrMessages]);
-        if (!Array.isArray(messages) || messages.length === 0) return;
         try {
-          await instance.triageMails(messages);
+          await instance.triageInboxPage(page);
         } catch {
           // Isolate listener failure
         }
@@ -369,18 +353,34 @@ export function createCognitionP5Composition({
       return meetingCoordinator.getReceipt(eventId, source);
     },
 
-    async triageMails(messages, options = {}) {
+    async triageMails(items, options = {}) {
       if (state === 'disposed') throw new Error('Cognition P5 composition has been disposed');
       if (state !== 'running') throw new Error(`Cognition P5 composition is not running (state: ${state})`);
       if (!mailPipeline) throw new Error('Mail pipeline unavailable: Laya inference/classifier not connected');
-      return tracked('mail', options, context => mailPipeline.processBatch({...context, messages}));
+      // Compatibility name, now requires the same scoped source-page envelope.
+      return instance.triageInboxPage({...options, items});
+    },
+
+    async triageInboxPage(page) {
+      if (!mailConsumer) throw Error('Inbox source, current read lease or classifier identity unavailable');
+      return tracked('mail', page, context => mailConsumer.processPage({...page, ...context}));
+    },
+
+    pauseMail() {
+      mailConsumer?.pause();
+      for (const controller of mailControllers) controller.abort();
+      publish();
+    },
+    resumeMail() {
+      if (state !== 'running') throw Error('Cognition P5 composition is not running');
+      mailConsumer?.resume(); publish();
     },
 
     async triagePagedMails(pagedRequest) {
       if (state === 'disposed') throw new Error('Cognition P5 composition has been disposed');
       if (state !== 'running') throw new Error(`Cognition P5 composition is not running (state: ${state})`);
       if (!mailPipeline) throw new Error('Mail pipeline unavailable: Laya inference/classifier not connected');
-      return tracked('mail', pagedRequest, context => mailPipeline.processPagedStream(context));
+      return tracked('mail', pagedRequest, context => mailConsumer.processStream(context));
     },
 
     async evaluateDeviceSample(sample, layaRequest) {
@@ -402,6 +402,9 @@ export function createCognitionP5Composition({
         meetings: records.slice(-20).map(({receipt}) => ({eventId: receipt.eventId,
           status: receipt.status, graphRevisionAfter: receipt.graphRevisionAfter,
           confidence: receipt.confidence, actionId: receipt.actionId,
+          decisionAction: receipt.decisionAction, reviewTaskId: receipt.reviewTaskId,
+          repairTaskId: receipt.repairTaskId, executionVerified: receipt.executionVerified === true,
+          graphUpdateVerified: receipt.graphUpdateVerified === true,
           selectionState: receipt.selection?.state, selectionReason: receipt.selection?.reason,
           selectionReceiptId: receipt.selection?.receipt?.id, calibrated: false,
           retryableInference: receipt.retryableInference === true,
@@ -418,9 +421,8 @@ export function createCognitionP5Composition({
 
     async getPendingProposals() {
       if (!meetingCoordinator) return [];
-      const proposals = await meetingCoordinator.listReceipts({status: 'proposal'});
-      const reviews = await meetingCoordinator.listReceipts({status: 'requires_review'});
-      return [...proposals, ...reviews];
+      const pending = new Set(['proposal', 'requires_review', 'submitted', 'waiting_approval', 'waiting_reconciliation']);
+      return (await meetingCoordinator.listReceipts()).filter(record => pending.has(record.status));
     },
 
     async listMeetingReceipts(filter) {

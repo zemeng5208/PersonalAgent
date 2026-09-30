@@ -6,6 +6,8 @@ export function mountLiveVoiceControls(root, invoke) {
   root.querySelector('#error').before(settings, status);
   const key = settings.querySelector('#live-key'), workspace = settings.querySelector('#live-workspace');
   const hotkey = settings.querySelector('#live-hotkey'), consent = settings.querySelector('#live-consent');
+  const reserved=[...hotkey.options].find(option=>option.value === 'F9');
+  if (reserved) {reserved.disabled=true;reserved.textContent='F9（记事本写入确认）';}
   const result = settings.querySelector('#live-config-result');
   let editing = false;
   settings.addEventListener('input', () => {editing = true;});

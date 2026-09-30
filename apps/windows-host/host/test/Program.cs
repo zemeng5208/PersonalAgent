@@ -1,8 +1,56 @@
 using System.Text.Json;
 using System.Diagnostics;
 using PersonalAgent.WindowsHost.Service;
+using PersonalAgent.WindowsHost;
 
 if (args.Length != 2) throw new ArgumentException("Pass #168 schema and fixture paths");
+using (var self = Process.GetCurrentProcess())
+{
+    if (!string.Equals(NotepadAction.ReadProcessImagePath(self), Environment.ProcessPath,
+        StringComparison.OrdinalIgnoreCase))
+        throw new Exception("Process image was not read from the bound live process");
+    if (NotepadAction.IsTrustedNotepadProcess(self))
+        throw new Exception("Fixture process was accepted as Notepad");
+}
+using (var unstarted = new Process())
+{
+    if (NotepadAction.ReadProcessImagePath(unstarted) is not null)
+        throw new Exception("Missing process identity returned an image path");
+}
+// Exercise the production cancellation source without opening a window or
+// invoking UIA: a long task cannot keep an expired target confirmation alive.
+var targetExpiry = DateTime.UtcNow.AddMilliseconds(250);
+var targetLease = NotepadExecutionLifetime.Create(CancellationToken.None,
+    DateTime.UtcNow.AddMinutes(5), targetExpiry) ?? throw new Exception("Fresh target refused");
+using (targetLease.Lifetime)
+{
+    if (targetLease.DeadlineUtc != targetExpiry ||
+        !targetLease.Lifetime.Token.WaitHandle.WaitOne(TimeSpan.FromSeconds(3)))
+        throw new Exception("Target expiry did not cancel pending execution");
+}
+var taskExpiry = DateTime.UtcNow.AddMilliseconds(250);
+var taskLease = NotepadExecutionLifetime.Create(CancellationToken.None,
+    taskExpiry, DateTime.UtcNow.AddMinutes(1)) ?? throw new Exception("Fresh task refused");
+using (taskLease.Lifetime)
+{
+    if (taskLease.DeadlineUtc != taskExpiry ||
+        !taskLease.Lifetime.Token.WaitHandle.WaitOne(TimeSpan.FromSeconds(3)))
+        throw new Exception("Task expiry did not cancel pending execution");
+}
+if (NotepadExecutionLifetime.Create(CancellationToken.None,
+    DateTime.UtcNow.AddMinutes(5), DateTime.UtcNow.AddSeconds(-1)) is not null)
+    throw new Exception("Expired target acquired an execution lifetime");
+using (var disconnected = new CancellationTokenSource())
+{
+    var lease = NotepadExecutionLifetime.Create(disconnected.Token,
+        DateTime.UtcNow.AddMinutes(5), DateTime.UtcNow.AddSeconds(30))!.Value;
+    using (lease.Lifetime)
+    {
+        disconnected.Cancel();
+        if (!lease.Lifetime.IsCancellationRequested)
+            throw new Exception("Disconnect did not cancel target execution");
+    }
+}
 var wire = new HostWire(args[0]);
 // An unstarted Process has no queryable session/start identity. A baseline
 // failure must reject the whole observation, rather than omit an old window

@@ -12,6 +12,23 @@ internal readonly record struct ExecutionRequester(
     string SessionId,
     CancellationToken Connected);
 
+internal static class NotepadExecutionLifetime
+{
+    internal static (CancellationTokenSource Lifetime, DateTime DeadlineUtc)? Create(
+        CancellationToken connected, DateTime taskDeadlineUtc, DateTime targetExpiresUtc)
+    {
+        var now = DateTime.UtcNow;
+        var deadline = taskDeadlineUtc < targetExpiresUtc ? taskDeadlineUtc : targetExpiresUtc;
+        var watchdog = now.AddMinutes(10);
+        if (watchdog < deadline) deadline = watchdog;
+        var remaining = deadline - now;
+        if (remaining <= TimeSpan.Zero) return null;
+        var lifetime = CancellationTokenSource.CreateLinkedTokenSource(connected);
+        lifetime.CancelAfter(remaining);
+        return (lifetime, deadline);
+    }
+}
+
 internal sealed class ActiveExecution
 {
     private readonly object _gate = new();
@@ -263,18 +280,16 @@ internal sealed class HostService(HostLaunchBinding launch, HostWire wire, RunJo
             return;
         }
 
-        var lifetime = CancellationTokenSource.CreateLinkedTokenSource(connected);
-        var watchdogUtc = DateTime.UtcNow.AddMinutes(10);
-        var effectiveDeadline = deadline < watchdogUtc ? deadline : watchdogUtc;
-        var remaining = effectiveDeadline - DateTime.UtcNow;
-        if (remaining <= TimeSpan.Zero)
+        // A prepared target is a short-lived confirmation, not permission to
+        // continue UIA discovery until the much longer task deadline.
+        var lease = NotepadExecutionLifetime.Create(connected, deadline, target.ExpiresUtc);
+        if (lease is null)
         {
-            lifetime.Dispose();
             var refused = journal.Complete(identity, "refused", Timestamp(DateTime.UtcNow), null, "TIMEOUT");
             await SendRecordAsync(pipe, refused, requestId, sessionId, connected).ConfigureAwait(false);
             return;
         }
-        lifetime.CancelAfter(remaining);
+        var (lifetime, effectiveDeadline) = lease.Value;
         var execution = new ActiveExecution(lifetime, pipe, requestId, sessionId, connected);
         if (!_active.TryAdd(identity.RunId, execution))
         {
