@@ -200,7 +200,7 @@ PR #36、#49 已进入 main，提供文字 Coordination/CloudAgent 与 Runtime �
 
 main 已包含版本化 CoordinationStore、SQLite/Fake `AtomicCoordinationStorePort.appendBatch`、事务 revision 校验与 rollback，以及通过该原子端口执行的显式修复预览/提交；PR #89～#91 已合并 provisional Memory 端口/Fake、SQLite 查询与 delivery checkpoint、Goal 侧未生效暂存及确认后原子激活投影。生产自动消费、真实事实来源、删除和 AgentArts/Evidence 闭环仍未交付。
 
-堆叠 Draft PR #203 的 MOD-09G 增加受信宿主的删除发起、预检和恢复路径；`MemoryQueryErrorCode`
+堆叠 PR #203 的 MOD-09G 增加受信宿主的删除发起、预检和恢复路径；`MemoryQueryErrorCode`
 增补 `STORAGE_UNAVAILABLE` 表示 WAL 截断未完成。无 wire operation/capability，
 Goal 稀疏 revision 仍需非作者语义评审，Memory/Goal/Runtime 均不因此冻结。
 
@@ -208,6 +208,10 @@ MOD-09H 继续在可信 `SqliteMemoryHost` 增加 `reviseUserFact` 与迁移 4�
 撤回通过精确头版本和操作 ID 在同一事务写入事实、feed 事件及无正文回执；重试幂等，
 来源拥有权冲突及待删除事实拒绝。它未注册 Desktop/wire capability，也不承担用户认证与
 授权校验；真实私人来源和用户侧验收仍 `unavailable`。
+
+MOD-09I 新增 `@personal-agent/learning` 的受信 SQLite 宿主：描述性候选版本、注入式验证、
+验证通过后启用、旧已验证版本回退及工作流历史删除。该 API 为 `provisional`，
+验证器和授权入口尚无生产装配；不暴露执行工具或 wire capability，也不等同 AgentArts Workflow。
 
 ### 6.3 桌面、语音、工具与通知增量（provisional）
 
