@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import test from 'node:test';
-import {createKnowledgeFeedReceipt, parseKnowledgeFeedReceipt,
+import {createKnowledgeFeedReceipt, createKnowledgeFeedReceiptFromCollectResult, parseKnowledgeFeedReceipt,
   verifyKnowledgeFeedReceiptBinding, knowledgeFeedReceiptItems} from '../dist/application/knowledge-feed-receipt.js';
 
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -17,6 +17,39 @@ const binding = receipt => ({namespace: receipt.namespace, sourceId: receipt.sou
   observedAt: receipt.observedAt, revision: receipt.revision, contentSha256: receipt.contentSha256,
   citation: receipt.citation, receiptId: receipt.receiptId, summary: receipt.summary.slice(0, 2000)});
 const rehash = raw => { const {receiptId, ...core} = raw; return {...core, receiptId: hash(core)}; };
+
+test('raw collect receipt preserves canonical mapping and rejects incomplete or foreign source bodies', () => {
+  const raw = {items: [...items].reverse().map(item => ({title:item.title, summary:item.summary,
+    record:{dedupeKey:item.dedupeKey,occurredAt:item.occurredAt,contentRef:item.contentRef,
+      accountRef:input.sourceId,fetchedAt:input.observedAt}})),nextCursor:'feed-cursor',hasMore:false,
+    collection:{state:'fetched',subscriptionId:input.sourceId,fetchedAt:input.observedAt,
+      validators:{etag:'page-v2',lastModified:null}}};
+  raw.items[0].title = 'T'.repeat(220); raw.items[0].summary = 'S'.repeat(550);
+  const make = result => createKnowledgeFeedReceiptFromCollectResult({namespace:input.namespace,sourceId:input.sourceId,result});
+  const receipt = make(raw);
+  assert.equal(receipt.items[1].title,'T'.repeat(200));
+  assert.equal(receipt.items[1].summary,'S'.repeat(500));
+  assert.deepEqual(receipt.items.map(item => item.dedupeKey),['a','b']);
+  assert.equal(receipt.contentSha256,hash(receipt.items));
+  assert.equal(receipt.revision,hash({etag:'page-v2',lastModified:null}));
+  assert.deepEqual(receipt,createKnowledgeFeedReceipt({...input,revision:receipt.revision,items:receipt.items}));
+  const withoutValidators = structuredClone(raw);
+  withoutValidators.collection.validators = {etag:null,lastModified:null};
+  assert.equal(make(withoutValidators).revision,hash({body:receipt.contentSha256}));
+  const bad = [
+    value => {value.hasMore=true;},
+    value => {value.collection.state='unchanged';value.items=[];},
+    value => {value.items=[];},
+    value => {value.collection.subscriptionId='other-feed';},
+    value => {value.items[0].record.accountRef='other-feed';},
+    value => {value.items[0].record.fetchedAt='2026-09-29T00:00:00Z';},
+    value => {value.items[0].record.contentRef='';},
+    value => {value.items[0].record.occurredAt='invalid';},
+    value => {value.items.push(value.items[0]);},
+    value => {delete value.collection.validators.etag;},
+  ];
+  for (const mutate of bad) {const changed=structuredClone(raw);mutate(changed);assert.equal(make(changed),undefined);}
+});
 
 test('different articles preserve their own locator/content hash and the full page hash', () => {
   const receipt = createKnowledgeFeedReceipt({...input, items: [...items].reverse()});

@@ -1502,13 +1502,13 @@ export function createKnowledgeWatchHost({
     }
     return digest({body: contentSha256});
   }
-  function persistFeedReadReceipt(sourceId, collected, identities, revision, contentSha256, citation, summary) {
+  function persistFeedReadReceipt(sourceId, collected, identities, revision, contentSha256, citation, summary, preparedReceipt = null) {
     const core = {version: 1, kind: 'feeds.collect', namespace, sourceId,
       observedAt: collected.collection.fetchedAt, revision, contentSha256, citation, summary, items: identities};
-    const receipt = knowledgeFeedReceipts
+    const receipt = preparedReceipt ?? (knowledgeFeedReceipts
       ? knowledgeFeedReceipts.createKnowledgeFeedReceipt({namespace, sourceId,
         observedAt: collected.collection.fetchedAt, revision, items: identities})
-      : {...core, receiptId: digest(core)};
+      : {...core, receiptId: digest(core)});
     const key = KNOWLEDGE_SOURCE_READ_PREFIX + receipt.receiptId;
     const previous = checkpoints.loadCheckpoint(checkpointTaskId, key);
     if (previous !== undefined && JSON.stringify(previous) !== JSON.stringify(receipt)) fail('REVISION_CONFLICT');
@@ -1613,11 +1613,19 @@ export function createKnowledgeWatchHost({
             availability: 'available', provider: 'feeds', revision: head.revision, submitted: []};
         });
       }
-      const identities = [];
-      for (const item of collected.items) {
-        const identity = feedItemIdentity(item);
-        if (!identity) return {accepted: false, availability: 'unavailable', reason: 'invalid_feed_result'};
-        identities.push(identity);
+      let preparedReceipt = null;
+      if (typeof knowledgeFeedReceipts?.createKnowledgeFeedReceiptFromCollectResult === 'function') {
+        preparedReceipt = knowledgeFeedReceipts.createKnowledgeFeedReceiptFromCollectResult({namespace,
+          sourceId: subscriptionId, result: collected});
+        if (!preparedReceipt) return {accepted: false, availability: 'unavailable', reason: 'invalid_feed_result'};
+      }
+      const identities = preparedReceipt?.items ?? [];
+      if (!preparedReceipt) {
+        for (const item of collected.items) {
+          const identity = feedItemIdentity(item);
+          if (!identity) return {accepted: false, availability: 'unavailable', reason: 'invalid_feed_result'};
+          identities.push(identity);
+        }
       }
       identities.sort((left, right) => left.dedupeKey < right.dedupeKey ? -1 : left.dedupeKey > right.dedupeKey ? 1 : 0);
       // A v2 receipt port binds each article. Without it, the singular v1 locator
@@ -1625,8 +1633,8 @@ export function createKnowledgeWatchHost({
       if (!knowledgeFeedReceipts && new Set(identities.map(item => item.contentRef)).size > 1) {
         return {accepted: false, availability: 'unavailable', reason: 'feed_citation_ambiguous', provider: 'feeds'};
       }
-      const contentSha256 = digest(identities);
-      const revision = opaqueFeedRevision(collected.collection.validators, contentSha256);
+      const contentSha256 = preparedReceipt?.contentSha256 ?? digest(identities);
+      const revision = preparedReceipt?.revision ?? opaqueFeedRevision(collected.collection.validators, contentSha256);
       const summary = identities.flatMap(item => [item.title, item.summary]).filter(Boolean).join('\n');
       if (!identities.length || !text(identities[0]?.contentRef)) {
         return {accepted: false, availability: 'unavailable', reason: 'source_body_not_read', provider: 'feeds'};
@@ -1635,7 +1643,7 @@ export function createKnowledgeWatchHost({
       try {
         if (!feedCurrent()) return {accepted: false, reason: 'feed_check_invalidated'};
         sourceReadReceipt = persistFeedReadReceipt(subscriptionId, collected, identities, revision,
-          contentSha256, identities[0].contentRef, summary);
+          contentSha256, identities[0].contentRef, summary, preparedReceipt);
       } catch {
         return {accepted: false, availability: 'unavailable', reason: 'source_read_receipt_failed', provider: 'feeds'};
       }

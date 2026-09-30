@@ -14,6 +14,11 @@ test('multi-article pages bind exact consumers and preserve item citations throu
       ?? new URL('../../runtime/dist/application/knowledge-feed-receipt.js', import.meta.url).href);
     const knowledgeFeedReceipts = Object.fromEntries(['createKnowledgeFeedReceipt','parseKnowledgeFeedReceipt',
       'verifyKnowledgeFeedReceiptBinding','knowledgeFeedReceiptItems'].map(key => [key,ports[key]]));
+    let mapped = 0;
+    knowledgeFeedReceipts.createKnowledgeFeedReceiptFromCollectResult = input => {
+      mapped += 1;
+      return ports.createKnowledgeFeedReceiptFromCollectResult(input);
+    };
     const rows = new Map();
     const tasks = new Map();
     const checkpoints = {loadCheckpoint(taskId,key) { return structuredClone(rows.get(`${taskId}:${key}`)); },
@@ -45,6 +50,7 @@ test('multi-article pages bind exact consumers and preserve item citations throu
     time+=1000;
     const collected=await host.refreshSubscribedFeed({subscriptionId:'feed-a'});
     assert.equal(collected.accepted,true);
+    assert.equal(mapped,1);
     assert.equal(collected.submitted.length,2);
     const contexts=Object.keys(host.snapshot().submissions).map(key=>host.getRecheckContext(key));
     assert.deepEqual(new Set(contexts.map(ctx=>ctx.topicId)),new Set(['rust','typescript']));
