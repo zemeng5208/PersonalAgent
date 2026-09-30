@@ -7,6 +7,7 @@
   "scripts": {
     "postinstall": "node -e \"require('electron/install.js')\"",
     "start": "electron .",
+    "build:windows-host": "node scripts/build-windows-host.mjs",
     "dev:fake": "electron . --fake-runtime",
     "typecheck": "node --check electron/main.js && node --check electron/runtime.js && node --check electron/conversations.js && node --check electron/preload.cjs && node --check src/app/renderer.js && node --check src/features/admin/view.js && node --check src/features/admin/profile.js && node --check src/features/workspace/view.js && node --check src/features/workspace/connectors.js && node --check src/features/orb/orb.js && node --check src/features/conversation/state.js && node --check src/features/conversation/rail.js && node --check src/ui/preferences.js",
     "dev:text-fake": "electron . --fake-model",
@@ -23,10 +24,17 @@
     "@personal-agent/knowledge": "0.1.0-alpha.1",
     "@personal-agent/cognition": "0.1.0-alpha.1",
     "@personal-agent/coding-tools": "0.1.0-alpha.1",
+    "@personal-agent/knowledge": "0.1.0-alpha.1",
     "@personal-agent/goals": "0.1.0-alpha.1",
+    "@personal-agent/feeds": "0.1.0-alpha.1",
+    "@personal-agent/productivity": "0.1.0-alpha.1",
+    "@personal-agent/notifications": "0.1.0-alpha.1",
     "@personal-agent/memory": "0.1.0-alpha.1",
+    "@personal-agent/weather": "0.1.0-alpha.1",
+    "@personal-agent/research": "0.1.0-alpha.1",
     "@personal-agent/runtime": "0.1.0-alpha.1",
-    "@personal-agent/tool-gateway": "0.1.0-alpha.1"
+    "@personal-agent/tool-gateway": "0.1.0-alpha.1",
+    "@personal-agent/voice": "0.1.0-alpha.1"
   },
   "devDependencies": {
     "@personal-agent/testkit": "0.1.0-alpha.1",

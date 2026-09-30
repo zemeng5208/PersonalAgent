@@ -11,7 +11,10 @@ const continuationFields = ['proposalId', 'state', 'result'] as const;
 const availableToolFields = ['name', 'version', 'inputSchema'] as const;
 // Total UTF-8 JSON budget, including the continuation envelope. Not a wire limit.
 const MAX_CONTINUATION_JSON_BYTES = 1_048_576;
-const MAX_AVAILABLE_TOOLS_JSON_BYTES = 8_192;
+// Shared by the trusted Runtime projection and cloud request parser. Leave room
+// for the user goal and request envelope within AgentArts' 32 KiB initial query.
+export const MAX_AVAILABLE_TOOLS = 64;
+export const MAX_AVAILABLE_TOOLS_JSON_BYTES = 24_576;
 interface JsonBudget { remaining: number; }
 
 function hasExactEnumerableKeys(value: object, fields: readonly string[]): boolean {
@@ -249,7 +252,7 @@ export function parseCoordinationAvailableTools(value: unknown): readonly Coordi
   } catch {
     return invalidResult();
   }
-  if (!Array.isArray(copy) || copy.length > 16
+  if (!Array.isArray(copy) || copy.length > MAX_AVAILABLE_TOOLS
     || Buffer.byteLength(JSON.stringify(copy), 'utf8') > MAX_AVAILABLE_TOOLS_JSON_BYTES) invalidResult();
   const names = new Set<string>();
   for (const tool of copy) {

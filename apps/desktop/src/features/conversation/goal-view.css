@@ -1,0 +1,14 @@
+.goal-open{border:0;background:transparent;color:var(--fg-2);font-size:11px;padding:3px 5px;white-space:nowrap;cursor:pointer}
+.goal-open:hover{color:var(--fg)}
+.goal-dialog{width:min(370px,92vw);max-height:80vh;overflow:auto;border:1px solid var(--glass-border);border-radius:16px;padding:16px;background:var(--glass-bg-strong);color:var(--fg);box-shadow:var(--shadow-3)}
+.goal-dialog::backdrop{background:rgba(0,0,0,.48)}
+.goal-dialog h2{font-size:15px;margin:0 0 10px}
+.goal-dialog p{font-size:12px;line-height:1.5;margin:7px 0}
+.goal-dialog p[data-state="error"],.goal-dialog p[data-state="unavailable"]{color:var(--danger)}
+.goal-dialog form label{display:block;font-size:12px;margin:10px 0}
+.goal-dialog form input,.goal-dialog form textarea,.goal-dialog form select{display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:7px;border:1px solid var(--glass-border);border-radius:8px;background:var(--composer-bg);color:var(--fg)}
+.goal-dialog form textarea{min-height:54px;resize:vertical}
+.goal-dialog button{margin:5px 6px 5px 0;padding:6px 9px;border:1px solid var(--glass-border);border-radius:8px;background:var(--surface-2);color:var(--fg);cursor:pointer}
+.goal-dialog button:disabled{opacity:.5;cursor:default}
+.goal-dialog [aria-label="已保存的目标"]>div{padding:6px 0;border-bottom:1px solid var(--glass-hairline)}
+.goal-dialog [aria-label="已保存的目标"] span{font-size:12px;overflow-wrap:anywhere}

@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "profile": "huawei_ict_agentarts",
+  "surface": "Runtime Application only; no Desktop or IPC",
+  "evidenceLevel": "conditional",
+  "startedAt": "2026-09-17T10:19:33.687Z",
+  "finishedAt": "2026-09-17T10:21:01.982Z",
+  "taskId": "1fecb109-1f76-4960-b1f7-3b0c513ce73e",
+  "codeVersion": {
+    "runtimeHead": "291ad4aaafd9a2c9b9b1084cd61259d14c27115b",
+    "helperCommit": "ece2151df70158ca1ecdc62b3ac1a74e92558152",
+    "harnessSha256": "0a470840838516839dda79ef7685d6a77df30e19288b36d973ec5d472364aba8"
+  },
+  "runtimeEnvironment": {
+    "tlsTrustMode": "system-ca",
+    "nodeVersion": "v26.3.0"
+  },
+  "networkCallCount": 1,
+  "authorizationReadCount": 1,
+  "transportFailureCategory": "none",
+  "firstRun": {
+    "state": "failed",
+    "errorCode": "EXTERNAL_FAILURE",
+    "verification": "unavailable",
+    "hasResult": false,
+    "evidenceRefCount": 0
+  },
+  "response": {
+    "status": 200,
+    "contentType": "text/event-stream",
+    "bodyOutcome": "complete",
+    "byteCount": 510406,
+    "chunkCount": 1879,
+    "inspectedByteCount": 510406,
+    "inspectionTruncated": false,
+    "utf8": "valid",
+    "eventCount": 1878,
+    "eventCounts": {
+      "task_start": 1,
+      "workflow_start": 3,
+      "message": 1868,
+      "workflow_end": 3,
+      "task_end": 1,
+      "end": 1,
+      "error": 0,
+      "status": 0,
+      "other": 1
+    },
+    "tailEventNames": [
+      "workflow_end",
+      "other",
+      "task_end",
+      "end"
+    ],
+    "messageTextTotalCodeUnits": 2180,
+    "workflowAnswerMaxCodeUnits": 1449,
+    "indexedMessages": {
+      "coverage": "partial",
+      "trackedIndexCount": 1024,
+      "validIndexOccurrences": 1865,
+      "invalidIndexCount": 0,
+      "missingIndexCount": 3,
+      "conflictCount": 2,
+      "conflictObserved": true
+    }
+  },
+  "restart": {
+    "sameDatabase": true,
+    "submittedDuringRestart": false,
+    "authorizationReadCount": 0,
+    "fetchCallCount": 0,
+    "state": "failed",
+    "errorCode": "EXTERNAL_FAILURE",
+    "verification": "unavailable"
+  },
+  "automaticRetryPerformed": false,
+  "localFallbackConfigured": false,
+  "conclusion": "System-CA isolated process received the complete HTTP/SSE response, including ordered task_end/end. Global index-text conflicts were observed; the current adapter rejects such conflicts. The report does not establish whether conflicts are within or across workflows, or exclude other validation failures.",
+  "notVerified": [
+    "specific first production rejection branch",
+    "workflow-local versus cross-workflow conflict scope",
+    "Desktop success",
+    "trusted tool or Evidence loop"
+  ],
+  "security": {
+    "rawResponseSaved": false,
+    "credentialsRecorded": false,
+    "privateInputSent": false
+  }
+}
