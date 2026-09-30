@@ -93,6 +93,68 @@ test('multi-article pages bind exact consumers and preserve item citations throu
     host.dispose();restored.dispose();
   });
 
+test('a resumed consumer cannot attach another consumer newer receipt to its older notice', async () => {
+  const ports = await import(process.env.PA_KNOWLEDGE_FEED_RECEIPT_TEST_MODULE
+    ?? new URL('../../runtime/dist/application/knowledge-feed-receipt.js', import.meta.url).href);
+  const knowledgeFeedReceipts = Object.fromEntries(['createKnowledgeFeedReceipt','parseKnowledgeFeedReceipt',
+    'verifyKnowledgeFeedReceiptBinding','knowledgeFeedReceiptItems'].map(key => [key,ports[key]]));
+  const rows = new Map(); const tasks = new Map();
+  const checkpoints = {loadCheckpoint(taskId,key) { return structuredClone(rows.get(`${taskId}:${key}`)); },
+    saveCheckpoint(taskId,key,value) { rows.set(`${taskId}:${key}`,structuredClone(value)); }};
+  const runtime = {...checkpoints,findTaskByIdempotencyKey(key) { return structuredClone(tasks.get(key)); },
+    submitTask(input) { const task={...input,taskId:`task-${tasks.size+1}`,state:'created',evidenceRefs:[]};
+      tasks.set(input.idempotencyKey,task);return structuredClone(task); }};
+  let time = base; let page = 2;
+  const options = {profile:'huawei_ict_agentarts',namespace:'fixture-user',checkpointTaskId:'root-task',
+    checkpoints,runtime,knowledgeFeedReceipts,now:()=>time,
+    interestDecider:{choose:async()=>({outcome:'selected',requiresHostRevalidation:true,
+      selected:{id:'track_public',revision:1},receipt:{modelReceiptId:'fixture-laya'}})},
+    feedCollect:async()=>({items:['rust','typescript'].map(topic => ({title:`${topic} article`,
+      summary:`${topic} release v${page}.`,record:{dedupeKey:topic,contentRef:`https://example.com/${topic}/v${page}`,occurredAt:iso(base)}})),
+      nextCursor:`cursor-${page}`,hasMore:false,collection:{state:'fetched',subscriptionId:'feed-a',fetchedAt:iso(time),
+        validators:{etag:`page-v${page}`,lastModified:null}}})};
+  const host = createKnowledgeWatchHost(options); host.start();
+  let restored;
+  try {
+    for (const topicId of ['rust','typescript']) {
+      const signal={namespace:'fixture-user',topicId,at:iso(base),evidenceMaxAgeMs:120000,watchDurationMs:3600000,
+        evidence:[{id:`${topicId}-q`,topicId,sourceId:'conversation',sourceRevision:'r1',occurredAt:iso(base-1000),interactionId:`${topicId}-q`,kind:'question',match:'semantic'},
+          {id:`${topicId}-f`,topicId,sourceId:'conversation',sourceRevision:'r1',occurredAt:iso(base),interactionId:`${topicId}-f`,kind:'followup',match:'semantic',relatedEvidenceId:`${topicId}-q`}],
+        source:{id:'feed-a',revision:'baseline',visibility:'public',risk:'low',transportVerified:true,verificationExpiresAt:iso(base+3600000)},
+        scope:{id:'public-scope',revision:1,state:'granted',publicLowRiskTracking:true,expiresAt:iso(base+3600000)},
+        sourceContent:{contentSha256:'a'.repeat(64),cacheVersion:'baseline',lastSuccessfulCheck:iso(base-1000),validUntil:iso(base+3600000)}};
+      assert.equal((await host.consumeInterestSignal(signal,{deadline:iso(base+60000),signal:new AbortController().signal})).watch.state,'tracked');
+    }
+    time += 1000;
+    assert.equal((await host.refreshSubscribedFeed({subscriptionId:'feed-a'})).accepted,true);
+    const before = host.dialogueProjection().items.find(item => item.topicId === 'rust');
+    assert.equal(before.answer.kind,'latest_observation');
+    assert.equal(before.answer.items.find(item => item.itemKey === 'rust').citation,'https://example.com/rust/v2');
+    await host.pause('rust'); page = 3; time += 1000;
+    assert.equal((await host.refreshSubscribedFeed({subscriptionId:'feed-a'})).accepted,true);
+    await host.resume('rust');
+    restored = createKnowledgeWatchHost(options); restored.start();
+    for (const target of [host,restored]) {
+      const projection = target.dialogueProjection();
+      const rust = projection.items.find(item => item.topicId === 'rust');
+      const typescript = projection.items.find(item => item.topicId === 'typescript');
+      assert.equal(rust.update.sourceRevision,before.update.sourceRevision);
+      assert.equal(rust.update.contentSha256,before.update.contentSha256);
+      assert.equal(rust.update.fetchedAt,before.update.fetchedAt);
+      assert.equal(rust.update.citation,before.update.citation);
+      assert.notEqual(rust.latestObservation.revision,rust.update.sourceRevision);
+      assert.equal(rust.update.usableAsLatestObservation,false);
+      assert.equal(rust.answer.kind,'withheld');
+      assert.equal(rust.answer.items,undefined);
+      assert.equal(rust.answer.citationBundleRef,undefined);
+      assert.equal(typescript.answer.kind,'latest_observation');
+      assert.equal(typescript.answer.sourceRevision,typescript.latestObservation.revision);
+      assert.ok(typescript.answer.items.every(item => item.sourceRevision === typescript.answer.sourceRevision));
+      assert.equal(typescript.answer.items.find(item => item.itemKey === 'typescript').citation,'https://example.com/typescript/v3');
+    }
+  } finally { host.dispose(); restored?.dispose(); }
+});
+
 test('knowledge page renders each original statement beside its own citation and hides bundle identities', () => {
   const html=knowledgeFeedCitationHtml({citation:null,citationBundleRef:'knowledge-feed-citations:internal',items:[
     {itemKey:'rust',citation:'https://example.com/rust',title:'Rust',excerpt:'Rust statement',sourceRevision:'page-v2'},

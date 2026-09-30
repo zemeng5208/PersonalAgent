@@ -635,6 +635,12 @@ export function createKnowledgeWatchHost({
       const notice = Object.values(document.notices)
         .filter(item => Array.isArray(item.topicIds) && item.topicIds.includes(projected.topicId))
         .sort((left, right) => instant(right.latest?.fetchedAt) - instant(left.latest?.fetchedAt))[0] ?? null;
+      // A topic's notice may remain older while another consumer advances the shared head.
+      // Head receipt quotes can substantiate only the notice with this exact source identity.
+      const noticeMatchesHead = !!(notice && head && notice.sourceId === binding?.sourceId
+        && notice.latest?.revision === head.revision && notice.latest?.contentSha256 === head.contentSha256
+        && notice.latest?.fetchedAt === head.observedAt && notice.citation === head.citation
+        && notice.latest?.availability === head.availability);
       const latestObservation = head ? {availability: head.availability, revision: head.revision ?? null,
         contentSha256: head.contentSha256 ?? null, fetchedAt: head.observedAt ?? null,
         citation: text(head.citation) ? head.citation : null, sameAsBinding: same} : null;
@@ -645,7 +651,8 @@ export function createKnowledgeWatchHost({
         delivered: notice.delivered === true, deliveryReason: notice.deliveryReason ?? null,
         readAt: notice.readAt ?? null,
         usableAsLatestObservation: bound && projected.state === 'tracked'
-          && text(notice.citation) && notice.latest?.availability === 'available' && !unknown && receiptMatchesHead,
+          && text(notice.citation) && notice.latest?.availability === 'available' && !unknown
+          && receiptMatchesHead && noticeMatchesHead,
         dataClass: 'untrusted_source_text',
         untrustedExcerpt: projected.state === 'revoked' ? null : notice.untrustedExcerpt ?? null} : null;
       let answer;
