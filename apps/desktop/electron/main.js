@@ -391,34 +391,40 @@ function privateMemoryController() {
   if (!privateMemory) {
     mkdirSync(path.dirname(dataPaths.privateMemory), {recursive: true});
     privateMemory = createPrivateMemoryController(dataPaths.privateMemory, async details => {
-      const answer = await dialog.showMessageBox(admin, {
+      const originAdmin=admin;if(!originAdmin || originAdmin.isDestroyed())return false;
+      const answer = await dialog.showMessageBox(originAdmin, {
         type: 'question', title: '确认私人记忆',
         message: details.previous ? '确认更正这条私人记忆？' : '确认保存这条私人记忆？',
         detail: `来源：${details.source.path}:${details.source.line}\n摘录：${details.citation}\n\n拟保存：${details.summary}`,
         buttons: ['确认保存', '取消'], defaultId: 1, cancelId: 1, noLink: true,
       });
-      return answer.response === 0 && admin && !admin.isDestroyed();
+      return answer.response === 0 && admin===originAdmin && !originAdmin.isDestroyed();
     }, async current => {
-      const answer = await dialog.showMessageBox(admin, {
+      const originAdmin=admin;if(!originAdmin || originAdmin.isDestroyed())return false;
+      const answer = await dialog.showMessageBox(originAdmin, {
         type: 'warning', title: '删除私人记忆', message: '删除这条私人记忆的全部版本？',
         detail: `当前摘要：${current.summary}\n来源：${current.sourceRef}`,
         buttons: ['删除所有版本', '取消'], defaultId: 1, cancelId: 1, noLink: true,
       });
-      return answer.response === 0 && admin && !admin.isDestroyed();
+      return answer.response === 0 && admin===originAdmin && !originAdmin.isDestroyed();
     }, {confirmWithdraw:async current=>{
-      const answer=await dialog.showMessageBox(admin,{type:'question',title:'撤回私人记忆',
+      const originAdmin=admin;if(!originAdmin || originAdmin.isDestroyed())return false;
+      const answer=await dialog.showMessageBox(originAdmin,{type:'question',title:'撤回私人记忆',
         message:'停止后续任务消费这条私人记忆？',detail:`版本 ${current.ref?.revision??current.revision}`,
         buttons:['撤回','取消'],defaultId:1,cancelId:1,noLink:true});
-      return answer.response===0 && admin && !admin.isDestroyed();
+      return answer.response===0 && admin===originAdmin && !originAdmin.isDestroyed();
     },authorizeConsumption:async scope=>{
       if(!admin || admin.isDestroyed() || !runtimeApplication || !scope.taskId) return false;
+      const originAdmin=admin,originApplication=runtimeApplication;
       const task=runtimeApplication.runtime.getTask(scope.taskId);
-      if(['succeeded','failed','cancelled'].includes(task.state)) return false;
-      const answer=await dialog.showMessageBox(admin,{type:'question',title:'本次任务使用私人记忆',
+      if(task.cancelRequested || ['succeeded','failed','cancelled'].includes(task.state)) return false;
+      const answer=await dialog.showMessageBox(originAdmin,{type:'question',title:'本次任务使用私人记忆',
         message:scope.destination==='agentarts'?'允许本次任务把所选记忆摘要发送给 AgentArts？':'允许本次任务使用所选记忆摘要？',
         detail:`任务：${scope.taskId}\n${scope.facts.map(f=>`版本 ${f.ref.revision}：${f.summary}`).join('\n')}`,
         buttons:['仅本次允许','取消'],defaultId:1,cancelId:1,noLink:true});
-      return answer.response===0 && admin && !admin.isDestroyed();
+      if(answer.response!==0 || admin!==originAdmin || originAdmin.isDestroyed() || runtimeApplication!==originApplication)return false;
+      const current=originApplication.runtime.getTask(scope.taskId);
+      return !current.cancelRequested && !['succeeded','failed','cancelled'].includes(current.state);
     }});
   }
   return privateMemory;
@@ -1467,6 +1473,7 @@ async function initializeRuntime() {
       try {
         p5DeviceReceiptStore = createP5DeviceReceiptStore({
           filePath: path.join(app.getPath('userData'), 'p5-device-receipts.json'),
+          storage:runtimeApplication.createHostStateStore('device-notifications'),
         });
       } catch {
         p5UnavailableReason = 'P5 本地提醒回执文件损坏或不可用，设备提醒不会启用';
@@ -1477,6 +1484,16 @@ async function initializeRuntime() {
         Notification, store: p5DeviceReceiptStore,
         isActive: () => Boolean(p5DeviceTelemetrySubscription && p5Cognition?.snapshot().state === 'running'),
         readProvenance: notification => p5SystemObservationSource?.readCurrentProvenance(notification),
+        readDeliveryPolicy:()=>{
+          const status=todoHost?.snapshot().notificationStatus;
+          if(!status || !['pausedUntil','quietUntil'].every(key=>status[key]===null
+            || (typeof status[key]==='string' && Number.isFinite(Date.parse(status[key]))))) {
+            return {allowed:false,reason:'unavailable'};
+          }
+          if(status.pausedUntil && Date.parse(status.pausedUntil)>Date.now())return {allowed:false,reason:'paused'};
+          if(status.quietUntil && Date.parse(status.quietUntil)>Date.now())return {allowed:false,reason:'quiet_hours'};
+          return {allowed:true,reason:null};
+        },
         onUpdate: publish, onLateOutcome: reconcileDeviceDeliveries,
       }) : undefined;
       const notificationPort = p5DeviceNotificationHost;
@@ -2197,8 +2214,8 @@ async function initializeSisVoice() {
         }
       },
       onTaskSubmitted: ({taskId, goal}) => {
-        conversations.add(taskId, 'panel', goal);
         taskGoals.set(taskId, goal);
+        conversations.add(taskId, 'panel', goal);
       }});
     voicePcmSource = source;
     sisPlaybackHost = playback;
@@ -2240,14 +2257,14 @@ async function initializeLiveVoice() {
     createGateway: config => runtimeApplication.createLiveVoiceModel(config),
     createConsumer: createRuntimeClientTranscriptConsumer, client, onUpdate: publish,
     onTranscript: message => conversations.addLiveMessage(message),
-    onTaskSubmitted: ({taskId, goal}) => {conversations.add(taskId, 'panel', goal); taskGoals.set(taskId, goal);},
+    onTaskSubmitted: ({taskId, goal}) => {taskGoals.set(taskId, goal);conversations.add(taskId, 'panel', goal);},
     readContext: () => JSON.stringify({profile: 'huawei_ict_agentarts',
       agentArts:{configured:agentArtsConfig.snapshot().configured,reason:agentArtsConfig.snapshot().reason},
       tasks: orderedTasks().filter(task => taskSurface(task) === 'panel').slice(-10)
         .map(task => ({taskId: task.taskId, goal: (taskGoals.get(task.taskId) ?? conversations.goal(task.taskId) ?? '').slice(0, 800),
           state: task.state, failureReason: task.error?.message, result: resultText(task.resultSummary,taskResultMetadata(task)).slice(0, 1600),
           createdAt: conversations?.turns.get(task.taskId)?.createdAt ?? task.createdAt ?? task.updatedAt})),
-      messages: conversations.messagesFor('panel').slice(-20).map(({role, text, createdAt}) => ({role, text: text.slice(0, 1600), createdAt})),
+      messages: conversations.messagesFor('panel').slice(-20).map(({id,role, text, createdAt}) => ({id,role, text: text.slice(0, 1600), createdAt})),
       capabilities: capabilities.map(item => ({name: item.name ?? item.id, version: item.version})),
       tools: (competitionToolAvailabilityList.length ? competitionToolAvailabilityList : [
         ...(codingWorkspace?.competitionToolAvailability ?? []),
