@@ -111,3 +111,16 @@ test('revocation persists a data-free tombstone if encryption becomes unavailabl
   const restarted = await createKnowledgeSourceConfig(options); t.after(() => restarted.close());
   assert.equal(restarted.snapshot().configured, false); assert.equal(restarted.snapshot().available, false);
 });
+
+test('revoke replaces an old enabled encrypted file even when startup could not decrypt it', async t => {
+  const {host, options, userData} = await fixture(t); await host.select();
+  const unreadable = await createKnowledgeSourceConfig({...options,
+    safeStorage: {...safeStorage, isEncryptionAvailable: () => false}});
+  t.after(() => unreadable.close());
+  assert.equal(unreadable.snapshot().configured, false);
+  await unreadable.revoke(); await unreadable.revoke();
+  assert.deepEqual(JSON.parse(await readFile(join(userData, 'knowledge-source-config.json'), 'utf8')), {version: 1, revoked: true});
+  const restoredStorage = await createKnowledgeSourceConfig(options); t.after(() => restoredStorage.close());
+  assert.equal(restoredStorage.snapshot().available, false);
+  assert.equal(restoredStorage.snapshot().configured, false);
+});

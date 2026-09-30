@@ -196,17 +196,12 @@ export async function createKnowledgeSourceConfig({userData, safeStorage, namesp
     });},
     async revoke() {return mutate(async () => {
       invalidate();
-      if (saved) {
-        saved = {...saved, configRevision: saved.configRevision + 1, enabled: false};
-        try {persist(saved);}
-        catch {
-          // Revocation must persist even if OS encryption becomes unavailable; tombstone contains no source data.
-          mkdirSync(userData, {recursive: true});
-          writeFileSync(file + '.tmp', JSON.stringify({version: 1, revoked: true}), {encoding: 'utf8', mode: 0o600});
-          renameSync(file + '.tmp', file); saved = undefined;
-        }
-      }
-      failure = ''; return snapshot();
+      saved = undefined;
+      // Also replace an unreadable old encrypted configuration. Failure is reported, never claimed as persisted.
+      mkdirSync(userData, {recursive: true});
+      writeFileSync(file + '.tmp', JSON.stringify({version: 1, revoked: true}), {encoding: 'utf8', mode: 0o600});
+      renameSync(file + '.tmp', file);
+      failure = '知识源已撤销，请重新选择'; return snapshot();
     });},
     /** Trusted local admin consumers use this same binding as the Runtime tool factory. */
     acquire(expected, signal) {

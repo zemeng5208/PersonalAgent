@@ -61,7 +61,7 @@ export interface KnowledgeWritePort {
   reconcile(input: {taskId: string; runId: string; argumentsDigest: string},
     context: Pick<ToolContext, 'signal' | 'deadline'>): Promise<{
       state: 'in_progress' | 'applied' | 'not_applied' | 'unknown';
-      operationId: string; backupId: string; currentSha256?: string;
+      operationId: string; backupId: string; lockRetained: boolean; currentSha256?: string;
     }>;
 }
 
@@ -90,9 +90,40 @@ function metadata(content: string): string {
   return content.slice(0, bodyOffset + match.index + match[0].length);
 }
 function links(content: string): string[] {
-  // Preserve wikilinks, Markdown inline/reference links, definitions and block IDs.
-  return [...content.matchAll(/!?\[\[[^\]\r\n]+\]\]|!?\[[^\]\r\n]*\]\([^\r\n]*?\)|!?\[[^\]\r\n]+\]\[[^\]\r\n]*\]|^ {0,3}\[[^\]\r\n]+\]:[^\r\n]*|(?:^|\s)\^[A-Za-z0-9-]+(?=\s|$)/gm)]
-    .map(item => item[0]);
+  // Conservative tokenizer: preserve every bracket span, including shortcut references and code spans.
+  // Balanced/escaped destinations are consumed fully; malformed spans refuse the patch rather than guess.
+  const protectedSpans: string[] = [];
+  function closing(start: number, left: string, right: string): number {
+    let depth = 0, quote = '', angled = false;
+    for (let i = start; i < content.length; i++) {
+      const character = content[i]!;
+      if (character === '\\') {i++; continue;}
+      if (left === '(') {
+        if (quote) {if (character === quote) quote = ''; continue;}
+        if (angled) {if (character === '>') angled = false; continue;}
+        if ((character === '"' || character === "'") && /\s/.test(content[i - 1] ?? '')) {quote = character; continue;}
+        if (character === '<') {angled = true; continue;}
+      }
+      if (character === left) depth++;
+      else if (character === right && --depth === 0) return i;
+    }
+    deny('SCOPE_DENIED');
+  }
+  for (let i = 0; i < content.length; i++) {
+    if (content[i] === '\\') {i++; continue;}
+    if (content[i] !== '[') continue;
+    const start = content[i - 1] === '!' ? i - 1 : i;
+    let end = closing(i, '[', ']');
+    if (content[end + 1] === '(') end = closing(end + 1, '(', ')');
+    else if (content[end + 1] === '[') end = closing(end + 1, '[', ']');
+    else if (content[end + 1] === ':') {
+      const newline = content.indexOf('\n', end + 1);
+      end = newline < 0 ? content.length - 1 : newline - 1;
+    }
+    protectedSpans.push(content.slice(start, end + 1)); i = end;
+  }
+  protectedSpans.push(...[...content.matchAll(/<https?:\/\/[^>\r\n]+>|(?:^|\s)\^[A-Za-z0-9-]+(?=\s|$)/gm)].map(item => item[0]));
+  return protectedSpans;
 }
 function protect(before: string, after: string): void {
   if (metadata(before) !== metadata(after)) deny('SCOPE_DENIED');
@@ -208,24 +239,33 @@ export function openControlledVaultWriter(options: {
         expectedRunId: input.runId, expectedArgumentsDigest: input.argumentsDigest,
         expectedBeforeSha256: record.beforeSha256, retainMarker: true});
       active(context); assertBinding();
-      if (helper.state === 'in_progress') return {state: 'in_progress', operationId, backupId: record.backupId};
+      if (helper.state === 'in_progress') return {state: 'in_progress', operationId, backupId: record.backupId, lockRetained: true};
       // Host-authorized read-only port, not an invented ToolContext or a write authorization.
       const readback = await openReadOnlyVault({vaultId: options.sourceId, rootPath: root});
       const result = await readback.readNote({path: record.path, ...context});
-      const currentSha256 = result.revision;
-      const state = currentSha256 === record.afterSha256 ? 'applied'
-        : currentSha256 === record.beforeSha256 ? 'not_applied' : 'unknown';
-      // Preserve unknown lock and all backups. A separate newly approved operation is required to restore.
-      if (state !== 'unknown') {
-        await reconcileWorkspacePatchApply({rootPath: root, recoveryRootPath: recovery,
-          relativePath: record.path, powerShellPath: options.powerShellPath,
-          expectedRunId: input.runId, expectedArgumentsDigest: input.argumentsDigest,
-          expectedBeforeSha256: record.beforeSha256});
+      active(context); assertBinding();
+      // Every shared readback retains its marker. The shared default clear also removes unknown markers,
+      // so this read-only bridge must never call it to release an interrupted helper automatically.
+      const finalHelper = await reconcileWorkspacePatchApply({rootPath: root, recoveryRootPath: recovery,
+        relativePath: record.path, powerShellPath: options.powerShellPath,
+        expectedRunId: input.runId, expectedArgumentsDigest: input.argumentsDigest,
+        expectedBeforeSha256: record.beforeSha256, retainMarker: true});
+      active(context); assertBinding();
+      if (finalHelper.state === 'in_progress') return {state: 'in_progress', operationId, backupId: record.backupId, lockRetained: true};
+      const currentSha256 = finalHelper.state === 'reconciled' ? finalHelper.currentSha256
+        : (await readback.readNote({path: record.path, ...context})).revision;
+      const unchanged = result.revision === currentSha256
+        && (helper.state !== 'reconciled' || helper.currentSha256 === currentSha256);
+      const state = unchanged && currentSha256 === record.afterSha256 ? 'applied'
+        : unchanged && currentSha256 === record.beforeSha256 ? 'not_applied' : 'unknown';
+      // Unknown or a still-present shared marker remains locked for trusted Runtime finalization.
+      const lockRetained = state === 'unknown' || finalHelper.state !== 'clear';
+      if (!lockRetained) {
         if (existsSync(pathLock(record.path)) && readFileSync(pathLock(record.path), 'utf8') === operationId) {
           unlinkSync(pathLock(record.path));
         }
       }
-      return {state, operationId, backupId: record.backupId, currentSha256};
+      return {state, operationId, backupId: record.backupId, currentSha256, lockRetained};
     }
   };
 }
