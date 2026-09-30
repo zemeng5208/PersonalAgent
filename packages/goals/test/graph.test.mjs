@@ -52,6 +52,26 @@ test('replay supports JSON roundtrip and immutable historical snapshots', () => 
   assert.deepEqual(graphAt(graph, 0), createGraph('person-a'));
   assert.throws(() => graphAt(graph, 5), {code: 'INVALID_ARGUMENT'});
 });
+test('content-free erased positions preserve old graph revisions and future append order', () => {
+  let graph = createGraph('person-a');
+  for (const id of ['first', 'erased', 'last']) graph = appendVersion(graph, graph.revision, node(id));
+  const sparse = {namespace: graph.namespace, revision: 3,
+    history: [graph.history[0], graph.history[2]], erasedGraphRevisions: [2]};
+  assert.deepEqual(parseGraph(JSON.parse(JSON.stringify(sparse))), sparse);
+  assert.deepEqual(graphAt(sparse, 1), {namespace: 'person-a', revision: 1,
+    history: [graph.history[0]]});
+  assert.deepEqual(graphAt(sparse, 2), {namespace: 'person-a', revision: 2,
+    history: [graph.history[0]], erasedGraphRevisions: [2]});
+  const appended = appendVersion(sparse, 3, node('future'));
+  assert.equal(appended.revision, 4);
+  assert.deepEqual(appended.history.map(item => item.graphRevision), [1, 3, 4]);
+  for (const bad of [
+    {...sparse, erasedGraphRevisions: []},
+    {...sparse, erasedGraphRevisions: [1]},
+    {...sparse, erasedGraphRevisions: [2, 2], revision: 4},
+    {...sparse, history: [graph.history[0], {...graph.history[2], graphRevision: 2}]},
+  ]) assert.throws(() => parseGraph(bad), {code: 'INVALID_ARGUMENT'});
+});
 test('restore prior content by appending, keeping correction history intact', () => {
   const original = fixture();
   const corrected = appendVersion(original, 4, {...node('meeting'), summary: '17:00'});

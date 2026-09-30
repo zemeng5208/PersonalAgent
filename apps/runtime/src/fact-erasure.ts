@@ -18,7 +18,11 @@ export function eraseDependentGraphHistory(snapshot: GraphSnapshot, targetId: st
       }
     }
   }
-  const history = graph.history.filter(node => !removed.has(node.id))
-    .map((node, index) => ({...node, graphRevision: index + 1}));
-  return parseGraph({namespace: graph.namespace, revision: history.length, history});
+  const history = graph.history.filter(node => !removed.has(node.id));
+  if (history.length === graph.history.length) return graph;
+  const erasedGraphRevisions = [...(graph.erasedGraphRevisions ?? []),
+    ...graph.history.filter(node => removed.has(node.id)).map(node => node.graphRevision)]
+    .sort((a, b) => a - b);
+  return parseGraph({namespace: graph.namespace, revision: graph.revision, history,
+    erasedGraphRevisions});
 }

@@ -267,6 +267,9 @@ export const RUNTIME_MIGRATIONS: readonly Migration[] = [{
     'CREATE INDEX task_schedules_due ON task_schedules(status, run_at);',
     'CREATE INDEX task_schedules_conversation ON task_schedules(conversation_id);'
   ].join('\n')
+}, {
+  version: 9,
+  sql: 'CREATE TABLE coordination_fact_erasure_receipts (graph_namespace TEXT NOT NULL, memory_namespace TEXT NOT NULL, fact_id TEXT NOT NULL, operation_id TEXT NOT NULL, expected_graph_revision INTEGER NOT NULL CHECK (expected_graph_revision >= 0), committed_at TEXT NOT NULL, PRIMARY KEY (graph_namespace, memory_namespace, fact_id), UNIQUE (graph_namespace, operation_id)) STRICT;'
 }];
 
 export class RuntimeError extends Error {
