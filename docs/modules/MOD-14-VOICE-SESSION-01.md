@@ -151,9 +151,11 @@ P8 消费合同：
    元数据失败不能改写 Runtime 的受理状态。
 
 验证：`node --test apps/desktop/test/live-voice-host.test.mjs
-apps/desktop/test/live-voice-history.test.mjs` 共 17/17 通过；`git diff --check`
+apps/desktop/test/live-voice-history.test.mjs` 共 18/18 通过；`git diff --check`
 通过。覆盖多轮/续接/显式停止、失败回补与修订、并发 task 状态隔离、同 callId
 幂等、consumer 工厂异常、在途连接关闭、同步释放失败及旧回调隔离。
+独立合成夹具还实际读回原 `Conversations` JSON 文件：失败回补后的 user/assistant
+与既有文字 task 共用该文件，修订同 ID 后重启读取不重复；未写入用户真实历史文件。
 此证据为离线显式 Fake，仅证明宿主消费者行为；P8 的主进程/文字上下文消费、
 真实千问双向音频与工具桥、物理麦克风/扬声器仍需在最终组合中分别验收。
 磁盘持续不可写时，覆盖层不具备跨进程耐久性，不能宣称重启后仍保留未落盘消息。
