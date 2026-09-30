@@ -306,3 +306,36 @@ test('due cancellation after feed read stops the delayed read/submit path and re
     fx.host.dispose();
   }
 });
+
+test('concurrent source consumers atomically claim one notification send', async () => {
+  let releaseReads;
+  const readsReady = new Promise(resolve => { releaseReads = resolve; });
+  let reads = 0;
+  let releaseDelivery;
+  const deliveryReady = new Promise(resolve => { releaseDelivery = resolve; });
+  let deliveryWaiters = 0;
+  let sends = 0;
+  const fx = fixture({workPort: {
+    async read() { reads += 1; if (reads === 2) releaseReads(); await readsReady;
+      return {state: 'accepted', taskId: 'same-runtime-recheck'}; },
+    async submit() { assert.fail('the existing exact task should be read back'); },
+  }, notificationPort: {async send() { sends += 1; return {delivered: true, receiptId: 'system-receipt'}; }}});
+  await fx.track(); fx.advance();
+  const event = {namespace, sourceId:'feed-a', availability:'available', revision:'observed-v2',
+    contentSha256:'b'.repeat(64), fetchedAt:iso(start+1000), citation:{locator:'https://example.com/article-a'},
+    summary:'Public source update.'};
+  const request = {revalidate: async () => {
+    if (fx.host.snapshot().notices.some(notice => !notice.deliveryAttempted)) {
+      deliveryWaiters += 1;
+      if (deliveryWaiters === 2) releaseDelivery();
+      await deliveryReady;
+    }
+    return true;
+  }};
+  const [first, second] = await Promise.all([fx.host.consumeSourceUpdate(event, request), fx.host.consumeSourceUpdate(event, request)]);
+  assert.equal(first.accepted, true); assert.equal(second.accepted, true);
+  assert.equal(reads, 2); assert.equal(sends, 1);
+  assert.equal(fx.host.snapshot().notices.length, 1);
+  assert.equal(fx.host.snapshot().notices[0].delivered, true);
+  fx.host.dispose();
+});
