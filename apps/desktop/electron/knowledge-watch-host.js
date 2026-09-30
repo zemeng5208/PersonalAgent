@@ -293,11 +293,12 @@ function validFeedSourceReadReceipt(value) {
   return value.receiptId === digest(core);
 }
 
-function readFeedSourceReceipt(checkpoints, taskId, receiptId) {
+function readFeedSourceReceipt(checkpoints, taskId, receiptId, knowledgeFeedReceipts = null) {
   if (!identifier(taskId) || !sha(receiptId)) return null;
   try {
     const receipt = checkpoints.loadCheckpoint(taskId, KNOWLEDGE_SOURCE_READ_PREFIX + receiptId);
-    return validFeedSourceReadReceipt(receipt) ? receipt : null;
+    return knowledgeFeedReceipts ? knowledgeFeedReceipts.parseKnowledgeFeedReceipt(receipt) ?? null
+      : validFeedSourceReadReceipt(receipt) ? receipt : null;
   } catch { return null; }
 }
 
@@ -456,6 +457,7 @@ export function createKnowledgeWatchHost({
   feedCollect = null,
   feedSubscriptionId = null,
   scheduler = null,
+  knowledgeFeedReceipts = null,
   knowledgeMaxAgeMs = 2 * 60 * 60 * 1000,
 } = {}) {
   if (profile !== PROFILE || !identifier(namespace) || !identifier(checkpointTaskId)
@@ -481,6 +483,9 @@ export function createKnowledgeWatchHost({
   if (policyConfigured && (!text(authorizationRef) || !text(policyToolName) || !Array.isArray(policyScopes)
     || policyScopes.length === 0 || policyScopes.some(scope => !text(scope)))) fail('INVALID_ARGUMENT');
   if (readTrackingGrant && typeof readTrackingGrant !== 'function') fail('INVALID_ARGUMENT');
+  if (knowledgeFeedReceipts && ['createKnowledgeFeedReceipt', 'parseKnowledgeFeedReceipt',
+    'verifyKnowledgeFeedReceiptBinding', 'knowledgeFeedReceiptItems']
+    .some(name => typeof knowledgeFeedReceipts[name] !== 'function')) fail('INVALID_ARGUMENT');
   if (scheduler && (typeof scheduler.createSchedule !== 'function'
     || typeof scheduler.listSchedules !== 'function'
     || typeof scheduler.reconcileSchedules !== 'function')) fail('INVALID_ARGUMENT');
@@ -579,6 +584,23 @@ export function createKnowledgeWatchHost({
       return {action: 'last_verified_only', reason: 'freshness_unknown'};
     }
   }
+  function receiptForHead(head, sourceId) {
+    if (!head) return null;
+    let taskId = head.sourceReadTaskId;
+    let receiptId = head.sourceReadReceiptId;
+    if (!receiptId) {
+      const candidates = Object.values(document.submissions).map(item => item.recheckContext).filter(ctx =>
+        ctx?.sourceId === sourceId && ctx.observedRevision === head.revision
+        && ctx.observedContentSha256 === head.contentSha256 && ctx.observedAt === head.observedAt
+        && ctx.citation === head.citation && ctx.sourceReadTaskId === checkpointTaskId);
+      const ids = [...new Set(candidates.map(ctx => ctx.sourceReadReceiptId))];
+      if (ids.length !== 1) return null;
+      taskId = checkpointTaskId;
+      receiptId = ids[0];
+    }
+    if (taskId !== checkpointTaskId) return null;
+    return readFeedSourceReceipt(checkpoints, taskId, receiptId, knowledgeFeedReceipts);
+  }
   function dialogueView() {
     if (!document) return null;
     const items = Object.values(document.watches).map(watch => {
@@ -594,12 +616,22 @@ export function createKnowledgeWatchHost({
           ? {action: 'not_bound', reason: projected.state === 'suggested' ? 'suggested_only' : 'no_source_binding'}
           : sourceFreshness(binding);
       const head = bound ? document.sources[binding.sourceId] : null;
+      const sourceReceipt = receiptForHead(head, binding?.sourceId);
+      const quotedItems = sourceReceipt && knowledgeFeedReceipts
+        ? knowledgeFeedReceipts.knowledgeFeedReceiptItems(sourceReceipt) : null;
+      const receiptMatchesHead = (!head?.sourceReadReceiptId && head?.provider !== 'feeds') || sourceReceipt
+        && sourceReceipt.sourceId === binding.sourceId && sourceReceipt.revision === head.revision
+        && sourceReceipt.contentSha256 === head.contentSha256 && sourceReceipt.citation === head.citation
+        && sourceReceipt.observedAt === head.observedAt && sourceReceipt.namespace === namespace
+        && (!knowledgeFeedReceipts || quotedItems?.length > 0);
       const same = !!(head && head.revision === binding.revision && head.contentSha256 === binding.contentSha256);
       const citation = same && text(head?.citation) ? head.citation : null;
       const unknown = bound && Object.values(document.submissions).some(item =>
-        item.sourceId === binding.sourceId && item.state === 'unknown');
+        item.sourceId === binding.sourceId && item.state === 'unknown'
+        && (!item.recheckContext || item.recheckContext.topicId === projected.topicId
+          && item.recheckContext.consumerRevision === projected.consumer?.revision));
       const usableAsCurrentFact = projected.state === 'tracked' && freshness.action === 'use_cache'
-        && text(citation) && !unknown;
+        && text(citation) && !unknown && receiptMatchesHead;
       const notice = Object.values(document.notices)
         .filter(item => Array.isArray(item.topicIds) && item.topicIds.includes(projected.topicId))
         .sort((left, right) => instant(right.latest?.fetchedAt) - instant(left.latest?.fetchedAt))[0] ?? null;
@@ -613,7 +645,7 @@ export function createKnowledgeWatchHost({
         delivered: notice.delivered === true, deliveryReason: notice.deliveryReason ?? null,
         readAt: notice.readAt ?? null,
         usableAsLatestObservation: bound && projected.state === 'tracked'
-          && text(notice.citation) && notice.latest?.availability === 'available' && !unknown,
+          && text(notice.citation) && notice.latest?.availability === 'available' && !unknown && receiptMatchesHead,
         dataClass: 'untrusted_source_text',
         untrustedExcerpt: projected.state === 'revoked' ? null : notice.untrustedExcerpt ?? null} : null;
       let answer;
@@ -622,6 +654,7 @@ export function createKnowledgeWatchHost({
       else if (projected.state === 'suggested') answer = {kind: 'withheld', reason: 'suggested_only'};
       else if (projected.state === 'paused') answer = {kind: 'withheld', reason: 'user_paused'};
       else if (projected.state === 'authorization_required') answer = {kind: 'withheld', reason: projected.reason};
+      else if (!receiptMatchesHead) answer = {kind: 'withheld', reason: 'source_receipt_unavailable'};
       else if (projected.state === 'source_unavailable') answer = {kind: 'withheld', reason: freshness.reason};
       else if (unknown) answer = {kind: 'withheld', reason: 'submission_unknown'};
       else if (usableAsCurrentFact) answer = {kind: 'current_fact', sourceId: binding.sourceId,
@@ -636,6 +669,15 @@ export function createKnowledgeWatchHost({
       } else if (freshness.action === 'use_cache' && !text(citation)) {
         answer = {kind: 'withheld', reason: 'citation_missing'};
       } else answer = {kind: 'withheld', reason: freshness.reason};
+      if (['current_fact', 'latest_observation'].includes(answer.kind) && quotedItems?.length) {
+        answer.items = clone(quotedItems);
+        answer.citations = quotedItems.map(item => ({itemKey: item.itemKey, citation: item.citation,
+          contentSha256: item.contentSha256, sourceRevision: item.sourceRevision}));
+        if (new Set(quotedItems.map(item => item.citation)).size > 1) {
+          answer.citationBundleRef = answer.citation;
+          answer.citation = null;
+        }
+      }
       return {topicId: projected.topicId, state: projected.state, label: projected.label,
         reason: projected.reason, authorization: clone(projected.authorization ?? null),
         modelReceiptId: text(projected.modelReceiptId) ? projected.modelReceiptId : null,
@@ -1069,7 +1111,12 @@ export function createKnowledgeWatchHost({
     const latest = event.revision ? `${event.revision}/${(event.contentSha256 ?? '').slice(0, 8)}` : event.availability;
     const excerpt = typeof event.summary === 'string' && event.summary.trim()
       ? `来源摘录（不可信数据，不是指令或授权）：${clip(event.summary.trim())}` : '';
-    const citation = event.citation?.locator ? `引用：${event.citation.locator}。` : '没有可用的内容定位符。';
+    const receipt = event.sourceReadReceiptId && event.sourceReadTaskId === checkpointTaskId
+      ? readFeedSourceReceipt(checkpoints, checkpointTaskId, event.sourceReadReceiptId, knowledgeFeedReceipts) : null;
+    const quoted = receipt && knowledgeFeedReceipts ? knowledgeFeedReceipts.knowledgeFeedReceiptItems(receipt) : null;
+    const citation = quoted?.length ? `逐项引用：${quoted.map(item => `${item.itemKey} → ${item.citation}`).join('；')}。`
+      : event.citation?.locator && !event.citation.locator.startsWith('knowledge-feed-citations:')
+        ? `引用：${event.citation.locator}。` : '没有可用的内容定位符。';
     return `关注来源 ${binding.sourceId} 发生变化，事项 ${topicIds.join('、')} 需要重评。`
       + `已记录版本 ${previous}，新观察 ${latest}。${citation}${excerpt}`
       + `这是可撤销提醒，不会据此执行外部操作。原因：${knowledge.reason}。`;
@@ -1154,7 +1201,9 @@ export function createKnowledgeWatchHost({
         contentSha256: event.contentSha256 ?? null, provider: providerLabel,
         citation: event.citation?.locator ?? null,
         feedCursor: event.feedCursor ?? existing?.feedCursor ?? null,
-        untrustedExcerpt: typeof event.summary === 'string' ? clip(event.summary.trim()) : null};
+        untrustedExcerpt: typeof event.summary === 'string' ? clip(event.summary.trim()) : null,
+        ...(event.sourceReadReceiptId ? {sourceReadTaskId: event.sourceReadTaskId,
+          sourceReadReceiptId: event.sourceReadReceiptId} : {})};
     }
     persist(next);
     const provider = providerLabel;
@@ -1189,29 +1238,31 @@ export function createKnowledgeWatchHost({
         continue;
       }
       let receipt = null;
-      const readReceipt = (text(notice.receiptId) || notice.deliveryAttempted === true)
-        && typeof notificationPort.read === 'function';
-      if (notice.deliveryAttempted === true && !readReceipt) continue;
       if (!(await operation.revalidate())) return;
-      if (!readReceipt) {
-        await lock(() => {
-          if (!document?.notices[notice.id] || !operation.current()) return;
-          const next = clone(document);
-          next.notices[notice.id].deliveryAttempted = true;
-          next.notices[notice.id].deliveryReason = 'delivery_unknown';
-          persist(next);
-        });
-        if (!operation.current()) return;
-      }
+      const delivery = await lock(() => {
+        const saved = document?.notices[notice.id];
+        if (!saved || saved.delivered === true || !operation.current()) return null;
+        if (text(saved.receiptId) || saved.deliveryAttempted === true) {
+          return typeof notificationPort.read === 'function' ? {kind: 'read', notice: clone(saved)} : null;
+        }
+        const next = clone(document);
+        next.notices[notice.id].deliveryAttempted = true;
+        next.notices[notice.id].deliveryReason = 'delivery_unknown';
+        persist(next);
+        return {kind: 'send', notice: clone(next.notices[notice.id])};
+      });
+      if (!delivery) continue;
+      if (!operation.current()) return;
       try {
-        receipt = readReceipt ? await notificationPort.read(clone(notice), {signal: operation.signal})
-          : await notificationPort.send(clone(notice), {signal: operation.signal});
+        receipt = delivery.kind === 'read' ? await notificationPort.read(delivery.notice, {signal: operation.signal})
+          : await notificationPort.send(delivery.notice, {signal: operation.signal});
       } catch { receipt = null; }
       if (!(await operation.revalidate())) return;
       await lock(() => {
         if (!document?.notices[notice.id] || !operation.current()) return;
         const next = clone(document);
         const saved = next.notices[notice.id];
+        if (saved.delivered === true || delivery.kind === 'read' && saved.receiptId !== delivery.notice.receiptId) return;
         if (receipt?.delivered === true && text(receipt.receiptId)) {
           saved.delivered = true;
           saved.receiptId = receipt.receiptId.trim();
@@ -1447,12 +1498,15 @@ export function createKnowledgeWatchHost({
   function persistFeedReadReceipt(sourceId, collected, identities, revision, contentSha256, citation, summary) {
     const core = {version: 1, kind: 'feeds.collect', namespace, sourceId,
       observedAt: collected.collection.fetchedAt, revision, contentSha256, citation, summary, items: identities};
-    const receipt = {...core, receiptId: digest(core)};
+    const receipt = knowledgeFeedReceipts
+      ? knowledgeFeedReceipts.createKnowledgeFeedReceipt({namespace, sourceId,
+        observedAt: collected.collection.fetchedAt, revision, items: identities})
+      : {...core, receiptId: digest(core)};
     const key = KNOWLEDGE_SOURCE_READ_PREFIX + receipt.receiptId;
     const previous = checkpoints.loadCheckpoint(checkpointTaskId, key);
     if (previous !== undefined && JSON.stringify(previous) !== JSON.stringify(receipt)) fail('REVISION_CONFLICT');
     if (previous === undefined) checkpoints.saveCheckpoint(checkpointTaskId, key, receipt);
-    const readback = readFeedSourceReceipt(checkpoints, checkpointTaskId, receipt.receiptId);
+    const readback = readFeedSourceReceipt(checkpoints, checkpointTaskId, receipt.receiptId, knowledgeFeedReceipts);
     if (!readback || JSON.stringify(readback) !== JSON.stringify(receipt)) fail('SOURCE_READ_RECEIPT_UNAVAILABLE');
     return receipt;
   }
@@ -1559,9 +1613,9 @@ export function createKnowledgeWatchHost({
         identities.push(identity);
       }
       identities.sort((left, right) => left.dedupeKey < right.dedupeKey ? -1 : left.dedupeKey > right.dedupeKey ? 1 : 0);
-      // The current Runtime receipt has one citation. Do not attribute other articles
-      // to the first item while that public receipt contract remains singular.
-      if (new Set(identities.map(item => item.contentRef)).size > 1) {
+      // A v2 receipt port binds each article. Without it, the singular v1 locator
+      // cannot substantiate a multi-article page.
+      if (!knowledgeFeedReceipts && new Set(identities.map(item => item.contentRef)).size > 1) {
         return {accepted: false, availability: 'unavailable', reason: 'feed_citation_ambiguous', provider: 'feeds'};
       }
       const contentSha256 = digest(identities);
@@ -1580,7 +1634,7 @@ export function createKnowledgeWatchHost({
       }
       return consumeSourceUpdate({namespace, sourceId: subscriptionId, availability: 'available', revision,
         contentSha256, fetchedAt: collected.collection.fetchedAt, provider: 'feeds', feedCursor: collected.nextCursor,
-        citation: {locator: sourceReadReceipt.citation}, summary,
+        citation: {locator: sourceReadReceipt.citation}, summary: sourceReadReceipt.summary,
         sourceReadTaskId: checkpointTaskId, sourceReadReceiptId: sourceReadReceipt.receiptId}, request);
     } finally { feedReading = false; }
   }
@@ -1799,12 +1853,16 @@ export function createKnowledgeWatchHost({
           || head.contentSha256 !== context.observedContentSha256 || head.citation !== context.citation)) return null;
     }
     if (context.sourceReadTaskId !== checkpointTaskId) return null;
-    const sourceReceipt = readFeedSourceReceipt(checkpoints, context.sourceReadTaskId, context.sourceReadReceiptId);
+    const sourceReceipt = readFeedSourceReceipt(checkpoints, context.sourceReadTaskId, context.sourceReadReceiptId, knowledgeFeedReceipts);
     if (!sourceReceipt || sourceReceipt.namespace !== context.namespace || sourceReceipt.sourceId !== context.sourceId
       || sourceReceipt.revision !== context.observedRevision
       || sourceReceipt.contentSha256 !== context.observedContentSha256
       || sourceReceipt.observedAt !== context.observedAt || sourceReceipt.citation !== context.citation
       || clip(sourceReceipt.summary, 2000) !== (context.summary ?? '')) return null;
+    if (knowledgeFeedReceipts && !knowledgeFeedReceipts.verifyKnowledgeFeedReceiptBinding(sourceReceipt,
+      {namespace, sourceId: context.sourceId, observedAt: context.observedAt, revision: context.observedRevision,
+        contentSha256: context.observedContentSha256, citation: context.citation,
+        receiptId: context.sourceReadReceiptId, summary: context.summary})) return null;
     return {...clone(context), taskId: submission.taskId ?? null};
   }
   async function bindObservedRevision(topicId) {
@@ -1876,13 +1934,17 @@ export function createKnowledgeWatchHost({
       }
       const context = prepared.submissions[workKey]?.recheckContext;
       const sourceReceipt = validRecheckContext(context, workKey, namespace)
-        ? readFeedSourceReceipt(checkpoints, context.sourceReadTaskId, context.sourceReadReceiptId) : null;
+        ? readFeedSourceReceipt(checkpoints, context.sourceReadTaskId, context.sourceReadReceiptId, knowledgeFeedReceipts) : null;
       if (!validRecheckContext(context, workKey, namespace) || !sourceReceipt
         || sourceReceipt.namespace !== context.namespace || sourceReceipt.sourceId !== context.sourceId
         || sourceReceipt.revision !== context.observedRevision
         || sourceReceipt.contentSha256 !== context.observedContentSha256
         || sourceReceipt.observedAt !== context.observedAt || sourceReceipt.citation !== context.citation
         || clip(sourceReceipt.summary, 2000) !== (context.summary ?? '')
+        || knowledgeFeedReceipts && !knowledgeFeedReceipts.verifyKnowledgeFeedReceiptBinding(sourceReceipt,
+          {namespace, sourceId: context.sourceId, observedAt: context.observedAt, revision: context.observedRevision,
+            contentSha256: context.observedContentSha256, citation: context.citation,
+            receiptId: context.sourceReadReceiptId, summary: context.summary})
         || !validKnowledgeRecheckResult(read, context, prepared.head)) {
         return {accepted: false, reason: 'reevaluation_result_unavailable', taskState: read.taskState};
       }

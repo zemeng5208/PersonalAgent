@@ -158,11 +158,45 @@ citation/来源回执/判断 Evidence；`succeeded`、已读、系统已投递�
 
 ### 引用限制与实际验证
 
-当前 Runtime 来源回执 v1 只校验单一 citation，且要求等于第一项 contentRef。
-若采集结果包含多个不同 contentRef，本增量返回 `feed_citation_ambiguous`，保留旧来源头/
-绑定/任务，不把其他文章归到第一篇。旧的这种多文章回执也不能在本宿主提升为 current_fact。
-真实全源 RSS 的多文章重评仍需 P8/公共接口负责人交付多引用或准确 item 绑定契约；
-不能通过放宽验证器解决。单一文章、同源多个 topic 仍分别按 consumer/workKey 绑定。
+未注入 v2 回执端口时，v1 单一 citation 仍只表示第一项 contentRef；多个不同
+contentRef 返回 `feed_citation_ambiguous` 并保留旧来源头/绑定/任务。
+已注入端口的多文章路径使用下述逐项引用；单一文章和同源多个 topic 仍按 consumer/workKey 绑定。
+
+### 多文章来源回执 v2（P7 实现，P8 公共导出与接线）
+
+`apps/runtime/src/application/knowledge-feed-receipt.ts` 提供纯确定性构造与验证。
+沿用 feeds.collect 的五个条目字段和整页哈希，增加逐项
+`citationItems: [{itemKey, contentRef, itemContentSha256}]`；receiptId 包含该映射。
+每条 summary 记录原始标题、摘录、定位符和条目哈希，不把生成摘要作为来源内容。
+多定位符页面的 citation 为内部 `knowledge-feed-citations:<hash>` 身份，不能作为网页引用。
+主对话 answer 将它放入 citationBundleRef，citation 为 null；items/citations 各带原文、
+自己的定位符和来源版本。知识页将每条摘录紧邻其对应引用显示，通知同样使用逐项引用。
+
+P8 在 `@personal-agent/runtime/application` 公开导出以下四个函数，替换生产 evaluator
+的手写 v1 来源校验，同时保留根任务、consumer/binding、授权、deadline、取消和 Evidence 门槛。
+`verifyKnowledgeFeedReceiptBinding(raw, {namespace, sourceId, observedAt, revision,
+contentSha256, citation, receiptId, summary})` 要求当前 context 精确一致；summary 为回执前 2000 字符。
+main 通过 `knowledgeFeedReceipts` 注入以下同名函数，不经跨应用私有路径导入：
+
+```js
+knowledgeFeedReceipts: {
+  createKnowledgeFeedReceipt,
+  parseKnowledgeFeedReceipt,
+  verifyKnowledgeFeedReceiptBinding,
+  knowledgeFeedReceiptItems,
+}
+```
+
+旧 v1 单文章回执保持可恢复；旧 v1 多文章回执保持结构可读，但不能提升为当前事实。
+不覆写旧 unknown 工作或已有回执；获取 v2 需合法的新采集与重评上下文。
+来源头缺失回执字段时只从同一根任务、准确 source/revision/hash/time/citation 的唯一
+持久 context 恢复映射，不能用别的根任务或模型声明替代。篡改映射/摘录/哈希、缺定位符、
+来源或版本不匹配均拒绝。重评结果仍沿用既有 v2/Evidence，未修改公共请求 Schema 或数据库迁移。
+
+本增量局部验证：单文件 TypeScript 严格编译；回执测试 3/3，覆盖逐项映射、篡改拒绝和 v1 恢复；
+宿主/展示测试 2/2，覆盖两个 consumer、合成 judgment/Evidence 门槛、检查点恢复与逐项引用转义。
+宿主测试直接注入该纯 helper，仅为离线组合夹具；P8 公共导出及实际生产 evaluator 接线尚待读回。
+此次没有重跑浏览器、模型或 Desktop 冒烟，真实 RSS/用户会话/Laya/AgentArts 仍未验收。
 
 局部验证：新增 due/取消/暂停恢复/准确 grant/已读/v2 门槛 8 项离线端口测试；
 既有相关 5 项测试；两个 owned JS 的语法检查和 `git diff --check`。
