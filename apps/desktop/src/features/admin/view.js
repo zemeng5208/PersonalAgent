@@ -12,6 +12,7 @@ import {mountNotepadControls} from '../../app/notepad-controls.js';
 import {mountTodoControls} from '../../app/todo-controls.js';
 import {mountGoalCloudControls} from '../../app/goal-cloud-controls.js';
 import {mountKnowledgeControls} from '../../app/knowledge-controls.js';
+import {mountModelApiControls} from '../../app/model-api-controls.js';
 import {profilePage, bindProfile} from './profile.js';
 import {approvalPresentation, authorizationHistoryHtml, authorizationListHtml, nextApprovalExpiry} from './approval-status.js';
 import {agentArtsModelPage} from './agentarts-model.js';
@@ -126,7 +127,7 @@ export function mountAdmin(root, invoke, escape) {
   localSettingsButton.textContent = '桌面设置与恢复';
   localSettingsButton.addEventListener('click', () => window.desktop.openSettings().catch(error => { root.querySelector('#error').textContent = error.message; }));
   root.querySelector('.admin-bar').insertBefore(localSettingsButton, root.querySelector('#admin-close'));
-  let liveControls,proactiveControls,mailControls,calendarControls,layaControls,codingControls,agentArtsControls,feedsControls,notepadControls,todoControls,goalCloudControls,knowledgeControls;
+  let liveControls,proactiveControls,mailControls,calendarControls,layaControls,codingControls,agentArtsControls,feedsControls,notepadControls,todoControls,goalCloudControls,knowledgeControls,modelApiControls;
 
   function capabilityTable(data) {
     const status = data.capabilityDirectory ?? {state: 'unavailable', reason: '可信宿主尚未报告能力目录状态'};
@@ -314,6 +315,9 @@ export function mountAdmin(root, invoke, escape) {
       agentArtsControls.render(data.agentArts);
     }
     agentArtsControls?.show(showAgentArts);
+    if (section === 'models' && data.modelApi) modelApiControls ??= mountModelApiControls(root.querySelector('.main'),invoke);
+    modelApiControls?.render(data.modelApi);
+    modelApiControls?.showSettings(section === 'models');
     root.querySelector('.main').dataset.cloudConfig=String(section==='models' && data.model?.provider==='agentarts');
     const directSettings = {settings: 'general', appearance: 'appearance', voice: 'voice', shortcuts: 'shortcuts'};
     const featureSections = ['import', 'profile', 'configuration', 'personalization', 'pets', 'usage', 'analytics', 'account', 'computer', 'browser', 'hooks', 'git', 'environment', 'worktrees', 'archive', 'memory'];

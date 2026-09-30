@@ -382,12 +382,14 @@ export interface DesktopSubagentDispatchToolOptions {
     deployment?: string;
     apiKey?: string;
   };
+  /** Trusted model aliases; unregistered names fail instead of falling back to Pangu. */
+  modelRegistry?: Readonly<Record<string, (modelName: string) => ModelGateway | undefined>>;
   now?: (() => number) | undefined;
   maxRecursionDepth?: number | undefined;
 }
 
 export function createDesktopSubagentDispatchTool(options: DesktopSubagentDispatchToolOptions): RegisteredTool {
-  const {getRuntime, getTools, fakeModelMode, modelConfig, now, maxRecursionDepth} = options;
+  const {getRuntime, getTools, fakeModelMode, modelConfig, modelRegistry, now, maxRecursionDepth} = options;
   return createRuntimeSubagentDispatchTool({
     getRuntime,
     getTools,
@@ -410,8 +412,13 @@ export function createDesktopSubagentDispatchTool(options: DesktopSubagentDispat
           },
         ));
       }
+      if (modelRegistry) {
+        const requested = modelName?.trim() || 'default';
+        const factory = Object.hasOwn(modelRegistry, requested) ? modelRegistry[requested] : undefined;
+        return factory?.(requested);
+      }
       if (options.getModelGateway) return options.getModelGateway(modelName);
-      if (modelConfig?.baseUrl && modelConfig?.apiKey && (modelName === 'pangu' || !modelName)) {
+      if (modelConfig?.baseUrl && modelConfig?.apiKey && (modelName === 'pangu' || modelName === 'default' || !modelName)) {
         const apiKey = modelConfig.apiKey;
         const panguOptions: PanguModelProviderOptions = {
           baseUrl: modelConfig.baseUrl,
