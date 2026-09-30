@@ -274,3 +274,71 @@ time; TTFT stays unknown unless sampled. No extra cloud benchmark was run here.
 New child/model and Goal capabilities are not asserted ready before their
 host composition/catalog is published. Legal repair still follows the pinned
 World/Plan/Review path; local Policy and Evidence remain authoritative.
+
+## 18:19 checkpoint: Goal compatibility and Runtime v16
+
+The v15 router accepted the historical confirmed Fact repair envelope, but not
+the initial Goal REVISE projection or the current production continuation
+wrapper. v15 therefore was not claimed as Goal/continuation acceptance.
+
+Official native copies of Plan and Review preserve the original role entities.
+The existing independent MVP router was updated through its Code/prompt editor
+and native child-workflow picker. The picker did not offer workflow reference
+replacement, so only this MVP copy's old Plan/Review nodes were replaced and
+their input/output bindings restored through the visible canvas.
+
+| Role | Entity | Published source | Version |
+| --- | --- | --- | --- |
+| Goal Plan | `65236810-db21-41cb-928b-39af691c4cfa` | `1790761689353` | `mvp-goal-plan-20260930-a` |
+| Goal Review | `8004735c-cac6-4c09-9691-1a93233475ac` | `1790762412803` | `mvp-goal-review-20260930-a` |
+| MVP router | `81bc9eb8-cf6a-4869-a1a2-e3b446349447` | `1790763138570` | `mvp-goal-router-20260930-a` |
+| MVP controller | `2f5d361c-bd85-4d2f-9903-bb35d4f55afa` | `1790763483827` | `mvp-goal-controller-20260930-a` |
+
+Read-only published previews confirmed the Plan/Review prompts, the router's
+9,435-character Code source against `mvp-goal-router.py`, the World Goal
+addendum, child versions, parameter references and aggregation. Plan receives
+Start.query and World.raw_output; Review receives Start.query, Plan.response_content
+and Plan.world_result. The first-nonempty aggregate preserves Code.text_result,
+Fast.response_content and new Review.response_content. Fast stays pinned at
+`1790745445443`. Controller child/default both pin router `1790763138570`;
+published history=0, jumps=1, LLM intent mode and termination were read back.
+
+The initial Goal path consumes P5's existing fixed selected-decision prefix,
+REVISE payload/nodes and repairContext, either directly or inside existing
+`{goal,availableTools}`. `executed:false` means a proposal, not confirmed
+execution. Target.summary remains the current plan baseline; Plan compares
+actual old/new Goal semantics instead of requiring `current_plan` or copying
+strategy/Laya descriptions. Review emits only existing repair_candidate 1.0.
+Missing source/selection remains RECHECK. The original confirmed Fact path
+continues to copy requestedSummary/requestedDependencies exactly.
+
+The router accepts only the exact current production and historical confirmed
+continuation wrappers (literal prefix/suffix), rejecting appended instructions.
+For an exact recipeId/exitCode/passed receipt of a known recipe, it emits a
+qualified kind:text summary with zero model calls. The wire has no tool/version
+field; matching proposal, tool/version, persisted receipt and confirmed state
+is P8's trusted Runtime responsibility. Cloud strings grant no authority.
+Controller intent still uses a model; thinking-off and end-to-end speed are
+not claimed verified.
+
+At **2026/09/30 18:19:52 GMT+08**, the same Runtime saved **v16** and showed
+**正常**, with the existing **Latest -> v16** mapping. Environment readback:
+AGENT_TYPE=agent, AGENT_ENTITY_TYPE=agent, AGENT_ENTITY_ID=`2f5d361c-bd85-4d2f-9903-bb35d4f55afa`,
+AGENT_LAST_VERSION=`1790763483827`. Credentials, network/access configuration,
+image and other environment values were not changed. v15/v14 and original
+sources remain available. This is deployment configuration readback only;
+one final real cloud/Policy/CAS acceptance was handed to P8 after these pins.
+No additional cloud probe, evaluator invocation or paid judge was launched.
+
+Bounded local checks cover direct/wrapped Goal, executed/uncertain/RECHECK and
+reference/baseline failures, current/legacy continuation wrappers and tampering,
+old Fact confirmed/pending, recipe summary, and ordinary catalog routing.
+Replay command: `python tests/manual/agentarts/verify-mvp-goal-router.py`.
+These checks execute only the deterministic Python function; no cloud call or
+local tool is invoked. Cloud prompt behavior and real CAS remain separately
+unverified at this checkpoint.
+
+Ignored UI proof: `goal-plan-published-20260930.jpg`,
+`goal-review-published-20260930.jpg`, `goal-router-published-20260930.jpg`,
+`goal-controller-published-20260930.jpg`, `runtime-v16-latest-20260930.jpg`,
+`runtime-v16-binding-20260930.jpg` under `.cache/cloud-mvp-build/`.
