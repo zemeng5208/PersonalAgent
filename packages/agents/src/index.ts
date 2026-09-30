@@ -1,5 +1,5 @@
 import { ProtocolError, PROTOCOL_VERSION } from '@personal-agent/contracts';
-import type { Request, Response, TaskSnapshot, ToolDescriptor } from '@personal-agent/contracts';
+import type { Request, Response, TaskSnapshot, ToolDescriptor, RegisteredTool, ToolContext } from '@personal-agent/contracts';
 import { validateToolArguments, validateToolProposal } from '@personal-agent/models';
 import type { ModelGateway, ModelMessage, ModelResult, ToolProposal } from '@personal-agent/models';
 
@@ -94,6 +94,8 @@ export interface AgentRunOptions {
   maxSteps: number;
   maxTokens?: number;
   maxRepairAttempts?: number;
+  reasoningEffort?: 'none' | 'low' | 'medium' | 'high';
+  thinkingBudget?: number;
   onUnknownResult?: (context: AgentWorkerContext, result: ToolInvocationResult) => void | Promise<void>;
 }
 
@@ -139,6 +141,8 @@ async function complete(context: AgentWorkerContext, options: AgentRunOptions, m
     messages,
     tools: options.tools.list(),
     ...(remainingTokens === undefined ? {} : {maxOutputTokens: remainingTokens}),
+    ...(options.reasoningEffort !== undefined ? {reasoningEffort: options.reasoningEffort} : {}),
+    ...(options.thinkingBudget !== undefined ? {thinkingBudget: options.thinkingBudget} : {}),
     deadline: context.deadline,
     signal: context.signal,
   });
@@ -219,3 +223,298 @@ export function createAgentWorker(options: AgentRunOptions): (context: AgentWork
     return {resultSummary: outcome.resultSummary, evidenceRefs: outcome.evidenceRefs};
   };
 }
+
+export type SubtaskRole = 'researcher' | 'coder' | 'reviewer' | 'planner' | 'coordinator';
+
+export interface SubtaskDefinition {
+  subtaskId: string;
+  role: SubtaskRole;
+  roleLabel?: string;
+  goal: string;
+  model?: string;
+  thinkingDepth?: number;
+}
+
+export interface SubtaskProgress {
+  subtaskId: string;
+  role: SubtaskRole;
+  roleLabel: string;
+  state: 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  result?: string;
+  error?: string;
+}
+
+export interface SubtaskExecutionSummary {
+  total: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+  subtasks: readonly SubtaskProgress[];
+  aggregatedSummary: string;
+}
+
+export const DEFAULT_ROLE_LABELS: Record<SubtaskRole, string> = {
+  researcher: '资料检索与调研',
+  coder: '代码与工程实现',
+  reviewer: '质量与安全审查',
+  planner: '规划与任务拆解',
+  coordinator: '多智能体协作与汇总',
+};
+
+export interface SubtaskProgressRecord {
+  parentTaskId: string;
+  subtaskId: string;
+  inputDigest: string;
+  state: SubtaskProgress['state'];
+  result?: string;
+  error?: string;
+}
+
+export function computeSubtaskInputDigest(subtask: SubtaskDefinition): string {
+  return JSON.stringify({
+    subtaskId: subtask.subtaskId.trim(),
+    role: subtask.role,
+    goal: subtask.goal.trim(),
+    ...(subtask.model ? {model: subtask.model.trim()} : {}),
+    ...(subtask.thinkingDepth !== undefined ? {thinkingDepth: subtask.thinkingDepth} : {}),
+  });
+}
+
+export async function dispatchSubtasks(
+  context: AgentWorkerContext,
+  subtasks: readonly SubtaskDefinition[],
+  executor: (subtask: SubtaskDefinition, signal: AbortSignal) => Promise<string>,
+): Promise<SubtaskExecutionSummary> {
+  if (!Array.isArray(subtasks) || subtasks.length === 0) {
+    throw new ProtocolError('INVALID_ARGUMENT', 'Subtasks must be a non-empty array');
+  }
+
+  const seenIds = new Set<string>();
+  for (let i = 0; i < subtasks.length; i++) {
+    const subtask = subtasks[i];
+    if (!subtask.subtaskId?.trim()) throw new ProtocolError('INVALID_ARGUMENT', `Subtask ${i} missing subtaskId`);
+    if (!subtask.goal?.trim()) throw new ProtocolError('INVALID_ARGUMENT', `Subtask ${subtask.subtaskId} missing goal`);
+    if (seenIds.has(subtask.subtaskId.trim())) {
+      throw new ProtocolError('INVALID_ARGUMENT', `Duplicate subtaskId: ${subtask.subtaskId}`);
+    }
+    seenIds.add(subtask.subtaskId.trim());
+  }
+
+  const progressList: SubtaskProgress[] = [];
+  const checkpointKey = 'subtask-progress-records';
+  const saved = context.loadCheckpoint(checkpointKey) as Record<string, SubtaskProgressRecord> | undefined;
+  const progressMap = new Map<string, SubtaskProgressRecord>(
+    saved ? Object.entries(saved) : [],
+  );
+
+  const total = subtasks.length;
+  let completedCount = 0;
+
+  for (let i = 0; i < subtasks.length; i++) {
+    const subtask = subtasks[i];
+    const roleLabel = subtask.roleLabel?.trim() || (DEFAULT_ROLE_LABELS as Record<string, string>)[subtask.role] || String(subtask.role);
+    const inputDigest = computeSubtaskInputDigest(subtask);
+
+    // Check if already finished in saved checkpoint
+    const previous = progressMap.get(subtask.subtaskId);
+    if (previous) {
+      if (previous.parentTaskId && previous.parentTaskId !== context.taskId) {
+        throw new ProtocolError('REVISION_CONFLICT', `Subtask ${subtask.subtaskId} belongs to parent task ${previous.parentTaskId}, not ${context.taskId}`);
+      }
+      if (previous.inputDigest && previous.inputDigest !== inputDigest) {
+        throw new ProtocolError('REVISION_CONFLICT', `Subtask ${subtask.subtaskId} input changed from prior execution; cannot reuse old result`);
+      }
+      if (previous.state === 'succeeded' || previous.state === 'failed' || previous.state === 'cancelled') {
+        progressList.push({
+          subtaskId: subtask.subtaskId,
+          role: subtask.role,
+          roleLabel,
+          state: previous.state,
+          ...(previous.result !== undefined ? {result: previous.result} : {}),
+          ...(previous.error !== undefined ? {error: previous.error} : {}),
+        });
+        completedCount++;
+        continue;
+      }
+    }
+
+    if (context.signal.aborted) {
+      progressList.push({
+        subtaskId: subtask.subtaskId,
+        role: subtask.role,
+        roleLabel,
+        state: 'cancelled',
+        error: 'Cancelled before execution',
+      });
+      progressMap.set(subtask.subtaskId, {
+        parentTaskId: context.taskId,
+        subtaskId: subtask.subtaskId,
+        inputDigest,
+        state: 'cancelled',
+        error: 'Cancelled before execution',
+      });
+      context.saveCheckpoint(checkpointKey, Object.fromEntries(progressMap.entries()));
+      continue;
+    }
+
+    context.reportProgress({
+      stepId: `subtask-${subtask.subtaskId}`,
+      label: `[${roleLabel}] 正在执行: ${subtask.goal}`,
+      completedUnits: completedCount,
+      totalUnits: total,
+    });
+
+    try {
+      const result = await executor(subtask, context.signal);
+      completedCount++;
+      progressList.push({
+        subtaskId: subtask.subtaskId,
+        role: subtask.role,
+        roleLabel,
+        state: 'succeeded',
+        result,
+      });
+      progressMap.set(subtask.subtaskId, {
+        parentTaskId: context.taskId,
+        subtaskId: subtask.subtaskId,
+        inputDigest,
+        state: 'succeeded',
+        result,
+      });
+      context.reportProgress({
+        stepId: `subtask-${subtask.subtaskId}`,
+        label: `[${roleLabel}] 执行完成: ${subtask.goal}`,
+        completedUnits: completedCount,
+        totalUnits: total,
+      });
+    } catch (err) {
+      if (context.signal.aborted) {
+        progressList.push({
+          subtaskId: subtask.subtaskId,
+          role: subtask.role,
+          roleLabel,
+          state: 'cancelled',
+          error: err instanceof Error ? err.message : 'Cancelled',
+        });
+        progressMap.set(subtask.subtaskId, {
+          parentTaskId: context.taskId,
+          subtaskId: subtask.subtaskId,
+          inputDigest,
+          state: 'cancelled',
+          error: err instanceof Error ? err.message : 'Cancelled',
+        });
+      } else {
+        completedCount++;
+        progressList.push({
+          subtaskId: subtask.subtaskId,
+          role: subtask.role,
+          roleLabel,
+          state: 'failed',
+          error: err instanceof Error ? err.message : 'Subtask execution failed',
+        });
+        progressMap.set(subtask.subtaskId, {
+          parentTaskId: context.taskId,
+          subtaskId: subtask.subtaskId,
+          inputDigest,
+          state: 'failed',
+          error: err instanceof Error ? err.message : 'Subtask execution failed',
+        });
+        context.reportProgress({
+          stepId: `subtask-${subtask.subtaskId}`,
+          label: `[${roleLabel}] 执行失败: ${err instanceof Error ? err.message : '执行失败'}`,
+          completedUnits: completedCount,
+          totalUnits: total,
+        });
+      }
+    }
+    context.saveCheckpoint(checkpointKey, Object.fromEntries(progressMap.entries()));
+  }
+
+  const succeeded = progressList.filter(p => p.state === 'succeeded').length;
+  const failed = progressList.filter(p => p.state === 'failed').length;
+  const cancelled = progressList.filter(p => p.state === 'cancelled').length;
+
+  const sections = progressList.map(p => {
+    if (p.state === 'succeeded') {
+      return `### 【${p.roleLabel}】(${p.role})\n${p.result?.trim() ?? '无输出'}`;
+    }
+    if (p.state === 'cancelled') {
+      return `### 【${p.roleLabel}】(${p.role}) · 已取消\n${p.error ?? '任务已取消'}`;
+    }
+    return `### 【${p.roleLabel}】(${p.role}) · 失败\n${p.error ?? '执行失败'}`;
+  });
+
+  const aggregatedSummary = `## 次级智能体协作汇总（共 ${total} 项：成功 ${succeeded}，失败 ${failed}，取消 ${cancelled}）\n\n${sections.join('\n\n')}`;
+
+  return {
+    total,
+    succeeded,
+    failed,
+    cancelled,
+    subtasks: progressList,
+    aggregatedSummary,
+  };
+}
+
+export const SUBAGENT_DISPATCH_TOOL_NAME = 'subagent.dispatch';
+export const SUBAGENT_DISPATCH_TOOL_VERSION = '1.0.0';
+
+export function createSubagentDispatchTool(
+  handler: (input: {subtasks: readonly SubtaskDefinition[]}, context: ToolContext) => Promise<unknown>,
+): RegisteredTool {
+  if (typeof handler !== 'function') {
+    throw new ProtocolError('INVALID_ARGUMENT', 'Subagent dispatch handler is required');
+  }
+  return {
+    descriptor: {
+      name: SUBAGENT_DISPATCH_TOOL_NAME,
+      version: SUBAGENT_DISPATCH_TOOL_VERSION,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          subtasks: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                subtaskId: {type: 'string', minLength: 1},
+                role: {type: 'string', enum: ['researcher', 'coder', 'reviewer', 'planner', 'coordinator']},
+                roleLabel: {type: 'string'},
+                goal: {type: 'string', minLength: 1},
+                model: {type: 'string'},
+                thinkingDepth: {type: 'integer', minimum: 0, maximum: 5},
+              },
+              required: ['subtaskId', 'role', 'goal'],
+              additionalProperties: false,
+            },
+            minItems: 1,
+          },
+        },
+        required: ['subtasks'],
+        additionalProperties: false,
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          total: {type: 'integer'},
+          succeeded: {type: 'integer'},
+          failed: {type: 'integer'},
+          cancelled: {type: 'integer'},
+          summary: {type: 'string'},
+        },
+        required: ['total', 'succeeded', 'failed', 'cancelled', 'summary'],
+        additionalProperties: true,
+      },
+      sideEffect: 'read',
+      requiredScopes: ['agent:delegate'],
+      idempotencySupport: true,
+      recoverySupport: true,
+      requiresPresence: false,
+    },
+    execute: async (rawInput, context) => {
+      const input = rawInput as {subtasks: readonly SubtaskDefinition[]};
+      return handler(input, context);
+    },
+  };
+}
+

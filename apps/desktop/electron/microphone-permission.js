@@ -22,9 +22,10 @@ export function createMicrophonePermissionGate({expectedPageUrl, isTrustedWindow
     old.webContents.removeListener('destroyed', old.revoke);
     old.webContents.removeListener('did-start-navigation', old.revoke);
     old.webContents.removeListener('render-process-gone', old.revoke);
+    old.onRevoke?.();
   }
 
-  function grant({webContents, deadlineAtMs, signal}) {
+  function grant({webContents, deadlineAtMs, signal, onRevoke}) {
     if (lease && (now() >= lease.deadlineAtMs || lease.signal?.aborted)) revoke();
     if (lease) throw Error('Microphone permission is already leased');
     if (!Number.isFinite(deadlineAtMs) || deadlineAtMs <= now() || signal?.aborted ||
@@ -35,7 +36,8 @@ export function createMicrophonePermissionGate({expectedPageUrl, isTrustedWindow
     if (signal && (typeof signal.addEventListener !== 'function' || typeof signal.removeEventListener !== 'function')) {
       throw Error('Invalid microphone permission signal');
     }
-    const active = {webContents, url: webContents.getURL(), deadlineAtMs, signal};
+    if (onRevoke !== undefined && typeof onRevoke !== 'function') throw Error('Invalid microphone revoke handler');
+    const active = {webContents, url: webContents.getURL(), deadlineAtMs, signal, onRevoke};
     active.revoke = () => { if (lease === active) revoke(); };
     lease = active;
     signal?.addEventListener('abort', active.revoke, {once: true});

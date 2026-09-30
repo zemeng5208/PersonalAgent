@@ -40,3 +40,22 @@ for (const action of ['update', 'remember']) {
     }
   });
 }
+
+test('initial namespace is published only after persistence succeeds', () => {
+  const root = fileURLToPath(new URL('../.cache/', import.meta.url));
+  mkdirSync(root, {recursive: true});
+  const directory = mkdtempSync(path.join(root, 'desktop-identity-failure-'));
+  const file = path.join(directory, 'settings.json');
+  try {
+    const store = new DesktopState(file);
+    const before = structuredClone(store.value);
+    mkdirSync(file + '.tmp');
+    assert.throws(() => store.ensureHostUserNamespace(), error => ['EISDIR', 'EPERM', 'EACCES'].includes(error?.code));
+    assert.deepEqual(store.value, before);
+    rmSync(file + '.tmp', {recursive: true, force: true});
+    const namespace = store.ensureHostUserNamespace();
+    assert.equal(new DesktopState(file).ensureHostUserNamespace(), namespace);
+  } finally {
+    rmSync(directory, {recursive: true, force: true});
+  }
+});

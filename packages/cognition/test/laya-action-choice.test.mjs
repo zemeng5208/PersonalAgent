@@ -36,6 +36,11 @@ test('concrete candidates retain scores and binding; unauthorized, duplicate, ch
   const expired = {...candidate, expiresAt: '2000-01-01T00:00:00.000Z'};
   const noFakeChoice = await service.choose(request([expired, noop]));
   assert.equal(noFakeChoice.reason, 'insufficient_candidates'); assert.equal(calls, 2);
+  const fullContext = 'A detailed source update. '.repeat(200);
+  const detailed = await service.choose({...request([{...candidate,
+    description: 'Explain the affected local metadata. '.repeat(30)}, noop]), context: fullContext});
+  assert.equal(detailed.state, 'selected', 'ordinary context must not hit the old demo text caps');
+  assert.equal(calls, 3);
   const fabricated = new LayaActionChoiceService({async infer() {
     return {answers: {action: {choice: 'revoked', probabilities: {candidate_0: 0.9, candidate_1: 0.1}, answer_confidence: 0.9, confidence: 1}}};
   }});
