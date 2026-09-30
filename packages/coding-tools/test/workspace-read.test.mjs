@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import {validateToolValue} from '@personal-agent/contracts';
 import {
   WORKSPACE_READ_SCOPE,
   WORKSPACE_READ_TOOL_NAME,
@@ -42,10 +44,16 @@ test('reads only bounded UTF-8 text and returns no absolute host path', async t 
     encoding: 'utf-8',
     byteLength: Buffer.byteLength('export const greeting = "你好";\n'),
     content: 'export const greeting = "你好";\n',
+    sha256: createHash('sha256').update('export const greeting = "你好";\n').digest('hex'),
   });
   assert.equal(JSON.stringify(result).includes(root), false);
   assert.deepEqual(tool.descriptor.requiredScopes, [WORKSPACE_READ_SCOPE]);
   assert.equal(tool.descriptor.sideEffect, 'read');
+  assert.doesNotThrow(() => validateToolValue(tool.descriptor.outputSchema, result));
+  const {sha256: _digest, ...historical} = result;
+  assert.doesNotThrow(() => validateToolValue(tool.descriptor.outputSchema, historical));
+  assert.throws(() => validateToolValue(tool.descriptor.outputSchema, {...result, sha256: 'invalid'}),
+    {code: 'INVALID_ARGUMENT'});
 });
 
 test('exact input schema rejects missing and additional fields', async t => {
