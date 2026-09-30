@@ -802,7 +802,7 @@ test('delivery acknowledgement is not a read or a re-evaluation result', async (
   const unverified = await host.bindObservedRevision('typescript');
   assert.equal(unverified.accepted, false);
   assert.equal(unverified.reason, 'reevaluation_missing');
-  assert.equal(unverified.taskState, 'succeeded');
+  assert.equal(task.state, 'succeeded');
   assert.equal(host.listWatches()[0].boundSource.revision, 'source-v1');
   assert.equal(host.dialogueProjection().items[0].usableAsCurrentFact, false);
   assert.equal(submits, 2);
