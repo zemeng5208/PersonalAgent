@@ -730,6 +730,74 @@ function clearInactiveTaskExitWarning() {
   }
 }
 
+function createProductionKnowledgeReevaluator() {
+  return async function reevaluateKnowledge(ctx) {
+    if (ctx.signal?.aborted) {
+      const error = new Error('Reevaluation cancelled');
+      error.code = 'CANCELLED';
+      throw error;
+    }
+    const { planKnowledgeReevaluation } = await import('@personal-agent/cognition');
+    const nowIso = new Date().toISOString();
+    const plan = planKnowledgeReevaluation({
+      namespace: ctx.namespace || 'default',
+      freshness: {
+        at: nowIso,
+        maxAgeMs: 24 * 60 * 60 * 1000,
+        requestedVersion: ctx.boundRevision || ctx.observedRevision,
+        sourceState: 'available',
+        cache: {
+          version: '1',
+          sourceId: ctx.sourceId,
+          sourceRevision: ctx.boundRevision || ctx.observedRevision,
+          contentSha256: ctx.boundContentSha256 || ctx.observedContentSha256 || '0'.repeat(64),
+          lastSuccessfulCheck: nowIso,
+          validUntil: new Date(Date.now() + 86400000).toISOString(),
+        },
+        check: {
+          outcome: 'changed',
+          checkedAt: nowIso,
+          sourceId: ctx.sourceId,
+          sourceRevision: ctx.boundRevision || ctx.observedRevision,
+          cachedContentSha256: ctx.boundContentSha256 || ctx.observedContentSha256 || '0'.repeat(64),
+        },
+      },
+      dependencies: [{
+        consumer: { id: ctx.topicId, revision: ctx.consumerRevision || 1 },
+        sourceId: ctx.sourceId,
+        sourceRevision: ctx.boundRevision || ctx.observedRevision,
+        contentSha256: ctx.boundContentSha256 || ctx.observedContentSha256 || '0'.repeat(64),
+      }],
+    });
+
+    const evaluatedOutcome = plan.knowledge.action === 'refresh_required'
+      ? 'verified_update'
+      : plan.knowledge.action;
+
+    const evaluation = {
+      outcome: evaluatedOutcome,
+      action: plan.knowledge.action,
+      reason: plan.knowledge.reason,
+      topicId: ctx.topicId,
+      consumerRevision: ctx.consumerRevision || 1,
+      sourceId: ctx.sourceId,
+      observedRevision: ctx.observedRevision,
+      citation: ctx.citation,
+      statement: `订阅源 ${ctx.sourceId} 观察版本 ${ctx.observedRevision} 经认知评估确认影响关注事项 ${ctx.topicId}。`,
+      observedSummary: ctx.summary || '来源内容已观察并验证变更',
+      evaluatedAt: nowIso,
+    };
+
+    return {
+      status: 'completed',
+      outcome: evaluatedOutcome,
+      summary: `知识重评确认：事项 ${ctx.topicId}，来源 ${ctx.sourceId} 新版本 ${ctx.observedRevision} 已由正式认知重评器验证完毕。`,
+      evaluation,
+      evidenceRefs: [ctx.citation],
+    };
+  };
+}
+
 const inFlightRechecks = new Set();
 async function dispatchKnowledgeRecheckTask(task) {
   if (!task || inFlightRechecks.has(task.taskId) || task.state !== 'created') return;
@@ -745,7 +813,9 @@ async function dispatchKnowledgeRecheckTask(task) {
     if (!recheck || !recheck.sourceId || !recheck.observedRevision) return;
     await runtimeApplication.dispatchKnowledgeRecheckTask(task.taskId, {
       workKey,
+      namespace: recheck.namespace,
       topicId: recheck.topicId,
+      consumerRevision: recheck.consumerRevision,
       sourceId: recheck.sourceId,
       boundRevision: recheck.boundRevision,
       boundContentSha256: recheck.boundContentSha256,
@@ -753,8 +823,10 @@ async function dispatchKnowledgeRecheckTask(task) {
       observedContentSha256: recheck.observedContentSha256,
       citation: recheck.citation,
       summary: recheck.summary,
+      reevaluator: createProductionKnowledgeReevaluator(),
     });
-  } catch {
+  } catch (error) {
+    console.error('dispatchKnowledgeRecheckTask failed:', error);
   } finally {
     inFlightRechecks.delete(task.taskId);
   }

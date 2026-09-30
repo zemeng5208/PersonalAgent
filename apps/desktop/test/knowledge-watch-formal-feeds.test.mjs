@@ -174,69 +174,82 @@ test('Formal desktop feeds.collect path through session consent, genuine recheck
   assert.equal(earlyBind.reason, 'reevaluation_unconfirmed');
   assert.equal(earlyBind.taskState, 'created');
 
-  // 8. Dispatch recheck task: without reevaluator, it must NOT self-sign confirmed and fails as UNSUPPORTED_CAPABILITY
+  // 8. Resolve recheckContext via Luna's getRecheckContext(workKey)
   const recheckWorkKey = Object.keys(submissions)[0];
-  const recheckContext = {
-    workKey: recheckWorkKey,
-    topicId: 'typescript',
-    sourceId: subscriptionId,
-    observedRevision: 'v2',
-    citation: 'https://example.com/ts58',
-  };
+  const recheckContext = host.getRecheckContext(recheckWorkKey);
+  assert.ok(recheckContext, 'getRecheckContext must resolve context for submitted work key');
+  assert.equal(recheckContext.topicId, 'typescript');
+  assert.equal(recheckContext.sourceId, subscriptionId);
+  const expectedObservedRevision = recheckContext.observedRevision;
+  assert.ok(expectedObservedRevision, 'observedRevision must be present');
+  assert.equal(recheckContext.citation, 'https://example.com/ts58');
 
-  // Without connected capability: task fails as UNSUPPORTED_CAPABILITY
-  await runtimeApp.dispatchKnowledgeRecheckTask(recheckTask.taskId, recheckContext);
-  const unassistedTask = runtime.getTask(recheckTask.taskId);
-  assert.equal(unassistedTask.state, 'failed');
-  assert.equal(unassistedTask.error?.code, 'UNSUPPORTED_CAPABILITY');
-  assert.equal(runtime.loadCheckpoint(recheckTask.taskId, 'knowledge-recheck-result'), undefined);
-
-  // With genuine reevaluator capability connected: reevaluation produces real result
-  const secondTask = runtime.submitTask({
-    goal: `RECHECK ${recheckWorkKey}`,
+  // Verify that dispatching without reevaluator fails with UNSUPPORTED_CAPABILITY and cannot self-sign
+  const rejectedTask = runtime.submitTask({
+    goal: `RECHECK test-unsupported`,
     conversationId: 'knowledge-watch:test-user',
-    idempotencyKey: 'recheck-genuine',
+    idempotencyKey: 'kw-unsupported',
   });
+  await runtimeApp.dispatchKnowledgeRecheckTask(rejectedTask.taskId, recheckContext);
+  assert.equal(runtime.getTask(rejectedTask.taskId).state, 'failed');
+  assert.equal(runtime.getTask(rejectedTask.taskId).error?.code, 'UNSUPPORTED_CAPABILITY');
+  assert.equal(runtime.loadCheckpoint(rejectedTask.taskId, 'knowledge-recheck-result'), undefined);
+
+  // Now execute the genuine recheck task with the production-aligned reevaluator:
   let reevaluatorExecuted = false;
-  await runtimeApp.dispatchKnowledgeRecheckTask(secondTask.taskId, {
+  await runtimeApp.dispatchKnowledgeRecheckTask(recheckTask.taskId, {
     ...recheckContext,
     reevaluator: async ctx => {
       reevaluatorExecuted = true;
       assert.equal(ctx.topicId, 'typescript');
       assert.equal(ctx.citation, 'https://example.com/ts58');
+      assert.equal(ctx.observedRevision, expectedObservedRevision);
       return {
-        status: 'confirmed',
+        status: 'completed',
         outcome: {
           analyzedImpact: 'verified_update',
           recheckedVersion: ctx.observedRevision,
         },
+        evaluation: {
+          outcome: 'verified_update',
+          statement: 'TypeScript 5.8 经认知重评确认已发布且影响本项关注',
+          observedSummary: 'TypeScript 5.8 发布',
+          citation: ctx.citation,
+        },
         summary: '知识重评确认：TypeScript 5.8 发布，实际重评分析已完成',
-        evidenceRefs: ['https://example.com/ts58#changelog'],
+        evidenceRefs: ['https://example.com/ts58'],
       };
     },
   });
   assert.equal(reevaluatorExecuted, true);
-  const confirmedTask = runtime.getTask(secondTask.taskId);
-  assert.equal(confirmedTask.state, 'succeeded');
-  assert.deepEqual(confirmedTask.evidenceRefs, ['https://example.com/ts58', 'https://example.com/ts58#changelog']);
 
-  const checkpoint = runtime.loadCheckpoint(secondTask.taskId, 'knowledge-recheck-result');
+  const confirmedTask = runtime.getTask(recheckTask.taskId);
+  assert.equal(confirmedTask.state, 'succeeded');
+  assert.deepEqual(confirmedTask.evidenceRefs, ['https://example.com/ts58']);
+
+  const checkpoint = runtime.loadCheckpoint(recheckTask.taskId, 'knowledge-recheck-result');
   assert.ok(checkpoint, 'Knowledge recheck result checkpoint must be saved');
-  assert.equal(checkpoint.status, 'confirmed');
+  assert.equal(checkpoint.version, 2);
+  assert.equal(checkpoint.status, 'completed');
   assert.equal(checkpoint.topicId, 'typescript');
   assert.equal(checkpoint.citation, 'https://example.com/ts58');
-  assert.deepEqual(checkpoint.outcome, {analyzedImpact: 'verified_update', recheckedVersion: 'v2'});
+  assert.equal(checkpoint.observedRevision, expectedObservedRevision);
+  assert.ok(checkpoint.evaluation && Object.keys(checkpoint.evaluation).length > 0);
 
-  // 9. Host bindObservedRevision obeys Luna 65217d1 gate (first submitted task failed, so unconfirmed)
+  // 9. Now bindObservedRevision succeeds with genuine confirmed reevaluation!
   const bound = await host.bindObservedRevision('typescript');
-  assert.equal(bound.accepted, false);
-  assert.equal(bound.reason, 'reevaluation_unconfirmed');
+  assert.equal(bound.accepted, true);
+  assert.equal(bound.reason, 'bound');
+  assert.equal(bound.revision, expectedObservedRevision);
+  assert.deepEqual(bound.taskIds, [recheckTask.taskId]);
 
-  // 10. Dialogue projection preserves latest_observation, not posing as current_fact
+  // 10. Dialogue projection now promotes to current_fact with citation
   const projectionAfterBind = host.dialogueProjection();
   const finalItem = projectionAfterBind.items.find(i => i.topicId === 'typescript');
-  assert.equal(finalItem.answer.kind, 'latest_observation');
-  assert.equal(finalItem.usableAsCurrentFact, false);
+  assert.ok(finalItem);
+  assert.equal(finalItem.usableAsCurrentFact, true);
+  assert.equal(finalItem.answer.kind, 'current_fact');
+  assert.equal(finalItem.answer.citation, 'https://example.com/ts58');
 
   // Ordered cleanup
   await host.dispose();

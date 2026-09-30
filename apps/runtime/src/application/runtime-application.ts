@@ -59,19 +59,24 @@ export interface SubmitHostToolTaskRequest {
 }
 
 export interface KnowledgeRecheckResult {
-  status?: string;
+  status?: 'completed' | 'rejected' | 'failed' | string | undefined;
   outcome?: unknown;
-  summary?: string;
-  evidenceRefs?: readonly string[];
+  summary?: string | undefined;
+  evaluation?: Record<string, unknown> | undefined;
+  evidenceRefs?: readonly string[] | undefined;
 }
 
 export interface KnowledgeRecheckContext {
   taskId: string;
   workKey?: string | undefined;
+  namespace?: string | undefined;
   topicId?: string | undefined;
+  consumerRevision?: number | undefined;
   sourceId: string;
   boundRevision?: string | null | undefined;
+  boundContentSha256?: string | null | undefined;
   observedRevision: string;
+  observedContentSha256?: string | null | undefined;
   citation: string;
   summary?: string | null | undefined;
   signal: AbortSignal;
@@ -79,17 +84,19 @@ export interface KnowledgeRecheckContext {
 
 export interface KnowledgeRecheckOptions {
   sourceId: string;
-  sourceRevision?: string;
-  workKey?: string;
-  topicId?: string;
-  boundRevision?: string | null;
-  boundContentSha256?: string | null;
-  observedRevision?: string | null;
-  observedContentSha256?: string | null;
-  citation?: string | null;
-  summary?: string | null;
-  deadline?: string;
-  reevaluator?: (context: KnowledgeRecheckContext) => Promise<KnowledgeRecheckResult>;
+  sourceRevision?: string | undefined;
+  workKey?: string | undefined;
+  namespace?: string | undefined;
+  topicId?: string | undefined;
+  consumerRevision?: number | undefined;
+  boundRevision?: string | null | undefined;
+  boundContentSha256?: string | null | undefined;
+  observedRevision?: string | null | undefined;
+  observedContentSha256?: string | null | undefined;
+  citation?: string | null | undefined;
+  summary?: string | null | undefined;
+  deadline?: string | undefined;
+  reevaluator?: ((context: KnowledgeRecheckContext) => Promise<KnowledgeRecheckResult>) | undefined;
 }
 
 export type PrepareHostToolTaskRequest = Omit<SubmitHostToolTaskRequest, 'arguments'>;
@@ -951,41 +958,85 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
         throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Knowledge reevaluation capability is unavailable');
       }
 
+      const workKey = options.workKey ?? '';
+      const topicId = options.topicId ?? 'unknown';
+      const namespace = options.namespace ?? this.hostUserNamespace ?? 'default';
+      const consumerRevision = options.consumerRevision ?? 1;
+
       const reevalResult = await options.reevaluator({
         taskId,
-        workKey: options.workKey,
-        topicId: options.topicId,
+        workKey,
+        namespace,
+        topicId,
+        consumerRevision,
         sourceId: options.sourceId,
         boundRevision: options.boundRevision,
+        boundContentSha256: options.boundContentSha256,
         observedRevision,
+        observedContentSha256: options.observedContentSha256,
         citation,
         summary: options.summary,
         signal: context.signal,
       });
 
+      // 异步重评返回后，写检查点前重验取消、deadline和适用版本
+      if (context.signal.aborted) {
+        throw new ProtocolError('CANCELLED', 'Knowledge recheck task was cancelled');
+      }
+      if (this.now().getTime() >= Date.parse(deadlineIso)) {
+        throw new ProtocolError('TIMEOUT', 'Knowledge recheck task deadline exceeded');
+      }
+      if (options.boundRevision && options.boundRevision === observedRevision
+        && options.boundContentSha256 && options.observedContentSha256
+        && options.boundContentSha256 === options.observedContentSha256) {
+        throw new ProtocolError('REVISION_CONFLICT', 'Source revision and content hash have not changed');
+      }
+
+      // status缺失不能默认confirmed；只有有效实际结果才能供P7绑定
+      const status = reevalResult?.status === 'completed' || reevalResult?.status === 'confirmed'
+        ? 'completed'
+        : reevalResult?.status;
+
+      const evaluation = (reevalResult?.evaluation && typeof reevalResult.evaluation === 'object' && !Array.isArray(reevalResult.evaluation) && Object.keys(reevalResult.evaluation).length > 0)
+        ? reevalResult.evaluation
+        : (reevalResult?.outcome && typeof reevalResult.outcome === 'object' && !Array.isArray(reevalResult.outcome) && Object.keys(reevalResult.outcome).length > 0)
+          ? reevalResult.outcome as Record<string, unknown>
+          : typeof reevalResult?.outcome === 'string' && reevalResult.outcome.trim()
+            ? { outcome: reevalResult.outcome.trim() }
+            : null;
+
+      if (!reevalResult || status !== 'completed' || !evaluation) {
+        throw new ProtocolError('EXTERNAL_FAILURE', `Knowledge reevaluation did not produce a valid completed result: status=${reevalResult?.status ?? 'missing'}`);
+      }
+
       const evaluatedAt = this.now().toISOString();
-      const topicId = options.topicId ?? 'unknown';
-      const summaryExcerpt = options.summary ? options.summary.slice(0, 500) : null;
+      const evidenceRefs = [citation, ...(reevalResult.evidenceRefs ?? [])];
+      const uniqueEvidenceRefs = [...new Set(evidenceRefs)];
+
       const recheckRecord = {
-        version: 1,
+        version: 2,
+        status: 'completed',
         taskId,
-        workKey: options.workKey ?? null,
+        workKey,
+        namespace,
         topicId,
+        consumerRevision,
         sourceId: options.sourceId,
-        boundRevision: options.boundRevision ?? null,
+        boundRevision: options.boundRevision ?? '',
+        boundContentSha256: options.boundContentSha256 ?? '',
         observedRevision,
-        observedContentSha256: options.observedContentSha256 ?? null,
+        observedContentSha256: options.observedContentSha256 ?? '',
+        evaluatedContentSha256: options.observedContentSha256 ?? '',
         citation,
-        summaryExcerpt,
         evaluatedAt,
-        status: reevalResult.status ?? 'confirmed',
-        outcome: reevalResult.outcome ?? null,
+        evaluation,
+        evidenceRefs: uniqueEvidenceRefs,
       };
       this.runtime.saveCheckpoint(taskId, 'knowledge-recheck-result', recheckRecord);
 
       return {
-        resultSummary: reevalResult.summary ?? `知识重评确认：关注 ${topicId}，来源 ${options.sourceId} 新版本 ${observedRevision}（引用：${citation}）已由正式 Runtime 确认。摘要：${summaryExcerpt ?? '无'}`,
-        evidenceRefs: [citation, ...(reevalResult.evidenceRefs ?? [])],
+        resultSummary: reevalResult.summary ?? `知识重评确认：关注 ${topicId}，来源 ${options.sourceId} 新版本 ${observedRevision}（引用：${citation}）已由正式 Runtime 确认。结论：${String(reevalResult.outcome ?? 'completed')}`,
+        evidenceRefs: uniqueEvidenceRefs,
       };
     }, {
       deadline: deadlineIso,
