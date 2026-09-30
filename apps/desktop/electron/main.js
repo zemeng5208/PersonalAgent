@@ -14,6 +14,7 @@ import {restoreSyntheticRepairSubmission} from './competition-repair-submission.
 import {readCapabilityDirectory} from './capability-directory.js';
 import {createMicrophonePermissionGate} from './microphone-permission.js';
 import {readApprovalPage} from './approval-history.js';
+import {createPrivateMemoryController} from './private-memory.js';
 import {createMicrophoneCaptureHost} from './microphone-capture-host.js';
 import {createDesktopEvidenceHost} from './evidence-host.js';
 import {createDesktopCompetitionFactBridge} from './competition-fact-bridge.js';
@@ -133,6 +134,8 @@ let runtimeApplication;
 let syntheticRepairHost;
 const repairPrompts = new Set();
 let microphonePermissionGate;
+let privateMemory;
+let privateMemoryFixtureWrite = false;
 let microphoneCaptureHost;
 let voicePcmSource;
 let voiceInput;
@@ -1756,6 +1759,7 @@ app.whenReady().then(async () => {
     }
     globalShortcut.unregisterAll();
     try {
+      privateMemory?.close();
       proactiveHost?.close();
       goalCloudHost?.close();
       mailAnalysisHost?.close();

@@ -8,6 +8,10 @@ import {ProtocolError} from '@personal-agent/contracts';
 import type {RegisteredTool, ToolContext, ToolDescriptor} from '@personal-agent/contracts';
 import type {WorkspacePatchPreviewResult} from './patch-preview.js';
 import {checkedSource} from './patch-stage.js';
+import {
+  captureWorkspacePatchProcessIdentity,
+  workspacePatchInflightPathFromCanonical,
+} from './patch-reconcile.js';
 
 export const WORKSPACE_PATCH_APPLY_TOOL_NAME = 'workspace.apply_text_patch';
 export const WORKSPACE_PATCH_APPLY_TOOL_VERSION = '1.0.0';
@@ -85,32 +89,66 @@ async function invokeHelper(
   context: ToolContext,
   now: () => number,
 ): Promise<HelperResponse> {
-  const remaining = check(context, now);
-  return new Promise<HelperResponse>((resolveResult, reject) => {
-    let child: ReturnType<typeof spawn>;
-    try {
-      child = spawn(executable, ['-NoProfile', '-NonInteractive', '-File', script], {
-        cwd: request.rootPath,
-        env: {
-          SystemRoot: process.env.SystemRoot ?? 'C:\\Windows',
-          TEMP: process.env.TEMP ?? '',
-          TMP: process.env.TMP ?? '',
-        },
-        shell: false,
-        windowsHide: true,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-    } catch {
-      reject(new ProtocolError('RESULT_UNKNOWN', 'Workspace patch helper could not start'));
-      return;
+  check(context, now);
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(executable, ['-NoProfile', '-NonInteractive', '-File', script], {
+      cwd: request.rootPath,
+      env: {
+        SystemRoot: process.env.SystemRoot ?? 'C:\\Windows',
+        TEMP: process.env.TEMP ?? '',
+        TMP: process.env.TMP ?? '',
+      },
+      shell: false,
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch {
+    throw new ProtocolError('RESULT_UNKNOWN', 'Workspace patch helper could not start');
+  }
+  let earlyChildError = false;
+  const onEarlyChildError = (): void => { earlyChildError = true; };
+  // Install an error observer before the first await. Otherwise a spawn error
+  // can become an unhandled EventEmitter error while identity is queried.
+  child.once('error', onEarlyChildError);
+  let processIdentity: Awaited<ReturnType<typeof captureWorkspacePatchProcessIdentity>>;
+  try {
+    const pid = child.pid;
+    if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid < 1) {
+      throw new ProtocolError('RESULT_UNKNOWN', 'Workspace patch helper identity is unavailable');
     }
+    processIdentity = await captureWorkspacePatchProcessIdentity(pid, executable);
+    if (earlyChildError || child.exitCode !== null) {
+      throw new ProtocolError('RESULT_UNKNOWN', 'Workspace patch helper identity is unavailable');
+    }
+    // Identity lookup is asynchronous; do not dispatch an expired or cancelled write.
+    check(context, now);
+  } catch (error) {
+    child.removeListener('error', onEarlyChildError);
+    // A failed spawn may report its asynchronous error after pid validation.
+    // Keep cleanup observed until close rather than crashing the host process.
+    child.on('error', () => {});
+    child.stdin?.on('error', () => {});
+    if (typeof child.pid === 'number' && Number.isSafeInteger(child.pid) && child.pid > 0) {
+      try { child.kill('SIGKILL'); } catch { /* identity failure is already unknown */ }
+    }
+    await new Promise<void>(resolveResult => {
+      if (child.exitCode !== null) { resolveResult(); return; }
+      const timer = setTimeout(resolveResult, STOP_GRACE_MS);
+      child.once('close', () => { clearTimeout(timer); resolveResult(); });
+    });
+    throw error instanceof ProtocolError ? error : new ProtocolError('RESULT_UNKNOWN', 'Workspace patch helper identity is unavailable');
+  }
+  child.removeListener('error', onEarlyChildError);
+  return new Promise<HelperResponse>((resolveResult, reject) => {
     // Persist this marker before supplying any candidate bytes. A timeout may
     // settle the Gateway early, but reconciliation must wait until close removes it.
     let markerFd: number | undefined;
     try {
       markerFd = openSync(inflightPath, 'wx', 0o600);
       writeSync(markerFd, JSON.stringify({
-        pid: child.pid ?? null,
+        pid: processIdentity.pid,
+        startTimeTicks: processIdentity.startTimeTicks,
         beforeSha256: request.beforeSha256,
         afterSha256: request.afterSha256,
       }));
@@ -196,6 +234,15 @@ async function invokeHelper(
       }
     });
     context.signal.addEventListener('abort', onAbort, {once: true});
+    let remaining: number;
+    try {
+      // Marker persistence can also consume the remaining budget. Recheck at
+      // the actual side-effect boundary, before any candidate bytes leave stdin.
+      remaining = check(context, now);
+    } catch {
+      stop(new ProtocolError('RESULT_UNKNOWN', 'Workspace patch apply preconditions changed before dispatch'));
+      return;
+    }
     deadlineTimer = setTimeout(() => stop(new ProtocolError('RESULT_UNKNOWN', 'Workspace patch apply deadline expired')), Math.min(remaining, 2_147_483_647));
     child.stdin?.end(JSON.stringify(request));
     if (context.signal.aborted) onAbort();
@@ -263,7 +310,6 @@ export function createWorkspacePatchApplyToolFromPreview(options: ApplyOptions):
       const sourcePath = resolve(root, ...preview.path.split('/'));
       // One durable marker per source, not per attempt: an unknown prior helper
       // blocks a second apply until a trusted reconciler confirms its process exited.
-      const sourceKey = digest(Buffer.from(`${root}\n${preview.path}`)).slice(0, 32);
       const response = await invokeHelper(powerShell, script, {
         rootPath: root,
         sourcePath,
@@ -271,7 +317,7 @@ export function createWorkspacePatchApplyToolFromPreview(options: ApplyOptions):
         beforeSha256: preview.beforeSha256,
         afterSha256: preview.afterSha256,
         afterBase64: after.toString('base64'),
-      }, resolve(recoveryRoot, `${sourceKey}.inflight`), context, options.now);
+      }, workspacePatchInflightPathFromCanonical(root, recoveryRoot, preview.path), context, options.now);
       if (response.state === 'conflict') throw new ProtocolError('REVISION_CONFLICT', 'Workspace source changed or is busy');
       if (response.state !== 'applied') throw new ProtocolError('RESULT_UNKNOWN', 'Workspace patch apply requires reconciliation');
       result.applied = true;

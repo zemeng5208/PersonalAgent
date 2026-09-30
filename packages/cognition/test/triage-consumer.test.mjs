@@ -21,6 +21,50 @@ const validFake = {async infer(payload) {
 }};
 const input = (results, selected = messages) => ({namespace: 'host/mail/account-1', messages: selected, labels, results});
 
+test('explicit other category is accepted as a review result', async () => {
+  const otherLabels = {work: 'Work', other: 'Other'};
+  const message = {source: 'mail', messageId: 'other', sourceRevision: '1', text: 'Unclear message'};
+  const service = new LayaTriageService({async infer() {
+    return {answers: {
+      category_0: answer('other', {work: 0.1, other: 0.9}),
+      impact_0: answer('routine', {routine: 0.9, high_impact: 0.1}),
+    }};
+  }});
+  const results = await service.classify({...request([message]), labels: otherLabels});
+  assert.equal(results[0].reason, 'unknown_category');
+  const dispatch = prepareTriageDispatch({namespace: 'host/mail/account-1',
+    messages: [message], labels: otherLabels, results});
+  assert.deepEqual(dispatch.review.map(ref => ref.messageId), ['other']);
+  assert.deepEqual(dispatch.groups, []);
+});
+
+test('blank input is retained as deferred instead of rejected by the consumer', async () => {
+  const message = {source: 'mail', messageId: 'blank', sourceRevision: '1', text: '   '};
+  const results = await new LayaTriageService(validFake).classify(request([message]));
+  assert.equal(results[0].reason, 'insufficient_input');
+  const dispatch = prepareTriageDispatch({namespace: 'host/mail/account-1',
+    messages: [message], labels, results});
+  assert.deepEqual(dispatch.deferred.map(ref => ref.reason), ['insufficient_input']);
+});
+
+test('meeting labels use the same high-impact rule as the classifier', async () => {
+  const meetingLabels = {meeting: 'Meetings', work: 'Work'};
+  const message = {source: 'mail', messageId: 'meeting', sourceRevision: '1', text: 'Calendar update'};
+  const service = new LayaTriageService({async infer() {
+    return {answers: {
+      category_0: answer('meeting', {meeting: 0.9, work: 0.1}),
+      impact_0: answer('routine', {routine: 0.9, high_impact: 0.1}),
+    }};
+  }});
+  const results = await service.classify({...request([message]), labels: meetingLabels});
+  const dispatch = prepareTriageDispatch({namespace: 'host/mail/account-1',
+    messages: [message], labels: meetingLabels, results});
+  assert.deepEqual(dispatch.mainAgent.map(ref => ref.messageId), ['meeting']);
+  assert.throws(() => prepareTriageDispatch({namespace: 'host/mail/account-1',
+    messages: [message], labels: meetingLabels,
+    results: [{...results[0], candidateLabel: 'work'}]}));
+});
+
 test('same-call Fake results become stable metadata-only groups and reasoning routes', async () => {
   const results = await new LayaTriageService(validFake).classify(request(messages));
   const dispatch = prepareTriageDispatch(input(results));

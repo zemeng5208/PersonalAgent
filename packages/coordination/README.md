@@ -89,6 +89,12 @@ for cancellation, `TIMEOUT` for a deadline (the contract has no
 `DEADLINE_EXCEEDED`), and `EXTERNAL_FAILURE` for authorization, transport, HTTP, or
 malformed-response failures (the contract has no `EXTERNAL_SERVICE_ERROR`).
 
+When a response uses workflow events, each `workflow_start` must pair with a
+`workflow_end`; supplied workflow IDs/names must match. The adapter keeps the latest
+workflow answer and returns it only after the ordered `task_end` then `end` events.
+Intermediate message text is not the final answer, and malformed ordering or a
+provider failure rejects the response. The result remains unverified cloud text.
+
 For a cloud deployment whose prompt accepts tool selection, trusted composition may
 set `responseMode: 'tool-proposal-json'` and `initialRequestMode: 'goal-with-tools-json'`.
 The initial `query` then contains exactly `{"goal": string, "availableTools":
@@ -106,6 +112,12 @@ The adapter alone does not establish AgentArts availability. Deployment, API,
 trace/usage and local tool read-back require their own operational evidence. Without
 explicit trusted configuration, composition keeps the capability unavailable and never
 silently falls back to Local or Fake.
+
+For a Workflow whose start node accepts one text input, trusted composition may set
+`workflowGoalInput` to its variable name. The adapter maps the computed request text to
+that `inputs` entry; without this opt-in it sends the existing `query` shape. It never
+guesses a variable, sends both forms, or retries with another request shape. This
+provisional option is not evidence that a deployed Workflow accepts the input.
 
 Trusted composition may pass a sixth constructor argument, `onDiagnostic`, to receive
 one content-free receipt when an invocation fails. It contains a fixed failure stage

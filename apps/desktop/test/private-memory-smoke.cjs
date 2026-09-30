@@ -18,7 +18,7 @@ const {_electron} = require('playwright');
       ...process.env, ELECTRON_RUN_AS_NODE: undefined,
       PA_RUNTIME_PROFILE: 'huawei_ict_agentarts',
       PA_AGENTARTS_AUTHORIZATION: 'Bearer synthetic-only',
-      PA_AGENTARTS_GATEWAY_URL: 'https://synthetic.huaweicloud-agentarts.com',
+      PA_AGENTARTS_GATEWAY_URL: 'https://127.0.0.1:9',
       PA_AGENTARTS_RUNTIME_NAME: 'synthetic-only',
       PA_DESKTOP_TEST_USER_DATA: data,
       PA_DESKTOP_TEST_VAULT: vault,

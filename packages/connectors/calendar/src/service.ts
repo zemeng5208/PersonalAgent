@@ -52,7 +52,7 @@ export class CalendarService {
     if (provider.providerKind === 'fixture') this.providerVerification = 'mock';
   }
 
-  listEvents(accountRef: string, window: CalendarWindow, options?: {cursor?: string; limit?: number}): EventPage {
+  async listEvents(accountRef: string, window: CalendarWindow, options?: {cursor?: string; limit?: number}): Promise<EventPage> {
     const limit = options?.limit ?? 20;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new ProtocolError('INVALID_ARGUMENT', 'limit must be 1..100');
     // 聚合提供商分页直到满足 limit 或取尽，页大小与游标语义由提供商决定。
@@ -60,7 +60,7 @@ export class CalendarService {
     const collected: CalendarEventRecord[] = [];
     let providerHasMore = true;
     while (providerHasMore && collected.length < limit) {
-      const page = this.provider.fetchWindow(accountRef, window, cursor);
+      const page = await this.provider.fetchWindow(accountRef, window, cursor);
       collected.push(...page.events);
       providerHasMore = page.hasMore;
       cursor = page.nextCursor;
@@ -97,18 +97,18 @@ export class CalendarService {
 
   async getEventItem(accountRef: string, externalId: string): Promise<ConnectorItem> {
     if (typeof externalId !== 'string' || externalId.length === 0) throw new ProtocolError('INVALID_ARGUMENT', 'externalId must be a non-empty string');
-    const event = this.provider.getEvent(accountRef, externalId);
+    const event = await this.provider.getEvent(accountRef, externalId);
     if (event === undefined) throw new ProtocolError('NOT_FOUND', `Calendar event ${externalId} not found`);
     return eventToItem(event, accountRef, this.isoNow());
   }
 
   /** 邀请/变更按动作授权：respond 是外部写，actionId 由幂等键决定，可安全重试。 */
-  respond(input: CalendarRespondInput): ConnectorAction {
+  async respond(input: CalendarRespondInput): Promise<ConnectorAction> {
     if (!input || typeof input !== 'object') throw new ProtocolError('INVALID_ARGUMENT', 'respond input must be an object');
     if (typeof input.accountRef !== 'string' || input.accountRef.length === 0) throw new ProtocolError('INVALID_ARGUMENT', 'accountRef is required');
     if (typeof input.externalId !== 'string' || input.externalId.length === 0) throw new ProtocolError('INVALID_ARGUMENT', 'externalId is required');
     if (typeof input.idempotencyKey !== 'string' || input.idempotencyKey.length === 0) throw new ProtocolError('INVALID_ARGUMENT', 'idempotencyKey is required');
-    const result = this.provider.respond(input);
+    const result = await this.provider.respond(input);
     return {
       actionId: `calendar-respond:${input.idempotencyKey}`,
       state: 'confirmed',
