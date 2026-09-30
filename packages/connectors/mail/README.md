@@ -13,7 +13,12 @@ MOD-21 · 邮件连接器——QQ 邮箱提供商工作包（PA-014，P1）。�
 - 草稿使用 IMAP Drafts APPEND、内存 MIME 和 Message-ID 读回，不调用 SMTP；unknown 不自动重写，
   recoverySupport=false，跨重启输入绑定和未知动作阻断由 Runtime 持久记录负责。
 - QQ SMTP 在发送前生成稳定 Message-ID，未知结果也保留为 externalId。reconcileSend 只读 Sent，
-  核对精确 Message-ID；没找到仍 unknown，不据此盲重发。
+  先核对原幂等键与原记录或稳定 Message-ID 的绑定，再核对精确 Message-ID；任意 A 邮件＋B 键
+  返回 INVALID_ARGUMENT，缺绑定能力返回 UNSUPPORTED_CAPABILITY。没找到仍 unknown，不据此盲重发。
+- mark_seen/save_draft 的可选 MailOperationContext 从工具贯穿 Service/Registry/QQ，携带真实
+  signal/deadline；所有写前异步准备步骤返回后与 STORE/APPEND 前检查 CANCELLED/TIMEOUT。
+  已开始的写入继续读回：APPEND 未知保持 unknown 且同键不重写；STORE 未核实返回
+  RESULT_UNKNOWN（不可重试），成功读回不因稍后取消而伪称未执行。
 - fetchInbox 按 UID 排序、校验进度和 epoch、由页补齐 UIDVALIDITY；工具取消信号传到读取端口。
   IMAP 有 30 秒连接/问候/空闲限制，取消在返回前拦截；不承诺在途命令立即取消。
 - 完整 dedupeKey 以源码为准：accountRef:uidValidity:folder:uid:messageId，而不是下面旧简写。
@@ -69,7 +74,10 @@ manifest：`id=mail`、`accountTypes=['qq']`、`capabilities=['fetchChanges','se
 
 ## 取消、超时与重试
 
-读侧由宿主 `ToolContext.signal`/deadline 门禁；写侧超时语义见上（unknown，不盲重试）。
+读侧由宿主 `ToolContext.signal`/deadline 门禁；markSeen/saveDraft 增加可选第三参数
+`MailOperationContext`（signal、deadline、受信 now），旧的无 context 调用保持兼容。注册工具使用
+真实 ToolContext，并沿现有注册表转发。写前拒绝取消或过期；已开始的外部写按读回/unknown
+处理，不因取消改报未执行。此检查不承诺中断在途 IMAP 命令。写侧超时语义见上（unknown，不盲重试）。
 
 ## 测试
 
