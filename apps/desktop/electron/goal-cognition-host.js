@@ -1,6 +1,6 @@
 import {createHash,randomUUID} from 'node:crypto';
 import {toolArgumentsDigest} from '@personal-agent/tool-gateway';
-import {prepareReviewedRepair} from '@personal-agent/cognition';
+import {analyzeImpact,buildMeetingRepairOptions,prepareReviewedRepair,selectMeetingRepairScope} from '@personal-agent/cognition';
 import {parseCoordinationRepairCandidate} from '@personal-agent/coordination';
 import {isDeepStrictEqual} from 'node:util';
 
@@ -8,6 +8,7 @@ const VERSION='desktop-goal-analysis-v1';
 const MARKER='desktop-goal-cognition-review';
 const HANDOFF_TASK_MARKER='desktop-goal-cognition-handoff-task-v1';
 const REPAIR_TASK_MARKER='desktop-goal-cognition-repair-task-v1';
+const MEETING_SCOPE_MARKER='desktop-meeting-review-scope-v1';
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const sameRef=(a,b)=>a?.id===b?.id && a?.revision===b?.revision;
 const machineReview=review=>!review?.selectedOption && review?.machineReview?.reason==='uncertain'
@@ -29,7 +30,7 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
   const conversationId=`desktop-proactive-goals:${namespace}`;
   let enabled=false,cloudAllowed=false,closed=false,busy=false,nextTick=0,cursor=0;
   let controller=new AbortController(),generation=randomUUID(),status='disabled',reason='目标主动分析未开启';
-  const outgoing=new Map(),reviews=new Map();
+  const outgoing=new Map(),reviews=new Map(),meetingHosts=new Set();
   const context=()=>({signal:controller.signal,deadline:new Date(now()+180_000).toISOString()});
   const callerContext=input=>{
     const local=context();
@@ -43,7 +44,45 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
   function repairPreparation(review,candidate) {
     return prepareReviewedRepair(store.read(),new Date(now()).toISOString(),review,candidate);
   }
+  function meetingScope(proof) {
+    if(proof?.version!==1 || proof.namespace!==namespace || typeof proof.sourceRevision!=='string'
+      || !proof.sourceRevision.trim() || !proof.meetingFact || Object.keys(proof.meetingFact).length!==2
+      || typeof proof.meetingFact.id!=='string' || !Number.isSafeInteger(proof.meetingFact.revision)
+      || proof.meetingFact.revision<1 || proof.input?.graphNamespace!==namespace) throw Error('会议来源绑定无效');
+    const projection=proof.input.projection;
+    if(!projection || !Number.isSafeInteger(projection.graphRevision) || projection.graphRevision<1) throw Error('会议投影无效');
+    const original=facts.listImpactReceipts({afterGraphRevision:projection.graphRevision-1,limit:1})[0];
+    // The entire original receipt remains the proof, including every unrelated link.
+    if(!original?.completed || !isDeepStrictEqual(original.projection,projection)) throw Error('会议 Fact 投影尚未完成或已经变化');
+    const snapshot=store.read(projection.graphRevision),completed=facts.readCompletedImpact(projection.batchToken);
+    if(!completed || completed.batchToken!==projection.batchToken || !isDeepStrictEqual(original.completed,completed)
+      || !isDeepStrictEqual(analyzeImpact(snapshot,completed.report?.evaluatedAt),completed.report)
+      || Date.parse(proof.evaluatedAt)<Date.parse(completed.report.evaluatedAt)) throw Error('会议完整批次凭据不匹配');
+    const scope=selectMeetingRepairScope(snapshot,proof.evaluatedAt,proof.input,proof.meetingFact);
+    const selected={graphNamespace:namespace,projection:{...projection,
+      links:projection.links.filter(link=>sameRef(link.node,proof.meetingFact))}};
+    return {snapshot,scope,selected};
+  }
+  function validateMeetingReview(taskId,review,required=false) {
+    const proof=application.runtime.loadCheckpoint(taskId,MEETING_SCOPE_MARKER);
+    if(!proof) {
+      const intent=application.runtime.loadCheckpoint(taskId,'proactive-cognition-intent-v1');
+      const projection=intent?.trigger?.kind==='fact'?intent.trigger.input?.projection:undefined;
+      const original=projection && facts.listImpactReceipts({afterGraphRevision:projection.graphRevision-1,limit:1})[0];
+      if(required || (original && !isDeepStrictEqual(original.projection,projection))) throw Error('会议复核缺少原批次范围凭据');
+      return;
+    }
+    const {scope,selected}=meetingScope(proof);
+    const intent=application.runtime.loadCheckpoint(taskId,'proactive-cognition-intent-v1');
+    if(application.runtime.getTask(taskId).conversationId!==`proactive-cognition:${namespace}`
+      || intent?.graphNamespace!==namespace || intent.bindingVersion!==VERSION || intent.trigger?.kind!=='fact'
+      || intent.evaluatedAt!==proof.evaluatedAt || !isDeepStrictEqual(intent.trigger.input,selected)
+      || (review && (review.taskId!==taskId || review.graphNamespace!==namespace || review.bindingVersion!==VERSION
+        || review.evaluatedAt!==proof.evaluatedAt || review.graphRevision!==scope.graphRevision
+        || !isDeepStrictEqual(review.affected,scope.items)))) throw Error('会议复核任务范围绑定不匹配');
+  }
   function project(review) {
+    validateMeetingReview(review.taskId,review);
     if (!allowed() || review.graphNamespace!==namespace || review.bindingVersion!==VERSION || !canHandoff(review)) return;
     const snapshot=store.read();
     if (snapshot.revision!==review.graphRevision) return;
@@ -239,38 +278,89 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
     /** Trusted P5 consumer reuses this exact Fact review/chooser/handoff/repair owner. */
     meetingReviewedRepairPort(readCommittedProjection) {
       if(typeof readCommittedProjection!=='function') throw Error('会议需要受信的已提交来源投影');
+      let bound,activeProof,tail=Promise.resolve();
+      // A selection view for the existing Runtime factory; no new feed, model or execution loop.
+      // Actual consume/process calls still belong to the original FactHost.
+      const scopedFacts={...facts,consume:request=>facts.consume(request),processImpacts:request=>facts.processImpacts(request),
+        listImpactReceipts:request=>{
+          if(!activeProof) throw Error('会议选择范围尚未绑定');
+          const {selected}=meetingScope(activeProof);
+          return request.afterGraphRevision<selected.projection.graphRevision
+            ? [{projection:selected.projection,completed:facts.readCompletedImpact(selected.projection.batchToken)}] : [];
+        }};
+      const scoped=createHost({application,facts:scopedFacts,graphNamespace:namespace,bindingVersion:VERSION,chooser,
+        selectionHandoff:{...handoff,prepare:async review=>{
+          validateMeetingReview(review.taskId,review,true);return handoff.prepare(review);
+        },dispatch:async (request,context)=>{
+          validateMeetingReview(request.reviewTaskId,cognition.readReview(request.reviewTaskId).review,true);
+          return handoff.dispatch(request,context);
+        }},prepareOptions:async review=>{
+          if(!activeProof) throw Error('会议选择范围尚未绑定');
+          const {snapshot,scope}=meetingScope(activeProof);
+          if(!isDeepStrictEqual(review.affected,scope.items)) throw Error('会议选择超出原范围');
+          const saved=application.runtime.loadCheckpoint(review.taskId,MEETING_SCOPE_MARKER);
+          if(saved && !isDeepStrictEqual(saved,activeProof)) throw Error('会议来源凭据不能替换');
+          if(!saved) application.runtime.saveCheckpoint(review.taskId,MEETING_SCOPE_MARKER,activeProof);
+          validateMeetingReview(review.taskId,review,true);
+          return buildMeetingRepairOptions(snapshot,review.evaluatedAt,activeProof.input,activeProof.meetingFact);
+        }});
+      meetingHosts.add(scoped);
       const readReview=taskId=>{
-        const task=application.runtime.getTask(taskId);
-        const intent=application.runtime.loadCheckpoint(taskId,'proactive-cognition-intent-v1');
-        if(task.conversationId!==`proactive-cognition:${namespace}` || intent?.graphNamespace!==namespace
-          || intent.bindingVersion!==VERSION || intent.trigger?.kind!=='fact') throw Error('会议复核任务绑定不匹配');
-        return cognition.readReview(taskId);
+        const value=cognition.readReview(taskId);
+        validateMeetingReview(taskId,value.review,true);
+        return value;
       };
       return Object.freeze({
-        readCommittedProjection,
+        async readCommittedProjection(event,context) {
+          const value=await readCommittedProjection(event,context);
+          bound=value?structuredClone(value):undefined;
+          return value?structuredClone(value):undefined;
+        },
         readReview,
-        async reviewCommittedFact(request) {
-          if(!enabled || closed || !ready() || request.graphNamespace!==namespace) throw Error('会议认知端口尚未获得当前本地分析许可');
-          const current=callerContext(request);
-          const projection=request.projection;
-          if(!projection || !Number.isSafeInteger(projection.graphRevision) || projection.graphRevision<1) throw Error('会议投影无效');
-          const original=facts.listImpactReceipts({afterGraphRevision:projection.graphRevision-1,limit:1})[0];
-          if(!original?.completed || !isDeepStrictEqual(original.projection,projection)) throw Error('会议 Fact 投影尚未完成或已经变化');
-          const batch=await cognition.consumeAndReview({...current,at:request.at,limit:1,
-            afterGraphRevision:projection.graphRevision-1});
-          const value=batch.reviews.find(item=>{
-            const intent=application.runtime.loadCheckpoint(item.task.taskId,'proactive-cognition-intent-v1');
-            return intent?.trigger?.kind==='fact' && isDeepStrictEqual(intent.trigger.input,
-              {graphNamespace:namespace,projection});
-          });
-          if(!value) throw Error('原会议投影尚无可验证的认知任务');
-          record(value);onUpdate();return value;
+        reviewCommittedFact(request) {
+          const captured={...request,projection:structuredClone(request.projection),meetingFact:structuredClone(request.meetingFact)};
+          const operation=tail.then(()=>reviewCommittedFact(captured));
+          tail=operation.then(()=>{},()=>{});return operation;
         },
         applyDecision:async (taskId,input)=>{
           readReview(taskId);
           return instance.applyDecision(taskId,input);
         },
       });
+      async function reviewCommittedFact(request) {
+          if(!enabled || closed || !ready() || request.graphNamespace!==namespace) throw Error('会议认知端口尚未获得当前本地分析许可');
+          const current=callerContext(request);
+          const input={graphNamespace:request.graphNamespace,projection:request.projection};
+          if(!bound || bound.sourceRevision!==request.sourceRevision || !isDeepStrictEqual(bound.meetingFact,request.meetingFact)
+            || !isDeepStrictEqual(bound.input,input)) throw Error('会议来源尚无受信的准确读回');
+          const proof={version:1,namespace,sourceRevision:bound.sourceRevision,meetingFact:bound.meetingFact,
+            input:bound.input,evaluatedAt:request.at};
+          const {selected}=meetingScope(proof);
+          // Same canonical Fact identity as the existing Runtime owner. Recovery
+          // reads its checkpoint; it cannot convert an old full-batch review.
+          const prior=application.runtime.findTaskByIdempotencyKey('proactive-cognition:'+toolArgumentsDigest({
+            graphNamespace:namespace,bindingVersion:VERSION,trigger:{kind:'fact',input:selected}}));
+          if(prior) {
+            const value=readReview(prior.taskId);
+            if(!isDeepStrictEqual(application.runtime.loadCheckpoint(prior.taskId,MEETING_SCOPE_MARKER),proof)) throw Error('会议来源凭据不能替换');
+            record(value);onUpdate();return value;
+          }
+          if(store.read().revision!==selected.projection.graphRevision) throw Error('会议复核图版本已经变化');
+          activeProof=structuredClone(proof);
+          let batch;
+          try {batch=await scoped.consumeAndReview({...current,at:request.at,limit:1,
+            afterGraphRevision:selected.projection.graphRevision-1});}
+          finally {activeProof=undefined;}
+          const value=batch.reviews.find(item=>{
+            const intent=application.runtime.loadCheckpoint(item.task.taskId,'proactive-cognition-intent-v1');
+            return intent?.trigger?.kind==='fact' && isDeepStrictEqual(intent.trigger.input,
+              selected);
+          });
+          if(!value) throw Error('原会议投影尚无可验证的认知任务');
+          validateMeetingReview(value.task.taskId,value.review,true);
+          if(!isDeepStrictEqual(application.runtime.loadCheckpoint(value.task.taskId,MEETING_SCOPE_MARKER),proof)) throw Error('会议来源凭据不能替换');
+          record(value);onUpdate();return value;
+      }
     },
     /** Trusted host only. No raw source data, authorization or new wire operation. */
     readRepairBinding(taskId) {
@@ -392,7 +482,7 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
         : value.handoff?.state??'unavailable',reviewTaskId,...feedback,
         executionVerified:feedback.executionVerified===true,graphUpdateVerified:feedback.graphUpdateVerified===true};
     },
-    close(){closed=true;enabled=false;cloudAllowed=false;controller.abort();cognition.close();},
+    close(){closed=true;enabled=false;cloudAllowed=false;controller.abort();cognition.close();meetingHosts.forEach(host=>host.close());},
   };
   return instance;
 }

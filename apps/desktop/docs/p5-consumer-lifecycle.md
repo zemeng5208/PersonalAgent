@@ -14,3 +14,9 @@
 `dialogueProjection` 显示真实 selectionState/reason/receiptId/confidence/calibrated=false；没有 selection 时不推断已经推理。指标回答、通知投递、图谱修复、真实日历写入和实际邮件账号读取是不同证据面。正常设备状态或源未变化时可返回 KEEP，但不能用人为升高指标触发分支并称真实异常。旧 CLI/合成用例是验证行为，不是这些实时源的真实推理验收。
 
 公开合成输入的真实模型验收函数是 `p5-reviewed-goal.mjs` 和 `p5-small-mail-batch.mjs`；它们不能证明私人账号、真实设备异常或 UI 行为。会议/设备审计函数只做语法/import 检查，真实推理、AgentArts invocation、CAS 与真实设备通知必须由唯一模型/整体验收槽保存当次结果。
+
+会议批次可能同时提交多个 Fact。受信 reader 始终返回完整原始 projection；`meetingReviewedRepairPort` 校验它与原 receipt 完全相同，且 completed report 与原 graphRevision 的历史图谱重新计算结果完全相同。只有 reader 已核实的 `meetingFact{id,revision}` 和 `sourceRevision` 可决定选择范围。内部单 link 是现有 Runtime factory 的选择视图，不替代完整 receipt，也不确认/写入新 feed。
+
+`desktop-meeting-review-scope-v1` 在同 Runtime review task、Laya choose 之前保存完整原 projection、会议 Fact、sourceRevision 与 evaluatedAt；review/candidate/CAS 仅对应会议依赖链。恢复核对原 proof、原 Fact trigger、affected 与持久 scope digest，复用同 task，不扩大到同批次无关 Goal/Plan，不将旧的整批 review 转换为会议 review。factory 使用同 chooser/handoff/Runtime，没有第二个后台循环或执行入口；原 FactHost consume/process 仍由原宿主执行。
+
+混合批次双 Fact/独立 Goal/Plan、篡改无关 link、恢复范围扩大、sourceRevision 替换和 Policy/CAS 不触及无关分支的用例已准备在 cognition 与 Desktop 现有测试文件中。此增量按整体验收槽要求只做语法和差异检查，未执行这些行为用例；最终统一验证由 P8 完成。

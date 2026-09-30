@@ -1,7 +1,8 @@
 export {analyzeImpact, proposePlanRevision, CognitionError} from './impact.js';
 export {buildMinimalRepairCandidate} from './minimal-repair.js';
 export {prepareReviewedRepair} from './reviewed-repair.js';
-export {ReviewedMeetingFactConsumer, buildMeetingRepairOptions, createCommittedMeetingProjectionReader} from './reviewed-meeting.js';
+export {ReviewedMeetingFactConsumer, buildMeetingRepairOptions, createCommittedMeetingProjectionReader,
+  selectMeetingRepairScope} from './reviewed-meeting.js';
 export type {MeetingFactReview, MeetingReviewReadback, MeetingRuntimeFeedback, MeetingReviewedRepairPort,
   MeetingReviewContext, MeetingFactReceiptReader} from './reviewed-meeting.js';
 export {createInboxPageConsumer, measureTriageClassifier} from './inbox-page-consumer.js';

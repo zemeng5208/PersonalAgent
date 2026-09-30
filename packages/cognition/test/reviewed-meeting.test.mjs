@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {FakeCoordinationStoreHost} from '@personal-agent/goals/store';
 import {InMemoryMeetingDecisionReceiptStore, ReviewedMeetingFactConsumer, buildMeetingRepairOptions,
-  selectProjectedRepairScope} from '../dist/index.js';
+  analyzeImpact, createCommittedMeetingProjectionReader, selectMeetingRepairScope, selectProjectedRepairScope} from '../dist/index.js';
 
 const at='2026-09-30T08:00:00.000Z';
 const ref=(id,revision=1)=>({id,revision});
-function fixture() {
+function fixture(mixed=false) {
   const namespace='synthetic-meeting';
   const store=new FakeCoordinationStoreHost().provision(namespace);
   const append=(id,kind,summary,dependencies=[],sourceRef='calendar:synthetic')=>store.append(store.read().revision,
@@ -14,15 +14,52 @@ function fixture() {
       validFrom:'2026-01-01T00:00:00.000Z',validUntil:'2099-01-01T00:00:00.000Z'});
   append('meeting','fact','14:00');append('goal','goal','Attend meeting',[ref('meeting')]);
   append('plan','plan','Prepare at 13:00',[ref('goal')]);
-  append('other','fact','Other source');append('other-plan','plan','Unrelated plan',[ref('other')]);
-  append('other','fact','Other source changed');append('meeting','fact','16:00');
+  append('other','fact','Other source');append('other-goal','goal','Unrelated goal',[ref('other')]);
+  append('other-plan','plan','Unrelated plan',[ref('other-goal')]);
+  if(mixed) store.appendBatch(store.read().revision,['meeting','other'].map(id=>({id,kind:'fact',
+    summary:id==='meeting'?'16:00':'Other source changed',dependencies:[],sourceRef:'calendar:synthetic',
+    sensitivity:'public',state:'active',reason:'public fixture',validFrom:'2026-01-01T00:00:00.000Z',validUntil:'2099-01-01T00:00:00.000Z'})));
+  else {append('other','fact','Other source changed');append('meeting','fact','16:00');}
   const input={graphNamespace:namespace,projection:{batchToken:'committed-public-batch',graphRevision:store.read().revision,
-    links:[{eventId:'memory-change',fact:ref('memory-meeting',2),node:ref('meeting',2)}]}};
+    links:[{eventId:'memory-change',fact:ref('memory-meeting',2),node:ref('meeting',2)},
+      ...(mixed?[{eventId:'other-change',fact:ref('memory-other',2),node:ref('other',2)}]:[])]}};
   const event={eventId:'calendar-change',source:'calendar:synthetic',meetingFactId:'meeting',originalSummary:'14:00',
     newSummary:'16:00',sourceRevision:'2',detectedAt:at,deadline:new Date(Date.now()+60_000).toISOString(),signal:new AbortController().signal};
   const receipts=new InMemoryMeetingDecisionReceiptStore();
   return {namespace,store,input,event,receipts};
 }
+
+test('mixed completed batch retains both links as proof but meeting selection and restart remain on one chain',async()=>{
+  const f=fixture(true),before=f.store.read();let calls=0,applied=0;
+  const completed={batchToken:f.input.projection.batchToken,report:analyzeImpact(before,at)};
+  const reader=createCommittedMeetingProjectionReader({namespace:f.namespace,store:f.store,
+    facts:{listImpactReceipts:()=>[{projection:f.input.projection,completed}]},
+    readSourceRevision:async()=>({source:f.event.source,sourceRevision:'2',meetingFact:ref('meeting',2)})});
+  const bound=await reader(f.event,f.event);
+  assert.deepEqual(bound.input,f.input,'a multi-node batch ends after its first meeting node revision');
+  assert.deepEqual(selectProjectedRepairScope(before,at,f.input).items.map(item=>item.node.id),['goal','plan','other-goal','other-plan']);
+  const scope=selectMeetingRepairScope(before,at,f.input,ref('meeting',2));
+  assert.deepEqual(scope.items.map(item=>item.node.id),['goal','plan']);
+  assert.throws(()=>buildMeetingRepairOptions(before,at,f.input),{code:'INVALID_ARGUMENT'});
+  const options=buildMeetingRepairOptions(before,at,f.input,ref('meeting',2));
+  assert.deepEqual(options.find(option=>option.action==='REVISE').repair.changes.map(item=>item.node.id),['goal','plan']);
+  const review={taskId:'mixed-meeting-review',graphNamespace:f.namespace,graphRevision:before.revision,
+    bindingVersion:'existing-host',evaluatedAt:at,action:'RECHECK',affected:scope.items,options,
+    selection:{state:'review',reason:'uncertain',eligibleForRuntime:false,answerConfidence:0.4}};
+  const value={task:{taskId:review.taskId,state:'succeeded'},review};
+  const reviewedRepair={readCommittedProjection:reader,reviewCommittedFact:async request=>{
+    calls++;assert.deepEqual(request.projection,f.input.projection);assert.deepEqual(request.meetingFact,ref('meeting',2));
+    assert.equal(request.sourceRevision,'2');return value;
+  },readReview:()=>value,applyDecision:async()=>{applied++;return {status:'waiting_reconciliation',taskId:'same-task'};}};
+  const open=()=>new ReviewedMeetingFactConsumer({store:f.store,receiptStore:f.receipts,namespace:f.namespace,reviewedRepair});
+  await open().processEvent(f.event);await open().processEvent(f.event);
+  assert.equal(calls,1);assert.equal(applied,2);
+  review.affected=selectProjectedRepairScope(before,at,f.input).items;
+  await open().processEvent(f.event);assert.equal(applied,2,'recovery cannot broaden the persisted meeting scope');
+  const tampered=structuredClone(f.input);tampered.projection.links[1].node.revision=99;
+  assert.throws(()=>selectMeetingRepairScope(before,at,tampered,ref('meeting',2)),{code:'NOT_APPLICABLE'});
+  assert.deepEqual(f.store.read(),before);
+});
 test('meeting candidates cover only its committed Fact dependency chain and never rewrite summaries',()=>{
   const f=fixture(),before=f.store.read();
   const options=buildMeetingRepairOptions(before,at,f.input);

@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 import {isDeepStrictEqual} from 'node:util';
 import {isEffective, type GraphSnapshot, type NodeRef} from '@personal-agent/goals';
 import type {CoordinationStorePort} from '@personal-agent/goals/store';
-import {CognitionError} from './impact.js';
+import {CognitionError, type ImpactReport} from './impact.js';
 import {buildMinimalRepairCandidate} from './minimal-repair.js';
 import {selectProjectedRepairScope, type ProjectedRepairInput} from './projected-repair.js';
 import {prepareReviewedRepair, type ReviewedRepairSelection} from './reviewed-repair.js';
@@ -37,7 +37,7 @@ export interface MeetingReviewedRepairPort {
   } | undefined>;
   /** Must reuse Runtime review identity by the exact committed projection; no second review loop. */
   reviewCommittedFact(request: ProjectedRepairInput & MeetingReviewContext & {
-    workKey: string; at: string;
+    workKey: string; at: string; meetingFact: NodeRef; sourceRevision: string;
   }): Promise<MeetingReviewReadback>;
   readReview(taskId: string): MeetingReviewReadback;
   /** Existing Goal/Fact host applies AgentArts handoff and Runtime/Policy repair. Never appendBatch here. */
@@ -46,7 +46,7 @@ export interface MeetingReviewedRepairPort {
 /** Existing fixed-scope FactHost read surface; no feed acknowledgements or graph writes. */
 export interface MeetingFactReceiptReader {
   listImpactReceipts(input: {afterGraphRevision: number; limit: number}): readonly {
-    completed: boolean; projection: ProjectedRepairInput['projection'];
+    completed?: {batchToken: string; report: ImpactReport}; projection: ProjectedRepairInput['projection'];
   }[];
 }
 const refEqual = (a: NodeRef, b: NodeRef): boolean => a.id === b.id && a.revision === b.revision;
@@ -76,16 +76,27 @@ export function createCommittedMeetingProjectionReader(options: {
     if (snapshot.namespace !== options.namespace || !fact || fact.kind !== 'fact'
       || !refEqual(fact, source.meetingFact) || fact.sourceRef !== source.source || fact.summary !== event.newSummary) return undefined;
     const receipt = options.facts.listImpactReceipts({afterGraphRevision: fact.graphRevision - 1, limit: 1})[0];
-    if (!receipt?.completed || receipt.projection.graphRevision !== fact.graphRevision
+    if (!receipt?.completed || receipt.projection.graphRevision < fact.graphRevision
       || !receipt.projection.links.some(link => refEqual(link.node, source.meetingFact))) return undefined;
     return {sourceRevision: source.sourceRevision, meetingFact: {...source.meetingFact},
       input: {graphNamespace: options.namespace, projection: structuredClone(receipt.projection)}};
   };
 }
 
+/** Validate the whole projection before deriving a view of exactly one trusted Fact. Never a new receipt. */
+export function selectMeetingRepairScope(snapshot: GraphSnapshot, at: string, input: ProjectedRepairInput, meetingFact: NodeRef) {
+  selectProjectedRepairScope(snapshot, at, input);
+  const links = input.projection.links.filter(link => refEqual(link.node, meetingFact));
+  if (links.length !== 1) throw new CognitionError('NOT_APPLICABLE');
+  return selectProjectedRepairScope(snapshot, at, {...input, projection: {...input.projection, links}});
+}
+
 /** Runtime prepareOptions callback for the committed meeting scope; summaries remain unchanged until semantic review. */
-export function buildMeetingRepairOptions(snapshot: GraphSnapshot, at: string, projection: ProjectedRepairInput): MeetingFactReview['options'] {
-  const scope = selectProjectedRepairScope(snapshot, at, projection);
+export function buildMeetingRepairOptions(snapshot: GraphSnapshot, at: string, projection: ProjectedRepairInput,
+  meetingFact?: NodeRef): MeetingFactReview['options'] {
+  const selected = meetingFact ?? (projection.projection.links.length === 1 ? projection.projection.links[0]?.node : undefined);
+  if (!selected) throw new CognitionError('INVALID_ARGUMENT');
+  const scope = selectMeetingRepairScope(snapshot, at, projection, selected);
   if (!scope.items.length) return [];
   const candidate = buildMinimalRepairCandidate(snapshot, at, {
     expectedGraphRevision: snapshot.revision, targets: scope.items.map(item => item.node),
@@ -184,8 +195,8 @@ export class ReviewedMeetingFactConsumer {
       return this.save(record, {...receipt, reason: '当前会议 Fact 尚无匹配的持久投影；先由受控来源读回并提交'});
     }
     // Current graph scope is authoritative; never create a prospective Fact or rewrite unrelated nodes.
-    const scope = selectProjectedRepairScope(current, event.detectedAt, {...bound.input,
-      projection: {...bound.input.projection, graphRevision: current.revision}});
+    const scope = selectMeetingRepairScope(current, event.detectedAt, {...bound.input,
+      projection: {...bound.input.projection, graphRevision: current.revision}}, bound.meetingFact);
     receipt = {...receipt, graphRevisionBefore: current.revision,
       graphRevisionAfter: current.revision, reviewScopeDigest: hash(scope.items)};
     if (!scope.items.length) return this.save(record, {...receipt, status: 'kept', decisionAction: 'KEEP',
@@ -195,6 +206,7 @@ export class ReviewedMeetingFactConsumer {
     await this.save(record, receipt);
     const result = await withCognitionDeadline(event, context => host.reviewCommittedFact({...bound.input, workKey: `meeting-review:${hash([
       this.options.namespace, event.source, event.eventId, inputDigest])}`, at: event.detectedAt,
+      meetingFact: {...bound.meetingFact}, sourceRevision: bound.sourceRevision,
       ...context}), () => this.now());
     this.active(event);
     const review = result.review;
