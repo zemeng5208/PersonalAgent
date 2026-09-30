@@ -67,6 +67,8 @@ export interface InboxTriageOptions {
   readonly meetingLabels?: readonly string[];
   /** Trusted model/prompt/threshold/batching policy identity; unknown classifiers cannot reuse after restart. */
   readonly classifierFingerprint?: string;
+  /** Trusted current loaded-model identity. Undefined disables reuse and analysis export. */
+  readonly getClassifierFingerprint?: () => string | undefined;
   /** Checks the current local processing lease, not cloud export permission. */
   readonly authorizeRead: (scope: {accountRef: string; folder: string} & InboxTriageContext) => boolean;
 }
@@ -87,7 +89,17 @@ export function createInboxTriagePipeline(options: InboxTriageOptions) {
   if ([...meetingLabels].some(label => !Object.hasOwn(labels, label))) reject('Unknown meeting label');
   const storageKey = `inbox-triage:v1:${hash([options.namespace, labels, [...meetingLabels].sort()])}`;
   if (options.classifierFingerprint !== undefined && !text(options.classifierFingerprint)) reject('Invalid classifier fingerprint');
-  const classifierFingerprint = options.classifierFingerprint ?? randomUUID();
+  if (options.getClassifierFingerprint !== undefined && typeof options.getClassifierFingerprint !== 'function') reject('Invalid classifier identity getter');
+  const fallbackFingerprint = options.classifierFingerprint ?? randomUUID();
+  const readFingerprint = (): string | undefined => {
+    if (options.getClassifierFingerprint === undefined) return fallbackFingerprint;
+    let value: unknown;
+    try {value = options.getClassifierFingerprint();} catch {return undefined;}
+    return text(value) && value.length <= 256 ? value : undefined;
+  };
+  const checkFingerprint = (expected: string): void => {
+    if (readFingerprint() !== expected) throw new ProtocolError('REVISION_CONFLICT', 'Inbox classifier identity changed');
+  };
   let busy = false;
   const load = (): State => {
     const saved = options.storage.get(storageKey);
@@ -131,9 +143,9 @@ export function createInboxTriagePipeline(options: InboxTriageOptions) {
       throw new ProtocolError('UNAUTHORIZED', 'Local inbox processing is not authorized');
     }
   };
-  const currentAnalysis = (state: State, key: string): StoredAnalysis | undefined => {
+  const currentAnalysis = (state: State, key: string, classifierFingerprint: string | undefined): StoredAnalysis | undefined => {
     const item = state.analyses[key];
-    return item && item.classifierFingerprint === classifierFingerprint
+    return classifierFingerprint && item && item.classifierFingerprint === classifierFingerprint
       && state.heads[item.messageId]?.sourceRevision === item.sourceRevision ? item : undefined;
   };
   const publicAnalysis = (item: StoredAnalysis): InboxPendingAnalysis => {
@@ -142,16 +154,17 @@ export function createInboxTriagePipeline(options: InboxTriageOptions) {
   };
   const readAnalysis = (workKey: string, context: InboxTriageContext): InboxPendingAnalysis | undefined => {
     checkContext(context);
-    const item = currentAnalysis(load(), workKey);
+    const item = currentAnalysis(load(), workKey, readFingerprint());
     if (!item) return undefined;
     check({...context, accountRef: item.accountRef, folder: item.folder});
     return publicAnalysis(item);
   };
   const snapshot = () => {
     const state = load();
+    const classifierFingerprint = readFingerprint();
     const records = Object.values(state.latest).map(key => state.records[key]!)
       .filter(row => !state.heads[row.messageId] || state.heads[row.messageId]!.sourceRevision === row.sourceRevision)
-      .map(row => row.classifierFingerprint === classifierFingerprint ? row : {...row,
+      .map(row => classifierFingerprint && row.classifierFingerprint === classifierFingerprint ? row : {...row,
         label: null, route: 'review' as const, needsReview: true, highImpactCandidate: false, meetingCandidate: false});
     const groups: Record<string, number> = Object.create(null) as Record<string, number>;
     for (const row of records) if (row.label !== null) groups[row.label] = (groups[row.label] ?? 0) + 1;
@@ -166,8 +179,9 @@ export function createInboxTriagePipeline(options: InboxTriageOptions) {
     pendingAnalyses(context: InboxTriageContext): readonly InboxPendingAnalysis[] {
       checkContext(context);
       const state = load();
+      const classifierFingerprint = readFingerprint();
       return Object.keys(state.analyses).sort().flatMap(key => {
-        const item = currentAnalysis(state, key);
+        const item = currentAnalysis(state, key, classifierFingerprint);
         if (!item || item.state === 'accepted' || !options.authorizeRead({accountRef: item.accountRef,
           folder: item.folder, ...context})) return [];
         return [publicAnalysis(item)];
@@ -180,13 +194,14 @@ export function createInboxTriagePipeline(options: InboxTriageOptions) {
       if (!input || ![input.workKey, input.sourceRevision, input.receiptId, input.projectionDigest, input.taskId].every(text)) {
         reject('Invalid inbox analysis acceptance');
       }
-      const state = load(), item = currentAnalysis(state, input.workKey);
+      const state = load(), item = currentAnalysis(state, input.workKey, readFingerprint());
       if (!item || item.sourceRevision !== input.sourceRevision || item.receipt.id !== input.receiptId
         || item.projectionDigest !== input.projectionDigest || item.state === 'deferred'
         || (item.taskId !== undefined && item.taskId !== input.taskId)) {
         throw new ProtocolError('REVISION_CONFLICT', 'Inbox analysis is stale or not ready');
       }
       check({...context, accountRef: item.accountRef, folder: item.folder});
+      checkFingerprint(item.classifierFingerprint!);
       if (item.state !== 'accepted') {
         state.analyses[input.workKey] = {...item, state: 'accepted', taskId: input.taskId}; save(state);
       }
@@ -213,6 +228,8 @@ export function createInboxTriagePipeline(options: InboxTriageOptions) {
         || !Number.isFinite(Date.parse(input.deadline))) reject('Invalid inbox page');
       const page: InboxTriagePage = {...input, items: structuredClone(input.items)};
       check(page);
+      const classifierFingerprint = readFingerprint();
+      if (classifierFingerprint === undefined) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Loaded inbox classifier identity is unavailable');
       const mailboxId = hash([page.accountRef, page.folder]);
       const messages = page.items.map(item => {
         validateContract('connectorItem', item);
@@ -265,7 +282,7 @@ export function createInboxTriagePipeline(options: InboxTriageOptions) {
           return true;
         });
         // Invalidate superseded work before inference can yield to a cloud sender.
-        check(page); save(state);
+        check(page); checkFingerprint(classifierFingerprint); save(state);
         const pending = current.filter(message => {
           const row = state.records[hash([message.messageId, message.sourceRevision])];
           return !row?.receiptId || row.classifierFingerprint !== classifierFingerprint;
@@ -274,11 +291,11 @@ export function createInboxTriagePipeline(options: InboxTriageOptions) {
         let incomplete = false;
         // The public Laya service bounds each batch; persist completed chunks before proceeding.
         for (let index = 0; index < pending.length; index += 4) {
-          check(page);
+          check(page); checkFingerprint(classifierFingerprint);
           const batch = pending.slice(index, index + 4);
           const results = await options.triage.classify({messages: batch, labels,
             deadline: page.deadline, signal: page.signal});
-          check(page);
+          check(page); checkFingerprint(classifierFingerprint);
           if (!Array.isArray(results) || results.length !== batch.length) {
             throw new ProtocolError('EXTERNAL_FAILURE', 'Inbox classifier returned an invalid batch');
           }
@@ -327,7 +344,7 @@ export function createInboxTriagePipeline(options: InboxTriageOptions) {
             state.latest[message.messageId] = key;
             classified++;
           }
-          check(page); save(state);
+          check(page); checkFingerprint(classifierFingerprint); save(state);
         }
         // Cached revisions must also become the latest visible observation after replay.
         for (const message of current) {
@@ -335,7 +352,7 @@ export function createInboxTriagePipeline(options: InboxTriageOptions) {
           if (state.records[key]) state.latest[message.messageId] = key;
           else incomplete = true;
         }
-        check(page);
+        check(page); checkFingerprint(classifierFingerprint);
         if (!incomplete && !historical) state.cursors[mailboxId] = page.nextCursor;
         save(state);
         return {classified, reused: current.length - pending.length, ignoredStale: unique.length - current.length, complete: !incomplete,
