@@ -8,6 +8,7 @@ import {
   DEFAULT_MAIL_LABELS,
   DeviceAnomalyDecisionService,
 } from '@personal-agent/cognition';
+import {createCalendarMeetingSource} from './p5-calendar-meeting-source.js';
 
 /**
  * Register a listener on an event source, supporting:
@@ -84,6 +85,7 @@ export function createCognitionP5Composition({
   classifier,
   policyEvaluator,
   notificationPort,
+  calendarReadPort,
   autoStart = true,
   now = Date.now,
   onUpdate = () => {},
@@ -212,6 +214,15 @@ export function createCognitionP5Composition({
     }
   };
 
+  // Trusted host ports only; missing source/baseline wiring remains unavailable.
+  const calendarMeetingSource = meetingCoordinator && calendarReadPort ? createCalendarMeetingSource({
+    readCurrent: calendarReadPort.readCurrent,
+    readBaseline: calendarReadPort.readBaseline,
+    processMeetingEvent: event => meetingCoordinator.processEvent(event),
+    now,
+    onUpdate: publish,
+  }) : undefined;
+
   const instance = {
     get receiptStore() { return receiptStore; },
     get executionPort() { return executionPort; },
@@ -225,6 +236,8 @@ export function createCognitionP5Composition({
         ready: state === 'running',
         activeSubscriptionCount: activeSubscriptions.size,
         hasMeetingCoordinator: Boolean(meetingCoordinator),
+        hasCalendarMeetingSource: Boolean(calendarMeetingSource),
+        calendarSource: calendarMeetingSource?.snapshot() ?? {status: 'unavailable', calendarWriteVerified: false},
         hasMailPipeline: Boolean(mailPipeline),
         hasDeviceAnomalyService: Boolean(deviceAnomalyService),
         hasExecutionPort: Boolean(executionPort),
@@ -333,6 +346,11 @@ export function createCognitionP5Composition({
       return tracked('meeting', event, context => meetingCoordinator.processEvent({...event, ...context}));
     },
 
+    async refreshCalendarMeeting(binding, options = {}) {
+      if (!calendarMeetingSource) throw new Error('Calendar source or durable baseline unavailable');
+      return tracked('meeting', options, context => calendarMeetingSource.refresh(binding, context));
+    },
+
     async applyMeetingProposal(query, options) {
       if (state === 'disposed') throw new Error('Cognition P5 composition has been disposed');
       if (!meetingCoordinator) throw new Error('Meeting coordinator unavailable: Laya inference/chooser not connected');
@@ -373,6 +391,7 @@ export function createCognitionP5Composition({
       const records = await instance.listMeetingReceipts();
       const devices = await instance.readDeviceFeedback();
       return {state, modelReady: instance.snapshot().modelReady, failures: {...failures},
+        calendarSource: instance.snapshot().calendarSource,
         meetings: records.slice(-20).map(({receipt}) => ({eventId: receipt.eventId,
           status: receipt.status, graphRevisionAfter: receipt.graphRevisionAfter,
           confidence: receipt.confidence, actionId: receipt.actionId,
