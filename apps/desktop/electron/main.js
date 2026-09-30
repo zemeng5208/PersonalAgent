@@ -1206,6 +1206,7 @@ async function initializeRuntime() {
       const subagentTool = createDesktopSubagentDispatchTool({
         getRuntime: () => runtimeApplication.runtime,
         getTools: () => runtimeApplication.tools,
+        runDefaultWorker:(subtask,worker,tools)=>runtimeApplication.runDefaultSubagentWorker(subtask,worker,tools),
         fakeModelMode,
         getModelGateway: modelName => modelApiHost?.getModelGateway(modelName),
         getModelReasoningEfforts: modelName => modelApiHost?.getModelReasoningEfforts(modelName) ?? [],
@@ -1215,17 +1216,19 @@ async function initializeRuntime() {
         const taskThinking = runtimeApplication.runtime.loadCheckpoint(context.taskId,'task-thinking');
         const boundTool=createDesktopSubagentDispatchTool({getRuntime:()=>runtimeApplication.runtime,
           getTools:()=>runtimeApplication.tools,fakeModelMode,
+          runDefaultWorker:(subtask,worker,tools)=>runtimeApplication.runDefaultSubagentWorker(subtask,worker,tools),
           getModelGateway:name=>modelApiHost?.getModelGateway(name,preferred?.configurationRef),
           getModelReasoningEfforts:name=>modelApiHost?.getModelReasoningEfforts(name,preferred?.configurationRef)??[]});
         return boundTool.execute({...input,subtasks:input.subtasks.map(subtask=>({...subtask,
-          ...(preferred?.modelId ? {model:preferred.modelId} : {}),
-          ...(taskThinking ? {thinkingDepth:taskThinking.depth} : {}),
+          ...(subtask.model===undefined && preferred?.modelId ? {model:preferred.modelId} : {}),
+          ...(subtask.thinkingDepth===undefined && taskThinking ? {thinkingDepth:taskThinking.depth} : {}),
         }))},context);
       };
       const subagentAvailability = {
         toolName: SUBAGENT_DISPATCH_TOOL_NAME,
         toolVersion: SUBAGENT_DISPATCH_TOOL_VERSION,
-        available: async () => Boolean(modelApiHost?.snapshot().models?.some(item => item.enabled)),
+        available: async ({taskId}) => runtimeApplication.isDefaultSubagentAvailable()
+          && !runtimeApplication.runtime.getTask(taskId).conversationId?.startsWith('desktop-subtask:'),
       };
       const subagentExport = {
         toolName: SUBAGENT_DISPATCH_TOOL_NAME,
@@ -1281,6 +1284,16 @@ async function initializeRuntime() {
       runtimeApplication = runtimeModule.createAgentArtsRuntimeApplication({
         path: dbPath,
         hostUserNamespace: namespace,
+        knowledgeWriteReconciliation:{
+          reconcile: (original,context)=>{
+            const current=knowledgeSourceConfig.snapshot();
+            return knowledgeTools.reconcileWrite({...original,sourceId:current.sourceId,configRevision:current.configRevision},context);
+          },
+          finalize: (acceptedOriginal,context)=>{
+            const current=knowledgeSourceConfig.snapshot();
+            return knowledgeTools.finalizeWrite({sourceId:current.sourceId,configRevision:current.configRevision,acceptedOriginal},context);
+          },
+        },
         // Match the existing text tool workflow budget; preserve room for the final answer.
         competitionMaxSteps: 8,
         // Module availability/consent, input validation and ToolGateway still run.
@@ -1302,7 +1315,7 @@ async function initializeRuntime() {
           if (!['desktop-panel','desktop-workspace'].includes(conversationId)) return undefined;
           const preference = conversations.preference(conversationId,{depth:thinking.depth,fast:thinking.fast});
           const models=modelApiHost?.snapshot();
-          const modelId=preference.modelId || models?.defaultId || undefined;
+          const modelId=preference.modelId || undefined;
           const selected=models?.models.find(item=>item.id===modelId);
           return {...preference,modelId,configurationRef:selected?.configurationRef};
         },
@@ -1777,6 +1790,12 @@ async function action(event, name, payload) {
       publish();return result;
     }
     if(action==='readNote') return knowledgeSourceConfig.readSelectedNote(payload);
+    if(action==='reconcile') {
+      if(!payload || Object.keys(payload).some(key=>key!=='taskId') || typeof payload.taskId!=='string')throw Error('原知识任务标识无效');
+      const task=await runtimeApplication.reconcileKnowledgeWriteTask(payload.taskId,
+        {deadline:new Date(Date.now()+30000).toISOString(),signal:new AbortController().signal});
+      publish();return {taskId:task.taskId,state:task.state};
+    }
     if(action==='submitPatch') {
       const binding=knowledgeSourceConfig.snapshot();
       if(payload?.sourceId!==binding.sourceId || payload?.configRevision!==binding.configRevision) throw Error('笔记配置已改变，请重新读取');
@@ -2264,6 +2283,7 @@ app.whenReady().then(async () => {
   if (competitionMode && !syntheticMvp) {
     const {createConfiguredSubagentModelGateway} = await import('@personal-agent/runtime/application');
     modelApiHost = createModelApiConfig({userData:app.getPath('userData'),safeStorage,
+      isDefaultExecutionAvailable:()=>runtimeApplication?.isDefaultSubagentAvailable()===true,
       createGateway:createConfiguredSubagentModelGateway});
   }
   if (competitionMode && !syntheticMvp) calendarConfig = createCalendarConfig({userData:app.getPath('userData'),safeStorage});
