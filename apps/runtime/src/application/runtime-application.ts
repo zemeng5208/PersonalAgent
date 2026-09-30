@@ -3,14 +3,16 @@ import {createHash} from 'node:crypto';
 import type {Event, Request, Response, RegisteredTool, TaskSnapshot, ToolDescriptor} from '@personal-agent/contracts';
 import {RuntimeToolInvoker} from '@personal-agent/agents';
 import type {AgentToolPort} from '@personal-agent/agents';
+import type {SubtaskDefinition} from '@personal-agent/agents';
 import {ToolGateway, toolArgumentsDigest} from '@personal-agent/tool-gateway';
 import {TaskRuntime} from '../index.js';
+import type {WorkerContext,WorkerResult} from '../index.js';
 import {createTextApplication, type TextApplication, type TextApplicationOptions} from './text.js';
 import type {ModelMessage, ModelGateway, ReasoningEffort} from '@personal-agent/models';
 import {QwenRealtimeModelGateway} from '@personal-agent/models';
 import {parseCoordinationRepairCandidate} from '@personal-agent/coordination';
 import type {CoordinationPort, CoordinationRequest, CoordinationRepairCandidateResult} from '@personal-agent/coordination';
-import {startCoordinationTask, assertCompetitionExportAllowed, type CompetitionToolExport} from './coordination.js';
+import {startCoordinationTask,runCoordinationWorker, assertCompetitionExportAllowed, type CompetitionToolExport} from './coordination.js';
 import {createLocalRepairTool, prepareLocalRepair, startLocalRepairTask, LOCAL_REPAIR_CHECKPOINT} from './local-repair.js';
 import type {LocalRepairHostOptions, SubmitLocalRepairRequest} from './local-repair.js';
 import {isDeepStrictEqual} from 'node:util';
@@ -200,6 +202,8 @@ export interface RuntimeApplicationOptions { path: string; now?: () => Date; idF
   thinking?: ThinkingConfig;
   /** Trusted host policy for routine operations inside already enabled module scopes. */
   automaticTools?: readonly {toolName: string; toolVersion: string}[];
+  /** Opaque identity of trusted Competition configuration, excluding credentials. */
+  coordinationBinding?: string;
   /** Trusted current configuration, shared by initial child dispatch and recovery. */
   subagentModels?: {getModelGateway?: (modelName?:string,configurationRef?:string)=>ModelGateway|undefined;
     getModelReasoningEfforts?: (modelName?:string,configurationRef?:string)=>readonly ReasoningEffort[]};
@@ -217,6 +221,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   private readonly tools: AgentToolPort | undefined;
   readonly profile: 'local' | 'huawei_ict_agentarts';
   private readonly coordination: CoordinationPort | undefined;
+  private readonly coordinationBinding: string;
   private readonly competitionToolExports: readonly CompetitionToolExport[];
   private competitionMaxSteps: number;
   private thinkingConfig: ThinkingConfig = {depth: 1, fast: false};
@@ -252,6 +257,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       throw new ProtocolError('INVALID_ARGUMENT', 'Choose explicit competition coordination or existing local text configuration, not both');
     }
     this.coordination = options.coordination;
+    this.coordinationBinding=options.coordinationBinding??'runtime-configured-coordination';
     this.now = options.now ?? (() => new Date());
     this.repairCandidateVersion = options.repairCandidateVersion;
     this.localRepair = options.localRepair;
@@ -524,6 +530,48 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   }
 
   /** Trusted composition only. Native audio never replaces AgentArts task coordination. */
+  isDefaultSubagentAvailable(): boolean {return this.profile==='huawei_ict_agentarts' && this.coordination!==undefined;}
+
+  /** Original Competition worker inside the already running child TaskRuntime lifecycle. */
+  async runDefaultSubagentWorker(subtask:SubtaskDefinition,worker:WorkerContext):Promise<WorkerResult> {
+    if(!this.isDefaultSubagentAvailable() || subtask.model!==undefined) {
+      throw new ProtocolError('UNSUPPORTED_CAPABILITY','Default Competition child is unavailable');
+    }
+    const binding=this.runtime.loadCheckpoint(worker.taskId,'subtask-parent') as {parentTaskId?:string;parentDeadline?:string;subtaskId?:string;goal?:string;role?:string}|undefined;
+    const child=this.runtime.getTask(worker.taskId);
+    if(!binding?.parentTaskId || binding.parentDeadline!==worker.deadline || binding.subtaskId!==subtask.subtaskId
+      || binding.goal!==subtask.goal || binding.role!==subtask.role || child.state!=='running'
+      || child.conversationId!==`desktop-subtask:${binding.parentTaskId}` || worker.signal.aborted) {
+      throw new ProtocolError('UNAUTHORIZED','Default child is not bound to its original parent');
+    }
+    const identity={profile:'huawei_ict_agentarts',configurationRef:this.coordinationBinding};
+    const previous=worker.loadCheckpoint('subtask-coordination-binding');
+    if(previous!==undefined && !isDeepStrictEqual(previous,identity)) {
+      throw new ProtocolError('REVISION_CONFLICT','Competition child configuration changed');
+    }
+    const maxSteps=subtask.thinkingDepth===undefined?6:Math.max(2,(subtask.thinkingDepth+1)*2);
+    if(previous===undefined) {
+      worker.saveCheckpoint('subtask-coordination-binding',identity);
+      worker.saveCheckpoint('application-profile',this.profile);
+      worker.saveCheckpoint('application-goal',child.goal);
+      worker.saveCheckpoint('application-deadline',worker.deadline);
+      worker.saveCheckpoint('competition-max-steps',maxSteps);
+      worker.saveCheckpoint('subtask-thinking-binding',{depth:subtask.thinkingDepth??null,stepBudget:{maxSteps},
+        modelReasoning:{supported:false,effort:null,verification:'unverified',thinkingBudgetSupported:false,
+          reason:'AgentArts child uses a step budget; native reasoning parameter is unavailable'}});
+    } else if(worker.loadCheckpoint('application-goal')!==child.goal
+      || worker.loadCheckpoint('application-deadline')!==worker.deadline
+      || worker.loadCheckpoint('competition-max-steps')!==maxSteps) {
+      throw new ProtocolError('REVISION_CONFLICT','Competition child original task binding changed');
+    }
+    const tools:AgentToolPort|undefined=this.tools?{list:()=>this.tools!.list().filter(tool=>tool.name!==SUBAGENT_DISPATCH_TOOL_NAME),
+      invoke:invocation=>{if(invocation.toolName===SUBAGENT_DISPATCH_TOOL_NAME)throw new ProtocolError('UNAUTHORIZED','Recursive child dispatch denied');
+        return this.tools!.invoke(invocation);}}:undefined;
+    return runCoordinationWorker(this.runtime,this.coordination,tools,worker.taskId,child.goal,worker,
+      {toolExports:this.competitionToolExports,...(this.competitionToolCatalog?{toolCatalog:this.competitionToolCatalog}:{}),
+        ...(this.repairCandidateVersion?{repairCandidateVersion:this.repairCandidateVersion}:{})});
+  }
+
   createLiveVoiceModel(config: {workspaceId: string; apiKey: string}): Pick<QwenRealtimeModelGateway, 'connect'> {
     if (this.profile !== 'huawei_ict_agentarts') {
       throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Live voice requires Competition Profile');
