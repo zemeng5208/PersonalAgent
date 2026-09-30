@@ -3,6 +3,7 @@ import {themePreference, saveTheme, saveCalm} from '../../ui/preferences.js';
 import {mountLiveVoiceControls} from '../../app/live-voice-controls.js';
 import {mountProactiveControls} from '../../app/proactive-controls.js';
 import {mountMailControls} from '../../app/mail-controls.js';
+import {mountCalendarControls} from '../../app/calendar-controls.js';
 import {mountLayaControls} from '../../app/laya-controls.js';
 import {mountWorkspaceControls} from '../../app/workspace-controls.js';
 import {mountAgentArtsControls} from '../../app/agentarts-controls.js';
@@ -125,7 +126,7 @@ export function mountAdmin(root, invoke, escape) {
   localSettingsButton.textContent = '桌面设置与恢复';
   localSettingsButton.addEventListener('click', () => window.desktop.openSettings().catch(error => { root.querySelector('#error').textContent = error.message; }));
   root.querySelector('.admin-bar').insertBefore(localSettingsButton, root.querySelector('#admin-close'));
-  let liveControls,proactiveControls,mailControls,layaControls,codingControls,agentArtsControls,feedsControls,notepadControls,todoControls,goalCloudControls,knowledgeControls;
+  let liveControls,proactiveControls,mailControls,calendarControls,layaControls,codingControls,agentArtsControls,feedsControls,notepadControls,todoControls,goalCloudControls,knowledgeControls;
 
   function capabilityTable(data) {
     const status = data.capabilityDirectory ?? {state: 'unavailable', reason: '可信宿主尚未报告能力目录状态'};
@@ -293,6 +294,8 @@ export function mountAdmin(root, invoke, escape) {
     notepadControls?.render(data.notepad);notepadControls?.show(section==='computer');
     if (section==='connections' && data.mail) mailControls ??= mountMailControls(root.querySelector('.main'),invoke);
     mailControls?.render(data.mail);mailControls?.showSettings(section==='connections');
+    if (section==='connections' && data.calendar) calendarControls ??= mountCalendarControls(root.querySelector('.main'),invoke);
+    calendarControls?.render(data.calendar);calendarControls?.show(section==='connections');
     if (section==='connections' && data.feeds) feedsControls ??= mountFeedsControls(root.querySelector('.main'),invoke);
     feedsControls?.render(data.feeds);feedsControls?.show(section==='connections');
     if(section==='connections' && data.todo) todoControls ??= mountTodoControls(root.querySelector('.main'),invoke);

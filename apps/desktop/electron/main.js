@@ -34,6 +34,7 @@ import {createWorkspaceCommandRecipeTool} from './workspace-command-recipes.js';
 import {createAgentArtsConfig} from './agentarts-config.js';
 import {createDeferredRuntimeStartup} from './runtime-startup.js';
 import {createMailConfig} from './mail-config.js';
+import {createCalendarConfig} from './calendar-config.js';
 import {createDesktopMailAnalysisHost} from './mail-analysis-host.js';
 import {createDesktopFeedsHost} from './feeds-host.js';
 import {createDesktopNotepadHost} from './notepad-host.js';
@@ -180,6 +181,7 @@ let productTools;
 let codingWorkspace;
 let competitionToolAvailabilityList = [];
 let mailConfig;
+let calendarConfig;
 let feedsHost;
 let todoHost;
 let todoFailure = '';
@@ -404,6 +406,7 @@ function snapshot(surface) {
     p5: p5StatusSnapshot(),
     knowledgeWatch: knowledgeWatchHost?.snapshot() ?? null,
     mail: mailSnapshot(),
+    calendar: calendarConfig?.snapshot(),
     feeds: feedsHost?.snapshot(),
     todo: todoHost?.snapshot() ?? {available:false,items:[],notifications:[],reason:todoFailure || '待办将在 Runtime 连接后可用'},
     goalCloud:goalCloudHost?.snapshot() ?? {available:false,sessionAllowed:false,reason:'目标工具将在 Runtime 连接后可用'},
@@ -1535,6 +1538,12 @@ async function action(event, name, payload) {
     if (name === 'coding.revoke') codingWorkspace.revoke();
     publish();return {coding:codingWorkspace.snapshot()};
   }
+  if (['calendar.configure','calendar.revoke'].includes(name)) {
+    if (sender !== admin || !competitionMode || syntheticMvp || !calendarConfig) throw Error('请从正式应用日历设置操作');
+    if (runtimeApplication?.activeTaskCount || runtimeStartup.snapshot().state === 'starting') throw Error('请等待当前任务及启动结束后修改日历配置');
+    const result = name === 'calendar.configure' ? calendarConfig.configure(payload) : calendarConfig.revoke();
+    publish(); return result;
+  }
   if (['mail.configure','mail.enable','mail.read','mail.disable','mail.enableCloud','mail.disableCloud','laya.start','laya.stop'].includes(name)) {
     if (sender !== admin || !competitionMode || !mailConfig || !localLaya) throw Error('此操作仅允许从本项目设置调用');
     if (name === 'laya.start') {
@@ -2021,6 +2030,7 @@ app.whenReady().then(async () => {
   sisConfigHost = createDesktopSisConfigHost({userData: app.getPath('userData'), safeStorage});
   liveConfig = createLiveVoiceConfig({userData: app.getPath('userData'), safeStorage});
   agentArtsConfig = createAgentArtsConfig({userData: app.getPath('userData'), safeStorage});
+  if (competitionMode && !syntheticMvp) calendarConfig = createCalendarConfig({userData:app.getPath('userData'),safeStorage});
   if (competitionMode && !syntheticMvp) feedsHost = createDesktopFeedsHost({userData:app.getPath('userData'),safeStorage});
   ipcMain.on('desktop:live-event', (event, message) => {liveVoice?.receive(event, message);});
   ipcMain.on('desktop:voice-playback-event', (event, message) => {
