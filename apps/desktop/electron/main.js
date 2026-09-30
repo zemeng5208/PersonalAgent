@@ -65,16 +65,6 @@ if (process.env.PA_DESKTOP_EPHEMERAL_MODEL === '1') app.setPath('userData', app.
   : path.resolve(dir, `../.cache/test-user-data-${process.pid}`));
 if (process.env.PA_DESKTOP_TEST_USER_DATA) {
   app.setPath('userData', path.resolve(process.env.PA_DESKTOP_TEST_USER_DATA));
-} else if (!fakeMode && !fakeModelMode && process.env.PA_DESKTOP_EPHEMERAL_MODEL !== '1' && !app.isPackaged) {
-  const localSisUserData = path.resolve(dir, '../../../.cache/sis-live-user-data');
-  const mod11SisUserData = path.resolve(dir, '../../../../mod11-fact-public-desktop/PersonalAgent/.cache/sis-live-user-data');
-  if (existsSync(path.join(localSisUserData, 'agentarts-config.json'))) {
-    app.setPath('userData', localSisUserData);
-    process.env.PA_DESKTOP_TEST_USER_DATA = localSisUserData;
-  } else if (existsSync(path.join(mod11SisUserData, 'agentarts-config.json'))) {
-    app.setPath('userData', mod11SisUserData);
-    process.env.PA_DESKTOP_TEST_USER_DATA = mod11SisUserData;
-  }
 }
 const dataPaths = desktopDataPaths({electronDir: dir, userData: app.getPath('userData'),
   packaged: app.isPackaged, fakeRuntime: fakeMode, fakeModel: fakeModelMode,
