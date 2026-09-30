@@ -3,10 +3,12 @@ import {createP5DeviceReceiptStore} from '../electron/p5-device-receipt-store.js
 
 /** P8 calls this once with actual Electron Notification and an isolated Runtime namespace port. */
 export async function captureP5SyntheticNativeReceipt({Notification, storage, readDeliveryPolicy,
-  caseId, allowOneSyntheticNotification = false} = {}) {
+  caseId, signal, allowOneSyntheticNotification = false} = {}) {
   if (allowOneSyntheticNotification !== true) return {state: 'not_started', delivered: false};
   if (typeof caseId !== 'string' || !/^p5-native-case-[a-z0-9-]{1,64}$/.test(caseId)
-    || !storage || typeof readDeliveryPolicy !== 'function') throw new Error('Invalid P5 native receipt case');
+    || !storage || typeof readDeliveryPolicy !== 'function'
+    || (signal !== undefined && !(signal instanceof AbortSignal))) throw new Error('Invalid P5 native receipt case');
+  if (signal?.aborted) return {state: 'cancelled', delivered: false};
   const store = createP5DeviceReceiptStore({storage, allowedSources: ['injected']});
   const existing = store.read(caseId);
   const notification = {id: caseId, source: 'injected',
@@ -18,11 +20,13 @@ export async function captureP5SyntheticNativeReceipt({Notification, storage, re
   const provenance = {taskId: 'synthetic-device-input', source: notification.source,
     timestamp: notification.timestamp, evidenceRefs: ['synthetic-input-not-runtime-evidence']};
   const host = createP5DeviceNotificationHost({Notification, store, readDeliveryPolicy,
-    readProvenance: () => provenance, isActive: () => true});
+    readProvenance: () => provenance, isActive: () => !signal?.aborted});
+  const stop = () => host.stop();
+  signal?.addEventListener('abort', stop, {once: true});
   let result, error;
   try { result = await host.sendAdvisoryNotification(notification); }
   catch { error = 'delivery_unknown_or_reconciliation_required'; }
-  finally { host.dispose(); }
+  finally { signal?.removeEventListener('abort', stop); host.dispose(); }
   const receipt = host.readDeliveryOutcome(caseId);
   return {
     caseId, capturedAt: new Date().toISOString(),

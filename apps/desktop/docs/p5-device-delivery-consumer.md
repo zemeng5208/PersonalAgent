@@ -103,10 +103,19 @@ delivered/failed，之后 readDeviceFeedback 读回；unknown/pending 不猜测�
 
 P8 最后槽可导入 `test/p5-device-native-receipt.mjs` 的
 `captureP5SyntheticNativeReceipt({Notification,storage,readDeliveryPolicy,caseId,
-allowOneSyntheticNotification:true})`。脚本无自动执行/自动弹窗；Notification 必须由
+signal,allowOneSyntheticNotification:true})`。脚本无自动执行/自动弹窗；Notification 必须由
 实际 Electron 入口提供，storage 必须来自隔离 Runtime 的已绑定 namespace（不使用用户
 正式通知历史）。caseId 固定为 `p5-native-case-...`，重入复用同 ID 和原 timestamp，
 unknown 不重发；缺显式单次开关只返回 not_started。
+P8 可传当前验收 AbortSignal；预先取消不启动，进行中取消同步调用 host.stop 保留 unknown，
+不以取消证明未投递。
 该 helper 只记录合成输入的原生回执、静音抑制或 unknown，不启动模型/不调用云，
 输出明确 `realMetricsTriggered/layaChoiceVerified/runtimeToolEvidenceVerified=false`。
 实际生产采样与 Laya 链仍须各自匹配，不用此合成通知补造生产 Evidence。
+
+2026-09-30 云端分工更新后：设备宿主/store 保持本机唯一写入，P5 云端不编辑本包。
+P5 `e11ac12` 通过 `application.createHostStateStore('proactive-receipts')` 保存原主动认知
+checkpoint；设备 OS 回执通过 P8 分配的 `'device-notifications'` domain 保存，都是同一个
+Runtime SQLite，不是 fake anchor task、新任务库或另一数据库。P6 真实采样合同保持
+`node:os/evidenceRefs/samplingIntervalMs>=1000`。以上两个 logical domain 不改变输入来源
+或出云许可。最后 helper AbortSignal 修改只保存源码，按用户统一验收要求未追加局部测试。
