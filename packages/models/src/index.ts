@@ -3,6 +3,8 @@ import type { ToolDescriptor } from '@personal-agent/contracts';
 export {StructuredToolProvider} from './structured-tools.js';
 export {QwenRealtimeModelGateway} from './realtime.js';
 export type {RealtimeEvent, RealtimeRequest, RealtimeSession} from './realtime.js';
+export {OpenAICompatibleModelProvider} from './openai-compatible.js';
+export type {OpenAICompatibleModelProviderOptions} from './openai-compatible.js';
 
 export type ModelCapability = 'text' | 'streaming' | 'toolCalling' | 'structuredOutput' | 'vision';
 export type Verification = 'mock' | 'verified' | 'conditional';

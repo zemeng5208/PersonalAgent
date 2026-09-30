@@ -52,6 +52,8 @@ export interface CalendarRespondResult {
 export interface CalendarProvider {
   /** 账号类型（进 manifest.accountTypes），Fake 为 'fixture'。 */
   readonly providerKind: string;
+  /** 提供商验证等级（透传到连接器 manifest.verification）：Fake 为 'mock'，网络型真实源为 'conditional'。 */
+  readonly verification: 'mock' | 'verified' | 'conditional';
   listCalendars(accountRef: string): CalendarSummary[] | Promise<CalendarSummary[]>;
   fetchWindow(accountRef: string, window: CalendarWindow, cursor?: string): CalendarFetchPage | Promise<CalendarFetchPage>;
   getEvent(accountRef: string, externalId: string): CalendarEventRecord | undefined | Promise<CalendarEventRecord | undefined>;

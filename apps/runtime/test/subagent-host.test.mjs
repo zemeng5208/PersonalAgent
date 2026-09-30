@@ -5,7 +5,7 @@ import {createRuntimeSubagentDispatchTool} from '../dist/application.js';
 import {createRuntimeApplication} from '../dist/application/runtime-application.js';
 import {ModelGateway, FakeModelProvider} from '@personal-agent/models';
 
-test('createRuntimeSubagentDispatchTool creates real tracked child tasks in Runtime', async () => {
+test('createRuntimeSubagentDispatchTool refuses to fabricate success without a model gateway', async () => {
   const runtime = new TaskRuntime(':memory:');
   const parent = runtime.submitTask({
     conversationId: 'desktop-panel',
@@ -26,28 +26,33 @@ test('createRuntimeSubagentDispatchTool creates real tracked child tasks in Runt
     scopes: ['agent:delegate'],
   };
 
+  // 未配置模型网关：不再按角色生成固定「完成」文本（假成功），子任务失败并给出准确原因。
   const result = await tool.execute({
     subtasks: [
       {subtaskId: 'sub-1', role: 'researcher', goal: '调查北京天气趋势'},
-      {subtaskId: 'sub-2', role: 'coder', goal: '审查工作区差异'},
+      {subtaskId: 'sub-2', role: 'coder', goal: '审查工作区差异', model: 'deep-research'},
     ],
   }, context);
 
-  // 校验汇总结构
   assert.equal(result.total, 2);
-  assert.equal(result.succeeded, 2);
-  assert.equal(result.failed, 0);
+  assert.equal(result.succeeded, 0);
+  assert.equal(result.failed, 2);
   assert.equal(result.cancelled, 0);
-  assert.equal(result.subtasks.length, 2);
-  assert.match(result.aggregatedSummary, /次级智能体协作汇总/);
+  for (const subtask of result.subtasks) {
+    assert.equal(subtask.state, 'failed');
+    assert.match(subtask.error, /未配置或不受支持/);
+  }
 
-  // 校验 Runtime 中真实创建了子任务
+  // Runtime 中真实创建了子任务且终态为 failed（不冒充模型执行成功；错误信息在 error 上）。
   const child1 = runtime.findTaskByIdempotencyKey(`subagent-dispatch-${parent.taskId}-sub-1`);
   assert.ok(child1);
-  assert.equal(child1.state, 'succeeded');
+  assert.equal(child1.state, 'failed');
   assert.equal(child1.conversationId, `desktop-subtask:${parent.taskId}`);
+  assert.match(child1.error?.message ?? '', /默认模型 未配置或不受支持/);
+  const child2 = runtime.findTaskByIdempotencyKey(`subagent-dispatch-${parent.taskId}-sub-2`);
+  assert.match(child2?.error?.message ?? '', /模型 deep-research 未配置或不受支持/);
 
-  // 校验父子关联检查点
+  // 父子关联检查点仍写入（失败可诊断、可追溯）。
   const parentRef = runtime.loadCheckpoint(child1.taskId, 'subtask-parent');
   assert.equal(parentRef.parentTaskId, parent.taskId);
   assert.equal(parentRef.subtaskId, 'sub-1');

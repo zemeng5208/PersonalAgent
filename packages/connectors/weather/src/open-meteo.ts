@@ -22,6 +22,14 @@ export interface OpenMeteoOptions {
   /** Population floor for trusting a match that is not an administrative seat. See `assessConfidence`. */
   minCorroboratedPopulation?: number;
   /**
+   * Population floor for trusting a *minor* administrative seat (PPLA2–PPLA5). Measured gap:
+   * the wrong minor-seat misresolutions carry 14574 (凤凰 → Chongqing PPLA4) and 1733
+   * (开罗 → Cairo, Illinois PPLA2), while the smallest correct one carries 211151 (丽江市,
+   * PPLA2). 100000 falls inside that gap. A proven alternate name (GeoNames `name_equals`)
+   * corroborates a minor seat regardless of population.
+   */
+  minMinorSeatPopulation?: number;
+  /**
    * GeoNames official API account. When set, Han-script inputs get an extra exact-name tier
    * (`name_equals`) that Open-Meteo's per-language index cannot answer: its `zh` index is
    * Traditional and incomplete, so simplified foreign city names fail outright. Inject at
@@ -76,17 +84,28 @@ const DEFAULT_GEOCODE_CACHE_LIMIT = 500;
  * Calibrated on a gap measured against the production endpoint on 2026-09-06, not on a round
  * number: the worst misresolution (伦敦 → London, Ontario) carried 422324 people, while the
  * correct non-admin-seat city (New York) carried 8804190. Anything between those two figures
- * is unmeasured territory. Known false positives (阳朔, 同里 — correct places GeoNames gives no
- * population) and false negatives (`Pingyao` → Zhejiang, 凤凰 → Chongqing — wrong places that
- * are admin seats) are listed in the README. The rule detects a bad match; it does not repair it.
+ * is unmeasured territory. The two documented judgement errors are both addressed elsewhere:
+ * wrong minor-seat matches by `DEFAULT_MIN_MINOR_SEAT_POPULATION`, and correct
+ * no-population places by the GeoNames exact-name tier (`exactNameMatch`). The rule detects a
+ * bad match; it does not repair it.
  */
 const DEFAULT_MIN_CORROBORATED_POPULATION = 500_000;
+
+/**
+ * Calibrated on the gap between the smallest correct minor seat measured (丽江市, PPLA2,
+ * 211151) and the wrong minor seats the misresolutions carried (凤凰 → Chongqing PPLA4 14574,
+ * `Pingyao` → Zhejiang PPLA4, `Wuyuan` → Zhejiang PPLA3, 开罗 → Illinois PPLA2 1733). Anything
+ * between 14574 and 211151 is unmeasured territory.
+ */
+const DEFAULT_MIN_MINOR_SEAT_POPULATION = 100_000;
 
 /** GeoNames marks every inhabited place `PPL*`; `PCLI`, `PCL*`, `ADM*` and `MT` are not places a forecast can answer for. */
 const POPULATED_PLACE_PREFIX = 'PPL';
 
-/** A seat of government is corroborated by its own record, however small its population. */
-const ADMIN_SEAT_CODES: ReadonlySet<string> = new Set(['PPLC', 'PPLA', 'PPLA2', 'PPLA3', 'PPLA4', 'PPLA5']);
+/** A capital or first-level seat is corroborated by its own record, however small its population. */
+const MAJOR_ADMIN_SEAT_CODES: ReadonlySet<string> = new Set(['PPLC', 'PPLA']);
+/** Minor seats (second-level and below) still need population or a proven alternate name. */
+const MINOR_ADMIN_SEAT_CODES: ReadonlySet<string> = new Set(['PPLA2', 'PPLA3', 'PPLA4', 'PPLA5']);
 
 /**
  * Han ideographs including the compatibility block. Japanese kanji match, which is intended:
@@ -94,10 +113,14 @@ const ADMIN_SEAT_CODES: ReadonlySet<string> = new Set(['PPLC', 'PPLA', 'PPLA2', 
  */
 const HAN_PATTERN = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
 
-function assessConfidence(featureCode: string | undefined, population: number, minCorroboratedPopulation: number): PlaceConfidence {
+function assessConfidence(featureCode: string | undefined, population: number,
+  minCorroboratedPopulation: number, minMinorSeatPopulation: number, exactNameMatch: boolean): PlaceConfidence {
   if (featureCode === undefined || !featureCode.startsWith(POPULATED_PLACE_PREFIX)) return 'low';
-  if (ADMIN_SEAT_CODES.has(featureCode)) return 'high';
-  return population >= minCorroboratedPopulation ? 'high' : 'low';
+  if (MAJOR_ADMIN_SEAT_CODES.has(featureCode)) return 'high';
+  if (MINOR_ADMIN_SEAT_CODES.has(featureCode)) {
+    return population >= minMinorSeatPopulation || exactNameMatch ? 'high' : 'low';
+  }
+  return population >= minCorroboratedPopulation || exactNameMatch ? 'high' : 'low';
 }
 
 const WMO_SUMMARY_ZH: Readonly<Record<number, string>> = {
@@ -196,6 +219,7 @@ export class OpenMeteoProvider implements WeatherProvider {
   private readonly geocodingBaseUrl: string;
   private readonly geocodeCacheLimit: number;
   private readonly minCorroboratedPopulation: number;
+  private readonly minMinorSeatPopulation: number;
   private readonly geonamesUsername: string | undefined;
   private readonly geonamesBaseUrl: string;
   private readonly geocodeCache = new Map<string, ResolvedPlace>();
@@ -212,6 +236,9 @@ export class OpenMeteoProvider implements WeatherProvider {
     const floor = options.minCorroboratedPopulation ?? DEFAULT_MIN_CORROBORATED_POPULATION;
     if (!Number.isFinite(floor) || floor < 0) throw new Error('minCorroboratedPopulation must be a non-negative number');
     this.minCorroboratedPopulation = floor;
+    const minorFloor = options.minMinorSeatPopulation ?? DEFAULT_MIN_MINOR_SEAT_POPULATION;
+    if (!Number.isFinite(minorFloor) || minorFloor < 0) throw new Error('minMinorSeatPopulation must be a non-negative number');
+    this.minMinorSeatPopulation = minorFloor;
     this.geonamesUsername = options.geonamesUsername;
     this.geonamesBaseUrl = (options.geonamesBaseUrl ?? GEONAMES_BASE_URL).replace(/\/+$/, '');
   }
@@ -318,7 +345,8 @@ export class OpenMeteoProvider implements WeatherProvider {
   }
 
   private confidenceOf(place: MergedPlace): PlaceConfidence {
-    return assessConfidence(place.featureCode, place.population, this.minCorroboratedPopulation);
+    return assessConfidence(place.featureCode, place.population,
+      this.minCorroboratedPopulation, this.minMinorSeatPopulation, place.exactNameMatch === true);
   }
 
   /**

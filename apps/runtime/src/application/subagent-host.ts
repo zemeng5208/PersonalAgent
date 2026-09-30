@@ -173,7 +173,8 @@ export function createRuntimeSubagentDispatchTool(options: SubagentHostOptions):
                   initialMessages: [rolePrompt],
                   model,
                   tools: childTools ?? {list: () => [], invoke: async () => { throw new Error('No tools'); }},
-                  authorizationRefFor: () => `subtask-auth-${childTaskId}`,
+                  // 授权引用不再自造前缀：agent 循环默认按本次调用 runId 派生，
+                  // 与 RuntimeApplication.tools 的真实授权/审批机制一致（POTATOS-MVP §9.7）。
                   maxSteps: subtask.thinkingDepth !== undefined ? Math.max(2, (subtask.thinkingDepth + 1) * 2) : 6,
                   ...(reasoningEffort !== undefined ? {reasoningEffort} : {}),
                 },
@@ -184,27 +185,12 @@ export function createRuntimeSubagentDispatchTool(options: SubagentHostOptions):
               };
             }
 
-            // 未配置模型时使用基于角色职责的结构化执行
-            let detail = '';
-            if (subtask.role === 'researcher') {
-              detail = `【${roleLabel}】完成针对性资料检索与事实调研：${subtask.goal}`;
-            } else if (subtask.role === 'coder') {
-              detail = `【${roleLabel}】工程工作区与代码实现核验完毕：${subtask.goal}`;
-            } else if (subtask.role === 'reviewer') {
-              detail = `【${roleLabel}】合规性与质量复核通过：${subtask.goal}`;
-            } else if (subtask.role === 'planner') {
-              detail = `【${roleLabel}】子目标与执行步骤已结构化拆解：${subtask.goal}`;
-            } else {
-              detail = `【${roleLabel}】协作协调与输出汇总完成：${subtask.goal}`;
-            }
-
-            const modelNote = subtask.model ? ` [model=${subtask.model}]` : '';
-            const thinkingNote = subtask.thinkingDepth !== undefined ? ` [thinking_depth=${subtask.thinkingDepth}]` : '';
-
-            return {
-              resultSummary: `${detail}${modelNote}${thinkingNote}`,
-              evidenceRefs: [],
-            };
+            // 未配置或不受支持的模型：明确不可用，不生成固定完成文本（假成功）。
+            // 显式 Fake 仅经 fakeModelMode 开关由 FakeModelProvider 标注 mock；
+            // 缺模型时 Runtime 将子任务记为失败并给出准确原因，不冒充模型执行。
+            const modelLabel = subtask.model ? `模型 ${subtask.model}` : '默认模型';
+            throw new ProtocolError('UNSUPPORTED_CAPABILITY',
+              `子任务无法执行：${modelLabel} 未配置或不受支持。请在受信设置中配置模型后重试`);
           },
           {
             deadline: childDeadline,
