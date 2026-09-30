@@ -3,6 +3,21 @@ import {validateToolArguments, validateToolProposal} from './index.js';
 import type {ModelDeployment, ModelProvider, ModelRequest, ModelResult, ModelResponse} from './index.js';
 
 /** Host-side JSON proposal protocol over a text model; not native function calling. */
+
+/**
+ * 真实端点（glm-4-flash 等）常把 JSON 包进 markdown 代码围栏。只剥**整段围栏**——
+ * 开头 ```(+可选语言标记) 与结尾 ``` 之间必须是合法 JSON；正文内部出现 ``` 一律拒绝
+ * （那不是围栏而是注入或损坏的输出，不猜测）。
+ */
+function stripProposalFence(text: string): string {
+  const trimmed = text.trim();
+  const openMatch = /^```[A-Za-z0-9_-]*\s*\r?\n/.exec(trimmed);
+  if (!openMatch || !trimmed.endsWith('```')) return trimmed;
+  const inner = trimmed.slice(openMatch[0].length, -3).trim();
+  if (inner.includes('```')) throw new Error('nested fence in proposal');
+  return inner;
+}
+
 export class StructuredToolProvider implements ModelProvider {
   readonly deployment: ModelDeployment;
   constructor(private readonly text: ModelProvider) {
@@ -20,7 +35,9 @@ export class StructuredToolProvider implements ModelProvider {
     ]});
     if (result.response.kind !== 'final') throw new ProtocolError('EXTERNAL_FAILURE', 'Text provider returned a non-text response');
     let value: unknown;
-    try { value = JSON.parse(result.response.text); } catch { throw new ProtocolError('INVALID_ARGUMENT', 'Model returned invalid proposal JSON'); }
+    try {
+      value = JSON.parse(stripProposalFence(result.response.text));
+    } catch { throw new ProtocolError('INVALID_ARGUMENT', 'Model returned invalid proposal JSON'); }
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ProtocolError('INVALID_ARGUMENT', 'Model response must be an object');
     const record = value as Record<string, unknown>;
     let response: ModelResponse;

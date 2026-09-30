@@ -25,6 +25,8 @@ test('different articles preserve their own locator/content hash and the full pa
   assert.notEqual(receipt.citation, items[0].contentRef);
   assert.match(receipt.citation, /^knowledge-feed-citations:[a-f0-9]{64}$/);
   assert.ok(verifyKnowledgeFeedReceiptBinding(receipt, binding(receipt)));
+  const {summary: _summary, ...withoutSummary} = binding(receipt);
+  assert.ok(verifyKnowledgeFeedReceiptBinding(receipt, withoutSummary));
   const quotes = knowledgeFeedReceiptItems(receipt);
   assert.deepEqual(quotes.map(item => [item.itemKey, item.citation, item.excerpt]),
     [['a', items[0].contentRef, items[0].summary], ['b', items[1].contentRef, items[1].summary]]);
