@@ -182,7 +182,7 @@ knowledgeWatch.start();
 
 `bindObservedRevision` 在任务未完成时返回 `reevaluation_unconfirmed` 和实际 `taskState`；已跟踪关注缺少对应 consumer 时返回 `reevaluation_consumer_missing`；任务与已持久接受的 `taskId` 不一致时返回 `reevaluation_task_mismatch`；经任一适配器读回的任务成功但宿主没有可核验的结构化重评结果时返回 `reevaluation_result_unavailable`。过期关注返回 `watch_expired`；已经绑定返回 `already_bound`；撤销后返回 `user_revoked`。
 
-总装解锁点：`knowledge-watch-host.js` 的 `adaptRuntimeWork` / `bindObservedRevision` 已固定上述消费契约，但 P8 当前装配仍未形成生产正向闭环。P8 `f700dec` 的 `main.js` 会取 `getRecheckContext(workKey)` 并传部分来源元数据，却没有注入受信 `reevaluator`，也没有把 namespace、consumerRevision 和完整 v2 结果写入 Runtime；Runtime 当前记录仍是 v1，且缺少实际结果时默认 `confirmed`。因此 P7 会安全拒绝该路径，保持 `reevaluation_result_unavailable`。P7 不在宿主解析摘要、不自行调用 `runTask`，也不新增第二套结果存储。
+总装解锁点：`knowledge-watch-host.js` 的 `adaptRuntimeWork` / `bindObservedRevision` 已固定上述消费契约，但 P8 当前装配仍未形成可接受的生产正向闭环。P8 `2d8136a` 的 `main.js` 已传完整 context 并注入 `createProductionKnowledgeReevaluator`，Runtime 也写入 v2；当前 reevaluator 只基于元数据调用认知计划，并把 citation URL 作为唯一 Evidence ref，没有受信来源读回或非 citation Evidence。P7 会安全拒绝该结果，保持 `reevaluation_result_unavailable`。P7 不在宿主解析摘要、不自行调用 `runTask`，也不新增第二套结果存储。
 
 交给总装实现的最小可信结果契约：由受信 Runtime 实际执行来源重评后，在同一任务 checkpoint 写入上面的 v2 记录，并把同一 Evidence ids 写入 `TaskSnapshot.evidenceRefs`；`main.js` 只负责把 P7 返回的完整上下文传入 Runtime。仅有 `TaskSnapshot.state`、通用 goal 字符串、固定 `resultSummary` 或空 Evidence 不够。
 
@@ -198,7 +198,7 @@ knowledgeWatch.start();
 
 ## 总装分支上的当前调用
 
-分支 `codex/zemeng/p8-shared-assembly` 当前的 `apps/desktop/electron/main.js`（P8 `f700dec`）用幂等键 `` `knowledge-watch-root:${namespace}` `` 创建任务，并接入 P7 宿主的 `layaChooser: localLaya`、受会话授权门控的 `feedCollect` 和 Runtime 适配。P8 的 `dispatchKnowledgeRecheckTask` 已能取 `getRecheckContext(workKey)`，但尚未注入受信 `reevaluator`，也未写入本页定义的 v2 checkpoint；这部分仍保持不可用。
+分支 `codex/zemeng/p8-shared-assembly` 当前的 `apps/desktop/electron/main.js`（P8 `2d8136a`）用幂等键 `` `knowledge-watch-root:${namespace}` `` 创建任务，并接入 P7 宿主的 `layaChooser: localLaya`、受会话授权门控的 `feedCollect`、完整 recheck context 和 Runtime v2 适配。当前正向结果仍因 citation-only Evidence 及缺少实际来源读回而被 P7 拒绝；这部分保持不可用，直到 P8 提供受信 Evidence。
 
 总装更新时必须使用 P7 最新宿主文件，不得把旧副本复制回来。`knowledgeWatchHost` 的 `workPort` 仍应只使用 `RECHECK <workKey>` 的 Runtime 幂等任务；不要另建结果库或在 Desktop 解析摘要。
 
