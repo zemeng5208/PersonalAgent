@@ -14,6 +14,11 @@ import {PanguModelProvider, StructuredToolProvider} from '@personal-agent/models
 import {TaskRuntime} from '@personal-agent/runtime';
 import {createRuntimeSubagentDispatchTool} from '@personal-agent/runtime/application';
 
+if (process.env.PA_PANGU_LIVE !== '1') {
+  console.error('真实盘古验收默认关闭；显式设置 PA_PANGU_LIVE=1 后才会读取凭据或发起请求。');
+  process.exit(1);
+}
+
 const required = name => {
   const value = process.env[name];
   if (!value || !value.trim()) {
