@@ -34,7 +34,7 @@ export interface CloudSkillSelectionOptions {
 const KEY='skill:cloud-selection:v1';
 export const CLOUD_SKILL_TOOL_NAME='skill.workspace_reference_summary';
 export const CLOUD_SKILL_TOOL_VERSION='1.0.0';
-export const CLOUD_SKILL_PUBLIC_ENUM_PATHS=['/skillId','/version','/digest'] as const;
+export const CLOUD_SKILL_PUBLIC_ENUM_PATHS=['/skillId','/version','/digest','/sourceRef'] as const;
 export const CLOUD_SKILL_CHOICE_SCHEMA={type:'object',properties:{skillId:{type:'string',const:'workspace-reference-summary'},version:{type:'string',const:'1.0.0'},digest:{type:'string',pattern:'^[a-f0-9]{64}$'},sourceRef:{type:'string',pattern:'^[A-Za-z0-9._:-]{1,128}$'}},required:['skillId','version','digest','sourceRef'],additionalProperties:false};
 const selectionSchema={type:'object',properties:{selectionRef:{type:'string',minLength:1,maxLength:128},skillId:{const:'workspace-reference-summary'},version:{const:'1.0.0'},digest:{type:'string',pattern:'^[a-f0-9]{64}$'}},required:['selectionRef','skillId','version','digest'],additionalProperties:false};
 interface Saved {taskId:string; proposalId:string; choice:CloudSkillChoice; source:PublicSkillSource; selection:CloudSkillSelection; receipt?:CloudSkillReceipt}
@@ -120,12 +120,17 @@ export function createCloudSkillSelectionPort(options:CloudSkillSelectionOptions
   const port={
     /** Native host approves publishing these owned public enums. This descriptor
      * feeds existing availableTools, not ToolGateway.register. */
-    describe():CoordinationAvailableTool|undefined {
+    describe(sourceRefs:readonly string[]=[]):CoordinationAvailableTool|undefined {
       if(closed || !worker?.health().connected || !options.publicReferenceExport) return undefined;
+      // Only aliases the native host just approved for this task may be published.
+      // Describing them does not replace the execution/export permission checks.
+      const aliases=Array.isArray(sourceRefs)?[...new Set(sourceRefs)]:[];
+      if(aliases.length===0
+        || aliases.some(ref=>typeof ref!=='string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(ref))) return undefined;
       const manifest=worker.manifest();
       return {name:CLOUD_SKILL_TOOL_NAME,version:CLOUD_SKILL_TOOL_VERSION,inputSchema:{
         type:'object',properties:{skillId:{type:'string',enum:[manifest.id]},version:{type:'string',enum:[manifest.version]},
-          digest:{type:'string',enum:[manifest.digest]},sourceRef:{type:'string',minLength:1,maxLength:128}},
+          digest:{type:'string',enum:[manifest.digest]},sourceRef:{type:'string',enum:aliases}},
         required:['skillId','version','digest','sourceRef'],additionalProperties:false}};
     },
     catalog(sourceRef:string,context:CloudSkillContext):CloudSkillChoice {

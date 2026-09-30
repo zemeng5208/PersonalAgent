@@ -18,10 +18,28 @@ test('native MCP candidates separate preflight from original confirmation and ne
   const application={runtime,configureReferenceSkill:()=>{},setReferenceSkillEnabled:()=>{},referenceSkillSnapshot:()=>({manifest})};
   const descriptor={name:'mcp.workspace.read_text',version:'1.0.0',inputSchema:{type:'object',properties:{path:{type:'string',minLength:1,maxLength:1024}},required:['path'],additionalProperties:false},outputSchema:MCP_READ_RESULT_SCHEMA};
   const createMcp=()=>{let connected=false;return {tools:[{descriptor}],health:()=>({connected}),start:async()=>{connected=true;},dispose:async()=>{connected=false;}};};
+  let publicRefs=['public-reference'],skillAllowed=true,replaceBindingOnAliasRead=false;
   const host=createDesktopReferenceHost({hostUserNamespace:'synthetic-user',workspace:{
     readWorkspaceBinding:()=>({rootPath:'synthetic-root',nodeExecutable:'synthetic-node',bindingId:'synthetic-session'}),
-    isWorkspaceBindingCurrent:()=>active},createMcp,resolvePublicSkillPath:()=> 'public.md'});
+    isWorkspaceBindingCurrent:()=>active},createMcp,resolvePublicSkillPath:()=> 'public.md',
+    publicSkillAvailability:async()=>skillAllowed,
+    readPublicSkillSourceRefs:input=>{
+      assert.equal(input.taskId,taskId);assert.equal(typeof input.configurationRef,'string');
+      if(replaceBindingOnAliasRead) active=false;
+      return publicRefs;
+    }});
   host.bindApplication(application);await host.setMcpEnabled(true);host.bindTask(taskId);
+  host.configureCloudSkillWorker({manifest:()=>manifest,health:()=>({connected:true}),invoke:async()=>{throw Error('catalog must not read');}});
+  const catalogInput={taskId,deadline,signal:new AbortController().signal};
+  const catalog=await host.cloudSkillCatalog(catalogInput);
+  assert.deepEqual(catalog.inputSchema.properties.sourceRef.enum,['public-reference']);
+  assert.equal(JSON.stringify(catalog).includes('public.md'),false);
+  publicRefs=[];assert.equal(await host.cloudSkillCatalog(catalogInput),undefined);
+  publicRefs=['../private.md'];assert.equal(await host.cloudSkillCatalog(catalogInput),undefined);
+  publicRefs=['public-reference'];skillAllowed=false;assert.equal(await host.cloudSkillCatalog(catalogInput),undefined);skillAllowed=true;
+  replaceBindingOnAliasRead=true;assert.equal(await host.cloudSkillCatalog(catalogInput),undefined);replaceBindingOnAliasRead=false;active=true;
+  assert.equal(await host.cloudSkillCatalog({...catalogInput,signal:AbortSignal.abort()}),undefined);
+  assert.equal(await host.cloudSkillCatalog({...catalogInput,deadline:new Date(0).toISOString()}),undefined);
   const put=(k,v)=>checkpoints.set(key(taskId,k),structuredClone(v));
   put('application-profile','huawei_ict_agentarts');put('application-deadline',deadline);
   const proposal={kind:'tool_proposal',proposalId,toolName:descriptor.name,toolVersion:descriptor.version,arguments:{path:'public.md'},verification:'unverified'};
