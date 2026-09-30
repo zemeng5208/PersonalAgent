@@ -14,10 +14,13 @@ function fixture(fetch) {
   const base = new URL('../../../.cache/model-api-config-tests/',import.meta.url);
   mkdirSync(base,{recursive:true});
   const userData = mkdtempSync(base);
-  const modelApi = {...models,
-    OpenAICompatibleModelProvider:class extends models.OpenAICompatibleModelProvider {constructor(options) {super({...options,fetch});}},
-    PanguModelProvider:class extends models.PanguModelProvider {constructor(options) {super({...options,fetch});}}};
-  const options = {userData,safeStorage,modelApi};
+  const createGateway = ({provider,baseUrl,model,deployment,apiKey}) => {
+    const Provider = provider === 'pangu' ? models.PanguModelProvider : models.OpenAICompatibleModelProvider;
+    return new models.ModelGateway(new models.StructuredToolProvider(new Provider({
+      baseUrl,model,deployment,apiKey,fetch,
+    })));
+  };
+  const options = {userData,safeStorage,createGateway};
   return {options,host:createModelApiConfig(options)};
 }
 const answer = () => new Response(JSON.stringify({choices:[{message:{content:'Synthetic answer'}}]}));
@@ -66,14 +69,14 @@ test('changing, disabling or disposing model configuration aborts inflight calls
     host.dispose();
   }
 });
-test('unsafe storage, credential URLs and missing provider stay unavailable without network calls', () => {
+test('unsafe storage, credential URLs and a missing Runtime gateway factory stay unavailable without network calls', () => {
   const {options,host} = fixture(()=>{throw Error('must not call');});
   const noStorage = createModelApiConfig({...options,safeStorage:{isEncryptionAvailable:()=>false}});
   assert.throws(()=>noStorage.configure(input),/安全存储/);
   for (const baseUrl of ['http://remote.invalid/v1','https://user:secret@synthetic.invalid/v1','https://synthetic.invalid/v1?token=secret']) {
     assert.throws(()=>host.configure({...input,baseUrl}));
   }
-  const missing = createModelApiConfig({...options,modelApi:{...models,OpenAICompatibleModelProvider:undefined}});
+  const missing = createModelApiConfig({...options,createGateway:undefined});
   missing.configure({...input,id:'absent'});
   assert.equal(missing.snapshot().configured,false);
   assert.equal(missing.getModelGateway(),undefined);
