@@ -56,6 +56,9 @@ export class CalendarService {
   }
 
   async listEvents(accountRef: string, window: CalendarWindow, options?: {cursor?: string; limit?: number}): Promise<EventPage> {
+    assertUtcInstant(window.fromUtc, 'fromUtc');
+    assertUtcInstant(window.toUtc, 'toUtc');
+    if (Date.parse(window.fromUtc) >= Date.parse(window.toUtc)) throw new ProtocolError('INVALID_ARGUMENT', 'Calendar window must have a positive duration');
     const limit = options?.limit ?? 20;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new ProtocolError('INVALID_ARGUMENT', 'limit must be 1..100');
     // 聚合提供商分页直到满足 limit 或取尽，页大小与游标语义由提供商决定。
@@ -64,6 +67,9 @@ export class CalendarService {
     let providerHasMore = true;
     while (providerHasMore && collected.length < limit) {
       const page = await this.provider.fetchWindow(accountRef, window, cursor);
+      if (page.hasMore && (page.nextCursor === undefined || page.nextCursor === cursor || page.events.length === 0)) {
+        throw new ProtocolError('EXTERNAL_FAILURE', 'Calendar provider returned a non-progressing page', false);
+      }
       collected.push(...page.events);
       providerHasMore = page.hasMore;
       cursor = page.nextCursor;
@@ -105,6 +111,25 @@ export class CalendarService {
     return eventToItem(event, accountRef, this.isoNow());
   }
 
+  /** Host passes its persisted baseline. Includes explicit cancellation readback;
+   * missing UIDs throw NOT_FOUND and cannot silently become withdrawal events.
+   * No event DTO or second baseline store: P5 creates the semantic change event.
+   */
+  async refreshKnownItems(accountRef: string, previous: readonly ConnectorItem[]): Promise<ConnectorItem[]> {
+    const changed: ConnectorItem[] = [];
+    const seen = new Set<string>();
+    for (const prior of previous) {
+      if (prior.source !== 'calendar' || prior.accountRef !== accountRef || seen.has(prior.externalId)) {
+        throw new ProtocolError('INVALID_ARGUMENT', 'Calendar baseline must contain unique UIDs from this account');
+      }
+      seen.add(prior.externalId);
+      const current = await this.getEventItem(accountRef, prior.externalId);
+      if (current.dedupeKey !== prior.dedupeKey || current.contentRef !== prior.contentRef
+        || current.validFor !== prior.validFor) changed.push(current);
+    }
+    return changed;
+  }
+
   /** 邀请/变更按动作授权：respond 是外部写，actionId 由幂等键决定，可安全重试。 */
   async respond(input: CalendarRespondInput): Promise<ConnectorAction> {
     if (!input || typeof input !== 'object') throw new ProtocolError('INVALID_ARGUMENT', 'respond input must be an object');
@@ -126,5 +151,5 @@ export class CalendarService {
 }
 
 export function assertUtcInstant(value: string, field: string): void {
-  if (!UTC_PATTERN.test(value)) throw new ProtocolError('INVALID_ARGUMENT', `${field} must be an ISO-8601 UTC instant`);
+  if (!UTC_PATTERN.test(value) || !Number.isFinite(Date.parse(value))) throw new ProtocolError('INVALID_ARGUMENT', `${field} must be an ISO-8601 UTC instant`);
 }

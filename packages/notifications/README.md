@@ -2,6 +2,16 @@
 
 MOD-23 · 通知汇总策略（PA-015，P1）。负责人 `Potatos498`，评审者 `goo122`。
 
+## 2026-09-30 云端业务增量（待本地统一验收）
+
+未确认批次在休眠/重启后重新 drain 仍尊重 quietHours/pauseUntilUtc；保持批次 ID，出窗再交付。
+planSchedules 补充确定性的 pause-end（含仅剩未确认批次的情况）。
+acknowledge 在首个确认时持久写入可选 deliveredAt，重复确认保留该时刻。
+宿主必须在通知通道给出实际投递回执后确认；ready_for_delivery 只是排队。
+实例复制装配策略，用户编辑后由宿主用同一存储重建服务，外部对象突变不绕过策略。
+本轮没有运行新增用例或 Windows 通知验收。统一交接见
+[业务接线说明](../connectors/mail/docs/cloud-business-handoff.md)。
+
 ## 职责
 
 - 对 `ConnectorItem` 标准事件流按**用户规则**做裁定：立即交付、安静时段持有、暂停持有、聚合为摘要请求。

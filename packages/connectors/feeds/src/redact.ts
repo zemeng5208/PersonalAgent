@@ -17,7 +17,15 @@ export function secretNeedles(url: URL): string[] {
   const needles = [url.href, url.search, url.search.slice(1)];
   // A source that echoes only the token value, without the `?name=` prefix, still leaks it.
   for (const value of url.searchParams.values()) needles.push(value);
-  const unique = new Set(needles.filter(value => value.length >= MIN_NEEDLE_LENGTH));
+  const credentials = [url.username, url.password];
+  for (const value of [...credentials]) {
+    try { credentials.push(decodeURIComponent(value)); } catch { /* Keep the encoded form. */ }
+  }
+  for (const [key, value] of url.searchParams) {
+    if (/(?:token|session|key|secret|passw|auth|signature|sig|access)/iu.test(key)) credentials.push(value);
+  }
+  const unique = new Set([...needles.filter(value => value.length >= MIN_NEEDLE_LENGTH),
+    ...credentials.filter(value => value.length > 0)]);
   return [...unique].sort((a, b) => b.length - a.length);
 }
 
@@ -30,8 +38,17 @@ function applyNeedles(text: string, needles: readonly string[]): string {
 /** For text derived from the document. Surgical: only the configured URL and its credentials. */
 export function makeContentRedactor(url: URL): (text: string) => string {
   const needles = secretNeedles(url);
-  if (needles.length === 0) return text => text;
-  return text => applyNeedles(text, needles);
+  return text => applyNeedles(text, needles)
+    .replace(/https?:\/\/[^\s"'<>()\[\]]+/giu, value => {
+      try {
+        const embedded = new URL(value);
+        if (embedded.username || embedded.password
+          || [...embedded.searchParams.keys()].some(key => /(?:token|session|key|secret|passw|auth|signature|sig|access)/iu.test(key))) {
+          return '<redacted-url>';
+        }
+      } catch { /* Non-URL document text stays text. */ }
+      return value;
+    });
 }
 
 /**

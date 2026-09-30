@@ -183,6 +183,9 @@ function parseZonedValue(value: string, params: string): number | undefined {
 }
 
 function readEvent(props: Record<string, string>): ParsedCalDavEvent | undefined {
+  if (props['RECURRENCE-ID'] !== undefined) {
+    throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'CalDAV recurrence instances require an instance-aware projection; no UID collapse is applied');
+  }
   const uid = props.UID ?? '';
   const summary = unescapeIcalText(props.SUMMARY ?? '(无标题)');
   const start = propertyWithParams(props, 'DTSTART');
@@ -197,6 +200,7 @@ function readEvent(props: Record<string, string>): ParsedCalDavEvent | undefined
   if (endMs === startMs && allDay) endMs = startMs + 86_400_000;
   if (endMs <= startMs) return undefined;
   const sequence = Number(props.SEQUENCE ?? '0');
+  if (!Number.isSafeInteger(sequence) || sequence < 0) return undefined;
   const statusRaw = (props.STATUS ?? 'CONFIRMED').toUpperCase();
   const status: ParsedCalDavEvent['status'] = statusRaw === 'CANCELLED' ? 'cancelled'
     : statusRaw === 'TENTATIVE' ? 'tentative' : 'confirmed';
@@ -367,12 +371,26 @@ export class CalDavProvider implements CalendarProvider {
     for (const item of parseMultistatus(body)) {
       if (item.calendarData === undefined) continue;
       for (const event of parseCalDavEvents(item.calendarData)) {
-        // 时间窗在客户端再过滤一次：服务器 time-range 实现质量参差（RFC 4791 §9.7 允许近似）。
-        if (window !== undefined && !(event.startMs < Date.parse(window.toUtc) && event.endMs > Date.parse(window.fromUtc))) continue;
         events.push(event);
       }
     }
-    return events;
+    // Select the current UID revision before filtering: a newer cancelled or
+    // moved version must not resurrect an older version inside the window.
+    const latest = new Map<string, ParsedCalDavEvent>();
+    const ordered = events.sort((a, b) => b.sequence - a.sequence
+      || (b.lastModifiedMs ?? 0) - (a.lastModifiedMs ?? 0));
+    for (const event of ordered) {
+      const prior = latest.get(event.uid);
+      if (prior === undefined || event.sequence > prior.sequence
+        || (event.sequence === prior.sequence && (event.lastModifiedMs ?? 0) > (prior.lastModifiedMs ?? 0))) {
+        latest.set(event.uid, event);
+      } else if (event.sequence === prior.sequence && (event.lastModifiedMs ?? 0) === (prior.lastModifiedMs ?? 0)
+        && JSON.stringify(event) !== JSON.stringify(prior)) {
+        throw new ProtocolError('EXTERNAL_FAILURE', 'CalDAV returned conflicting versions for one UID', false);
+      }
+    }
+    return [...latest.values()].filter(event => window === undefined
+      || (event.startMs < Date.parse(window.toUtc) && event.endMs > Date.parse(window.fromUtc)));
   }
 
   async fetchWindow(_accountRef: string, window: CalendarWindow, cursor?: string): Promise<CalendarFetchPage> {

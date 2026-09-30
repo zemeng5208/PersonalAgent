@@ -1,4 +1,5 @@
 import { ProtocolError } from '@personal-agent/contracts';
+import type { ProtocolContracts } from '@personal-agent/contracts';
 import type {
   MailFetchInput,
   MailFolder,
@@ -106,5 +107,17 @@ export class RegistryMailProvider implements MailProvider {
 
   send(accountRef: string, input: MailSendInput & {idempotencyKey: string}): MailSendResult | Promise<MailSendResult> {
     return this.registry.resolve(accountRef).send(accountRef, input);
+  }
+
+  async saveDraft(accountRef: string, input: MailSendInput & {idempotencyKey: string}): Promise<ProtocolContracts['connectorAction']> {
+    const provider = this.registry.resolve(accountRef);
+    if (!provider.saveDraft) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'This mail provider cannot save drafts');
+    return provider.saveDraft(accountRef, input);
+  }
+
+  async reconcileSend(accountRef: string, messageId: string): Promise<MailSendResult> {
+    const provider = this.registry.resolve(accountRef);
+    if (!provider.reconcileSend) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'This mail provider cannot reconcile sent mail');
+    return provider.reconcileSend(accountRef, messageId);
   }
 }

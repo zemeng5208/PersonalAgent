@@ -99,7 +99,7 @@ export function register(host: ToolHost, options: MailModuleOptions): () => void
       recoverySupport: true,
       requiresPresence: false,
     },
-    execute: async (input: unknown) => {
+    execute: async (input: unknown, context) => {
       const raw = input as {account?: string; cursor?: string; limit?: number; folder?: string};
       const accountRef = typeof raw.account === 'string' && raw.account.length > 0
         ? raw.account
@@ -111,7 +111,7 @@ export function register(host: ToolHost, options: MailModuleOptions): () => void
       const cursor = typeof raw.cursor === 'string' && raw.cursor.length > 0
         ? decodeMailCursor(raw.cursor)
         : undefined;
-      const fetchArgs: {cursor?: ReturnType<typeof decodeMailCursor>; limit?: number; folder?: string} = {};
+      const fetchArgs: {cursor?: ReturnType<typeof decodeMailCursor>; limit?: number; folder?: string; signal?: AbortSignal} = {signal: context.signal};
       if (cursor !== undefined) fetchArgs.cursor = cursor;
       if (raw.limit !== undefined) fetchArgs.limit = raw.limit;
       if (typeof raw.folder === 'string') fetchArgs.folder = raw.folder;
@@ -142,7 +142,68 @@ export function register(host: ToolHost, options: MailModuleOptions): () => void
 
   const unregisterInbox = host.register(inboxTool);
   const unregisterAccounts = host.register(accountsTool);
+  const extra: (() => void)[] = [];
+  const resolveAccount = (raw: {account?: string}): string => {
+    const account = raw.account ?? provider.defaultAccount();
+    if (!account) throw new ProtocolError('INVALID_ARGUMENT', 'An explicitly bound mail account is required');
+    return account;
+  };
+  extra.push(host.register({
+    descriptor: {
+      name: 'mail.mark_seen', version: MAIL_CONNECTOR_VERSION,
+      inputSchema: {type: 'object', additionalProperties: false, required: ['folder', 'uid'],
+        properties: {account: {type: 'string', minLength: 1}, folder: {type: 'string', minLength: 1},
+          uid: {type: 'integer', minimum: 1}}},
+      outputSchema: {$ref: `${PROTOCOL_ID}#/definitions/ConnectorAction`},
+      sideEffect: 'external_write', requiredScopes: ['mail:write'], idempotencySupport: true,
+      recoverySupport: true, requiresPresence: false,
+    },
+    execute: async (input, context) => {
+      if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Mail mark_seen cancelled before execution');
+      const raw = input as {account?: string; folder: string; uid: number};
+      return service.markSeen(resolveAccount(raw), {folder: raw.folder, uid: raw.uid, idempotencyKey: context.runId});
+    },
+  }));
+  if (options.provider.saveDraft) {
+    extra.push(host.register({
+      descriptor: {
+        name: 'mail.save_draft', version: MAIL_CONNECTOR_VERSION,
+        inputSchema: {type: 'object', additionalProperties: false, required: ['to', 'subject', 'text'],
+          properties: {account: {type: 'string', minLength: 1}, to: {type: 'string', minLength: 3},
+            subject: {type: 'string', minLength: 1, maxLength: 500}, text: {type: 'string'}}},
+        outputSchema: {$ref: `${PROTOCOL_ID}#/definitions/ConnectorAction`},
+        sideEffect: 'external_write', requiredScopes: ['mail:draft'], idempotencySupport: true,
+        recoverySupport: false, requiresPresence: false,
+      },
+      execute: async (input, context) => {
+        if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Mail draft cancelled before execution');
+        const raw = input as {account?: string; to: string; subject: string; text: string};
+        return service.saveDraft(resolveAccount(raw), {...raw, idempotencyKey: context.runId});
+      },
+    }));
+  }
+  if (options.provider.reconcileSend) {
+    extra.push(host.register({
+      descriptor: {
+        name: 'mail.reconcile_send', version: MAIL_CONNECTOR_VERSION,
+        inputSchema: {type: 'object', additionalProperties: false, required: ['messageId', 'idempotencyKey'],
+          properties: {account: {type: 'string', minLength: 1}, messageId: {type: 'string', minLength: 3},
+            idempotencyKey: {type: 'string', minLength: 1}}},
+        outputSchema: {$ref: `${PROTOCOL_ID}#/definitions/ConnectorAction`},
+        sideEffect: 'read', requiredScopes: ['mail:read'], idempotencySupport: true,
+        recoverySupport: true, requiresPresence: false,
+      },
+      execute: async (input, context) => {
+        if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Mail reconciliation cancelled before execution');
+        const raw = input as {account?: string; messageId: string; idempotencyKey: string};
+        const result = await service.reconcileSend(resolveAccount(raw), raw.messageId, raw.idempotencyKey);
+        if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Mail reconciliation cancelled');
+        return result;
+      },
+    }));
+  }
   return () => {
+    extra.forEach(unregister => unregister());
     unregisterInbox();
     unregisterAccounts();
     connector.disconnect();

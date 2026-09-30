@@ -67,7 +67,7 @@ export class MailConnector implements ConnectorPort {
 
   async getItem(accountRef: string, id: string): Promise<ProtocolContracts['connectorItem']> {
     this.assertConnected();
-    const match = /^([^:]+):(\d+)$/.exec(id);
+    const match = /^(.+):(\d+)$/.exec(id);
     if (match === null) throw new ProtocolError('INVALID_ARGUMENT', 'Mail item id must be folder:uid');
     const folder = match[1] ?? '';
     const uid = Number(match[2]);
@@ -78,6 +78,17 @@ export class MailConnector implements ConnectorPort {
   async performAction(input: {accountRef: string; action: string; input: unknown; idempotencyKey: string}): Promise<ProtocolContracts['connectorAction']> {
     this.assertConnected();
     const raw = input.input as Record<string, unknown>;
+    if (input.action === 'save_draft') {
+      if (typeof raw?.to !== 'string' || typeof raw?.subject !== 'string' || typeof raw?.text !== 'string') {
+        throw new ProtocolError('INVALID_ARGUMENT', 'save_draft requires to, subject and text');
+      }
+      return this.service.saveDraft(input.accountRef, {to: raw.to, subject: raw.subject, text: raw.text,
+        idempotencyKey: input.idempotencyKey});
+    }
+    if (input.action === 'reconcile_send') {
+      if (typeof raw?.messageId !== 'string') throw new ProtocolError('INVALID_ARGUMENT', 'reconcile_send requires messageId');
+      return this.service.reconcileSend(input.accountRef, raw.messageId, input.idempotencyKey);
+    }
     if (input.action === 'mark_seen') {
       if (typeof raw?.folder !== 'string' || !Number.isSafeInteger(raw?.uid)) {
         throw new ProtocolError('INVALID_ARGUMENT', 'mark_seen requires folder and uid');

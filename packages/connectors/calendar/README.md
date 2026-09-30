@@ -2,6 +2,18 @@
 
 MOD-20 · 日历连接器（PA-013，P1；Fake 提供商先行）。负责人 `Potatos498`，评审者 `goo122`。
 
+## 2026-09-30 云端业务增量（待本地统一验收）
+
+CalDAV 在窗口过滤前按 UID 选择最高 SEQUENCE、再以 LAST-MODIFIED 判定版本；同版本内容冲突明确报错。
+列表与单 UID 读回共用选版路径，较新取消不会让旧事件重新出现在列表。
+含 RECURRENCE-ID 的实例当前明确 UNSUPPORTED_CAPABILITY，避免将重复实例当同 UID 的修订。
+
+新增公开 CalendarService.refreshKnownItems(accountRef, previousConnectorItems)，返回现有 ConnectorItem[]：
+包括显式取消、改时或内容变化，保存新基线后重复调用不再产出；未知 UID 抛 NOT_FOUND，不能推断撤回。
+P5 仍负责语义事件与依赖图投影，本包不创建新公共事件 DTO。
+本轮没有运行新增用例或真实 CalDAV；账号未配置时 unavailable，不使用 Fake 生产账号。
+统一交接见 [业务接线说明](../mail/docs/cloud-business-handoff.md)。
+
 ## 职责
 
 - 把日历事件规范化为公共 `ConnectorItem`：`occurredAt` = 事件开始（UTC 瞬间），`validFor` = `[start, end)` UTC 区间，`contentRef` 携带目标时区的本地墙上时间，`dedupeKey` = `calendar:<calendarId>:<externalId>:<sequence>`（提供商修订后换键）。
