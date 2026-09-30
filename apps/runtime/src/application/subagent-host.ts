@@ -228,12 +228,22 @@ export interface DesktopSubagentDispatchToolOptions {
     deployment?: string;
     apiKey?: string;
   };
+  /**
+   * 模型注册表（§9.4：模型名必须解析到实际 Provider/部署）。受信宿主按别名注册工厂；
+   * `default` 键为未指名子任务的回退。未注册且无 default → 子任务明确 UNSUPPORTED_CAPABILITY，
+   * 不再把任意名字当默认盘古。工厂每子任务调用一次（同一注册项可返回共享实例）。
+   */
+  modelRegistry?: Readonly<Record<string, (modelName: string) => ModelGateway | undefined>>;
   now?: (() => number) | undefined;
   maxRecursionDepth?: number | undefined;
 }
 
 export function createDesktopSubagentDispatchTool(options: DesktopSubagentDispatchToolOptions): RegisteredTool {
-  const {getRuntime, getTools, fakeModelMode, modelConfig, now, maxRecursionDepth} = options;
+  const {getRuntime, getTools, fakeModelMode, modelConfig, modelRegistry, now, maxRecursionDepth} = options;
+  const registry = modelRegistry
+    ?? (modelConfig?.baseUrl && modelConfig?.apiKey
+      ? {'pangu': () => createLegacyPanguGateway(modelConfig!), 'default': () => createLegacyPanguGateway(modelConfig!)}
+      : {});
   return createRuntimeSubagentDispatchTool({
     getRuntime,
     getTools,
@@ -255,19 +265,22 @@ export function createDesktopSubagentDispatchTool(options: DesktopSubagentDispat
           },
         ));
       }
-      if (modelConfig?.baseUrl && modelConfig?.apiKey && (modelName === 'pangu' || !modelName)) {
-        const apiKey = modelConfig.apiKey;
-        const panguOptions: PanguModelProviderOptions = {
-          baseUrl: modelConfig.baseUrl,
-          model: modelConfig.model ?? 'default',
-          apiKey: () => apiKey,
-        };
-        if (modelConfig.deployment !== undefined) {
-          panguOptions.deployment = modelConfig.deployment;
-        }
-        return new ModelGateway(new PanguModelProvider(panguOptions));
-      }
-      return undefined;
+      // §9.4：模型名必须解析到注册表中的实际 Provider；'default' 为未指名回退。
+      // 未注册且无 default → undefined → 子任务明确 UNSUPPORTED_CAPABILITY（不假定盘古）。
+      const requested = modelName?.trim() || 'default';
+      const factory = registry[requested];
+      return factory?.(requested);
     },
   });
+}
+
+/** 旧 modelConfig 形状的兼容网关（§9.4 注册表的 legacy 适配项）。 */
+function createLegacyPanguGateway(config: NonNullable<DesktopSubagentDispatchToolOptions['modelConfig']>): ModelGateway {
+  const panguOptions: PanguModelProviderOptions = {
+    baseUrl: config.baseUrl!,
+    model: config.model ?? 'default',
+    apiKey: () => config.apiKey!,
+  };
+  if (config.deployment !== undefined) panguOptions.deployment = config.deployment;
+  return new ModelGateway(new PanguModelProvider(panguOptions));
 }
