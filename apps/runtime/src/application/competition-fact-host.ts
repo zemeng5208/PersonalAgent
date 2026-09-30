@@ -5,6 +5,7 @@ import {isAbsolute} from 'node:path';
 import type {RuntimeApplication} from './runtime-application.js';
 import {createSqliteFactProjectionHost} from './sqlite-fact-projection.js';
 import type {SqliteFactProjectionHost} from './sqlite-fact-projection.js';
+import {createBoundPublicFactErasureApplication} from './memory-learning.js';
 
 export interface CompetitionFactHostOptions {
   /** A separate, trusted host-owned SQLite file; never the Runtime database. */
@@ -38,6 +39,7 @@ export interface TrustedPublicWithdrawal extends PublicSourceKey {
 }
 
 export interface CompetitionFactHost extends SqliteFactProjectionHost {
+  createPublicFactErasureApplication(options:{confirm:(ref:{id:string;revision:number})=>Promise<boolean>}): ReturnType<typeof createBoundPublicFactErasureApplication>;
   /** Host-only first phase after an independently authorized deletion decision. */
   beginFactErasure(request: MemoryReadContext & {readonly factId: string;
     readonly expectedRevision: number; readonly operationId: string}): void;
@@ -71,6 +73,13 @@ export function createCompetitionFactHost(
     const projection = createSqliteFactProjectionHost({memory, runtime: application.runtime,
       memoryNamespace, graphNamespace, consumerKey});
     return Object.freeze({
+      createPublicFactErasureApplication:({confirm}:{confirm:(ref:{id:string;revision:number})=>Promise<boolean>})=>{
+        active();
+        const erasure=createBoundPublicFactErasureApplication({profile:'huawei_ict_agentarts',memory,
+          runtime:application.runtime,projection,memoryNamespace,graphNamespace,confirm});
+        return Object.freeze({erase:async(request:Parameters<typeof erasure.erase>[0])=>{active();return erasure.erase(request);},
+          reconcile:async(context:MemoryReadContext)=>{active();return erasure.reconcile(context);}});
+      },
       beginFactErasure: (request: MemoryReadContext & {readonly factId: string;
         readonly expectedRevision: number; readonly operationId: string}) => {
         active();

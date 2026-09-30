@@ -8,10 +8,12 @@
     "./filesystem": {"types": "./dist/filesystem.d.ts", "import": "./dist/filesystem.js"},
     "./obsidian": {"types": "./dist/obsidian.d.ts", "import": "./dist/obsidian.js"},
     "./tool": {"types": "./dist/tool.d.ts", "import": "./dist/tool.js"},
-    "./testing": {"types": "./dist/testing.d.ts", "import": "./dist/testing.js"}
+    "./testing": {"types": "./dist/testing.d.ts", "import": "./dist/testing.js"},
+    "./write": {"types": "./dist/write.d.ts", "import": "./dist/write.js"}
   },
   "dependencies": {
-    "@personal-agent/contracts": "0.1.0-alpha.1"
+    "@personal-agent/contracts": "0.1.0-alpha.1",
+    "@personal-agent/coding-tools": "0.1.0-alpha.1"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

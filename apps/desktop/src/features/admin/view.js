@@ -12,6 +12,10 @@ import {mountNotepadControls} from '../../app/notepad-controls.js';
 import {mountTodoControls} from '../../app/todo-controls.js';
 import {mountGoalCloudControls} from '../../app/goal-cloud-controls.js';
 import {mountKnowledgeControls} from '../../app/knowledge-controls.js';
+import {mountModelApiControls} from '../../app/model-api-controls.js';
+import {mountReferenceToolsControls} from '../../app/reference-tools-controls.js';
+import {mountKnowledgeSourceControls} from '../../app/knowledge-source-controls.js';
+import {mountMemoryLearningControls} from './memory-learning-controls.js';
 import {profilePage, bindProfile} from './profile.js';
 import {approvalPresentation, authorizationHistoryHtml, authorizationListHtml, nextApprovalExpiry} from './approval-status.js';
 import {agentArtsModelPage} from './agentarts-model.js';
@@ -126,7 +130,8 @@ export function mountAdmin(root, invoke, escape) {
   localSettingsButton.textContent = '桌面设置与恢复';
   localSettingsButton.addEventListener('click', () => window.desktop.openSettings().catch(error => { root.querySelector('#error').textContent = error.message; }));
   root.querySelector('.admin-bar').insertBefore(localSettingsButton, root.querySelector('#admin-close'));
-  let liveControls,proactiveControls,mailControls,calendarControls,layaControls,codingControls,agentArtsControls,feedsControls,notepadControls,todoControls,goalCloudControls,knowledgeControls;
+  let liveControls,proactiveControls,mailControls,calendarControls,layaControls,codingControls,agentArtsControls,feedsControls,notepadControls,todoControls,goalCloudControls,knowledgeControls,modelApiControls,referenceControls,knowledgeSourceControls,memoryLearningControls,memoryLearningRoot;
+  let modelApiSignature;
 
   function capabilityTable(data) {
     const status = data.capabilityDirectory ?? {state: 'unavailable', reason: '可信宿主尚未报告能力目录状态'};
@@ -306,14 +311,32 @@ export function mountAdmin(root, invoke, escape) {
     layaControls?.render(data.laya);layaControls?.show(section==='connections' || section==='memory');
     if (section==='memory' && data.knowledge) knowledgeControls ??= mountKnowledgeControls(root.querySelector('.main'),invoke);
     knowledgeControls?.render(data.knowledge, data.knowledgeWatch);knowledgeControls?.show(section==='memory');
+    if(section==='memory' && data.knowledgeSource) knowledgeSourceControls??=mountKnowledgeSourceControls(root.querySelector('.main'),invoke);
+    knowledgeSourceControls?.update(data.knowledgeSource);
+    if(knowledgeSourceControls) knowledgeSourceControls.element.hidden=section!=='memory';
+    if(section==='memory' && data.memoryLearning && !memoryLearningControls) {
+      memoryLearningRoot=document.createElement('div');memoryLearningRoot.className='memory-learning-settings';
+      root.querySelector('.main').append(memoryLearningRoot);
+      memoryLearningControls=mountMemoryLearningControls(memoryLearningRoot,{invoke,status:data.memoryLearning,refs:savedMemory.facts.map(f=>f.ref)});
+    }
+    if(memoryLearningRoot) memoryLearningRoot.hidden=section!=='memory';
+    memoryLearningControls?.update({status:data.memoryLearning,refs:savedMemory.facts.map(f=>f.ref)});
     if (section==='worktrees' || section==='environment') codingControls ??= mountWorkspaceControls(root.querySelector('.main'),invoke);
     codingControls?.render(data);codingControls?.show(section==='worktrees' || section==='environment');
+    if(section==='capabilities' && data.reference) referenceControls??=mountReferenceToolsControls(root.querySelector('.main'),invoke);
+    referenceControls?.render(data.reference);referenceControls?.show(section==='capabilities');
     const showAgentArts=section==='models' && data.model?.provider==='agentarts';
     if (showAgentArts) {
       agentArtsControls ??= mountAgentArtsControls(root.querySelector('.main'),invoke);
       agentArtsControls.render(data.agentArts);
     }
     agentArtsControls?.show(showAgentArts);
+    if (section === 'models' && data.modelApi) modelApiControls ??= mountModelApiControls(root.querySelector('.main'),invoke);
+    const nextModelApiSignature = JSON.stringify(data.modelApi);
+    if (modelApiControls && modelApiSignature !== nextModelApiSignature) {
+      modelApiControls.render(data.modelApi);modelApiSignature=nextModelApiSignature;
+    }
+    modelApiControls?.showSettings(section === 'models');
     root.querySelector('.main').dataset.cloudConfig=String(section==='models' && data.model?.provider==='agentarts');
     const directSettings = {settings: 'general', appearance: 'appearance', voice: 'voice', shortcuts: 'shortcuts'};
     const featureSections = ['import', 'profile', 'configuration', 'personalization', 'pets', 'usage', 'analytics', 'account', 'computer', 'browser', 'hooks', 'git', 'environment', 'worktrees', 'archive', 'memory'];
@@ -429,7 +452,9 @@ export function mountAdmin(root, invoke, escape) {
       const index = Number(button.dataset.memorySave);
       button.disabled = true;
       try {
-        const result = await invoke('memory.save', {source: memorySearch.hits[index].source,
+        const source=memorySearch.hits[index].source;
+        const baseline=await invoke('memory.previewSave',{source});
+        const result = await invoke('memory.save', {source,baseline,
           summary: (memorySummaries.get(index) ?? '').trim()});
         memorySearch.status = result.state === 'saved' ? `私人记忆已保存为版本 ${result.revision}。`
           : result.state === 'unchanged' ? '这条私人记忆已经保存。' : '已取消，未写入记忆。';

@@ -4,12 +4,15 @@ import {
   createSubagentDispatchTool,
   dispatchSubtasks,
   DEFAULT_ROLE_LABELS,
+  computeSubtaskInputDigest,
   SUBAGENT_DISPATCH_TOOL_NAME,
   SUBAGENT_DISPATCH_TOOL_VERSION,
   type AgentWorkerContext,
   type AgentToolPort,
   type SubtaskDefinition,
   type SubtaskExecutionSummary,
+  type SubtaskProgress,
+  type SubtaskProgressRecord,
 } from '@personal-agent/agents';
 import {runAgent} from '@personal-agent/agents';
 import {
@@ -19,17 +22,251 @@ import {
   type ModelMessage,
   type ModelRequest,
   type PanguModelProviderOptions,
+  type ReasoningEffort,
+  StructuredToolProvider,
+  OpenAICompatibleModelProvider,
+  type ModelProvider,
 } from '@personal-agent/models';
-import type {TaskRuntime, WorkerContext, SubmitTaskInput} from '../index.js';
+import {toolArgumentsDigest} from '@personal-agent/tool-gateway';
+import {isDeepStrictEqual} from 'node:util';
+import type {TaskRuntime, WorkerContext, WorkerResult, SubmitTaskInput} from '../index.js';
 
 export {SUBAGENT_DISPATCH_TOOL_NAME, SUBAGENT_DISPATCH_TOOL_VERSION};
+
+export interface ConfiguredSubagentModelOptions {
+  profile?: 'huawei_ict_agentarts';
+  provider: 'pangu' | 'openai-compatible';
+  baseUrl: string;
+  model: string;
+  deployment: string;
+  apiKey: () => string | Promise<string>;
+}
+
+/** Runtime composition only; Desktop injects credentials, never imports providers. */
+export function createConfiguredSubagentModelGateway(
+  config: ConfiguredSubagentModelOptions,
+  decorateProvider?: (provider: ModelProvider) => ModelProvider,
+): ModelGateway {
+  if (config.profile !== undefined && config.profile !== 'huawei_ict_agentarts') {
+    throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Subagent model profile is unavailable');
+  }
+  if (config.provider !== 'pangu' && config.provider !== 'openai-compatible') {
+    throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Subagent model provider is unavailable');
+  }
+  const Provider = config.provider === 'pangu' ? PanguModelProvider : OpenAICompatibleModelProvider;
+  const provider = new StructuredToolProvider(new Provider(config));
+  return new ModelGateway(decorateProvider ? decorateProvider(provider) : provider);
+}
 
 export interface SubagentHostOptions {
   getRuntime: () => TaskRuntime;
   getTools?: (() => AgentToolPort | undefined) | undefined;
   getModelGateway?: ((modelName?: string) => ModelGateway | undefined) | undefined;
+  /** Only explicitly supported provider parameters; step budgets are separate. */
+  getModelReasoningEfforts?: ((modelName?: string) => readonly ReasoningEffort[]) | undefined;
+  /** Trusted Competition worker; it must reuse the original loop without calling runTask again. */
+  runDefaultWorker?: ((subtask: SubtaskDefinition, worker: WorkerContext, tools: AgentToolPort) => Promise<WorkerResult>) | undefined;
+  /** Trusted host may narrow tools per role/child; this never creates authorization. */
+  getToolsForSubtask?: ((subtask: SubtaskDefinition, worker: WorkerContext) => AgentToolPort | undefined) | undefined;
   now?: (() => number) | undefined;
   maxRecursionDepth?: number | undefined;
+}
+
+type ChildBinding = SubtaskDefinition & {parentTaskId: string; parentDeadline: string};
+function childBinding(runtime: TaskRuntime, taskId: string): ChildBinding {
+  const binding = runtime.loadCheckpoint(taskId, 'subtask-parent') as ChildBinding | undefined;
+  if (!binding || typeof binding.parentTaskId !== 'string' || !binding.parentTaskId.trim()
+    || typeof binding.subtaskId !== 'string' || !binding.subtaskId.trim()
+    || typeof binding.goal !== 'string' || !binding.goal.trim() || !Object.hasOwn(DEFAULT_ROLE_LABELS, binding.role)
+    || (binding.roleLabel !== undefined && typeof binding.roleLabel !== 'string')
+    || typeof binding.parentDeadline !== 'string' || !Number.isFinite(Date.parse(binding.parentDeadline))
+    || (binding.model !== undefined && (typeof binding.model !== 'string' || !binding.model.trim()))
+    || (binding.thinkingDepth !== undefined && (!Number.isInteger(binding.thinkingDepth)
+      || binding.thinkingDepth < 0 || binding.thinkingDepth > 5))) {
+    throw new ProtocolError('INVALID_ARGUMENT', 'Invalid persisted subagent binding');
+  }
+  const task = runtime.getTask(taskId);
+  const roleLabel = binding.roleLabel?.trim() || DEFAULT_ROLE_LABELS[binding.role];
+  if (task.conversationId !== `desktop-subtask:${binding.parentTaskId}`
+    || task.goal !== `[${roleLabel}] ${binding.goal}`
+    || runtime.findTaskByIdempotencyKey(`subagent-dispatch-${binding.parentTaskId}-${binding.subtaskId}`)?.taskId !== taskId) {
+    throw new ProtocolError('REVISION_CONFLICT', 'Subagent binding does not match the persisted task');
+  }
+  return binding;
+}
+
+async function runSubagentWorker(options: SubagentHostOptions, subtask: SubtaskDefinition,
+  childWorker: WorkerContext): Promise<WorkerResult> {
+  if (childWorker.signal.aborted) throw new ProtocolError('CANCELLED', 'Subtask cancelled during execution');
+  const runtime = options.getRuntime();
+  const roleLabel = subtask.roleLabel?.trim() || DEFAULT_ROLE_LABELS[subtask.role];
+  childWorker.reportProgress({stepId: `child-${subtask.subtaskId}`, label: `[${roleLabel}] 正在执行: ${subtask.goal}`});
+  const kind = subtask.model === undefined && options.runDefaultWorker ? 'competition' : 'model';
+  const priorExecution = childWorker.loadCheckpoint('subtask-execution-binding');
+  if (priorExecution !== undefined && !isDeepStrictEqual(priorExecution, {kind})) {
+    throw new ProtocolError('REVISION_CONFLICT', 'Subagent execution strategy changed');
+  }
+  if ((kind === 'competition' && (childWorker.loadCheckpoint('subtask-model-binding') !== undefined
+    || childWorker.loadCheckpoint('agent-loop') !== undefined))
+    || (kind === 'model' && childWorker.loadCheckpoint('subtask-coordination-binding') !== undefined)) {
+    throw new ProtocolError('REVISION_CONFLICT', 'Subagent cannot switch its persisted execution strategy');
+  }
+  childWorker.saveCheckpoint('subtask-execution-binding', {kind});
+  const sourceTools = options.getToolsForSubtask ? options.getToolsForSubtask(subtask, childWorker) : options.getTools?.();
+  const descriptors = structuredClone(sourceTools?.list().filter(item => item.name !== SUBAGENT_DISPATCH_TOOL_NAME) ?? []);
+  descriptors.sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
+  const previousTools = childWorker.loadCheckpoint('subtask-tools-binding');
+  if (previousTools !== undefined && !isDeepStrictEqual(previousTools, descriptors)) {
+    throw new ProtocolError('REVISION_CONFLICT', 'Subagent tool scope changed');
+  }
+  childWorker.saveCheckpoint('subtask-tools-binding', descriptors);
+  const tools: AgentToolPort = {list: () => structuredClone(descriptors), invoke: async request => {
+    const descriptor = descriptors.find(item => item.name === request.toolName && item.version === request.toolVersion);
+    if (!sourceTools || !descriptor || request.taskId !== childWorker.taskId || request.deadline !== childWorker.deadline
+      || !isDeepStrictEqual(sourceTools.list().find(item => item.name === request.toolName && item.version === request.toolVersion), descriptor)) {
+      throw new ProtocolError('UNAUTHORIZED', 'Tool is outside the bound child scope');
+    }
+    return sourceTools.invoke({...request, signal: childWorker.signal});
+  }};
+  const maxSteps = subtask.thinkingDepth !== undefined ? Math.max(2, (subtask.thinkingDepth + 1) * 2) : 6;
+  if (kind === 'competition') {
+    childWorker.saveCheckpoint('subtask-thinking-binding', {depth: subtask.thinkingDepth ?? null,
+      stepBudget: {maxSteps}, modelReasoning: {requestedEffort: null, effort: null, supported: false,
+        verification: 'conditional', thinkingBudgetSupported: false, reason: 'Competition native reasoning is not declared'}});
+    return options.runDefaultWorker!(subtask, childWorker, tools);
+  }
+  const model = options.getModelGateway?.(subtask.model);
+  if (!model) {
+    const modelLabel = subtask.model ? `模型 ${subtask.model}` : '默认模型';
+    throw new ProtocolError('UNSUPPORTED_CAPABILITY',
+      `子任务无法执行：${modelLabel} 未配置或不受支持。请在受信设置中配置模型后重试`);
+  }
+  const identity = {provider: model.deployment.provider, deployment: model.deployment.deployment, model: model.deployment.model};
+  const previousIdentity = childWorker.loadCheckpoint('subtask-model-binding') as typeof identity | undefined;
+  const pendingLoop = childWorker.loadCheckpoint('agent-loop') as {pending?: import('@personal-agent/models').ModelResult} | undefined;
+  const expected = previousIdentity ?? pendingLoop?.pending?.deployment;
+  if (expected && (expected.provider !== identity.provider || expected.deployment !== identity.deployment || expected.model !== identity.model)) {
+    throw new ProtocolError('REVISION_CONFLICT', 'Subagent model configuration changed; the prior proposal cannot be resumed');
+  }
+  if (!previousIdentity) childWorker.saveCheckpoint('subtask-model-binding', identity);
+  const effortLevels: ReasoningEffort[] = ['none', 'low', 'low', 'medium', 'high', 'high'];
+  const requestedEffort = subtask.thinkingDepth === undefined ? undefined : effortLevels[subtask.thinkingDepth];
+  const reasoningEffort = requestedEffort !== undefined
+    && options.getModelReasoningEfforts?.(subtask.model).includes(requestedEffort) ? requestedEffort : undefined;
+  childWorker.saveCheckpoint('subtask-thinking-binding', {depth: subtask.thinkingDepth ?? null,
+    stepBudget: {maxSteps}, modelReasoning: {requestedEffort: requestedEffort ?? null,
+      effort: reasoningEffort ?? null, supported: reasoningEffort !== undefined,
+      verification: 'conditional', thinkingBudgetSupported: false,
+      reason: reasoningEffort !== undefined ? 'Trusted host explicitly configured this reasoning_effort'
+        : requestedEffort === undefined ? 'No native reasoning effort selected' : 'Selected effort is not configured for this model'}});
+  const rolePrompt: ModelMessage = {role: 'system',
+    content: `你是专业次级智能体，当前承担职责为【${roleLabel}】(${subtask.role})。请聚焦于此职责，独立执行指派的目标。`};
+  const outcome = await runAgent(childWorker, {goal: subtask.goal, initialMessages: [rolePrompt], model,
+    tools,
+    maxSteps,
+    ...(reasoningEffort === undefined ? {} : {reasoningEffort}),
+    onUnknownResult: () => {
+      if (runtime.getTask(childWorker.taskId).state === 'running') runtime.transitionTask(childWorker.taskId, 'waiting_reconciliation');
+    },
+  });
+  if (outcome.status === 'waiting_approval' && runtime.getTask(childWorker.taskId).state === 'running') {
+    // This is a wait state only; no approval or grant is issued by the model/worker.
+    runtime.transitionTask(childWorker.taskId, 'waiting_approval');
+  }
+  return {resultSummary: outcome.resultSummary, evidenceRefs: outcome.evidenceRefs};
+}
+
+/** Reuse the exact child and pending agent invocation after trusted approval. */
+export async function resumeRuntimeSubagentTask(options: SubagentHostOptions, childTaskId: string,
+  parentSignal?: AbortSignal): Promise<TaskSnapshot> {
+  const runtime = options.getRuntime();
+  const binding = childBinding(runtime, childTaskId);
+  const child = runtime.getTask(childTaskId);
+  if (['succeeded', 'failed', 'cancelled'].includes(child.state)) return child;
+  const parent = runtime.getTask(binding.parentTaskId);
+  if (parent.cancelRequested || parentSignal?.aborted) {
+    runtime.requestCancel(childTaskId, 'Parent task cancelled');
+    return runtime.getTask(childTaskId);
+  }
+  if (['succeeded', 'failed', 'cancelled'].includes(parent.state) || child.state !== 'waiting_approval') {
+    throw new ProtocolError('REVISION_CONFLICT', 'Subagent is not resumable for this parent');
+  }
+  const execution = runtime.loadCheckpoint(childTaskId, 'subtask-execution-binding') as {kind?: string} | undefined;
+  const defaultChild = execution?.kind === 'competition' || runtime.loadCheckpoint(childTaskId, 'subtask-coordination-binding') !== undefined;
+  let runId: string, toolName: string, argumentsValue: Record<string, unknown>;
+  if (defaultChild) {
+    const loop = runtime.loadCheckpoint(childTaskId, 'competition-loop') as {step?: number; pending?: {toolName?: string; arguments?: Record<string, unknown>}} | undefined;
+    if (binding.model !== undefined || !options.runDefaultWorker || !Number.isSafeInteger(loop?.step) || (loop?.step ?? 0) < 1
+      || typeof loop?.pending?.toolName !== 'string' || !loop.pending.arguments || Array.isArray(loop.pending.arguments)) {
+      throw new ProtocolError('NOT_FOUND', 'Default child has no original pending Competition invocation');
+    }
+    runId = `competition-tool-${childTaskId}-${loop.step}`;
+    toolName = loop.pending.toolName; argumentsValue = loop.pending.arguments;
+  } else {
+    const loop = runtime.loadCheckpoint(childTaskId, 'agent-loop') as {step?: number; pending?: import('@personal-agent/models').ModelResult} | undefined;
+    if (!Number.isSafeInteger(loop?.step) || (loop?.step ?? 0) < 1 || !loop?.pending || loop.pending.response.kind !== 'tool_proposal') {
+      throw new ProtocolError('NOT_FOUND', 'Subagent has no pending agent invocation');
+    }
+    runId = `agent-run-${childTaskId}-${loop.step}`;
+    toolName = loop.pending.response.proposal.toolName; argumentsValue = loop.pending.response.proposal.arguments;
+  }
+  const approval = runtime.getApproval(runId);
+  if (approval.taskId !== childTaskId || approval.state !== 'allowed'
+    || approval.toolName !== toolName
+    || approval.argumentsDigest !== toolArgumentsDigest(argumentsValue)
+    || !runtime.policy.get(runId)) {
+    throw new ProtocolError('UNAUTHORIZED', 'Subagent invocation is not approved or grant was revoked');
+  }
+  const cancel = () => {
+    try {runtime.requestCancel(childTaskId, 'Parent task cancelled');}
+    catch { /* A terminal child cannot be cancelled or reopened. */ }
+  };
+  parentSignal?.addEventListener('abort', cancel, {once: true});
+  try {
+    return await runtime.runTask(childTaskId, worker => runSubagentWorker(options, binding, worker),
+      {deadline: binding.parentDeadline, sideEffect: 'read', resume: true});
+  } finally {parentSignal?.removeEventListener('abort', cancel);}
+}
+
+/** Read-only aggregation from persistent children; never reopens a terminal parent. */
+export function readRuntimeSubagentSummary(runtime: TaskRuntime, parentTaskId: string,
+  definitions?: readonly SubtaskDefinition[]): SubtaskExecutionSummary & {summary: string} {
+  const records = runtime.loadCheckpoint(parentTaskId, 'subtask-progress-records') as Record<string, SubtaskProgressRecord> | undefined;
+  const subtasks = definitions ?? Object.values(records ?? {}).map(record => {
+    try {
+      const definition = JSON.parse(record.inputDigest) as SubtaskDefinition;
+      // The digest normalizes text; the record retains the actual dispatch identity.
+      return {...definition, subtaskId: record.subtaskId};
+    }
+    catch {throw new ProtocolError('INVALID_ARGUMENT', 'Invalid subtask progress binding');}
+  });
+  const progress: SubtaskProgress[] = subtasks.map(subtask => {
+    const record = records?.[subtask.subtaskId];
+    if (record && (record.parentTaskId !== parentTaskId || record.inputDigest !== computeSubtaskInputDigest(subtask))) {
+      throw new ProtocolError('REVISION_CONFLICT', 'Subtask input changed from the persisted dispatch');
+    }
+    const child = runtime.findTaskByIdempotencyKey(`subagent-dispatch-${parentTaskId}-${subtask.subtaskId}`);
+    const binding = child ? childBinding(runtime, child.taskId) : undefined;
+    if (binding && computeSubtaskInputDigest(binding) !== computeSubtaskInputDigest(subtask)) {
+      throw new ProtocolError('REVISION_CONFLICT', 'Subtask definition does not match the persistent child');
+    }
+    const roleLabel = binding?.roleLabel?.trim() || subtask.roleLabel?.trim() || DEFAULT_ROLE_LABELS[subtask.role];
+    const state: SubtaskProgress['state'] = !child ? record?.state ?? 'pending'
+      : ['succeeded', 'failed', 'cancelled'].includes(child.state) ? child.state as 'succeeded' | 'failed' | 'cancelled'
+        : child.state === 'running' || child.state === 'cancelling' ? 'running' : 'pending';
+    return {subtaskId: subtask.subtaskId, role: subtask.role, roleLabel, state,
+      ...(state === 'succeeded' ? {result: child?.resultSummary ?? record?.result ?? ''} : {}),
+      ...(state === 'failed' || state === 'cancelled' ? {error: child?.error?.message ?? record?.error ?? 'Subtask execution stopped'}
+        : state === 'pending' || state === 'running' ? {error: `Subtask is ${child?.state ?? state}; execution is not complete`} : {}),
+    };
+  });
+  const succeeded = progress.filter(item => item.state === 'succeeded').length;
+  const failed = progress.filter(item => item.state === 'failed').length;
+  const cancelled = progress.filter(item => item.state === 'cancelled').length;
+  const pending = progress.length - succeeded - failed - cancelled;
+  const summary = `## 次级智能体协作汇总（共 ${progress.length} 项：成功 ${succeeded}，失败 ${failed}，取消 ${cancelled}，未完成 ${pending}）\n\n`
+    + progress.map(item => `### 【${item.roleLabel}】(${item.role}) · ${item.state}\n${item.result ?? item.error ?? ''}`).join('\n\n');
+  return {total: progress.length, succeeded, failed, cancelled, subtasks: progress, aggregatedSummary: summary, summary};
 }
 
 export function createRuntimeSubagentDispatchTool(options: SubagentHostOptions): RegisteredTool {
@@ -40,7 +277,7 @@ export function createRuntimeSubagentDispatchTool(options: SubagentHostOptions):
   const handler = async (
     input: {subtasks: readonly SubtaskDefinition[]},
     context: ToolContext,
-  ): Promise<SubtaskExecutionSummary> => {
+  ): Promise<SubtaskExecutionSummary & {summary: string}> => {
     const runtime = options.getRuntime();
     if (!runtime) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Runtime is not available');
 
@@ -58,20 +295,44 @@ export function createRuntimeSubagentDispatchTool(options: SubagentHostOptions):
     if (input.subtasks.length > 10) {
       throw new ProtocolError('INVALID_ARGUMENT', 'Subtasks count cannot exceed 10');
     }
+    const seen = new Set<string>();
+    for (const subtask of input.subtasks) {
+      if (!subtask.subtaskId?.trim() || !subtask.goal?.trim() || seen.has(subtask.subtaskId.trim())
+        || (subtask.model !== undefined && !subtask.model.trim())) {
+        throw new ProtocolError('INVALID_ARGUMENT', 'Subtask identity, goal or explicit model is invalid');
+      }
+      seen.add(subtask.subtaskId.trim());
+      const saved = runtime.loadCheckpoint(context.taskId, 'subtask-progress-records') as Record<string, SubtaskProgressRecord> | undefined;
+      const record = saved?.[subtask.subtaskId];
+      if (record && (record.parentTaskId !== context.taskId || record.inputDigest !== computeSubtaskInputDigest(subtask))) {
+        throw new ProtocolError('REVISION_CONFLICT', 'Subtask input changed from the prior dispatch');
+      }
+    }
 
     // 2. 构造父任务 WorkerContext 桥接对象供 dispatchSubtasks 记录进度与检查点
     const workerBridge: AgentWorkerContext = {
       taskId: context.taskId,
       deadline: context.deadline,
       signal: context.signal,
-      saveCheckpoint: (key: string, value: unknown) => runtime.saveCheckpoint(context.taskId, key, value),
+      saveCheckpoint: (key: string, value: unknown) => {
+        if (key === 'subtask-progress-records') {
+          const records = {...runtime.loadCheckpoint(context.taskId, key) as Record<string, SubtaskProgressRecord> | undefined,
+            ...structuredClone(value) as Record<string, SubtaskProgressRecord>};
+          for (const record of Object.values(records)) {
+            const child = runtime.findTaskByIdempotencyKey(`subagent-dispatch-${context.taskId}-${record.subtaskId}`);
+            if (child && ['waiting_approval', 'waiting_reconciliation'].includes(child.state)) {
+              record.state = 'pending'; delete record.result;
+            }
+          }
+          runtime.saveCheckpoint(context.taskId, key, records);
+        } else runtime.saveCheckpoint(context.taskId, key, value);
+      },
       loadCheckpoint: (key: string) => runtime.loadCheckpoint(context.taskId, key),
-      reportProgress: (progress) => runtime.getTask(context.taskId),
+      reportProgress: (progress) => runtime.recordProgress(context.taskId, progress),
     };
 
     // 3. 子任务真实执行器
     const executor = async (subtask: SubtaskDefinition, signal: AbortSignal): Promise<string> => {
-      const childTaskId = `subtask-${context.taskId}-${subtask.subtaskId}`;
       const idempotencyKey = `subagent-dispatch-${context.taskId}-${subtask.subtaskId}`;
 
       if (signal.aborted || context.signal.aborted) {
@@ -112,8 +373,11 @@ export function createRuntimeSubagentDispatchTool(options: SubagentHostOptions):
       // 如果已在终态，直接读取
       if (['succeeded', 'failed', 'cancelled'].includes(taskSnapshot.state)) {
         if (taskSnapshot.state === 'cancelled') throw new ProtocolError('CANCELLED', 'Subtask was cancelled');
-        if (taskSnapshot.state === 'failed') throw new Error(taskSnapshot.resultSummary || 'Subtask execution failed');
+        if (taskSnapshot.state === 'failed') throw new Error(taskSnapshot.error?.message || taskSnapshot.resultSummary || 'Subtask execution failed');
         return taskSnapshot.resultSummary ?? '';
+      }
+      if (taskSnapshot.state !== 'created') {
+        throw new ProtocolError('UNSUPPORTED_CAPABILITY', `Subtask is ${taskSnapshot.state}; execution is not complete`);
       }
 
       // 5. 使用 runtime.runTask 真实运行子任务并监听父级取消以联动取消子任务
@@ -139,58 +403,7 @@ export function createRuntimeSubagentDispatchTool(options: SubagentHostOptions):
             if (signal.aborted || childWorker.signal.aborted || context.signal.aborted) {
               throw new ProtocolError('CANCELLED', 'Subtask cancelled during execution');
             }
-
-            childWorker.reportProgress({
-              stepId: `child-${subtask.subtaskId}`,
-              label: `[${roleLabel}] 正在执行: ${subtask.goal}`,
-            });
-
-            // 检查是否配置了 ModelGateway 进行真实模型推理
-            const model = options.getModelGateway?.(subtask.model);
-            if (model) {
-              const childTools = options.getTools?.();
-              const effortLevels: ('none' | 'low' | 'medium' | 'high')[] = ['none', 'low', 'low', 'medium', 'high', 'high'];
-              const reasoningEffort = subtask.thinkingDepth !== undefined
-                ? (effortLevels[Math.min(Math.max(0, subtask.thinkingDepth), 5)] ?? 'low')
-                : undefined;
-
-              const rolePrompt: ModelMessage = {
-                role: 'system',
-                content: `你是专业次级智能体，当前承担职责为【${roleLabel}】(${subtask.role})。请聚焦于此职责，独立执行指派的目标。`,
-              };
-
-              const agentOutcome = await runAgent(
-                {
-                  taskId: childTaskId,
-                  deadline: childWorker.deadline,
-                  signal: childWorker.signal,
-                  saveCheckpoint: (k, v) => childWorker.saveCheckpoint(k, v),
-                  loadCheckpoint: (k) => childWorker.loadCheckpoint(k),
-                  reportProgress: (p) => childWorker.reportProgress(p),
-                },
-                {
-                  goal: subtask.goal,
-                  initialMessages: [rolePrompt],
-                  model,
-                  tools: childTools ?? {list: () => [], invoke: async () => { throw new Error('No tools'); }},
-                  // 授权引用不再自造前缀：agent 循环默认按本次调用 runId 派生，
-                  // 与 RuntimeApplication.tools 的真实授权/审批机制一致（POTATOS-MVP §9.7）。
-                  maxSteps: subtask.thinkingDepth !== undefined ? Math.max(2, (subtask.thinkingDepth + 1) * 2) : 6,
-                  ...(reasoningEffort !== undefined ? {reasoningEffort} : {}),
-                },
-              );
-              return {
-                resultSummary: agentOutcome.resultSummary,
-                evidenceRefs: agentOutcome.evidenceRefs,
-              };
-            }
-
-            // 未配置或不受支持的模型：明确不可用，不生成固定完成文本（假成功）。
-            // 显式 Fake 仅经 fakeModelMode 开关由 FakeModelProvider 标注 mock；
-            // 缺模型时 Runtime 将子任务记为失败并给出准确原因，不冒充模型执行。
-            const modelLabel = subtask.model ? `模型 ${subtask.model}` : '默认模型';
-            throw new ProtocolError('UNSUPPORTED_CAPABILITY',
-              `子任务无法执行：${modelLabel} 未配置或不受支持。请在受信设置中配置模型后重试`);
+            return runSubagentWorker(options, subtask, childWorker);
           },
           {
             deadline: childDeadline,
@@ -205,6 +418,9 @@ export function createRuntimeSubagentDispatchTool(options: SubagentHostOptions):
           throw new Error(outcome.error?.message || outcome.resultSummary || 'Subtask execution failed');
         }
 
+        if (outcome.state !== 'succeeded') {
+          throw new ProtocolError('UNSUPPORTED_CAPABILITY', `Subtask is ${outcome.state}; execution is not complete`);
+        }
         return outcome.resultSummary ?? '';
       } finally {
         signal.removeEventListener('abort', abortListener);
@@ -212,7 +428,22 @@ export function createRuntimeSubagentDispatchTool(options: SubagentHostOptions):
       }
     };
 
-    return dispatchSubtasks(workerBridge, input.subtasks, executor);
+    // Reuse the existing dispatcher per child. Each checkpoint slice merges synchronously,
+    // so parallel completions cannot overwrite a sibling's durable progress.
+    await Promise.all(input.subtasks.map(subtask => dispatchSubtasks({...workerBridge,
+      loadCheckpoint: key => {
+        const value = workerBridge.loadCheckpoint(key);
+        if (key !== 'subtask-progress-records') return value;
+        const record = (value as Record<string, SubtaskProgressRecord> | undefined)?.[subtask.subtaskId];
+        return record ? {[subtask.subtaskId]: record} : undefined;
+      },
+      reportProgress: progress => workerBridge.reportProgress({...progress, totalUnits: input.subtasks.length,
+        completedUnits: input.subtasks.filter(item => {
+          const child = runtime.findTaskByIdempotencyKey(`subagent-dispatch-${context.taskId}-${item.subtaskId}`);
+          return child && ['succeeded', 'failed', 'cancelled'].includes(child.state);
+        }).length}),
+    }, [subtask], executor)));
+    return readRuntimeSubagentSummary(runtime, context.taskId, input.subtasks);
   };
 
   return createSubagentDispatchTool(handler);
@@ -222,23 +453,33 @@ export interface DesktopSubagentDispatchToolOptions {
   getRuntime: () => TaskRuntime;
   getTools?: (() => AgentToolPort | undefined) | undefined;
   fakeModelMode?: boolean;
+  /** Trusted host selection. An unknown name must return undefined, never default. */
+  getModelGateway?: ((modelName?: string) => ModelGateway | undefined) | undefined;
+  getModelReasoningEfforts?: ((modelName?: string) => readonly ReasoningEffort[]) | undefined;
+  runDefaultWorker?: SubagentHostOptions['runDefaultWorker'];
+  getToolsForSubtask?: SubagentHostOptions['getToolsForSubtask'];
   modelConfig?: {
     baseUrl?: string;
     model?: string;
     deployment?: string;
     apiKey?: string;
   };
+  /** Trusted model aliases; unregistered names fail instead of falling back to Pangu. */
+  modelRegistry?: Readonly<Record<string, (modelName: string) => ModelGateway | undefined>>;
   now?: (() => number) | undefined;
   maxRecursionDepth?: number | undefined;
 }
 
 export function createDesktopSubagentDispatchTool(options: DesktopSubagentDispatchToolOptions): RegisteredTool {
-  const {getRuntime, getTools, fakeModelMode, modelConfig, now, maxRecursionDepth} = options;
+  const {getRuntime, getTools, fakeModelMode, modelConfig, modelRegistry, now, maxRecursionDepth} = options;
   return createRuntimeSubagentDispatchTool({
     getRuntime,
     getTools,
     now,
     maxRecursionDepth,
+    getModelReasoningEfforts: options.getModelReasoningEfforts,
+    runDefaultWorker: fakeModelMode ? undefined : options.runDefaultWorker,
+    getToolsForSubtask: options.getToolsForSubtask,
     getModelGateway: (modelName?: string) => {
       if (fakeModelMode) {
         return new ModelGateway(new FakeModelProvider(
@@ -255,7 +496,13 @@ export function createDesktopSubagentDispatchTool(options: DesktopSubagentDispat
           },
         ));
       }
-      if (modelConfig?.baseUrl && modelConfig?.apiKey && (modelName === 'pangu' || !modelName)) {
+      if (modelRegistry) {
+        const requested = modelName?.trim() || 'default';
+        const factory = Object.hasOwn(modelRegistry, requested) ? modelRegistry[requested] : undefined;
+        return factory?.(requested);
+      }
+      if (options.getModelGateway) return options.getModelGateway(modelName);
+      if (modelConfig?.baseUrl && modelConfig?.apiKey && (modelName === 'pangu' || modelName === 'default' || !modelName)) {
         const apiKey = modelConfig.apiKey;
         const panguOptions: PanguModelProviderOptions = {
           baseUrl: modelConfig.baseUrl,
@@ -265,7 +512,7 @@ export function createDesktopSubagentDispatchTool(options: DesktopSubagentDispat
         if (modelConfig.deployment !== undefined) {
           panguOptions.deployment = modelConfig.deployment;
         }
-        return new ModelGateway(new PanguModelProvider(panguOptions));
+        return new ModelGateway(new StructuredToolProvider(new PanguModelProvider(panguOptions)));
       }
       return undefined;
     },

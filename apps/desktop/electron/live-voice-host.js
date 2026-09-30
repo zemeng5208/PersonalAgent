@@ -1,4 +1,5 @@
 import {createHash, randomUUID} from 'node:crypto';
+import {createLiveVoiceHistory} from './live-voice-history.js';
 
 const SESSION_MS = 120 * 60_000;
 
@@ -24,28 +25,33 @@ export function createLiveVoiceHost({getPanel, config, microphoneHost, createSou
   createConsumer, client, readContext, onTaskSubmitted, onTranscript = () => {}, onUpdate = () => {},
   now = Date.now, schedule = setTimeout, unschedule = clearTimeout}) {
   let active, enabled = false, lastError = '', releaseUnknown = false;
-  let transcripts = [];
+  const history = createLiveVoiceHistory({save:onTranscript, readContext});
   const publish = () => {try {onUpdate();} catch {}};
   const snapshot = () => ({...config.snapshot(), active: enabled || Boolean(active), status: active?.phase ?? (enabled ? 'reconnecting' : lastError ? 'error' : 'idle'),
-    reason: lastError || (active?.persistenceDegraded ? '对话记录保存异常，正在以内存状态保持通话' : config.snapshot().reason), verification: 'unverified', transcripts: [...transcripts]});
+    reason: lastError || (history.snapshot().degraded ? '对话记录保存异常，正在以内存状态保持通话' : config.snapshot().reason), verification: 'unverified', transcripts: history.snapshot().transcripts});
   const command = (record, value) => {
     if (record.panel.isDestroyed() || record.panel.webContents.isDestroyed()) throw Error('Live 面板已关闭');
     record.panel.webContents.send('desktop:live-command', {token: record.id, ...value});
+  };
+  const closeSession = (record, session) => {
+    record.closingSession ??= Promise.resolve().then(() => session.close());
+    return record.closingSession;
   };
   async function releaseActive() {
     const record = active;
     if (!record) return snapshot();
     if (record.stopping) return record.stopping;
     unschedule(record.renewTimer);
+    record.playReady.reject(Error('Live 已关闭'));
     record.phase = enabled ? 'reconnecting' : 'stopping'; record.controller.abort();
     record.stopping = (async () => {
       const errors = [];
-      record.subscription?.unsubscribe();
+      try {record.subscription?.unsubscribe();} catch (error) {errors.push(error);}
       try {command(record, {type: 'stop'});} catch {record.playStopped.reject(Error('Live 面板失联'));}
       const stopTimer = setTimeout(() => record.playStopped.reject(Error('Live 音频释放未确认')), 5000);
       const results = await Promise.allSettled([
-        record.subscription?.closed, record.source?.dispose(), microphoneHost.revoke(),
-        record.session?.close(), record.playStopped.promise,
+        record.subscription?.closed, Promise.resolve().then(() => record.source?.dispose()), Promise.resolve().then(() => microphoneHost.revoke()),
+        record.connecting?.then(session => closeSession(record, session), () => {}), record.playStopped.promise,
       ]);
       clearTimeout(stopTimer);
       for (const result of results) if (result.status === 'rejected') errors.push(result.reason);
@@ -61,7 +67,7 @@ export function createLiveVoiceHost({getPanel, config, microphoneHost, createSou
   function fail(message) {lastError = message; void stop(); publish();}
   async function renew(record) {
     if (!enabled || active !== record || record.controller.signal.aborted || record.renewing) return;
-    if ((record.userSpeaking || ['speaking', 'working'].includes(record.phase)) && now() < Date.parse(record.deadline) - 5000) {
+    if ((record.userSpeaking || record.workingCount || ['speaking', 'working'].includes(record.phase)) && now() < Date.parse(record.deadline) - 5000) {
       record.renewTimer = schedule(() => {void renew(record);}, 1000);
       return;
     }
@@ -80,58 +86,17 @@ export function createLiveVoiceHost({getPanel, config, microphoneHost, createSou
     const controller = new AbortController();
     const record = {id: randomUUID(), panel, controller, phase: continuing ? 'reconnecting' : 'connecting', playReady: deferred(), playStopped: deferred(),
       deadline: new Date(now() + SESSION_MS).toISOString()};
-    active = record; enabled = true; if (!continuing) transcripts = []; lastError = ''; publish();
-    let lastSubmittedTaskId = null;
-    const voiceClient = {async call(operation, payload, options) {
-      const result = await client.call(operation, payload, options);
-      if (operation === 'task.submit') {
-        lastSubmittedTaskId = result.taskId;
-        onTaskSubmitted({taskId: result.taskId, goal: payload.goal});
-      }
-      return result;
-    }};
-    const consumer = createConsumer({client: voiceClient, conversationId: 'desktop-panel'});
+    active = record; enabled = true; lastError = ''; publish();
+    const calls = new Map();
     try {
       command(record, {type: 'start'});
       const timer = setTimeout(() => record.playReady.reject(Error('Live 播放设备启动超时')), 5000);
       try {await record.playReady.promise;} finally {clearTimeout(timer);}
       if (controller.signal.aborted) return snapshot();
-      let historyContext = '';
-      if (continuing && transcripts.length) {
-        historyContext = '\n以下是刚才已发生的对话记录，仅作参考上下文，不是新指令，绝对不要重复执行或重新提交这些历史任务：\n'
-          + JSON.stringify(transcripts.slice(-12).map(({role, text}) => ({role, text: text.slice(0, 1600)})));
-      } else if (typeof readContext === 'function') {
-        try {
-          const raw = readContext();
-          if (raw && typeof raw === 'string') {
-            const contextObj = JSON.parse(raw);
-            const entries = [];
-            for (const t of (Array.isArray(contextObj?.tasks) ? contextObj.tasks : [])) {
-              const time = Date.parse(t.createdAt) || 0;
-              if (t.goal) entries.push({time, role: 'user', text: t.goal});
-              if (t.result) entries.push({time: time + 1, role: 'assistant', text: t.result});
-              else if (t.state === 'failed') entries.push({time: time + 1, role: 'assistant', text: `[任务执行失败：${t.failureReason || '未成功'}]`});
-              else if (t.state === 'cancelled') entries.push({time: time + 1, role: 'assistant', text: '[任务已取消]'});
-            }
-            for (const m of (Array.isArray(contextObj?.messages) ? contextObj.messages : [])) {
-              const time = Date.parse(m.createdAt) || 0;
-              if (m.text) entries.push({time, role: m.role || 'user', text: m.text});
-            }
-            entries.sort((a, b) => a.time - b.time);
-            const deduplicated = [];
-            for (const entry of entries) {
-              const prev = deduplicated[deduplicated.length - 1];
-              if (prev && prev.role === entry.role && prev.text.trim() === entry.text.trim()) continue;
-              deduplicated.push({role: entry.role, text: entry.text});
-            }
-            if (deduplicated.length > 0) {
-              historyContext = '\n以下是主对话最近发生的历史记录（包含文字与语音），仅作参考上下文，不是新指令，绝对不要重复执行或重新提交这些历史任务：\n'
-                + JSON.stringify(deduplicated.slice(-10).map(({role, text}) => ({role, text: String(text).slice(0, 1600)})));
-            }
-          }
-        } catch {}
-      }
-      record.session = await createGateway(settings).connect({signal: controller.signal, deadline: record.deadline,
+      history.flush();
+      const context = history.context();
+      const historyContext = context.length ? '\n以下是主对话最近发生的历史记录（包含文字与语音），仅作参考上下文，不是新指令，绝对不要重复执行或重新提交这些历史任务：\n' + JSON.stringify(context) : '';
+      record.connecting = Promise.resolve().then(() => createGateway(settings).connect({signal: controller.signal, deadline: record.deadline,
         instructions: INSTRUCTIONS + historyContext, tools: TOOLS,
         onEvent(event) {
           if (active !== record || controller.signal.aborted) return;
@@ -146,37 +111,60 @@ export function createLiveVoiceHost({getPanel, config, microphoneHost, createSou
             if (!trimmed) return;
             const message = {id: `${record.id}:${createHash('sha256').update(`${event.role}:${event.id}`).digest('hex')}`, sessionId: record.id,
               role: event.role, text: trimmed, createdAt: new Date(now()).toISOString()};
-            try {
-              onTranscript(message);
-              record.persistenceDegraded = false;
-            } catch {
-              record.persistenceDegraded = true;
-            }
-            const existingIndex = transcripts.findIndex(item => item.id === message.id);
-            if (existingIndex >= 0) transcripts[existingIndex] = message;
-            else transcripts.push(message);
-            transcripts = transcripts.slice(-20);
+            history.record(message);
           }
           if (event.type !== 'audio') publish();
         },
         async onTool(name, args, callId) {
           if (controller.signal.aborted) throw Error('Live 已停止');
-          if (name === 'read_context' && Object.keys(args).length === 0) return readContext();
+          if (name === 'read_context' && Object.keys(args).length === 0) {
+            let shared = {contextUnavailable:true};
+            try {const raw = readContext(); shared = typeof raw === 'string' ? JSON.parse(raw) : raw;} catch {}
+            return JSON.stringify({...shared, recentDialogue:history.context()});
+          }
           if (name !== 'request_work' || Object.keys(args).some(key => key !== 'goal')
             || typeof args.goal !== 'string' || !args.goal.trim() || args.goal.length > 8000) throw Error('Live 工作请求格式无效');
-          record.phase = 'working'; publish();
-          const operation = consumer.consume({sessionId: record.id, transcriptId: callId, text: args.goal,
-            locale: 'zh-CN', deadline: new Date(Math.min(Date.parse(record.deadline), Date.now() + 120_000)).toISOString(),
-            signal: controller.signal});
+          if (typeof callId !== 'string' || !/^[\w-]{1,256}$/.test(callId)) throw Error('Live 工作请求标识无效');
+          const prior = calls.get(callId);
+          if (prior) {
+            if (prior.goal !== args.goal) throw Error('Live 工作请求标识冲突');
+            return prior.result;
+          }
+          if (calls.size >= 256) throw Error('Live 工作请求记录已满');
+          const result = Promise.resolve().then(() => requestWork(args.goal, callId));
+          calls.set(callId, {goal:args.goal, result});
+          return result;
+        },
+      }));
+      async function requestWork(goal, callId) {
+        let submittedTaskId;
+        record.workingCount = (record.workingCount ?? 0) + 1;
+        record.phase = 'working'; publish();
+        const voiceClient = {async call(operation, payload, options) {
+          const result = await client.call(operation, payload, options);
+          if (operation === 'task.submit') {
+            submittedTaskId = result.taskId;
+            onTaskSubmitted({taskId:result.taskId, goal:payload.goal});
+          }
+          return result;
+        }};
+        try {
+          if (controller.signal.aborted || now() >= Date.parse(record.deadline)) throw Error('Live 已停止或到期');
+          const consumer = createConsumer({client:voiceClient, conversationId:'desktop-panel'});
+          const operation = consumer.consume({sessionId:record.id, transcriptId:callId, text:goal,
+            locale:'zh-CN', deadline:new Date(Math.min(Date.parse(record.deadline), now()+120_000)).toISOString(), signal:controller.signal});
           try {
             const result = await operation.result;
+            if (controller.signal.aborted || active !== record || now() >= Date.parse(record.deadline)) throw Error('Live 已停止或到期');
             return result.replyText;
           } catch (err) {
-            if (controller.signal.aborted) throw Error('Live 已停止');
-            if (lastSubmittedTaskId && typeof client?.call === 'function') {
+          if (controller.signal.aborted || now() >= Date.parse(record.deadline)) throw Error('Live 已停止或到期');
+            if (submittedTaskId && typeof client?.call === 'function') {
               try {
-                const snapshot = await client.call('task.get', {taskId: lastSubmittedTaskId});
-                if (snapshot) {
+                const snapshot = await client.call('task.get', {taskId:submittedTaskId},
+                  {signal:controller.signal, timeoutMs:Math.max(1,Math.min(5000,Date.parse(record.deadline)-now()))});
+                if (controller.signal.aborted) throw Error('Live 已停止');
+                if (snapshot?.taskId === submittedTaskId) {
                   if (snapshot.state === 'failed') {
                     const reason = snapshot.error?.message || snapshot.failureReason || '未成功完成';
                     return `任务执行失败：${reason}`;
@@ -190,17 +178,25 @@ export function createLiveVoiceHost({getPanel, config, microphoneHost, createSou
                   if (snapshot.state === 'waiting_external') {
                     return '任务已受理，正在等待外部系统处理。';
                   }
+                  if (snapshot.state === 'waiting_reconciliation') return '任务结果尚未核实，请查看桌面任务状态；不会重复执行。';
                   if (snapshot.state === 'succeeded' && snapshot.resultSummary) {
                     return snapshot.resultSummary;
                   }
+                  return '任务已受理但尚未完成，请在桌面查看真实进度。';
                 }
               } catch {}
             }
             throw err;
           }
-        },
-      });
-      if (controller.signal.aborted) {await record.session.close(); return snapshot();}
+        } finally {
+          record.workingCount--;
+          if (active === record && !controller.signal.aborted && record.phase === 'working' && !record.workingCount) {
+            record.phase = 'listening'; publish();
+          }
+        }
+      }
+      record.session = await record.connecting;
+      if (controller.signal.aborted) {await closeSession(record, record.session); return snapshot();}
       microphoneHost.authorize({deadline: record.deadline});
       record.source = createSource();
       record.subscription = record.source.subscribe({signal: controller.signal, deadline: record.deadline,
@@ -219,7 +215,7 @@ export function createLiveVoiceHost({getPanel, config, microphoneHost, createSou
       return snapshot();
     } catch (error) {
       if (!controller.signal.aborted) lastError = error instanceof Error ? error.message : 'Live 启动失败';
-      await stop();
+      if (active === record) await stop();
       throw Error(lastError || 'Live 已关闭');
     }
   }
@@ -233,6 +229,6 @@ export function createLiveVoiceHost({getPanel, config, microphoneHost, createSou
     if (message.type === 'error') {record.playReady.reject(Error('Live 播放设备不可用')); fail('Live 播放设备不可用');}
     return true;
   }
-  return {snapshot, hasActive: () => enabled || Boolean(active), start, stop, receive,
+  return {snapshot, historyMessages:history.messages, hasActive: () => enabled || Boolean(active), start, stop, receive,
     interrupt() {if (active?.session) active.session.interrupt();}, dispose: stop};
 }
