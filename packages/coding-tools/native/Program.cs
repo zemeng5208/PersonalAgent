@@ -310,7 +310,7 @@ internal static class Program
 
             // 4. CreateProcessW with CREATE_SUSPENDED and CREATE_NO_WINDOW
             bool created = CreateProcessW(
-                lpApplicationName: null,
+                lpApplicationName: exe,
                 lpCommandLine: sb.ToString(),
                 lpProcessAttributes: ref procSa,
                 lpThreadAttributes: ref threadSa,
@@ -387,8 +387,6 @@ internal static class Program
 
             // 8. Wait for process exit
             WaitForSingleObject(pi.hProcess, INFINITE);
-            Task.WaitAll(stdoutTask, stderrTask);
-
             uint exitCode = 1;
             if (!GetExitCodeProcess(pi.hProcess, out exitCode))
             {
@@ -398,11 +396,22 @@ internal static class Program
             }
             CloseHandle(pi.hProcess);
 
+            // A child can outlive the root and keep inherited output handles open.
+            // End this recipe's job before draining pipes, so normal completion
+            // cannot hang until the outer deadline or leave background workers.
+            if (!CloseHandle(hJob))
+            {
+                Console.Error.WriteLine("WindowsJobProcessHost: Job close failed");
+                return 1;
+            }
+            hJob = IntPtr.Zero;
+            Task.WaitAll(stdoutTask, stderrTask);
+
             return (int)exitCode;
         }
         finally
         {
-            CloseHandle(hJob);
+            if (hJob != IntPtr.Zero) CloseHandle(hJob);
         }
     }
 
