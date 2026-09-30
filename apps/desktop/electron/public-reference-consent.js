@@ -7,8 +7,8 @@ const sha=value=>typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 
 /** Native PUBLIC permission only. The original Gateway remains the execution and Evidence source. */
 export function createNativePublicReferenceConsent({readPreflightCandidate,readConfirmedCandidate,
-  isTaskCurrent,confirmNative,now=Date.now}) {
-  const permissions=new Map();let closed=false;
+  isTaskCurrent,isCatalogCurrent=()=>false,confirmNative,now=Date.now}) {
+  const permissions=new Map(),catalogs=new Map();let closed=false;
   function candidate(query,confirmed=false) {
     if (closed || !query || !isTaskCurrent(query.taskId)) return undefined;
     const reference={taskId:query.taskId,proposalId:query.proposalId,path:query.path,configurationRef:query.configurationRef};
@@ -35,6 +35,17 @@ export function createNativePublicReferenceConsent({readPreflightCandidate,readC
       || !Number.isFinite(Date.parse(context.deadline)) || Date.parse(context.deadline) <= now()) throw Error('公开资料许可请求已停止或到期');
   }
   return {
+    async requestCatalog(input,kind,publicParameters) {
+      contextCurrent(input);
+      if (closed || !['mcp','skill'].includes(kind) || !isTaskCurrent(input.taskId) || !isCatalogCurrent(input)) return false;
+      const id=JSON.stringify([input.taskId,input.configurationRef,kind]),previous=catalogs.get(id);
+      if (previous && previous.expiresAt === input.deadline) return previous.allowed;
+      const allowed=await confirmNative({phase:'catalog',query:{taskId:input.taskId,configurationRef:input.configurationRef},
+        catalogKind:kind,publicParameters,expiresAt:input.deadline},input);
+      contextCurrent(input);
+      if (closed || !isTaskCurrent(input.taskId) || !isCatalogCurrent(input)) return false;
+      catalogs.set(id,{allowed:allowed === true,expiresAt:input.deadline});return allowed === true;
+    },
     async requestPreflight(query,context) {
       contextCurrent(context);
       const value=candidate(query);
@@ -90,6 +101,6 @@ export function createNativePublicReferenceConsent({readPreflightCandidate,readC
       return {...bound.saved.scope,contentDigest:bound.saved.contentDigest};
     },
     revokeTask(taskId) {for (const [id,value] of permissions) if (JSON.parse(id)[0] === taskId) permissions.delete(id);},
-    close() {closed=true;permissions.clear();},
+    close() {closed=true;permissions.clear();catalogs.clear();},
   };
 }

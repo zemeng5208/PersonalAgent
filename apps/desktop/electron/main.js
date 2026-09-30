@@ -208,6 +208,7 @@ let todoClosing;
 let todoClosed = false;
 let notepadHost;
 let publicReferenceConsent;
+const publicSkillSources=new Map();
 let notepadClosing;
 let notepadClosed = false;
 let mailHost;
@@ -1155,11 +1156,24 @@ async function initializeRuntime() {
             return task.state === 'running' && task.cancelRequested !== true;
           } catch {return false;}
         },
+        isCatalogCurrent:input=>{
+          try {return referenceHost?.bindTask(input.taskId) === input.configurationRef;} catch {return false;}
+        },
         confirmNative:async (request,context)=>{
           if (context.signal.aborted || Date.now() >= Date.parse(context.deadline)) return false;
           openAdmin('computer');const originAdmin=admin,originApplication=runtimeApplication;
           if (!originAdmin || originAdmin.isDestroyed()) return false;
           const purpose=request.purpose === 'coding-reference' ? '编程参考' : '参考资料摘要';
+          if (request.phase === 'catalog') {
+            const answer=await dialog.showMessageBox(originAdmin,{type:'question',title:'公开参考能力目录',
+              message:request.catalogKind === 'skill' ? '允许本任务向 AgentArts 公布参考摘要 Skill 的公开版本参数？' : '允许本任务向 AgentArts 公布只读参考工具的公开能力目录？',
+              detail:`原任务：${request.query.taskId}\n到期：${request.expiresAt}`
+                + (request.publicParameters ? `\n公开版本：${JSON.stringify(request.publicParameters)}` : '')
+                + '\n能力目录不含文件路径或正文。具体资料读取和内容出机会分别确认。',
+              buttons:['取消','仅允许本任务'],defaultId:0,cancelId:0,noLink:true});
+            return answer.response === 1 && admin === originAdmin && !originAdmin.isDestroyed()
+              && runtimeApplication === originApplication && !context.signal.aborted && Date.now() < Date.parse(context.deadline);
+          }
           const answer=await dialog.showMessageBox(originAdmin,{type:'question',title:'本任务公开资料许可',
             message:request.phase === 'preflight' ? `允许读取此公开资料用于${purpose}？` : `允许向 AgentArts 发送这份已读回的公开内容用于${purpose}？`,
             detail:`原任务：${request.query.taskId}\n资料：${request.query.path}\n内容上限：${request.maxExportBytes} 字节\n到期：${request.expiresAt}`
@@ -1197,6 +1211,30 @@ async function initializeRuntime() {
         },
         createCommandRecipeTool:options=>createWorkspaceCommandRecipeTool({...options,createWorkspaceCommandTool})});
       referenceHost=createDesktopReferenceHost({workspace:codingWorkspace,createMcp:runtimeModule.createReadonlyMcpHost,onUpdate:publish,
+        hostUserNamespace:namespace,
+        publicReferenceExport:{
+          readPreflight:query=>publicReferenceConsent?.readPreflight(query),
+          readAuthorization:query=>publicReferenceConsent?.readAuthorization(query),
+          readConfirmed:query=>referenceHost?.readConfirmedPublicReference?.(query),
+        },
+        publicReferenceAvailability:input=>publicReferenceConsent.requestCatalog(input,'mcp'),
+        publicSkillAvailability:async input=>{
+          const manifest=runtimeApplication.referenceSkillSnapshot().manifest;
+          if (!manifest || !(await publicReferenceConsent.requestCatalog(input,'skill',
+            {skillId:manifest.id,version:manifest.version,digest:manifest.digest}))) return false;
+          return Boolean(await chooseNativePublicSkillSource(input));
+        },
+        resolvePublicSkillPath:input=>readNativePublicSkillSource(input)?.path,
+        readPublicSkillSourceRefs:input=>readNativePublicSkillSource({...input,sourceRef:'public-reference'})
+          ? ['public-reference'] : [],
+        resolvePublicSkillSource:input=>{
+          const selected=readNativePublicSkillSource(input);
+          if (!selected) return undefined;
+          const scope=publicReferenceConsent.readPreflight({taskId:input.taskId,proposalId:input.proposalId,
+            path:selected.path,configurationRef:input.configurationRef,arguments:{path:selected.path}});
+          return scope ? {...scope,path:selected.path,sourceRef:input.sourceRef,
+            configurationRef:input.configurationRef,revision:input.revision} : undefined;
+        },
         assertDispatchBinding:taskId=>{
           const saved=runtimeApplication.runtime.loadCheckpoint(taskId,'learning:binding:v1');
           if(saved!==undefined) {
@@ -1370,12 +1408,14 @@ async function initializeRuntime() {
         },
         tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...(goalCloudHost?.tools ?? goalHost.tools), ...productTools.tools, ...(mailHost?.tools ?? []), ...(calendarMeetingHost?.tools ?? []), ...(feedsHost?.tools ?? []), ...(notepadHost?.tools ?? []), ...(todoHost?.tools ?? []), ...(subagentTool ? [subagentTool] : []), ...(knowledgeTools?.tools??[]),...(referenceHost?.tools??[])],
         prepareCompetitionToolExport:async ({phase,taskId,proposal,deadline,signal})=>{
-          if (!['workspace.read_text','mcp.workspace.read_text'].includes(proposal?.toolName)) return;
+          if (!['workspace.read_text','mcp.workspace.read_text','skill.workspace_reference_summary'].includes(proposal?.toolName)) return;
           if (!publicReferenceConsent || !['preflight','projection'].includes(phase)) throw Error('原生公开资料许可入口不可用');
           const configurationRef=proposal.toolName === 'workspace.read_text'
             ? codingWorkspace?.readWorkspaceExportConfigurationRef?.() : referenceHost?.bindTask(taskId);
-          const query={taskId,proposalId:proposal.proposalId,path:proposal.arguments.path,
-            configurationRef,arguments:proposal.arguments};
+          const selected=proposal.toolName === 'skill.workspace_reference_summary'
+            ? readNativePublicSkillSource({taskId,sourceRef:proposal.arguments.sourceRef,configurationRef}) : undefined;
+          const query={taskId,proposalId:proposal.proposalId,path:selected?.path ?? proposal.arguments.path,
+            configurationRef,arguments:selected ? {path:selected.path} : proposal.arguments};
           if (phase === 'preflight') await publicReferenceConsent.requestPreflight(query,{deadline,signal});
           else await publicReferenceConsent.requestExact(query,{deadline,signal});
         },
@@ -2334,6 +2374,48 @@ async function toggleLive() {
   return liveVoice.start();
 }
 
+function readNativePublicSkillSource(input) {
+  try {
+    if (input?.sourceRef !== 'public-reference') return undefined;
+    const value=publicSkillSources.get(JSON.stringify([input.taskId,input.configurationRef]));
+    if (!value || value.denied || Date.now() >= Date.parse(value.expiresAt)
+      || !codingWorkspace.isWorkspaceBindingCurrent(value.workspace)) return undefined;
+    referenceHost.assertTask(input.taskId);
+    const task=runtimeApplication.runtime.getTask(input.taskId);
+    if (task.state !== 'running' || task.cancelRequested || runtimeApplication.runtime.loadCheckpoint(input.taskId,'application-deadline') !== value.expiresAt) return undefined;
+    return {...value};
+  } catch {return undefined;}
+}
+
+async function chooseNativePublicSkillSource(input) {
+  const key=JSON.stringify([input.taskId,input.configurationRef]);
+  if (publicSkillSources.has(key)) return readNativePublicSkillSource({...input,sourceRef:'public-reference'});
+  const workspaceBinding=codingWorkspace?.readWorkspaceBinding();
+  if (!workspaceBinding || input.signal.aborted || Date.now() >= Date.parse(input.deadline)) return undefined;
+  openAdmin('computer');const originAdmin=admin,originApplication=runtimeApplication;
+  const selection=await dialog.showOpenDialog(originAdmin,{title:'选择本任务的公开参考资料',defaultPath:workspaceBinding.rootPath,
+    properties:['openFile'],filters:[{name:'公开文本资料',extensions:['md','txt']}]});
+  const current=()=>admin === originAdmin && !originAdmin.isDestroyed() && runtimeApplication === originApplication
+    && !input.signal.aborted && Date.now() < Date.parse(input.deadline)
+    && codingWorkspace.isWorkspaceBindingCurrent(workspaceBinding);
+  if (!current()) return undefined;
+  if (selection.canceled || selection.filePaths.length !== 1) {publicSkillSources.set(key,{denied:true});return undefined;}
+  const relative=path.relative(realpathSync(workspaceBinding.rootPath),realpathSync(selection.filePaths[0]));
+  if (!relative || path.isAbsolute(relative) || relative === '..' || relative.startsWith('..'+path.sep)
+    || !/\.(md|txt)$/i.test(relative)) throw Error('公开资料必须位于已许可的当前工作区内');
+  const sourcePath=relative.split(path.sep).join('/');
+  const answer=await dialog.showMessageBox(originAdmin,{type:'question',title:'本任务公开参考来源',
+    message:`公开参考资料：${sourcePath}`,
+    detail:`原任务：${input.taskId}\n公开别名：public-reference\n到期：${input.deadline}\n仅将此文件作为公开参考来源。此步骤未读取正文；实际工具读取和对应内容出机会另行核对。`,
+    buttons:['取消','确认这是本任务的公开资料'],defaultId:0,cancelId:0,noLink:true});
+  if (!current()) return undefined;
+  referenceHost.assertTask(input.taskId);
+  if (answer.response !== 1) {publicSkillSources.set(key,{denied:true});return undefined;}
+  publicSkillSources.set(key,{taskId:input.taskId,configurationRef:input.configurationRef,sourceRef:'public-reference',
+    path:sourcePath,expiresAt:input.deadline,workspace:workspaceBinding});
+  return readNativePublicSkillSource({...input,sourceRef:'public-reference'});
+}
+
 function registerLiveShortcut() {
   if (liveShortcut.registered) globalShortcut.unregister(liveShortcut.key);
   const key = liveConfig.snapshot().hotkey;
@@ -2569,6 +2651,7 @@ app.whenReady().then(async () => {
       productTools?.close();
       codingWorkspace?.close();
       publicReferenceConsent?.close();
+      publicSkillSources.clear();
       feedsHost?.close();
       void todoHost?.close();
     } catch (error) {
