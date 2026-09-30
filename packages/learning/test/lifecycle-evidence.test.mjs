@@ -38,6 +38,45 @@ test('validator requires exact persisted Skill, policy decision and confirmed ex
   await assert.rejects(createEvidenceWorkflowValidator(late.ports).validate(candidate, context()), {code: 'REVISION_CONFLICT'});
 });
 
+test('Skill disable, revision or content changes while execution is awaited reject an unchanged binding', async () => {
+  for (const change of [{enabled: false}, {revision: 'v2'}, {contentSha256: 'c'.repeat(64)}]) {
+    const fx = fixture();
+    const skill = {id: binding.skillId, revision: binding.skillRevision,
+      contentSha256: binding.skillContentSha256, enabled: true};
+    let skillReads = 0;
+    fx.ports.readSkill = async () => {skillReads++; return structuredClone(skill);};
+    const originalRead = fx.ports.readExecution;
+    fx.ports.readExecution = async (...args) => {
+      const execution = await originalRead(...args);
+      Object.assign(skill, change);
+      return execution;
+    };
+    await assert.rejects(createEvidenceWorkflowValidator(fx.ports).validate(candidate, context()),
+      {code: 'NOT_VALIDATED'});
+    assert.equal(skillReads, 2);
+    assert.deepEqual(await fx.ports.readBinding(), binding);
+  }
+});
+
+test('Skill final read still obeys cancellation and deadline after otherwise valid execution', async () => {
+  for (const expected of ['CANCELLED', 'TIMEOUT']) {
+    const fx = fixture();
+    const controller = new AbortController();
+    const scope = {...context(), signal: controller.signal};
+    const originalRead = fx.ports.readSkill;
+    let reads = 0;
+    fx.ports.readSkill = async (...args) => {
+      const skill = await originalRead(...args);
+      if (++reads === 2) {
+        if (expected === 'CANCELLED') controller.abort();
+        else scope.deadline = '2000-01-01T00:00:00.000Z';
+      }
+      return skill;
+    };
+    await assert.rejects(createEvidenceWorkflowValidator(fx.ports).validate(candidate, scope), {code: expected});
+  }
+});
+
 test('stop and source invalidation persist across restart without silently restoring older selections', async t => {
   const directory = mkdtempSync(join(tmpdir(), 'pa-learning-owned-'));
   t.after(() => rmSync(directory, {recursive: true, force: true}));

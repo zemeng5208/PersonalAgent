@@ -46,11 +46,14 @@ export function createEvidenceWorkflowValidator(ports: WorkflowEvidencePorts): W
     const binding = structuredClone(bound);
     const skill = await ports.readSkill(binding.skillId, context);
     check(context);
+    const matchesSkill = (value: typeof skill): boolean => Boolean(value && value.enabled === true
+      && value.id === binding.skillId && value.revision === binding.skillRevision
+      && value.contentSha256 === binding.skillContentSha256);
+    if (!matchesSkill(skill)) throw new LearningError('NOT_VALIDATED');
     const execution = await ports.readExecution(binding.taskId, binding.evidenceId, context);
     check(context);
     const record = execution?.record;
-    if (!skill || !skill.enabled || skill.id !== binding.skillId || skill.revision !== binding.skillRevision
-      || skill.contentSha256 !== binding.skillContentSha256 || !record
+    if (!record
       || execution?.task.taskId !== binding.taskId || execution.task.state !== 'succeeded'
       || !execution.task.evidenceRefs.includes(binding.evidenceId)
       || record.taskId !== binding.taskId || record.evidenceId !== binding.evidenceId
@@ -62,6 +65,10 @@ export function createEvidenceWorkflowValidator(ports: WorkflowEvidencePorts): W
     const again = await ports.readBinding(structuredClone(candidate), context);
     check(context);
     if (JSON.stringify(again) !== JSON.stringify(binding)) throw new LearningError('REVISION_CONFLICT');
+    // Execution/binding reads may wait. The original Skill snapshot cannot authorize a late pass.
+    const currentSkill = await ports.readSkill(binding.skillId, context);
+    check(context);
+    if (!matchesSkill(currentSkill)) throw new LearningError('NOT_VALIDATED');
     return {passed: true, evidenceRef: binding.evidenceId};
   }});
 }
