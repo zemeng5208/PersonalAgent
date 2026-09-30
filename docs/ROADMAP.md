@@ -108,7 +108,7 @@
 | MOD-27 | M1.6 | review | `zemeng` / main 已有版本图及 SQLite/Fake 原子 `appendBatch`；事实查询/变化流与自动事实投影的后续增量仍在堆叠分支，真实事实来源、确认消费和数据删除未完成 |
 | MOD-28 | M1.6 | in_progress | `zemeng` / main 已有离线影响分析、显式修复预览/提交和原子 CAS；自动事实投影、外部事实身份落地、真实 AgentArts 驱动和 Evidence 闭环未完成 |
 | MOD-29 | M1.5 第一优先 | in_progress | `zemeng` / AgentArts Runtime 适配与配置入口已有 provisional 实现；真实项目、版本、部署、API 和 trace 读回仍无成功证据 |
-| MOD-30 | M1.5 第一优先 | in_progress | `zemeng` / PR #49 已进入 main，工具提案/审批/continuation 离线链可用；Workflow 输入 #72 和载荷边界 #80 尚未进入 main，真实 MCP/Skill 与目标系统读回未完成 |
+| MOD-30 | M1.5 第一优先 | in_progress | `zemeng` / PR #49、#72（Workflow 输入）、#80（载荷边界）均已进入 main（2026-09-30 台账核对），工具提案/审批/continuation 离线链可用；真实 MCP/Skill 与目标系统读回未完成 |
 | MOD-31 | M1.5/M3 | in_progress | `zemeng` / PR #58 已合并固定合成评估 runner；真实多 Agent 角色、重复运行指标和平台评估未完成 |
 | MOD-32 | M1.5/M5 第一优先 | in_progress | `zemeng` / 手动验收脚手架和失败诊断已有记录；真实发布、健康读回、trace、成本、回滚和端到端成功证据未提供 |
 
