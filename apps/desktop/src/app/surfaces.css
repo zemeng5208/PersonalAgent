@@ -20,6 +20,10 @@
 .composer textarea:focus,.composer textarea:focus-visible {outline:none;box-shadow:none}
 .composer:focus-within {border-color:var(--focus-ring)}
 .settings-form input:focus {border-color:var(--focus-ring);box-shadow:0 0 0 1px var(--focus-ring)}
+.sis-settings .sis-fields > button {border:1px solid var(--border-strong);background:var(--surface-2);color:var(--fg);transition:background var(--dur-fast) var(--ease-standard),border-color var(--dur-fast) var(--ease-standard)}
+.sis-settings .sis-fields > button:hover:not(:disabled) {background:var(--surface-3);border-color:var(--focus-ring)}
+.sis-settings .sis-fields > button:focus-visible {outline:2px solid var(--focus-ring);outline-offset:2px}
+.sis-settings .sis-fields > button:disabled {opacity:.5;cursor:default}
 .sheet th {background:var(--surface-2);color:var(--fg-2)}
 .sheet td {color:var(--fg-2)}
 .card,.sheet,.settings-list,.model-list {background:var(--glass-bg);color:var(--fg)}
@@ -33,7 +37,7 @@
 .btn-primary {background:var(--accent);color:var(--accent-ink)}
 .switch-control span {background:var(--surface-3)}.switch-control input:checked + span {background:var(--fg-2)}.switch-control input:checked + span::after {background:var(--bg)}
 .switch-control input:focus-visible + span {outline-color:var(--focus-ring)}
-.panel header {gap:5px;padding:10px}.panel header .status {max-width:42px;overflow:hidden;white-space:nowrap}
+.panel header {gap:5px;padding:10px}.panel header .status {flex:0 1 auto;min-width:0;max-width:88px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .panel .hdr-btn {width:28px;height:28px;flex-shrink:0}
 .panel .dot {background:var(--fg-2);box-shadow:none}
 .panel .send-btn,.workspace .send-btn {background:var(--fg);color:var(--bg)}
@@ -70,18 +74,31 @@
 .admin .side {background:var(--bg-2)}
 .activity-grid span {background:#c6dcf8}
 :root:not([data-theme="light"]) .activity-grid span {background:#1c3c66}
-.panel .composer {margin:0 12px 12px;padding:6px 9px 5px;border-radius:17px}
-.panel .composer textarea {min-height:30px;font-size:13px;padding:4px 4px 0}
-.panel .composer-bar {margin-top:0}
-.panel .composer .icon-btn,.panel .send-btn {width:29px;height:29px}
-.panel .model-select {font-size:12px;padding:4px 5px}
-.panel .mic-state {display:none}
-.panel .thread {padding:14px 26px 18px 18px}
-.panel .user-message {font-size:13px;padding:7px 11px}
+.panel .composer {margin:0 12px 12px;padding:8px 12px;border-radius:17px}
+.panel .composer textarea {min-height:38px;font-size:14px;padding:4px 4px 0}
+.panel .composer-bar {margin-top:2px;min-width:0}
+.panel .composer-bar>.icon-btn,.panel .composer-bar>.send-btn {width:32px;height:32px;flex:0 0 32px}
+.panel .model-box {flex:0 1 148px;min-width:0;max-width:148px}
+.panel .model-select {display:flex;width:100%;min-width:0;max-width:100%;overflow:hidden;font-size:12px;padding:4px 5px;white-space:nowrap}
+.panel .model-select #model-label {display:block;flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.panel .model-select svg {flex:0 0 14px}
+.panel .composer-bar>.spacer {flex:1 1 0;min-width:0}
+.panel .composer-bar>.goal-open {flex:0 0 auto}
+.panel .composer .mic-state {display:block;margin:4px 6px 0;line-height:1.45}
+.panel .thread {padding:14px 26px 18px 18px;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--fg) 28%,transparent) transparent}
+.panel .user-message,.panel .assistant-message {font-size:14px}
 .panel {position:relative}
 .thread,.workspace-stage {scrollbar-width:none}
 .thread::-webkit-scrollbar,.workspace-stage::-webkit-scrollbar {display:none;width:0;height:0}
 .conversation-rail {position:absolute;right:6px;top:74px;bottom:130px;width:22px;display:flex;flex-direction:column;justify-content:center;align-items:center;z-index:4;pointer-events:none}
+.panel>header {grid-row:1;grid-column:1}
+.panel>.thread {grid-row:2;grid-column:1}
+.panel>.composer {grid-row:3;grid-column:1;min-width:0}
+.panel>.conversation-rail {position:static;inset:auto;grid-row:2;grid-column:1;align-self:stretch;justify-self:end;margin:8px 6px}
+.panel .thread::-webkit-scrollbar {display:block;width:6px;height:6px}
+.panel .thread::-webkit-scrollbar-track {background:transparent}
+.panel .thread::-webkit-scrollbar-thumb {background:color-mix(in srgb,var(--fg) 28%,transparent);border:1px solid transparent;border-radius:999px;background-clip:padding-box}
+.panel .thread::-webkit-scrollbar-thumb:hover {background:color-mix(in srgb,var(--fg) 44%,transparent)}
 .conversation-rail button {position:relative;display:flex;align-items:center;justify-content:center;flex:0 1 12px;min-height:3px;width:22px;padding:0;border:0;background:transparent;pointer-events:auto}
 .rail-dash {display:block;width:7px;height:2px;background:var(--fg);opacity:.23;transition:width .15s,opacity .15s}
 .conversation-rail button[aria-current="true"] .rail-dash {width:14px;opacity:.9}

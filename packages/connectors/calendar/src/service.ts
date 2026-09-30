@@ -44,12 +44,15 @@ function contentRefOf(event: CalendarEventRecord): string {
 
 export class CalendarService {
   readonly providerVerification: 'mock' | 'verified' | 'conditional' = 'mock';
+  /** 提供商种类透出（如 'fixture'/'ical-subscription'/'caldav'），连接器 manifest 据此声明账号类型与认证方式。 */
+  readonly providerKind: string;
 
   constructor(
     private readonly provider: CalendarProvider,
     private readonly options: CalendarServiceOptions,
   ) {
-    if (provider.providerKind === 'fixture') this.providerVerification = 'mock';
+    this.providerKind = provider.providerKind;
+    this.providerVerification = provider.verification;
   }
 
   async listEvents(accountRef: string, window: CalendarWindow, options?: {cursor?: string; limit?: number}): Promise<EventPage> {
