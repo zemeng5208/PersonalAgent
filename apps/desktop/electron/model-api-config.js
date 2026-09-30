@@ -3,6 +3,7 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 
 const providers = new Set(['pangu', 'openai-compatible']);
+const efforts = ['none', 'low', 'medium', 'high'];
 const fail = message => { throw Error(message); };
 const text = (value, max) => typeof value === 'string' && value.trim().length > 0
   && value.trim().length <= max && !/[\u0000-\u001f\u007f]/u.test(value) ? value.trim() : fail('模型配置字段无效');
@@ -14,15 +15,20 @@ function endpoint(value) {
       && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)))) fail('模型 Endpoint 必须使用 HTTPS，本机服务可使用 HTTP；不能包含凭据或查询参数');
   return url.href.replace(/\/+$/u, '');
 }
+function supportedEfforts(value = []) {
+  if (!Array.isArray(value) || value.length > efforts.length || new Set(value).size !== value.length
+    || value.some(item => !efforts.includes(item))) fail('原生推理支持列表无效');
+  return efforts.filter(item => value.includes(item));
+}
 function validateRecord(value) {
   if (!value || !providers.has(value.provider) || typeof value.enabled !== 'boolean') fail('模型配置无效');
   return {id: text(value.id, 100), provider: value.provider, baseUrl: endpoint(value.baseUrl),
     model: text(value.model, 200), displayName: text(value.displayName, 200), apiKey: text(value.apiKey, 8192),
-    bindingId: text(value.bindingId, 100)};
+    bindingId: text(value.bindingId, 100), reasoningEfforts: supportedEfforts(value.reasoningEfforts)};
 }
 
 /** Trusted main process only. Snapshot is safe for IPC; no endpoint is contacted while saving. */
-export function createModelApiConfig({userData, safeStorage, createGateway}) {
+export function createModelApiConfig({userData, safeStorage, createGateway, profile = 'huawei_ict_agentarts'}) {
   const target = path.join(userData, 'model-api-config.json');
   let entries = new Map(), defaultId, restoreFailed = false, disposed = false;
   const gateways = new Map();
@@ -59,36 +65,62 @@ export function createModelApiConfig({userData, safeStorage, createGateway}) {
       renameSync(temporary, target);
     } catch {fail('模型加密配置保存失败');}
   };
-  const available = () => typeof createGateway === 'function';
+  const available = () => profile === 'huawei_ict_agentarts' && typeof createGateway === 'function';
+  const selectedEntry = (modelName, expectedConfigurationRef) => {
+    const id = modelName === undefined || modelName === '' ? defaultId : modelName;
+    const entry = entries.get(id);
+    return !disposed && entry?.enabled && available()
+      && (expectedConfigurationRef === undefined || expectedConfigurationRef === entry.bindingId) ? entry : undefined;
+  };
+  const getModelReasoningEfforts = (modelName, expectedConfigurationRef) =>
+    [...(selectedEntry(modelName, expectedConfigurationRef)?.reasoningEfforts ?? [])];
+  const getModelReasoningState = (modelName, expectedConfigurationRef) => {
+    const entry = selectedEntry(modelName, expectedConfigurationRef);
+    return {available: Boolean(entry), modelId: entry?.id ?? '', configurationRef: entry?.bindingId ?? '',
+      reasoningEfforts: [...(entry?.reasoningEfforts ?? [])],
+      nativeReasoningConfigured: Boolean(entry?.reasoningEfforts.length), nativeReasoningVerified: false,
+      parameter: 'reasoning_effort', verification: 'conditional', source: 'explicit-configuration',
+      thinkingBudgetSupported: false,
+      reason: !entry ? '模型、配置版本或当前 profile 不可用'
+        : entry.reasoningEfforts.length ? '已声明此配置支持的 reasoning_effort；真实端点尚未验证'
+          : '未声明原生推理参数支持，仅可使用执行步骤预算'};
+  };
   const snapshot = () => ({
     configured: !disposed && [...entries.values()].some(entry => entry.enabled && available(entry)),
     defaultId: defaultId ?? '',
-    status: disposed || restoreFailed ? 'unavailable' : entries.size ? 'configured' : 'unconfigured',
+    status: disposed || restoreFailed || !available() ? 'unavailable' : entries.size ? 'configured' : 'unconfigured',
     reason: disposed ? '模型配置宿主已释放' : restoreFailed ? '模型加密配置无法读取，请重新保存'
+      : profile !== 'huawei_ict_agentarts' ? '当前模型配置只服务 AgentArts Competition Profile'
       : '用于 AgentArts 委派的辅助子任务；保存不代表真实连接已验证',
-    models: [...entries.values()].map(({id, provider, baseUrl, model, displayName, enabled}) => ({
-      id, provider, baseUrl, model, displayName, enabled,
+    models: [...entries.values()].map(({id, provider, baseUrl, model, displayName, enabled, bindingId, reasoningEfforts}) => ({
+      id, provider, baseUrl, model, displayName, enabled, configurationRef: bindingId,
       available: !disposed && enabled && available(entries.get(id)),
       verification: 'conditional', keyConfigured: true,
-      capabilities: {text: true, tools: 'structured-json', nativeToolCalling: false, nativeReasoning: false},
-      reasoningEfforts: [],
+      capabilities: {text: true, tools: 'structured-json', nativeToolCalling: false,
+        nativeReasoning: Boolean(selectedEntry(id)?.reasoningEfforts.length), thinkingBudget: false},
+      reasoningEfforts: [...reasoningEfforts], nativeReasoningVerified: false,
+      reasoningVerification: 'conditional', reasoningSource: 'explicit-configuration',
     })),
   });
-  function getModelGateway(modelName) {
+  function getModelGateway(modelName, expectedConfigurationRef) {
     active();
-    const id = modelName === undefined || modelName === '' ? defaultId : modelName;
-    const entry = entries.get(id);
-    if (!entry?.enabled || !available(entry)) return undefined;
+    const entry = selectedEntry(modelName, expectedConfigurationRef);
+    if (!entry) return undefined;
+    const id = entry.id;
     if (gateways.has(id)) return gateways.get(id);
     const assertCurrent = () => {
       if (disposed || entries.get(id) !== entry || !entry.enabled) fail('模型配置已撤销或更改');
     };
-    const modelGateway = createGateway({provider: entry.provider, baseUrl: entry.baseUrl,
+    const modelGateway = createGateway({profile, provider: entry.provider, baseUrl: entry.baseUrl,
       model: entry.model, deployment: `${entry.id}@${entry.bindingId}`,
       apiKey: () => {assertCurrent(); return entry.apiKey;}});
     if (!modelGateway || typeof modelGateway.complete !== 'function') fail('受信模型网关不可用');
     const gateway = {deployment: modelGateway.deployment, async complete(request) {
       assertCurrent();
+      if (request.reasoningEffort !== undefined && !entry.reasoningEfforts.includes(request.reasoningEffort)) {
+        fail('此模型配置未声明支持所请求的 reasoning_effort');
+      }
+      if (request.thinkingBudget !== undefined) fail('当前模型配置不支持 thinkingBudget 参数');
       const controller = new AbortController();
       const abort = () => controller.abort(request.signal.reason);
       const pending = controllers.get(id) ?? new Set();
@@ -107,19 +139,30 @@ export function createModelApiConfig({userData, safeStorage, createGateway}) {
     return gateway;
   }
   return Object.freeze({
-    snapshot, getModelGateway,
-    getModelReasoningEfforts: () => [],
+    snapshot, getModelGateway, getModelReasoningEfforts, getModelReasoningState,
     configure(input) {
       active();
-      if (!input || Object.keys(input).some(key => !['id', 'provider', 'baseUrl', 'model', 'displayName', 'apiKey', 'enabled', 'makeDefault'].includes(key))
+      if (profile !== 'huawei_ict_agentarts') fail('当前模型配置只服务 AgentArts Competition Profile');
+      if (!input || Object.keys(input).some(key => !['id', 'provider', 'baseUrl', 'model', 'displayName', 'apiKey', 'enabled', 'makeDefault',
+        'reasoningEfforts', 'reasoningSupportConfirmed', 'expectedConfigurationRef'].includes(key))
         || (input.makeDefault !== undefined && typeof input.makeDefault !== 'boolean')
         || (input.enabled !== undefined && typeof input.enabled !== 'boolean')
-        || (input.apiKey !== undefined && typeof input.apiKey !== 'string')) fail('模型配置字段无效');
+        || (input.apiKey !== undefined && typeof input.apiKey !== 'string')
+        || (input.reasoningSupportConfirmed !== undefined && typeof input.reasoningSupportConfirmed !== 'boolean')
+        || (input.expectedConfigurationRef !== undefined && typeof input.expectedConfigurationRef !== 'string')) fail('模型配置字段无效');
       const id = input.id === undefined || input.id === '' ? `model-${randomUUID()}` : text(input.id, 100);
       const previous = entries.get(id);
+      if (input.expectedConfigurationRef !== undefined && previous?.bindingId !== input.expectedConfigurationRef) {
+        fail('模型配置版本已变更，请刷新后重新保存');
+      }
+      const reasoningEfforts = supportedEfforts(input.reasoningEfforts);
+      if (reasoningEfforts.length && (input.reasoningSupportConfirmed !== true
+        || (previous && input.expectedConfigurationRef !== previous.bindingId))) {
+        fail('请明确确认当前供应商、Endpoint、模型与配置版本支持这些原生推理参数');
+      }
       const baseUrl = endpoint(input.baseUrl);
       const sameDestination = previous?.provider === input.provider && previous?.baseUrl === baseUrl;
-      const entry = {...validateRecord({...input, id, baseUrl, bindingId: randomUUID(), enabled: input.enabled ?? previous?.enabled ?? true,
+      const entry = {...validateRecord({...input, id, baseUrl, reasoningEfforts, bindingId: randomUUID(), enabled: input.enabled ?? previous?.enabled ?? true,
         apiKey: input.apiKey?.trim() || (sameDestination ? previous.apiKey : '')}),
         enabled: input.enabled ?? previous?.enabled ?? true};
       const next = new Map(entries); next.set(id, entry);
