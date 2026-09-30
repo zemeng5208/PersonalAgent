@@ -35,6 +35,7 @@ import {createAgentArtsConfig} from './agentarts-config.js';
 import {createDeferredRuntimeStartup} from './runtime-startup.js';
 import {createMailConfig} from './mail-config.js';
 import {createCalendarConfig} from './calendar-config.js';
+import {createDesktopCalendarMeetingHost} from './calendar-meeting-host.js';
 import {createDesktopMailAnalysisHost} from './mail-analysis-host.js';
 import {createDesktopFeedsHost} from './feeds-host.js';
 import {createDesktopNotepadHost} from './notepad-host.js';
@@ -182,6 +183,7 @@ let codingWorkspace;
 let competitionToolAvailabilityList = [];
 let mailConfig;
 let calendarConfig;
+let calendarMeetingHost;
 let feedsHost;
 let todoHost;
 let todoFailure = '';
@@ -406,7 +408,7 @@ function snapshot(surface) {
     p5: p5StatusSnapshot(),
     knowledgeWatch: knowledgeWatchHost?.snapshot() ?? null,
     mail: mailSnapshot(),
-    calendar: calendarConfig?.snapshot(),
+    calendar: calendarMeetingHost?.snapshot() ?? calendarConfig?.snapshot(),
     feeds: feedsHost?.snapshot(),
     todo: todoHost?.snapshot() ?? {available:false,items:[],notifications:[],reason:todoFailure || '待办将在 Runtime 连接后可用'},
     goalCloud:goalCloudHost?.snapshot() ?? {available:false,sessionAllowed:false,reason:'目标工具将在 Runtime 连接后可用'},
@@ -999,6 +1001,11 @@ async function initializeRuntime() {
       const {createDesktopCompetitionToolCatalog} = await import('./competition-tool-catalog.js');
       const namespace = desktopHost.userNamespace;
       goalHost = createGoalHost(namespace);
+      if (!syntheticMvp && calendarConfig) calendarMeetingHost = createDesktopCalendarMeetingHost({
+        config: calendarConfig, namespace, onUpdate: publish,
+        // P1's controlled single-read factory is not published yet. No direct
+        // CalendarService/Connector call or implicit read grant substitutes for it.
+      });
       if (!syntheticMvp) goalCloudHost = createDesktopGoalCloudHost({goalHost});
       if (!syntheticMvp) {
         try {todoHost = createDesktopTodoHost({userData:app.getPath('userData'),safeStorage,namespace,
@@ -1259,6 +1266,7 @@ async function initializeRuntime() {
       feedsHost?.bindApplication(runtimeApplication);
       todoHost?.bindApplication(runtimeApplication);
       goalHost.bind(runtimeApplication);
+      calendarMeetingHost?.bindApplication(runtimeApplication);
       goalCloudHost?.bindApplication(runtimeApplication);
       notepadHost?.bind(runtimeApplication);
       goalHost.resumeApproved();
@@ -1358,6 +1366,8 @@ async function initializeRuntime() {
           classify: request => localLaya.classify(request),
         }),
         ...(notificationPort ? {notificationPort} : {}),
+        ...(calendarMeetingHost?.snapshot().readAvailable
+          ? {calendarReadPort: calendarMeetingHost.calendarReadPort} : {}),
         autoStart: false,
         onUpdate: () => {publish(); void refreshP5DeviceFeedback();},
       });
@@ -1540,9 +1550,34 @@ async function action(event, name, payload) {
   }
   if (['calendar.configure','calendar.revoke'].includes(name)) {
     if (sender !== admin || !competitionMode || syntheticMvp || !calendarConfig) throw Error('请从正式应用日历设置操作');
-    if (runtimeApplication?.activeTaskCount || runtimeStartup.snapshot().state === 'starting') throw Error('请等待当前任务及启动结束后修改日历配置');
+    if (name === 'calendar.configure' && (runtimeApplication?.activeTaskCount || runtimeStartup.snapshot().state === 'starting')) throw Error('请等待当前任务及启动结束后修改日历配置');
+    if (name === 'calendar.revoke') calendarMeetingHost?.invalidate();
     const result = name === 'calendar.configure' ? calendarConfig.configure(payload) : calendarConfig.revoke();
+    if (name === 'calendar.configure') calendarMeetingHost?.invalidate();
     publish(); return result;
+  }
+  if (['calendar.read','calendar.readTask','calendar.bindMeeting','calendar.refreshMeeting',
+    'calendar.respond','calendar.cancel'].includes(name)) {
+    if (sender !== admin || !competitionMode || syntheticMvp || !calendarMeetingHost || !client) {
+      throw Error('请从正式应用日历设置操作');
+    }
+    if (name === 'calendar.read') return calendarMeetingHost.read(payload);
+    if (name === 'calendar.readTask') return calendarMeetingHost.readTask(payload);
+    if (name === 'calendar.bindMeeting') return calendarMeetingHost.bindMeeting(payload);
+    if (name === 'calendar.refreshMeeting') return calendarMeetingHost.refreshMeeting(payload,
+      p5Cognition?.refreshCalendarMeeting.bind(p5Cognition));
+    if (name === 'calendar.cancel') {
+      calendarMeetingHost.readTask(payload);
+      return client.call('task.cancel', {taskId: payload, reason: '用户取消日历读取'});
+    }
+    const task = calendarMeetingHost.readTask(payload?.taskId);
+    if (!task.approval || task.approval.approvalId !== payload?.approvalId
+      || task.approval.revision !== payload?.revision || !['allow_once','deny'].includes(payload?.decision)) {
+      throw Error('日历审批已变更或不属于此任务');
+    }
+    const response = await client.call('authorization.respond', {approvalId: payload.approvalId,
+      revision: payload.revision, decision: payload.decision});
+    publish();return response;
   }
   if (['mail.configure','mail.enable','mail.read','mail.disable','mail.enableCloud','mail.disableCloud','laya.start','laya.stop'].includes(name)) {
     if (sender !== admin || !competitionMode || !mailConfig || !localLaya) throw Error('此操作仅允许从本项目设置调用');
@@ -2175,6 +2210,7 @@ app.whenReady().then(async () => {
       privateMemory?.close();
       proactiveHost?.close();
       goalCloudHost?.close();
+      calendarMeetingHost?.close();
       mailAnalysisHost?.close();
       competitionFactBridge?.close();
       if (runtimeApplication) runtimeApplication.close();
