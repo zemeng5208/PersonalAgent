@@ -12,7 +12,8 @@ Profile：`huawei_ict_agentarts`。范围为 Windows Host/Client、coding-tools 
 
 2026-09-30 核对装配基线 `b34af799d27a2f4cc0d108d5c6dbc831f53edfce`：上述 P6 生产源码和可信绑定与交付源一致。
 但该工作树当时的 Host.exe、Host.dll、WindowsHost.dll 仍匹配旧批次，其余配置和 Schema 一致。
-装配方已接受在最终 Native 验收前串行替换并核对的交接；尚未收到替换后的哈希读回，不记录为已完成。
+装配方随后确认本次自有 Host 没有在途操作，备份旧批次后整组复制六件。P6 再次只读核对六件 SHA，
+全部与 #249 同批 manifest 一致。这里只完成开发产物准备；没有启动 Native/F9 或关闭用户应用，不能记录实机操作通过。
 
 复用已构建产物时，先确认本次自有 Bridge/Host 没有在途操作，再整批拷贝以下文件，并按同批本地 manifest 核对每个 SHA：
 `WindowsHost.Host.exe`、`WindowsHost.Host.dll`、`WindowsHost.dll`、`WindowsHost.Host.deps.json`、
