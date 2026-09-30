@@ -220,6 +220,7 @@ export function openControlledVaultWriter(options: {
         await apply.execute(patch, context);
         active(context); assertBinding();
         const readback = await reader.execute({path: input.path}, context) as WorkspaceReadResult;
+        active(context); assertBinding();
         if (hash(Buffer.from(readback.content, 'utf8')) !== candidate.afterSha256) deny('RESULT_UNKNOWN');
         const receipt: KnowledgeWriteReceipt = {sourceId: options.sourceId, configRevision: options.configRevision,
           path: input.path, beforeSha256: input.expectedSha256, afterSha256: candidate.afterSha256,

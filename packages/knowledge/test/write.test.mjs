@@ -171,6 +171,24 @@ test('a user edit between reconciliation reads returns unknown and retains both 
   await assert.rejects(writer.apply(retry, context({argumentsDigest: inputDigest(retry)})), error => error.code === 'RESULT_UNKNOWN');
 });
 
+test('normal write tail revocation retains the original operation without a success receipt or retry', {skip: !windows}, async t => {
+  const {root, recovery, writer, options, input, context} = await fixture(t);
+  const authorized = context(), operationId = digest(authorized.taskId + '\n' + authorized.runId);
+  const marker = join(recovery, digest(realpathSync.native(root) + '\ndemo.md') + '.knowledge-pending');
+  // The host lease expires exactly when the final awaited readback returns.
+  let guards = 0;
+  options.bindingCurrent = () => ++guards < 5;
+  await assert.rejects(writer.apply(input, authorized), error => error.code === 'RESULT_UNKNOWN');
+  assert.equal(existsSync(marker), true);
+  assert.equal(await readFile(marker, 'utf8'), operationId);
+  const stored = JSON.parse(await readFile(join(recovery, operationId + '.knowledge-operation.json'), 'utf8'));
+  assert.equal(stored.receipt, undefined);
+  assert.equal(await readFile(join(recovery, stored.backupId), 'utf8'), original);
+  assert.equal(await readFile(join(root, 'demo.md'), 'utf8'), original.replace('待整理段落', '已整理的合成段落'));
+  options.bindingCurrent = () => true;
+  await assert.rejects(writer.apply(input, authorized), error => error.code === 'RESULT_UNKNOWN');
+});
+
 test('late binding revocation after the final readback cannot report applied or release the pending note', {skip: !windows}, async t => {
   const {root, recovery, writer, options, input, context} = await fixture(t);
   const authorized = context(), receipt = await writer.apply(input, authorized);
