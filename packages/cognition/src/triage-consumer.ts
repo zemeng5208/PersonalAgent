@@ -19,7 +19,7 @@ export interface TriageDispatchRef {
 }
 
 export interface TriageDeferredRef extends TriageDispatchRef {
-  readonly reason: 'invalid_response' | 'unavailable' | 'cancelled' | 'deadline';
+  readonly reason: 'invalid_response' | 'unavailable' | 'cancelled' | 'deadline' | 'insufficient_input';
   /** Preserve the classifier's host-impact route without dispatching unfinished work. */
   readonly requiredRoute: 'main_agent' | 'review';
 }
@@ -79,7 +79,7 @@ export function prepareTriageDispatch(input: TriageDispatchInput): TriageDispatc
     if (message === null || typeof message !== 'object' || Array.isArray(message)
       || [message.source, message.messageId, message.sourceRevision].some(value =>
         typeof value !== 'string' || !value.trim() || value.length > 256)
-      || typeof message.text !== 'string' || !message.text.trim() || message.text.length > 4000
+      || typeof message.text !== 'string' || message.text.length > 4000
       || (message.highImpact !== undefined && typeof message.highImpact !== 'boolean')) invalid();
     const id = identity(message.source, message.messageId);
     if (messages.has(id)) invalid();
@@ -110,20 +110,25 @@ export function prepareTriageDispatch(input: TriageDispatchInput): TriageDispatc
       ])) || result.calibrated !== false
       || !['multi_question', 'multi_state'].includes(result.batching)) invalid();
 
-    const failed = ['invalid_response', 'unavailable', 'cancelled', 'deadline'].includes(result.reason);
+    const failed = ['invalid_response', 'unavailable', 'cancelled', 'deadline', 'insufficient_input'].includes(result.reason);
     if (failed) {
       if (result.label !== null || result.abstained !== true
         || result.route !== (message.highImpact ? 'main_agent' : 'review')
         || result.scores !== undefined || result.impactScores !== undefined) invalid();
     } else {
       if (!validScores(result.scores, keys)
-        || !validScores(result.impactScores, ['routine', 'high_impact'])) invalid();
-      const highImpact = message.highImpact === true || result.impactScores.choice === 'high_impact';
+        || !validScores(result.impactScores, ['routine', 'high_impact'])
+        || result.candidateLabel !== result.scores.choice) invalid();
+      const highImpact = message.highImpact === true || result.impactScores.choice === 'high_impact'
+        || result.candidateLabel === 'meeting';
       if (result.reason === 'classified') {
         if (highImpact || result.route !== 'group' || result.abstained !== false
           || result.label !== result.scores.choice) invalid();
       } else if (result.reason === 'uncertain') {
         if (highImpact || result.route !== 'review' || result.abstained !== true || result.label !== null) invalid();
+      } else if (result.reason === 'unknown_category') {
+        if (highImpact || result.route !== 'review' || result.abstained !== true || result.label !== null
+          || result.candidateLabel !== 'other' || result.scores.choice !== 'other') invalid();
       } else if (result.reason === 'high_impact') {
         if (!highImpact || result.route !== 'main_agent'
           || (result.abstained === true ? result.label !== null
