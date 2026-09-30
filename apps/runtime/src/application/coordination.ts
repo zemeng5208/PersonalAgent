@@ -3,7 +3,7 @@ import type {TaskSnapshot} from '@personal-agent/contracts';
 import {parseCoordinationResult, parseCoordinationContinuation, type CoordinationContinuation, type CoordinationPort,
   type CoordinationResult, type CoordinationToolProposalResult} from '@personal-agent/coordination';
 import type {AgentToolPort, ToolInvocationResult} from '@personal-agent/agents';
-import type {TaskRuntime} from '../index.js';
+import type {TaskRuntime, WorkerContext, WorkerResult} from '../index.js';
 import {isDeepStrictEqual} from 'node:util';
 import type {CompetitionAvailableTool, RuntimeCompetitionToolCatalog} from './tool-catalog.js';
 
@@ -16,7 +16,8 @@ export interface CompetitionToolExport {
   /** Must change whenever the host narrows or changes the projection policy. */
   readonly exportPolicyVersion: string;
   /** Restrict to the explicitly selected synthetic data before local approval. */
-  accepts(input: {taskId: string; proposalId: string; arguments: Record<string, unknown>}): boolean;
+  accepts(input: {taskId: string; proposalId: string; arguments: Record<string, unknown>;
+    phase?:'preflight'|'final';projection?:unknown;signal?:AbortSignal}): boolean;
   /** Return only the permitted projection; raw results and Evidence stay local. */
   project(input: {taskId: string; proposalId: string; result: unknown; signal: AbortSignal}): unknown | Promise<unknown>;
 }
@@ -25,9 +26,20 @@ interface CompetitionCheckpoint {
   step: number;
   continuation?: CoordinationContinuation;
   pending?: CoordinationToolProposalResult;
+  pendingRevision?:number;
   evidenceRefs: string[];
-  receipts?: {proposal: CoordinationToolProposalResult; continuation: CoordinationContinuation; exportPolicyVersion?: string}[];
+  receipts?: {proposal: CoordinationToolProposalResult; continuation: CoordinationContinuation; exportPolicyVersion?: string;
+    workerSelection?:unknown;workerRevision?:number;runId?:string}[];
 }
+
+export interface CoordinationWorkerCapabilityPort {
+  accepts(proposal:CoordinationToolProposalResult):boolean;
+  dispatch(proposal:CoordinationToolProposalResult,context:WorkerContext & {revision:number}):Promise<
+    {state:'pending'|'unknown'|'confirmed';result:unknown;evidenceRefs:readonly string[];selection:unknown}>;
+  assertReceiptAllowed(proposal:CoordinationToolProposalResult,selection:unknown,receipt:unknown,context:WorkerContext & {revision:number}):void;
+}
+export type PrepareCompetitionToolExport=(input:{phase:'preflight'|'projection';taskId:string;
+  proposal:CoordinationToolProposalResult;deadline:string;signal:AbortSignal})=>Promise<void>;
 
 function summary(text: string, verification: 'mock' | 'unverified'): string {
   return `${text}\n[profile=huawei_ict_agentarts; verification=${verification}]`;
@@ -39,6 +51,7 @@ function requireExportBinding(
   tools: AgentToolPort | undefined,
   bindings: readonly CompetitionToolExport[] | undefined,
   permitWrite = false,
+  phase:'preflight'|'final'='final',projection?:unknown,signal?:AbortSignal,
 ): CompetitionToolExport | undefined {
   if (proposal.verification === 'mock') return undefined;
   const binding = bindings?.find(item => item.toolName === proposal.toolName && item.toolVersion === proposal.toolVersion);
@@ -50,7 +63,7 @@ function requireExportBinding(
   let accepted = false;
   try {
     accepted = binding.accepts({taskId, proposalId: proposal.proposalId,
-      arguments: structuredClone(proposal.arguments)}) === true;
+      arguments: structuredClone(proposal.arguments),phase,...(signal?{signal}:{}),...(phase==='final'?{projection:structuredClone(projection)}:{})}) === true;
   } catch { /* Host errors may include private data. */ }
   if (!accepted) throw new ProtocolError('UNAUTHORIZED', 'Competition result export scope denied');
   return binding;
@@ -74,7 +87,7 @@ export function assertCompetitionExportAllowed(
     || !isDeepStrictEqual(receipt.continuation, request.continuation)) {
     throw new ProtocolError('UNAUTHORIZED', 'Competition export is not bound to this task');
   }
-  const binding = requireExportBinding(receipt.proposal, request.taskId, tools, bindings, permitWrite);
+  const binding = requireExportBinding(receipt.proposal, request.taskId, tools, bindings, permitWrite,'final',request.continuation.result,request.signal);
   if (!binding || !receipt.exportPolicyVersion || binding.exportPolicyVersion !== receipt.exportPolicyVersion) {
     throw new ProtocolError('UNAUTHORIZED', 'Competition result export policy changed');
   }
@@ -155,9 +168,18 @@ export function startCoordinationTask(
   taskId: string,
   goal: string,
   deadline: string,
-  options: {resume?: boolean; toolExports?: readonly CompetitionToolExport[]; toolCatalog?: RuntimeCompetitionToolCatalog; repairCandidateVersion?: '1.0'} = {},
+  options: {resume?: boolean; toolExports?: readonly CompetitionToolExport[]; toolCatalog?: RuntimeCompetitionToolCatalog; repairCandidateVersion?: '1.0';workerCapabilities?:CoordinationWorkerCapabilityPort;prepareCompetitionToolExport?:PrepareCompetitionToolExport} = {},
 ): Promise<TaskSnapshot> {
-  return runtime.runTask(taskId, async context => {
+  return runtime.runTask(taskId, context => runCoordinationWorker(runtime,port,tools,taskId,goal,context,options),
+    {deadline,sideEffect:options.toolCatalog?.sideEffect??'read',...(options.resume?{resume:true}:{})});
+}
+
+/** Shared worker for the original Runtime-owned parent and child task lifecycle. */
+export async function runCoordinationWorker(
+  runtime: TaskRuntime, port: CoordinationPort | undefined, tools: AgentToolPort | undefined,
+  taskId: string, goal: string, context: WorkerContext,
+  options: {toolExports?: readonly CompetitionToolExport[]; toolCatalog?: RuntimeCompetitionToolCatalog; repairCandidateVersion?: '1.0';workerCapabilities?:CoordinationWorkerCapabilityPort;prepareCompetitionToolExport?:PrepareCompetitionToolExport} = {},
+): Promise<WorkerResult> {
     if (!port) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition coordination is unavailable');
     // Persisted by trusted Runtime composition at submission, never by the model.
     // Legacy tasks keep their original four-round budget when resumed.
@@ -187,8 +209,12 @@ export function startCoordinationTask(
       const result = pending ?? await exchange(runtime, port, taskId, goal, context, continuation, () => {
         const prior = receipts.find(item => item.proposal.proposalId === continuation?.proposalId);
         if (prior) {
+          if(options.workerCapabilities?.accepts(prior.proposal)) {
+            options.workerCapabilities.assertReceiptAllowed(prior.proposal,prior.workerSelection,prior.continuation.result,
+              {...context,revision:prior.workerRevision!});return;
+          }
           const current = requireExportBinding(prior.proposal, taskId, tools, options.toolExports,
-            options.toolCatalog !== undefined);
+            options.toolCatalog !== undefined,'final',prior.continuation.result,context.signal);
           if (current && (!prior.exportPolicyVersion || current.exportPolicyVersion !== prior.exportPolicyVersion)) {
             throw new ProtocolError('UNAUTHORIZED', 'Competition result export policy changed');
           }
@@ -206,8 +232,6 @@ export function startCoordinationTask(
         context.saveCheckpoint('competition-repair-candidate', result);
         return {resultSummary: summary('Plan repair candidate is ready for local preview; no plan changes committed', 'unverified'), evidenceRefs};
       }
-      const exportBinding = requireExportBinding(result, taskId, tools, options.toolExports,
-        options.toolCatalog !== undefined);
       if (result.verification !== 'mock' && options.toolCatalog) {
         await options.toolCatalog.assertProposal({taskId, toolName: result.toolName,
           toolVersion: result.toolVersion, arguments: result.arguments,
@@ -234,8 +258,18 @@ export function startCoordinationTask(
       }
 
       const runId = `competition-tool-${taskId}-${step}`;
-      context.saveCheckpoint('competition-loop', {step, continuation, pending: result, evidenceRefs, receipts});
-      const toolResult: ToolInvocationResult = await tools.invoke({
+      const inputRevision=pending===undefined?proposalRevision:saved?.pendingRevision??proposalRevision;
+      // This is a parsed proposal, not a receipt or permission. Trusted host
+      // preflight readers must be able to verify it before any grant/execution.
+      context.saveCheckpoint('competition-loop', {step, continuation, pending: result,pendingRevision:inputRevision,evidenceRefs, receipts});
+      const worker=options.workerCapabilities?.accepts(result)?options.workerCapabilities:undefined;
+      if(result.verification!=='mock')await options.prepareCompetitionToolExport?.({phase:'preflight',taskId,proposal:structuredClone(result),deadline:context.deadline,signal:context.signal});
+      if(context.signal.aborted || runtime.getTask(taskId).cancelRequested)throw new ProtocolError('CANCELLED','Export preflight cancelled');
+      if(Date.now()>=Date.parse(context.deadline))throw new ProtocolError('TIMEOUT','Export preflight expired');
+      const exportBinding=worker?undefined:requireExportBinding(result,taskId,tools,options.toolExports,
+        options.toolCatalog!==undefined,'preflight',undefined,context.signal);
+      const workerResult=worker?await worker.dispatch(result,{...context,revision:inputRevision}):undefined;
+      const toolResult: ToolInvocationResult = workerResult??await tools.invoke({
         toolName: result.toolName,
         toolVersion: result.toolVersion,
         arguments: result.arguments,
@@ -253,9 +287,10 @@ export function startCoordinationTask(
         return {resultSummary: 'Competition tool result requires reconciliation', evidenceRefs};
       }
       let exportedResult: unknown = toolResult.result ?? null;
-      if (result.verification !== 'mock') {
+      if (result.verification !== 'mock' && !workerResult) {
         if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Competition result export cancelled');
         try {
+          await options.prepareCompetitionToolExport?.({phase:'projection',taskId,proposal:structuredClone(result),deadline:context.deadline,signal:context.signal});
           exportedResult = await projectResult(exportBinding!, {taskId, proposalId: result.proposalId,
             result: structuredClone(exportedResult), signal: context.signal});
           // Use the existing strict JSON validator: getters, cycles, unsupported
@@ -264,21 +299,23 @@ export function startCoordinationTask(
             state: 'confirmed', result: exportedResult});
           exportedResult = projected.result;
         } catch {
+          if(runtime.getTask(taskId).state==='running')runtime.transitionTask(taskId,'waiting_reconciliation',{
+            error:{code:'UNAUTHORIZED',message:'Confirmed local result export withheld; revalidate the original receipt',retryable:false}});
           throw new ProtocolError('UNAUTHORIZED', 'Competition result export denied');
         }
         if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Competition result export cancelled');
       }
+      if(workerResult)worker!.assertReceiptAllowed(result,workerResult.selection,workerResult.result,{...context,revision:inputRevision});
       continuation = {
         proposalId: result.proposalId,
         state: 'confirmed',
         result: exportedResult,
       };
       receipts.push({proposal: result, continuation,
+        runId,...(workerResult?{workerSelection:workerResult.selection,workerRevision:inputRevision}:{}),
         ...(exportBinding ? {exportPolicyVersion: exportBinding.exportPolicyVersion} : {})});
       pending = undefined;
       context.saveCheckpoint('competition-loop', {step: step + 1, continuation, evidenceRefs, receipts});
     }
     throw new ProtocolError('TIMEOUT', `Competition coordination reached maxSteps=${maxSteps}`);
-  }, {deadline, sideEffect: options.toolCatalog?.sideEffect ?? 'read',
-    ...(options.resume ? {resume: true} : {})});
 }

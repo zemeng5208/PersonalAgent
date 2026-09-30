@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {once} from 'node:events';
 import {createServer} from 'node:http';
+import {spawnSync} from 'node:child_process';
 import {test} from 'node:test';
 import {ProactiveDecisionService} from '../dist/proactive-decision.js';
 import {LayaDecisionModel, LocalLayaHttpTransport} from '../dist/laya-decision.js';
@@ -73,6 +74,26 @@ test('deadline bounds even an uncooperative model, and caller cancellation stays
   const pending = service.decide(cancelled);
   controller.abort();
   await assert.rejects(pending, {code: 'CANCELLED'});
+  // Separate processes have no test-worker handles to hide an unreferenced deadline.
+  for (const mode of ['deadline', 'cancelled', 'completed']) {
+    const code = `
+      import {ProactiveDecisionService} from ${JSON.stringify(new URL('../dist/proactive-decision.js', import.meta.url).href)};
+      const mode=${JSON.stringify(mode)}, controller=new AbortController();
+      const service=new ProactiveDecisionService({async choose() {
+        return mode==='completed' ? [{intervention:'REMIND',confidence:0.9}] : new Promise(()=>{});
+      }});
+      const request={events:[${JSON.stringify(event())}],signal:controller.signal,
+        deadline:new Date(Date.now()+(mode==='deadline'?30:10000)).toISOString()};
+      const pending=service.decide(request);
+      if(mode==='cancelled')controller.abort();
+      try {await pending;console.log('completed');}
+      catch(error) {if(!['TIMEOUT','CANCELLED'].includes(error.code))throw error;console.log(error.code);}
+    `;
+    const child = spawnSync(process.execPath, ['--input-type=module', '--eval', code],
+      {encoding: 'utf8', timeout: 5000});
+    assert.equal(child.status, 0, child.stderr || child.error?.message);
+    assert.equal(child.stdout.trim(), mode==='deadline' ? 'TIMEOUT' : mode==='cancelled' ? 'CANCELLED' : 'completed');
+  }
 });
 
 test('Laya adapter sends a bounded multilingual choice batch and rejects unknown labels', async () => {

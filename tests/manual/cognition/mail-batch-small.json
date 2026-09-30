@@ -1,0 +1,17 @@
+{
+  "dataClass": "public_synthetic_headers",
+  "accountRef": "synthetic-public-mail",
+  "folder": "INBOX",
+  "uidValidity": 1,
+  "pageSize": 4,
+  "messages": [
+    {"uid":1,"folder":"INBOX","uidValidity":1,"messageId":"sample-1@synthetic.invalid","from":"review@synthetic.invalid","fromName":"Synthetic project review","to":"user@synthetic.invalid","seen":false,"sentAt":"2026-09-30T00:01:00.000Z","subject":"Project review moved from 14:00 to 16:00; please confirm the revised meeting time."},
+    {"uid":2,"folder":"INBOX","uidValidity":1,"messageId":"sample-2@synthetic.invalid","from":"engineering@synthetic.invalid","fromName":"Synthetic engineering","to":"user@synthetic.invalid","seen":false,"sentAt":"2026-09-30T00:02:00.000Z","subject":"Code review request: check the new parser unit tests and the pull request notes."},
+    {"uid":3,"folder":"INBOX","uidValidity":1,"messageId":"sample-3@synthetic.invalid","from":"digest@synthetic.invalid","fromName":"Synthetic technology digest","to":"user@synthetic.invalid","seen":false,"sentAt":"2026-09-30T00:03:00.000Z","subject":"Weekly technology newsletter: open-source releases, documentation and community news."},
+    {"uid":4,"folder":"INBOX","uidValidity":1,"messageId":"sample-4@synthetic.invalid","from":"receipts@synthetic.invalid","fromName":"Synthetic order receipt","to":"user@synthetic.invalid","seen":false,"sentAt":"2026-09-30T00:04:00.000Z","subject":"Synthetic order receipt: payment confirmation and delivery tracking for the sample order."},
+    {"uid":5,"folder":"INBOX","uidValidity":1,"messageId":"sample-5@synthetic.invalid","from":"friend@synthetic.invalid","fromName":"Synthetic friend","to":"user@synthetic.invalid","seen":false,"sentAt":"2026-09-30T00:05:00.000Z","subject":"Hello from a friend: shall we take a walk together this weekend?"},
+    {"uid":6,"folder":"INBOX","uidValidity":1,"messageId":"sample-6@synthetic.invalid","from":"notes@synthetic.invalid","fromName":"Synthetic miscellaneous note","to":"user@synthetic.invalid","seen":false,"sentAt":"2026-09-30T00:06:00.000Z","subject":"A brief note for later: there is something to discuss, but no further details yet."},
+    {"uid":7,"folder":"INBOX","uidValidity":1,"messageId":"sample-7@synthetic.invalid","from":"docs@synthetic.invalid","fromName":"Synthetic documentation team","to":"user@synthetic.invalid","seen":false,"sentAt":"2026-09-30T00:07:00.000Z","subject":"Documentation update: the installation guide now explains the supported runtime versions."},
+    {"uid":8,"folder":"INBOX","uidValidity":1,"messageId":"sample-8@synthetic.invalid","from":"science@synthetic.invalid","fromName":"Synthetic science subscription","to":"user@synthetic.invalid","seen":false,"sentAt":"2026-09-30T00:08:00.000Z","subject":"Monthly science newsletter: a round-up of astronomy and materials research articles."}
+  ]
+}
