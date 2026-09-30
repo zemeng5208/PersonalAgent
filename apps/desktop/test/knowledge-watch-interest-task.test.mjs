@@ -85,3 +85,36 @@ test('Runtime interest intake requires real reader ports and persisted preparati
     assert.equal(fx.choices,0); assert.equal(fx.host.snapshot().watches.length,0);
   } finally {fx.host.dispose();missing.dispose();}
 });
+
+test('cancellation, failure or deadline during the final reader await never commits an interest watch', async () => {
+  for (const change of ['cancelRequested', 'failed', 'deadline']) {
+    const fx = fixture();
+    fx.sustained(); fx.host.dispose();
+    let time = at; let reads = 0; let release; let entered;
+    const waiting = new Promise(resolve => {release = resolve;});
+    const ready = new Promise(resolve => {entered = resolve;});
+    const options = {...fx.options, now: () => time, readInterestSignal: async input => {
+      const signal = await fx.options.readInterestSignal(input);
+      reads += 1;
+      if (reads === 4) {entered(); await waiting;}
+      return signal;
+    }};
+    const host = createKnowledgeWatchHost(options); host.start();
+    try {
+      const pending = host.consumeInterestTask('followup-task', request());
+      await ready;
+      if (change === 'deadline') time = at + 60_000;
+      else if (change === 'failed') fx.tasks.get('followup-task').state = 'failed';
+      else fx.tasks.get('followup-task').cancelRequested = true;
+      release();
+      assert.equal((await pending).reason, 'interest_context_invalidated', change);
+      assert.deepEqual(host.snapshot().watches, [], change);
+      const receipts = [...fx.rows.entries()].filter(([key]) => key.includes('knowledge-watch-interest-task:'));
+      assert.equal(receipts.length, 1); assert.equal(receipts[0][1].state, 'unknown');
+      const task = fx.tasks.get('followup-task'); delete task.cancelRequested; task.state = 'created';
+      assert.equal((await host.consumeInterestTask('followup-task', {...request(), deadline: iso(at + 120_000)})).reason,
+        'interest_consumption_unknown');
+      assert.equal(fx.choices, 1);
+    } finally {host.dispose();}
+  }
+});
