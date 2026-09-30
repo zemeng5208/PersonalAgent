@@ -5,17 +5,19 @@ import {GOAL_CREATE_TOOL,GOAL_REVISE_TOOL,GOAL_TOOL_VERSION} from '@personal-age
 const CHECKPOINT='desktop-goal-cloud-scope-v1';
 const CATALOG='competition-tool-catalog';
 const LOOP='competition-loop';
-const POLICY='desktop-goal-cloud-projection-v1';
+const POLICY='desktop-goal-cloud-projection-v2';
 const CONVERSATIONS=new Set(['desktop-panel','desktop-workspace']);
 const WRITE_NAMES=new Set([GOAL_CREATE_TOOL,GOAL_REVISE_TOOL]);
 const READ_NAMES=new Set(['goals.list','goals.get']);
 const ALL_NAMES=new Set([...WRITE_NAMES,...READ_NAMES]);
 const blockedText=value=>typeof value!=='string' || /(?:[A-Za-z]:[\\/]|\\\\[^\\\s]+\\|(?:^|[\s"'(])\/(?:[^\s/]+\/)*[^\s/]+|(?:api[_-]?key|password|secret|authorization|bearer)\s*[:=]|\bsk-[A-Za-z0-9_-]{12,})/i.test(value);
 
-const goalViewSchema={type:'object',required:['id','revision','summary','validFrom','validUntil','sensitivity','state','reason'],
+const goalViewSchema={type:'object',required:['id','revision','summary','validFrom','validUntil','sensitivity','state','reason','dependencies'],
   additionalProperties:false,properties:{id:{type:'string',minLength:1},revision:{type:'integer',minimum:1},
     summary:{type:'string'},validFrom:{type:'string'},validUntil:{type:'string'},
-    sensitivity:{enum:['public','private']},state:{enum:['active','withdrawn']},reason:{type:'string'}}};
+    sensitivity:{enum:['public','private']},state:{enum:['active','withdrawn']},reason:{type:'string'},
+    dependencies:{type:'array',items:{type:'object',required:['id','revision'],additionalProperties:false,
+      properties:{id:{type:'string',minLength:1},revision:{type:'integer',minimum:1}}}}}};
 const listDescriptor={name:'goals.list',version:GOAL_TOOL_VERSION,sideEffect:'read',requiredScopes:['goals:read'],
   idempotencySupport:true,recoverySupport:true,requiresPresence:false,
   inputSchema:{type:'object',additionalProperties:false,properties:{afterId:{type:'string',minLength:1},
@@ -31,10 +33,13 @@ const getDescriptor={name:'goals.get',version:GOAL_TOOL_VERSION,sideEffect:'read
 
 function projectedGoal(node) {
   if(!node || node.sensitivity==='restricted' || !['public','private'].includes(node.sensitivity)
-    || blockedText(node.id) || blockedText(node.summary) || blockedText(node.reason)) return null;
+    || blockedText(node.id) || blockedText(node.summary) || blockedText(node.reason)
+    || !Array.isArray(node.dependencies) || node.dependencies.some(ref=>blockedText(ref?.id)
+      || !Number.isSafeInteger(ref.revision) || ref.revision<1)) return null;
   return {id:node.id,revision:node.revision,summary:node.summary.slice(0,512),
     validFrom:node.validFrom,validUntil:node.validUntil,sensitivity:node.sensitivity,
-    state:node.state,reason:node.reason.slice(0,512)};
+    state:node.state,reason:node.reason.slice(0,512),
+    dependencies:node.dependencies.map(ref=>({id:ref.id,revision:ref.revision}))};
 }
 
 /** Trusted Desktop adapter. Goal writes still use the public Goal tools and Runtime Policy. */
