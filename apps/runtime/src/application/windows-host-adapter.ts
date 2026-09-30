@@ -253,6 +253,7 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
   const lifetime = new AbortController();
   let closed = false;
   let occupied = false;
+  let observationReservation: object | undefined;
   let checking = false;
   let releaseFailed = false;
   let closePromise: Promise<void> | undefined;
@@ -283,9 +284,21 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
     if (occupied) throw new ProtocolError('REVISION_CONFLICT', 'Windows Host session is occupied');
     // Reserve before the first asynchronous presence check, not after it.
     occupied = true;
+    const reservation = {};
+    observationReservation = reservation;
+    const requireCurrentReservation = (): void => {
+      ensureOpen();
+      active({deadline, signal}, now);
+      if (observationReservation !== reservation) {
+        throw new ProtocolError('REVISION_CONFLICT', 'Windows Host observation reservation changed');
+      }
+    };
     let bound: Bound | undefined;
     try {
-      if (!await presenceAllowed({taskId, deadline, signal})) {
+      const allowed = await presenceAllowed({taskId, deadline, signal});
+      // Presence can finish after cancellation or close; never open a late session.
+      requireCurrentReservation();
+      if (!allowed) {
         throw new ProtocolError('UNAUTHORIZED', 'Local user presence was not authorized');
       }
       bound = await open(options.transport);
@@ -330,9 +343,13 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
       if (Date.parse(reply.expiresAt) <= now()) throw new ProtocolError('TIMEOUT', 'Notepad target already expired');
       const target = {targetRef: reply.targetRef, expiresAt: reply.expiresAt};
       observed.set(taskId, {bound, target});
+      observationReservation = undefined;
       return {...target};
     } catch (error) {
-      try { if (bound) await closeConnection(bound.connection); } finally { occupied = false; }
+      try { if (bound) await closeConnection(bound.connection); } finally {
+        if (observationReservation === reservation) observationReservation = undefined;
+        occupied = false;
+      }
       throw error;
     }
   }
@@ -511,6 +528,7 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
   return {tool, observe, checkObservationReady, releaseObservation, recover, close() {
     if (closePromise) return closePromise;
     closed = true;
+    observationReservation = undefined;
     lifetime.abort();
     const pending = [...observed.values()];
     observed.clear();

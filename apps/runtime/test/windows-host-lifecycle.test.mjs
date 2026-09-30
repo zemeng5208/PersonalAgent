@@ -14,7 +14,7 @@ function deferred() {
   const promise = new Promise(done => { resolve = done; });
   return {promise, resolve};
 }
-function fixture({presence = async () => true, closeFails = false} = {}) {
+function fixture({presence = async () => true, closeFails = false, now} = {}) {
   let opens = 0;
   let closes = 0;
   let transportCloses = 0;
@@ -38,7 +38,7 @@ function fixture({presence = async () => true, closeFails = false} = {}) {
     },
     async close() { transportCloses++; },
   };
-  const adapter = createWindowsHostNotepadAdapter({transport,
+  const adapter = createWindowsHostNotepadAdapter({transport, now,
     attempts: {async record() {}, async read() {return undefined;}}, authorizePresence: presence});
   return {adapter, sent, get opens() {return opens;}, get closes() {return closes;},
     get transportCloses() {return transportCloses;}};
@@ -66,6 +66,39 @@ test('closing during presence verification cannot create a late Host session', a
     gate.resolve(true);
     assert.equal((await pending).error?.code, 'UNSUPPORTED_CAPABILITY');
     assert.equal(f.opens, 0);
+  } finally {gate.resolve(true); await pending; await f.adapter.close();}
+});
+
+test('cancelling during presence verification cannot create a late Host session', async () => {
+  const gate = deferred();
+  const controller = new AbortController();
+  const f = fixture({presence: () => gate.promise});
+  const pending = f.adapter.observe('first', deadline(), controller.signal)
+    .then(value => ({value}), error => ({error}));
+  try {
+    controller.abort();
+    gate.resolve(true);
+    assert.equal((await pending).error?.code, 'CANCELLED');
+    assert.equal(f.opens, 0);
+    assert.deepEqual(f.sent, []);
+    await f.adapter.observe('second', deadline(), signal());
+    assert.equal(f.opens, 1);
+  } finally {gate.resolve(true); await pending; await f.adapter.close();}
+});
+
+test('expiry during presence verification cannot create a late Host session', async () => {
+  const gate = deferred();
+  let current = Date.now();
+  const expiresAt = new Date(current + 30_000).toISOString();
+  const f = fixture({presence: () => gate.promise, now: () => current});
+  const pending = f.adapter.observe('first', expiresAt, signal())
+    .then(value => ({value}), error => ({error}));
+  try {
+    current = Date.parse(expiresAt);
+    gate.resolve(true);
+    assert.equal((await pending).error?.code, 'TIMEOUT');
+    assert.equal(f.opens, 0);
+    assert.deepEqual(f.sent, []);
   } finally {gate.resolve(true); await pending; await f.adapter.close();}
 });
 

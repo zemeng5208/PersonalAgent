@@ -26,6 +26,7 @@
 7. Runtime Notepad adapter 改为先授权存在检查、hello/bind 建立旧窗口基线，再运行 Desktop 新窗/F9 准备，最后 observe。
    原来的准备前开窗顺序使新窗口进入 Host baseline，实际导致 NOT_FOUND。
    准备阶段取消、超时或 adapter close 释放已建立的连接，不观察或执行。
+   presence 异步返回后先重验关闭、取消、期限与当前预约身份，再打开 Host；关闭、取消或超时不能创建迟到连接。
 8. QQ 宿主建立新读取会话时，通过授权的 `readCursor` 读取同邮箱持久游标，传给 Runtime 内部会话。
    重启不恢复旧会话或权限；读源明确返回 CURSOR_EXPIRED 时停止，显示重新同步状态，
    只有下一次用户主动读取才比对并清除该失效游标。分类和已受理 outbox 保留。
@@ -49,6 +50,7 @@
 - Desktop Notepad 三项通过：Runtime/Policy 一次性授权、目标过期拒绝、确认前取消及安全对话投影。
   原生 transport 是显式夹具，不是 UIA 写入证明。
 - Runtime adapter 三项准备顺序/取消/关闭测试通过；Runtime TypeScript 构建及 Desktop 修改文件语法检查通过。
+  CI 暴露的 presence 等待后迟到连接已修复；关闭、取消、期限、预约互斥/释放及三项准备顺序共八项定向检查通过。
   陈旧 Memory 类型与 Runtime 导出产物分别重建后正式应用成功启动，没有为此全仓重建。
 - 正式 Desktop 实际显示 Competition 本地 Runtime，无 Fake/model-fake；设备服务 idle，监控未启用。
 - 第一次真实新 Notepad/F9 任务被 Host 在 observation 阶段拒绝，Runtime 为 cancelled，Evidence 为空。
