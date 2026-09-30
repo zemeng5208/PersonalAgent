@@ -200,3 +200,77 @@ the deployed v14. No Desktop latency improvement is claimed yet.
   non-meeting acceptance path; do not run a broad paid benchmark.
 - Hand off exact versions and binding to the sole P8 composition writer for real
   Desktop consumption of the formal P5/P6/P7 surfaces.
+
+## 17:03 checkpoint: native controller copy and Runtime v15
+
+This checkpoint supersedes the earlier pending Runtime-binding statements.
+The failed empty-controller workflow-intent saves and export were not repeated.
+The official Agent card **Copy** action instead preserved the working native
+multi-agent controller structure in a separate entity:
+
+| Item | Actual readback |
+| --- | --- |
+| Copied Agent | `PersonalAgent持续认知协调器_1` |
+| Entity | `2f5d361c-bd85-4d2f-9903-bb35d4f55afa` |
+| Published name | `mvp-controller-copy-20260930-a` |
+| Published source | `1790758814293` |
+| Published time | 2026-09-30 17:00:14 GMT+08 |
+| Intent mode / model | Native LLM recognition / DeepSeek-V4-Flash |
+| Child and default | Router source `1790747359456`, both terminate |
+| History / jumps | 0 / 1 |
+
+The copied form closed after Save and its saved timestamp became 16:54:02.
+Independent **read-only published-source preview**, including the controller
+form, confirmed the 296-character prompt, intent mode, history/jump limits,
+both router pins and termination settings. The source is eligible for binding.
+The original controller, original unpublished draft, and old published sources
+were preserved. Deterministic intent source `1790748354851` remains standalone;
+it is not deployed as this controller's intent recognizer. LLM intent overhead
+therefore remains. Thinking-off and recipe-summary candidates remain undeployed.
+
+The official **Save as new version** action reused the existing Runtime,
+without creating another Runtime or changing credentials, permissions, image,
+other environment variables, storage, or live/SIS settings:
+
+| Runtime field | Actual readback |
+| --- | --- |
+| Runtime name | `agent-arts-d5ae1174bc7d4cb8ab3dbbc6fae654e4` |
+| Console ID | `1beeb366-7d05-4bb5-b054-d0b626aaef7f` |
+| New version / time | `v15` / 2026-09-30 17:03:43 GMT+08 |
+| Status | Normal |
+| `AGENT_TYPE` / `AGENT_ENTITY_TYPE` | `agent` / `agent` |
+| `AGENT_ENTITY_ID` | `2f5d361c-bd85-4d2f-9903-bb35d4f55afa` |
+| `AGENT_LAST_VERSION` | `1790758814293` |
+| Existing access name | `Latest`, now explicitly mapped to `v15` |
+| Old version | `v14` remains in the 15-entry version history |
+
+Saving the new version automatically changed the existing Latest access mapping
+to v15. Preserving v14 as a version does **not** mean Latest still invokes v14.
+The existing invocation address remains:
+
+```text
+https://defaultgw-gztdqobzmm.cn-southwest-2.huaweicloud-agentarts.com/runtimes/agent-arts-d5ae1174bc7d4cb8ab3dbbc6fae654e4/invocations?endpoint=Latest
+```
+
+No workflow entity-type string or private API was guessed. The official
+[InvokeRuntime contract](https://support.huaweicloud.com/api-agentarts/InvokeRuntime.html)
+defines `query` for single/multi agents and `inputs` for workflows; it does not
+document a per-invocation source/entity override. This deployment stays within
+the already working native `agent` type and existing query/catalog/confirmed
+continuation contract.
+
+Ignored local UI evidence is under `.cache/cloud-mvp-build/`:
+`controller-published-20260930.jpg`, `runtime-v15-binding-20260930.jpg`, and
+`runtime-v15-latest-20260930.jpg`. The binding image includes only the three
+non-secret entity/type/source rows; no provider credentials are exposed.
+
+This checkpoint confirms **published source and configuration/endpoint
+readback**, not a successful API invocation, tool execution, Desktop acceptance,
+TTFT, or end-to-end latency improvement. P8 has the exact pins and access mapping
+for one necessary non-meeting `workspace.node_check@1.0.0` proposal, trusted
+local receipt, and confirmed continuation after final composition. Separate
+initial-cloud total/TTFT, local execution, continuation and overall elapsed
+time; TTFT stays unknown unless sampled. No extra cloud benchmark was run here.
+New child/model and Goal capabilities are not asserted ready before their
+host composition/catalog is published. Legal repair still follows the pinned
+World/Plan/Review path; local Policy and Evidence remain authoritative.
