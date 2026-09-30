@@ -90,7 +90,8 @@ export interface AgentRunOptions {
   initialMessages?: readonly ModelMessage[];
   model: ModelGateway;
   tools: AgentToolPort;
-  authorizationRefFor: (toolName: string, context: AgentWorkerContext) => string;
+  /** 可选：宿主自有受信授权体系时覆盖；缺省用本次调用的 runId（真实网关的授权身份）。 */
+  authorizationRefFor?: (toolName: string, context: AgentWorkerContext) => string | undefined;
   maxSteps: number;
   maxTokens?: number;
   maxRepairAttempts?: number;
@@ -191,13 +192,17 @@ export async function runAgent(context: AgentWorkerContext, options: AgentRunOpt
       continue;
     }
 
-    const authorizationRef = options.authorizationRefFor(proposal.toolName, context);
+    // 授权身份默认就是本次调用的 runId——与 RuntimeApplication.tools 的真实授权机制一致
+    // （policy.grant 以 runId 为 authorizationRef 发放；无授予则进入审批流）。宿主不得
+    // 凭格式自造授权前缀；仅在宿主确有自己的受信授权体系时经 authorizationRefFor 覆盖。
+    const runId = `agent-run-${context.taskId}-${step}`;
+    const authorizationRef = options.authorizationRefFor?.(proposal.toolName, context) ?? runId;
     if (!authorizationRef.trim()) throw new ProtocolError('UNAUTHORIZED', 'Trusted host did not provide an authorization reference');
     context.reportProgress({stepId: `agent-tool-${step}`, label: `calling ${proposal.toolName}`, completedUnits: step, totalUnits: options.maxSteps});
     context.saveCheckpoint('agent-loop', {messages, usedTokens, repairs, evidenceRefs, step, pending: result});
     const toolResult = await options.tools.invoke({
       toolName: proposal.toolName, toolVersion: proposal.toolVersion, arguments: structuredClone(proposal.arguments),
-      taskId: context.taskId, runId: `agent-run-${context.taskId}-${step}`, authorizationRef, deadline: context.deadline, signal: context.signal,
+      taskId: context.taskId, runId, authorizationRef, deadline: context.deadline, signal: context.signal,
     });
     evidenceRefs = [...evidenceRefs, ...toolResult.evidenceRefs];
     if (toolResult.state === 'pending') {
