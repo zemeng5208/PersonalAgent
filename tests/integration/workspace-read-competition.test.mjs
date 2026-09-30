@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
 import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -77,6 +78,7 @@ test('Competition discovers, approves and reads through the real workspace provi
         encoding: 'utf-8',
         byteLength: Buffer.byteLength(content),
         content,
+        sha256: createHash('sha256').update(content).digest('hex'),
       },
     });
     return {kind: 'text', text: '合成源码已通过本地只读工具读取', verification: 'mock'};

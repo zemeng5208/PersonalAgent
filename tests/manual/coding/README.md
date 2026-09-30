@@ -45,3 +45,25 @@ Job helper 使用受信的明确 executable 启动根命令。根命令退出后
 - 此回执证明真实本地工具链，尚未证明正式 Desktop 设置页/主对话消费、AgentArts 提案与云续接、Windows 选定应用 UIA 或整体 MVP。
 - Windows 实机需要 P8 独占正式 Desktop/新记事本/F9 槽，分别确认窗口身份、目标过期/接管拒绝、写后读回、可信 Evidence 与桌面终态。
 - 编码正式 Desktop 消费应保留现有工作区选择、精确能力公布、结果出云授权和 P8 恢复接线，不能用此 runner 代替用户入口。
+
+## 2026-09-30 P6 读取摘要与 BOM 增量
+
+正式 read → patch 消费缺少 `expectedSha256` 的来源。`workspace.read_text@1.0.0` 现在返回同一次读取原始字节的 `sha256`，输入路径与授权不变；输出 Schema 可选该字段以兼容历史回执，当前 provider 成功输出必带。正文首个 UTF-8 BOM 现在保留为 U+FEFF，而旧读取器会剥除；换行不归一化。严格消费者应发现当前 descriptor，旧无摘要结果不能直接生成新补丁。没有修改 contracts、根注册、迁移或依赖，接口保持 provisional。
+
+定向验证：contracts、coding-tools、tool-gateway 的已有 TypeScript 构建；读取、wire 边界、patch-preview 17/17 测试。BOM 原拒绝断言改为验证准确保留，其他路径、敏感内容、非法 UTF-8 和输出边界拒绝不变。按本轮最少验证要求未跑全仓 check、原生重建或重复 Desktop 冒烟。
+
+复用本 runner 的 `--cas-only` 模式：
+
+```powershell
+node tests/manual/coding/p6-runtime-acceptance.mjs <trusted-pwsh.exe> --cas-only
+```
+
+Node 24.19.0 / Windows PowerShell 7，本地真实 Runtime/Policy/ToolGateway 经公开 Client 审批执行，使用新排他工作区、独立数据库及 ACL recovery；不调用云端。Runtime 复用此前本地构建，contracts、coding-tools、tool-gateway dist 已按本次源码更新；这不是最新正式 Desktop 装配验收。
+
+- 成功回执：`.cache/p6-runtime-s9priJ/receipt.json`；读取返回摘要直接用于预览和应用，写后原始字节与工具二次读取匹配，BOM/CRLF 均保留。
+- before：`c955ba4dfc2309dd6a52a531b9eea3ffb258127f78af653da6c7694e21b85f37`；after：`421500aa5d5bc97c7cf52b1fd57fd0a63d7d259a617da6b7b4f11d9f1341a768`。
+- apply task `0ff7012c-5e64-40c7-acd9-cc26c141d292` succeeded，执行 confirmed，Evidence `host-tool-0ff7012c-5e64-40c7-acd9-cc26c141d292` 的 verification 仍是 conditional；单独文件读回在本验收中匹配，未提升公共 Evidence 等级。
+- 旧摘要 preview task `d4b2916a-c99f-4470-8d58-56b004ec9b93` failed / REVISION_CONFLICT；旧摘要 apply task `e34889db-f85b-47a8-9ddf-f2008c2a411a` waiting_reconciliation / RESULT_UNKNOWN，文件保持 after、recovery 空。另受影响测试验证读取后用户改变文件的冲突拒绝。
+- 首次尝试 `.cache/p6-runtime-AVTKvE` 遇到陈旧 tool-gateway dist：它向 Policy 提供 argumentsDigest，但没有向 ToolContext 传入，apply 被拒并保留 waiting_reconciliation。源文件 raw SHA 仍为 before、recovery 空；保留此 DB，不重试或改变该 task。main 的 tool-gateway 源码已有正确字段，更新该既有依赖 dist 后在新的隔离 fixture 成功；未修改公共源来迎合旧产物。
+
+P8 使用公开 `createWorkspaceReadTool`/`createWorkspacePatchPreviewTool`/`createWorkspacePatchApplyTool` 即可消费，无需自行计算文本摘要。正式主对话 read → patch、AgentArts 续接及 Windows UIA 验收仍由 P8 保留各自证据，不由本地 runner 替代。

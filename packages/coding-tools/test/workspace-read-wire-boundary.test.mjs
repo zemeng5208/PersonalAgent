@@ -73,7 +73,7 @@ test('returns normal UTF-8 text at the serialized result boundary', async t => {
   const path = 'src/utf8-boundary.txt';
   let contentBytes = MAX_SERIALIZED_WORKSPACE_READ_RESULT_BYTES;
   for (let iteration = 0; iteration < 4; iteration += 1) {
-    const emptyResult = {path, encoding: 'utf-8', byteLength: contentBytes, content: ''};
+    const emptyResult = {path, encoding: 'utf-8', byteLength: contentBytes, content: '', sha256: '0'.repeat(64)};
     contentBytes = MAX_SERIALIZED_WORKSPACE_READ_RESULT_BYTES - Buffer.byteLength(JSON.stringify(emptyResult));
   }
   const content = normalUtf8WithByteLength(contentBytes);
