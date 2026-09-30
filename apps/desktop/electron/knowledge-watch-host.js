@@ -1189,29 +1189,31 @@ export function createKnowledgeWatchHost({
         continue;
       }
       let receipt = null;
-      const readReceipt = (text(notice.receiptId) || notice.deliveryAttempted === true)
-        && typeof notificationPort.read === 'function';
-      if (notice.deliveryAttempted === true && !readReceipt) continue;
       if (!(await operation.revalidate())) return;
-      if (!readReceipt) {
-        await lock(() => {
-          if (!document?.notices[notice.id] || !operation.current()) return;
-          const next = clone(document);
-          next.notices[notice.id].deliveryAttempted = true;
-          next.notices[notice.id].deliveryReason = 'delivery_unknown';
-          persist(next);
-        });
-        if (!operation.current()) return;
-      }
+      const delivery = await lock(() => {
+        const saved = document?.notices[notice.id];
+        if (!saved || saved.delivered === true || !operation.current()) return null;
+        if (text(saved.receiptId) || saved.deliveryAttempted === true) {
+          return typeof notificationPort.read === 'function' ? {kind: 'read', notice: clone(saved)} : null;
+        }
+        const next = clone(document);
+        next.notices[notice.id].deliveryAttempted = true;
+        next.notices[notice.id].deliveryReason = 'delivery_unknown';
+        persist(next);
+        return {kind: 'send', notice: clone(next.notices[notice.id])};
+      });
+      if (!delivery) continue;
+      if (!operation.current()) return;
       try {
-        receipt = readReceipt ? await notificationPort.read(clone(notice), {signal: operation.signal})
-          : await notificationPort.send(clone(notice), {signal: operation.signal});
+        receipt = delivery.kind === 'read' ? await notificationPort.read(delivery.notice, {signal: operation.signal})
+          : await notificationPort.send(delivery.notice, {signal: operation.signal});
       } catch { receipt = null; }
       if (!(await operation.revalidate())) return;
       await lock(() => {
         if (!document?.notices[notice.id] || !operation.current()) return;
         const next = clone(document);
         const saved = next.notices[notice.id];
+        if (saved.delivered === true || delivery.kind === 'read' && saved.receiptId !== delivery.notice.receiptId) return;
         if (receipt?.delivered === true && text(receipt.receiptId)) {
           saved.delivered = true;
           saved.receiptId = receipt.receiptId.trim();
