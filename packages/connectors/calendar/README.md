@@ -25,7 +25,7 @@ MOD-20 · 日历连接器（PA-013，P1；Fake 提供商先行）。负责人 `P
 
 ### CalDAV（`CalDavProvider`，只读首片，RFC 4791）
 
-- 输入：日历集合完整 URL（HTTPS）＋宿主注入的 `authorization` 头值（本包不保存凭据本体）＋可注入 `CalDavFetchLike`（PROPFIND/REPORT，离线测试用）。
+- 输入：日历集合完整 URL（HTTPS）＋宿主注入的 `authorization` 头值（本包不保存凭据本体）＋可注入 `CalDavFetchLike`（PROPFIND/REPORT，离线测试用）。`allowLoopbackHttp: true` 仅放行本机回环（localhost/127.0.0.1/[::1]）的明文 `http://`，供本地验收服务器（如 Radicale）使用；非回环明文一律拒绝。
 - **变更轮询**：`pollChanges()` 一次 Depth:1 PROPFIND 同时取集合 `getctag` 与全部子资源 `getetag`（href→etag 表）。变更检测 = ctag 或 etag 变化，随后按需 `fetchWindow`/`getEvent`。P5 消费方式见 Issue #212 的 P1 形状确认。
 - **时间窗查询**：`fetchWindow` 走 `calendar-query` REPORT（time-range），并在客户端二次过滤（服务器 time-range 实现质量参差）；cancelled 剔除与 iCal 一致。
 - **时区**：`DTSTART;TZID=<IANA>` 经 Intl 定点迭代换算为 UTC（秋季回拨歧义取较早、春季空洞收敛到切换后偏移，均有测试）；非法 TZID 的事件整条剔除。每条事件保留 `DTSTART` 的 IANA 时区与起止本地墙上时间；UTC 瞬间单独用于排序与窗口过滤。
@@ -58,7 +58,7 @@ node --test test/caldav.test.mjs
 
 ### 连接器（ConnectorPort）
 
-manifest：`id=calendar`、`accountTypes=['fixture']`（随提供商 `providerKind`）、`capabilities=['fetchChanges','search','getItem','performAction']`、`authentication='none'`（Fake）、`syncStrategy='windowed'`、`verification='mock'`。未 `connect()` 前调用数据方法抛 `UNAUTHORIZED`；游标损坏抛 `CURSOR_EXPIRED`；不支持的动作抛 `UNSUPPORTED_CAPABILITY`。
+manifest 随**实际 Provider** 声明（不保留把真实提供者标为 fixture 的过时示例）：`accountTypes=[providerKind]`（Fake=`fixture`、订阅源=`ical-subscription`、CalDAV=`caldav`）、`authentication`（Fake/iCal 订阅=`none`，CalDAV=`basic`）、`capabilities`（Fake 含 `performAction`；只读真实源只有 `fetchChanges/search/getItem`）、`verification` 透传 Provider 声明（Fake=`mock`、网络型真实源=`conditional`）、`syncStrategy='windowed'`。未 `connect()` 前调用数据方法抛 `UNAUTHORIZED`；游标损坏抛 `CURSOR_EXPIRED`；不支持的动作抛 `UNSUPPORTED_CAPABILITY`。
 
 ## 取消、超时与重试
 
