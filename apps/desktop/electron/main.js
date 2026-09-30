@@ -2008,6 +2008,7 @@ async function action(event, name, payload) {
     throw Error('Unsupported voice action');
   }
   if (name === 'live.configure') {
+    if (payload?.hotkey === 'F9') throw Error('F9 用于记事本本次写入确认，请为 Live 选择其他快捷键');
     if ((sender !== panel && sender !== admin) || !competitionMode) throw Error('Live 配置只能从可信面板或设置提交');
     if (liveVoice?.hasActive() || voiceInput?.hasActive()) throw Error('请先结束语音再修改配置');
     const result = liveConfig.configure(payload);
@@ -2260,6 +2261,10 @@ async function toggleLive() {
 function registerLiveShortcut() {
   if (liveShortcut.registered) globalShortcut.unregister(liveShortcut.key);
   const key = liveConfig.snapshot().hotkey;
+  if (key === 'F9') {
+    liveShortcut={key,registered:false,reason:'F9 用于记事本写入确认，请在 Live 设置中更换快捷键'};
+    return;
+  }
   const registered = globalShortcut.register(key, () => {
     if (Date.now() - lastLiveShortcutAt < 400) return;
     lastLiveShortcutAt = Date.now();
