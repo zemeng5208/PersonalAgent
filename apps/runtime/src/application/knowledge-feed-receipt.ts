@@ -138,7 +138,7 @@ export function verifyKnowledgeFeedReceiptBinding(raw: unknown, expected: Knowle
   const receipt = parseKnowledgeFeedReceipt(raw);
   if (!receipt || !['namespace', 'sourceId', 'observedAt', 'revision', 'contentSha256', 'citation', 'receiptId']
     .every(key => receipt[key as keyof KnowledgeFeedReceiptBinding] === expected[key as keyof KnowledgeFeedReceiptBinding])
-    || expected.summary !== receipt.summary.slice(0, 2000)) return undefined;
+    || expected.summary != null && expected.summary !== receipt.summary.slice(0, 2000)) return undefined;
   // Legacy multi-article receipts can recover unchanged, but their single citation cannot
   // substantiate a new page-level statement. Recollect to obtain the v2 map.
   if (receipt.version === 1 && new Set(receipt.items.map(item => item.contentRef)).size > 1) return undefined;
