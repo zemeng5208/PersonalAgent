@@ -10,6 +10,12 @@ const error = (code, message) => Object.assign(new Error(message), {code});
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 export const calendarConfigurationId = binding => createHash('sha256').update(JSON.stringify(binding)).digest('hex');
+/** Translate the local control revision into the existing protocol field. */
+export function calendarApprovalResponse({approvalId, revision, decision}) {
+  if (!text(approvalId) || !Number.isSafeInteger(revision) || revision < 1
+    || !['allow_once', 'deny'].includes(decision)) throw error('INVALID_ARGUMENT', '日历审批响应无效');
+  return {approvalId, expectedRevision: revision, decision};
+}
 const configurationId = calendarConfigurationId;
 export const calendarMeetingSourceRef = (accountRef, externalId) =>
   `calendar:${createHash('sha256').update(JSON.stringify([accountRef, externalId])).digest('hex')}`;

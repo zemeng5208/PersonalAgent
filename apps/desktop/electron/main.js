@@ -35,7 +35,8 @@ import {createAgentArtsConfig} from './agentarts-config.js';
 import {createDeferredRuntimeStartup} from './runtime-startup.js';
 import {createMailConfig} from './mail-config.js';
 import {createCalendarConfig} from './calendar-config.js';
-import {createDesktopCalendarMeetingHost,calendarConfigurationId} from './calendar-meeting-host.js';
+import {createModelApiConfig} from './model-api-config.js';
+import {createDesktopCalendarMeetingHost,calendarConfigurationId,calendarApprovalResponse} from './calendar-meeting-host.js';
 import {createDesktopMailAnalysisHost} from './mail-analysis-host.js';
 import {createDesktopFeedsHost} from './feeds-host.js';
 import {createDesktopNotepadHost} from './notepad-host.js';
@@ -178,6 +179,13 @@ let p5ReceiptFailure = '';
 let p5DeviceFeedback = {state: 'unread', items: []};
 let p5FeedbackReading = false;
 let knowledgeWatchHost;
+let modelApiHost;
+let reviewedRepairLock = Promise.resolve();
+function withReviewedRepairLock(work) {
+  const result = reviewedRepairLock.then(work);
+  reviewedRepairLock = result.catch(() => {});
+  return result;
+}
 let productTools;
 let codingWorkspace;
 let competitionToolAvailabilityList = [];
@@ -421,6 +429,7 @@ function snapshot(surface) {
     approvals: [...approvals.values()],
     notifications: [...notifications.values(),...(todoHost?.snapshot().notifications ?? [])],
     model: structuredClone(model),
+    modelApi: modelApiHost?.snapshot(),
     thinking: structuredClone(thinking),
     live: {...(liveVoice?.snapshot() ?? liveConfig?.snapshot()), shortcut: {...liveShortcut}},
     proactive: proactiveSnapshot(),
@@ -973,8 +982,8 @@ async function initializeRuntime() {
     throw Error('PA_AGENTARTS_RESPONSE_MODE 只允许 text 或 tool-proposal-json');
   }
   if (repairCandidateVersion !== undefined && (repairCandidateVersion !== '1.0'
-    || !syntheticMvp || agentArtsResponseMode !== 'tool-proposal-json')) {
-    throw Error('版本化修复候选只允许合成 Competition JSON 模式显式启用');
+    || !competitionMode || (agentArtsResponseMode ?? 'tool-proposal-json') !== 'tool-proposal-json')) {
+    throw Error('版本化修复候选需要 Competition JSON 模式');
   }
   if ((layaPort !== undefined || layaKey !== undefined)
     && (!syntheticMvp || !layaPort || !layaKey || !/^\d+$/.test(layaPort))) {
@@ -1140,17 +1149,13 @@ async function initializeRuntime() {
         getRuntime: () => runtimeApplication.runtime,
         getTools: () => runtimeApplication.tools,
         fakeModelMode,
-        modelConfig: modelConfig ? {
-          baseUrl: modelConfig.baseUrl,
-          model: modelConfig.model,
-          deployment: modelConfig.deployment,
-          apiKey: modelConfig.apiKey,
-        } : undefined,
+        getModelGateway: modelName => modelApiHost?.getModelGateway(modelName),
+        getModelReasoningEfforts: modelName => modelApiHost?.getModelReasoningEfforts(modelName) ?? [],
       });
       const subagentAvailability = {
         toolName: SUBAGENT_DISPATCH_TOOL_NAME,
         toolVersion: SUBAGENT_DISPATCH_TOOL_VERSION,
-        available: async () => true,
+        available: async () => Boolean(modelApiHost?.snapshot().models?.some(item => item.enabled)),
       };
       const subagentExport = {
         toolName: SUBAGENT_DISPATCH_TOOL_NAME,
@@ -1253,7 +1258,7 @@ async function initializeRuntime() {
         competitionMaxSteps: 8,
         // Module availability/consent, input validation and ToolGateway still run.
         // Explicit names prevent future destructive tools inheriting this policy.
-        automaticTools: [...productTools.tools,...codingWorkspace.tools,...(goalCloudHost?.tools??[]),...(subagentTool?[subagentTool]:[]),...(knowledgeTool?[knowledgeTool]:[]),
+        automaticTools: [...[...productTools.tools,...codingWorkspace.tools,...(goalCloudHost?.tools??[]),...(subagentTool?[subagentTool]:[]),...(knowledgeTool?[knowledgeTool]:[]),
           ...(todoHost?.tools??[]),...(feedsHost?.tools??[])].filter(tool=>[
             'weather.forecast','research.search','feeds.collect','feeds.subscriptions',
             'todo.list','todo.create','todo.update','notifications.status',
@@ -1263,6 +1268,9 @@ async function initializeRuntime() {
             'workspace.node_check','workspace.npm_build','workspace.npm_test',SUBAGENT_DISPATCH_TOOL_NAME,KNOWLEDGE_SEARCH_TOOL_NAME,
           ].includes(tool.descriptor.name))
           .map(tool=>({toolName:tool.descriptor.name,toolVersion:tool.descriptor.version})),
+          ...(!syntheticMvp ? [{toolName:runtimeModule.LOCAL_REPAIR_TOOL,toolVersion:'1.0.0'}] : [])],
+        subagentModels: {getModelGateway: modelName => modelApiHost?.getModelGateway(modelName),
+          getModelReasoningEfforts: modelName => modelApiHost?.getModelReasoningEfforts(modelName) ?? []},
         beforeCompetitionSend:request=> {
           if (!proactiveHost && runtimeApplication.runtime.getTask(request.taskId).conversationId?.startsWith('desktop-proactive-goals:')) {
             throw Error('目标主动分析宿主尚未就绪');
@@ -1276,8 +1284,15 @@ async function initializeRuntime() {
         },
         tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...(goalCloudHost?.tools ?? goalHost.tools), ...productTools.tools, ...(mailHost?.tools ?? []), ...(calendarMeetingHost?.tools ?? []), ...(feedsHost?.tools ?? []), ...(notepadHost?.tools ?? []), ...(todoHost?.tools ?? []), ...(subagentTool ? [subagentTool] : []), ...(knowledgeTool ? [knowledgeTool] : [])],
         ...(codingWorkspace.patchReconciliation ? {workspacePatchReconciliation: codingWorkspace.patchReconciliation} : {}),
-        ...(syntheticMvp ? {localRepair: syntheticRepairHost.localRepair} : {}),
-        ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
+        localRepair: syntheticMvp ? syntheticRepairHost.localRepair : {
+          graphNamespace: namespace, bindingVersion:'desktop-reviewed-execution-v1',
+          withSourceLock:withReviewedRepairLock,
+          reviewedSource:{resolve({sourceTaskId,reviewTaskId}) {
+            const value = proactiveHost?.readPreparedRepair?.(sourceTaskId);
+            return value?.kind === 'prepared' && value.binding.reviewTaskId === reviewTaskId ? value : undefined;
+          }},
+        },
+        repairCandidateVersion: repairCandidateVersion ?? '1.0',
         ...(process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT === undefined ? {} : {workflowGoalInput: process.env.PA_AGENTARTS_WORKFLOW_GOAL_INPUT}),
         responseMode: agentArtsResponseMode ?? 'tool-proposal-json',
         ...(syntheticMvp ? {competitionToolExports: syntheticTools.competitionToolExports} : {
@@ -1390,7 +1405,7 @@ async function initializeRuntime() {
           classify: request => localLaya.classify(request),
         }),
         ...(notificationPort ? {notificationPort} : {}),
-        ...(calendarMeetingHost?.snapshot().readAvailable
+        ...(calendarMeetingHost?.tools.length
           ? {calendarReadPort: calendarMeetingHost.calendarReadPort} : {}),
         autoStart: false,
         onUpdate: () => {publish(); void refreshP5DeviceFeedback();},
@@ -1491,6 +1506,12 @@ async function action(event, name, payload) {
     throw Error('Competition Profile 的 AgentArts 配置只允许由可信主进程提供；盘古配置操作不可用');
   }
   if (name === 'snapshot') return snapshot(sender === workspace ? 'workspace' : sender === admin ? undefined : 'panel');
+  if (['modelApi.state','modelApi.configure','modelApi.remove'].includes(name)) {
+    if (sender !== admin || !competitionMode || !modelApiHost) throw Error('请从模型设置管理辅助模型');
+    const result = name === 'modelApi.state' ? modelApiHost.snapshot()
+      : name === 'modelApi.configure' ? modelApiHost.configure(payload) : modelApiHost.remove(payload);
+    publish();return result;
+  }
   if (name === 'notepad.start' || name === 'notepad.cancel') {
     if ((sender !== admin && sender !== workspace) || !notepadHost || notepadClosing) throw Error('请从电脑操控设置操作记事本');
     return name === 'notepad.start' ? notepadHost.start(payload) : notepadHost.cancel();
@@ -1599,8 +1620,7 @@ async function action(event, name, payload) {
       || task.approval.revision !== payload?.revision || !['allow_once','deny'].includes(payload?.decision)) {
       throw Error('日历审批已变更或不属于此任务');
     }
-    const response = await client.call('authorization.respond', {approvalId: payload.approvalId,
-      revision: payload.revision, decision: payload.decision});
+    const response = await client.call('authorization.respond', calendarApprovalResponse(payload));
     publish();return response;
   }
   if (['mail.configure','mail.enable','mail.read','mail.disable','mail.enableCloud','mail.disableCloud','laya.start','laya.stop'].includes(name)) {
@@ -2089,6 +2109,11 @@ app.whenReady().then(async () => {
   sisConfigHost = createDesktopSisConfigHost({userData: app.getPath('userData'), safeStorage});
   liveConfig = createLiveVoiceConfig({userData: app.getPath('userData'), safeStorage});
   agentArtsConfig = createAgentArtsConfig({userData: app.getPath('userData'), safeStorage});
+  if (competitionMode && !syntheticMvp) {
+    const {createConfiguredSubagentModelGateway} = await import('@personal-agent/runtime/application');
+    modelApiHost = createModelApiConfig({userData:app.getPath('userData'),safeStorage,
+      createGateway:createConfiguredSubagentModelGateway});
+  }
   if (competitionMode && !syntheticMvp) calendarConfig = createCalendarConfig({userData:app.getPath('userData'),safeStorage});
   if (competitionMode && !syntheticMvp) feedsHost = createDesktopFeedsHost({userData:app.getPath('userData'),safeStorage});
   ipcMain.on('desktop:live-event', (event, message) => {liveVoice?.receive(event, message);});
@@ -2231,6 +2256,7 @@ app.whenReady().then(async () => {
       p5Cognition?.dispose();
       p5SystemObservationSource?.dispose();
       knowledgeWatchHost?.dispose();
+      modelApiHost?.dispose();
       privateMemory?.close();
       proactiveHost?.close();
       goalCloudHost?.close();

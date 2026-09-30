@@ -56,7 +56,11 @@ export {createReminderDeliveryHost} from './application/reminder-delivery.js';
 export {
   createRuntimeSubagentDispatchTool,
   createDesktopSubagentDispatchTool,
+  createConfiguredSubagentModelGateway,
+  resumeRuntimeSubagentTask,
+  readRuntimeSubagentSummary,
   SUBAGENT_DISPATCH_TOOL_NAME,
   SUBAGENT_DISPATCH_TOOL_VERSION,
 } from './application/subagent-host.js';
 export type {SubagentHostOptions, DesktopSubagentDispatchToolOptions} from './application/subagent-host.js';
+export {LOCAL_REPAIR_TOOL} from './application/local-repair.js';
