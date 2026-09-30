@@ -170,7 +170,11 @@ export function readRuntimeSubagentSummary(runtime: TaskRuntime, parentTaskId: s
   definitions?: readonly SubtaskDefinition[]): SubtaskExecutionSummary & {summary: string} {
   const records = runtime.loadCheckpoint(parentTaskId, 'subtask-progress-records') as Record<string, SubtaskProgressRecord> | undefined;
   const subtasks = definitions ?? Object.values(records ?? {}).map(record => {
-    try {return JSON.parse(record.inputDigest) as SubtaskDefinition;}
+    try {
+      const definition = JSON.parse(record.inputDigest) as SubtaskDefinition;
+      // The digest normalizes text; the record retains the actual dispatch identity.
+      return {...definition, subtaskId: record.subtaskId};
+    }
     catch {throw new ProtocolError('INVALID_ARGUMENT', 'Invalid subtask progress binding');}
   });
   const progress: SubtaskProgress[] = subtasks.map(subtask => {

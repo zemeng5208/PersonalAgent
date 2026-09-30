@@ -148,3 +148,20 @@ test('changing the selected deployment while waiting cannot execute an old appro
     assert.equal(app.runtime.policy.get(approval.approvalId).usesRemaining,1);
   } finally {app.close();}
 });
+test('summary without definitions preserves a subtask ID containing surrounding spaces', async () => {
+  const {app,parent} = fixture();
+  try {
+    const provider = new FakeModelProvider([()=>({kind:'final',text:'spaced ID result'})]);
+    const gateway = new ModelGateway(provider);
+    const tool = app.createSubagentDispatchTool(()=>gateway);
+    const input = {subtasks:[{subtaskId:' r ',role:'researcher',goal:'read'}]};
+    const dispatched = await tool.execute(input,context(parent));
+    assert.equal(dispatched.succeeded,1);
+    const child = app.runtime.findTaskByIdempotencyKey(`subagent-dispatch-${parent.taskId}- r `);
+    assert.equal(child.state,'succeeded');
+    const readback = readRuntimeSubagentSummary(app.runtime,parent.taskId);
+    assert.equal(readback.subtasks[0].subtaskId,' r ');
+    assert.deepEqual(readback,dispatched);
+    assert.equal(provider.requests.length,1);
+  } finally {app.close();}
+});
