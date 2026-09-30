@@ -28,8 +28,8 @@ modelApiHost.dispose();
 P8 在 `apps/runtime/src/application.ts` 现有 subagent-host 导出组中加入
 `createConfiguredSubagentModelGateway`、`resumeRuntimeSubagentTask`、
 `readRuntimeSubagentSummary`。该工厂及模型 Provider 构造位于 Runtime，
-Desktop 不导入 models/agents。第二参数是 provider decorator，由配置宿主添加撤销
-和取消信号；不改变 Policy/工具授权，也不新建模型执行循环。
+Desktop 不导入 models/agents。工厂可选第二参数是受信 provider decorator；当前配置宿主
+在返回网关的外层传播撤销与取消信号，不改变 Policy/工具授权，也不新建模型执行循环。
 
 共享 IPC 使用既有可信窗口/发送者校验与模型设置权限，限定以下分派：
 
@@ -59,7 +59,7 @@ controls.close();
 返回 unavailable，不回退旧盘古配置。P8 应把稳定 ID 绑定到原有子任务选型控件及可用
 模型目录，不将本地配置表直接导出到云端。保留 AgentArts/Live/SIS 的现有配置。
 
-`createGateway` 必须由 Runtime/Application 注入，接收供应商、Endpoint、模型、稳定部署 ID
+`createGateway` 必须由 Runtime/Application 注入，接收供应商、Endpoint、模型、配置版本部署 ID
 和仅在请求时读取密钥的回调，并返回已有 `ModelGateway`。没有注入时模型保持不可用；
 Desktop 不导入或构造 Provider。模型均经已有 ModelGateway 和 StructuredToolProvider；后者是文字 JSON 提案协议，
 能力等级 conditional，不是原生工具调用。当前配置宿主返回空 reasoningEfforts；
@@ -117,5 +117,7 @@ CI 指出 Desktop 直接导入 models 的架构边界错误后，将模型构造
 新增 Runtime 工厂无凭据拒绝与一次真实 SQLite approval allowed → 同 child 同 invocation
 恢复 → Evidence → 重新聚合的离线检查，未重复全依赖构建或旧 12 项。
 模型配置版本绑定的新失败用例验证：等待期间变更部署，旧提案不执行、不消费已批准 grant。
+正常合并 goo122 在同分支提供的 factory 注入修复（0777c30/eb89233/b7a9e5d），保留其
+createGateway 接口与返回值检查，合并后只重跑 3 个配置用例及单个架构门禁，通过。
 独立浏览器预览检查保存后模型选中、默认选中和密码清空，截图位于本树忽略目录
 `.cache/model-api-controls-preview.png`；该预览只使用合成值与 Fake IPC。
