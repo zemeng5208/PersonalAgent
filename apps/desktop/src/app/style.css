@@ -47,6 +47,21 @@ button,input,textarea {font:inherit} button {cursor:pointer} button:disabled {cu
 .send-btn:disabled {background:rgba(255,255,255,.22);color:rgba(255,255,255,.45)}
 .send-btn:hover:not(:disabled) {transform:scale(1.06)}
 .mic-state {margin:8px 6px 2px}
+.sis-settings {margin:12px 0;border:1px solid var(--glass-border);border-radius:12px;padding:9px 11px;color:var(--fg-2);font-size:11px}
+.sis-settings[hidden] {display:none}
+.sis-settings summary {cursor:pointer}
+.sis-fields {display:grid;gap:8px;margin-top:10px}
+.sis-fields label {display:grid;gap:4px}
+.sis-fields input,.sis-fields select {min-width:0;width:100%;padding:7px 8px;border:1px solid var(--glass-border);border-radius:7px;background:var(--glass-bg-strong);color:var(--fg);font:inherit}
+.sis-fields button {padding:8px;border:0;border-radius:8px;background:var(--accent);color:#061316;font:inherit}
+.sis-fields button:disabled {opacity:.5}
+.sis-fields .notice {margin:0}
+.sis-fields .mail-consent {display:flex;align-items:center;gap:8px}
+.sis-fields .mail-consent input[type="checkbox"] {width:auto;flex:none;margin:0}
+.coding-workspace {box-sizing:border-box;width:calc(100% - 48px);max-width:680px;margin:0 auto 32px}
+.coding-workspace .setting-row {justify-content:flex-start;gap:12px}
+.coding-workspace .setting-row input {width:auto;flex:none;margin:0}
+.main[data-section="models"][data-cloud-config="true"] #content {min-height:0}
 .error {color:var(--danger);font-size:12px;overflow-wrap:anywhere}.status {font-size:11px;color:var(--accent)}
 :root[data-theme="light"] .icon-btn:hover:not(:disabled),:root[data-theme="light"] .model-select:hover {background:rgba(0,0,0,.06)}
 :root[data-theme="light"] .send-btn {background:#15181b;color:#fff}
@@ -79,3 +94,6 @@ button,input,textarea {font:inherit} button {cursor:pointer} button:disabled {cu
 .admin-search {display:flex;align-items:center;gap:7px;border:1px solid var(--glass-border);border-radius:9px;padding:8px;background:rgba(255,255,255,.03)}.admin-search svg {width:15px;height:15px;flex-shrink:0}.admin-search input {width:100%;min-width:0;background:transparent;border:0;outline:0;color:var(--fg);font-size:12px}
 .admin .side nav {display:block;overflow:auto;min-height:0;flex:1;scrollbar-width:thin}.nav-group {margin-bottom:16px}.nav-group h2 {font-size:11px;font-weight:500;color:var(--faint);margin:8px 10px}.admin .side nav button {display:flex;align-items:center;gap:9px;width:100%;padding:7px 9px;font-size:12px;min-height:32px}.nav-icon {width:16px;height:16px;flex-shrink:0}.admin .side nav [hidden] {display:none}.admin .side footer {margin:0;padding:0 10px;font-size:10px}
 .main[data-surface="settings"] {padding:0;overflow:auto}.main[data-surface="settings"]>.eyebrow,.main[data-surface="settings"]>#page-title,.main[data-surface="settings"]>.banner {display:none}.settings-single,.feature-page {padding:48px 34px;max-width:828px;margin:0 auto}.main[data-section="settings"] #content {height:auto}.main>.error:not(:empty) {margin:16px 34px}
+:root .approval-card{margin:12px 0;padding:12px;border:1px solid var(--border,#555);border-radius:12px;background:var(--surface,#25282d);font-size:13px;overflow-wrap:anywhere}
+:root .approval-card p{margin:6px 0}
+:root .approval-card .turn-action{padding:8px 14px;border:1px solid currentColor;border-radius:8px}

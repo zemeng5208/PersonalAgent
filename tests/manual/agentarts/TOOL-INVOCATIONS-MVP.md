@@ -233,7 +233,7 @@ Evidence；原生预览核对会议 17:00、准备 16:00、三个节点引用与
 和 Evidence 仍可读回。Laya 在 graph revision 6 给出 `ready` /
 `ESCALATE_AGENTARTS` / `low_confidence` 建议，没有签发权限或写图。
 
-本机完整脱敏收据位于被忽略的 `D:/PersonalAgent/.cache/full-chain-acceptance-20260924.md`
+本机完整脱敏收据位于被忽略的 `本机忽略的完整验收收据（不纳入仓库）`
 和 `afda` 工作树 `.cache/desktop-agentarts-wRje2A/receipt.json`。复验没有改动产品
 代码，也没有证明其他场景稳定性、云原生同 run 恢复、请求 ID 到平台 trace 的精确
 join、部署回滚或全比赛验收。前述旧请求的 `TypeError`/远端未知结论继续保留。

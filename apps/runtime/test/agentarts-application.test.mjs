@@ -15,7 +15,8 @@ async function terminal(app, taskId) {
   throw Error('Task did not settle');
 }
 
-test('trusted factory runs the competition HTTP adapter without local fallback', async () => {
+for (const workflowGoalInput of [undefined, 'goal']) {
+test(`trusted factory runs the competition HTTP adapter without local fallback (${workflowGoalInput ?? 'agent'})`, async () => {
   const base = new URL('../../../.cache/agentarts-application-tests/', import.meta.url);
   await mkdir(base, {recursive: true});
   const directory = await mkdtemp(new URL('case-', base));
@@ -26,6 +27,7 @@ test('trusted factory runs the competition HTTP adapter without local fallback',
     gatewayUrl: 'https://agentarts.example.test',
     runtimeName: 'pa-runtime',
     invokeMode: 'published',
+    ...(workflowGoalInput === undefined ? {} : {workflowGoalInput}),
     authorizationProvider: {
       read: async () => {
         authorizationReads += 1;
@@ -55,7 +57,9 @@ test('trusted factory runs the competition HTTP adapter without local fallback',
     assert.deepEqual(task.evidenceRefs, []);
     assert.equal(authorizationReads, 1);
     assert.equal(calls.length, 1);
-    assert.deepEqual(JSON.parse(calls[0].init.body), {query: '只分析合成事实，不执行工具'});
+    assert.deepEqual(JSON.parse(calls[0].init.body), workflowGoalInput === undefined
+      ? {query: '只分析合成事实，不执行工具'}
+      : {inputs: {goal: '只分析合成事实，不执行工具'}});
     assert.equal(calls[0].url, 'https://agentarts.example.test/runtimes/pa-runtime/invocations');
     assert.throws(() => app.configureText({mode: 'fake'}), /unavailable/);
   } finally {
@@ -63,6 +67,7 @@ test('trusted factory runs the competition HTTP adapter without local fallback',
     await rm(directory, {recursive: true, force: true});
   }
 });
+}
 
 test('HTTP 200 stream error after a partial message fails the task without persisting the partial answer', async () => {
   const base = new URL('../../../.cache/agentarts-application-tests/', import.meta.url);
@@ -263,4 +268,62 @@ test('JSON SSE terminal errors never reach factory approval or tool execution', 
       assert.deepEqual(app.runtime.readToolExecutions(taskId), []);
     } finally {app.close();}
   });
+});
+
+test('opt-in factory sends only the selected public tool catalog and rechecks host health after credentials', async t => {
+  for (const revokeDuringCredentials of [false, true]) await t.test(`revoked=${revokeDuringCredentials}`, async () => {
+    let healthy = true;
+    const bodies = [];
+    const toolName = 'fixture.read';
+    const app = createAgentArtsRuntimeApplication({path: ':memory:',
+      gatewayUrl: 'https://agentarts.example.test', runtimeName: 'workflow',
+      responseMode: 'tool-proposal-json', initialRequestMode: 'goal-with-tools-json',
+      authorizationProvider: {read: async () => {
+        if (revokeDuringCredentials) healthy = false;
+        return 'Bearer synthetic-token';
+      }},
+      tools: [{descriptor: {name: toolName, version: '1.0.0',
+        inputSchema: {type: 'object', required: ['id'], additionalProperties: false,
+          description: 'private fixture marker', properties: {id: {type: 'string',
+            enum: ['private fixture marker']}}},
+        outputSchema: {type: 'object', required: ['value'], properties: {value: {type: 'string'}}},
+        sideEffect: 'read', requiredScopes: ['fixture:read'],
+        idempotencySupport: true, recoverySupport: true, requiresPresence: false},
+      execute: async () => ({value: 'local-only'})}],
+      competitionToolExports: [{toolName, toolVersion: '1.0.0', exportPolicyVersion: 'fixture-v1',
+        accepts: () => true, project: ({result}) => ({value: result.value})}],
+      competitionToolAvailability: [{toolName, toolVersion: '1.0.0', available: () => healthy}],
+      fetchImpl: async (_url, init) => {
+        bodies.push(JSON.parse(init.body));
+        return new Response(JSON.stringify(event(JSON.stringify({kind: 'text', text: 'Synthetic catalog accepted'}))),
+          {status: 200, headers: {'content-type': 'application/json'}});
+      },
+    });
+    try {
+      const client = new Client(app);
+      await client.connect();
+      const {taskId} = await client.call('task.submit', {goal: 'Synthetic public read',
+        conversationId: 'catalog'}, {idempotencyKey: `catalog-${revokeDuringCredentials}`});
+      const task = await terminal(app, taskId);
+      if (revokeDuringCredentials) {
+        assert.equal(task.state, 'failed');
+        assert.deepEqual(bodies, []);
+      } else {
+        assert.equal(task.state, 'succeeded');
+        assert.deepEqual(JSON.parse(bodies[0].query), {goal: 'Synthetic public read', availableTools: [{
+          name: toolName, version: '1.0.0', inputSchema: {type: 'object', required: ['id'],
+            additionalProperties: false, properties: {id: {type: 'string'}}},
+        }]});
+        assert.doesNotMatch(JSON.stringify(bodies), /private fixture marker|local-only/);
+      }
+    } finally {app.close();}
+  });
+});
+
+test('factory rejects a catalog without explicit initial request mode', () => {
+  assert.throws(() => createAgentArtsRuntimeApplication({path: ':memory:',
+    gatewayUrl: 'https://agentarts.example.test', runtimeName: 'workflow',
+    responseMode: 'tool-proposal-json', authorizationProvider: {read: async () => 'Bearer synthetic'},
+    competitionToolAvailability: [],
+  }), /explicit initial request mode/);
 });
