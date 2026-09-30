@@ -224,6 +224,11 @@ export class SqliteLearningHost {
       WHERE namespace = ? AND source_ref = ?`).get(namespace, sourceRef)) return fail('NOT_FOUND');
   }
 
+  /** Read-only trusted-host fence for dispatch/resume; never restores an invalidated source. */
+  assertSourceAvailable(namespace: string, sourceRef: string): void {
+    this.sourceAvailable(label(namespace), label(sourceRef, 1024));
+  }
+
   /** Content-free readback distinguishes accepted deletion from a rejected head. */
   readErasureReceipt(namespaceValue: string, workflowIdValue: string): {
     readonly operationId: string; readonly expectedRevision: number;

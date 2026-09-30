@@ -135,6 +135,16 @@ facade 可注入 `privateErasure`；此时 `managedPrivateCopies` 指其他未�
 许可必须核对真实 ancestry，独立模型/provider 更换不得继承原逐任务许可。当前 owned host 不提供
 自动子任务许可，P8 shared 路径和云知识记忆组接续；本地不再竞争 portable 文件写入。
 
+## PR270 两项本机补修
+
+吸收云端 exact `d875b9c262e3e137db27ea8d397aa06d2bf9eddc` 后恢复本包独占增量：
+`SqliteLearningHost.assertSourceAvailable(namespace,sourceRef)` 只复用原持久来源撤销检查，
+Runtime 在验证提交前后、每次 dispatch/resume 入口重新检查，不恢复已撤销来源或另起工具循环。
+Evidence validator 在实际执行及 binding 的异步读回之后再查 Skill enabled/revision/content hash，
+同时重新检查取消与 deadline，不能用等待前的 Skill 状态出具通过结果。
+定向来源撤销、await 期间 Skill 变化、最终读取取消/超时用例已准备；本阶段按统一验收安排
+只执行 TS syntax parse、测试文件 `node --check` 和 `git diff --check`，未运行测试、构建或服务。
+
 ## 验证与限制
 
 定向 SQLite/合成 Vault 验证：私人确认纠正可查询、精确 baseline 及 config变更拒绝、
