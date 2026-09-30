@@ -7,6 +7,7 @@ import {Client} from '@personal-agent/client';
 import {LayaActionChoiceService} from '@personal-agent/cognition';
 import {createAgentArtsRuntimeApplication,createProactiveCognitionHost} from '@personal-agent/runtime/application';
 import {createDesktopGoalCognitionHost} from '../electron/goal-cognition-host.js';
+import {createGoalHostCore} from '../electron/goal-host-core.js';
 
 const namespace='synthetic-desktop-cognition';
 const ref=(id,revision=1)=>({id,revision});
@@ -21,10 +22,10 @@ async function terminal(application,id) {
   }
   throw Error('Synthetic task did not settle');
 }
-async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCredentialRead=false,uncertain=false,unavailableInitially=false,newGoal=false}={}) {
+async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCredentialRead=false,uncertain=false,unavailableInitially=false,newGoal=false,holdFetch=false}={}) {
   const root=fileURLToPath(new URL('../../../.cache/desktop-goal-cognition/',import.meta.url));
   await mkdir(root,{recursive:true});const directory=await mkdtemp(path.join(root,'case-'));
-  let host,layaCalls=0,time=Date.now(),unavailable=unavailableInitially;const sent=[],announced=[];
+  let host,layaCalls=0,goalWrites=0,releaseFetch,time=Date.now(),unavailable=unavailableInitially;const sent=[],announced=[];
   const application=createAgentArtsRuntimeApplication({path:path.join(directory,'runtime.sqlite'),
     gatewayUrl:'https://agentarts.example.test',runtimeName:'synthetic',
     beforeCompetitionSend:request=>host.assertCloudSend(request),
@@ -35,6 +36,7 @@ async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCred
     }},
     fetchImpl:async(_url,input)=>{
       sent.push(JSON.parse(input.body));
+      if(holdFetch) await new Promise(resolve=>{releaseFetch=resolve;});
       return new Response(JSON.stringify({event:'message',data:{text:'合成规划已接收',index:0}}),
         {headers:{'content-type':'application/json'}});
     }});
@@ -49,9 +51,12 @@ async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCred
   const sourceTask=application.runtime.submitTask({goal:'Synthetic completed goal edit',conversationId:'host-fixture',idempotencyKey:'synthetic-goal-edit'});
   await application.runtime.runTask(sourceTask.taskId,async()=>({resultSummary:'Synthetic goal receipt'}),
     {deadline:new Date(Date.now()+60_000).toISOString(),sideEffect:'read'});
+  const strictGoalHost=createGoalHostCore(namespace,{getGoal:()=>{},listGoals:()=>[],createGoalTools:()=>[],
+    GOAL_CREATE_TOOL:'goal.create',GOAL_REVISE_TOOL:'goal.revise',GOAL_TOOL_VERSION:'1.0.0'});
+  strictGoalHost.bind(application);
   const goalHost={listTasks:()=>[{taskId:sourceTask.taskId,state:'succeeded',result:{kind:'applied',
     graphRevision:newGoal?2:5,...(newGoal?{}:{previousGoal:ref('goal')}),currentGoal:ref('goal',newGoal?1:2)}}],
-    revise:(input)=>{store.append(input.expectedGraphRevision,{...input.goal,kind:'goal'});return {taskId:'synthetic-revision-task'};}};
+    revise:input=>{goalWrites++;return strictGoalHost.revise(input);}};
   const facts=application.createCompetitionFactHost({memoryPath:path.join(directory,'memory.sqlite'),
     memoryNamespace:'synthetic-public-memory',graphNamespace:namespace,consumerKey:'fixture'});
   const client=new Client(application,Date.now);await client.connect();
@@ -68,6 +73,7 @@ async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCred
   host=createDesktopGoalCognitionHost(options);
   t.after(async()=>{host.close();facts.close();application.close();await rm(directory,{recursive:true,force:true});});
   return {application,sent,announced,store,sourceTaskId:sourceTask.taskId,host:()=>host,layaCalls:()=>layaCalls,
+    goalWrites:()=>goalWrites,releaseFetch:()=>releaseFetch?.(),
     restoreLaya:()=>{unavailable=false;},advance:(ms=1100)=>{time+=ms;},restart:()=>{host.close();host=createDesktopGoalCognitionHost(options);return host;}};
 }
 
@@ -163,7 +169,7 @@ test('goal cognition snapshot exposes trigger, Laya choice, and executionStatus 
   const review = snapshot.reviews[0];
   assert.ok(review.trigger, 'trigger must be present');
   assert.match(review.choice, /defer|revise|recheck|plan/);
-  assert.equal(review.executionStatus, '本地决策建议');
+  assert.match(review.executionStatus, /本地决策建议.*尚未执行/);
 
   // When cloud is allowed and submitted
   f.host().configure({enabled: true, cloudAllowed: true});
@@ -172,22 +178,94 @@ test('goal cognition snapshot exposes trigger, Laya choice, and executionStatus 
   assert.ok(taskId);
   assert.equal((await terminal(f.application, taskId)).state, 'succeeded');
   const updated = f.host().snapshot().reviews[0];
-  assert.equal(updated.executionStatus, '已提交 AgentArts 编排');
+  assert.equal(updated.state, 'succeeded');
+  assert.match(updated.executionStatus, /目标更新尚未核实/);
+  assert.equal(updated.graphUpdateVerified,false);
 });
 
-test('goal cognition applyDecision executes the chosen revision locally', async t => {
-  const f = await fixture(t);
+test('applyDecision uses one idempotent AgentArts handoff and real task feedback, never a Goal rewrite', async t => {
+  const f = await fixture(t,{holdFetch:true});
   f.host().configure({enabled: true, cloudAllowed: false});
   await f.host().tick();
   const snapshot = f.host().snapshot();
   assert.equal(snapshot.reviews.length, 1);
   const reviewTaskId = snapshot.reviews[0].reviewTaskId;
+  await assert.rejects(f.host().applyDecision(reviewTaskId),/许可未开启/);
+  assert.equal(f.goalWrites(),0);
+  assert.equal(f.store.read().revision,5);
+  f.host().configure({enabled:true,cloudAllowed:true});
   const result = await f.host().applyDecision(reviewTaskId);
-  assert.equal(result.status, 'applied');
-  assert.equal(result.taskId, 'synthetic-revision-task');
-  const updatedSnapshot = f.host().snapshot();
-  assert.equal(updatedSnapshot.reviews[0].state, 'applied');
-  assert.match(updatedSnapshot.reviews[0].executionStatus, /已在本地执行更新/);
+  assert.equal(result.status, 'submitted');
+  assert.equal(result.graphUpdateVerified,false);
+  await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(f.sent.length,1);
+  const repeated=await f.host().applyDecision(reviewTaskId);
+  assert.equal(repeated.taskId,result.taskId);
+  assert.equal(f.sent.length,1);
+  f.releaseFetch();
+  assert.equal((await terminal(f.application,result.taskId)).state,'succeeded');
+  const updated=f.host().snapshot().reviews[0];
+  assert.equal(updated.state,'succeeded');
+  assert.match(updated.executionStatus,/目标更新尚未核实/);
+  assert.equal(f.goalWrites(),0);
+  assert.equal(f.store.read().revision,5);
+  const restored=f.restart().snapshot().reviews[0];
+  assert.equal(restored.reviewTaskId,reviewTaskId);
+  assert.equal(restored.taskId,result.taskId);
+  assert.equal(restored.state,'succeeded');
+  assert.equal(restored.graphUpdateVerified,false);
+  assert.equal(f.host().snapshot().cloudAllowed,false);
+  assert.equal(f.layaCalls(),1);
+});
+
+test('uncertain action remains a machine review; stale or substituted choices cannot rewrite arbitrary Goals',async t=>{
+  const f=await fixture(t,{uncertain:true});
+  f.host().configure({enabled:true,cloudAllowed:false});await f.host().tick();
+  const reviewTaskId=f.host().snapshot().reviews[0].reviewTaskId;
+  assert.equal(f.restart().snapshot().reviews[0].reviewTaskId,reviewTaskId);
+  f.host().configure({enabled:true,cloudAllowed:true});
+  const result=await f.host().applyDecision(reviewTaskId);
+  await terminal(f.application,result.taskId);
+  assert.match(f.sent[0].query,/Laya 尚未确定选择/);
+  assert.equal(f.goalWrites(),0);assert.equal(f.store.read().revision,5);
+  const next=await fixture(t);
+  next.host().configure({enabled:true,cloudAllowed:false});await next.host().tick();
+  const id=next.host().snapshot().reviews[0].reviewTaskId;
+  next.store.append(5,node('another-goal','goal',[],'另一目标'));
+  next.host().configure({enabled:true,cloudAllowed:true});
+  await assert.rejects(next.host().applyDecision(id),/来源版本已变化/);
+  assert.equal(next.goalWrites(),0);assert.equal(next.sent.length,0);
+});
+
+test('failed handoff is reported from Runtime and stable decision markers restore without another model call',async t=>{
+  const f=await fixture(t,{revokeDuringCredentialRead:true});
+  f.host().configure({enabled:true,cloudAllowed:false});await f.host().tick();
+  const reviewTaskId=f.host().snapshot().reviews[0].reviewTaskId;
+  const recovered=f.restart().snapshot();
+  assert.equal(recovered.reviews[0].reviewTaskId,reviewTaskId);
+  assert.equal(recovered.cloudAllowed,false);
+  f.host().configure({enabled:true,cloudAllowed:true});
+  const result=await f.host().applyDecision(reviewTaskId);
+  await terminal(f.application,result.taskId);
+  assert.equal(f.host().snapshot().reviews[0].state,'failed');
+  assert.match(f.host().snapshot().reviews[0].executionStatus,/任务失败/);
+  assert.equal((await f.host().applyDecision(reviewTaskId)).status,'failed');
+  assert.equal(f.sent.length,0);assert.equal(f.goalWrites(),0);assert.equal(f.layaCalls(),1);
+});
+
+test('a selected strategy must still match the offered candidate and host binding',async t=>{
+  for(const changed of ['candidate','binding']) {
+    const f=await fixture(t);
+    f.host().configure({enabled:true,cloudAllowed:false});await f.host().tick();
+    const id=f.host().snapshot().reviews[0].reviewTaskId;
+    const review=f.application.runtime.loadCheckpoint(id,'proactive-cognition-review-v1');
+    f.application.runtime.saveCheckpoint(id,'proactive-cognition-review-v1',changed==='candidate'
+      ? {...review,selectedOption:{...review.selectedOption,description:'substituted action'}}
+      : {...review,graphNamespace:'another-host'});
+    f.host().configure({enabled:true,cloudAllowed:true});
+    await assert.rejects(f.host().applyDecision(id),changed==='candidate'?/没有合法选择/:/可验证/);
+    assert.equal(f.goalWrites(),0);assert.equal(f.sent.length,0);assert.equal(f.store.read().revision,5);
+  }
 });
 
 

@@ -1,3 +1,4 @@
+import {ModelGateway, FakeModelProvider} from '@personal-agent/models';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import path from 'node:path';
@@ -137,8 +138,14 @@ test('runtime-created subagent dispatch tool executes successfully in TaskRuntim
   });
 
   let runtimeRef = runtime;
+  // 显式 Fake 网关（等价 fakeModelMode 测试开关）：无网关时现在是明确失败而非假成功。
+  const gateway = new ModelGateway(new FakeModelProvider([
+    () => ({kind: 'final', text: '检索完成：天气信息已获取'}),
+    () => ({kind: 'final', text: '规划完成：日程已结构化'}),
+  ]));
   const subagentTool = createRuntimeSubagentDispatchTool({
     getRuntime: () => runtimeRef,
+    getModelGateway: () => gateway,
   });
 
   const summary = await subagentTool.execute({

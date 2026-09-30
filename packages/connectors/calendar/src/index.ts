@@ -8,6 +8,8 @@ import type { CalendarProvider } from './provider.js';
 export { CalendarConnector, CALENDAR_CONNECTOR_VERSION } from './connector.js';
 export { ICalSubscriptionProvider, parseIcalEvents, unfoldLines, unescapeIcalText, parseIcalDate } from './ical-subscription.js';
 export type { FetchLike, FetchResponseLike, ICalSubscriptionOptions } from './ical-subscription.js';
+export { CalDavProvider, parseCalDavEvents, zonedWallToUtc } from './caldav.js';
+export type { CalDavFetchLike, CalDavFetchResponseLike, CalDavReadProviderOptions, CalDavChangeSnapshot } from './caldav.js';
 export { CalendarService, eventToItem } from './service.js';
 export { FakeCalendarProvider, defaultCalendarFixtures } from './fake-provider.js';
 export type { CalendarEventRecord, CalendarFetchPage, CalendarProvider, CalendarRespondInput, CalendarRespondResult, CalendarSummary, CalendarWindow } from './provider.js';

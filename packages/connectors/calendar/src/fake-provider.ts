@@ -82,6 +82,7 @@ export interface FakeCalendarProviderOptions {
 
 export class FakeCalendarProvider implements CalendarProvider {
   readonly providerKind = 'fixture';
+  readonly verification = 'mock';
   private readonly events = new Map<string, CalendarEventRecord>();
   private readonly responses = new Map<string, CalendarRespondInput>();
 

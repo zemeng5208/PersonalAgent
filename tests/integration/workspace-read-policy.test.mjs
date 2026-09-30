@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
 import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -60,6 +61,7 @@ test('Policy and ToolGateway authorize the bound workspace reader before executi
     encoding: 'utf-8',
     byteLength: Buffer.byteLength('export const fixture = "synthetic";\n'),
     content: 'export const fixture = "synthetic";\n',
+    sha256: createHash('sha256').update('export const fixture = "synthetic";\n').digest('hex'),
   });
   assert.equal(executions, 1);
 
