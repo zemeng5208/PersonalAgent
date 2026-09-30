@@ -14,14 +14,16 @@ const binding = {sourceRef: candidate.sourceRef, workflowId: 'review', revision:
   taskId: 'synthetic-task', evidenceId: 'synthetic-run', toolName: 'workspace.read_text', toolVersion: '1', inputDigest: 'b'.repeat(64)};
 function fixture() {
   let live = true;
+  const skill = {id: binding.skillId, revision: binding.skillRevision,
+    contentSha256: binding.skillContentSha256, enabled: true};
   const record = {taskId: binding.taskId, evidenceId: binding.evidenceId, toolName: binding.toolName,
     toolVersion: binding.toolVersion, inputDigest: binding.inputDigest, policyDecision: 'allow',
     executionStarted: true, state: 'confirmed', finishedAt: at};
   const ports = {readBinding: async () => live ? structuredClone(binding) : null,
-    readSkill: async () => ({id: binding.skillId, revision: binding.skillRevision,
-      contentSha256: binding.skillContentSha256, enabled: true}),
+    readSkill: async () => structuredClone(skill),
+    readCurrent: () => ({binding: live ? structuredClone(binding) : null, skill: structuredClone(skill)}),
     readExecution: async () => ({task: {taskId: binding.taskId, state: 'succeeded', evidenceRefs: [binding.evidenceId]}, record})};
-  return {ports, record, revoke: () => {live = false;}};
+  return {ports, record, skill, revoke: () => {live = false;}};
 }
 
 test('validator requires exact persisted Skill, policy decision and confirmed execution evidence', async () => {
@@ -41,8 +43,7 @@ test('validator requires exact persisted Skill, policy decision and confirmed ex
 test('Skill disable, revision or content changes while execution is awaited reject an unchanged binding', async () => {
   for (const change of [{enabled: false}, {revision: 'v2'}, {contentSha256: 'c'.repeat(64)}]) {
     const fx = fixture();
-    const skill = {id: binding.skillId, revision: binding.skillRevision,
-      contentSha256: binding.skillContentSha256, enabled: true};
+    const skill = fx.skill;
     let skillReads = 0;
     fx.ports.readSkill = async () => {skillReads++; return structuredClone(skill);};
     const originalRead = fx.ports.readExecution;
@@ -74,6 +75,43 @@ test('Skill final read still obeys cancellation and deadline after otherwise val
       return skill;
     };
     await assert.rejects(createEvidenceWorkflowValidator(fx.ports).validate(candidate, scope), {code: expected});
+  }
+});
+
+test('source revocation during the final Skill await is rejected by the synchronous joint gate', async () => {
+  const fx = fixture();
+  const read = fx.ports.readSkill;
+  let reads = 0;
+  let jointReads = 0;
+  const joint = fx.ports.readCurrent;
+  fx.ports.readCurrent = (...args) => {jointReads++; return joint(...args);};
+  fx.ports.readSkill = async (...args) => {
+    const skill = await read(...args);
+    if (++reads === 2) fx.revoke();
+    return skill;
+  };
+  await assert.rejects(createEvidenceWorkflowValidator(fx.ports).validate(candidate, context()),
+    {code: 'REVISION_CONFLICT'});
+  assert.equal(jointReads, 1);
+  assert.equal(reads, 2);
+});
+
+test('joint gate cannot be missing, async, disabled, cancelled or expired', async () => {
+  for (const changed of ['missing', 'async', 'disabled', 'cancelled', 'expired']) {
+    const fx = fixture();
+    const controller = new AbortController();
+    const scope = {...context(), signal: controller.signal};
+    const joint = fx.ports.readCurrent;
+    if (changed === 'missing') delete fx.ports.readCurrent;
+    else if (changed === 'async') fx.ports.readCurrent = async (...args) => joint(...args);
+    else fx.ports.readCurrent = (...args) => {
+      if (changed === 'disabled') fx.skill.enabled = false;
+      if (changed === 'cancelled') controller.abort();
+      if (changed === 'expired') scope.deadline = '2000-01-01T00:00:00.000Z';
+      return joint(...args);
+    };
+    await assert.rejects(createEvidenceWorkflowValidator(fx.ports).validate(candidate, scope),
+      {code: changed === 'cancelled' ? 'CANCELLED' : changed === 'expired' ? 'TIMEOUT' : 'NOT_VALIDATED'});
   }
 });
 

@@ -145,6 +145,14 @@ Evidence validator 在实际执行及 binding 的异步读回之后再查 Skill 
 定向来源撤销、await 期间 Skill 变化、最终读取取消/超时用例已准备；本阶段按统一验收安排
 只执行 TS syntax parse、测试文件 `node --check` 和 `git diff --check`，未运行测试、构建或服务。
 
+非作者复核指出最终 `readSkill` 等待期间仍可能撤回 source binding，补修要求
+`WorkflowEvidencePorts.readCurrent(candidate,binding,context)` 提供受信宿主原 mutation fences 下的
+同步一致联合读回（当前 binding + Skill），最后检查精确 binding/Skill/取消/deadline 后无 await 直接返回。
+缺少此端口、返回 Promise、原来源撤回或 Skill变化均拒绝；不可用异步快照拼装假 joint current，
+真实 adapter 未接通前保持不可用，不给新许可或恢复已撤销来源。仅合成 fixture 接口已更新。
+来源撤销的 `startValidation` 在调用时同步抛错，其用例改为 `assert.throws`，保留零新任务/MCP断言。
+新增最终 Skill await 中撤销、缺失/异步/停用 joint gate 与 gate取消/超时用例仅准备，未运行。
+
 ## 验证与限制
 
 定向 SQLite/合成 Vault 验证：私人确认纠正可查询、精确 baseline 及 config变更拒绝、
