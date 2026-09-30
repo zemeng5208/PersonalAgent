@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {ProtocolError, validateToolValue} from '@personal-agent/contracts';
-import type {AgentToolPort, AgentWorkerContext, ToolInvocationResult} from '@personal-agent/agents';
+import type {AgentToolInvocation, AgentToolPort, AgentWorkerContext, ToolInvocationResult} from '@personal-agent/agents';
 
 export const REFERENCE_SUMMARY_SKILL_ID='workspace-reference-summary';
 export const REFERENCE_SUMMARY_SKILL_VERSION='1.0.0';
@@ -30,12 +30,31 @@ export interface SkillOutcome {
   resultSummary?:string;
   sources?:readonly {path:string;contentDigest:string}[];
 }
+export interface SkillReadReconciliationQuery extends AgentToolInvocation {
+  toolName:typeof TOOL_NAME;
+  toolVersion:typeof TOOL_VERSION;
+  arguments:{path:string};
+  skillId:typeof REFERENCE_SUMMARY_SKILL_ID;
+  skillVersion:typeof REFERENCE_SUMMARY_SKILL_VERSION;
+  skillDigest:string;
+  argumentsDigest:string;
+  configurationRef:string;
+}
+export interface SkillReadReconciliationPort {
+  /** Opaque trusted configuration identity, never a root path or credential. */
+  currentConfigurationRef():string|undefined;
+  /** Read only the exact Runtime execution, tool-result checkpoint and Evidence.
+   * Must verify original task/run/tool/version/arguments/scopeRef and configuration.
+   * Never invoke, grant, fabricate a receipt or reconcile from Renderer input. */
+  readConfirmed(query:SkillReadReconciliationQuery):Promise<ToolInvocationResult|undefined>;
+}
 export interface ReferenceSummaryOptions {
   /** Existing Runtime tool port; never RegisteredTool.execute or self-issued grants. */
   tools:AgentToolPort;
   enabled?:boolean;
   /** Fresh trusted MCP health check, not an external tool annotation. */
   isToolAvailable:()=>boolean;
+  reconciliation?:SkillReadReconciliationPort;
 }
 interface Checkpoint {
   binding:string;
@@ -43,10 +62,16 @@ interface Checkpoint {
   read?:{path:string;text:string;contentDigest:string};
   evidenceRefs:string[];
   outcome?:SkillOutcome;
+  configurationRef?:string;
 }
 
 /** Fixed two-step skill runner, called at the worker layer outside tool locks. */
 export function createReferenceSummarySkill(options?:ReferenceSummaryOptions) {
+  options=options ? {...options} : undefined;
+  const reconciliation=options?.reconciliation ? {
+    currentConfigurationRef:options.reconciliation.currentConfigurationRef.bind(options.reconciliation),
+    readConfirmed:options.reconciliation.readConfirmed.bind(options.reconciliation),
+  } : undefined;
   let enabled=options?.enabled ?? false;
   let disposed=false;
   let epoch=0;
@@ -75,6 +100,21 @@ export function createReferenceSummarySkill(options?:ReferenceSummaryOptions) {
     if(manifest().digest!==bindingDigest) fail('PROTOCOL_MISMATCH','Skill content changed during invocation');
     if(!available()) fail('UNSUPPORTED_CAPABILITY','Skill tool dependency is unavailable');
   }
+  function configurationRef():string|undefined {
+    if(!reconciliation) return undefined;
+    let value:string|undefined;
+    try {value=reconciliation.currentConfigurationRef();}
+    catch {return fail('UNSUPPORTED_CAPABILITY','Skill reconciliation configuration is unavailable');}
+    if(value===undefined) fail('UNSUPPORTED_CAPABILITY','Skill reconciliation configuration is unavailable');
+    if(typeof value!=='string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(value)) fail('INVALID_ARGUMENT','Skill configuration reference must be an opaque identifier');
+    return value;
+  }
+  function confirmedRead(result:unknown,path:string) {
+    validateToolValue(readResultSchema,result);
+    const read=result as {path:string;text:string;contentDigest:string};
+    if(read.path!==path || hash(read.text)!==read.contentDigest || Buffer.byteLength(read.text)>262144) fail('EXTERNAL_FAILURE','Skill source result is inconsistent');
+    return {path:read.path,text:read.text,contentDigest:read.contentDigest};
+  }
   async function run(input:ReferenceSummaryInput,context:AgentWorkerContext):Promise<SkillOutcome> {
     validateToolValue(parameters,input);
     const current=manifest();
@@ -84,11 +124,29 @@ export function createReferenceSummarySkill(options?:ReferenceSummaryOptions) {
     let saved=context.loadCheckpoint(CHECKPOINT) as Checkpoint|undefined;
     if(saved && (typeof saved!=='object' || saved.binding!==binding)) fail('REVISION_CONFLICT','Skill task is bound to different input or version');
     if(saved?.phase==='complete') return structuredClone(saved.outcome!);
-    if(saved?.phase==='started' || saved?.phase==='unknown') return {state:'unknown',evidenceRefs:[...saved.evidenceRefs]};
+    const runId=`skill-read-${context.taskId}-${input.digest.slice(0,16)}`;
+    if(saved?.phase==='started' || saved?.phase==='unknown') {
+      const unknown=():SkillOutcome=>({state:'unknown',evidenceRefs:[...saved!.evidenceRefs]});
+      // Old checkpoints without an original configuration binding cannot be promoted.
+      if(!reconciliation || !saved.configurationRef) return unknown();
+      if(configurationRef()!==saved.configurationRef) fail('REVISION_CONFLICT','Skill reconciliation configuration changed');
+      const receipt=await reconciliation.readConfirmed({taskId:context.taskId,runId,toolName:TOOL_NAME,toolVersion:TOOL_VERSION,
+        arguments:{path:input.path},argumentsDigest:hash(JSON.stringify({path:input.path})),authorizationRef:runId,
+        deadline:context.deadline,signal:AbortSignal.any([context.signal,controller.signal]),
+        skillId:REFERENCE_SUMMARY_SKILL_ID,skillVersion:REFERENCE_SUMMARY_SKILL_VERSION,skillDigest:input.digest,configurationRef:saved.configurationRef});
+      check(context,generation,input.digest);
+      if(configurationRef()!==saved.configurationRef) fail('REVISION_CONFLICT','Skill reconciliation configuration changed');
+      if(receipt?.state!=='confirmed' || !Array.isArray(receipt.evidenceRefs) || !receipt.evidenceRefs.includes(runId)
+        || receipt.evidenceRefs.some(ref=>typeof ref!=='string' || !ref)) return unknown();
+      try {saved.read=confirmedRead(receipt.result,input.path);}
+      catch {return unknown();}
+      saved.phase='read-confirmed';saved.evidenceRefs=[...receipt.evidenceRefs];context.saveCheckpoint(CHECKPOINT,saved);
+    }
     if(!saved?.read) {
       context.reportProgress({stepId:'skill-read-reference',label:'Read approved reference',completedUnits:0,totalUnits:2});
-      const runId=`skill-read-${context.taskId}-${input.digest.slice(0,16)}`;
-      saved={binding,phase:'started',evidenceRefs:saved?.evidenceRefs ?? []};
+      const originalConfiguration=saved?.configurationRef ?? configurationRef();
+      if(saved?.configurationRef && configurationRef()!==saved.configurationRef) fail('REVISION_CONFLICT','Skill configuration changed');
+      saved={binding,phase:'started',evidenceRefs:saved?.evidenceRefs ?? [],...(originalConfiguration?{configurationRef:originalConfiguration}:{})};
       context.saveCheckpoint(CHECKPOINT,saved);
       let result:ToolInvocationResult;
       try {
@@ -105,10 +163,7 @@ export function createReferenceSummarySkill(options?:ReferenceSummaryOptions) {
         return {state:result.state,evidenceRefs:[...result.evidenceRefs]};
       }
       try {
-        validateToolValue(readResultSchema,result.result);
-        const read=result.result as {path:string;text:string;contentDigest:string};
-        if(read.path!==input.path || hash(read.text)!==read.contentDigest || Buffer.byteLength(read.text)>262144) fail('EXTERNAL_FAILURE','Skill source result is inconsistent');
-        saved.read={path:read.path,text:read.text,contentDigest:read.contentDigest};saved.phase='read-confirmed';
+        saved.read=confirmedRead(result.result,input.path);saved.phase='read-confirmed';
       } catch {
         saved.phase='unknown';context.saveCheckpoint(CHECKPOINT,saved);
         fail('RESULT_UNKNOWN','Skill read returned an invalid result; reconcile before retrying');
@@ -117,6 +172,7 @@ export function createReferenceSummarySkill(options?:ReferenceSummaryOptions) {
       context.saveCheckpoint(CHECKPOINT,saved);
     }
     check(context,generation,input.digest);
+    if(saved.configurationRef && configurationRef()!==saved.configurationRef) fail('REVISION_CONFLICT','Skill configuration changed');
     context.reportProgress({stepId:'skill-summarize-reference',label:'Summarize confirmed reference',completedUnits:1,totalUnits:2});
     const read=saved.read!;
     const excerpt=read.text.split(/\r?\n/).map(line=>line.trim()).filter(Boolean).slice(0,2).join(' ').slice(0,480);

@@ -24,6 +24,8 @@ const outcome = await skill.invoke({
 
 `skill:workspace-reference-summary:v1` checkpoint 使用现有任务的 load/save；绑定 taskId/版本/digest/参数。审批 pending 恢复同一 runId；已确认读取/最终结果不重做；未知结果或崩溃时 started 无确认进入 unknown，不自动重新调用。确认结果与 evidenceRefs 保存在 checkpoint，Runtime 决定 waiting_approval/waiting_reconciliation/终态。方法只返回 `{state:'confirmed'|'pending'|'unknown',evidenceRefs,resultSummary?,sources?}`，不改变 task state。
 
+可选 `reconciliation: SkillReadReconciliationPort` 只由可信 Runtime 装配，含 `currentConfigurationRef(): string | undefined` 与 `readConfirmed(query): Promise<ToolInvocationResult | undefined>`。首次开始保存不透明配置引用；started/unknown 恢复时只读取原任务、同一 runId 的已确认 Runtime 结果/Evidence，绝不 invoke/grant。query 复用 `AgentToolInvocation`，附 `skillId/skillVersion/skillDigest/argumentsDigest/configurationRef`；固定工具/版本/相对 path、authorizationRef=原 runId。adapter 必须用 Runtime `matchesToolExecutionInput` 校验其 inputDigest，读取 confirmed/Policy allow/executionStarted 记录及原 `tool-result-<runId>`，核对 task Evidence；query 的 argumentsDigest 是参数摘要，不替代 Runtime 自身摘要算法。结果 refs 必须包含原 runId，正文相对 path/SHA 再验，取消/禁用/配置引用变化不得晋升。配置未就绪返回 undefined，不能复用被撤销 generation；配置原文/路径不进入 manifest/UI/云。旧 checkpoint 缺原配置引用、无确认、无 Evidence 或结果不一致都保留 unknown。Renderer 不能传确认 receipt；公开 options 是受信宿主依赖注入接口。
+
 `health()` 投影 configured/connected(enabled dependency)/disabled/unavailable，带公开 ID/version/digest。缺配置/服务断连为 unavailable，不自动 Fake。`setEnabled(false)` / `dispose()` 中断在途 signal；取消、deadline、版本内容变更、依赖断连在步骤边界重新检查。若取消时已得到确认读取，保存确认记录后停止摘要；用户明确重新启用并恢复同一任务可继续剩余纯步骤。同任务并行 invoke 拒绝；不另建资源锁或调度器。
 
 打包时保留 `workspace-reference-summary/SKILL.md`（相对 dist）。内容 digest 规范化 CRLF/LF，绑定 manifest+完整正文。当前只加载这一份受信自有 bundle；不宣称导入任意社区 Skill。官方规范用于可移植格式，无额外 parser 依赖/源码复制；版本附加 metadata 不授权。
@@ -31,3 +33,5 @@ const outcome = await skill.invoke({
 ## 验证
 
 依赖产物就绪后构建新 workspace，再运行模块测试。`skills.test.mjs` 明确使用内存 checkpoint 和受控 test tool port；`real-skill.test.mjs` 实际调用官方 stdio 服务，经现有 ToolGateway 与真实 Policy 实现读取公开合成资料，checkpoint/AgentToolPort 是测试装配、`evidenceRefs:[]`，不冒充真实 SQLite Evidence。P8 的生产 worker、审批恢复、Evidence/Competition/管理 UI 另验收，见 [交接](../../docs/modules/MOD-06-07-MVP.md)。
+
+恢复增量只运行新增 `reconciliation.test.mjs`：started → 受信确认 → 纯摘要，零重复读取；无确认/错 Evidence、配置变化、禁用、取消拒绝。该单 case 的端口与 Evidence 为显式离线夹具，实际 SQLite 确认记录由 P8 同一最终 Runtime case 验证。
