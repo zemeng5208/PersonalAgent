@@ -41,7 +41,6 @@ export interface CoordinationWorkerCapabilityPort {
 export type PrepareCompetitionToolExport=(input:{phase:'preflight'|'projection';taskId:string;
   proposal:CoordinationToolProposalResult;deadline:string;signal:AbortSignal})=>Promise<void>;
 
-/** Keep the original confirmed read resumable when fresh export permission is denied. */
 function withholdConfirmedExport(runtime:TaskRuntime,taskId:string):void {
   if(runtime.getTask(taskId).state!=='running')return;
   runtime.saveCheckpoint(taskId,'competition-export-withheld',{withheld:true});
@@ -220,15 +219,15 @@ export async function runCoordinationWorker(
           if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Competition result export cancelled');
           if (Date.now() >= Date.parse(context.deadline)) throw new ProtocolError('TIMEOUT', 'Competition result export expired');
           try {
-            if(options.workerCapabilities?.accepts(prior.proposal)) {
-              options.workerCapabilities.assertReceiptAllowed(prior.proposal,prior.workerSelection,prior.continuation.result,
-                {...context,revision:prior.workerRevision!});return;
-            }
-            const current = requireExportBinding(prior.proposal, taskId, tools, options.toolExports,
-              options.toolCatalog !== undefined,'final',prior.continuation.result,context.signal);
-            if (current && (!prior.exportPolicyVersion || current.exportPolicyVersion !== prior.exportPolicyVersion)) {
-              throw new ProtocolError('UNAUTHORIZED', 'Competition result export policy changed');
-            }
+          if(options.workerCapabilities?.accepts(prior.proposal)) {
+            options.workerCapabilities.assertReceiptAllowed(prior.proposal,prior.workerSelection,prior.continuation.result,
+              {...context,revision:prior.workerRevision!});return;
+          }
+          const current = requireExportBinding(prior.proposal, taskId, tools, options.toolExports,
+            options.toolCatalog !== undefined,'final',prior.continuation.result,context.signal);
+          if (current && (!prior.exportPolicyVersion || current.exportPolicyVersion !== prior.exportPolicyVersion)) {
+            throw new ProtocolError('UNAUTHORIZED', 'Competition result export policy changed');
+          }
           } catch(error) {withholdConfirmedExport(runtime,taskId);throw error;}
         }
       }, availableTools, revision => { proposalRevision = revision; });
@@ -273,18 +272,23 @@ export async function runCoordinationWorker(
       // preflight readers must be able to verify it before any grant/execution.
       context.saveCheckpoint('competition-loop', {step, continuation, pending: result,pendingRevision:inputRevision,evidenceRefs, receipts});
       const worker=options.workerCapabilities?.accepts(result)?options.workerCapabilities:undefined;
-      if(result.verification!=='mock') {
-        try {await options.prepareCompetitionToolExport?.({phase:'preflight',taskId,proposal:structuredClone(result),deadline:context.deadline,signal:context.signal});}
-        catch {
-          if(context.signal.aborted)throw new ProtocolError('CANCELLED','Export preflight cancelled');
-          if(Date.now()>=Date.parse(context.deadline))throw new ProtocolError('TIMEOUT','Export preflight expired');
-          throw new ProtocolError('UNAUTHORIZED','Native export preflight denied');
+      let exportBinding:CompetitionToolExport|undefined;
+      try {
+        if(result.verification!=='mock')await options.prepareCompetitionToolExport?.({phase:'preflight',taskId,proposal:structuredClone(result),deadline:context.deadline,signal:context.signal});
+        exportBinding=worker?undefined:requireExportBinding(result,taskId,tools,options.toolExports,
+          options.toolCatalog!==undefined,'preflight',undefined,context.signal);
+      } catch(error) {
+        if(!context.signal.aborted && !runtime.getTask(taskId).cancelRequested && Date.now()<Date.parse(context.deadline)
+          && runtime.getTask(taskId).state==='running') {
+          context.saveCheckpoint('competition-preflight-withheld',{step,proposal:result});
+          runtime.transitionTask(taskId,'waiting_reconciliation',{
+            error:{code:'UNAUTHORIZED',message:'Original proposal retained pending native export preflight',retryable:false}});
+          return {resultSummary:'Competition export preflight requires native review',evidenceRefs};
         }
+        throw error;
       }
       if(context.signal.aborted || runtime.getTask(taskId).cancelRequested)throw new ProtocolError('CANCELLED','Export preflight cancelled');
       if(Date.now()>=Date.parse(context.deadline))throw new ProtocolError('TIMEOUT','Export preflight expired');
-      const exportBinding=worker?undefined:requireExportBinding(result,taskId,tools,options.toolExports,
-        options.toolCatalog!==undefined,'preflight',undefined,context.signal);
       const workerResult=worker?await worker.dispatch(result,{...context,revision:inputRevision}):undefined;
       const toolResult: ToolInvocationResult = workerResult??await tools.invoke({
         toolName: result.toolName,
@@ -316,7 +320,8 @@ export async function runCoordinationWorker(
             state: 'confirmed', result: exportedResult});
           exportedResult = projected.result;
         } catch {
-          withholdConfirmedExport(runtime,taskId);
+          if(runtime.getTask(taskId).state==='running')runtime.transitionTask(taskId,'waiting_reconciliation',{
+            error:{code:'UNAUTHORIZED',message:'Confirmed local result export withheld; revalidate the original receipt',retryable:false}});
           throw new ProtocolError('UNAUTHORIZED', 'Competition result export denied');
         }
         if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Competition result export cancelled');

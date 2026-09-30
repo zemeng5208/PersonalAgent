@@ -110,6 +110,7 @@ async function runSubagentWorker(options: SubagentHostOptions, subtask: SubtaskD
   childWorker: WorkerContext): Promise<WorkerResult> {
   if (childWorker.signal.aborted) throw new ProtocolError('CANCELLED', 'Subtask cancelled during execution');
   const runtime = options.getRuntime();
+  if(runtime.hasPrivateDerivedCopy(childWorker.taskId))throw new ProtocolError('UNAUTHORIZED','A parent private consumption license cannot authorize a child or provider');
   const roleLabel = subtask.roleLabel?.trim() || DEFAULT_ROLE_LABELS[subtask.role];
   childWorker.reportProgress({stepId: `child-${subtask.subtaskId}`, label: `[${roleLabel}] 正在执行: ${subtask.goal}`});
   const priorExecution = childWorker.loadCheckpoint('subtask-execution-binding') as {kind?:string}|undefined;
@@ -209,7 +210,14 @@ export async function resumeRuntimeSubagentTask(options: SubagentHostOptions, ch
   }
   const execution = runtime.loadCheckpoint(childTaskId, 'subtask-execution-binding') as {kind?: string} | undefined;
   const defaultChild = execution?.kind === 'competition' || runtime.loadCheckpoint(childTaskId, 'subtask-coordination-binding') !== undefined;
-  const competition=runtime.loadCheckpoint(childTaskId,'competition-loop') as {pending?:unknown;continuation?:unknown}|undefined;
+  const competition=runtime.loadCheckpoint(childTaskId,'competition-loop') as {step?:number;pending?:{toolName:string;arguments:Record<string,unknown>};continuation?:unknown}|undefined;
+  const preflight=runtime.loadCheckpoint(childTaskId,'competition-preflight-replay') as {step:number;proposal:unknown}|undefined;
+  if(defaultChild && preflight && preflight.step===competition?.step && isDeepStrictEqual(preflight.proposal,competition?.pending)
+    && !runtime.readToolExecutions(childTaskId).some(record=>record.evidenceId===`competition-tool-${childTaskId}-${competition?.step}`
+      || record.state==='started'||record.state==='unknown')) {
+    return runtime.runTask(childTaskId,worker=>runSubagentWorker(options,binding,worker),
+      {deadline:binding.parentDeadline,sideEffect:subagentSideEffect(options,runtime,childTaskId),resume:true});
+  }
   const replay=runtime.loadCheckpoint(childTaskId,'competition-confirmed-replay') as {runId:string;inputDigest:string}|undefined;
   if(defaultChild && !competition?.pending && competition?.continuation && replay
     && runtime.readToolExecutions(childTaskId).some(record=>record.evidenceId===replay.runId && record.inputDigest===replay.inputDigest
@@ -241,14 +249,14 @@ export async function resumeRuntimeSubagentTask(options: SubagentHostOptions, ch
     runId=`skill-read-${childTaskId}-${intent.input.digest.slice(0,16)}`;
     toolName='mcp.workspace.read_text';argumentsValue={path:intent.input.path};
   }
-  const approval = runtime.getApproval(runId);
   const confirmed=runtime.readToolExecutions(childTaskId).some(record=>record.evidenceId===runId
     && record.state==='confirmed' && record.executionStarted && record.policyDecision==='allow'
     && record.toolName===toolName && runtime.matchesToolExecutionInput(record,{arguments:argumentsValue,scopeRef:runId}));
-  if (approval.taskId !== childTaskId || approval.state !== 'allowed'
+  const approval = confirmed?undefined:runtime.getApproval(runId);
+  if (!confirmed && (!approval || approval.taskId !== childTaskId || approval.state !== 'allowed'
     || approval.toolName !== toolName
     || approval.argumentsDigest !== toolArgumentsDigest(argumentsValue)
-    || (!confirmed && !runtime.policy.get(runId))) {
+    || !runtime.policy.get(runId))) {
     throw new ProtocolError('UNAUTHORIZED', 'Subagent invocation is not approved or grant was revoked');
   }
   const cancel = () => {

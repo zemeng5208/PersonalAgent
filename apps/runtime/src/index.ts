@@ -1,4 +1,5 @@
 import {createHash, randomUUID} from 'node:crypto';
+import {isDeepStrictEqual} from 'node:util';
 import type {DatabaseSync, SQLInputValue} from 'node:sqlite';
 import {parseEvent, parseRequest, parseResponse, PROTOCOL_VERSION, ProtocolError, validateContract} from '@personal-agent/contracts';
 import type {Event, Operation, Request, Response, Result, TaskSnapshot, ToolDescriptor} from '@personal-agent/contracts';
@@ -506,8 +507,10 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
          AND t.state = 'succeeded'
          AND t.result_summary IS NOT NULL
          AND e.sequence < ?
+         AND EXISTS (SELECT 1 FROM task_events completed WHERE completed.task_id=t.task_id
+           AND completed.type='task.completed' AND completed.sequence < ?)
        ORDER BY e.sequence DESC LIMIT ?`,
-    ).all(normalizedConversationId, currentEvent.sequence, limit) as unknown as ConversationTurn[];
+    ).all(normalizedConversationId, currentEvent.sequence,currentEvent.sequence, limit) as unknown as ConversationTurn[];
 
     return rows.reverse().filter(row=>!['private-copy-erasure','private-memory:consumption:v1','private-derived-output','knowledge-recheck-result']
       .some(key=>this.loadCheckpoint(row.taskId,key)!==undefined)).map(row => ({
@@ -515,6 +518,14 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
       goal: row.goal,
       resultSummary: row.resultSummary,
     }));
+  }
+
+  readTaskCreation(taskId:string):{taskId:string;occurredAt:string;sequence:number} {
+    this.getTask(taskId);
+    const row=this.db.prepare("SELECT occurred_at,sequence FROM task_events WHERE task_id=? AND type='task.created' ORDER BY sequence LIMIT 1")
+      .get(taskId) as {occurred_at:string;sequence:number}|undefined;
+    if(!row)throw new RuntimeError('NOT_FOUND','Task creation record is unavailable');
+    return {taskId,occurredAt:row.occurred_at,sequence:row.sequence};
   }
 
   /** Host-only metadata inventory. Descendants are copies, never inherited consumption licenses. */
@@ -556,6 +567,17 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     const current=this.privateCopyIdentity(taskId);
     if(marker.taskId!==taskId || marker.factId!==current.factId || marker.bindingDigest!==current.bindingDigest)return undefined;
     return {taskId,factId:marker.factId,bindingDigest:marker.bindingDigest,state:'purged'};
+  }
+
+  hasPrivateDerivedCopy(taskId:string):boolean {
+    let afterTaskId:string|undefined;
+    for(;;) {
+      const page=this.listBindings({limit:100,...(afterTaskId?{afterTaskId}:{})});
+      const item=page.items.find(item=>item.taskId===taskId);
+      if(item)return item.binding.copyOnly===true;
+      if(!page.nextAfterTaskId)return false;
+      afterTaskId=page.nextAfterTaskId;
+    }
   }
 
   private privateCopyIdentity(taskId:string):{factId:string;bindingDigest:string} {
@@ -776,6 +798,7 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
         case 'tool.invoke': {
           if (!this.toolGateway) throw new RuntimeError('UNSUPPORTED_CAPABILITY', 'Tool gateway is not configured');
           if (!request.taskId) throw new RuntimeError('INVALID_ARGUMENT', 'tool.invoke requires a taskId');
+          if(this.loadCheckpoint(request.taskId,'private-copy-erasure')!==undefined)throw new RuntimeError('UNAUTHORIZED','Private task copies are withheld');
           const task = this.getTask(request.taskId);
           if (task.state !== 'running') {
             throw new RuntimeError('REVISION_CONFLICT', 'Tools can only be invoked for a running task');
@@ -1341,6 +1364,22 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
   }
 
   /** Reopen only the worker continuation of a cached, authorized original run. No execution or grant. */
+  prepareExportPreflightReplay(taskId:string):TaskSnapshot {
+    return this.transaction(()=> {
+      const task=this.getTask(taskId);
+      const loop=this.loadCheckpoint(taskId,'competition-loop') as {step:number;pending?:unknown}|undefined;
+      const withheld=this.loadCheckpoint(taskId,'competition-preflight-withheld') as {step:number;proposal:unknown}|undefined;
+      if(task.state!=='waiting_reconciliation' || task.cancelRequested || this.loadCheckpoint(taskId,'private-copy-erasure')
+        || !loop?.pending || !withheld || loop.step!==withheld.step || !isDeepStrictEqual(loop.pending,withheld.proposal)
+        || this.readToolExecutions(taskId).some(record=>record.state==='started'||record.state==='unknown'
+          || record.evidenceId===`competition-tool-${taskId}-${loop.step}`)) {
+        throw new RuntimeError('UNAUTHORIZED','Only an unexecuted original preflight may resume');
+      }
+      this.saveCheckpoint(taskId,'competition-preflight-replay',withheld);
+      return this.updateTask(taskId,'waiting_approval',{error:null},false);
+    });
+  }
+
   prepareConfirmedReplay(taskId:string,input:{runId:string;toolName:string;toolVersion:string;arguments:Record<string,unknown>}):TaskSnapshot {
     return this.transaction(()=> {
       const task=this.getTask(taskId),record=this.readToolExecutions(taskId).find(item=>item.evidenceId===input.runId);

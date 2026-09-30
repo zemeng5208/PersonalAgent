@@ -30,7 +30,7 @@ import {MailReadSessions, MAIL_READ_SESSION_CHECKPOINT, MAIL_READ_TOOL, MAIL_REA
 import type {StartMailReadSessionRequest, MailReadSession} from './mail-read-session.js';
 import {createRuntimeSubagentDispatchTool, resumeRuntimeSubagentTask, readRuntimeSubagentSummary,
   SUBAGENT_DISPATCH_TOOL_NAME} from './subagent-host.js';
-import {verifyKnowledgeFeedReceiptBinding,createKnowledgeFeedReceiptFromCollectResult,createKnowledgeFeedReceiptFromConfirmedExecution,knowledgeFeedReceiptItems} from './knowledge-feed-receipt.js';
+import {verifyKnowledgeFeedReceiptBinding,createKnowledgeFeedReceiptFromConfirmedExecution,knowledgeFeedReceiptItems} from './knowledge-feed-receipt.js';
 import type {KnowledgeFeedQuotedItem} from './knowledge-feed-receipt.js';
 import {planKnowledgeReevaluation,LayaActionChoiceService,actionArgumentsDigest} from '@personal-agent/cognition';
 import type {LayaActionChoiceRequest} from '@personal-agent/cognition';
@@ -291,7 +291,7 @@ export interface CloudSkillRuntimeHostPort {
   dispatchCloudSkillProposal(proposal:import('@personal-agent/coordination').CoordinationToolProposalResult,context:Omit<CloudSkillContext,'proposalId'>):Promise<CloudSkillReceipt>;
   assertReceiptAllowed(selection:CloudSkillSelection,receipt:CloudSkillReceipt,context:CloudSkillContext):void;
 }
-export interface ConversationContextMessage {id:string; role:'user'|'assistant'; content:string; taskId?:string; withheld?:boolean;}
+export interface ConversationContextMessage {id:string; role:'user'|'assistant'; content?:string;text?:string;createdAt?:string; taskId?:string; withheld?:boolean;}
 /** All hooks are trusted host composition, never model supplied. Bodies remain process-local. */
 export interface CoordinationInputHooks {
   prepareCoordinationGoal?: (scope:CoordinationGoalScope)=>Promise<string>;
@@ -579,6 +579,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       || binding.deadline!==this.runtime.loadCheckpoint(taskId,'application-deadline')
       || binding.userGoalDigest!==createHash('sha256').update(task.goal).digest('hex')
       || !plainObject(binding.fact) || !plainObject(binding.fact.ref)
+      || Object.keys(binding.fact.ref).sort().join(',')!=='id,revision'
       || !nonEmptyText(binding.fact.ref.id) || !Number.isSafeInteger(binding.fact.ref.revision)
       || (binding.fact.ref.revision as number)<1 || !sha256(binding.fact.summaryDigest) || !sha256(binding.fact.sourceDigest)
       || Object.keys(binding).sort().join(',')!=='configurationRef,conversationId,deadline,destination,fact,taskId,userGoalDigest'
@@ -610,7 +611,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     if(request.signal.aborted || task.cancelRequested || task.state!=='running'
       || task.revision!==request.revision || !Number.isFinite(Date.parse(request.deadline))
       || this.now().getTime()>=Date.parse(request.deadline)
-      || this.runtime.loadCheckpoint(request.taskId,'private-copy-erasure')) {
+      || this.runtime.loadCheckpoint(request.taskId,'private-copy-erasure') || this.runtime.hasPrivateDerivedCopy(request.taskId)) {
       throw new ProtocolError('UNAUTHORIZED','Coordination input binding is no longer active');
     }
     const child=this.runtime.loadCheckpoint(request.taskId,'subtask-parent') as {parentTaskId?:string;parentDeadline?:string}|undefined;
@@ -642,10 +643,10 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     const ids=new Set<string>();
     const context=messages.filter(message=> {
       if(!nonEmptyText(message.id) || ids.has(message.id) || !['user','assistant'].includes(message.role)
-        || typeof message.content!=='string')throw new ProtocolError('INVALID_ARGUMENT','Invalid conversation context');
+        || typeof (message.content??message.text)!=='string')throw new ProtocolError('INVALID_ARGUMENT','Invalid conversation context');
       ids.add(message.id);
       return !message.withheld && (!message.taskId || !this.isHistoryWithheld(message.taskId));
-    }).slice(-CONVERSATION_HISTORY_LIMIT);
+    }).slice(-CONVERSATION_HISTORY_LIMIT).map(message=>({...message,content:(message.content??message.text)!}));
     const privateDerived=prepared!==request.goal || this.runtime.loadCheckpoint(task.taskId,'private-memory:consumption:v1')!==undefined;
     // Context is data, never instructions or an authorization. It is not checkpointed.
     const goal=context.length ? JSON.stringify({publicGoal:request.goal,ephemeralGoal:prepared,
@@ -682,7 +683,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
   }
 
   isHistoryWithheld(taskId:string):boolean {
-    return this.runtime.loadCheckpoint(taskId,'private-memory:consumption:v1')!==undefined
+    return this.runtime.hasPrivateDerivedCopy(taskId) || this.runtime.loadCheckpoint(taskId,'private-memory:consumption:v1')!==undefined
       || this.runtime.loadCheckpoint(taskId,'private-derived-output')!==undefined
       || this.runtime.loadCheckpoint(taskId,'private-copy-erasure')!==undefined
       || this.runtime.loadCheckpoint(taskId,KNOWLEDGE_RECHECK_RESULT_KEY)!==undefined;
@@ -695,17 +696,21 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     if(task.conversationId!==input.conversationId || !Number.isFinite(Date.parse(input.deadline)) || input.signal.aborted
       || this.now().getTime()>=Date.parse(input.deadline))throw new ProtocolError('UNAUTHORIZED','Conversation scope expired');
     const result=new Map<string,ConversationContextMessage>();
+    const cutoff=this.runtime.readTaskCreation(input.taskId);
     for(const turn of this.runtime.readConversationHistory(input.conversationId,input.taskId,CONVERSATION_HISTORY_LIMIT)) {
       if(this.isHistoryWithheld(turn.taskId))continue;
       result.set(turn.taskId+':user',{id:turn.taskId+':user',taskId:turn.taskId,role:'user',content:turn.goal});
       result.set(turn.taskId+':assistant',{id:turn.taskId+':assistant',taskId:turn.taskId,role:'assistant',content:assistantText(turn.resultSummary)});
     }
     for(const message of input.historyMessages??[]) {
-      if(!nonEmptyText(message.id) || !['user','assistant'].includes(message.role) || typeof message.content!=='string') {
+      if(!nonEmptyText(message.id) || !['user','assistant'].includes(message.role) || typeof (message.content??message.text)!=='string') {
         throw new ProtocolError('INVALID_ARGUMENT','Invalid history overlay');
       }
-      if(message.withheld || (message.taskId && this.isHistoryWithheld(message.taskId)))result.delete(message.id);
-      else if(message.taskId!==input.taskId)result.set(message.id,structuredClone(message));
+      const beforeCutoff=message.taskId ? this.runtime.readTaskCreation(message.taskId).sequence<cutoff.sequence
+        :typeof message.createdAt==='string' && Number.isFinite(Date.parse(message.createdAt))
+          && Date.parse(message.createdAt)<Date.parse(cutoff.occurredAt);
+      if(message.withheld || !beforeCutoff || (message.taskId && this.isHistoryWithheld(message.taskId)))result.delete(message.id);
+      else if(message.taskId!==input.taskId)result.set(message.id,{...structuredClone(message),content:(message.content??message.text)!});
     }
     return [...result.values()].slice(-CONVERSATION_HISTORY_LIMIT);
   }
@@ -1227,7 +1232,8 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     }
     return {commandId: intent.commandId, toolName: intent.toolName, toolVersion: intent.toolVersion,
       task, ...(approval ? {approval} : {}),
-      ...(task.state === 'succeeded' && result ? {confirmed: {runId, result: result.result, evidenceRefs: [runId]}} : {})};
+      ...(task.state === 'succeeded' && result && Object.hasOwn(result,'result')
+        && this.runtime.loadCheckpoint(taskId,'private-copy-erasure')===undefined ? {confirmed: {runId, result: result.result, evidenceRefs: [runId]}} : {})};
   }
 
   private workspacePatchBindingFor(toolName: string): string | undefined {
@@ -1492,11 +1498,12 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       if(result.state==='confirmed') {
         this.assertReferenceSkillEvidence(context.taskId,input,result.evidenceRefs);
         const loop=context.loadCheckpoint('competition-loop') as {pending?:import('@personal-agent/coordination').CoordinationToolProposalResult}|undefined;
-        if(loop?.pending && this.coordinationWorkers.accepts(loop.pending)) {
+        if(loop?.pending?.toolName===CLOUD_SKILL_TOOL_NAME) {
           await this.prepareCompetitionToolExport?.({phase:'projection',taskId:context.taskId,
             proposal:structuredClone(loop.pending),deadline:context.deadline,signal:context.signal});
-          if(context.signal.aborted)throw new ProtocolError('CANCELLED','Skill result export cancelled');
+          if(context.signal.aborted || this.runtime.getTask(context.taskId).cancelRequested)throw new ProtocolError('CANCELLED','Skill exact export consent cancelled');
           if(this.now().getTime()>=Date.parse(context.deadline))throw new ProtocolError('TIMEOUT','Skill result export expired');
+          this.assertReferenceSkillEvidence(context.taskId,input,result.evidenceRefs);
         }
       }
       if(result.state==='unknown' && this.runtime.getTask(context.taskId).state==='running')this.runtime.transitionTask(context.taskId,'waiting_reconciliation');
@@ -1617,6 +1624,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     const intent=this.runtime.loadCheckpoint(taskId,REFERENCE_SKILL_TASK) as {input:ReferenceSummaryInput;deadline:string}|undefined;
     if (!intent || this.now().getTime()>=Date.parse(intent.deadline)) return task;
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),Math.max(1,Date.parse(intent.deadline)-this.now().getTime()));
+    let resumeCompetition=false;
     const execution=(async()=>{
       await this.assertReferenceSkillBinding?.(taskId);
       const result=await this.referenceSkill!.invoke(intent.input,{taskId,deadline:intent.deadline,signal:controller.signal,
@@ -1633,10 +1641,16 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       }
       if (this.runtime.getTask(taskId).state!=='waiting_reconciliation') return this.runtime.getTask(taskId);
       if (this.runtime.getTask(taskId).cancelRequested) return this.runtime.transitionTask(taskId,'cancelled',{evidenceRefs:[...result.evidenceRefs]});
+      if(this.runtime.loadCheckpoint(taskId,'competition-loop')!==undefined) {
+        resumeCompetition=true;return this.runtime.getTask(taskId);
+      }
       this.runtime.transitionTask(taskId,'verifying');
       return this.runtime.transitionTask(taskId,'succeeded',{resultSummary:result.resultSummary??'Reference summary confirmed',evidenceRefs:[...result.evidenceRefs],error:null});
     })().finally(()=>{clearTimeout(timer);this.activeTextTasks.delete(taskId);});
-    this.activeTextTasks.set(taskId,execution);return execution;
+    this.activeTextTasks.set(taskId,execution);
+    const completed=await execution;
+    if(resumeCompetition)this.resumeConfirmedTask(taskId);
+    return resumeCompetition?this.runtime.getTask(taskId):completed;
   }
 
   resumeTask(taskId: string): void {
@@ -1683,10 +1697,21 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
       if (typeof deadline !== 'string') throw new ProtocolError('NOT_FOUND', 'Task has no deadline checkpoint');
       const competition = this.runtime.loadCheckpoint(taskId, 'competition-loop') as {step: number;pending?:{toolName:string;arguments:Record<string,unknown>};continuation?:unknown} | undefined;
       const replay=this.runtime.loadCheckpoint(taskId,'competition-confirmed-replay') as {runId:string;inputDigest:string}|undefined;
-      const continuationReplay=competition?.pending===undefined && competition?.continuation!==undefined
-        && replay && this.runtime.readToolExecutions(taskId).some(record=>record.evidenceId===replay.runId && record.inputDigest===replay.inputDigest
-          && record.state==='confirmed' && record.executionStarted && record.policyDecision==='allow');
-      if (!this.confirmedSubagentWait(taskId) && !continuationReplay) {
+      const preflight=this.runtime.loadCheckpoint(taskId,'competition-preflight-replay') as {step:number;proposal:unknown}|undefined;
+      const preflightReplay=!!preflight && preflight.step===competition?.step && isDeepStrictEqual(preflight.proposal,competition?.pending)
+        && !this.runtime.readToolExecutions(taskId).some(record=>record.evidenceId===`competition-tool-${taskId}-${competition?.step}`
+          || record.state==='started'||record.state==='unknown');
+      const continuationReplay=!!replay && this.runtime.readToolExecutions(taskId).some(record=> {
+        if(record.evidenceId!==replay.runId || record.inputDigest!==replay.inputDigest || record.state!=='confirmed'
+          || !record.executionStarted || record.policyDecision!=='allow')return false;
+        if(!competition?.pending)return competition?.continuation!==undefined;
+        const intent=this.runtime.loadCheckpoint(taskId,REFERENCE_SKILL_TASK) as {input:ReferenceSummaryInput}|undefined;
+        const skill=competition.pending.toolName===REFERENCE_SKILL_WORKER_TOOL;
+        return record.evidenceId===(skill && intent?`skill-read-${taskId}-${intent.input.digest.slice(0,16)}`:`competition-tool-${taskId}-${competition.step}`)
+          && record.toolName===(skill?'mcp.workspace.read_text':competition.pending.toolName)
+          && this.runtime.matchesToolExecutionInput(record,{arguments:skill && intent?{path:intent.input.path}:competition.pending.arguments,scopeRef:record.evidenceId});
+      });
+      if (!this.confirmedSubagentWait(taskId) && !continuationReplay && !preflightReplay) {
         const skillIntent=this.runtime.loadCheckpoint(taskId,REFERENCE_SKILL_TASK) as {input:ReferenceSummaryInput}|undefined;
         const skillPending=competition?.pending?.toolName===REFERENCE_SKILL_WORKER_TOOL;
         const selection=this.runtime.loadCheckpoint(taskId,'skill:cloud-selection:v1') as {choice:unknown;source:{path:string}}|undefined;
@@ -1742,6 +1767,12 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
     const receipt=loop?.receipts?.find(item=>item.proposal.proposalId===loop.continuation?.proposalId);
     const proposal=loop?.pending??receipt?.proposal;
     if(!proposal || !Number.isSafeInteger(loop?.step))throw new ProtocolError('NOT_FOUND','No original Competition tool continuation');
+    if(this.runtime.loadCheckpoint(taskId,'competition-preflight-withheld')!==undefined
+      && !this.runtime.readToolExecutions(taskId).some(record=>record.evidenceId===`competition-tool-${taskId}-${loop!.step}`)) {
+      const originalDeadline=this.runtime.loadCheckpoint(taskId,'application-deadline');
+      if(typeof originalDeadline!=='string' || this.now().getTime()>=Date.parse(originalDeadline))throw new ProtocolError('TIMEOUT','Original preflight expired');
+      this.runtime.prepareExportPreflightReplay(taskId);this.resumeTask(taskId);return;
+    }
     if(proposal.toolName===SUBAGENT_DISPATCH_TOOL_NAME && !this.confirmedSubagentWait(taskId))throw new ProtocolError('RESULT_UNKNOWN','Original children are not reconciled');
     let input={runId:receipt?.runId??`competition-tool-${taskId}-${loop!.step}`,...proposal};
     if(proposal.toolName===REFERENCE_SKILL_WORKER_TOOL) {
@@ -1909,7 +1940,9 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
           || !original.executionStarted || original.policyDecision!=='allow' || original.inputDigest!==provenance.inputDigest
           || !this.runtime.matchesToolExecutionInput(original,{arguments:provenance.arguments,scopeRef:provenance.runId})
           || !cached || hashJson(cached.result)!==provenance.resultDigest
-          || !isDeepStrictEqual(createKnowledgeFeedReceiptFromCollectResult({namespace:options.namespace,sourceId:options.sourceId,result:cached.result}),verified)) {
+          || !isDeepStrictEqual(createKnowledgeFeedReceiptFromConfirmedExecution({namespace:options.namespace,sourceId:options.sourceId,
+            taskId:provenance.taskId,runId:provenance.runId,toolVersion:original.toolVersion,
+            query:provenance.arguments,scopeRef:provenance.runId,runtime:this.runtime}),verified)) {
           throw new ProtocolError('UNAUTHORIZED','Feed receipt differs from original execution Evidence');
         }
         return verified;
