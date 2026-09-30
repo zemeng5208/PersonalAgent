@@ -1,4 +1,4 @@
-import {ProtocolError, validateToolValue} from '@personal-agent/contracts';
+import {ProtocolError, validateToolValue,validateContract} from '@personal-agent/contracts';
 import {createHash} from 'node:crypto';
 import type {Event, Request, Response, RegisteredTool, TaskSnapshot, ToolDescriptor} from '@personal-agent/contracts';
 import {RuntimeToolInvoker} from '@personal-agent/agents';
@@ -345,9 +345,21 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
         }
         automaticTools.add(JSON.stringify([binding.toolName, binding.toolVersion]));
       }
-      const invoker = new RuntimeToolInvoker(this.runtime, descriptors);
-      this.tools = {list: () => structuredClone(descriptors), invoke: async invocation => {
-        const tool = descriptors.find(item => item.name === invocation.toolName && item.version === invocation.toolVersion);
+      const currentDescriptors=()=>{
+        const current=gateway!.list();
+        if(current.length!==descriptors.length) throw new ProtocolError('UNAUTHORIZED','Registered tool set changed');
+        for(const descriptor of current) {
+          validateContract('tool',descriptor);
+          const baseline=descriptors.find(item=>item.name===descriptor.name && item.version===descriptor.version);
+          if(!baseline || !isDeepStrictEqual({...baseline,inputSchema:undefined},{...descriptor,inputSchema:undefined})) {
+            throw new ProtocolError('UNAUTHORIZED','Registered tool permissions changed');
+          }
+        }
+        return current;
+      };
+      this.tools = {list: currentDescriptors, invoke: async invocation => {
+        const current=currentDescriptors();
+        const tool = current.find(item => item.name === invocation.toolName && item.version === invocation.toolVersion);
         if (!tool) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Tool is not registered');
         validateToolValue(tool.inputSchema, invocation.arguments);
         const observationSession = this.runtime.loadCheckpoint(invocation.taskId, SYSTEM_OBSERVATION_SESSION_CHECKPOINT);
@@ -400,7 +412,7 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
           if (approval.state === 'allowed') throw new ProtocolError('UNAUTHORIZED', 'Tool grant was revoked');
           return {state: 'pending', evidenceRefs: []};
         }
-        const result = await invoker.invoke({...invocation, authorizationRef: ref});
+        const result = await new RuntimeToolInvoker(this.runtime,current).invoke({...invocation, authorizationRef: ref});
         if (tool.name !== SUBAGENT_DISPATCH_TOOL_NAME || result.state !== 'confirmed') return result;
         // Dispatch was confirmed; aggregate actual children without executing it again.
         const summary = readRuntimeSubagentSummary(this.runtime, invocation.taskId);

@@ -25,6 +25,7 @@
     "@personal-agent/cognition": "0.1.0-alpha.1",
     "@personal-agent/coordination": "0.1.0-alpha.1",
     "@personal-agent/coding-tools": "0.1.0-alpha.1",
+    "@personal-agent/learning": "0.1.0-alpha.1",
     "@personal-agent/goals": "0.1.0-alpha.1",
     "@personal-agent/feeds": "0.1.0-alpha.1",
     "@personal-agent/productivity": "0.1.0-alpha.1",

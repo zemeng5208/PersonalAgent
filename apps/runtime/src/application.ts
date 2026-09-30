@@ -73,3 +73,7 @@ export type {ReadonlyMcpOptions, McpHealth} from '@personal-agent/mcp';
 export {createReferenceSummarySkill, REFERENCE_SUMMARY_SKILL_ID, REFERENCE_SUMMARY_SKILL_VERSION} from '@personal-agent/skills';
 export type {SkillManifest, SkillOutcome, ReferenceSummaryInput, ReferenceSummaryOptions,
   SkillReadReconciliationPort, SkillReadReconciliationQuery} from '@personal-agent/skills';
+export {createTrustedKnowledgeTools} from './application/knowledge-tools.js';
+export type {TrustedKnowledgeSource,TrustedKnowledgeBinding,KnowledgeToolTaskBindings} from './application/knowledge-tools.js';
+export {createWorkflowLearningApplication,createBoundPublicFactErasureApplication,LEARNING_BINDING_CHECKPOINT} from './application/memory-learning.js';
+export type {WorkflowLearningOptions,LearningTaskBinding,LearningSkillManifest} from './application/memory-learning.js';

@@ -24,4 +24,10 @@
 
 ## 尚未完成
 
-知识库与记忆/学习正式 facade、Skill 云端分派及 RSS 来源证据仍在接线；真实 Goal/Laya/v16 云源/Policy/CAS、账户服务、原生桌面和恢复整体验收未执行。上述定向通过不等于 MVP 完成或产品发布。
+知识库与记忆/学习正式 facade 已接到原生选择/确认及原任务端口；私人写入基于实际无应用副本 inventory 和删除维护，精确 previewSave 基线必需。PRIVATE 知识不进入云目录/结果，旧 ENV 默认知识路径及直接 execute/fake scope 已移除。公共事实删除使用原 FactHost 同源闭包，不打开第二数据库。
+
+已许可本会话的固定 MCP 只读工具进入精确 routine 白名单；新增真实 stdio+SQLite case 1/1 通过，无重复审批，停用后零新增读取。无 routine 的审批/恢复 case 保留。
+
+实际 Goal 验收入口 `tests/manual/cognition/p8-real-reviewed-goal.mjs` 已准备。使用既有 Electron 安全存储 profile 读取凭据，Runtime/graph/task 在新 `.cache/p5-real-reviewed-goal/<UUID>` 隔离目录，未输出凭据。初次 ESM ready 等待已修复并按 exe/command/starttime 收尾原隔离进程；独立新 profile 无法读取原安全存储后零云退出。受信 profile 配置随后实际可读，Laya 启动返回 `memory_insufficient`、ready false，stop 返回 stopped；同次 cloudCalls=0。此结果保存于该目录 `b5683f90-2d4f-4138-be67-0b1ca41ee880/result.json`。未降 2 GB 门槛、未关闭用户应用，未获得实际推理/Goal/CAS/云证据。
+
+Skill 云端分派、私人记忆实际按任务消费、RSS 来源 Evidence 与知识写入未知结果最后释放仍在接线；真实 Goal/Laya/v16 云源/Policy/CAS、账户服务、原生桌面和恢复整体验收未完成。上述定向通过不等于 MVP 完成或产品发布。
