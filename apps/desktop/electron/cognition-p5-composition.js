@@ -402,11 +402,16 @@ export function createCognitionP5Composition({
         meetings: records.slice(-20).map(({receipt}) => ({eventId: receipt.eventId,
           status: receipt.status, graphRevisionAfter: receipt.graphRevisionAfter,
           confidence: receipt.confidence, actionId: receipt.actionId,
+          selectionState: receipt.selection?.state, selectionReason: receipt.selection?.reason,
+          selectionReceiptId: receipt.selection?.receipt?.id, calibrated: false,
           retryableInference: receipt.retryableInference === true,
           // This is an internal graph commit, never proof of provider reschedule.
           calendarWriteVerified: false})),
         devices: devices.map(({source, pendingDeliveryId, receipt}) => ({source,
           status: receipt?.status ?? 'unobserved', notificationDelivered: receipt?.notificationDelivered === true,
+          selectionState: receipt?.selection?.state, selectionReason: receipt?.selection?.reason,
+          selectionReceiptId: receipt?.selection?.receipt?.id, confidence: receipt?.selection?.answerConfidence ?? null,
+          calibrated: false,
           deliveryNeedsReconciliation: Boolean(pendingDeliveryId), receiptId: receipt?.receiptId})),
       };
     },
