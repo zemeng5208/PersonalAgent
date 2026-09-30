@@ -1,7 +1,6 @@
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
-import * as models from '@personal-agent/models';
 
 const providers = new Set(['pangu', 'openai-compatible']);
 const fail = message => { throw Error(message); };
@@ -22,7 +21,7 @@ function validateRecord(value) {
 }
 
 /** Trusted main process only. Snapshot is safe for IPC; no endpoint is contacted while saving. */
-export function createModelApiConfig({userData, safeStorage, modelApi = models}) {
+export function createModelApiConfig({userData, safeStorage, createGateway}) {
   const target = path.join(userData, 'model-api-config.json');
   let entries = new Map(), defaultId, restoreFailed = false, disposed = false;
   const gateways = new Map();
@@ -59,9 +58,7 @@ export function createModelApiConfig({userData, safeStorage, modelApi = models})
       renameSync(temporary, target);
     } catch {fail('模型加密配置保存失败');}
   };
-  const available = entry => typeof modelApi.ModelGateway === 'function'
-    && typeof modelApi.StructuredToolProvider === 'function'
-    && typeof modelApi[entry.provider === 'pangu' ? 'PanguModelProvider' : 'OpenAICompatibleModelProvider'] === 'function';
+  const available = () => typeof createGateway === 'function';
   const snapshot = () => ({
     configured: !disposed && [...entries.values()].some(entry => entry.enabled && available(entry)),
     defaultId: defaultId ?? '',
@@ -85,10 +82,11 @@ export function createModelApiConfig({userData, safeStorage, modelApi = models})
     const assertCurrent = () => {
       if (disposed || entries.get(id) !== entry || !entry.enabled) fail('模型配置已撤销或更改');
     };
-    const Provider = modelApi[entry.provider === 'pangu' ? 'PanguModelProvider' : 'OpenAICompatibleModelProvider'];
-    const provider = new modelApi.StructuredToolProvider(new Provider({baseUrl: entry.baseUrl,
-      model: entry.model, deployment: entry.id, apiKey: () => {assertCurrent(); return entry.apiKey;}}));
-    const gateway = new modelApi.ModelGateway({deployment: provider.deployment, async complete(request) {
+    const modelGateway = createGateway({provider: entry.provider, baseUrl: entry.baseUrl,
+      model: entry.model, deployment: entry.id,
+      apiKey: () => {assertCurrent(); return entry.apiKey;}});
+    if (!modelGateway || typeof modelGateway.complete !== 'function') fail('受信模型网关不可用');
+    const gateway = {deployment: modelGateway.deployment, async complete(request) {
       assertCurrent();
       const controller = new AbortController();
       const abort = () => controller.abort(request.signal.reason);
@@ -97,7 +95,7 @@ export function createModelApiConfig({userData, safeStorage, modelApi = models})
       request.signal.addEventListener('abort', abort, {once: true});
       if (request.signal.aborted) abort();
       try {
-        const result = await provider.complete({...request, signal: controller.signal});
+        const result = await modelGateway.complete({...request, signal: controller.signal});
         assertCurrent();
         return result;
       } finally {
