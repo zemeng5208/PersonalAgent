@@ -5,6 +5,47 @@ Profile：`huawei_ict_agentarts`。隔离工作树登记：`.worktrees/subagent-
 分支 `codex/zemeng/subagent-model-config`，基线 main `4249ace1`（含批准的 #244/#246）。
 状态：review；本包不承担共享 main/preload/Admin/Runtime Application 挂载。
 
+## 默认 Competition 子任务执行策略（完整 MVP 增量）
+
+`SubagentHostOptions` / `DesktopSubagentDispatchToolOptions` 新增受信进程内端口：
+
+```ts
+runDefaultWorker?: (subtask: SubtaskDefinition, worker: WorkerContext, tools: AgentToolPort) => Promise<WorkerResult>;
+getToolsForSubtask?: (subtask: SubtaskDefinition, worker: WorkerContext) => AgentToolPort | undefined;
+```
+
+P8 注入 `RuntimeApplication.runDefaultSubagentWorker`；它复用主 Competition 配置与原
+Coordination worker，无需独立模型 API。SubagentHost 已在同一 TaskRuntime 中调用 child
+runTask，注入端口不得再次对该 child 调用 runTask 或复制协调/工具循环。默认 worker
+负责 application-profile/deadline、Cloud 配置身份与 competition-max-steps/checkpoint，
+用第三参数限定 tools 构造同源 catalog，并保留 Policy/Gateway/真实 Evidence 与本地终态。
+
+只在 subtask.model 未指定时走注入 Competition 策略；显式 model（含未知模型）只查对应
+独立 API，空白 model 拒绝。不在默认 worker 失败后回退 API。Standalone 未注入时保留
+现有 registry/default API 兼容路径；生产 P8 必须注入真实 Competition worker。
+`subtask-execution-binding` 固定 competition/model，旧 agent-loop / cloud binding 不能换策略。
+默认 cloud 无原生 reasoning 支持声明，thinkingDepth 仅控制单独步骤预算。
+
+host 对每个 child 调用窄工具 getter（或现 getTools），剔除 subagent.dispatch 防递归，
+冻结完整工具描述到 subtask-tools-binding。invoke 验证 child task、deadline 和当前描述；
+重启/审批恢复改变工具范围拒绝，不能利用原 grant 扩权。角色/目标/原期限沿 subtask-parent
+持久绑定。多个 child 并行复用原 dispatchSubtasks，checkpoint 按单 child 切片、同步合并，
+保留兄弟 progress。原 deadline、父取消与实际子终态仍由原 TaskRuntime 负责。
+Competition 审批恢复读原 competition-loop，并匹配 competition-tool-childId-step 的
+allowed approval/工具/arguments digest/未撤销 grant；重聚合只读真实 child，不重执行父 dispatch。
+
+配置宿主新增 `isDefaultExecutionAvailable?: () => boolean` 受信回调，由 P8 注入实际
+Runtime `isDefaultSubagentAvailable()`。snapshot.defaultAvailable/defaultExecution 只按该
+回调严格 true（异常/未注入/非 Competition/释放均 false），不根据 enabled API 数量推断。
+`defaultModelAvailable` 仅说明独立 API 的 defaultId 真正存在且可选；configured 仍仅表示
+有独立 API 配置。独立控件明确区分默认 AgentArts worker 与独立 API 默认选项。
+调用器可用不等于云端结果已验证；真实验收必须由 P8 读原父子 task/tool/Evidence。
+
+本增量只构建新增 main 所需 calendar/cognition dist 与 Runtime；4 个新增定向用例验证
+默认端口双 child 与显式 API 并行/保存/重放、未知模型无默认回退、原审批单次恢复及范围变化
+拒绝不消费 grant、父取消双 child、enabled API 不冒充默认可用。真实 AgentArts 两 child
+分派与协作汇总、共享装配/readback 由 P8 单独执行，本包离线端口夹具不作真实云证明。
+
 ## 受信挂载接口（P8 唯一写入）
 
 ```js
