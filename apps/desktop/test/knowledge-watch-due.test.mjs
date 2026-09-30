@@ -7,7 +7,7 @@ const start = Date.parse('2026-09-30T00:00:00Z');
 const iso = time => new Date(time).toISOString();
 const namespace = 'fixture-user';
 
-function fixture({feedCollect, readTrackingGrant} = {}) {
+function fixture({feedCollect, readTrackingGrant, workPort, notificationPort} = {}) {
   let time = start;
   const rows = new Map();
   const schedules = new Map();
@@ -43,7 +43,7 @@ function fixture({feedCollect, readTrackingGrant} = {}) {
     },
   };
   const options = {profile: 'huawei_ict_agentarts', namespace, checkpointTaskId: 'root-task',
-    checkpoints, runtime, now: () => time, readTrackingGrant,
+    checkpoints, runtime, now: () => time, readTrackingGrant, workPort, notificationPort,
     interestDecider: {choose: async () => ({outcome: 'selected', requiresHostRevalidation: true,
       selected: {id: 'track_public', revision: 1}, receipt: {modelReceiptId: 'fixture-laya'}})},
     feedCollect: async (query, signal) => {
@@ -264,4 +264,45 @@ test('binding control becomes ready only after exact checkpoint v2 and judgment 
   assert.equal((await fx.host.bindObservedRevision('typescript')).accepted, true);
   assert.equal(fx.host.dialogueProjection().items[0].answer.kind, 'current_fact');
   fx.host.dispose();
+});
+
+test('due cancellation after feed read stops the delayed read/submit path and retains started work as unknown', async () => {
+  for (const gateAt of ['read', 'submit']) {
+    let release;
+    let entered;
+    const ready = new Promise(resolve => { entered = resolve; });
+    let submits = 0;
+    let notifications = 0;
+    const fx = fixture({workPort: {
+      async read({signal}) {
+        if (gateAt === 'read') { entered(); await new Promise(resolve => { release = resolve; }); }
+        assert.equal(signal instanceof AbortSignal, true);
+        return {state: 'absent'};
+      },
+      async submit({signal}) {
+        submits += 1;
+        if (gateAt === 'submit') { entered(); await new Promise(resolve => { release = resolve; }); }
+        assert.equal(signal instanceof AbortSignal, true);
+        return {accepted: true, taskId: 'started-runtime-work'};
+      },
+    }, notificationPort: {send: async () => { notifications += 1; return {delivered: false}; }}});
+    await fx.track();
+    const taskId = fx.fire(fx.register().schedule.scheduleId);
+    const controller = new AbortController();
+    const pending = fx.host.consumeFeedCheck(taskId, {signal: controller.signal});
+    await ready;
+    controller.abort();
+    release();
+    const result = await pending;
+    assert.equal(result.accepted, false, gateAt);
+    assert.equal(result.reason, 'source_operation_invalidated', gateAt);
+    assert.equal(submits, gateAt === 'read' ? 0 : 1);
+    assert.equal(notifications, 0);
+    assert.deepEqual(fx.host.snapshot().sources, {});
+    assert.deepEqual(fx.host.snapshot().notices, []);
+    assert.equal(Object.values(fx.host.snapshot().submissions)[0].state, 'unknown');
+    assert.equal((await fx.host.consumeFeedCheck(taskId, {signal: controller.signal})).accepted, false);
+    assert.equal(submits, gateAt === 'read' ? 0 : 1, 'no blind resubmit after cancellation');
+    fx.host.dispose();
+  }
 });

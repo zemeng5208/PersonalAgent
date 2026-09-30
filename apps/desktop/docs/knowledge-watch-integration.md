@@ -172,6 +172,12 @@ citation/来源回执/判断 Evidence；`succeeded`、已读、系统已投递�
 默认测试不会安装或下载浏览器。它不是 Electron/Live/真实 RSS/Laya/AgentArts 端到端验收；
 未启动模型、未改 Live/SIS 配置，P8 统一接线与整体验收仍待完成。
 
+取消链补充：due worker 的 signal 和精确绑定重验贯穿来源消费、workPort read/submit、
+来源/提醒落盘及通知前后；每次 await 后、下一提交和同步落盘前再次检查。
+已经开始而回执未确认的提交/投递保留 unknown，不在取消后盲重试。
+新增单项局部回归覆盖 feed 返回后 read/submit 挂起再取消两种情况，通过；
+仅运行这项和宿主语法/diff 检查，没有重跑上述浏览器或旧测试。
+
 ## 初始化和生命周期
 
 挂载位置在 `apps/desktop/electron/main.js`：`const namespace = desktopHost.userNamespace` 且 `runtimeApplication` 已赋值之后，与 `feedsHost.bindApplication(runtimeApplication)`、`feedsHost.prepare()` 同一段。退出释放放在现有 `feedsHost?.close()` 之前。下面使用的都是该文件里已经存在的对象；`watchTask` 和 `collectTool` 是这两次调用的返回值，不是预先存在的全局变量。

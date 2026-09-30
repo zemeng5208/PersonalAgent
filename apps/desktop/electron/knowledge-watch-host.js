@@ -1011,7 +1011,7 @@ export function createKnowledgeWatchHost({
         && watch.boundSource?.contentSha256 === work.source?.contentSha256;
     });
   }
-  async function submitKeys(keys, plans) {
+  async function submitKeys(keys, plans, operation) {
     const accepted = new Set();
     const unknown = new Set();
     const skipped = new Set();
@@ -1019,18 +1019,19 @@ export function createKnowledgeWatchHost({
     const grant = await grantStatus();
     for (const item of plans) for (const work of item.plan.affected) works.set(work.workKey, work);
     for (const workKey of keys) {
-      if (!running || controller?.signal.aborted) { unknown.add(workKey); continue; }
+      if (!(await operation.revalidate())) { unknown.add(workKey); continue; }
       const current = document.submissions[workKey];
       if (current?.state === 'accepted') { accepted.add(workKey); continue; }
       let verdict = 'absent';
       try {
-        const read = await workPort.read({namespace, idempotencyKey: workKey});
+        const read = await workPort.read({namespace, idempotencyKey: workKey, signal: operation.signal});
+        if (!(await operation.revalidate())) { unknown.add(workKey); continue; }
         verdict = read?.state === 'accepted' && text(read.taskId) ? 'accepted'
           : read?.state === 'absent' ? 'absent' : 'unknown';
         if (verdict === 'accepted') {
           accepted.add(workKey);
           await lock(() => {
-            if (!document?.submissions[workKey]) return;
+            if (!document?.submissions[workKey] || !operation.current()) return;
             const next = clone(document);
             next.submissions[workKey] = {...next.submissions[workKey], state: 'accepted', namespace,
               taskId: read.taskId, sourceId: current?.sourceId};
@@ -1044,13 +1045,15 @@ export function createKnowledgeWatchHost({
         skipped.add(workKey);
         continue;
       }
+      if (!(await operation.revalidate())) { unknown.add(workKey); continue; }
       try {
-        const result = await workPort.submit({namespace, idempotencyKey: workKey, work: clone(works.get(workKey))});
-        if (!running || controller?.signal.aborted) { unknown.add(workKey); continue; }
+        const result = await workPort.submit({namespace, idempotencyKey: workKey,
+          work: clone(works.get(workKey)), signal: operation.signal});
+        if (!(await operation.revalidate())) { unknown.add(workKey); continue; }
         if (result?.accepted === true && text(result.taskId)) {
           accepted.add(workKey);
           await lock(() => {
-            if (!document) return;
+            if (!document || !operation.current()) return;
             const next = clone(document);
             next.submissions[workKey] = {...next.submissions[workKey], state: 'accepted', namespace,
               taskId: result.taskId, sourceId: current?.sourceId};
@@ -1071,12 +1074,12 @@ export function createKnowledgeWatchHost({
       + `已记录版本 ${previous}，新观察 ${latest}。${citation}${excerpt}`
       + `这是可撤销提醒，不会据此执行外部操作。原因：${knowledge.reason}。`;
   }
-  function finalizeSource(prepared, submitted) {
+  function finalizeSource(prepared, submitted, operation) {
     if (!document || health.status !== 'ready') fail('CHECKPOINT_UNREADABLE');
     const event = prepared.event;
     const providerLabel = event.provider ?? (sourcePort || feedCollect ? 'port' : 'unspecified');
-    if (!running) {
-      return {accepted: false, reason: 'stopped', notified: false,
+    if (!operation.current()) {
+      return {accepted: false, reason: 'source_operation_invalidated', notified: false,
         availability: event.availability, provider: providerLabel};
     }
     const next = clone(document);
@@ -1160,14 +1163,14 @@ export function createKnowledgeWatchHost({
       availability: event.availability, provider,
       submitted: submitted ? [...submitted.accepted] : []};
   }
-  async function deliverPending() {
+  async function deliverPending(operation) {
     if (!document) return;
     const pending = Object.values(document.notices).filter(notice => notice.delivered !== true);
     for (const notice of pending) {
-      if (!running || controller?.signal.aborted) return;
+      if (!(await operation.revalidate())) return;
       if (!text(notice.citation)) {
         await lock(() => {
-          if (!document?.notices[notice.id] || !running) return;
+          if (!document?.notices[notice.id] || !operation.current()) return;
           const next = clone(document);
           next.notices[notice.id].delivered = false;
           next.notices[notice.id].deliveryReason = 'citation_missing';
@@ -1177,7 +1180,7 @@ export function createKnowledgeWatchHost({
       }
       if (typeof notificationPort?.send !== 'function') {
         await lock(() => {
-          if (!document?.notices[notice.id] || !running) return;
+          if (!document?.notices[notice.id] || !operation.current()) return;
           const next = clone(document);
           next.notices[notice.id].delivered = false;
           next.notices[notice.id].deliveryReason = 'notification_port_missing';
@@ -1186,13 +1189,27 @@ export function createKnowledgeWatchHost({
         continue;
       }
       let receipt = null;
+      const readReceipt = (text(notice.receiptId) || notice.deliveryAttempted === true)
+        && typeof notificationPort.read === 'function';
+      if (notice.deliveryAttempted === true && !readReceipt) continue;
+      if (!(await operation.revalidate())) return;
+      if (!readReceipt) {
+        await lock(() => {
+          if (!document?.notices[notice.id] || !operation.current()) return;
+          const next = clone(document);
+          next.notices[notice.id].deliveryAttempted = true;
+          next.notices[notice.id].deliveryReason = 'delivery_unknown';
+          persist(next);
+        });
+        if (!operation.current()) return;
+      }
       try {
-        receipt = text(notice.receiptId) && typeof notificationPort.read === 'function'
-          ? await notificationPort.read(clone(notice))
-          : await notificationPort.send(clone(notice));
+        receipt = readReceipt ? await notificationPort.read(clone(notice), {signal: operation.signal})
+          : await notificationPort.send(clone(notice), {signal: operation.signal});
       } catch { receipt = null; }
+      if (!(await operation.revalidate())) return;
       await lock(() => {
-        if (!document?.notices[notice.id] || !running) return;
+        if (!document?.notices[notice.id] || !operation.current()) return;
         const next = clone(document);
         const saved = next.notices[notice.id];
         if (receipt?.delivered === true && text(receipt.receiptId)) {
@@ -1278,14 +1295,36 @@ export function createKnowledgeWatchHost({
     }
     return result;
   }
-  async function consumeSourceUpdate(raw) {
+  function sourceOperation(request = {}) {
+    if (request.signal !== undefined && !(request.signal instanceof AbortSignal)) fail('INVALID_ARGUMENT');
+    const signal = request.signal ? AbortSignal.any([request.signal, controller.signal]) : controller.signal;
+    const ticket = life;
+    const current = () => running && ticket === life && !signal.aborted
+      && (!request.isCurrent || request.isCurrent() === true);
+    return {signal, current, async revalidate() {
+      if (!current()) return false;
+      let valid;
+      try { valid = !request.revalidate || await request.revalidate() === true; }
+      catch { valid = false; }
+      return valid && current();
+    }};
+  }
+  async function consumeSourceUpdate(raw, request = {}) {
+    requireReady();
+    const operation = sourceOperation(request);
     const event = pickSource(raw);
-    const prepared = await lock(() => prepareSource(event));
+    const invalidated = () => ({accepted: false, reason: 'source_operation_invalidated', notified: false});
+    if (!(await operation.revalidate())) return invalidated();
+    const prepared = await lock(() => operation.current() ? prepareSource(event) : invalidated());
     if (!prepared.proceed) return prepared;
-    const submitted = prepared.keys?.length ? await submitKeys(prepared.keys, prepared.plans) : null;
+    const submitted = prepared.keys?.length ? await submitKeys(prepared.keys, prepared.plans, operation) : null;
     if (submitted?.skipped) prepared.skipped = submitted.skipped;
-    const result = await lock(() => finalizeSource(prepared, submitted));
-    await deliverPending();
+    if (!(await operation.revalidate())) return invalidated();
+    const result = await lock(() => finalizeSource(prepared, submitted, operation));
+    if (!result.accepted) return result;
+    if (!(await operation.revalidate())) return invalidated();
+    await deliverPending(operation);
+    if (!(await operation.revalidate())) return invalidated();
     return result;
   }
   async function refreshSource(sourceId) {
@@ -1433,10 +1472,12 @@ export function createKnowledgeWatchHost({
     requireReady();
     if (request.signal !== undefined && !(request.signal instanceof AbortSignal)) fail('INVALID_ARGUMENT');
     const signal = request.signal ? AbortSignal.any([controller.signal, request.signal]) : controller.signal;
+    const feedCurrent = () => !signal.aborted && ticket === life && running
+      && (!request.isCurrent || request.isCurrent() === true);
     const stillCurrent = async () => {
-      if (signal.aborted || ticket !== life || !running) return false;
+      if (!feedCurrent()) return false;
       const valid = !request.revalidate || await request.revalidate() === true;
-      return valid && !signal.aborted && ticket === life && running;
+      return valid && feedCurrent();
     };
     if (typeof feedCollect !== 'function') {
       return {accepted: false, availability: 'unavailable', reason: 'source_provider_missing'};
@@ -1466,7 +1507,7 @@ export function createKnowledgeWatchHost({
         if (error?.code === 'NOT_FOUND') {
           if (!(await stillCurrent())) return {accepted: false, reason: 'feed_check_invalidated'};
           return consumeSourceUpdate({namespace, sourceId: subscriptionId, availability: 'withdrawn',
-            fetchedAt: iso(clock()), reason: 'source_withdrawn', provider: 'feeds'});
+            fetchedAt: iso(clock()), reason: 'source_withdrawn', provider: 'feeds'}, request);
         }
         return {accepted: false, availability: 'unavailable', reason: 'source_unavailable',
           code: text(error?.code) ? error.code : 'EXTERNAL_FAILURE'};
@@ -1481,8 +1522,8 @@ export function createKnowledgeWatchHost({
         return {accepted: false, availability: 'unavailable', reason: 'feed_clock_ahead'};
       }
       if (collected.hasMore) {
-        await lock(() => {
-          if (!running || !document || ticket !== life) return;
+        return lock(() => {
+          if (!document || !feedCurrent()) return {accepted: false, reason: 'feed_check_invalidated'};
           const next = clone(document);
           const existing = next.sources[subscriptionId];
           if (existing) existing.feedCursor = collected.nextCursor;
@@ -1490,12 +1531,12 @@ export function createKnowledgeWatchHost({
             availability: 'unavailable', revision: null, contentSha256: null, provider: 'feeds',
             feedCursor: collected.nextCursor, reason: 'feed_page_incomplete'};
           persist(next);
+          return {accepted: true, reason: 'feed_page_incomplete', provider: 'feeds', availability: 'unavailable'};
         });
-        return {accepted: true, reason: 'feed_page_incomplete', provider: 'feeds', availability: 'unavailable'};
       }
       if (collected.collection.state === 'unchanged') {
         return lock(() => {
-          if (!running || !document || ticket !== life) return {accepted: false, reason: 'stopped'};
+          if (!document || !feedCurrent()) return {accepted: false, reason: 'feed_check_invalidated'};
           const head = document.sources[subscriptionId];
           if (head?.availability !== 'available' || !text(head.revision) || !sha(head.contentSha256)) {
             return {accepted: false, availability: 'unavailable', reason: 'source_body_not_read', provider: 'feeds'};
@@ -1531,6 +1572,7 @@ export function createKnowledgeWatchHost({
       }
       let sourceReadReceipt;
       try {
+        if (!feedCurrent()) return {accepted: false, reason: 'feed_check_invalidated'};
         sourceReadReceipt = persistFeedReadReceipt(subscriptionId, collected, identities, revision,
           contentSha256, identities[0].contentRef, summary);
       } catch {
@@ -1539,7 +1581,7 @@ export function createKnowledgeWatchHost({
       return consumeSourceUpdate({namespace, sourceId: subscriptionId, availability: 'available', revision,
         contentSha256, fetchedAt: collected.collection.fetchedAt, provider: 'feeds', feedCursor: collected.nextCursor,
         citation: {locator: sourceReadReceipt.citation}, summary,
-        sourceReadTaskId: checkpointTaskId, sourceReadReceiptId: sourceReadReceipt.receiptId});
+        sourceReadTaskId: checkpointTaskId, sourceReadReceiptId: sourceReadReceipt.receiptId}, request);
     } finally { feedReading = false; }
   }
   function registerFeedCheck(input) {
@@ -1694,6 +1736,7 @@ export function createKnowledgeWatchHost({
     activeFeedChecks.add(taskId);
     try {
       const result = await refreshSubscribedFeed({subscriptionId: context.subscriptionId, signal,
+        isCurrent: () => JSON.stringify(getFeedCheckContext(taskId)) === JSON.stringify(context),
         revalidate: async () => {
           if (JSON.stringify(getFeedCheckContext(taskId)) !== JSON.stringify(context)) return false;
           if (typeof readTrackingGrant === 'function') {
