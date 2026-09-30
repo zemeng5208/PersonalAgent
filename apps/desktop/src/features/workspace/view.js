@@ -16,6 +16,15 @@ export function mountWorkspace(root,invoke,escape){
       <aside class="conversation-inspector" id="conversation-inspector" aria-label="对话内部查看" hidden><header><h2>对话详情</h2><button class="icon-btn" id="inspector-close" aria-label="关闭对话详情">${icon('close')}</button></header><div id="inspector-content"></div></aside></div>
     </main></section>`;
   const conversation=root.querySelector('#workspace-conversation'),stage=root.querySelector('#workspace-stage');
+  const preferences=document.createElement('div');preferences.className='conversation-preferences';
+  preferences.innerHTML='<label>辅助任务模型 <select class="conversation-model-choice" aria-label="工作区辅助任务模型"></select></label><label>思考深度 <input type="range" min="0" max="5" step="1" aria-label="工作区思考深度"></label><label><input type="checkbox">快速模式</label>';
+  root.querySelector('.workspace-top').after(preferences);
+  const modelChoice=preferences.querySelector('select'),depth=preferences.querySelector('[type=range]'),fast=preferences.querySelector('[type=checkbox]');
+  const reportPreference=error=>{root.querySelector('#workspace-error').textContent=error.message;};
+  modelChoice.onchange=()=>invoke('conversation.model',{modelId:modelChoice.value}).catch(reportPreference);
+  const saveThinking=()=>invoke('thinking.update',{depth:Number(depth.value),fast:fast.checked}).catch(reportPreference);
+  depth.onchange=saveThinking;fast.onchange=saveThinking;
+  let preferenceSignature;
   const updateRail=mountConversationRail(root.querySelector('.workspace-chat'),stage);
   const orbButton=root.querySelector('#workspace-orb');
   const orb=new Orb(orbButton.querySelector('canvas'),{variant:'matrix',layout:'shell',count:170});
@@ -37,20 +46,29 @@ export function mountWorkspace(root,invoke,escape){
   root.querySelector('#connector-cards').onclick=event=>{const card=event.target.closest('[data-connector]');if(!card)return;invoke('admin.open',{page:'connections'}).catch(report);};
   conversation.onclick=async event=>{
     const button=event.target.closest('[data-cancel],[data-view],[data-copy]');if(!button)return;
-    try{if(button.dataset.view){inspected=button.dataset.view;renderInspector();}else if(button.dataset.copy){await invoke('clipboard.writeText',resultText(current.tasks.find(task=>task.taskId===button.dataset.copy)?.resultSummary));button.title='已复制';}else{button.disabled=true;await invoke('task.cancel',button.dataset.cancel);}}catch(error){report(error);button.disabled=false;}
+    try{if(button.dataset.view){inspected=button.dataset.view;renderInspector();}else if(button.dataset.copy){await invoke('clipboard.writeText',resultText(current.tasks.find(task=>task.taskId===button.dataset.copy)?.resultSummary,current.tasks.find(task=>task.taskId===button.dataset.copy)?.resultMetadata));button.title='已复制';}else{button.disabled=true;await invoke('task.cancel',button.dataset.cancel);}}catch(error){report(error);button.disabled=false;}
   };
   function renderInspector(){
     const task=current.tasks.find(item=>item.taskId===inspected);if(!task)return;
     root.querySelector('#conversation-inspector').hidden=false;
-    root.querySelector('#inspector-content').innerHTML=`<h3>你的消息</h3><p>${escape(task.userMessage||'历史对话')}</p><h3>回答</h3><p>${escape(resultText(task.resultSummary)||task.error?.message||stateNames[task.state])}</p><h3>执行状态</h3><p>${escape(stateNames[task.state]||task.state)}</p>${(task.steps||[]).map(step=>`<p class="inspector-step">${escape(step.label)} · ${escape(step.state)}</p>`).join('')}`;
+    root.querySelector('#inspector-content').innerHTML=`<h3>你的消息</h3><p>${escape(task.userMessage||'历史对话')}</p><h3>回答</h3><p>${escape(resultText(task.resultSummary,task.resultMetadata)||task.error?.message||stateNames[task.state])}</p>${task.resultMetadata?`<h3>模型与验证</h3><p>${escape(task.resultMetadata.profile)} · ${escape(task.resultMetadata.verification)}</p>`:'' }<h3>执行状态</h3><p>${escape(stateNames[task.state]||task.state)}</p>${(task.steps||[]).map(step=>`<p class="inspector-step">${escape(step.label)} · ${escape(step.state)}</p>`).join('')}`;
   }
   function update(data){
+    const nextPreferenceSignature=JSON.stringify([data.modelChoices,data.conversationPreference]);
+    if(preferenceSignature!==nextPreferenceSignature) {
+      modelChoice.replaceChildren(new Option('使用默认辅助模型',''),...(data.modelChoices??[]).map(item=>{
+        const option=new Option(item.displayName,item.id);option.disabled=!item.available;return option;
+      }));
+      modelChoice.value=data.conversationPreference?.modelId??'';depth.value=String(data.thinking?.depth??1);fast.checked=Boolean(data.thinking?.fast);
+      preferenceSignature=nextPreferenceSignature;
+    }
+    preferences.querySelector('label').hidden=!data.modelChoices?.length;
     current=data;current.tasks ||= [];
     root.querySelector('#workspace-greeting').hidden=current.tasks.length>0;root.querySelector('#workspace-intro').hidden=current.tasks.length>0;root.querySelector('#workspace-welcome').classList.toggle('compact',current.tasks.length>0);
     const signature=JSON.stringify(data.tasks);
     if(signature!==lastSignature){
       const atBottom=stage.scrollHeight-stage.scrollTop-stage.clientHeight<90;lastSignature=signature;
-      conversation.innerHTML=data.tasks.map(task=>`<article class="workspace-turn" data-turn="${escape(task.taskId)}"><div class="user-message">${escape(task.userMessage||'历史对话')}</div><div class="assistant-message">${escape(resultText(task.resultSummary)||task.error?.message||stateNames[task.state]||task.state)}</div><div class="response-actions"><button type="button" data-view="${escape(task.taskId)}" title="在对话内查看" aria-label="查看这轮对话">${icon('view')}</button>${task.resultSummary?`<button type="button" data-copy="${escape(task.taskId)}" title="复制回答" aria-label="复制回答">${icon('copy')}</button>`:''}${!isTerminal(task)?`<button class="turn-action" data-cancel="${escape(task.taskId)}" ${task.state==='cancelling'?'disabled':''}>${task.state==='cancelling'?'正在停止':'停止'}</button>`:''}</div></article>`).join('');
+      conversation.innerHTML=data.tasks.map(task=>`<article class="workspace-turn" data-turn="${escape(task.taskId)}"><div class="user-message">${escape(task.userMessage||'历史对话')}</div><div class="assistant-message">${escape(resultText(task.resultSummary,task.resultMetadata)||task.error?.message||stateNames[task.state]||task.state)}</div><div class="response-actions"><button type="button" data-view="${escape(task.taskId)}" title="在对话内查看" aria-label="查看这轮对话">${icon('view')}</button>${task.resultSummary?`<button type="button" data-copy="${escape(task.taskId)}" title="复制回答" aria-label="复制回答">${icon('copy')}</button>`:''}${!isTerminal(task)?`<button class="turn-action" data-cancel="${escape(task.taskId)}" ${task.state==='cancelling'?'disabled':''}>${task.state==='cancelling'?'正在停止':'停止'}</button>`:''}</div></article>`).join('');
       requestAnimationFrame(()=>{if(atBottom)stage.scrollTop=stage.scrollHeight;updateRail();});if(inspected)renderInspector();
     }
     const nextCards=JSON.stringify([data.capabilities,data.health,data.notifications,data.todo?.items,data.todo?.available,data.todo?.sessionAllowed,data.feeds?.subscriptions,data.feeds?.available,data.feeds?.sessionAllowed,data.mail?.status,data.mail?.counts,data.mail?.sessionAllowed,data.knowledge?.configured]);if(cardsSignature!==nextCards){cardsSignature=nextCards;root.querySelector('#connector-cards').innerHTML=connectorCards(data,escape);}

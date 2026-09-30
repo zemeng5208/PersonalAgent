@@ -64,3 +64,12 @@ export {
 } from './application/subagent-host.js';
 export type {SubagentHostOptions, DesktopSubagentDispatchToolOptions} from './application/subagent-host.js';
 export {LOCAL_REPAIR_TOOL} from './application/local-repair.js';
+export {createKnowledgeFeedReceipt, parseKnowledgeFeedReceipt, verifyKnowledgeFeedReceiptBinding,
+  knowledgeFeedReceiptItems} from './application/knowledge-feed-receipt.js';
+export type {KnowledgeFeedItem, KnowledgeFeedCitation, KnowledgeFeedReceipt, KnowledgeFeedReceiptBinding,
+  KnowledgeFeedQuotedItem} from './application/knowledge-feed-receipt.js';
+export {createReadonlyMcpHost, MCP_READ_TOOL_NAME, MCP_READ_TOOL_VERSION, MCP_READ_SCOPE} from '@personal-agent/mcp';
+export type {ReadonlyMcpOptions, McpHealth} from '@personal-agent/mcp';
+export {createReferenceSummarySkill, REFERENCE_SUMMARY_SKILL_ID, REFERENCE_SUMMARY_SKILL_VERSION} from '@personal-agent/skills';
+export type {SkillManifest, SkillOutcome, ReferenceSummaryInput, ReferenceSummaryOptions,
+  SkillReadReconciliationPort, SkillReadReconciliationQuery} from '@personal-agent/skills';

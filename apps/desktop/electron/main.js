@@ -30,12 +30,14 @@ import {createP5DeviceNotificationHost} from './p5-device-notification-host.js';
 import {createKnowledgeWatchHost, createProductionKnowledgeReevaluator} from './knowledge-watch-host.js';
 import {createPublicConnectorHost} from './public-connector-host.js';
 import {createWorkspaceConfigHost} from './workspace-config-host.js';
+import {createDesktopReferenceHost} from './reference-tools-host.js';
 import {createWorkspaceCommandRecipeTool} from './workspace-command-recipes.js';
 import {createAgentArtsConfig} from './agentarts-config.js';
 import {createDeferredRuntimeStartup} from './runtime-startup.js';
 import {createMailConfig} from './mail-config.js';
 import {createCalendarConfig} from './calendar-config.js';
 import {createModelApiConfig} from './model-api-config.js';
+import {resolveRuntimeProfile} from './runtime-profile.js';
 import {createDesktopCalendarMeetingHost,calendarConfigurationId,calendarApprovalResponse} from './calendar-meeting-host.js';
 import {createDesktopMailAnalysisHost} from './mail-analysis-host.js';
 import {createDesktopFeedsHost} from './feeds-host.js';
@@ -44,13 +46,13 @@ import {createDesktopTodoHost} from './todo-host.js';
 import {createDesktopGoalCloudHost} from './goal-cloud-host.js';
 import {createMailMetadataStorage} from './mail-metadata-storage.js';
 import {createLocalLayaHost} from './laya-local-host.js';
-import {resultText} from '../src/features/conversation/result-text.js';
+import {resultText,resultMetadata} from '../src/features/conversation/result-text.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.resolve(dir, '../src/app/index.html');
 const fakeMode = process.argv.includes('--fake-runtime');
 const fakeModelMode = process.argv.includes('--fake-model') || process.env.PA_DESKTOP_MODEL_MODE === 'fake';
-const runtimeProfile = process.env.PA_RUNTIME_PROFILE === undefined ? 'local' : process.env.PA_RUNTIME_PROFILE;
+const runtimeProfile = resolveRuntimeProfile({profile:process.env.PA_RUNTIME_PROFILE,fakeRuntime:fakeMode,fakeModel:fakeModelMode});
 const agentArtsInvokeMode = process.env.PA_AGENTARTS_INVOKE_MODE === undefined
   ? 'published'
   : process.env.PA_AGENTARTS_INVOKE_MODE;
@@ -188,6 +190,9 @@ function withReviewedRepairLock(work) {
 }
 let productTools;
 let codingWorkspace;
+let referenceHost;
+let referenceClosing;
+let referenceClosed=false;
 let competitionToolAvailabilityList = [];
 let mailConfig;
 let calendarConfig;
@@ -404,6 +409,13 @@ function privateMemoryController() {
   return privateMemory;
 }
 
+function taskResultMetadata(task) {
+  if (task.state!=='succeeded' || !runtimeApplication) return undefined;
+  const source=runtimeApplication.runtime;
+  return source.loadCheckpoint(task.taskId,'application-profile')==='huawei_ict_agentarts'
+    ? resultMetadata(task.resultSummary,{profile:'huawei_ict_agentarts'}) : undefined;
+}
+
 function snapshot(surface) {
   return {
     connection: connectionLabel,
@@ -415,6 +427,7 @@ function snapshot(surface) {
     audioLevel,
     orbStateOverride,
     tasks: orderedTasks().filter(task => !surface || taskSurface(task) === surface).map(task => ({...structuredClone(task),
+      resultMetadata:taskResultMetadata(task),
       createdAt: conversations?.turns.get(task.taskId)?.createdAt ?? task.createdAt ?? task.updatedAt,
       userMessage: taskGoals.get(task.taskId) ?? conversations?.goal(task.taskId),
       // UI summary is derived from trusted readback; TaskRuntime still owns state.
@@ -429,8 +442,11 @@ function snapshot(surface) {
     approvals: [...approvals.values()],
     notifications: [...notifications.values(),...(todoHost?.snapshot().notifications ?? [])],
     model: structuredClone(model),
-    modelApi: modelApiHost?.snapshot(),
-    thinking: structuredClone(thinking),
+    modelApi: surface ? undefined : modelApiHost?.snapshot(),
+    modelChoices: modelApiHost?.snapshot().models.map(({id,displayName,enabled,available})=>({id,displayName,enabled,available})) ?? [],
+    conversationPreference: conversations?.preference(`desktop-${surface === 'workspace' ? 'workspace' : 'panel'}`,thinking),
+    thinking: {...thinking,...(conversations?.preference(`desktop-${surface === 'workspace' ? 'workspace' : 'panel'}`,thinking) ?? {}),
+      reason:'本对话的步骤预算在提交时固定；AgentArts 负责主编排，辅助任务使用当前对话的模型选择。原生思考能力以模型设置和实际参数回执为准。'},
     live: {...(liveVoice?.snapshot() ?? liveConfig?.snapshot()), shortcut: {...liveShortcut}},
     proactive: proactiveSnapshot(),
     p5: p5StatusSnapshot(),
@@ -443,6 +459,7 @@ function snapshot(surface) {
     notepad: notepadHost?.snapshot() ?? {available:false,busy:false,state:'unavailable',
       reason:'本机执行组件尚未就绪，记事本操作暂不可用。'},
     coding: codingWorkspace?.snapshot() ?? {configured:false,reason:'编程工作区尚未装配'},
+    reference:surface ? undefined : referenceHost?.snapshot(),
     agentArts: agentArtsConfig?.snapshot(),
     laya: localLaya?.snapshot() ?? {state:'unavailable', ready:false, reason:'本地模型尚未装配'},
     knowledge: structuredClone(knowledgeStatus),
@@ -807,6 +824,20 @@ function clearInactiveTaskExitWarning() {
 }
 
 const inFlightRechecks = new Set();
+function dispatchKnowledgeFeedCheckTask(task) {
+  if (!knowledgeWatchHost || !runtimeApplication || task?.state !== 'created') return;
+  return runtimeApplication.dispatchKnowledgeFeedCheckTask(task.taskId,{namespace:desktopHost.userNamespace,
+    readBinding:()=>knowledgeWatchHost.getFeedCheckContext(task.taskId),
+    consume:signal=>knowledgeWatchHost.consumeFeedCheck(task.taskId,{signal})});
+}
+let lastKnowledgeScheduleTick=0;
+function tickKnowledgeSchedules() {
+  if (!knowledgeWatchHost || !runtimeApplication || Date.now()-lastKnowledgeScheduleTick<1000) return;
+  lastKnowledgeScheduleTick=Date.now();
+  for (const fired of runtimeApplication.runtime.dispatchDueSchedules(`knowledge-watch:${desktopHost.userNamespace}`)) {
+    if (fired.task) void dispatchKnowledgeFeedCheckTask(fired.task);
+  }
+}
 async function dispatchKnowledgeRecheckTask(task) {
   if (!task || inFlightRechecks.has(task.taskId) || task.state !== 'created') return;
   const conversationId = task.conversationId;
@@ -856,6 +887,7 @@ function applyEvent(event) {
       && event.payload.goal?.startsWith('RECHECK ')) {
       void dispatchKnowledgeRecheckTask(event.payload);
     }
+    if (event.type === 'task.created') void dispatchKnowledgeFeedCheckTask(event.payload);
   }
   if (event.type === 'approval.requested' && event.payload) approvals.set(event.payload.approvalId, structuredClone(event.payload));
   if (event.type === 'task.cancelled' && event.payload?.taskId) {
@@ -923,6 +955,7 @@ async function syncRuntimeSnapshots() {
   for (const approval of pending.items) approvals.set(approval.approvalId, structuredClone(approval));
   eventCursor.reset(snapshotSequence ?? 0);
   for (const task of tasks.values()) {
+    if (task.state === 'created') void dispatchKnowledgeFeedCheckTask(task);
     if (task.state === 'created' && task.conversationId?.startsWith('knowledge-watch:') && task.goal?.startsWith('RECHECK ')) {
       void dispatchKnowledgeRecheckTask(task);
     }
@@ -1108,6 +1141,7 @@ async function initializeRuntime() {
           return result.canceled?undefined:result.filePaths[0];
         },
         createCommandRecipeTool:options=>createWorkspaceCommandRecipeTool({...options,createWorkspaceCommandTool})});
+      referenceHost=createDesktopReferenceHost({workspace:codingWorkspace,createMcp:runtimeModule.createReadonlyMcpHost,onUpdate:publish});
       const {LayaActionChoiceService, LocalLayaHttpTransport} = await import('@personal-agent/cognition');
       localLaya = createLocalLayaHost({projectRoot:path.resolve(dir, '../../..'),
         createService:runtimeModule.createLocalInboxClassifier,
@@ -1152,6 +1186,18 @@ async function initializeRuntime() {
         getModelGateway: modelName => modelApiHost?.getModelGateway(modelName),
         getModelReasoningEfforts: modelName => modelApiHost?.getModelReasoningEfforts(modelName) ?? [],
       });
+      subagentTool.execute = (input, context) => {
+        const preferred = runtimeApplication.runtime.loadCheckpoint(context.taskId,'task-model-preference');
+        const taskThinking = runtimeApplication.runtime.loadCheckpoint(context.taskId,'task-thinking');
+        const boundTool=createDesktopSubagentDispatchTool({getRuntime:()=>runtimeApplication.runtime,
+          getTools:()=>runtimeApplication.tools,fakeModelMode,
+          getModelGateway:name=>modelApiHost?.getModelGateway(name,preferred?.configurationRef),
+          getModelReasoningEfforts:name=>modelApiHost?.getModelReasoningEfforts(name,preferred?.configurationRef)??[]});
+        return boundTool.execute({...input,subtasks:input.subtasks.map(subtask=>({...subtask,
+          ...(preferred?.modelId ? {model:preferred.modelId} : {}),
+          ...(taskThinking ? {thinkingDepth:taskThinking.depth} : {}),
+        }))},context);
+      };
       const subagentAvailability = {
         toolName: SUBAGENT_DISPATCH_TOOL_NAME,
         toolVersion: SUBAGENT_DISPATCH_TOOL_VERSION,
@@ -1269,8 +1315,16 @@ async function initializeRuntime() {
           ].includes(tool.descriptor.name))
           .map(tool=>({toolName:tool.descriptor.name,toolVersion:tool.descriptor.version})),
           ...(!syntheticMvp ? [{toolName:runtimeModule.LOCAL_REPAIR_TOOL,toolVersion:'1.0.0'}] : [])],
-        subagentModels: {getModelGateway: modelName => modelApiHost?.getModelGateway(modelName),
-          getModelReasoningEfforts: modelName => modelApiHost?.getModelReasoningEfforts(modelName) ?? []},
+        subagentModels: {getModelGateway: (modelName,ref) => modelApiHost?.getModelGateway(modelName,ref),
+          getModelReasoningEfforts: (modelName,ref) => modelApiHost?.getModelReasoningEfforts(modelName,ref) ?? []},
+        readConversationPreference: conversationId => {
+          if (!['desktop-panel','desktop-workspace'].includes(conversationId)) return undefined;
+          const preference = conversations.preference(conversationId,{depth:thinking.depth,fast:thinking.fast});
+          const models=modelApiHost?.snapshot();
+          const modelId=preference.modelId || models?.defaultId || undefined;
+          const selected=models?.models.find(item=>item.id===modelId);
+          return {...preference,modelId,configurationRef:selected?.configurationRef};
+        },
         beforeCompetitionSend:request=> {
           if (!proactiveHost && runtimeApplication.runtime.getTask(request.taskId).conversationId?.startsWith('desktop-proactive-goals:')) {
             throw Error('目标主动分析宿主尚未就绪');
@@ -1282,7 +1336,7 @@ async function initializeRuntime() {
           }
           mailAnalysisHost?.assertCloudSend(request);
         },
-        tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...(goalCloudHost?.tools ?? goalHost.tools), ...productTools.tools, ...(mailHost?.tools ?? []), ...(calendarMeetingHost?.tools ?? []), ...(feedsHost?.tools ?? []), ...(notepadHost?.tools ?? []), ...(todoHost?.tools ?? []), ...(subagentTool ? [subagentTool] : []), ...(knowledgeTool ? [knowledgeTool] : [])],
+        tools: [...(syntheticMvp ? syntheticTools.tools : codingWorkspace.tools.length ? codingWorkspace.tools : competitionCatalog ? [competitionCatalog.tool] : []), ...(goalCloudHost?.tools ?? goalHost.tools), ...productTools.tools, ...(mailHost?.tools ?? []), ...(calendarMeetingHost?.tools ?? []), ...(feedsHost?.tools ?? []), ...(notepadHost?.tools ?? []), ...(todoHost?.tools ?? []), ...(subagentTool ? [subagentTool] : []), ...(knowledgeTool ? [knowledgeTool] : []),...(referenceHost?.tools??[])],
         ...(codingWorkspace.patchReconciliation ? {workspacePatchReconciliation: codingWorkspace.patchReconciliation} : {}),
         localRepair: syntheticMvp ? syntheticRepairHost.localRepair : {
           graphNamespace: namespace, bindingVersion:'desktop-reviewed-execution-v1',
@@ -1297,8 +1351,8 @@ async function initializeRuntime() {
         responseMode: agentArtsResponseMode ?? 'tool-proposal-json',
         ...(syntheticMvp ? {competitionToolExports: syntheticTools.competitionToolExports} : {
           initialRequestMode: 'goal-with-tools-json',
-          competitionToolAvailability: (competitionToolAvailabilityList = [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolAvailability : competitionCatalog ? [competitionCatalog.availability] : []), ...productTools.competitionToolAvailability, ...feedsHost.competitionToolAvailability, ...(todoHost?.competitionToolAvailability ?? []), ...(goalCloudHost?.competitionToolAvailability ?? []), ...(subagentAvailability ? [subagentAvailability] : []), ...(knowledgeAvailability ? [knowledgeAvailability] : [])]),
-          competitionToolExports: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolExports : competitionCatalog ? [competitionCatalog.export] : []), ...productTools.competitionToolExports, ...feedsHost.competitionToolExports, ...(todoHost?.competitionToolExports ?? []), ...(goalCloudHost?.competitionToolExports ?? []), ...(subagentExport ? [subagentExport] : []), ...(knowledgeExport ? [knowledgeExport] : [])],
+          competitionToolAvailability: (competitionToolAvailabilityList = [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolAvailability : competitionCatalog ? [competitionCatalog.availability] : []), ...productTools.competitionToolAvailability, ...feedsHost.competitionToolAvailability, ...(todoHost?.competitionToolAvailability ?? []), ...(goalCloudHost?.competitionToolAvailability ?? []), ...(subagentAvailability ? [subagentAvailability] : []), ...(knowledgeAvailability ? [knowledgeAvailability] : []),...(referenceHost?.competitionToolAvailability??[])]),
+          competitionToolExports: [...(codingWorkspace.tools.length ? codingWorkspace.competitionToolExports : competitionCatalog ? [competitionCatalog.export] : []), ...productTools.competitionToolExports, ...feedsHost.competitionToolExports, ...(todoHost?.competitionToolExports ?? []), ...(goalCloudHost?.competitionToolExports ?? []), ...(subagentExport ? [subagentExport] : []), ...(knowledgeExport ? [knowledgeExport] : []),...(referenceHost?.competitionToolExports??[])],
         }),
         ...cloudBinding,
         invokeMode: agentArtsInvokeMode,
@@ -1317,6 +1371,7 @@ async function initializeRuntime() {
       if (syntheticRepairHost) await syntheticRepairHost.initialize(runtimeApplication.runtime);
       if (mailHost) {mailHost.bindApplication(runtimeApplication); mailConfig.markBound(configuredMail.revision);}
       codingWorkspace.bindApplication(runtimeApplication);
+      referenceHost.bindApplication(runtimeApplication);
       feedsHost?.bindApplication(runtimeApplication);
       todoHost?.bindApplication(runtimeApplication);
       goalHost.bind(runtimeApplication);
@@ -1445,13 +1500,31 @@ async function initializeRuntime() {
           error.code = 'TOOL_UNAVAILABLE';
           throw error;
         }
-        const isAvailable = availability.available({taskId: knowledgeWatchTask.taskId, signal});
+        const deadline = new Date(Date.now()+60_000).toISOString();
+        const prepared = runtimeApplication.prepareHostToolTask({commandId:`knowledge-feed-read:${randomUUID()}`,
+          toolName:collectTool.descriptor.name,toolVersion:collectTool.descriptor.version,
+          goal:'Read a currently authorized subscription page',deadline});
+        const isAvailable = await availability.available({taskId: prepared.taskId, signal});
         if (!isAvailable) {
+          runtimeApplication.runtime.requestCancel(prepared.taskId,'Subscription scope unavailable');
           const error = new Error('订阅收集工具未获用户会话授权');
           error.code = 'UNAUTHORIZED';
           throw error;
         }
-        return collectTool.execute(query, {taskId: knowledgeWatchTask.taskId, signal});
+        runtimeApplication.finalizeHostToolTask(prepared.taskId,{arguments:query});
+        const cancel=()=>runtimeApplication.runtime.requestCancel(prepared.taskId,'Knowledge feed check cancelled');
+        signal.addEventListener('abort',cancel,{once:true});
+        try {
+          for (;;) {
+            if (signal.aborted) {cancel();throw Object.assign(Error('订阅检查已取消'),{code:'CANCELLED'});}
+            const read=runtimeApplication.readHostToolTask(prepared.taskId);
+            if (read.task.state==='succeeded' && read.confirmed) return read.confirmed.result;
+            if (['failed','cancelled','waiting_reconciliation','waiting_approval'].includes(read.task.state)) {
+              throw Object.assign(Error('订阅工具读取未确认'),{code:read.task.error?.code??'RESULT_UNKNOWN'});
+            }
+            await new Promise(resolve=>setTimeout(resolve,10));
+          }
+        } finally {signal.removeEventListener('abort',cancel);}
       };
       knowledgeWatchHost = createKnowledgeWatchHost({
         profile: 'huawei_ict_agentarts',
@@ -1462,8 +1535,15 @@ async function initializeRuntime() {
         layaChooser: localLaya,
         runtime: runtimeApplication.runtime,
         feedCollect,
+        knowledgeFeedReceipts:runtimeModule,
       });
       await knowledgeWatchHost.start();
+      for (const fired of runtimeApplication.runtime.recoverMissedSchedules(`knowledge-watch:${namespace}`)) {
+        if (fired.task) void dispatchKnowledgeFeedCheckTask(fired.task);
+      }
+      for (const task of runtimeApplication.runtime.listTasks({conversationId:`knowledge-watch:${namespace}`,states:['created'],limit:100}).items) {
+        void dispatchKnowledgeFeedCheckTask(task);
+      }
     } catch {
       try { knowledgeWatchHost?.dispose(); } catch {}
       knowledgeWatchHost = undefined;
@@ -1475,7 +1555,7 @@ async function initializeRuntime() {
       if (task.state === 'succeeded') void promptSyntheticRepairCandidate(task.taskId).catch(() => {});
     }
   }
-  eventPoll = setInterval(() => {void pumpEvents(); void tickProactiveP5(); void refreshMail(); void notepadHost?.refresh(); void todoHost?.tick();}, 120);
+  eventPoll = setInterval(() => {void pumpEvents(); void tickProactiveP5(); void refreshMail(); void notepadHost?.refresh(); void todoHost?.tick();tickKnowledgeSchedules();}, 120);
 }
 
 async function initializeProductServices() {
@@ -1585,6 +1665,7 @@ async function action(event, name, payload) {
   if (['coding.select','coding.selectNode','coding.selectNpmCli','coding.selectCheckFile','coding.authorize','coding.revoke'].includes(name)) {
     if ((sender !== admin && sender !== workspace) || !competitionMode || syntheticMvp || !codingWorkspace) throw Error('请从正式应用设置配置编程工作区');
     if (name !== 'coding.revoke' && runtimeApplication.activeTaskCount > 0) throw Error('请等待当前任务结束后更改工作区');
+    await referenceHost?.invalidate();
     if (name === 'coding.select') await codingWorkspace.select();
     if (name === 'coding.selectNode') await codingWorkspace.selectNode();
     if (name === 'coding.selectNpmCli') await codingWorkspace.selectNpmCli();
@@ -1592,6 +1673,14 @@ async function action(event, name, payload) {
     if (name === 'coding.authorize') codingWorkspace.authorize(payload);
     if (name === 'coding.revoke') codingWorkspace.revoke();
     publish();return {coding:codingWorkspace.snapshot()};
+  }
+  if (['reference.mcp','reference.skill','reference.run','reference.reconcile'].includes(name)) {
+    if(sender!==admin || !competitionMode || syntheticMvp || !referenceHost) throw Error('请从正式应用的插件设置操作参考工具');
+    const result=name==='reference.mcp'?await referenceHost.setMcpEnabled(payload?.enabled)
+      :name==='reference.skill'?referenceHost.setSkillEnabled(payload?.enabled)
+      :name==='reference.run'?referenceHost.submit({path:payload?.path})
+      :await referenceHost.reconcile(payload?.taskId);
+    publish();return result;
   }
   if (['calendar.configure','calendar.revoke'].includes(name)) {
     if (sender !== admin || !competitionMode || syntheticMvp || !calendarConfig) throw Error('请从正式应用日历设置操作');
@@ -1726,10 +1815,14 @@ async function action(event, name, payload) {
       publish();
       return result;
     }
-    if (name === 'knowledge.watch.acknowledge') {
-      const result = knowledgeWatchHost.observeNotificationAcknowledgement(payload);
+    if (name === 'knowledge.watch.read') {
+      const result = await knowledgeWatchHost.markNoticeRead(payload?.id);
       publish();
       return result;
+    }
+    if (name === 'knowledge.watch.pause' || name === 'knowledge.watch.resume') {
+      const result = await knowledgeWatchHost[name.endsWith('.pause')?'pause':'resume'](payload?.topicId);
+      publish();return result;
     }
     if (name === 'knowledge.watch.bind') {
       const topicId = typeof payload?.topicId === 'string' ? payload.topicId.trim() : '';
@@ -1884,7 +1977,22 @@ async function action(event, name, payload) {
   }
   if (name === 'thinking.update') {
     if (sender !== panel && sender !== admin && sender !== workspace) throw Error('思考设置来源不受信任');
-    return updateThinking(payload);
+    if (!competitionMode) return updateThinking(payload);
+    const conversationId = sender === workspace ? 'desktop-workspace' : 'desktop-panel';
+    const previous = conversations.preference(conversationId,{depth:thinking.depth,fast:thinking.fast});
+    const value = conversations.setPreference(conversationId,{...previous,depth:payload?.depth,fast:payload?.fast});
+    publish();return value;
+  }
+  if (name === 'conversation.model') {
+    if (sender !== panel && sender !== workspace) throw Error('请从当前对话选择辅助模型');
+    if (!competitionMode || !payload || Object.keys(payload).some(key=>key!=='modelId')) throw Error('模型选择无效');
+    const id = payload.modelId;
+    if (typeof id !== 'string' || (id && !modelApiHost?.snapshot().models.some(item=>item.id===id && item.available))) {
+      throw Error('所选辅助模型未配置或不可用');
+    }
+    const conversationId = sender === workspace ? 'desktop-workspace' : 'desktop-panel';
+    const value = conversations.setPreference(conversationId,{...conversations.preference(conversationId),modelId:id});
+    publish();return value;
   }
   if (sender === orb) throw Error('Action unavailable from orb');
   if (!client) throw Error('Runtime 未连接，此操作尚不可用');
@@ -2074,7 +2182,7 @@ async function initializeLiveVoice() {
       agentArts:{configured:agentArtsConfig.snapshot().configured,reason:agentArtsConfig.snapshot().reason},
       tasks: orderedTasks().filter(task => taskSurface(task) === 'panel').slice(-10)
         .map(task => ({taskId: task.taskId, goal: (taskGoals.get(task.taskId) ?? conversations.goal(task.taskId) ?? '').slice(0, 800),
-          state: task.state, failureReason: task.error?.message, result: resultText(task.resultSummary).slice(0, 1600),
+          state: task.state, failureReason: task.error?.message, result: resultText(task.resultSummary,taskResultMetadata(task)).slice(0, 1600),
           createdAt: conversations?.turns.get(task.taskId)?.createdAt ?? task.createdAt ?? task.updatedAt})),
       messages: conversations.messagesFor('panel').slice(-20).map(({role, text, createdAt}) => ({role, text: text.slice(0, 1600), createdAt})),
       capabilities: capabilities.map(item => ({name: item.name ?? item.id, version: item.version})),
@@ -2188,6 +2296,12 @@ app.whenReady().then(async () => {
       event.preventDefault(); runtimeError = 'Runtime 正在连接，请稍后退出'; publish(); return;
     }
     void stopP5DeviceTelemetry();
+    if(referenceHost && !referenceClosed) {
+      event.preventDefault();
+      referenceClosing??=referenceHost.dispose().then(()=>{referenceClosed=true;app.quit();})
+        .catch(()=>{referenceClosing=undefined;runtimeError='参考工具尚未停止，请稍后退出';publish();});
+      return;
+    }
     proactiveHost?.stop();
     if(todoHost && !todoClosed) {
       event.preventDefault();

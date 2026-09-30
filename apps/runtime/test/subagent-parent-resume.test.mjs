@@ -59,3 +59,33 @@ test('child approval resumes the original child and confirmed parent dispatch, t
   assert.throws(()=>app.resumeTask(child.taskId),{code:'REVISION_CONFLICT'});
   assert.equal(calls,1);
 });
+
+for(const action of ['deny','cancel']) test(`terminal child ${action} refreshes the waiting parent without executing its tool`,async t=>{
+  let app,calls=0;
+  const gateway=new ModelGateway(new FakeModelProvider([
+    ()=>({kind:'tool_proposal',proposal:{toolName:descriptor.name,toolVersion:descriptor.version,arguments:{value:'never'}}}),
+  ]));
+  const selection={getModelGateway:()=>gateway};
+  const dispatch=createDesktopSubagentDispatchTool({getRuntime:()=>app.runtime,getTools:()=>app.tools,...selection});
+  const port=new FakeCoordinationPort(request=>!request.continuation ? {kind:'tool_proposal',proposalId:'one',
+    toolName:SUBAGENT_DISPATCH_TOOL_NAME,toolVersion:SUBAGENT_DISPATCH_TOOL_VERSION,
+    arguments:{subtasks:[{subtaskId:'child',role:'researcher',goal:'synthetic read'}]},verification:'mock'} : (()=>{
+      assert.equal(request.continuation.result.cancelled,1);assert.equal(request.continuation.result.succeeded,0);
+      return {kind:'text',text:'Child cancelled; no action completed',verification:'mock'};
+    })());
+  app=createRuntimeApplication({path:':memory:',profile:'huawei_ict_agentarts',coordination:port,subagentModels:selection,
+    tools:[dispatch,{descriptor,execute:async input=>{calls++;return input;}}],
+    automaticTools:[{toolName:SUBAGENT_DISPATCH_TOOL_NAME,toolVersion:SUBAGENT_DISPATCH_TOOL_VERSION}]});
+  t.after(()=>app.close());
+  const client=new Client(app,Date.now);await client.connect();
+  const {taskId}=await client.call('task.submit',{goal:'Delegate',conversationId:'competition'},{idempotencyKey:action});
+  await until(()=>app.runtime.getTask(taskId).state==='waiting_approval'&&app.activeTaskCount===0);
+  const child=app.runtime.findTaskByIdempotencyKey(`subagent-dispatch-${taskId}-child`);
+  if(action==='deny') {
+    const approval=app.runtime.getApproval(`agent-run-${child.taskId}-1`);
+    await client.call('authorization.respond',{approvalId:approval.approvalId,expectedRevision:approval.revision,decision:'deny'});
+  } else await client.call('task.cancel',{taskId:child.taskId,reason:'Cancel child'});
+  await until(()=>['succeeded','failed'].includes(app.runtime.getTask(taskId).state)&&app.activeTaskCount===0);
+  assert.equal(app.runtime.getTask(taskId).state,'succeeded');assert.equal(app.runtime.getTask(child.taskId).state,'cancelled');
+  assert.equal(calls,0);assert.equal(port.requests.length,2);assert.equal(app.runtime.readToolExecutions(taskId).length,1);
+});
