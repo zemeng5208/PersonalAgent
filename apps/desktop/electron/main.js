@@ -39,6 +39,7 @@ import {createDesktopReferenceHost} from './reference-tools-host.js';
 import {createNativePublicReferenceConsent} from './public-reference-consent.js';
 import {createWorkspaceCommandRecipeTool} from './workspace-command-recipes.js';
 import {createAgentArtsConfig} from './agentarts-config.js';
+import {agentArtsFailureNotice} from './agentarts-failure-notice.js';
 import {createDeferredRuntimeStartup} from './runtime-startup.js';
 import {createMailConfig} from './mail-config.js';
 import {createCalendarConfig} from './calendar-config.js';
@@ -118,6 +119,7 @@ let audioLevel = 0;
 let orbStateOverride = null;
 let connectionLabel = '未连接 Runtime';
 let runtimeError = '';
+let cloudRequestFailureNotice = '';
 let capabilities = [];
 let health = [];
 let capabilityDirectory = {state: 'loading', reason: '正在读取 Runtime 能力目录'};
@@ -455,10 +457,15 @@ function taskResultMetadata(task) {
     ? resultMetadata(task.resultSummary,{profile:'huawei_ict_agentarts'}) : undefined;
 }
 
+function agentArtsSnapshot() {
+  const value = agentArtsConfig?.snapshot();
+  return value && {...value, reason: cloudRequestFailureNotice || value.reason};
+}
+
 function snapshot(surface) {
   return {
     connection: connectionLabel,
-    connectionError: runtimeError,
+    connectionError: runtimeError || cloudRequestFailureNotice,
     fakeModel: fakeModelMode,
     fake: fakeMode,
     pinned,
@@ -500,7 +507,7 @@ function snapshot(surface) {
       reason:'本机执行组件尚未就绪，记事本操作暂不可用。'},
     coding: codingWorkspace?.snapshot() ?? {configured:false,reason:'编程工作区尚未装配'},
     reference:surface ? undefined : referenceHost?.snapshot(),
-    agentArts: agentArtsConfig?.snapshot(),
+    agentArts: agentArtsSnapshot(),
     laya: localLaya?.snapshot() ?? {state:'unavailable', ready:false, reason:'本地模型尚未装配'},
     knowledge: knowledgeSourceConfig?.snapshot()??structuredClone(knowledgeStatus),
     knowledgeSource:surface ? undefined : knowledgeSourceConfig?.snapshot(),
@@ -1410,6 +1417,7 @@ async function initializeRuntime() {
             return context;
           },
           beforeCoordinationSend:(request,scope)=>{
+            cloudRequestFailureNotice = '';
             const conversationId=runtimeApplication.runtime.getTask(request.taskId).conversationId;
             if (!['desktop-panel','desktop-workspace'].includes(conversationId)) return;
             if (!privateConsumption) throw Error('私人记忆发送门禁尚未装配');
@@ -1499,8 +1507,11 @@ async function initializeRuntime() {
         }),
         ...cloudBinding,
         invokeMode: agentArtsInvokeMode,
-        onDiagnostic: process.env.PA_AGENTARTS_SAFE_DIAGNOSTICS === '1'
-          ? receipt => desktopHost.logAgentArtsFailure(receipt) : undefined,
+        onDiagnostic: receipt => {
+          if (process.env.PA_AGENTARTS_SAFE_DIAGNOSTICS === '1') desktopHost.logAgentArtsFailure(receipt);
+          cloudRequestFailureNotice = agentArtsFailureNotice(receipt);
+          publish();
+        },
         authorizationProvider: {
           read: async () => {
             return agentArtsConfig.readAuthorization(cloudBinding);
@@ -1930,6 +1941,7 @@ async function action(event, name, payload) {
     if (sender!==admin || !competitionMode || runtimeApplication?.activeTaskCount || liveVoice?.hasActive()
       || runtimeStartup.snapshot().state==='starting') throw Error('请在任务、通话及启动结束后从设置配置 AgentArts');
     const result=agentArtsConfig.configure(payload);
+    cloudRequestFailureNotice = '';
     const startup = await runtimeStartup.start();
     if (liveVoice && !liveShortcut.registered) registerLiveShortcut();
     const requiresRestart = startup.state !== 'ready' || result.gatewayUrl !== activeCloudBinding?.gatewayUrl
@@ -1944,6 +1956,7 @@ async function action(event, name, payload) {
     if (sender !== admin || !competitionMode || runtimeApplication?.activeTaskCount || liveVoice?.hasActive()
       || runtimeStartup.snapshot().state === 'starting') throw Error('请在任务、通话及启动结束后从设置撤销 AgentArts');
     const result = agentArtsConfig.revoke();
+    cloudRequestFailureNotice = '';
     publish();
     return {...result, reason: '已清除保存在本机的 AgentArts 凭据与绑定配置。'};
   }
@@ -2590,7 +2603,7 @@ async function initializeLiveVoice() {
     onTranscript: message => conversations.addLiveMessage(message),
     onTaskSubmitted: ({taskId, goal}) => {taskGoals.set(taskId, goal);conversations.add(taskId, 'panel', goal);},
     readContext: () => JSON.stringify({profile: 'huawei_ict_agentarts',
-      agentArts:{configured:agentArtsConfig.snapshot().configured,reason:agentArtsConfig.snapshot().reason},
+      agentArts:{configured:agentArtsConfig.snapshot().configured,reason:agentArtsSnapshot().reason},
       tasks: orderedTasks().filter(task => taskSurface(task) === 'panel').slice(-10)
         .map(task => ({taskId: task.taskId, goal: (taskGoals.get(task.taskId) ?? conversations.goal(task.taskId) ?? '').slice(0, 800),
           state: task.state, failureReason: task.error?.message, result: resultText(task.resultSummary,taskResultMetadata(task)).slice(0, 1600),
