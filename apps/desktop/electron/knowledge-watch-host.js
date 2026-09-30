@@ -168,6 +168,7 @@ function validKnowledgeRecheckResult(read, context, head) {
   const result = read?.knowledgeRecheckResult;
   const refs = result?.evidenceRefs;
   const taskRefs = read?.taskEvidenceRefs;
+  const trustedRefs = Array.isArray(refs) ? refs.filter(ref => ref !== result?.citation) : [];
   return plain(result) && result.version === KNOWLEDGE_RECHECK_RESULT_VERSION
     && result.status === 'completed'
     && result.taskId === read.taskId && result.workKey === context.workKey
@@ -183,8 +184,8 @@ function validKnowledgeRecheckResult(read, context, head) {
     && plain(result.evaluation) && Object.keys(result.evaluation).length > 0
     && Array.isArray(refs) && refs.length > 0 && refs.every(text)
     && new Set(refs).size === refs.length
-    && Array.isArray(taskRefs) && refs.every(ref => taskRefs.includes(ref))
-    && refs.every(ref => ref !== result.citation);
+    && trustedRefs.length > 0
+    && Array.isArray(taskRefs) && trustedRefs.every(ref => taskRefs.includes(ref));
 }
 
 function emptyDocument(namespace) {

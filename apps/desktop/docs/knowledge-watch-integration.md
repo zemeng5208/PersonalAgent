@@ -166,7 +166,7 @@ knowledgeWatch.start();
 }
 ```
 
-- Runtime 结果读取口固定为同一任务的 v2 checkpoint。宿主要求 `status: "completed"`，并逐项匹配 `taskId`、`workKey`、`namespace`、`topicId`、`consumerRevision`、旧来源 id/revision/content hash、本次 observed revision/content hash、`evaluatedContentSha256`、`citation`、`evaluatedAt`；还要求非空的结构化 `evaluation` 和唯一 `evidenceRefs`。每个 Evidence 引用必须出现在 `TaskSnapshot.evidenceRefs`，且不能只复用 citation URL。
+- Runtime 结果读取口固定为同一任务的 v2 checkpoint。宿主要求 `status: "completed"`，并逐项匹配 `taskId`、`workKey`、`namespace`、`topicId`、`consumerRevision`、旧来源 id/revision/content hash、本次 observed revision/content hash、`evaluatedContentSha256`、`citation`、`evaluatedAt`；还要求非空的结构化 `evaluation` 和唯一 `evidenceRefs`。结果可以同时带 citation 供定位，但至少要有一个非 citation Evidence ref，且每个非 citation ref 必须出现在 `TaskSnapshot.evidenceRefs`。
 
 ```js
 {

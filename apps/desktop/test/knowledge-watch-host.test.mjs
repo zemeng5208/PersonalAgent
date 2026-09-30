@@ -748,10 +748,10 @@ test('delivery acknowledgement is not a read or a re-evaluation result', async (
   const citationOnly = await host.bindObservedRevision('typescript');
   assert.equal(citationOnly.accepted, false);
   assert.equal(citationOnly.reason, 'reevaluation_result_unavailable');
-  task.evidenceRefs = [initialEvidenceRef];
+  task.evidenceRefs = [initialContext.citation, initialEvidenceRef];
   taskCheckpoints.set(`${acceptedTaskId}\0knowledge-recheck-result`,
     testOnlyKnowledgeRecheckResult(initialContext, acceptedTaskId,
-      {evidenceRefs: [initialEvidenceRef]}));
+      {evidenceRefs: [initialContext.citation, initialEvidenceRef]}));
   const bound = await host.bindObservedRevision('typescript');
   assert.equal(bound.accepted, true);
   assert.equal(bound.reason, 'bound');
