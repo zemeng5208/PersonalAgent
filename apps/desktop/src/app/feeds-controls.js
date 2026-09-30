@@ -2,6 +2,9 @@ export function mountFeedsControls(root,invoke) {
   const section = document.createElement('section'); section.className = 'sheet';
   section.innerHTML = '<h2>RSS / Atom 订阅</h2><p>订阅地址在本机加密保存。允许后，可在主对话中让智能体读取、分页并汇总订阅文章。</p><form class="settings-form"><label>名称<input name="title" maxlength="200" required></label><label>订阅地址<input name="url" type="url" autocomplete="off" required></label><button class="btn" type="submit">添加订阅</button></form><ul data-feeds="list"></ul><label><input type="checkbox" data-feeds="consent">允许本会话读取订阅，并向 AgentArts 发送文章标题、摘要、来源与分页结果</label><div><button class="btn" data-feeds="enable">允许本会话</button> <button class="btn" data-feeds="disable">关闭并撤销</button></div><p data-feeds="status" role="status"></p>';
   root.append(section);
+  const taskLabel=document.createElement('label'),taskInput=document.createElement('input');
+  taskLabel.textContent='公开跟踪许可对应的原任务编号';taskInput.maxLength=256;taskInput.autocomplete='off';
+  taskLabel.append(taskInput);section.querySelector('[data-feeds="list"]').before(taskLabel);
   const field = name => section.querySelector(`[data-feeds="${name}"]`);
   const form = section.querySelector('form'); let state = {}, busy = false;
   async function run(name,input) {
@@ -25,11 +28,14 @@ export function mountFeedsControls(root,invoke) {
     const list = field('list'); list.replaceChildren();
     for (const item of value.subscriptions ?? []) {
       const row = document.createElement('li'), label = document.createElement('span'), remove = document.createElement('button');
-      label.textContent = item.title; remove.textContent = '移除'; remove.className = 'btn btn-sm';
+      label.textContent = `${item.title} · ${item.sensitivity === 'public' ? '公开' : '私人'}`; remove.textContent = '移除'; remove.className = 'btn btn-sm';
       remove.disabled = busy; remove.onclick = () => run('feeds.remove',{id:item.id});
-      row.append(label,' ',remove); list.append(row);
+      const classify=document.createElement('button');classify.className='btn btn-sm';classify.textContent='来源与跟踪许可';
+      classify.disabled=busy;classify.onclick=()=>run('feeds.classify',{subscriptionId:item.id,taskId:taskInput.value.trim()});
+      row.append(label,' ',classify,' ',remove); list.append(row);
     }
     form.querySelector('button').disabled = busy;
+    taskInput.disabled=busy;
     field('enable').disabled = busy || !value.available || value.requiresRestart;
     field('disable').disabled = busy || !value.sessionAllowed;
     if (value.sessionAllowed) field('consent').checked = true;

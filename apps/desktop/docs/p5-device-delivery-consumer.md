@@ -81,13 +81,41 @@ delivered/failed，之后 readDeviceFeedback 读回；unknown/pending 不猜测�
 - 新 Node SQLite port case 5/5 通过：数据库关闭重开、delivered 去重、pending→unknown、
   旧 JSON 一次导入/旧文件不变、V1 不伪 delivered、读写/腐坏失败、多 source 来源绑定、容量保留。
 - 宿主和 store 的 node --check、git diff --check 通过。#248 原 10 个 Fake case 不重复运行。
+- 本轮执行器实际为 Windows / Node `v26.3.0`，与仓库 `.node-version` 的 `24.15.0` 不同；
+  本包没有改根版本约束或安装运行时，Electron/声明 Node 版本的正式组合仍由 P8 验收。
 - Node SQLite seam case 使用隔离真实 SQLite 和同形 StoragePort，不等于 P8 migration10
   与正式 Runtime namespace 集成验收。未安装/启动模型、没有真实 OS 通知副作用。
 - P6 默认真实 source 是 node:os；injected 只能是显式测试来源。CPU/内存没有进程/磁盘/
   温度/网络归因，不能从相关性推断变慢原因。
+- 2026-09-30 19:57（Asia/Shanghai）复用 P6 既有脱敏 capture CLI 完成一次真实 Windows
+  provider 读取：`computer.system.observe@1.0.0`、`source=node:os`、Schema 有效且聚合
+  指标存在，requested=250ms、actual=253.27ms。证据类型明确为
+  `direct_provider_read_only`；`productionAuthorizationVerified=false`、`agentArtsVerified=false`。
+  本地忽略目录保留原 metadata，未包含实际 CPU/内存读数、私人账号或个人路径；
+  unavailable 为 `process_breakdown/disk_io/thermal/network_activity`。该次真实观测未触发通知，
+  不证明 Runtime/Policy/Evidence、持续异常、Laya 决策或 OS 投递。
 - 完整证据需 P8 最后短槽：实际已许可 Windows 指标/同 Runtime Evidence → P5 真实 Laya
   多候选 → 新鲜策略 → OS show/failed/unknown → SQLite 回执/重启核实/撤销隔离。
   若用公开合成持续高压样本触发一次真实 OS，必须分别标注“合成输入、真实投递”；
   该结果不能证明真实指标异常或物理用户已阅读。用户不在不做过量通知测试。
 - 原 Laya 因本机资源/账号/现场受阻的项目保持未验，不能用固定 delivered:true 替代，
   不停止用户应用或改安全策略。未完成全链证据前不标记本包/首版 MVP done。
+
+P8 最后槽可导入 `test/p5-device-native-receipt.mjs` 的
+`captureP5SyntheticNativeReceipt({Notification,storage,readDeliveryPolicy,caseId,
+signal,allowOneSyntheticNotification:true})`。脚本无自动执行/自动弹窗；Notification 必须由
+实际 Electron 入口提供，storage 必须来自隔离 Runtime 的已绑定 namespace（不使用用户
+正式通知历史）。caseId 固定为 `p5-native-case-...`，重入复用同 ID 和原 timestamp，
+unknown 不重发；缺显式单次开关只返回 not_started。
+P8 可传当前验收 AbortSignal；预先取消不启动，进行中取消同步调用 host.stop 保留 unknown，
+不以取消证明未投递。
+该 helper 只记录合成输入的原生回执、静音抑制或 unknown，不启动模型/不调用云，
+输出明确 `realMetricsTriggered/layaChoiceVerified/runtimeToolEvidenceVerified=false`。
+实际生产采样与 Laya 链仍须各自匹配，不用此合成通知补造生产 Evidence。
+
+2026-09-30 云端分工更新后：设备宿主/store 保持本机唯一写入，P5 云端不编辑本包。
+P5 `e11ac12` 通过 `application.createHostStateStore('proactive-receipts')` 保存原主动认知
+checkpoint；设备 OS 回执通过 P8 分配的 `'device-notifications'` domain 保存，都是同一个
+Runtime SQLite，不是 fake anchor task、新任务库或另一数据库。P6 真实采样合同保持
+`node:os/evidenceRefs/samplingIntervalMs>=1000`。以上两个 logical domain 不改变输入来源
+或出云许可。最后 helper AbortSignal 修改只保存源码，按用户统一验收要求未追加局部测试。

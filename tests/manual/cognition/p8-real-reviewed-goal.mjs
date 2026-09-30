@@ -3,7 +3,7 @@
 import {app,safeStorage} from 'electron';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {mkdirSync,writeFileSync} from 'node:fs';
+import {mkdirSync,readFileSync,writeFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {Client} from '@personal-agent/client';
 import {LayaActionChoiceService,LocalLayaHttpTransport} from '@personal-agent/cognition';
@@ -18,6 +18,25 @@ import {createReviewedGoalChoiceAudit,runReviewedGoalAcceptance} from './p5-revi
 const project=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../..');
 const sourceUserData=process.argv.find(arg=>arg.startsWith('--configuration-source='))?.slice('--configuration-source='.length);
 if(!sourceUserData || !path.isAbsolute(sourceUserData)) throw Error('Existing trusted configuration source is required');
+// This optional public Console readback describes the observed deployment, not
+// the deployment that handled an HTTP request. Never infer it from Latest.
+const deploymentReadbackPath=process.argv.find(arg=>arg.startsWith('--deployment-readback='))?.slice('--deployment-readback='.length);
+let consoleDeploymentReadback=null;
+if(deploymentReadbackPath!==undefined) {
+  if(!path.isAbsolute(deploymentReadbackPath))throw Error('Deployment readback must be an absolute public JSON path');
+  const bytes=readFileSync(deploymentReadbackPath);
+  if(bytes.length>8192)throw Error('Deployment readback exceeds the limit');
+  const value=JSON.parse(bytes.toString('utf8'));
+  const sources=['controllerSource','routerSource','planSource','reviewSource'];
+  if(!value || typeof value!=='object' || Array.isArray(value)
+    || typeof value.runtimeVersion!=='string' || !/^v[0-9]+$/.test(value.runtimeVersion)
+    || typeof value.controllerEntity!=='string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value.controllerEntity)
+    || sources.some(key=>typeof value[key]!=='string' || !/^[0-9]{1,32}$/.test(value[key]))) {
+    throw Error('Deployment readback has an invalid public identity');
+  }
+  consoleDeploymentReadback={runtimeVersion:value.runtimeVersion,controllerEntity:value.controllerEntity,
+    ...Object.fromEntries(sources.map(key=>[key,value[key]])),provenance:'explicit_console_readback_file'};
+}
 const directory=path.join(project,'.cache','p5-real-reviewed-goal',randomUUID());mkdirSync(directory,{recursive:true});
 app.setPath('userData',sourceUserData);app.commandLine.appendSwitch('disable-gpu');
 const namespace='synthetic-p5-reviewed-'+randomUUID();
@@ -26,7 +45,8 @@ const captures=[];
 function publish(value) {console.info('P8_ACCEPTANCE',JSON.stringify(value));}
 async function captureFetch(url,init) {
   const started=performance.now(),request=JSON.parse(init.body);
-  const capture={endpoint:url,request,startedAt:new Date().toISOString(),ttftMs:null};calls.push(capture);
+  const capture={endpoint:url,request,startedAt:new Date().toISOString(),ttftMs:null,
+    latencySemantics:{firstByteMs:'first_transport_chunk_not_first_token',totalMs:'complete_response_body',ttftMs:'not_observed'}};calls.push(capture);
   const response=await fetch(url,init);
   Object.assign(capture,{status:response.status,headers:Object.fromEntries(['content-type','x-request-id','x-trace-id','x-runtime-version','x-agent-version'].map(key=>[key,response.headers.get(key)]))});
   let total=0;const decoder=new TextDecoder();
@@ -81,7 +101,7 @@ try {
     signal:new AbortController().signal,deadline:new Date(Date.now()+180000).toISOString(),onProgress:publish,
     reopen:async()=>{await closeSession();return openSession(config,binding);}});
   Object.assign(report,{totalMs:performance.now()-started,cloudCalls:calls.length,nodeVersion:process.versions.node,
-    consoleDeploymentReadback:{runtimeVersion:'v16',controllerEntity:'2f5d361c-bd85-4d2f-9903-bb35d4f55afa',controllerSource:'1790763483827',routerSource:'1790763138570',planSource:'1790761689353',reviewSource:'1790762412803'},
+    consoleDeploymentReadback,consoleReadbackState:consoleDeploymentReadback?'provided':'not_provided',
     requestLevelDeploymentVerified:false});
   publish(report);
 } catch(error) {
