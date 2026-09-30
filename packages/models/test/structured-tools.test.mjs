@@ -32,3 +32,17 @@ test('gateway cancellation interrupts a provider that ignores its signal', async
   controller.abort();
   await assert.rejects(promise, {code: 'CANCELLED'});
 });
+
+test('a fenced JSON proposal from real endpoints is unwrapped; nested fences are refused', async () => {
+  const F = 'x'.repeat(0);
+  const open = String.fromCharCode(96, 96, 96);
+  const fenced = new FakeModelProvider([{kind: 'final', text: open + 'json' + String.fromCharCode(10) + JSON.stringify({kind: 'tool_proposal', proposal: {toolName: 'read', toolVersion: '1', arguments: {city: '北京'}}}) + String.fromCharCode(10) + open}]);
+  const proposal = await new ModelGateway(new StructuredToolProvider(fenced)).complete(request());
+  assert.equal(proposal.response.kind, 'tool_proposal');
+  assert.deepEqual(proposal.response.proposal.arguments, {city: '北京'});
+  const fencedFinal = new FakeModelProvider([{kind: 'final', text: open + String.fromCharCode(10) + JSON.stringify({kind: 'final', text: '直接回答'}) + String.fromCharCode(10) + open}]);
+  const finalResult = await new ModelGateway(new StructuredToolProvider(fencedFinal)).complete(request());
+  assert.equal(finalResult.response.kind, 'final');
+  const nested = new FakeModelProvider([{kind: 'final', text: open + 'json' + String.fromCharCode(10) + JSON.stringify({kind: 'final', text: open + '内嵌' + open}) + String.fromCharCode(10) + open}]);
+  await assert.rejects(new ModelGateway(new StructuredToolProvider(nested)).complete(request()), {code: 'INVALID_ARGUMENT'});
+});
