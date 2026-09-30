@@ -353,7 +353,7 @@ test('confidence separates the intended city from a same-name village', async ()
     {location: '上海', confidence: 'high'},
     {location: '杭州', confidence: 'high'},
     {location: '巴黎', confidence: 'high'},
-    {location: '婺源', confidence: 'high'},
+    {location: '婺源', confidence: 'low'},
     {location: 'New York', confidence: 'high'},
     {location: 'London', confidence: 'high'},
     {location: 'Seoul', confidence: 'high'},
@@ -394,6 +394,65 @@ test('the population floor is configurable and its boundary is the measured gap'
   assert.equal((await below.resolvePlace('伦敦', undefined, signal())).confidence, 'high');
   const above = makeProvider([captureRoutes(CAPTURES)], {minCorroboratedPopulation: 422_325});
   assert.equal((await above.resolvePlace('伦敦', undefined, signal())).confidence, 'low');
+});
+
+// Minor seats (PPLA2–PPLA5) no longer ride the seat exemption unconditionally: the wrong minor
+// seats the misresolutions carried (凤凰 → PPLA4 14574, Pingyao → PPLA4, 开罗 → PPLA2 1733) all
+// sit below 丽江市's 211151, the smallest correct one measured. The floor splits that gap.
+test('minor administrative seats carry their own population floor', async () => {
+  const seat = population => [({id: 1, name: '某县城', latitude: 30, longitude: 120,
+    timezone: 'Asia/Shanghai', feature_code: 'PPLA4', population})];
+  assert.equal((await makeProvider([geoRoutesByLanguage({zh: seat(99_999)})])
+    .resolvePlace('某县城', undefined, signal())).confidence, 'low');
+  assert.equal((await makeProvider([geoRoutesByLanguage({zh: seat(100_000)})])
+    .resolvePlace('某县城', undefined, signal())).confidence, 'high');
+  const lowered = makeProvider([geoRoutesByLanguage({zh: seat(50_000)})], {minMinorSeatPopulation: 50_000});
+  assert.equal((await lowered.resolvePlace('某县城', undefined, signal())).confidence, 'high');
+});
+
+// The documented worst hint case: 开罗 matched Cairo, Illinois (PPLA2, 1733 people) as an
+// unconditional high, which hid the hint tier entirely. With the minor-seat floor the primary
+// is low, the hint runs, and the Egyptian capital wins by exact name plus population.
+test('a small minor-seat misresolution no longer hides the hint tier', async () => {
+  const illinois = {id: 4227970, name: '开罗', latitude: 37.00533, longitude: -89.18342,
+    timezone: 'America/Chicago', feature_code: 'PPLA2', population: 1733, admin1: '伊利诺伊州', country: '美国'};
+  const egypt = {id: 360630, name: 'Cairo', latitude: 30.06263, longitude: 31.24967,
+    timezone: 'Africa/Cairo', feature_code: 'PPLC', population: 9606916, admin1: 'Cairo', country: 'Egypt'};
+  const captures = {
+    '开罗': {zh: [illinois], en: []},
+    'Cairo': {zh: [], en: [egypt, {...illinois, name: 'Cairo', admin1: 'Illinois', country: 'United States'}]},
+  };
+  const provider = makeProvider([captureRoutes(captures)]);
+  const sig = signal();
+  const unhinted = await provider.resolvePlace('开罗', undefined, sig);
+  assert.equal(unhinted.timezone, 'America/Chicago');
+  assert.equal(unhinted.confidence, 'low', 'the Illinois PPLA2 is no longer vouched for');
+  const hinted = await provider.resolvePlace('开罗', 'Cairo', sig);
+  assert.equal(hinted.timezone, 'Africa/Cairo', 'the hint tier can finally run');
+  assert.equal(hinted.confidence, 'high');
+});
+
+// The no-population false positives (阳朔, 同里 — plain PPL records GeoNames carries no
+// population for) are corroborated by the exact-name tier once an account is configured.
+test('a proven alternate name corroborates a place GeoNames carries no population for', async () => {
+  const yangshuo = {id: 1803512, name: '阳朔', latitude: 24.73333, longitude: 110.48889,
+    timezone: 'Asia/Shanghai', feature_code: 'PPL', country: '中国'};
+  const searchAndGet = (captures, recordsById) => ['geocoding-api.open-meteo.com', url => {
+    const parsed = new URL(url);
+    if (parsed.pathname.endsWith('/v1/get')) {
+      const record = recordsById[parsed.searchParams.get('id')];
+      return record === undefined ? jsonResponse({error: true, reason: 'Id not found'}, 404) : jsonResponse(record);
+    }
+    const entry = captures[parsed.searchParams.get('name')] ?? {};
+    return jsonResponse({results: entry[parsed.searchParams.get('language')] ?? []});
+  }];
+  const provider = makeProvider(
+    [geonamesRoute({'阳朔': [1803512]}, 'acct'), searchAndGet({'阳朔': {zh: [yangshuo], en: []}}, {1803512: yangshuo})],
+    {geonamesUsername: 'acct'},
+  );
+  const place = await provider.resolvePlace('阳朔', undefined, signal());
+  assert.equal(place.featureCode, 'PPL');
+  assert.equal(place.confidence, 'high', 'name_equals proved the query is a documented name of this place');
 });
 
 test('a candidate carrying no feature classification is not vouched for', async () => {
@@ -459,12 +518,13 @@ test('a hint is a fallback tier and never outranks a good original match', async
   const provider = makeProvider([captureRoutes(CAPTURES)]);
   const sig = signal();
 
-  // 婺源 already resolves to the right county in Jiangxi. Searched on its own, `Wuyuan` ranks a
-  // different county in Zhejiang first — and both are administrative seats, so neither the
-  // feature code nor the population separates them. An unconditional merge would be a regression.
+  // 婺源 still resolves to the right county in Jiangxi, but as a populationless PPLA3 it is no
+  // longer vouched for unconditionally: the minor-seat tightening leaves it low until the
+  // GeoNames exact-name tier corroborates it. The wrong hint cannot rescue it either — searched
+  // on its own, `Wuyuan` ranks Zhejiang first, and that PPLA3 carries no population either.
   const wuyuan = await provider.resolvePlace('婺源', 'Wuyuan', sig);
   assert.equal(wuyuan.admin1, '江西', 'the wrong hint is ignored');
-  assert.equal(wuyuan.confidence, 'high');
+  assert.equal(wuyuan.confidence, 'low', 'a populationless minor seat is not vouched for');
   const hintAlone = await provider.resolvePlace('Wuyuan', undefined, sig);
   assert.equal(hintAlone.admin1, '浙江', 'which is what acting on it would have produced');
 

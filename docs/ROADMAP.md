@@ -103,7 +103,7 @@
 | MOD-22 | M3 | done | `Potatos498` / PR #8 已合并（RSS 2.0/Atom 增量、趟水位线分页修复、真实源读回验证） |
 | MOD-23 | M3 | review | `Potatos498` / PR #27、#81 已合并；通知裁定、持久批次、ack、DST 和毫秒摘要窗口已验证，Runtime/Desktop 通知查询与展示尚未接通 |
 | MOD-24 | M2 | review | `Potatos498` / PR #47 已合并为 `2117908a`；OpenAlex、Fake、缓存三态和三项来源披露已验证，长期真实服务稳定性仍为 conditional |
-| MOD-25 | M2 | done | `Potatos498` / PR #4、#12、#23 与 Runtime 装配 PR #9 已合并；GeoNames 增强下 26 个世界大城市简体查询 26/26 高置信，真实门控测试 66/66；manifest 仍为 `conditional`，不等于长期生产稳定性验收 |
+| MOD-25 | M2 | done | `Potatos498` / PR #4、#12、#23 与 Runtime 装配 PR #9 已合并；GeoNames 增强下 26 个世界大城市简体查询 26/26 高置信，真实门控测试 66/66；2026-09-30 置信度收口：`PPLA2`–`PPLA5` 次级席位不再无条件判 `high`（新增 `minMinorSeatPopulation` 默认 100000，实测空档 14574↔211151），GeoNames 已证名可佐证任意人口档；`开罗+Cairo` 提示串用例随之修复；manifest 仍为 `conditional`，不等于长期生产稳定性验收 |
 | MOD-26 | M4 起逐平台验收 | todo | `Potatos498` 已登记，未授权启动 |
 | MOD-27 | M1.6 | review | `zemeng` / main 已有版本图及 SQLite/Fake 原子 `appendBatch`；事实查询/变化流与自动事实投影的后续增量仍在堆叠分支，真实事实来源、确认消费和数据删除未完成 |
 | MOD-28 | M1.6 | in_progress | `zemeng` / main 已有离线影响分析、显式修复预览/提交和原子 CAS；自动事实投影、外部事实身份落地、真实 AgentArts 驱动和 Evidence 闭环未完成 |
@@ -183,6 +183,7 @@
 - 2026-09-09：完成接口冻结评估。只冻结 Core Runtime Profile 1；事件生命周期、Host、Model/Agent/Tool、连接器、Evidence/Artifact 和持续授权保持 `provisional`，无生产提供者的设置、语音、知识/记忆、MCP/Skills、Windows、AgentArts 与分发接口列为 `unavailable`。
 - 2026-09-09：按新分工拆分 MOD-04A/04B，新增 MOD-27～32，并接受核心认知依赖倒置和 AgentArts 本地信任边界；这些新接口和模块尚未实现，不能因文档完成而提升状态。
 - 2026-09-09：确认华为 ICT 创新赛 AgentArts 赛题；新增 Competition Profile 与 ADR-0007，当前只实施比赛主路径，Local Profile 仅可选留存现有代码，不新增且不进入比赛退出条件。
+- 2026-09-30：MOD-25 遗留两项收口（用户本轮授权「做」）。①置信度收紧：次级行政中心（`PPLA2`–`PPLA5`）不再无条件判 `high`，需人口 ≥ 新增选项 `minMinorSeatPopulation`（默认 100000，取自实测空档：错误小席位 凤凰 14574 / 开罗-伊利诺伊 1733 ↔ 正确最小席位 丽江市 211151）或 GeoNames `name_equals` 已证名（已证名同时修复阳朔/同里型无人口误判）；`PPLC`/`PPLA` 维持无条件 `high`。②连带修复：`开罗+Cairo` 曾因小席位被无条件判 `high` 而把提示串层整个挡住，收口后提示串正常救回到 `Africa/Cairo`（离线测试固定）。行为变更提示：`apps/runtime` 的 `createOpenMeteoRuntime` 以 `strict` 装配，无人口次级席位（如未配置 GeoNames 账号时的 `婺源`）从可用变为拒绝并给出候选，属修正方向，点名 `goo122` 知悉。第三项遗留（显示名简繁混杂）维持 README 已有结论：根因在 GeoNames zh 备用名本身混合，映射表方案已否决，不在本包修。验证：weather 69 项（65 过＋4 live 门控跳过）0 失败、runtime 集成 3/3、`check:architecture` 通过。真实验收已于合并评审期间在 #227 分支补跑（2026-09-30 04:56Z，`PA_WEATHER_LIVE=1`）：48 项 47 过 0 失败 1 跳过（GeoNames 项无账号），真实端点上五个既往误解析全部判 `low`、提示串救回 6 例全部正常，结果已录入 README。
 - 此记录不构成任何运行时能力通过证明。
 
 ## 5. 继续入口
