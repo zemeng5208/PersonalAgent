@@ -13,6 +13,7 @@ import {createRuntimeApplication} from '@personal-agent/runtime/application';
 
 if (process.platform !== 'win32') throw Error('Windows acceptance only');
 const powerShellPath = process.argv[2];
+const casOnly = process.argv[3] === '--cas-only';
 if (!powerShellPath || !path.isAbsolute(powerShellPath)) throw Error('Pass trusted PowerShell 7 executable');
 const repository = fileURLToPath(new URL('../../../', import.meta.url));
 const cache = path.join(repository, '.cache');
@@ -35,7 +36,8 @@ execFileSync(powerShellPath, ['-NoProfile', '-NonInteractive', '-EncodedCommand'
 {input: recovery, windowsHide: true, timeout: 10_000, stdio: ['pipe', 'pipe', 'pipe']});
 
 const source = path.join(root, 'demo.mjs');
-const before = 'export const greeting = "P6_BEFORE";\nconsole.log(greeting);\n';
+const newline = casOnly ? '\r\n' : '\n';
+const before = `${casOnly ? '\ufeff' : ''}export const greeting = "P6_BEFORE";${newline}console.log(greeting);${newline}`;
 const after = before.replace('P6_BEFORE', 'P6_AFTER_中文');
 const sha = value => createHash('sha256').update(value).digest('hex');
 await writeFile(source, before, {flag: 'wx'});
@@ -96,7 +98,8 @@ try {
   assert.equal(read.task.state, 'succeeded');
   assert.equal(read.confirmed.result.content, before);
   assert.ok(read.confirmed.result.content.includes('P6_BEFORE')); // Local search of selected file.
-  const patch = {path: 'demo.mjs', expectedSha256: sha(before),
+  assert.equal(read.confirmed.result.sha256, sha(await readFile(source)));
+  const patch = {path: read.confirmed.result.path, expectedSha256: read.confirmed.result.sha256,
     edits: [{oldText: 'P6_BEFORE', newText: 'P6_AFTER_中文'}]};
   const preview = await execute(request('workspace.preview_text_patch', patch));
   assert.equal(preview.task.state, 'succeeded');
@@ -110,6 +113,28 @@ try {
   assert.equal(applied.confirmed.result.afterSha256, sha(after));
   assert.equal(await readFile(source, 'utf8'), after);
   assert.ok(applied.confirmed.evidenceRefs.length > 0);
+  if (casOnly) {
+    const reread = await execute(request('workspace.read_text', {path: patch.path}));
+    assert.equal(reread.confirmed.result.content, after);
+    assert.equal(reread.confirmed.result.sha256, applied.confirmed.result.afterSha256);
+    assert.deepEqual(await readFile(source), Buffer.from(after));
+    const stalePreview = await execute(request('workspace.preview_text_patch', patch));
+    assert.equal(stalePreview.task.state, 'failed');
+    assert.equal(stalePreview.task.error.code, 'REVISION_CONFLICT');
+    const staleApply = await execute(request('workspace.apply_text_patch', patch));
+    assert.equal(staleApply.task.state, 'waiting_reconciliation');
+    assert.equal(staleApply.task.error.code, 'RESULT_UNKNOWN');
+    assert.equal(staleApply.confirmed, undefined);
+    assert.deepEqual(await readFile(source), Buffer.from(after));
+    assert.deepEqual(await readdir(recovery), []);
+    const summary = {profile: 'huawei_ict_agentarts', mode: 'cas-only', realLocalExecution: true,
+      desktopVerified: false, cloudVerified: false, bomAndCrlfPreserved: true,
+      beforeSha256: read.confirmed.result.sha256, afterSha256: reread.confirmed.result.sha256,
+      stalePreviewCode: stalePreview.task.error.code, staleApplyState: staleApply.task.state, receipts};
+    await writeFile(path.join(base, 'receipt.json'), JSON.stringify(summary, null, 2), {flag: 'wx'});
+    console.log(JSON.stringify({state: 'passed', mode: 'cas-only', receiptDirectory: path.relative(repository, base),
+      beforeSha256: summary.beforeSha256, afterSha256: summary.afterSha256, taskIds: receipts.map(item => item.taskId)}));
+  } else {
   const command = await execute(request('workspace.run_allowed_command', {recipeId: 'run-demo'}));
   assert.equal(command.task.state, 'succeeded');
   assert.deepEqual(command.confirmed.result, {recipeId: 'run-demo', exitCode: 0,
@@ -161,6 +186,7 @@ try {
   await writeFile(path.join(base, 'receipt.json'), JSON.stringify(summary, null, 2), {flag: 'wx'});
   console.log(JSON.stringify({state: 'passed', receiptDirectory: path.relative(repository, base),
     beforeSha256: sha(before), afterSha256: sha(after), taskIds: receipts.map(item => item.taskId)}));
+  }
 } finally {
   await until(() => app.activeTaskCount === 0);
   app.close();

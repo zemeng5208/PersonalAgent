@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import { constants as fsConstants, realpathSync, statSync } from 'node:fs';
 import { lstat, open, opendir, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep, win32 } from 'node:path';
@@ -130,6 +131,8 @@ export interface WorkspaceReadResult {
   encoding: 'utf-8';
   byteLength: number;
   content: string;
+  /** SHA-256 of the same raw file bytes; optional for historical 1.0.0 receipts. */
+  sha256?: string;
 }
 
 export interface WorkspaceListOptions {
@@ -194,6 +197,8 @@ const outputSchema = (maxReadBytes: number): ToolDescriptor['outputSchema'] => (
     encoding: {enum: ['utf-8']},
     byteLength: {type: 'integer', minimum: 0, maximum: maxReadBytes},
     content: {type: 'string'},
+    sha256: {type: 'string', pattern: '^[a-f0-9]{64}$',
+      description: 'SHA-256 of the raw bytes returned by this read. Use as expectedSha256 for a later patch of this path; it does not grant a write.'},
   },
 });
 
@@ -489,7 +494,9 @@ export function createWorkspaceReadTool(options: WorkspaceReadOptions): Register
         const bytes = Buffer.concat(chunks, position);
         let content: string;
         try {
-          content = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+          // Preserve a UTF-8 BOM so re-encoding for patch preview hashes the
+          // exact bytes read, including BOM and the original line endings.
+          content = new TextDecoder('utf-8', {fatal: true, ignoreBOM: true}).decode(bytes);
         } catch {
           throw new ProtocolError('INVALID_ARGUMENT', 'Workspace file is not valid UTF-8 text');
         }
@@ -504,6 +511,7 @@ export function createWorkspaceReadTool(options: WorkspaceReadOptions): Register
           encoding: 'utf-8',
           byteLength: bytes.byteLength,
           content,
+          sha256: createHash('sha256').update(bytes).digest('hex'),
         };
         assertSerializedResultFits(result, 'Workspace read result exceeds the bounded serialized-output limit');
         checkContext(context, now);

@@ -64,7 +64,9 @@ PID 的起始时间并与 marker 比对。未提供检查器或 PowerShell 路�
 - `register(host, options)`：使用现有 `ToolHost.register()` 注册并返回 dispose，不创建第二套 registry。
 - 工具 scope：`workspace:read`。授权仍由 Runtime/Policy/ToolGateway 签发、绑定和消费；本包不创建授权引用，也不扩大 scope。
 - 输入：`{path, maxBytes?}`。`path` 只接受规范的相对子路径，`maxBytes` 只能收紧宿主上限。文件必须完整落在上限内；不截断、不提供无限输出。
-- 输出：`{path, encoding:'utf-8', byteLength, content}`。只返回相对路径，不披露宿主工作区绝对路径。
+- 输出：`{path, encoding:'utf-8', byteLength, content, sha256}`。`sha256` 是同一次读取的原始字节摘要，可作为该 `path` 后续 preview/apply 的 `expectedSha256`；不能让模型另行计算摘要或用一次新读取替换旧版本。只返回相对路径，不披露宿主工作区绝对路径。
+- UTF-8 BOM 以正文首个 U+FEFF 保留，换行不归一化；摘要、`byteLength`、preview 重编码与 apply 原始字节校验一致。文件在读取后变化时，旧摘要必须触发冲突，不构成写入授权。
+- `workspace.read_text@1.0.0` 的 provisional 输出 Schema 兼容增加可选 `sha256`：历史无摘要结果仍可校验，当前 provider 成功读取必带摘要。严格消费者需发现当前 descriptor，不能以缓存旧 Schema 校验新输出；缺摘要历史结果需显式重新读取后重新拟定补丁。
 - 序列化边界：结果自身的 UTF-8 JSON 最多为 `MAX_SERIALIZED_WORKSPACE_READ_RESULT_BYTES`（当前为 960 KiB），为现有 `tool.invoke` / Response 包装预留 64 KiB；超限拒绝，不截断。
 
 目录枚举使用独立入口与 scope：
