@@ -1,0 +1,61 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {Client} from '@personal-agent/client';
+import {ModelGateway, FakeModelProvider} from '@personal-agent/models';
+import {FakeCoordinationPort} from '@personal-agent/coordination/testing';
+import {createRuntimeApplication, createDesktopSubagentDispatchTool,
+  SUBAGENT_DISPATCH_TOOL_NAME, SUBAGENT_DISPATCH_TOOL_VERSION} from '../dist/application.js';
+
+const descriptor = {name:'fixture.approved-child',version:'1.0.0',
+  inputSchema:{type:'object',required:['value'],additionalProperties:false,properties:{value:{type:'string'}}},
+  outputSchema:{type:'object',required:['value'],additionalProperties:false,properties:{value:{type:'string'}}},
+  sideEffect:'read',requiredScopes:['fixture:read'],requiresPresence:false,idempotencySupport:true,recoverySupport:true};
+async function until(predicate) {
+  for(let attempt=0;attempt<200;attempt++) {if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}
+  throw Error('Expected persisted state was not reached');
+}
+
+test('child approval resumes the original child and confirmed parent dispatch, then continues the cloud once',async t=>{
+  let app,calls=0;
+  const gateway=new ModelGateway(new FakeModelProvider([
+    ()=>({kind:'tool_proposal',proposal:{toolName:descriptor.name,toolVersion:descriptor.version,arguments:{value:'approved'}}}),
+    ()=>({kind:'final',text:'confirmed child answer'}),
+  ],{deployment:'fixed-model-binding'}));
+  const selection={getModelGateway:()=>gateway};
+  const dispatch=createDesktopSubagentDispatchTool({getRuntime:()=>app.runtime,getTools:()=>app.tools,...selection});
+  const port=new FakeCoordinationPort(request=>{
+    if(!request.continuation) return {kind:'tool_proposal',proposalId:'dispatch-one',
+      toolName:SUBAGENT_DISPATCH_TOOL_NAME,toolVersion:SUBAGENT_DISPATCH_TOOL_VERSION,
+      arguments:{subtasks:[{subtaskId:'child',role:'researcher',goal:'Read approved synthetic value'}]},verification:'mock'};
+    assert.equal(request.continuation.state,'confirmed');
+    assert.equal(request.continuation.result.succeeded,1);
+    assert.equal(request.continuation.result.failed,0);
+    assert.match(request.continuation.result.summary,/confirmed child answer/);
+    return {kind:'text',text:'parent confirmed refreshed child answer',verification:'mock'};
+  });
+  app=createRuntimeApplication({path:':memory:',profile:'huawei_ict_agentarts',coordination:port,
+    subagentModels:selection,tools:[dispatch,{descriptor,execute:async input=>{calls++;return input;}}],
+    automaticTools:[{toolName:SUBAGENT_DISPATCH_TOOL_NAME,toolVersion:SUBAGENT_DISPATCH_TOOL_VERSION}]});
+  t.after(()=>app.close());
+  const client=new Client(app,Date.now);await client.connect();
+  const parent=await client.call('task.submit',{goal:'Delegate and wait for real child result',conversationId:'competition'},
+    {idempotencyKey:'parent-child-recovery'});
+  await until(()=>app.runtime.getTask(parent.taskId).state==='waiting_approval'&&app.activeTaskCount===0);
+  const child=app.runtime.findTaskByIdempotencyKey(`subagent-dispatch-${parent.taskId}-child`);
+  assert.equal(child.state,'waiting_approval');assert.equal(calls,0);assert.equal(port.requests.length,1);
+  const parentRecord=app.runtime.readToolExecutions(parent.taskId);
+  assert.equal(parentRecord.length,1);assert.equal(parentRecord[0].state,'confirmed');
+  const approval=app.runtime.getApproval(`agent-run-${child.taskId}-1`);
+  await client.call('authorization.respond',{approvalId:approval.approvalId,expectedRevision:approval.revision,decision:'allow_once'});
+  await until(()=>['succeeded','failed'].includes(app.runtime.getTask(parent.taskId).state)&&app.activeTaskCount===0);
+  const result=app.runtime.getTask(parent.taskId);
+  assert.equal(result.state,'succeeded',JSON.stringify(result.error));
+  assert.equal(app.runtime.getTask(child.taskId).state,'succeeded');assert.equal(calls,1);
+  assert.equal(port.requests.length,2);
+  assert.equal(app.runtime.readToolExecutions(parent.taskId).length,1);
+  assert.equal(app.runtime.readToolExecutions(child.taskId).length,1);
+  assert.ok(result.evidenceRefs.includes(approval.approvalId));
+  assert.match(app.runtime.loadCheckpoint(parent.taskId,'subagent-current-summary').summary,/confirmed child answer/);
+  assert.throws(()=>app.resumeTask(child.taskId),{code:'REVISION_CONFLICT'});
+  assert.equal(calls,1);
+});
