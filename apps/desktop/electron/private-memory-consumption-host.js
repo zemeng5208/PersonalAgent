@@ -7,7 +7,7 @@ const terminal = task => ['succeeded', 'failed', 'cancelled'].includes(task.stat
 
 /** Host-only, ephemeral projection into the existing Competition worker. No task loop or cloud grant. */
 export function createPrivateMemoryConsumptionHost({profile, privateMemory, readTask,
-  readTaskBinding, writeTaskBinding, readConfigurationRef}) {
+  readTaskBinding, writeTaskBinding, readConfigurationRef, assertCopyManagement}) {
   if (profile !== 'huawei_ict_agentarts' || !privateMemory
     || [readTask, readTaskBinding, writeTaskBinding, readConfigurationRef].some(value => typeof value !== 'function')) {
     throw Error('需要可信任务与 Competition 配置绑定');
@@ -30,6 +30,9 @@ export function createPrivateMemoryConsumptionHost({profile, privateMemory, read
     return ref;
   };
   const checkLease = (lease, request) => {
+    if (typeof assertCopyManagement !== 'function') throw Error('私人任务副本清除未接通');
+    const gate = assertCopyManagement();
+    if (gate && typeof gate.then === 'function') throw Error('私人副本门禁必须同步完成');
     checkTask(request.taskId, lease.conversationId, lease.binding.deadline, request.signal);
     if (request.deadline !== lease.binding.deadline || request.goal !== lease.goal
       || configuration() !== lease.binding.configurationRef
@@ -68,6 +71,12 @@ export function createPrivateMemoryConsumptionHost({profile, privateMemory, read
       }
       const selected = selections.get(conversationId);
       if (!selected) return {state: 'not_selected', goal};
+      if (typeof assertCopyManagement !== 'function') throw Error('私人派生副本清除未接通，消费保持禁用');
+      const readiness = assertCopyManagement();
+      if (readiness !== undefined) {
+        void Promise.resolve(readiness).catch(() => undefined);
+        throw Error('私人副本清单检查必须同步完成');
+      }
       privateMemory.assertConsumption(selected);
       const configurationRef = configuration();
       const result = await privateMemory.consumeConfirmed({refs: [selected.ref], taskId,

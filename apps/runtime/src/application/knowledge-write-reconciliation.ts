@@ -8,6 +8,18 @@ import type {KnowledgeWriteFinalizationAcceptance} from '@personal-agent/knowled
 
 const TOOL='knowledge.apply_note_patch';
 const VERSION='1.0.0';
+async function bounded<T>(context:{deadline:string;signal:AbortSignal},work:()=>Promise<T>):Promise<T> {
+  const remaining=Date.parse(context.deadline)-Date.now();
+  if(context.signal.aborted || !Number.isFinite(remaining) || remaining<=0)throw new ProtocolError('TIMEOUT','Knowledge recovery expired');
+  let onAbort=()=>{},timer:ReturnType<typeof setTimeout>|undefined;
+  const interrupted=new Promise<never>((_resolve,reject)=> {
+    onAbort=()=>reject(new ProtocolError('CANCELLED','Knowledge recovery cancelled'));
+    context.signal.addEventListener('abort',onAbort,{once:true});
+    timer=setTimeout(()=>reject(new ProtocolError('TIMEOUT','Knowledge recovery expired')),Math.min(remaining,2147483647));
+  });
+  try {return await Promise.race([Promise.resolve().then(work),interrupted]);}
+  finally {if(timer)clearTimeout(timer);context.signal.removeEventListener('abort',onAbort);}
+}
 export interface KnowledgeWriteReconciliationPort {
   reconcile(input:{taskId:string;runId:string;argumentsDigest:string},context:{deadline:string;signal:AbortSignal}):Promise<{
     state:'applied'|'not_applied'|'unknown'|'in_progress';operationId:string;backupId:string;lockRetained:boolean;currentSha256?:string}>;
@@ -47,10 +59,11 @@ export class KnowledgeWriteReconciliationAdapter {
         if(context.signal.aborted)throw new ProtocolError('CANCELLED','Knowledge readback cancelled');
         if(Date.now()>=Date.parse(context.deadline) || !Number.isFinite(Date.parse(context.deadline)))throw new ProtocolError('TIMEOUT','Knowledge readback expired');
         if(!isDeepStrictEqual(this.runtime.loadCheckpoint(taskId,'host-tool-intent'),intent)
+          || !isDeepStrictEqual(record,this.runtime.readToolExecutions(taskId).find(value=>value.evidenceId===runId))
           || this.runtime.getTask(taskId).state!=='waiting_reconciliation')throw new ProtocolError('REVISION_CONFLICT','Original knowledge recovery changed');
       };
       current();
-      const result=await this.port.reconcile({taskId,runId,argumentsDigest:intent.argumentsDigest},context);
+      const result=await bounded(context,()=>this.port.reconcile({taskId,runId,argumentsDigest:intent.argumentsDigest},context));
       current();
       if(!result || !['applied','not_applied','unknown','in_progress'].includes(result.state)
         || typeof result.operationId!=='string' || !/^[a-f0-9]{64}$/.test(result.operationId)
@@ -77,11 +90,11 @@ export class KnowledgeWriteReconciliationAdapter {
         argumentsDigest:intent.argumentsDigest,operationId:result.operationId,originalInput:intent.arguments,
         outcome:result.state,currentSha256:result.currentSha256,executionRecordId:record.evidenceId,
         readbackEvidenceRefs:[evidence.evidenceId]};
-      const finalized=await this.port.finalize(accepted,context);current();
+      const finalized=await bounded(context,()=>this.port.finalize(accepted,context));current();
       if(finalized.state!=='finalized')return this.runtime.getTask(taskId);
       if(finalized.operationId!==result.operationId || finalized.outcome!==result.state
         || finalized.currentSha256!==result.currentSha256)throw new ProtocolError('RESULT_UNKNOWN','Knowledge finalization changed its readback');
-      return this.runtime.reconcileToolExecution(taskId,runId,result.state,result);
+      return this.runtime.reconcileToolExecution(taskId,runId,result.state,result,[evidenceId]);
     }).finally(()=>this.active.delete(taskId));
     this.active.set(taskId,work);return work;
   }

@@ -1,9 +1,13 @@
-export {createRuntimeApplication, RuntimeApplication} from './application/runtime-application.js';
+export {createRuntimeApplication, RuntimeApplication,createRuntimeKnowledgeReevaluator,REFERENCE_SKILL_WORKER_TOOL} from './application/runtime-application.js';
+export type {KnowledgeRecheckContext,KnowledgeRecheckOptions,KnowledgeRecheckResult} from './application/runtime-application.js';
+export type {CloudSkillRuntimeHostPort} from './application/runtime-application.js';
+export type {PrepareCompetitionToolExport,CompetitionToolExport,CoordinationWorkerCapabilityPort} from './application/coordination.js';
 export type {StartSystemObservationSessionRequest, SystemObservationSession} from './application/system-observation-session.js';
 export {createSystemObservationTool} from '@personal-agent/windows-client';
 export type {RuntimeApplicationOptions, RuntimeApplicationTransport, SubmitHostToolTaskRequest,
   PrepareHostToolTaskRequest, FinalizeHostToolTaskRequest, HostToolTaskReadback,
   RevokeHostAuthorizationRequest, RevokeHostAuthorizationResult,
+  CoordinationGoalScope, CoordinationInputHooks, ConversationContextMessage, WindowsHostTaskReconciliation,
   ConfirmedSystemObservationSample} from './application/runtime-application.js';
 export type {LocalRepairHostOptions, LocalRepairBinding, SubmitLocalRepairRequest} from './application/local-repair.js';
 export type {CompetitionAvailableTool, CompetitionToolAvailability} from './application/tool-catalog.js';
@@ -23,7 +27,7 @@ export type {ConfirmedPrivateFact} from './application/private-source.js';
 export {createWindowsHostBridgeTransport, createWindowsHostNotepadAdapter} from './application/windows-host-adapter.js';
 export {createRuntimeWindowsHostAttemptStore} from './application/windows-host-attempt-store.js';
 export type {WindowsHostTransport, VerifiedWindowsHostConnection, WindowsHostAttemptStore,
-  WindowsHostAdapterOptions, WindowsHostRunIdentity, ObservedNotepad} from './application/windows-host-adapter.js';
+  WindowsHostAdapterOptions, WindowsHostRunIdentity, WindowsHostRecovery, ObservedNotepad} from './application/windows-host-adapter.js';
 export {ScopedEvidenceReader} from './application/evidence-reader.js';
 export type {EvidenceReadScope, EvidenceReaderOptions, EvidencePage} from './application/evidence-reader.js';
 export type {
@@ -62,9 +66,9 @@ export {
   SUBAGENT_DISPATCH_TOOL_NAME,
   SUBAGENT_DISPATCH_TOOL_VERSION,
 } from './application/subagent-host.js';
-export type {SubagentHostOptions, DesktopSubagentDispatchToolOptions} from './application/subagent-host.js';
+export type {SubagentHostOptions, DesktopSubagentDispatchToolOptions,ConfiguredSubagentModelOptions} from './application/subagent-host.js';
 export {LOCAL_REPAIR_TOOL} from './application/local-repair.js';
-export {createKnowledgeFeedReceipt,createKnowledgeFeedReceiptFromCollectResult, parseKnowledgeFeedReceipt, verifyKnowledgeFeedReceiptBinding,
+export {createKnowledgeFeedReceipt,createKnowledgeFeedReceiptFromCollectResult,createKnowledgeFeedReceiptFromConfirmedExecution, parseKnowledgeFeedReceipt, verifyKnowledgeFeedReceiptBinding,
   knowledgeFeedReceiptItems} from './application/knowledge-feed-receipt.js';
 export type {KnowledgeFeedItem, KnowledgeFeedCitation, KnowledgeFeedReceipt, KnowledgeFeedReceiptBinding,
   KnowledgeFeedQuotedItem} from './application/knowledge-feed-receipt.js';
@@ -77,3 +81,5 @@ export {createTrustedKnowledgeTools} from './application/knowledge-tools.js';
 export type {TrustedKnowledgeSource,TrustedKnowledgeBinding,KnowledgeToolTaskBindings} from './application/knowledge-tools.js';
 export {createWorkflowLearningApplication,createBoundPublicFactErasureApplication,LEARNING_BINDING_CHECKPOINT} from './application/memory-learning.js';
 export type {WorkflowLearningOptions,LearningTaskBinding,LearningSkillManifest} from './application/memory-learning.js';
+export {KnowledgeWriteReconciliationAdapter} from './application/knowledge-write-reconciliation.js';
+export type {KnowledgeWriteReconciliationPort} from './application/knowledge-write-reconciliation.js';

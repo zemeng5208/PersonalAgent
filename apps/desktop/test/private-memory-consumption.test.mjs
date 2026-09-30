@@ -33,7 +33,7 @@ async function fixture(t) {
   const options = {profile: 'huawei_ict_agentarts', privateMemory,
     readTask: id => tasks.get(id), readTaskBinding: id => markers.get(id),
     writeTaskBinding: (id, binding) => markers.set(id, structuredClone(binding)),
-    readConfigurationRef: () => configuration};
+    readConfigurationRef: () => configuration, assertCopyManagement: () => {}};
   const host = createPrivateMemoryConsumptionHost(options);
   const task = id => {
     tasks.set(id, {taskId: id, conversationId: 'synthetic-conversation', state: 'created'});

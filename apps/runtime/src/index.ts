@@ -416,7 +416,16 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
   }
 
   getTask(taskId: string): TaskSnapshot {
-    return structuredClone(taskFromRow(this.taskRow(requireText(taskId, 'taskId'))));
+    return this.publicTask(taskFromRow(this.taskRow(requireText(taskId, 'taskId'))));
+  }
+
+  private publicTask(task:TaskSnapshot):TaskSnapshot {
+    if(this.loadCheckpoint(task.taskId,'private-copy-erasure')!==undefined) {
+      const masked={...task,goal:'[private-derived body withheld]',steps:[],attachmentRefs:[]};
+      delete masked.resultSummary;delete masked.error;
+      return structuredClone(masked);
+    }
+    return structuredClone(task);
   }
 
   private snapshotSequence(): number {
@@ -438,7 +447,7 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     const rows = this.db.prepare(`SELECT t.task_id, t.goal, t.conversation_id, t.attachment_refs_json, t.state, t.revision, t.updated_at, t.steps_json, t.evidence_refs_json, t.result_summary, t.error_json, t.cancel_requested, e.sequence AS created_sequence FROM tasks t JOIN task_events e ON e.task_id = t.task_id WHERE ${clauses.join(' AND ')} ORDER BY e.sequence DESC LIMIT ?`).all(...params, limit + 1) as unknown as Array<TaskRow & {created_sequence: number}>;
     const more = rows.length > limit;
     const page = rows.slice(0, limit);
-    return {items: page.map(taskFromRow), snapshotSequence, ...(more ? {nextBeforeSequence: page.at(-1)!.created_sequence} : {})};
+    return {items: page.map(row=>this.publicTask(taskFromRow(row))), snapshotSequence, ...(more ? {nextBeforeSequence: page.at(-1)!.created_sequence} : {})};
   }
 
   listConversations(input: {conversationId?: string; beforeSequence?: number; snapshotSequence?: number; limit?: number}): Result<'conversation.list'> {
@@ -453,7 +462,7 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     for (const row of rows) {
       if (conversationId !== undefined && row.conversation_id !== conversationId) continue;
       const current = grouped.get(row.conversation_id) ?? {sequence: row.created_sequence, tasks: []};
-      current.tasks.push(taskFromRow(row)); grouped.set(row.conversation_id, current);
+      current.tasks.push(this.publicTask(taskFromRow(row))); grouped.set(row.conversation_id, current);
     }
     const conversations = [...grouped.entries()].filter(([, value]) => input.beforeSequence === undefined || value.sequence < input.beforeSequence).sort((a, b) => b[1].sequence - a[1].sequence);
     const more = conversations.length > limit;
@@ -500,11 +509,120 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
        ORDER BY e.sequence DESC LIMIT ?`,
     ).all(normalizedConversationId, currentEvent.sequence, limit) as unknown as ConversationTurn[];
 
-    return rows.reverse().map(row => ({
+    return rows.reverse().filter(row=>!['private-copy-erasure','private-memory:consumption:v1','private-derived-output','knowledge-recheck-result']
+      .some(key=>this.loadCheckpoint(row.taskId,key)!==undefined)).map(row => ({
       taskId: row.taskId,
       goal: row.goal,
       resultSummary: row.resultSummary,
     }));
+  }
+
+  /** Host-only metadata inventory. Descendants are copies, never inherited consumption licenses. */
+  listBindings(input:{limit?:number;afterTaskId?:string}={}):{items:{taskId:string;binding:Record<string,unknown>}[];nextAfterTaskId?:string} {
+    const limit=input.limit??100;
+    if(!Number.isSafeInteger(limit)||limit<1||limit>100)throw new RuntimeError('INVALID_ARGUMENT','Invalid binding page size');
+    const rows=this.db.prepare("SELECT task_id, checkpoint_key, value_json FROM task_checkpoints WHERE checkpoint_key IN ('private-memory:consumption:v1','subtask-parent') ORDER BY task_id")
+      .all() as {task_id:string;checkpoint_key:string;value_json:string}[];
+    const bindings=new Map<string,Record<string,unknown>>();
+    const parents=new Map<string,string>();
+    for(const row of rows) {
+      const value=JSON.parse(row.value_json) as Record<string,unknown>;
+      if(row.checkpoint_key==='subtask-parent' && typeof value.parentTaskId==='string')parents.set(row.task_id,value.parentTaskId);
+      else if(row.checkpoint_key==='private-memory:consumption:v1') {
+        if(value.taskId!==row.task_id || value.destination!=='agentarts')throw new RuntimeError('REVISION_CONFLICT','Invalid private copy binding');
+        bindings.set(row.task_id,value);
+      }
+    }
+    for(const [child,parent] of parents) {
+      if(bindings.has(child))continue;
+      let ancestor:string|undefined=parent;
+      const seen=new Set([child]);
+      while(ancestor && !seen.has(ancestor)) {
+        seen.add(ancestor);
+        const binding=bindings.get(ancestor);
+        if(binding) {bindings.set(child,{...binding,taskId:child,derivedFromTaskId:ancestor,copyOnly:true});break;}
+        ancestor=parents.get(ancestor);
+      }
+    }
+    const entries=[...bindings].sort(([a],[b])=>a<b?-1:a>b?1:0)
+      .filter(([id])=>input.afterTaskId===undefined||id>input.afterTaskId);
+    const items=entries.slice(0,limit).map(([taskId,binding])=>({taskId,binding:structuredClone(binding)}));
+    return {items,...(entries.length>limit?{nextAfterTaskId:items.at(-1)!.taskId}:{})};
+  }
+
+  readCopyErasureReceipt(taskId:string):{taskId:string;factId:string;bindingDigest:string;state:'purged'}|undefined {
+    const marker=this.loadCheckpoint(taskId,'private-copy-erasure') as {taskId:string;factId:string;bindingDigest:string;state:string}|undefined;
+    if(!marker || marker.state!=='purged')return undefined;
+    const current=this.privateCopyIdentity(taskId);
+    if(marker.taskId!==taskId || marker.factId!==current.factId || marker.bindingDigest!==current.bindingDigest)return undefined;
+    return {taskId,factId:marker.factId,bindingDigest:marker.bindingDigest,state:'purged'};
+  }
+
+  private privateCopyIdentity(taskId:string):{factId:string;bindingDigest:string} {
+    let afterTaskId:string|undefined;
+    for(;;) {
+      const page=this.listBindings({limit:100,...(afterTaskId?{afterTaskId}:{})});
+      const item=page.items.find(item=>item.taskId===taskId);
+      if(item) {
+        const fact=item.binding.fact as {ref?:{id?:unknown}}|undefined;
+        if(typeof fact?.ref?.id!=='string')throw new RuntimeError('REVISION_CONFLICT','Invalid private fact identity');
+        return {factId:fact.ref.id,bindingDigest:createHash('sha256').update(JSON.stringify(item.binding)).digest('hex')};
+      }
+      if(!page.nextAfterTaskId)throw new RuntimeError('NOT_FOUND','Private copy binding not found');
+      afterTaskId=page.nextAfterTaskId;
+    }
+  }
+
+  /** Redacts bodies in the original database, retaining authorization/execution/Evidence metadata. */
+  eraseTaskCopies(input:{taskId:string;factId:string;bindingDigest:string;deadline:string;signal:AbortSignal;externalCopiesPurged?:boolean}):{state:'withheld'|'purged'} {
+    if(input.signal.aborted || !Number.isFinite(Date.parse(input.deadline)) || this.now().getTime()>=Date.parse(input.deadline)) {
+      throw new RuntimeError('CANCELLED','Copy erasure cancelled or expired');
+    }
+    const identity=this.privateCopyIdentity(input.taskId);
+    if(identity.factId!==input.factId||identity.bindingDigest!==input.bindingDigest)throw new RuntimeError('REVISION_CONFLICT','Copy binding changed');
+    return this.transaction(()=> {
+      const task=this.getTask(input.taskId);
+      const pending=!['succeeded','failed','cancelled'].includes(task.state)
+        || input.externalCopiesPurged===false
+        || this.readToolExecutions(input.taskId).some(record=>record.state==='started'||record.state==='unknown');
+      const state=pending?'withheld':'purged';
+      this.saveCheckpoint(input.taskId,'private-copy-erasure',{taskId:input.taskId,...identity,state});
+      if(pending)return {state};
+      // Metadata-only allowlist: unknown checkpoint bodies are conservatively removed.
+      const rows=this.db.prepare('SELECT checkpoint_key,value_json FROM task_checkpoints WHERE task_id=?').all(input.taskId) as {checkpoint_key:string;value_json:string}[];
+      const preserved=/^(private-memory:consumption:v1|private-copy-erasure|application-profile|application-deadline|subtask-execution-binding|subtask-coordination-binding|windows-host-attempt:|trusted-readback-evidence:)/u;
+      for(const row of rows) {
+        if(preserved.test(row.checkpoint_key))continue;
+        if(row.checkpoint_key==='subtask-parent') {
+          const {parentTaskId,subtaskId}=JSON.parse(row.value_json) as {parentTaskId:string;subtaskId:string};
+          this.db.prepare('UPDATE task_checkpoints SET value_json=? WHERE task_id=? AND checkpoint_key=?')
+            .run(JSON.stringify({parentTaskId,subtaskId,redacted:true}),input.taskId,row.checkpoint_key);
+          continue;
+        }
+        this.db.prepare('UPDATE task_checkpoints SET value_json=? WHERE task_id=? AND checkpoint_key=?')
+          .run(JSON.stringify({redacted:true,bodyDigest:createHash('sha256').update(row.value_json).digest('hex')}),input.taskId,row.checkpoint_key);
+      }
+      this.db.prepare('UPDATE tasks SET goal=?,result_summary=NULL,error_json=NULL,steps_json=? WHERE task_id=?')
+        .run('[private-derived body erased]','[]',input.taskId);
+      const events=this.db.prepare('SELECT sequence,type,payload_json FROM task_events WHERE task_id=?').all(input.taskId) as {sequence:number;type:Event['type'];payload_json:string}[];
+      for(const event of events)this.db.prepare('UPDATE task_events SET payload_json=? WHERE sequence=?')
+        .run(JSON.stringify(this.redactEventBody(event.type,JSON.parse(event.payload_json))),event.sequence);
+      this.db.prepare('UPDATE task_idempotency SET input_json=? WHERE task_id=?')
+        .run(JSON.stringify({redacted:true,taskId:input.taskId}),input.taskId);
+      return {state};
+    });
+  }
+
+  private redactEventBody(type:Event['type'],body:unknown):unknown {
+    if(['task.created','task.state_changed','task.completed','task.failed','task.cancelled'].includes(type)) {
+      const task=body as TaskSnapshot;
+      const redacted={...task,goal:'[private-derived body withheld]',steps:[],attachmentRefs:[]};
+      delete redacted.resultSummary;delete redacted.error;
+      return redacted;
+    }
+    if(type==='task.progress')return {...body as object,label:'[private-derived progress withheld]'};
+    // Other events contain ids, counts and states, never arbitrary tool result bodies.
+    return body;
   }
 
   readToolExecutions(taskId: string): ToolExecutionRecord[] {
@@ -854,7 +972,7 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
    * creates a second run or changes the authorization/idempotency identity.
    */
   reconcileToolExecution(taskId: string, evidenceId: string,
-    outcome: ToolExecutionReconciliationOutcome, result?: unknown): TaskSnapshot {
+    outcome: ToolExecutionReconciliationOutcome, result?: unknown, readbackEvidenceRefs:readonly string[]=[]): TaskSnapshot {
     requireText(taskId, 'taskId');
     requireText(evidenceId, 'evidenceId');
     if (!['applied', 'not_applied', 'unknown'].includes(outcome)) {
@@ -875,9 +993,13 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
       if (record.taskId !== taskId || record.evidenceId !== evidenceId) {
         throw new RuntimeError('REVISION_CONFLICT', 'Tool execution identity mismatch');
       }
-      if (record.reconciliationOutcome !== undefined) {
+      if (record.reconciliationOutcome !== undefined && record.reconciliationOutcome!=='unknown') {
         if (record.reconciliationOutcome !== outcome) {
           throw new RuntimeError('REVISION_CONFLICT', 'Tool execution was reconciled with a different outcome');
+        }
+        const previous=this.loadCheckpoint(taskId,'tool-reconciliation-'+evidenceId) as {result?:unknown}|undefined;
+        if(result!==undefined && (!previous || canonical(previous.result)!==canonical(result))) {
+          throw new RuntimeError('REVISION_CONFLICT','Reconciliation result differs from the original receipt');
         }
         return task;
       }
@@ -887,6 +1009,17 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
       if (record.state !== 'started' && record.state !== 'unknown') {
         throw new RuntimeError('REVISION_CONFLICT', 'Tool execution is not recoverable');
       }
+      // A poll saying unknown is an observation, not an immutable outcome.
+      // Keep the original run available for a later verified host readback.
+      if (outcome === 'unknown') return task;
+      if (!record.executionStarted || record.policyDecision !== 'allow') {
+        throw new RuntimeError('UNAUTHORIZED', 'Execution was not authorized');
+      }
+      const observed=this.readEvidence(taskId);
+      if(readbackEvidenceRefs.some(ref=>!observed.some(item=>item.evidenceId===ref && item.kind==='observation' && item.verification==='verified'))) {
+        throw new RuntimeError('UNAUTHORIZED','Reconciliation readback Evidence is not bound to this task');
+      }
+      const reconciledEvidenceRefs=[...new Set([...task.evidenceRefs,evidenceId,...readbackEvidenceRefs])];
       const finishedAt = this.timestamp();
       const nextRecord: ToolExecutionRecord = {
         ...record,
@@ -908,27 +1041,27 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
         .run(JSON.stringify(nextRecord), evidenceId, taskId);
       if (outcome === 'applied') {
         this.updateTask(taskId, 'verifying', {
-          resultSummary: 'Workspace patch reconciliation confirmed the earlier result',
+          resultSummary: record.toolName + ' reconciliation confirmed the original execution',
           error: null,
-          evidenceRefs: task.evidenceRefs.includes(evidenceId) ? task.evidenceRefs : [...task.evidenceRefs, evidenceId],
+          evidenceRefs: reconciledEvidenceRefs,
         }, true);
         return this.updateTask(taskId, 'succeeded', {
-          resultSummary: 'Workspace patch reconciliation confirmed the earlier result',
+          resultSummary: record.toolName + ' reconciliation confirmed the original execution',
           error: null,
-          evidenceRefs: task.evidenceRefs.includes(evidenceId) ? task.evidenceRefs : [...task.evidenceRefs, evidenceId],
+          evidenceRefs: reconciledEvidenceRefs,
         }, true);
       }
       if (outcome === 'not_applied') {
         if (task.cancelRequested) {
           return this.updateTask(taskId, 'cancelled', {
             error: null,
-            evidenceRefs: task.evidenceRefs.includes(evidenceId) ? task.evidenceRefs : [...task.evidenceRefs, evidenceId],
+            evidenceRefs: reconciledEvidenceRefs,
             cancelRequested: true,
           }, true);
         }
         return this.updateTask(taskId, 'failed', {
-          error: {code: 'EXTERNAL_FAILURE', message: 'Workspace patch reconciliation found no applied result', retryable: false},
-          evidenceRefs: task.evidenceRefs.includes(evidenceId) ? task.evidenceRefs : [...task.evidenceRefs, evidenceId],
+          error: {code: 'EXTERNAL_FAILURE', message: record.toolName + ' reconciliation found no applied result', retryable: false},
+          evidenceRefs: reconciledEvidenceRefs,
         }, true);
       }
       return this.updateTask(taskId, 'waiting_reconciliation', {
@@ -1190,12 +1323,37 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
     const task = this.getTask(taskId);
     if (task.state !== 'waiting_reconciliation') throw new RuntimeError('REVISION_CONFLICT', 'Task is not waiting for reconciliation');
     if (outcome === 'confirmed') {
+      const records=this.readToolExecutions(taskId);
+      if(!records.length || records.some(record=>record.state!=='confirmed' || !record.executionStarted || record.policyDecision!=='allow'
+        || this.loadCheckpoint(taskId,'tool-result-'+record.evidenceId)===undefined)) {
+        throw new RuntimeError('UNAUTHORIZED','Recovery requires the original confirmed execution Evidence');
+      }
       this.transitionTask(taskId, 'verifying');
-      return this.transitionTask(taskId, 'succeeded', {resultSummary: 'Reconciliation confirmed the earlier result'});
+      return this.transitionTask(taskId, 'succeeded', {resultSummary: 'Reconciliation confirmed the original execution',evidenceRefs:records.map(record=>record.evidenceId)});
+    }
+    if(this.readToolExecutions(taskId).some(record=>record.state==='started'||record.state==='unknown')) {
+      throw new RuntimeError('UNAUTHORIZED','Unknown execution requires a bound host readback');
     }
     if (task.cancelRequested) return this.transitionTask(taskId, 'cancelled', {cancelRequested: true});
     return this.transitionTask(taskId, 'failed', {
       error: {code: 'EXTERNAL_FAILURE', message: 'Reconciliation found no completed result', retryable: false}
+    });
+  }
+
+  /** Reopen only the worker continuation of a cached, authorized original run. No execution or grant. */
+  prepareConfirmedReplay(taskId:string,input:{runId:string;toolName:string;toolVersion:string;arguments:Record<string,unknown>}):TaskSnapshot {
+    return this.transaction(()=> {
+      const task=this.getTask(taskId),record=this.readToolExecutions(taskId).find(item=>item.evidenceId===input.runId);
+      if(task.state!=='waiting_reconciliation' || task.cancelRequested || this.loadCheckpoint(taskId,'private-copy-erasure')
+        || !record || record.state!=='confirmed' || !record.executionStarted || record.policyDecision!=='allow'
+        || record.toolName!==input.toolName || record.toolVersion!==input.toolVersion
+        || !this.matchesToolExecutionInput(record,{arguments:input.arguments,scopeRef:input.runId})
+        || this.loadCheckpoint(taskId,'tool-result-'+input.runId)===undefined
+        || this.readToolExecutions(taskId).some(item=>item.state==='started'||item.state==='unknown')) {
+        throw new RuntimeError('UNAUTHORIZED','Only an original confirmed receipt can resume its worker');
+      }
+      this.saveCheckpoint(taskId,'competition-confirmed-replay',{runId:record.evidenceId,inputDigest:record.inputDigest});
+      return this.updateTask(taskId,'waiting_approval',{error:null},false);
     });
   }
 
@@ -1213,7 +1371,8 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
       ...(row.task_id ? {taskId: row.task_id} : {}),
       type: row.type,
       occurredAt: row.occurred_at,
-      payload: JSON.parse(row.payload_json)
+      payload: row.task_id && this.loadCheckpoint(row.task_id,'private-copy-erasure')!==undefined
+        ?this.redactEventBody(row.type,JSON.parse(row.payload_json)):JSON.parse(row.payload_json)
     }));
   }
 

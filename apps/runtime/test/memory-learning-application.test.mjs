@@ -139,6 +139,25 @@ test('bad source verification fails learning; a self-reported succeeded task wit
   assert.equal(f.calls(), 1);
 });
 
+test('invalidated workflow source blocks new validation submission and the original dispatch/resume binding before MCP', async t => {
+  const f = await learningFixture(t);
+  const candidate = propose(f.app);
+  const queued = await f.app.startValidation({workflowId: 'reference-review', revision: 1,
+    operationId: 'queued-before-source-revocation', ...context()});
+  const binding = f.runtime.loadCheckpoint(queued.taskId, LEARNING_BINDING_CHECKPOINT);
+  f.app.assertDispatchBinding(binding);
+  f.learning.invalidateSource({namespace: 'desktop-learning', sourceRef: candidate.sourceRef,
+    operationId: 'revoke-original-source', invalidatedAt: new Date().toISOString(), ...context()});
+  assert.equal(f.app.readVersion('reference-review', 1).validation, 'candidate');
+  assert.throws(() => f.app.startValidation({workflowId: 'reference-review', revision: 1,
+    operationId: 'rejected-after-source-revocation', ...context()}), {code: 'NOT_FOUND'});
+  assert.equal(f.runtime.listTasks({conversationId: 'learning:desktop-learning', limit: 10}).items.length, 1);
+  assert.throws(() => f.app.assertDispatchBinding(binding), {code: 'NOT_FOUND'});
+  assert.equal((await f.dispatch(queued.taskId)).state, 'failed');
+  assert.equal(f.calls(), 0);
+  assert.throws(() => f.app.assertDispatchBinding(binding), {code: 'NOT_FOUND'});
+});
+
 test('stale learning deletion has zero cancellation effects on old and current version tasks', async t => {
   const f = await learningFixture(t);
   propose(f.app);

@@ -33,12 +33,13 @@ async function state(app, taskId, states) {
 }
 
 async function fixture(t, {toolExport = binding, result = proposal, sideEffect = 'read', timeoutMs = 30_000,
-  now, project, toolState, respond, path = ':memory:', cleanup = true} = {}) {
+  now, project, toolState, respond, prepareCompetitionToolExport, path = ':memory:', cleanup = true} = {}) {
   let executions = 0;
   const port = new FakeCoordinationPort(respond ?? (request => request.continuation
     ? {kind: 'text', text: 'Cloud fixture consumed projection', verification: 'unverified'} : result));
   const app = createRuntimeApplication({path, profile: 'huawei_ict_agentarts', coordination: port,
     ...(now ? {now: () => new Date(now())} : {}),
+    ...(prepareCompetitionToolExport ? {prepareCompetitionToolExport} : {}),
     competitionToolExports: [{...toolExport, ...(project ? {project} : {})}],
     tools: [{descriptor: {...descriptor, sideEffect}, execute: async () => {
       executions++;
@@ -150,11 +151,12 @@ test('projection errors, non-JSON and oversized output remain local with executi
       const f = await fixture(t, {project});
       await state(f.app, f.taskId, ['waiting_approval']);
       await f.approve('allow_once');
-      const task = await state(f.app, f.taskId, ['failed']);
+      const task = await state(f.app, f.taskId, ['waiting_reconciliation']);
       assert.equal(task.error.code, 'UNAUTHORIZED');
       assert.equal(f.executions(), 1);
       assert.equal(f.port.requests.length, 1);
       assert.equal(f.app.runtime.readEvidence(f.taskId).length, 1);
+      assert.deepEqual(f.app.runtime.loadCheckpoint(f.taskId, 'competition-export-withheld'), {withheld: true});
       assert.doesNotMatch(JSON.stringify(task), /synthetic-private-marker/);
     });
   }
@@ -185,11 +187,60 @@ test('revoking export scope during projection prevents the actual cloud handoff'
   await startedPromise;
   permitted = false;
   release({time: '17:00'});
-  const task = await state(f.app, f.taskId, ['failed']);
+  const task = await state(f.app, f.taskId, ['waiting_reconciliation']);
   assert.equal(task.error.code, 'UNAUTHORIZED');
   assert.equal(f.executions(), 1);
   assert.equal(f.port.requests.length, 1);
   assert.equal(f.app.runtime.readEvidence(f.taskId).length, 1);
+  assert.deepEqual(f.app.runtime.loadCheckpoint(f.taskId, 'competition-export-withheld'), {withheld: true});
+  permitted = true;
+  await new Promise(resolve => setImmediate(resolve));
+  await f.app.resumeConfirmedTask(f.taskId);
+  assert.equal((await state(f.app, f.taskId, ['succeeded', 'failed'])).state, 'succeeded');
+  assert.equal(f.executions(), 1);
+  assert.equal(f.port.requests.length, 2);
+});
+
+test('async native preparation separates unexecuted preflight from confirmed projection and final I/O', async t => {
+  const phases = [];
+  let f;
+  f = await fixture(t, {prepareCompetitionToolExport: async input => {
+    phases.push(input.phase);
+    assert.deepEqual(input.proposal, proposal);
+    assert.equal(input.signal.aborted, false);
+    await Promise.resolve();
+    if (input.phase === 'projection') {
+      const loop = f.app.runtime.loadCheckpoint(input.taskId, 'competition-loop');
+      assert.deepEqual(loop.pending, proposal);
+      const record = f.app.runtime.readToolExecutions(input.taskId)[0];
+      assert.equal(record.state, 'confirmed');
+      assert.equal(record.policyDecision, 'allow');
+      assert.equal(record.executionStarted, true);
+      assert.equal(f.executions(), 1);
+    }
+  }, toolExport: {...binding, accepts: input => {
+    phases.push(input.phase);
+    if (input.phase === 'final') assert.deepEqual(input.projection, {time: '17:00'});
+    return binding.accepts(input);
+  }}});
+  await state(f.app, f.taskId, ['waiting_approval']);
+  assert.equal(f.executions(), 0);
+  await f.approve('allow_once');
+  assert.equal((await state(f.app, f.taskId, ['succeeded', 'failed'])).state, 'succeeded');
+  assert.ok(phases.indexOf('projection') > phases.lastIndexOf('preflight'));
+  assert.ok(phases.indexOf('final') > phases.indexOf('projection'));
+  assert.equal(f.executions(), 1);
+});
+
+test('native preflight refusal performs no read and creates no execution approval', async t => {
+  const f = await fixture(t, {prepareCompetitionToolExport: async () => {throw Error('private-native-detail');}});
+  const task = await state(f.app, f.taskId, ['failed']);
+  assert.equal(task.error.code, 'UNAUTHORIZED');
+  assert.doesNotMatch(JSON.stringify(task), /private-native-detail/);
+  assert.equal(f.executions(), 0);
+  assert.equal(f.port.requests.length, 1);
+  assert.deepEqual((await f.client.call('approval.list', {taskId: f.taskId})).items, []);
+  assert.deepEqual(f.app.runtime.readToolExecutions(f.taskId), []);
 });
 
 test('repeated cloud proposals reuse confirmed projection and reject changed input', async t => {
@@ -238,7 +289,7 @@ test('restart with a narrower export policy never replays an old projection or r
     toolExport: {...binding, exportPolicyVersion: 'synthetic-v2'}, respond: () => proposal});
   current = restarted;
   await restarted.approve('allow_once');
-  const task = await state(restarted.app, restarted.taskId, ['failed']);
+  const task = await state(restarted.app, restarted.taskId, ['waiting_reconciliation']);
   assert.equal(task.error.code, 'UNAUTHORIZED');
   assert.equal(restarted.port.requests.length, 1);
   assert.doesNotMatch(JSON.stringify(restarted.port.requests), /synthetic-private-marker/);

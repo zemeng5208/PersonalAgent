@@ -99,6 +99,60 @@ Runtime 单次 `tsc -p apps/runtime/tsconfig.json` 通过；仅新 `learning sto
 此处仍未验证共享主对话调用、真实 Electron 原生确认、真实 Vault/真实 AgentArts 消费；
 等待 P8 实际接线和相应读回，不能仅凭本源包标记整个 PA020 done。
 
+## 应用派生副本清除接管合同
+
+模型答案、工具 arguments/result、协调续接正文、派生子任务 goal 和 conversation 助手消息可能带有私人摘要。
+仅删除私人 Memory 源库不足以消除这些副本。新增独立 `private-memory-erasure-host.js` 的
+`createPrivateMemoryErasureHost` 由 P8 注入原 Runtime/history 的可信端口：
+
+- `listBindings({limit,afterTaskId?})` 返回稳定 taskId 分页的 `{items:[{taskId,binding}],nextAfterTaskId?}`，
+  覆盖所有原持久任务及实际派生子任务，不能只列在内存中的 lease。binding 为原持久消费 marker；
+  派生 marker 必须使用实际子 taskId，保留同源 factRef，可附带真实 parent/root metadata。
+- `cancelTask(taskId)` 只调用原 Runtime；`eraseTaskCopies({taskId,factId,bindingDigest,deadline,signal})`
+  清除同原库/history 的实际私有正文副本，不能在 active/unknown/等待结果核实时提前删除必要 proof。
+  未完成清除保持 pending，先持久 withheld 并让未来模型 history/引用消费拒绝该副本。
+- `readCopyErasureReceipt(taskId)` 只读实际清除与读回之后的无内容
+  `{taskId,factId,bindingDigest,state:'purged'}` 收据；原消费 marker 保留恢复关联。
+  不接受模型自报、篡改 digest 或空 receipt 当作已清除。
+
+协调器先精确原生确认并提交原 Memory 删除，再失效内存 lease、取消同源任务和调用实际 redaction。
+过时 ref 拒绝且零取消；已提交 Memory 删除但 WAL维护/副本清除未完成返回
+`pending/private_copy_erasure`，不能显示全部删除成功。`reconcile` 只复用原 completed erasure markers
+与 task bindings/收据，不调用模型/工具或重建授权。`withdraw` 在源撤回之后失效并取消关联任务。
+原外部云端曾经收到的正文不在本机清除范围。
+
+facade 可注入 `privateErasure`；此时 `managedPrivateCopies` 指其他未登记副本，原任务副本通过协调器
+实际 bindings inventory 登记。其他副本未知或未接通仍拒绝。消费 host 新增同步 void
+`assertCopyManagement`：在私人消费前检查真实完整清单与清除端口，缺接线时保持消费禁用；
+公共未选择私人引用的任务照常。P8 原配置/native/共享 Runtime/history 接线仍是唯一生产证据来源。
+
+新增 `private-memory-erasure.test.mjs` 2/2 通过，仅显式合成 task/history redaction 端口：
+原 SQLite 删除关联 parent/child 副本、保留独立事实；过时删除零取消；missing/错 digest 收据 pending；
+重启从原 marker 接续后读回准确收据。不能把合成 redactor 验证写成实际 Runtime/history 已清除。
+
+源码交云知识记忆接管后未补跑旧 suite。剩余精确实现/评审点：最终 beforeSend guard 也应同步调用
+`assertCopyManagement`，防确认后清除登记变化；实际 parent→child inventory 与同配置 task-tree native
+许可必须核对真实 ancestry，独立模型/provider 更换不得继承原逐任务许可。当前 owned host 不提供
+自动子任务许可，P8 shared 路径和云知识记忆组接续；本地不再竞争 portable 文件写入。
+
+## PR270 两项本机补修
+
+吸收云端 exact `d875b9c262e3e137db27ea8d397aa06d2bf9eddc` 后恢复本包独占增量：
+`SqliteLearningHost.assertSourceAvailable(namespace,sourceRef)` 只复用原持久来源撤销检查，
+Runtime 在验证提交前后、每次 dispatch/resume 入口重新检查，不恢复已撤销来源或另起工具循环。
+Evidence validator 在实际执行及 binding 的异步读回之后再查 Skill enabled/revision/content hash，
+同时重新检查取消与 deadline，不能用等待前的 Skill 状态出具通过结果。
+定向来源撤销、await 期间 Skill 变化、最终读取取消/超时用例已准备；本阶段按统一验收安排
+只执行 TS syntax parse、测试文件 `node --check` 和 `git diff --check`，未运行测试、构建或服务。
+
+非作者复核指出最终 `readSkill` 等待期间仍可能撤回 source binding，补修要求
+`WorkflowEvidencePorts.readCurrent(candidate,binding,context)` 提供受信宿主原 mutation fences 下的
+同步一致联合读回（当前 binding + Skill），最后检查精确 binding/Skill/取消/deadline 后无 await 直接返回。
+缺少此端口、返回 Promise、原来源撤回或 Skill变化均拒绝；不可用异步快照拼装假 joint current，
+真实 adapter 未接通前保持不可用，不给新许可或恢复已撤销来源。仅合成 fixture 接口已更新。
+来源撤销的 `startValidation` 在调用时同步抛错，其用例改为 `assert.throws`，保留零新任务/MCP断言。
+新增最终 Skill await 中撤销、缺失/异步/停用 joint gate 与 gate取消/超时用例仅准备，未运行。
+
 ## 验证与限制
 
 定向 SQLite/合成 Vault 验证：私人确认纠正可查询、精确 baseline 及 config变更拒绝、

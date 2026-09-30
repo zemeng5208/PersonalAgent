@@ -101,7 +101,9 @@ export function mountMemoryLearningControls(root, {invoke, status, refs = []}) {
       }
       state.message = action === 'stop' ? (result.cancelRequested ? `已请求停止，任务当前为 ${result.state}。` : `任务当前为 ${result.state}。`)
         : result.state === 'declined' ? '已取消确认，未更改。'
-        : result.state === 'pending' ? `任务仍为 ${result.taskState}，请在任务区处理后读回。`
+        : result.state === 'pending' ? (result.phase === 'private_copy_erasure'
+          ? '来源已停止引用，关联任务副本仍待核实清除，请在任务区处理后读回。'
+          : `任务仍为 ${result.taskState}，请在任务区处理后读回。`)
           : result.taskId ? `任务已受理：${result.taskId}（${result.state}）`
             : result.version?.validation === 'failed' ? '验证失败，不能启用。'
               : result.state === 'deleted' ? '删除读回完成。'

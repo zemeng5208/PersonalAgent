@@ -8,15 +8,14 @@ const versionView = version => version === null ? null : ({workflowId: version.w
 
 /** Trusted admin composition. The shared main/preload owns sender validation and native dialogs. */
 export function createMemoryLearningHost({profile, privateMemory, learningApplication,
-  publicErasure, managedPrivateCopies}) {
+  publicErasure, privateErasure, managedPrivateCopies}) {
   if (profile !== 'huawei_ict_agentarts' || !privateMemory) throw Error('需要 Competition 私人记忆宿主');
   // Only the composition owner can supply the actual application-copy inventory.
   // Unknown/existing unsupported managed copies keep production writes disabled.
-  const noManagedCopies = () => {
-    const inventory = typeof managedPrivateCopies === 'function' ? managedPrivateCopies() : managedPrivateCopies;
-    return Array.isArray(inventory) && inventory.length === 0;
-  };
+  const inventory = () => typeof managedPrivateCopies === 'function' ? managedPrivateCopies() : managedPrivateCopies;
+  const noManagedCopies = () => {const copies = inventory(); return Array.isArray(copies) && copies.length === 0;};
   const writeReady = () => {
+    if (privateErasure) return privateErasure.assertReady(inventory());
     if (!noManagedCopies()) throw Error('应用管理副本删除未接通，私人写入保持禁用');
     return privateMemory.prepareWrite();
   };
@@ -24,19 +23,22 @@ export function createMemoryLearningHost({profile, privateMemory, learningApplic
     snapshot() {
       let writeEnabled = false;
       let writeState = 'managed_copy_inventory_required';
-      if (noManagedCopies()) {
+      if (privateErasure || noManagedCopies()) {
         try { writeReady(); writeEnabled = true; writeState = 'ready'; }
         catch { writeState = 'deletion_maintenance_required'; }
       }
       return {available: true, writeEnabled, writeState,
         configurationRevision: privateMemory.configurationRevision,
         learningAvailable: Boolean(learningApplication), publicErasureAvailable: Boolean(publicErasure),
+        privateTaskErasureAvailable: Boolean(privateErasure),
         deletionCoverage: 'active_application_databases', externalCopies: 'not_controlled'};
     },
     async recover() {
       // No writes or model calls are retried; public coordinator only follows durable erasure receipts.
       writeReady();
-      return publicErasure ? publicErasure.reconcile(context()) : {state: 'not_configured'};
+      const privateResult = privateErasure ? await privateErasure.reconcile(context()) : {state: 'not_configured'};
+      const publicResult = publicErasure ? await publicErasure.reconcile(context()) : {state: 'not_configured'};
+      return {privateResult, publicResult};
     },
     async invoke(name, payload = {}) {
       if (name === 'memory.previewSave') { writeReady(); return privateMemory.previewSave(payload.source); }
@@ -46,8 +48,11 @@ export function createMemoryLearningHost({profile, privateMemory, learningApplic
           || !Number.isSafeInteger(payload.baseline.configurationRevision)) throw Error('缺少精确来源配置与记忆基线');
         return privateMemory.save(payload.source, payload.summary, payload.baseline);
       }
-      if (name === 'memory.withdraw') return privateMemory.withdraw(payload.ref);
-      if (name === 'memory.delete') { writeReady(); return privateMemory.delete(payload.ref); }
+      if (name === 'memory.withdraw') return privateErasure ? privateErasure.withdraw(payload.ref) : privateMemory.withdraw(payload.ref);
+      if (name === 'memory.delete') {
+        writeReady();
+        return privateErasure ? privateErasure.erase(payload.ref) : privateMemory.delete(payload.ref);
+      }
       if (name === 'memory.boundErase') {
         if (!publicErasure) throw Error('公共事实跨库删除未配置');
         return publicErasure.erase({factId: payload.ref?.id, expectedRevision: payload.ref?.revision,
