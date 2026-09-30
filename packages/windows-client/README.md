@@ -29,6 +29,26 @@
 提供者结果是本地输出；没有为其配置 Competition 结果出口时，不自动将系统指标发送到 AgentArts。
 本包不代表 Desktop、AgentArts、MOD-16 或 PA-011 已完整验收。
 
+## 通知消费者与真实读回
+
+提供者的采样窗口默认 250 ms，可配置为 1～5000 ms。`actualSampleWindowMs` 是本次
+CPU tick 读取的单调时间区间，`requestedSampleWindowMs` 是请求等待间隔；两者都不是
+持续通知的调度周期。结果字段为 `unavailable`，不增加 `unavailableMetrics` 别名或第二套 DTO。
+
+可信 Desktop 使用 Runtime/Application 的 `startSystemObservationSession({expiresAt, intervalMs})`、
+`sampleSystemObservationSession(sessionId)` 和 `stopSystemObservationSession(sessionId)`。
+当前 `intervalMs` 至少 1000 ms，且不得超过剩余许可期限。许可只在本进程内有效，停止或重启
+不能从历史 checkpoint 恢复许可。Runtime 的 `readCurrentSystemObservationSample(taskId)`
+只返回仍在当前许可内、任务成功、有 confirmed 结果与 Evidence 引用的 `node:os` 观测，
+形状为 `{taskId, source, timestamp, cpuPercent, memoryPercent, samplingIntervalMs, evidenceRefs}`；
+其中 `samplingIntervalMs` 是会话调度周期。它是 Runtime 公开宿主入口，不是本包新增 wire capability。
+`p5-system-observation-source` 消费这一读回；通知消费者不能把直接 provider 输出冒充 Runtime Evidence。
+
+2026-09-30 一次独立真实 Windows provider 读取使用 Node 24.19.0，默认采样窗口 250 ms，
+实际窗口 264.4 ms，来源 `node:os`，输出 Schema 校验通过。脱敏本地收据保存采样时间与
+不可用项，未保存指标数值、设备标识或私人内容；没有制造高负载。这仅补充提供者实机证据，
+不证明持续通知、Runtime 会话授权、桌面渲染或 AgentArts 消费。
+
 验证：
 
 ```sh
