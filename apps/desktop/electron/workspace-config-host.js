@@ -2,6 +2,7 @@ import {existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync
 import {execFileSync} from 'node:child_process';
 import {createHash, randomUUID} from 'node:crypto';
 import path from 'node:path';
+import {ProtocolError, validateToolValue} from '@personal-agent/contracts';
 import * as coding from '@personal-agent/coding-tools';
 import {createDesktopCodingToolHost} from './coding-tool-host.js';
 
@@ -356,18 +357,32 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
     competitionToolExports:tools.map(tool=>({toolName:tool.descriptor.name,toolVersion:tool.descriptor.version,
       exportPolicyVersion:isProject(tool)?'authorized-project-script-redacted-v1'
         :tool.descriptor.name==='workspace.node_check'
-          ? 'authorized-node-check-redacted-v1':'authorized-coding-session-v1',
+          ? 'authorized-node-check-redacted-v1':'coding-local-result-redacted-v2',
       accepts:({taskId})=>enabled(tool) && bound(taskId),
       project:({taskId,result,signal})=> {
-        if (signal.aborted || !enabled(tool) || !bound(taskId)) throw Error('工作区出云许可已失效');
+        if(signal.aborted) throw new ProtocolError('CANCELLED','Workspace result export cancelled');
+        if(!enabled(tool) || !bound(taskId)) throw new ProtocolError('UNAUTHORIZED','Workspace result export consent changed');
         if (tool.descriptor.name==='workspace.node_check' || isProject(tool)) {
           const recipeId=isProject(tool)
             ? tool.descriptor.name==='workspace.npm_build'?'npm-build':'npm-test':'node-check';
           if (result?.recipeId!==recipeId || !Number.isSafeInteger(result.exitCode)) throw Error('命令结果无效');
           return {recipeId,exitCode:result.exitCode,passed:result.exitCode===0};
         }
-        if (Buffer.byteLength(JSON.stringify(result),'utf8')>coding.MAX_SERIALIZED_WORKSPACE_TOOL_RESULT_BYTES) throw Error('工具结果超过传输上限，请缩小范围');
-        return structuredClone(result);
+        // Session read consent permits local execution, not PUBLIC source export.
+        // Keep the real RegisteredTool result local; never relabel it as MCP data.
+        if(tool.descriptor.name==='workspace.read_text') {
+          throw new ProtocolError('UNSUPPORTED_CAPABILITY','Exact native-confirmed workspace read export is unavailable');
+        }
+        validateToolValue(tool.descriptor.outputSchema,result);
+        if(tool.descriptor.name==='workspace.git_diff_check') {
+          if(result.recipeId!=='git-diff-check') throw Error('命令结果无效');
+          return {recipeId:'git-diff-check',exitCode:result.exitCode,passed:result.exitCode===0};
+        }
+        if(tool.descriptor.name==='workspace.list_entries') return {listed:true,truncated:result.truncated};
+        if(tool.descriptor.name==='workspace.preview_text_patch') return {previewed:true,changed:result.changed};
+        if(tool.descriptor.name==='workspace.stage_text_patch') return {staged:true,changed:result.changed};
+        if(tool.descriptor.name==='workspace.apply_text_patch') return {applied:result.applied,changed:result.changed};
+        throw new ProtocolError('UNSUPPORTED_CAPABILITY','Workspace result export is unavailable');
       }})),
     close(){active=false;revoke();applyHost?.close();},
   };

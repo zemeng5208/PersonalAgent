@@ -10,6 +10,14 @@ Project `npm run build` and `npm run test` are registered as fixed `workspace.np
 
 The focused tests cover legacy configuration, encrypted option persistence, an actual fixed Node syntax check, separate write and command permissions, redacted export, revocation, invalid file selection, and a Fake recipe factory for project-script readiness and consent. They do not establish real npm execution, Electron dialog, or AgentArts acceptance.
 
+## Local results and per-read PUBLIC export
+
+The existing session field `cloudExportAllowed` remains in the version 1 configuration/UI contract for compatibility. It enables the selected local tool scope; it does not establish that every file in that scope is PUBLIC. Local `workspace.read_text` results retain their original content and raw-byte digest. Without an exact native-confirmed export provider, their Competition projection returns `UNSUPPORTED_CAPABILITY` rather than source text.
+
+The narrowed `coding-local-result-redacted-v2` policy returns only list/preview/stage/apply status. Names, paths, preview text, staged paths, backup references and private file digests stay local. Git diff checking, Node checks and project commands return only `{recipeId, exitCode, passed}`; raw stdout/stderr remain local. Cached continuations using the previous broader export policy are not compatible with this policy change.
+
+PUBLIC reads require the public workspace export helper supplied by the MCP owner and trusted Main readers for the exact native authorization and original confirmed Runtime receipt. A Renderer checkbox, a caller-supplied result, cached content or the workspace binding getter cannot provide this authority. MCP's existing reference helper accepts an actual `McpReadResult` with its MCP provenance; a coding result must use the separate workspace helper and retain its real provider identity. The native dialog, lifetime, deadline and current configuration checks belong to the trusted Main composition. The present host implements the default denial and redaction; workspace PUBLIC export remains unavailable until the separate helper's precise public contract and native consumers are integrated. The prepared cases are reserved for the final unified local suite; no new stage test or live cloud verification is claimed.
+
 ## Trusted workspace binding for local read-only services
 
 `createWorkspaceConfigHost` exposes `readWorkspaceBinding()` and `isWorkspaceBindingCurrent(binding)` to trusted Main only. The getter returns a frozen `{rootPath, nodeExecutable, bindingId}` or `undefined`; these private absolute paths and the binding ID must not enter Renderer state, logs, MCP result payloads, or cloud exports. It reuses the existing version 1 encrypted settings and the current consent generation, with no additional store or grant.
