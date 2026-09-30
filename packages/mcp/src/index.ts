@@ -10,7 +10,7 @@ import {CallToolResultSchema} from '@modelcontextprotocol/sdk/types.js';
 import {ProtocolError, validateToolValue} from '@personal-agent/contracts';
 import type {RegisteredTool, ToolContext, ToolHost} from '@personal-agent/contracts';
 export {createPublicReferenceExport} from './public-export.js';
-export type {PublicReferenceExportQuery, PublicReferenceExportAuthorization, PublicReferenceExportOptions} from './public-export.js';
+export type {PublicReferenceExportQuery, PublicReferenceReadQuery, PublicReferenceExportPreflight, PublicReferenceContentQuery, PublicReferenceTextProjection, PublicReferenceExportAuthorization, PublicReferenceExportOptions} from './public-export.js';
 export {createWorkspaceReferenceExport} from './workspace-export.js';
 export type {WorkspaceReferenceExportOptions} from './workspace-export.js';
 

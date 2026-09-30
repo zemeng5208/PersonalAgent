@@ -6,23 +6,30 @@ import {createReferenceSummarySkill,createCloudSkillSelectionPort,CLOUD_SKILL_TO
 const sha=text=>createHash('sha256').update(text).digest('hex');
 function setup() {
   const checkpoints=new Map();let calls=0;let grant=true;let configurationRef='synthetic-config';
-  let toolState='confirmed';const text='Public fixture.\nSecond line.';
+  let toolState='confirmed',exactAllowed=true;const text='Public fixture.\nSecond line.';
   const worker=createReferenceSummarySkill({enabled:true,isToolAvailable:()=>true,
     reconciliation:{currentConfigurationRef:()=>configurationRef,readConfirmed:async()=>undefined},
     tools:{list:()=>[{name:'mcp.workspace.read_text',version:'1.0.0',sideEffect:'read'}],invoke:async()=>{
       calls++;return {state:toolState,evidenceRefs:['synthetic-evidence'],result:{path:'reference.md',text,contentDigest:sha(text),source:'mcp',serverVersion:'2026.8.31'}};
     }}});
-  const source={path:'reference.md',sourceRef:'public-source',contentDigest:sha(text),configurationRef,revision:1,
+  const source={path:'reference.md',sourceRef:'public-source',sensitivity:'PUBLIC',purpose:'reference-summary',maxExportBytes:4096,configurationRef,revision:1,
     authorizationId:'synthetic-native-authorization',expiresAt:new Date(Date.now()+60000).toISOString()};
+  const permission=()=>({authorizationId:source.authorizationId,expiresAt:source.expiresAt,sensitivity:source.sensitivity,
+    purpose:source.purpose,maxExportBytes:source.maxExportBytes});
   const port=createCloudSkillSelectionPort({versionedSkillworker:worker,resolvePublicSource:()=>{
     if(!grant) throw Object.assign(Error('Permission revoked'),{code:'UNAUTHORIZED'});
     return {...source,configurationRef};
-  }});
+  },publicReferenceExport:{currentConfigurationRef:()=>configurationRef,
+    readPreflight:()=>grant?permission():undefined,
+    readAuthorization:q=>grant && exactAllowed && q.contentDigest===sha(text) && q.byteLength===Buffer.byteLength(text)
+      ? {...permission(),contentDigest:sha(text)}:undefined,
+    readConfirmed:q=>toolState==='confirmed' && calls>0 && q.contentDigest===sha(text)
+      ? {runId:'synthetic-evidence',result:{path:'reference.md',text,contentDigest:sha(text),source:'mcp',serverVersion:'2026.8.31'}}:undefined}});
   const abort=new AbortController();
   const context={taskId:'synthetic-task',proposalId:'synthetic-proposal',revision:1,deadline:new Date(Date.now()+60000).toISOString(),signal:abort.signal,
     loadCheckpoint:key=>structuredClone(checkpoints.get(key)),saveCheckpoint:(key,value)=>checkpoints.set(key,structuredClone(value)),reportProgress:()=>{}};
   return {worker,port,context,checkpoints,abort,calls:()=>calls,revoke:()=>{grant=false;},
-    config:value=>{configurationRef=value;},state:value=>{toolState=value;}};
+    config:value=>{configurationRef=value;},state:value=>{toolState=value;},exact:value=>{exactAllowed=value;}};
 }
 test('cloud choice runs injected worker outside tool locks; minimal receipt and replay retain original run',async()=>{
   const e=setup();const choice=e.port.catalog('public-source',e.context);
@@ -32,13 +39,23 @@ test('cloud choice runs injected worker outside tool locks; minimal receipt and 
   assert.deepEqual(Object.keys(choice).sort(),['digest','skillId','sourceRef','version']);
   const selection=e.port.select(choice,e.context);assert.deepEqual(e.port.select(choice,e.context),selection);
   const receipt=await e.port.run(selection,e.context);assert.equal(receipt.state,'confirmed');
-  assert.deepEqual(Object.keys(receipt).sort(),['contentDigest','selectionRef','sourceRef','state']);
+  assert.deepEqual(Object.keys(receipt).sort(),['byteLength','content','contentDigest','selectionRef','sourceRef','state','summaryDigest','truncated']);
+  assert.equal(receipt.content,'Public fixture. Second line.');assert.equal(receipt.byteLength,Buffer.byteLength(receipt.content));
+  assert.equal(receipt.summaryDigest,sha(receipt.content));assert.equal(JSON.stringify(receipt).includes('reference.md'),false);
   e.port.assertReceiptAllowed(selection,receipt,e.context);
   assert.throws(()=>e.port.assertReceiptAllowed(selection,{...receipt,extra:'secret'},e.context),{code:'UNAUTHORIZED'});
   assert.deepEqual(await e.port.run(selection,e.context),receipt);assert.equal(e.calls(),1);
   await assert.rejects(e.port.run({...selection,selectionRef:'forged'},e.context),{code:'UNAUTHORIZED'});
   e.revoke();assert.throws(()=>e.port.assertReceiptAllowed(selection,receipt,e.context),{code:'UNAUTHORIZED'});
   await assert.rejects(e.port.run(selection,e.context),{code:'UNAUTHORIZED'});assert.equal(e.calls(),1);
+});
+
+test('confirmed Skill read stays local while exact content consent is pending; resume only projects cached outcome',async()=>{
+  const e=setup();e.exact(false);
+  const selected=e.port.select(e.port.catalog('public-source',e.context),e.context);
+  await assert.rejects(e.port.run(selected,e.context),{code:'UNAUTHORIZED'});assert.equal(e.calls(),1);
+  e.exact(true);const receipt=await e.port.run(selected,e.context);assert.equal(receipt.state,'confirmed');assert.equal(e.calls(),1);
+  e.exact(false);assert.throws(()=>e.port.assertReceiptAllowed(selected,receipt,e.context),{code:'UNAUTHORIZED'});assert.equal(e.calls(),1);
 });
 test('existing tool_proposal dispatch preserves original task/proposal and never registers Skill as a tool',async()=>{
   const e=setup();const choice=e.port.catalog('public-source',e.context);
