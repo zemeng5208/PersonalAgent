@@ -46,6 +46,22 @@ function fixtureServer({propfind, report, propfindStatus = 207, reportStatus = 2
 
 const WINDOW = {fromUtc: '2026-11-01T00:00:00.000Z', toUtc: '2026-11-30T00:00:00.000Z'};
 
+test('请求超时会中止传输并标记为可重试', async () => {
+  let aborted = false;
+  const provider = new CalDavProvider({
+    calendarUrl: CALENDAR_URL,
+    requestTimeoutMs: 5,
+    fetchImpl: async (_url, {signal}) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => {
+        aborted = true;
+        reject(new Error('aborted'));
+      }, {once: true});
+    }),
+  });
+  await assert.rejects(provider.pollChanges(), error => error.code === 'EXTERNAL_FAILURE' && error.retryable);
+  assert.equal(aborted, true);
+});
+
 test('pollChanges：一次 Depth:1 PROPFIND 取回 ctag 与子资源 etag（集合本身不入 etag 表）', async () => {
   const {fetchImpl, calls} = fixtureServer({propfind: multistatus([
     {href: '/calendars/alice/default/', ctag: 'ctag-7'},
