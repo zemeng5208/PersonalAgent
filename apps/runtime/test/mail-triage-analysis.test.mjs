@@ -4,6 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 import {fileURLToPath} from 'node:url';
 import {LayaTriageService} from '@personal-agent/cognition';
+import {ProtocolError} from '@personal-agent/contracts';
 import {createEncryptedModuleStorage} from '../../desktop/electron/encrypted-module-storage.js';
 import {createRuntimeApplication, createQQMailTriageHost} from '../dist/application.js';
 
@@ -47,11 +48,11 @@ test('confirmed Fake Runtime inbox page keeps encrypted analysis outbox across r
     profile: 'huawei_ict_agentarts', hostUserNamespace: 'fixture-mail-user', tools: [{descriptor,
       execute: async args => {
         calls++;
-        assert.deepEqual(args, {account: 'fixture', folder: 'INBOX', limit: 100});
+        assert.deepEqual(args, {account: 'fixture', folder: 'INBOX', limit: 100, ...(calls > 1 ? {cursor:'1:1'} : {})});
         return {account: 'fixture', folder: 'INBOX', items: [item], nextCursor: '1:1', hasMore: false};
       }}]});
   const openHost = () => createQQMailTriageHost({user: 'fixture@qq.com', authCode: 'fake-only',
-    accountRef: 'fixture', storage: storage(), namespace: 'fixture-mail-user', triage,
+    accountRef: 'fixture', storage: storage(), namespace: 'fixture-mail-user', triage, classifierFingerprint:'fixture-policy-v1',
     labels: {meeting: 'Meeting-related header', other: 'Other'}, meetingLabels: ['meeting'],
     isSessionAllowed: () => allowed});
   let app = openApp(), host = openHost();
@@ -122,4 +123,37 @@ test('failed or wrong-scope Fake inbox task revokes its analysis lease', async (
       assert.throws(() => host.readAnalysis('any-work-key', context()), {code: 'UNAUTHORIZED'});
     } finally {await host.close(); await idle(app); app.close(); await rm(directory, {recursive: true, force: true});}
   }
+});
+
+test('authoritative expired inbox cursor stops until a new user read and preserves accepted outbox', async () => {
+  const values = new Map(), seen = [];
+  const storage = {get:key=>structuredClone(values.get(key)), set:(key,value)=>values.set(key,structuredClone(value))};
+  await mkdir(cacheRoot, {recursive:true});
+  const directory = await mkdtemp(path.join(cacheRoot, 'pa-mail-resync-'));
+  let expired = false;
+  const app = createRuntimeApplication({path:path.join(directory,'runtime.sqlite'), profile:'huawei_ict_agentarts',
+    hostUserNamespace:'fixture-mail-user', tools:[{descriptor, execute:async args=>{
+      seen.push(args);
+      if (expired && args.cursor) throw new ProtocolError('CURSOR_EXPIRED','Fixture UIDVALIDITY changed');
+      return {account:'fixture', folder:'INBOX', items:[item], nextCursor:expired?'2:1':'1:1', hasMore:false};
+    }}]});
+  const host = createQQMailTriageHost({user:'fixture@qq.com', authCode:'fake-only', accountRef:'fixture', storage,
+    namespace:'fixture-mail-user', triage, classifierFingerprint:'fixture-policy-v1',
+    labels:{meeting:'Meeting-related header',other:'Other'}, isSessionAllowed:()=>true});
+  try {
+    host.bindApplication(app); host.startBatch({expiresAt:context().deadline}); await idle(app); await host.refresh();
+    const [pending] = host.pendingAnalyses(context());
+    host.confirmAnalysisAccepted({...pending, receiptId:pending.receipt.id, taskId:'existing-analysis'},context());
+    await host.cancel(); expired = true;
+    host.startBatch({expiresAt:context().deadline}); await idle(app);
+    assert.equal((await host.refresh()).status,'resync_required');
+    assert.equal(seen.length,2); assert.equal(seen[1].cursor,'1:1');
+    assert.equal((await host.refresh()).status,'resync_required'); assert.equal(seen.length,2);
+    assert.throws(()=>host.pendingAnalyses(context()),{code:'UNAUTHORIZED'});
+    host.startBatch({expiresAt:context().deadline}); await idle(app);
+    assert.equal((await host.refresh()).status,'complete');
+    assert.equal(seen[2].cursor,undefined);
+    assert.equal(host.readAnalysis(pending.workKey,context()).taskId,'existing-analysis');
+    assert.deepEqual(host.pendingAnalyses(context()),[]);
+  } finally {await host.close(); await idle(app); app.close(); await rm(directory,{recursive:true,force:true});}
 });

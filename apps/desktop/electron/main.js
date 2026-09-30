@@ -26,6 +26,7 @@ import {createLiveVoiceHost} from './live-voice-host.js';
 import {createDesktopProactiveHost} from './proactive-host.js';
 import {createP5SystemObservationSource} from './p5-system-observation-source.js';
 import {createP5DeviceReceiptStore} from './p5-device-receipt-store.js';
+import {createP5DeviceNotificationHost} from './p5-device-notification-host.js';
 import {createKnowledgeWatchHost, createProductionKnowledgeReevaluator} from './knowledge-watch-host.js';
 import {createPublicConnectorHost} from './public-connector-host.js';
 import {createWorkspaceConfigHost} from './workspace-config-host.js';
@@ -167,10 +168,13 @@ let proactiveHost;
 let p5Cognition;
 let p5SystemObservationSource;
 let p5DeviceReceiptStore;
+let p5DeviceNotificationHost;
 let p5DeviceTelemetrySubscription;
 let p5UnavailableReason = '';
 let p5RuntimeFailure = '';
 let p5ReceiptFailure = '';
+let p5DeviceFeedback = {state: 'unread', items: []};
+let p5FeedbackReading = false;
 let knowledgeWatchHost;
 let productTools;
 let codingWorkspace;
@@ -233,12 +237,27 @@ function p5DevicePanelSuggestions() {
       source: receipt.source,
       capturedAt: receipt.timestamp,
       summary: `${receipt.title}：${receipt.message}`,
-      result: `Laya 建议：${receipt.advice}。本次 Runtime 已确认采样并保存 Evidence；仅记录提醒，未执行系统调整。`,
+      result: `Laya 建议：${receipt.advice}。本次 Runtime 已确认采样并保存 Evidence；${receipt.deliveryState === 'delivered'
+        ? '桌面通知已展示' : receipt.deliveryState === 'failed' ? '桌面通知未投递'
+          : receipt.deliveryState === 'pending' ? '桌面通知待确认' : '桌面通知结果未知，需核实'}，未执行系统调整。`,
     }));
   } catch {
     p5ReceiptFailure = 'P5 提醒记录无法读取';
     return [];
   }
+}
+
+async function refreshP5DeviceFeedback() {
+  if (!p5Cognition || p5FeedbackReading) return;
+  p5FeedbackReading = true;
+  try {
+    const records = await p5Cognition.readDeviceFeedback();
+    p5DeviceFeedback = {state: 'available', items: records.map(({source, pendingDeliveryId, receipt}) => ({
+      source, status: receipt?.status ?? 'unobserved', receiptId: receipt?.receiptId ?? null,
+      deliveryNeedsReconciliation: Boolean(pendingDeliveryId), notificationDelivered: receipt?.notificationDelivered === true,
+    }))};
+  } catch {p5DeviceFeedback = {...p5DeviceFeedback, state: 'unavailable'};}
+  finally {p5FeedbackReading = false; publish();}
 }
 
 function p5StatusSnapshot() {
@@ -253,13 +272,18 @@ function p5StatusSnapshot() {
   else if (!proactiveHost?.snapshot().enabled) reason = [reason, '请先在设置中开启本会话电脑状态监控'].filter(Boolean).join('；');
   else if (laya.state !== 'ready') reason = [reason, laya.reason || '请先启动本地 Laya'].filter(Boolean).join('；');
   else if (composition.state !== 'running' || !p5DeviceTelemetrySubscription) reason = [reason, 'P5 设备采样订阅尚未运行'].filter(Boolean).join('；');
-  else reason = '已复用当前本地 Laya；只处理有效观察会话的已确认采样，提醒回执写入本地主动提醒卡片';
-  const ready = Boolean(!p5UnavailableReason && composition.state === 'running' && composition.hasDeviceAnomalyService
+  else reason = '已复用当前本地 Laya，正在处理已确认的本机采样；通知展示后才确认投递';
+  const pendingDelivery = p5DeviceFeedback.items.some(item => item.deliveryNeedsReconciliation);
+  if (composition.failures?.device) reason = `${reason}；设备分析未完成（${composition.failures.device}），未确认新提醒`;
+  if (p5DeviceFeedback.state === 'unavailable') reason = `${reason}；设备持久反馈无法读回`;
+  if (pendingDelivery) reason = `${reason}；设备通知结果待核实，不会重复发送`;
+  const ready = Boolean(!p5UnavailableReason && !p5RuntimeFailure && !p5ReceiptFailure && !composition.failures?.device
+    && p5DeviceFeedback.state === 'available' && !pendingDelivery && composition.state === 'running' && composition.hasDeviceAnomalyService
     && composition.hasNotificationPort && p5DeviceTelemetrySubscription && laya.state === 'ready');
-  if (ready && p5ReceiptFailure) reason = `${p5ReceiptFailure}；${reason}`;
   return {state: composition.state, ready, activeSubscriptionCount: composition.activeSubscriptionCount,
     hasDeviceAnomalyService: composition.hasDeviceAnomalyService,
-    hasNotificationPort: composition.hasNotificationPort, reason};
+    hasNotificationPort: composition.hasNotificationPort, deliveryNeedsReconciliation: pendingDelivery,
+    feedback: structuredClone(p5DeviceFeedback), reason};
 }
 
 function proactiveSnapshot() {
@@ -361,7 +385,9 @@ function snapshot(surface) {
     orbStateOverride,
     tasks: orderedTasks().filter(task => !surface || taskSurface(task) === surface).map(task => ({...structuredClone(task),
       createdAt: conversations?.turns.get(task.taskId)?.createdAt ?? task.createdAt ?? task.updatedAt,
-      userMessage: taskGoals.get(task.taskId) ?? conversations?.goal(task.taskId)})),
+      userMessage: taskGoals.get(task.taskId) ?? conversations?.goal(task.taskId),
+      // UI summary is derived from trusted readback; TaskRuntime still owns state.
+      ...(notepadHost?.projectTask(task) ?? {})})),
     messages: conversations?.messagesFor(surface) ?? [],
     conversation: surface ?? 'all',
     capabilities: structuredClone(capabilities),
@@ -998,6 +1024,9 @@ async function initializeRuntime() {
           respond:payload => client.call('authorization.respond',payload),
           cancelTask:taskId => client.call('task.cancel',{taskId,reason:'用户停止记事本操作'}),
           onUpdate:publish,
+          onTask:({taskId,goal}) => {
+            conversations.add(taskId,'panel',goal); taskGoals.set(taskId,goal);
+          },
         });
       }
       if (syntheticFactSource) competitionCatalog = createDesktopCompetitionToolCatalog({
@@ -1043,6 +1072,7 @@ async function initializeRuntime() {
           mailHost = runtimeModule.createQQMailTriageHost({user, authCode, accountRef:'desktop-qq-inbox',
             storage:createMailMetadataStorage({userData:app.getPath('userData'), safeStorage}),
             namespace:`${namespace}:qq-inbox:${user.toLowerCase()}`, triage:localLaya,
+            classifierFingerprint:runtimeModule.LOCAL_INBOX_CLASSIFIER_FINGERPRINT,
             labels:{meeting:'Meeting invitations, rescheduling and appointment notices',
               work:'Work, project, technical discussions and documents',
               subscription:'Subscribed newsletters, news digests and product updates',
@@ -1290,25 +1320,28 @@ async function initializeRuntime() {
       }
       p5SystemObservationSource = createP5SystemObservationSource({application: runtimeApplication});
       const {createCognitionP5Composition} = await import('./cognition-p5-composition.js');
-      const notificationPort = p5DeviceReceiptStore ? {
-        async sendAdvisoryNotification(notification) {
-          if (!p5DeviceTelemetrySubscription || p5Cognition?.snapshot().state !== 'running') {
-            return {delivered: false, error: 'P5 设备分析已停止'};
+      async function reconcileDeviceDeliveries() {
+        const service = p5Cognition?.deviceAnomalyService;
+        if (!service || !p5DeviceReceiptStore) return;
+        try {
+          for (const pending of await service.readFeedback()) {
+            if (!pending.pendingDeliveryId) continue;
+            const receipt = p5DeviceReceiptStore.read(pending.pendingDeliveryId);
+            if (receipt?.source === pending.source && ['delivered', 'failed'].includes(receipt.deliveryState)) {
+              await service.reconcileDelivery(pending.source, pending.pendingDeliveryId, receipt.deliveryState === 'delivered');
+            }
           }
-          const provenance = p5SystemObservationSource?.readCurrentProvenance(notification);
-          if (!provenance) return {delivered: false, error: '观察许可已撤销或采样 Evidence 已失效'};
-          try {
-            p5DeviceReceiptStore.addNotification(notification, provenance);
-            p5ReceiptFailure = '';
-            publish();
-            return {delivered: true};
-          } catch {
-            p5ReceiptFailure = 'P5 设备提醒回执保存失败';
-            publish();
-            return {delivered: false, error: '本地设备提醒回执保存失败'};
-          }
-        },
-      } : undefined;
+          p5ReceiptFailure = '';
+        } catch { p5ReceiptFailure = 'P5 通知回执核实未完成，保持待核实状态'; }
+        publish();
+      }
+      p5DeviceNotificationHost = p5DeviceReceiptStore ? createP5DeviceNotificationHost({
+        Notification, store: p5DeviceReceiptStore,
+        isActive: () => Boolean(p5DeviceTelemetrySubscription && p5Cognition?.snapshot().state === 'running'),
+        readProvenance: notification => p5SystemObservationSource?.readCurrentProvenance(notification),
+        onUpdate: publish, onLateOutcome: reconcileDeviceDeliveries,
+      }) : undefined;
+      const notificationPort = p5DeviceNotificationHost;
       p5Cognition = createCognitionP5Composition({
         application: runtimeApplication,
         client,
@@ -1323,8 +1356,10 @@ async function initializeRuntime() {
         }),
         ...(notificationPort ? {notificationPort} : {}),
         autoStart: false,
-        onUpdate: publish,
+        onUpdate: () => {publish(); void refreshP5DeviceFeedback();},
       });
+      await reconcileDeviceDeliveries();
+      await refreshP5DeviceFeedback();
       if (!p5Cognition.snapshot().hasDeviceAnomalyService) {
         p5UnavailableReason = [p5UnavailableReason, 'P5 设备异常决策端口不可用'].filter(Boolean).join('；');
       } else if (!p5DeviceReceiptStore || !p5Cognition.snapshot().hasNotificationPort
@@ -1567,16 +1602,21 @@ async function action(event, name, payload) {
     if (name === 'cognition.status') return p5StatusSnapshot();
     if (sender !== panel && sender !== admin && sender !== workspace) throw Error('认知操作仅允许可信窗口调用');
     if (!competitionMode || !p5Cognition) throw Error('认知组合尚未就绪');
-    if (name === 'cognition.proposals.list') return p5Cognition.listProposals();
+    if (name === 'cognition.proposals.list') return p5Cognition.getPendingProposals();
     if (name === 'cognition.proposals.apply') {
-      const proposalId = typeof payload?.proposalId === 'string' ? payload.proposalId.trim() : '';
-      if (!proposalId) throw Error('提议标识不能为空');
-      return p5Cognition.applyProposal(proposalId, payload?.authorization);
+      if (!payload || Object.keys(payload).some(key => !['eventId', 'source'].includes(key))
+        || typeof payload.eventId !== 'string' || !payload.eventId.trim() || payload.eventId.length > 256
+        || typeof payload.source !== 'string' || !payload.source.trim() || payload.source.length > 256) {
+        throw Error('提议必须提供事件与来源标识');
+      }
+      return p5Cognition.applyMeetingProposal({eventId: payload.eventId, source: payload.source},
+        {deadline: new Date(Date.now() + 60_000).toISOString()});
     }
-    if (name === 'cognition.receipts.list') return p5Cognition.listReceipts();
+    if (name === 'cognition.receipts.list') return p5Cognition.listMeetingReceipts();
+    if (name === 'cognition.dialogue') return p5Cognition.dialogueProjection();
+    if (name === 'cognition.device.feedback') {await refreshP5DeviceFeedback(); return structuredClone(p5DeviceFeedback);}
     if (name === 'cognition.mail.triage') {
-      if (!Array.isArray(payload?.messages)) throw Error('邮件列表无效');
-      return p5Cognition.triageMails(payload.messages);
+      throw Error('邮件分类请使用已授权的邮箱读取入口，邮件来源由主进程绑定');
     }
     if (name === 'cognition.mail.triagePaged') {
       throw Error('分页邮件源必须由主进程绑定');
@@ -2118,6 +2158,7 @@ app.whenReady().then(async () => {
     }
     globalShortcut.unregisterAll();
     try {
+      p5DeviceNotificationHost?.dispose();
       p5Cognition?.dispose();
       p5SystemObservationSource?.dispose();
       knowledgeWatchHost?.dispose();

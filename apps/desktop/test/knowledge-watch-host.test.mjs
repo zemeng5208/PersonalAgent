@@ -397,10 +397,16 @@ test('a synthetic feed collection changes only the bound watch and a transient f
   assert.deepEqual(fx.host.snapshot().notices[0].topicIds, ['typescript']);
   assert.equal(fx.host.listWatches().find(watch => watch.topicId === 'releases').state, 'tracked');
   assert.notEqual(fx.host.snapshot().sources['official-docs'].revision, 'v10');
+  const observedHead = structuredClone(fx.host.snapshot().sources['official-docs']);
+  const boundBefore = structuredClone(fx.host.listWatches().find(watch => watch.topicId === 'typescript'));
   fx.time += minute;
   fx.nextFeed = collected(fx.time, {state: 'unchanged', etag: 'v10'});
   const same = await fx.host.refreshSubscribedFeed();
+  assert.equal(same.accepted, true);
+  assert.equal(same.reason, 'unchanged');
   assert.equal(same.notified, false);
+  assert.deepEqual(fx.host.snapshot().sources['official-docs'], observedHead);
+  assert.deepEqual(fx.host.listWatches().find(watch => watch.topicId === 'typescript'), boundBefore);
   assert.equal(fx.calls.submit, 1);
   fx.failFeed = true;
   const transient = await fx.host.refreshSubscribedFeed();
@@ -608,6 +614,8 @@ test('dialogue projection cites a new feed observation and keeps the old binding
   time += minute;
   feed = collected(time, {state: 'unchanged', etag: 'v10'});
   const again = await host.refreshSubscribedFeed();
+  assert.equal(again.accepted, true);
+  assert.equal(again.reason, 'unchanged');
   assert.equal(again.notified, false);
   assert.equal(submits, 1);
   assert.equal(host.dialogueProjection().items[0].answer.kind, 'latest_observation');

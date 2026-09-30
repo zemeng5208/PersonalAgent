@@ -34,7 +34,7 @@ export type {
 } from './application/memory.js';
 export {createInboxTriagePipeline} from './application/inbox-triage.js';
 export type {InboxTriageContext, InboxTriagePage, InboxTriageMetadata, InboxTriageOptions} from './application/inbox-triage.js';
-export {createQQMailTriageHost, createLocalInboxClassifier} from './application/mail-triage.js';
+export {createQQMailTriageHost, createLocalInboxClassifier, LOCAL_INBOX_CLASSIFIER_FINGERPRINT} from './application/mail-triage.js';
 export {createProactiveCognitionHost} from './application/proactive-cognition-host.js';
 export type {ProactiveCognitionHost, ProactiveCognitionHostOptions, ProactiveCognitionReview,
   ProactiveSelectionHandoff, ProactiveSelectionHandoffPort} from './application/proactive-cognition-host.js';

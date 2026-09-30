@@ -46,7 +46,8 @@ export function mountMailControls(root, invoke) {
     const labels = {meeting:'会议', work:'工作', subscription:'订阅', transaction:'订单与账单', personal:'个人', other:'其他'};
     const states = {unconfigured:'未配置', enabled:'已允许', disabled:'已停止', ready:'就绪', unavailable:'不可用',
       reading:'正在读取', running:'正在读取', pending:'等待处理', classifying:'正在分类', classification_unavailable:'分类中断，可重试',
-      complete:'本批分类完成', failed:'读取失败', cancelled:'已取消', stop_unconfirmed:'正在确认停止'};
+      complete:'本批分类完成', failed:'读取失败', cancelled:'已取消', stop_unconfirmed:'正在确认停止',
+      resync_required:'分页已失效，点击开始批量分类重新同步'};
     const groups = Object.entries(counts.groups ?? {}).map(([key,count]) => `${labels[key] || key} ${count}`).join('，');
     field('status').textContent = `${value.account || '未配置邮箱'} · ${states[value.status] || value.status || '未配置'}${value.requiresRestart ? ' · 配置已保存，下次启动生效' : ''} · 已分类 ${counts.total ?? 0}，待核对 ${counts.needsReview ?? 0}，会议候选 ${counts.meetingCandidates ?? 0}${groups ? ` · ${groups}` : ''}${!value.localModelReady ? ' · 请先启动本地 Laya' : ''}${value.reason ? ` · ${value.reason}` : ''}`;
     if (previous.sessionAllowed && !value.sessionAllowed) field('consent').checked = false;

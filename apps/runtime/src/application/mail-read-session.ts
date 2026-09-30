@@ -5,7 +5,7 @@ import type {HostToolTaskReadback} from './runtime-application.js';
 export const MAIL_READ_SESSION_CHECKPOINT = 'mail-read-session';
 export const MAIL_READ_TOOL = 'mail.inbox';
 export const MAIL_READ_VERSION = '0.1.0-alpha.1';
-export interface StartMailReadSessionRequest {accountRef: string; folder: 'INBOX'; expiresAt: string; limit?: number;}
+export interface StartMailReadSessionRequest {accountRef: string; folder: 'INBOX'; expiresAt: string; limit?: number; cursor?: string;}
 export interface MailReadSession {sessionId: string; accountRef: string; folder: 'INBOX'; expiresAt: string; limit: number;}
 interface Lease extends MailReadSession {sequence: number; taskId?: string; cursor?: string; done: boolean;}
 
@@ -14,9 +14,10 @@ export class MailReadSessions {
   private readonly leases = new Map<string, Lease>();
   constructor(private readonly now: () => number, private readonly cancel: (taskId: string) => void) {}
   start(request: StartMailReadSessionRequest): MailReadSession {
-    if (!request || Object.keys(request).some(key => !['accountRef', 'folder', 'expiresAt', 'limit'].includes(key))
+    if (!request || Object.keys(request).some(key => !['accountRef', 'folder', 'expiresAt', 'limit', 'cursor'].includes(key))
       || typeof request.accountRef !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(request.accountRef)
       || request.folder !== 'INBOX' || !Number.isFinite(Date.parse(request.expiresAt))
+      || (request.cursor !== undefined && (typeof request.cursor !== 'string' || !/^\d+:\d+$/.test(request.cursor) || request.cursor.length > 128))
       || Date.parse(request.expiresAt) <= this.now()
       || !Number.isSafeInteger(request.limit ?? 100) || (request.limit ?? 100) < 1 || (request.limit ?? 100) > 100) {
       throw new ProtocolError('INVALID_ARGUMENT', 'Mail read consent must bind one inbox and future expiry');

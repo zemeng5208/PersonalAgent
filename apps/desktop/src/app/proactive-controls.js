@@ -11,6 +11,24 @@ export function proactiveSuggestions(snapshot) {
   return [...unique.values()];
 }
 
+export function cognitionReviewFeedback(item = {}) {
+  const verified = item.status === 'applied' && item.executionVerified === true && item.graphUpdateVerified === true;
+  const state = item.status ?? item.state;
+  const labels = {created:'处理任务已建立，等待规划',verifying:'正在核实处理结果',
+    submitted:'处理任务已受理，目标更新尚未核实',pending:'等待主智能体处理',
+    planning:'正在规划',running:'主智能体正在处理',waiting_approval:'处理任务等待授权',
+    waiting_external:'等待外部结果',waiting_reconciliation:'处理结果待核实',
+    succeeded:'编排任务已完成，目标更新尚未核实',failed:'处理任务失败，目标更新尚未核实',
+    cancelling:'正在取消处理',cancelled:'处理任务已取消，目标更新尚未核实',
+    unavailable:'当前无法交给主智能体处理',expired:'方案已过期，请重新分析',
+    submission_unknown:'提交结果待核实，请勿重复提交'};
+  return {message: verified ? '执行与目标更新已核实'
+    : item.taskId ? labels[state] ?? '处理状态待核实，目标更新尚未核实'
+    : ['unavailable','expired','submission_unknown'].includes(state) ? labels[state] : '方案已记录，尚未交给主智能体处理',
+    label: verified ? '更新已核实' : item.taskId ? '已交给主智能体' : '交给主智能体处理',
+    locked: verified || Boolean(item.taskId) || state === 'submission_unknown'};
+}
+
 export function mountProactiveControls(container, invoke, {settings = false} = {}) {
   const section = document.createElement('section');
   section.className = settings ? 'feature-page' : 'proactive-notices';
@@ -30,24 +48,28 @@ export function mountProactiveControls(container, invoke, {settings = false} = {
   const fields=['enabled','cloudAnalysis','goalAnalysis','goalCloudAnalysis'];
   let current, dirty = false, saving = false;
   const rows = new Map(), pending = new Set();
+  const cognitionPending = new Set();
   if (reviewsList) {
     reviewsList.addEventListener('click', async event => {
       const button = event.target.closest('button[data-action="apply-cognition"]');
       if (!button || button.disabled) return;
       const reviewTaskId = button.dataset.reviewId;
-      if (!reviewTaskId) return;
+      if (!reviewTaskId || cognitionPending.has(reviewTaskId)) return;
+      cognitionPending.add(reviewTaskId);
       button.disabled = true;
       const card = button.closest('.cognition-review-card');
       const cardNotice = card?.querySelector('[data-feedback-id]');
-      if (cardNotice) cardNotice.textContent = '正在采纳并执行方案…';
+      if (cardNotice) cardNotice.textContent = '正在交给主智能体处理…';
       try {
         const result = await invoke('proactive.cognition.apply', {reviewTaskId});
-        if (cardNotice) cardNotice.textContent = result?.status === 'applied' ? '方案已执行，目标图谱已更新' : '执行完成';
-        button.textContent = '已在本地执行';
+        const feedback = cognitionReviewFeedback(result);
+        if (cardNotice) cardNotice.textContent = feedback.message;
+        button.textContent = feedback.label;
+        button.disabled = feedback.locked;
       } catch (err) {
         if (cardNotice) cardNotice.textContent = err.message;
         button.disabled = false;
-      }
+      } finally {cognitionPending.delete(reviewTaskId);}
     });
   }
   if (form) {
@@ -119,18 +141,18 @@ export function mountProactiveControls(container, invoke, {settings = false} = {
     }
     if (reviewsList) {
       if (cognitionReviews.length > 0) {
-        reviewsList.innerHTML = '<h3 style="margin-top:12px;font-size:14px;color:var(--text-secondary)">目标与计划决策</h3>' + cognitionReviews.map(r => {
-          const isApplied = r.executionStatus?.includes('已在本地执行') || r.state === 'applied';
+        reviewsList.innerHTML = '<h3 class="cognition-review-title">目标与计划决策</h3>' + cognitionReviews.map(r => {
+          const feedback = cognitionReviewFeedback(r);
           return `
           <article class="task cognition-review-card" data-review-id="${escape(r.reviewTaskId || '')}">
             <p class="cognition-trigger"><strong>触发原因：</strong>${escape(r.trigger || '事实或目标变更')}</p>
             <p class="cognition-choice"><strong>Laya 方案：</strong>${escape(r.choice || '本地决策建议')}</p>
-            <p class="notice cognition-status"><strong>执行状态：</strong>${escape(r.executionStatus || r.state || '已记录')}</p>
-            <div class="cognition-actions" style="margin-top:8px">
-              <button class="btn btn-sm" type="button" data-action="apply-cognition" data-review-id="${escape(r.reviewTaskId || '')}" ${isApplied ? 'disabled' : ''}>
-                ${isApplied ? '已在本地执行' : '采纳并执行方案'}
+            <p class="notice cognition-status"><strong>处理状态：</strong>${escape(feedback.message)}</p>
+            <div class="cognition-actions">
+              <button class="btn btn-sm" type="button" data-action="apply-cognition" data-review-id="${escape(r.reviewTaskId || '')}" ${feedback.locked || cognitionPending.has(r.reviewTaskId) ? 'disabled' : ''}>
+                ${feedback.label}
               </button>
-              <span class="notice" data-feedback-id="${escape(r.reviewTaskId || '')}" style="margin-left:8px"></span>
+              <span class="notice" data-feedback-id="${escape(r.reviewTaskId || '')}"></span>
             </div>
           </article>
         `;

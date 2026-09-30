@@ -14,7 +14,7 @@ async function until(predicate) {
 
 async function fixture(t, {targetReady = true} = {}) {
   const directory=await mkdtemp(path.join(tmpdir(),'pa-notepad-desktop-'));
-  const sent=[];let confirm,app,client;
+  const sent=[], conversation=[];let confirm,app,client;
   let observedExpiresAt;
   const host=createDesktopNotepadHost({createAdapter:createWindowsHostNotepadAdapter,
     createAttempts:createRuntimeWindowsHostAttemptStore,
@@ -41,20 +41,22 @@ async function fixture(t, {targetReady = true} = {}) {
     registerConfirmation:callback=>{confirm=callback;return ()=>{confirm=undefined;};},
     openNotepad:async()=>{},respond:payload=>client.call('authorization.respond',payload),
     cancelTask:taskId=>client.call('task.cancel',{taskId,reason:'fixture user cancellation'}),
+    onTask:task=>conversation.push(task),
   });
   app=createRuntimeApplication({path:path.join(directory,'runtime.sqlite'),
     profile:'huawei_ict_agentarts',hostUserNamespace:'fixture-user',tools:host.tools});
   host.bind(app);client=new Client(app,Date.now);await client.connect();
   t.after(async()=>{await host.close();await until(()=>app.activeTaskCount===0);app.close();await rm(directory,{recursive:true,force:true});});
-  return {host,app,sent,confirm:()=>confirm?.()};
+  return {host,app,sent,conversation,confirm:()=>confirm?.()};
 }
 
 test('Desktop confirmation freezes user text and obtains one Runtime grant before native write',async t=>{
-  const {host,app,sent,confirm}=await fixture(t);
+  const {host,app,sent,conversation,confirm}=await fixture(t);
   const first=host.start({text:'User authored text'});
   await until(()=>host.snapshot().state==='waiting_confirmation');
   assert.equal(sent.some(frame=>frame.kind==='observe'||frame.kind==='execute'),false);
   assert.equal(app.runtime.getTask(first.taskId).state,'created');
+  assert.deepEqual(conversation,[{taskId:first.taskId,goal:'向新空白记事本写入本次文本'}]);
   confirm();
   await until(async()=>{await host.refresh();return !host.snapshot().busy;});
   assert.equal(host.snapshot().state,'succeeded');
@@ -65,12 +67,16 @@ test('Desktop confirmation freezes user text and obtains one Runtime grant befor
   assert.equal(writes[0].expectedText,'');assert.equal(writes[0].replacementText,'User authored text');
   assert.equal(typeof writes[0].authorizationRef,'string');
   assert.ok(host.snapshot().evidenceRefs.length>0);
+  const projection=host.projectTask(app.runtime.getTask(first.taskId));
+  assert.match(projection.resultSummary,/读回匹配/);
+  assert.equal(JSON.stringify(projection).includes('notepad_fixture_target'),false);
+  assert.equal(JSON.stringify(projection).includes('User authored text'),false);
   assert.equal(JSON.stringify(host.snapshot()).includes('User authored text'),false);
   assert.equal(app.runtime.policy.get(writes[0].authorizationRef).usesRemaining,0);
 });
 
 test('Desktop denies once when the Host target is stale at the approval boundary',async t=>{
-  const {host,sent,confirm}=await fixture(t,{targetReady:false});
+  const {host,app,sent,confirm}=await fixture(t,{targetReady:false});
   host.start({text:'Must not write'});
   await until(()=>host.snapshot().state==='waiting_confirmation');
   confirm();
@@ -78,6 +84,9 @@ test('Desktop denies once when the Host target is stale at the approval boundary
   assert.notEqual(host.snapshot().state,'succeeded');
   assert.equal(sent.filter(frame=>frame.kind==='target_ready').length,1);
   assert.equal(sent.filter(frame=>frame.kind==='execute').length,0);
+  const projection=host.projectTask(app.runtime.getTask(host.snapshot().taskId));
+  assert.match(projection.resultSummary,/取消.*未获确认/);
+  assert.doesNotMatch(projection.resultSummary,/已完成|读回匹配/);
 });
 
 test('cancel before local gesture leaves no frozen write or native execution',async t=>{
@@ -86,6 +95,7 @@ test('cancel before local gesture leaves no frozen write or native execution',as
   await until(()=>host.snapshot().state==='waiting_confirmation');
   await host.cancel();confirm();
   assert.equal(app.runtime.getTask(first.taskId).state,'cancelled');
+  assert.match(host.projectTask(app.runtime.getTask(first.taskId)).resultSummary,/取消.*未确认写入/);
   assert.equal(host.snapshot().busy,false);
   assert.equal(sent.some(frame=>frame.kind==='observe'||frame.kind==='execute'),false);
   assert.equal(app.runtime.readToolExecutions(first.taskId).length,0);

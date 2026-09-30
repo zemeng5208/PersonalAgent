@@ -2,22 +2,29 @@ import {existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSy
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 
-const VERSION = 1;
+const VERSION = 2;
 const DEFAULT_LIMIT = 100;
 const text = (value, max = 512) => typeof value === 'string' && value.trim().length > 0 && value.length <= max;
 const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value)
   && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 const clone = value => structuredClone(value);
-const keys = ['id', 'source', 'timestamp', 'title', 'message', 'advice', 'candidateId',
+const legacyKeys = ['id', 'source', 'timestamp', 'title', 'message', 'advice', 'candidateId',
   'sourceTaskId', 'evidenceRefs', 'deliveredAt'];
+const keys = [...legacyKeys, 'createdAt', 'deliveryState'];
 
-function validRecord(value) {
-  return plain(value) && Object.keys(value).length === keys.length
-    && keys.every(key => Object.hasOwn(value, key))
+function validRecord(value, legacy = false) {
+  const expectedKeys = legacy ? legacyKeys : keys;
+  return plain(value) && Object.keys(value).length === expectedKeys.length
+    && expectedKeys.every(key => Object.hasOwn(value, key))
     && text(value.id) && value.source === 'node:os' && text(value.timestamp, 32)
     && Number.isFinite(Date.parse(value.timestamp)) && text(value.title) && text(value.message)
     && text(value.advice, 2000) && text(value.candidateId, 256) && text(value.sourceTaskId, 256)
-    && text(value.deliveredAt, 32) && Number.isFinite(Date.parse(value.deliveredAt))
+    && (legacy ? text(value.deliveredAt, 32) && Number.isFinite(Date.parse(value.deliveredAt))
+      : text(value.createdAt, 32) && Number.isFinite(Date.parse(value.createdAt))
+        && ['pending', 'unknown', 'delivered', 'failed'].includes(value.deliveryState)
+        && (value.deliveryState === 'delivered'
+          ? text(value.deliveredAt, 32) && Number.isFinite(Date.parse(value.deliveredAt))
+          : value.deliveredAt === null))
     && Array.isArray(value.evidenceRefs) && value.evidenceRefs.length > 0 && value.evidenceRefs.length <= 256
     && value.evidenceRefs.every(ref => text(ref, 256));
 }
@@ -25,12 +32,15 @@ function validRecord(value) {
 function load(filePath) {
   if (!existsSync(filePath)) return [];
   const parsed = JSON.parse(readFileSync(filePath, 'utf8'));
-  if (!plain(parsed) || parsed.version !== VERSION || !Array.isArray(parsed.records)
-    || !parsed.records.every(validRecord)
+  if (!plain(parsed) || ![1, VERSION].includes(parsed.version) || !Array.isArray(parsed.records)
+    || !parsed.records.every(record => validRecord(record, parsed.version === 1))
     || new Set(parsed.records.map(item => item.id)).size !== parsed.records.length) {
     throw new Error('P5 device receipt store is invalid');
   }
-  return parsed.records.map(clone);
+  return parsed.records.map(record => parsed.version === 1
+    // V1's timestamp proved card persistence only, never native delivery.
+    ? {...clone(record), createdAt: record.deliveredAt, deliveredAt: null, deliveryState: 'unknown'}
+    : {...clone(record), deliveryState: record.deliveryState === 'pending' ? 'unknown' : record.deliveryState});
 }
 
 /** Durable, bounded local card history used by the existing proactive panel. */
@@ -39,7 +49,6 @@ export function createP5DeviceReceiptStore({filePath, maxEntries = DEFAULT_LIMIT
     || !Number.isSafeInteger(maxEntries) || maxEntries < 1 || maxEntries > 1000
     || typeof now !== 'function') throw new Error('Invalid P5 device receipt store');
   let records = load(filePath);
-  if (records.length > maxEntries) records = records.slice(-maxEntries);
 
   function persist(next) {
     mkdirSync(path.dirname(filePath), {recursive: true});
@@ -81,12 +90,35 @@ export function createP5DeviceReceiptStore({filePath, maxEntries = DEFAULT_LIMIT
         id: notification.id, source: 'node:os', timestamp: notification.timestamp,
         title: notification.title, message: notification.message, advice: notification.advice,
         candidateId: notification.candidateId, sourceTaskId: provenance.taskId,
-        evidenceRefs: [...provenance.evidenceRefs], deliveredAt: new Date(now()).toISOString(),
+        evidenceRefs: [...provenance.evidenceRefs], createdAt: new Date(now()).toISOString(),
+        deliveryState: 'pending', deliveredAt: null,
       };
       if (!validRecord(record)) throw new Error('Invalid P5 device notification receipt');
-      persist([...records, record].slice(-maxEntries));
+      const unresolved = records.filter(item => ['pending', 'unknown'].includes(item.deliveryState));
+      if (unresolved.length >= maxEntries) throw new Error('P5 delivery reconciliation capacity reached');
+      const terminalSlots = maxEntries - unresolved.length - 1;
+      const retained = terminalSlots > 0 ? records.filter(item => ['delivered', 'failed'].includes(item.deliveryState))
+        .slice(-terminalSlots) : [];
+      // Never discard unknown delivery intent to make space for a new send.
+      persist(records.filter(item => unresolved.includes(item)
+        || retained.includes(item)).concat(record));
       return {record: clone(record), duplicate: false};
     },
+    recordDelivery(id, deliveryState) {
+      if (!text(id) || !['unknown', 'delivered', 'failed'].includes(deliveryState)) {
+        throw new Error('Invalid P5 delivery outcome');
+      }
+      const existing = records.find(item => item.id === id);
+      if (!existing) throw new Error('P5 delivery receipt missing');
+      if (existing.deliveryState === deliveryState) return clone(existing);
+      if (['delivered', 'failed'].includes(existing.deliveryState)) throw new Error('P5 delivery outcome conflict');
+      const updated = {...existing, deliveryState,
+        deliveredAt: deliveryState === 'delivered' ? new Date(now()).toISOString() : null};
+      if (!validRecord(updated)) throw new Error('Invalid P5 delivery outcome');
+      persist(records.map(record => record.id === id ? updated : record));
+      return clone(updated);
+    },
+    read(id) { const record = records.find(item => item.id === id); return record ? clone(record) : undefined; },
     list() { return records.map(clone); },
   });
 }

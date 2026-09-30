@@ -187,7 +187,8 @@ export interface WindowsHostAdapterOptions {
   attempts: WindowsHostAttemptStore;
   now?: () => number;
   /** Trusted Desktop may open a new target and wait for a local confirmation gesture.
-   * Runs before opening the pipe so confirmation does not retain a Host session.
+   * Runs after hello/bind so the Host's old-window baseline precedes target creation.
+   * Cancellation/deadline closes this reserved connection without observation or execution.
    * This is not tool authorization and must not inspect or select private windows. */
   prepareObservation?(input: {taskId: string; deadline: string; signal: AbortSignal}): Promise<void>;
   /** Desktop derives live local presence for this task. Checked at observation and again before execution. */
@@ -252,6 +253,7 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
   const lifetime = new AbortController();
   let closed = false;
   let occupied = false;
+  let observationReservation: object | undefined;
   let checking = false;
   let releaseFailed = false;
   let closePromise: Promise<void> | undefined;
@@ -282,11 +284,26 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
     if (occupied) throw new ProtocolError('REVISION_CONFLICT', 'Windows Host session is occupied');
     // Reserve before the first asynchronous presence check, not after it.
     occupied = true;
+    const reservation = {};
+    observationReservation = reservation;
+    const requireCurrentReservation = (): void => {
+      ensureOpen();
+      active({deadline, signal}, now);
+      if (observationReservation !== reservation) {
+        throw new ProtocolError('REVISION_CONFLICT', 'Windows Host observation reservation changed');
+      }
+    };
     let bound: Bound | undefined;
     try {
-      if (!await presenceAllowed({taskId, deadline, signal})) {
+      const allowed = await presenceAllowed({taskId, deadline, signal});
+      // Presence can finish after cancellation or close; never open a late session.
+      requireCurrentReservation();
+      if (!allowed) {
         throw new ProtocolError('UNAUTHORIZED', 'Local user presence was not authorized');
       }
+      bound = await open(options.transport);
+      ensureOpen();
+      active({deadline, signal}, now);
       if (options.prepareObservation) {
         const preparation = new AbortController();
         const abort = () => preparation.abort();
@@ -311,9 +328,6 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
       }
       ensureOpen();
       active({deadline, signal}, now);
-      bound = await open(options.transport);
-      ensureOpen();
-      active({deadline, signal}, now);
       const request = {kind: 'observe' as const, ...frameBase(bound.sessionId), deadline,
         capability: 'notepad.replace_text' as const};
       const reply = parseWindowsHostFrame(await bound.connection.exchange(request));
@@ -329,9 +343,13 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
       if (Date.parse(reply.expiresAt) <= now()) throw new ProtocolError('TIMEOUT', 'Notepad target already expired');
       const target = {targetRef: reply.targetRef, expiresAt: reply.expiresAt};
       observed.set(taskId, {bound, target});
+      observationReservation = undefined;
       return {...target};
     } catch (error) {
-      try { if (bound) await closeConnection(bound.connection); } finally { occupied = false; }
+      try { if (bound) await closeConnection(bound.connection); } finally {
+        if (observationReservation === reservation) observationReservation = undefined;
+        occupied = false;
+      }
       throw error;
     }
   }
@@ -510,6 +528,7 @@ export function createWindowsHostNotepadAdapter(options: WindowsHostAdapterOptio
   return {tool, observe, checkObservationReady, releaseObservation, recover, close() {
     if (closePromise) return closePromise;
     closed = true;
+    observationReservation = undefined;
     lifetime.abort();
     const pending = [...observed.values()];
     observed.clear();
