@@ -103,7 +103,7 @@ test('runtimeApplication configureThinking independently presents stepBudget and
   assert.deepEqual(readback.modelReasoning, state.modelReasoning);
 });
 
-test('createRuntimeSubagentDispatchTool executes real ModelGateway with role prompt and native reasoningEffort', async () => {
+test('subagent forwards reasoning only when trusted host explicitly supports it', async () => {
   const runtime = new TaskRuntime(':memory:');
   const parent = runtime.submitTask({
     conversationId: 'desktop-panel',
@@ -127,6 +127,7 @@ test('createRuntimeSubagentDispatchTool executes real ModelGateway with role pro
   const tool = createRuntimeSubagentDispatchTool({
     getRuntime: () => runtime,
     getModelGateway: () => gateway,
+    getModelReasoningEfforts: () => ['low', 'medium'],
   });
 
   const context = {
