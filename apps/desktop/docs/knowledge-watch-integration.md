@@ -164,6 +164,18 @@ contentRef 返回 `feed_citation_ambiguous` 并保留旧来源头/绑定/任务�
 
 ### 多文章来源回执 v2（P7 实现，P8 公共导出与接线）
 
+P7 新增 `createKnowledgeFeedReceiptFromCollectResult({namespace, sourceId, result})`，
+作为原始 `feeds.collect` 返回到 v2 的同一确定性映射入口。只接受 `fetched`、完整单页
+（`hasMore: false`）、非空 items、准确 subscriptionId 和合法 validators；不接受 304 或
+分页未完成结果作为新来源回执。存在原 record.accountRef/fetchedAt 时须与这次 collection
+一致。沿用标题 200、摘要 500 字符截断、dedupeKey 排序、原内容哈希和 validator revision。
+无法构造时返回 undefined；结构与映射通过不代表 HostTool/Policy 已执行。
+P8 在公开 application exports 增补此函数；Host 注入端口包含它时直接复用，旧四函数端口仍兼容。
+Runtime 应从实际 confirmed HostTool result 调用相同 helper，并将重建的 receiptId 与 root
+来源回执准确比较，保留真实 task/run/argumentsDigest/query/result 与 receipt 的持久关联。
+本增量定向验证：严格单文件编译、raw mapper 正向及十类失败路径 1/1、双 consumer
+宿主/回执恢复使用该 mapper 1/1、host 语法和 diff check；没有重跑旧全套或真实模型。
+
 `apps/runtime/src/application/knowledge-feed-receipt.ts` 提供纯确定性构造与验证。
 沿用 feeds.collect 的五个条目字段和整页哈希，增加逐项
 `citationItems: [{itemKey, contentRef, itemContentSha256}]`；receiptId 包含该映射。

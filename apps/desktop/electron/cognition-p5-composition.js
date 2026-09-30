@@ -9,6 +9,7 @@ import {
   DeviceAnomalyDecisionService,
 } from '@personal-agent/cognition';
 import {createCalendarMeetingSource} from './p5-calendar-meeting-source.js';
+import {createP5RuntimeCheckpoints} from './p5-runtime-checkpoints.js';
 
 /**
  * Register a listener on an event source, supporting:
@@ -71,7 +72,8 @@ function createSubscriptionHandle(unbind, activeSubscriptions) {
 /**
  * P5 exclusive desktop composition entry:
  * Assembles MeetingRescheduleCoordinator, MailTriagePipeline, and DeviceAnomalyDecisionService
- * with durable file-backed stores, policy-guarded execution, and confirmed notification delivery.
+ * with existing Runtime SQLite checkpoints (legacy files for explicit minimal test hosts),
+ * an injected execution port, and confirmed notification delivery.
  * Reuses existing local Laya model host via public ports (.choose, .classify) without spawning second processes.
  */
 export function createCognitionP5Composition({
@@ -84,6 +86,7 @@ export function createCognitionP5Composition({
   chooser,
   classifier,
   policyEvaluator,
+  meetingExecutionPort,
   notificationPort,
   calendarReadPort,
   autoStart = true,
@@ -98,13 +101,16 @@ export function createCognitionP5Composition({
   const receiptsDir = path.join(userData, 'meeting-receipts');
   mkdirSync(receiptsDir, {recursive: true});
 
-  // 1. Durable meeting decision receipt store
-  const receiptStore = new FileMeetingDecisionReceiptStore({storageDir: receiptsDir});
+  // 1. Production state shares the existing TaskRuntime SQLite and namespace.
+  // Minimal offline hosts without checkpoint APIs retain the explicit legacy file ports.
+  const runtimeCheckpoints = typeof application.createHostStateStore === 'function'
+    ? createP5RuntimeCheckpoints({storage: application.createHostStateStore('proactive-receipts'), namespace, userData}) : undefined;
+  const receiptStore = runtimeCheckpoints?.meetings ?? new FileMeetingDecisionReceiptStore({storageDir: receiptsDir});
 
-  // 2. Policy-guarded execution port: enforces policy checks before CAS appendBatch.
-  // Requires explicit, trusted policyEvaluator. When missing, executionPort is undefined
-  // and the coordinator outputs structured proposals (status: 'proposal') without mutating the graph.
-  const executionPort = policyEvaluator ? createPolicyGuardedExecutionPort({
+  // 2. Production composition injects its Runtime/Policy/ToolGateway execution port.
+  // The older policyEvaluator port is compatibility for isolated domain callers;
+  // its direct CAS is not production execution Evidence. With neither, emit a proposal.
+  const executionPort = meetingExecutionPort ?? (policyEvaluator ? createPolicyGuardedExecutionPort({
     store,
     policy: policyEvaluator,
     receiptStore,
@@ -112,7 +118,7 @@ export function createCognitionP5Composition({
     onExecuted: () => {
       try { onUpdate(); } catch {}
     },
-  }) : undefined;
+  }) : undefined);
 
   // 3. Resolve chooser & classifier ports directly from layaHost or explicit arguments
   // Public port reuse: consumes layaHost.choose and layaHost.classify without reading private closures or exposing keys
@@ -179,7 +185,7 @@ export function createCognitionP5Composition({
     sustainedSampleCount: 3,
     cooldownMs: 300_000,
     notificationPort,
-    checkpoint: deviceCheckpoint,
+    checkpoint: runtimeCheckpoints?.device ?? deviceCheckpoint,
     now,
   }) : undefined;
 
@@ -242,6 +248,7 @@ export function createCognitionP5Composition({
         hasDeviceAnomalyService: Boolean(deviceAnomalyService),
         hasExecutionPort: Boolean(executionPort),
         hasPolicyEvaluator: Boolean(policyEvaluator),
+        persistence: runtimeCheckpoints?.persistence ?? 'legacy_files',
         hasNotificationPort: Boolean(notificationPort),
         layaHostState: layaHost?.snapshot?.()?.state ?? null,
         modelReady: layaHost ? layaHost.snapshot?.()?.ready === true : Boolean(inference || chooser || classifier),

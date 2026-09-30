@@ -10,6 +10,8 @@ import {bindCoordinationStore} from './coordination-store.js';
 import type {AtomicCoordinationStorePort} from '@personal-agent/goals/store';
 import {bindFactProjectionStore} from './fact-projection-store.js';
 import type {FactProjectionStore} from './fact-projection-store.js';
+import {bindHostStateStore} from './host-state-store.js';
+export type {TrustedHostStateStore} from './host-state-store.js';
 
 export {FactProjectionError} from './fact-projection-store.js';
 export type {
@@ -274,6 +276,9 @@ export const RUNTIME_MIGRATIONS: readonly Migration[] = [{
 }, {
   version: 9,
   sql: 'CREATE TABLE coordination_fact_erasure_receipts (graph_namespace TEXT NOT NULL, memory_namespace TEXT NOT NULL, fact_id TEXT NOT NULL, operation_id TEXT NOT NULL, expected_graph_revision INTEGER NOT NULL CHECK (expected_graph_revision >= 0), committed_at TEXT NOT NULL, PRIMARY KEY (graph_namespace, memory_namespace, fact_id), UNIQUE (graph_namespace, operation_id)) STRICT;'
+}, {
+  version:10,
+  sql:'CREATE TABLE trusted_host_state (namespace TEXT NOT NULL,state_key TEXT NOT NULL,value_json TEXT NOT NULL,PRIMARY KEY(namespace,state_key)) STRICT;'
 }];
 
 export class RuntimeError extends Error {
@@ -344,6 +349,8 @@ function scheduleFromRow(row: ScheduleRow): ScheduleSnapshot {
 }
 
 export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
+  /** Host metadata shares this SQLite; this port is never registered as a wire operation. */
+  bindTrustedHostState(namespace:string) {return bindHostStateStore(this.db,namespace);}
   readonly policy: AuthorizationPolicy;
   private readonly db: DatabaseSync;
   private readonly now: () => Date;
@@ -506,7 +513,7 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
   }
 
   readEvidence(taskId: string): import('@personal-agent/contracts').ProtocolContracts['evidence'][] {
-    return this.readToolExecutions(taskId).map(record => {
+    const execution=this.readToolExecutions(taskId).map(record => {
       const evidence: import('@personal-agent/contracts').ProtocolContracts['evidence'] = {
         evidenceId: record.evidenceId, kind: 'execution', sourceRef: record.toolName,
         capturedAt: record.finishedAt ?? record.startedAt,
@@ -517,6 +524,12 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
       validateContract('evidence', evidence);
       return evidence;
     });
+    const readback=this.db.prepare("SELECT value_json FROM task_checkpoints WHERE task_id = ? AND checkpoint_key LIKE 'trusted-readback-evidence:%' ORDER BY checkpoint_key")
+      .all(taskId).map(row=>{
+        const evidence=JSON.parse(row.value_json as string) as import('@personal-agent/contracts').ProtocolContracts['evidence'];
+        validateContract('evidence',evidence);return evidence;
+      });
+    return [...execution,...readback];
   }
 
   getApproval(approvalId: string): ToolApproval {

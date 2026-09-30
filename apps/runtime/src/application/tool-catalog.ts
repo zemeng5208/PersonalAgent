@@ -87,6 +87,14 @@ function projectedSchema(descriptor: ToolDescriptor, binding: CompetitionToolAva
 
 export class RuntimeCompetitionToolCatalog {
   readonly sideEffect: ToolDescriptor['sideEffect'];
+  /** Child worker sees only the same bounded ToolPort used for execution. */
+  restrict(tools:AgentToolPort):RuntimeCompetitionToolCatalog {
+    const descriptors=tools.list();
+    const allowed=(name:string,version:string)=>descriptors.some(tool=>tool.name===name&&tool.version===version);
+    return new RuntimeCompetitionToolCatalog(this.runtime,tools,
+      this.exports.filter(item=>allowed(item.toolName,item.toolVersion)),
+      this.availability.filter(item=>allowed(item.toolName,item.toolVersion)));
+  }
 
   constructor(
     private readonly runtime: TaskRuntime,

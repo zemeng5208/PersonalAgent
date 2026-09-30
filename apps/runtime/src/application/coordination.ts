@@ -3,7 +3,7 @@ import type {TaskSnapshot} from '@personal-agent/contracts';
 import {parseCoordinationResult, parseCoordinationContinuation, type CoordinationContinuation, type CoordinationPort,
   type CoordinationResult, type CoordinationToolProposalResult} from '@personal-agent/coordination';
 import type {AgentToolPort, ToolInvocationResult} from '@personal-agent/agents';
-import type {TaskRuntime} from '../index.js';
+import type {TaskRuntime, WorkerContext, WorkerResult} from '../index.js';
 import {isDeepStrictEqual} from 'node:util';
 import type {CompetitionAvailableTool, RuntimeCompetitionToolCatalog} from './tool-catalog.js';
 
@@ -157,7 +157,16 @@ export function startCoordinationTask(
   deadline: string,
   options: {resume?: boolean; toolExports?: readonly CompetitionToolExport[]; toolCatalog?: RuntimeCompetitionToolCatalog; repairCandidateVersion?: '1.0'} = {},
 ): Promise<TaskSnapshot> {
-  return runtime.runTask(taskId, async context => {
+  return runtime.runTask(taskId, context => runCoordinationWorker(runtime,port,tools,taskId,goal,context,options),
+    {deadline,sideEffect:options.toolCatalog?.sideEffect??'read',...(options.resume?{resume:true}:{})});
+}
+
+/** Shared worker for the original Runtime-owned parent and child task lifecycle. */
+export async function runCoordinationWorker(
+  runtime: TaskRuntime, port: CoordinationPort | undefined, tools: AgentToolPort | undefined,
+  taskId: string, goal: string, context: WorkerContext,
+  options: {toolExports?: readonly CompetitionToolExport[]; toolCatalog?: RuntimeCompetitionToolCatalog; repairCandidateVersion?: '1.0'} = {},
+): Promise<WorkerResult> {
     if (!port) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Competition coordination is unavailable');
     // Persisted by trusted Runtime composition at submission, never by the model.
     // Legacy tasks keep their original four-round budget when resumed.
@@ -279,6 +288,4 @@ export function startCoordinationTask(
       context.saveCheckpoint('competition-loop', {step: step + 1, continuation, evidenceRefs, receipts});
     }
     throw new ProtocolError('TIMEOUT', `Competition coordination reached maxSteps=${maxSteps}`);
-  }, {deadline, sideEffect: options.toolCatalog?.sideEffect ?? 'read',
-    ...(options.resume ? {resume: true} : {})});
 }

@@ -1,0 +1,20 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdirSync,mkdtempSync,writeFileSync} from 'node:fs';
+import path from 'node:path';
+import {Conversations} from '../electron/conversations.js';
+test('legacy conversation metadata retains independent model and thinking preferences after restart',()=>{
+  const cache=new URL('../../../.cache/conversation-preferences/',import.meta.url);mkdirSync(cache,{recursive:true});
+  const file=path.join(mkdtempSync(new URL('run-',cache)),'conversations.json');
+  writeFileSync(file,JSON.stringify({version:2,turns:[{taskId:'old',surface:'panel',goal:'legacy'}],messages:[]}));
+  const journal=new Conversations(file);
+  journal.setPreference('desktop-panel',{modelId:'model-a',depth:1,fast:false});
+  journal.setPreference('desktop-workspace',{modelId:'model-b',depth:5,fast:true});
+  const reloaded=new Conversations(file);
+  assert.equal(reloaded.goal('old'),'legacy');
+  assert.deepEqual(reloaded.preference('desktop-panel'),{modelId:'model-a',depth:1,fast:false});
+  assert.deepEqual(reloaded.preference('desktop-workspace'),{modelId:'model-b',depth:5,fast:true});
+  reloaded.add('new','panel','new turn');
+  assert.equal(new Conversations(file).preference('desktop-workspace').modelId,'model-b');
+  assert.throws(()=>reloaded.setPreference('desktop-panel',{depth:9,fast:false}));
+});

@@ -64,3 +64,16 @@ export {
 } from './application/subagent-host.js';
 export type {SubagentHostOptions, DesktopSubagentDispatchToolOptions} from './application/subagent-host.js';
 export {LOCAL_REPAIR_TOOL} from './application/local-repair.js';
+export {createKnowledgeFeedReceipt,createKnowledgeFeedReceiptFromCollectResult, parseKnowledgeFeedReceipt, verifyKnowledgeFeedReceiptBinding,
+  knowledgeFeedReceiptItems} from './application/knowledge-feed-receipt.js';
+export type {KnowledgeFeedItem, KnowledgeFeedCitation, KnowledgeFeedReceipt, KnowledgeFeedReceiptBinding,
+  KnowledgeFeedQuotedItem} from './application/knowledge-feed-receipt.js';
+export {createReadonlyMcpHost, MCP_READ_TOOL_NAME, MCP_READ_TOOL_VERSION, MCP_READ_SCOPE} from '@personal-agent/mcp';
+export type {ReadonlyMcpOptions, McpHealth} from '@personal-agent/mcp';
+export {createReferenceSummarySkill, REFERENCE_SUMMARY_SKILL_ID, REFERENCE_SUMMARY_SKILL_VERSION} from '@personal-agent/skills';
+export type {SkillManifest, SkillOutcome, ReferenceSummaryInput, ReferenceSummaryOptions,
+  SkillReadReconciliationPort, SkillReadReconciliationQuery} from '@personal-agent/skills';
+export {createTrustedKnowledgeTools} from './application/knowledge-tools.js';
+export type {TrustedKnowledgeSource,TrustedKnowledgeBinding,KnowledgeToolTaskBindings} from './application/knowledge-tools.js';
+export {createWorkflowLearningApplication,createBoundPublicFactErasureApplication,LEARNING_BINDING_CHECKPOINT} from './application/memory-learning.js';
+export type {WorkflowLearningOptions,LearningTaskBinding,LearningSkillManifest} from './application/memory-learning.js';

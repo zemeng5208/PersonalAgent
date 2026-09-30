@@ -27,7 +27,7 @@ Desktop 只依赖[当前接口目录](../../docs/interfaces/CURRENT_INTERFACE_CA
 当前新增界面与集成只服务 [Huawei ICT AgentArts Competition Profile](../../docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)。正式比赛界面必须显示实际 profile、AgentArts deployment/version、trace 与不可用状态，不得把 Local/Fake 输出标成 AgentArts 结果，也不得静默回退。现有盘古/Local 配置界面作为可选历史基线保留，当前不新增功能且不进入比赛退出条件。
 
 Competition 文字接线由可信 Desktop 主进程显式选择，不由 Renderer 决定。部署完成后可
-通过进程环境提供 `PA_RUNTIME_PROFILE=huawei_ict_agentarts`、
+仓库构建后运行根命令 `npm run start:desktop`，默认选择 `huawei_ict_agentarts`。缺少 AgentArts 配置时从模型设置保存加密凭据，保持该 profile；不自动切换 Local。可通过进程环境显式提供 `PA_RUNTIME_PROFILE=huawei_ict_agentarts`、
 `PA_AGENTARTS_GATEWAY_URL`、`PA_AGENTARTS_RUNTIME_NAME`、
 `PA_AGENTARTS_INVOKE_MODE=published` 和完整的
 `PA_AGENTARTS_AUTHORIZATION` 请求头值。Authorization 只在每次云调用时由主进程
@@ -139,7 +139,7 @@ npm run test:text-smoke --workspace=@personal-agent/desktop
 
 ## 文字交互垂直链路
 
-普通启动时，提交文字任务会通过本地 Runtime Application 的 `task.submit` 入口，由 Runtime 自动执行 Agent、`ModelGateway` 和 Provider 编排。Desktop 主进程只负责安全配置、IPC、事件订阅和任务展示；没有 Provider 时任务会如实失败，不会静默生成假回答。
+显式 `PA_RUNTIME_PROFILE=local` 时，文字任务通过 Runtime Application 的 `task.submit` 入口执行已有 Agent、`ModelGateway` 和 Provider。普通启动的 Competition Profile 由 AgentArts 编排，辅助模型配置只用于其委派子任务。Desktop 主进程负责安全配置、IPC、事件订阅和任务展示；缺少配置保持不可用，不会生成假回答。`--fake-runtime` / `--fake-model` 的显式联调入口默认 Local，不能与显式 Competition 同时启用。
 
 离线验收使用显式 Fake Model：
 
