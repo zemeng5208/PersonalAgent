@@ -60,6 +60,6 @@ P8 所有源码接线后统一本机验证：
 - confirmed 后拒绝投影，再许可/恢复同 task/run/结果/Evidence；重启 continuation final phase 重验且工具执行次数保持一。
 - Skill 首读 pending/unknown/confirmed 恢复、摘要正文/字节/SHA/省略标记正确、真实 I/O 前撤销拒绝，同记录零重读。
 
-模块 prepared entry：packages/mcp/test/public-export.test.mjs、workspace-export.test.mjs（兼容入口引用同两格式 cases）、packages/skills/test/cloud-selection.test.mjs、apps/desktop/test/reference-export-candidates.test.mjs。P8 最终单次执行选 public-export 或兼容入口之一，避免重复同 case。
+模块 prepared entry：packages/mcp/test/public-export.test.mjs（MCP）、workspace-export.test.mjs（workspace）、packages/skills/test/cloud-selection.test.mjs、apps/desktop/test/reference-export-candidates.test.mjs。两种读格式共享 public-export-fixture.mjs，各入口只注册自身 case，workspace glob 不重复执行同一 case。
 
 无 wire/DB/根 lock 修改；新增内部私有校验和纯摘要函数，无额外依赖。根既有 build 顺序与依赖版本由 P8 维护。未知、无服务、缺端口仍 unavailable，不回退 Local，不宣称 MOD/MVP done。
