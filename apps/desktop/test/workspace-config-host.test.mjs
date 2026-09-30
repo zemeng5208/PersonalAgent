@@ -4,6 +4,9 @@ import {mkdir,mkdtemp,readFile,rename,rm,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
+import {createHash} from 'node:crypto';
+import {isDeepStrictEqual} from 'node:util';
+import {PROTOCOL_VERSION} from '@personal-agent/contracts';
 import {createWorkspaceConfigHost} from '../electron/workspace-config-host.js';
 
 async function workspaceBindingFixture(t) {
@@ -22,9 +25,9 @@ async function workspaceBindingFixture(t) {
   await writeFile(configuration,JSON.stringify({version:1,encrypted:Buffer.from(root).toString('base64'),
     encryptedNode:Buffer.from(node).toString('base64')}));
   const hosts=[];
-  const open=()=> {
+  const open=(options={})=> {
     const host=createWorkspaceConfigHost({userData,safeStorage,
-      selectDirectory:async()=>otherRoot,selectNodeExecutable:async()=>otherNode});
+      selectDirectory:async()=>otherRoot,selectNodeExecutable:async()=>otherNode,...options});
     hosts.push(host);return host;
   };
   t.after(async()=> {
@@ -157,11 +160,181 @@ test('selected workspace binds tasks, keeps consent session-only and rejects reu
     const larger=await read.execute({path:'larger.js'},context);
     assert.equal(larger.content,largerSource);
     assert.throws(()=>policy.project({...request,result:larger}),{code:'UNSUPPORTED_CAPABILITY'});
-    assert.equal(policy.accepts(request),true);
+    assert.equal(policy.accepts(request),false); // Local consent supplies no exact PUBLIC grant.
     host.revoke();assert.equal(policy.accepts(request),false);
     await assert.rejects(read.execute({path:'hello.js'},context),/撤销|绑定/);
     host.authorize({cloudExportAllowed:true,writeAllowed:false,commandAllowed:false});
     assert.equal(binding.available(request),false);
     assert.equal(binding.available({...request,taskId:'task-two'}),true);
   } finally {host.close();}
+});
+
+// Prepared unit fixtures only, not real Runtime/Policy/Evidence acceptance.
+// The export implementation itself is imported from its public cloud package.
+async function confirmedExportFixture(t) {
+  const {createWorkspaceReferenceExport}=await import('@personal-agent/mcp');
+  const {open,root}=await workspaceBindingFixture(t);
+  const taskId='prepared-workspace-task',proposalId='prepared-original-proposal';
+  const runId=`competition-tool-${taskId}-1`,args={path:'public-reference.js',maxBytes:1024};
+  const content='// Explicit synthetic PUBLIC reference\r\n';
+  const result={path:args.path,encoding:'utf-8',byteLength:Buffer.byteLength(content),content,
+    sha256:createHash('sha256').update(content).digest('hex')};
+  const deadline=new Date(Date.now()+60000).toISOString();
+  const proposal={kind:'tool_proposal',proposalId,toolName:'workspace.read_text',toolVersion:'1.0.0',
+    arguments:structuredClone(args),verification:'unverified'};
+  const finishedAt=new Date(Date.now()-100).toISOString();
+  const data={task:{taskId,state:'running',evidenceRefs:[runId]},
+    record:{evidenceId:runId,taskId,protocolVersion:PROTOCOL_VERSION,requestId:'original-runtime-request',
+      toolName:proposal.toolName,toolVersion:proposal.toolVersion,policyDecision:'allow',executionStarted:true,
+      state:'confirmed',startedAt:new Date(Date.now()-200).toISOString(),finishedAt},
+    evidence:[{evidenceId:runId,kind:'execution',sourceRef:proposal.toolName,capturedAt:finishedAt}],
+    result:structuredClone(result),loop:{step:1,pending:proposal,evidenceRefs:[],receipts:[]},
+    preflight:{authorizationId:'prepared-native-public-grant',expiresAt:deadline,sensitivity:'PUBLIC',
+      purpose:'coding-reference',maxExportBytes:1024}};
+  data.permission={...data.preflight,contentDigest:result.sha256};
+  const checkpoints=new Map([[`${taskId}:application-profile`,'huawei_ict_agentarts'],
+    [`${taskId}:application-deadline`,deadline]]);
+  const runtime={getTask:()=>structuredClone(data.task),
+    loadCheckpoint:(id,key)=>key==='competition-loop'?structuredClone(data.loop)
+      :key===`tool-result-${runId}`?{result:structuredClone(data.result)}:checkpoints.get(`${id}:${key}`),
+    saveCheckpoint:(id,key,value)=>checkpoints.set(`${id}:${key}`,value),
+    readToolExecutions:()=>[structuredClone(data.record)],readEvidence:()=>structuredClone(data.evidence),
+    matchesToolExecutionInput:(_record,input)=>input.scopeRef===runId && isDeepStrictEqual(input.arguments,args)};
+  const host=open({createWorkspaceReferenceExport,readWorkspaceExportPreflight:query=> {
+    data.onPreflight?.(query);return data.preflight;
+  },readWorkspaceExportAuthorization:query=> {
+    data.onAuthorization?.(query);return data.permission;
+  }});
+  host.bindApplication({runtime});allowWorkspaceRead(host);
+  const signal=new AbortController();
+  host.competitionToolAvailability.find(item=>item.toolName==='workspace.read_text')
+    .available({taskId,signal:signal.signal});
+  const query={taskId,proposalId,path:args.path,configurationRef:host.readWorkspaceExportConfigurationRef()};
+  const request={taskId,proposalId,arguments:structuredClone(args),phase:'preflight'};
+  const exporter=host.competitionToolExports.find(item=>item.toolName==='workspace.read_text');
+  return {host,root,data,checkpoints,query,request,exporter,result,runId,signal,deadline};
+}
+
+test('native PUBLIC workspace export consumes original confirmed result and pins its proposal/run', async t=> {
+  const f=await confirmedExportFixture(t);
+  const candidate=f.host.readWorkspaceExportCandidate(f.query);
+  assert.equal(candidate.runId,f.runId);assert.equal(candidate.contentDigest,f.result.sha256);
+  assert.deepEqual(candidate.arguments,f.request.arguments);assert.ok(Object.isFrozen(candidate));
+  assert.equal(Object.hasOwn(candidate,'content'),false);
+  assert.equal(f.exporter.exportPolicyVersion,'workspace-reference-3.0.0');
+  assert.equal(f.exporter.accepts(f.request),true);
+  const projected=f.exporter.project({...f.request,result:f.result,signal:f.signal.signal});
+  assert.deepEqual(projected,{source:'approved-workspace-reference',content:f.result.content,
+    byteLength:f.result.byteLength,contentDigest:f.result.sha256,truncated:false,readConfirmed:true});
+  for(const localOnly of [f.root,f.query.path,f.runId,f.data.permission.authorizationId]) {
+    assert.equal(JSON.stringify(projected).includes(localOnly),false);
+    assert.equal(JSON.stringify(f.host.snapshot()).includes(localOnly),false);
+  }
+  assert.throws(()=>f.exporter.project({...f.request,result:{...f.result,content:'swapped'},signal:f.signal.signal}),
+    {code:'UNAUTHORIZED'});
+  assert.equal(f.exporter.accepts({...f.request,arguments:{...f.request.arguments,maxBytes:512}}),false);
+  const originalProposal=f.data.loop.pending;
+  f.data.loop={step:2,evidenceRefs:[f.runId],receipts:[{proposal:originalProposal,
+    continuation:{proposalId:f.query.proposalId,state:'confirmed',result:projected},
+    exportPolicyVersion:f.exporter.exportPolicyVersion}]};
+  assert.equal(f.exporter.accepts(f.request),true); // Uses the already pinned original mapping.
+  assert.deepEqual(f.host.readConfirmedWorkspaceExport({...f.query,arguments:f.request.arguments,contentDigest:f.result.sha256}),
+    {runId:f.runId,result:f.result});
+  f.data.result={...f.result,content:'another confirmed-looking result',
+    byteLength:Buffer.byteLength('another confirmed-looking result'),
+    sha256:createHash('sha256').update('another confirmed-looking result').digest('hex')};
+  assert.equal(f.host.readWorkspaceExportCandidate(f.query),undefined);
+});
+
+test('workspace confirmed reader rejects wrong original identity, input, execution and Evidence', async t=> {
+  const changes={
+    taskSnapshot:data=>{data.task.taskId='other-task';},
+    task:data=>{data.record.taskId='other-task';},
+    run:data=>{data.record.evidenceId='other-run';},
+    tool:data=>{data.record.toolName='mcp.workspace.read_text';},
+    version:data=>{data.record.toolVersion='2.0.0';},
+    protocol:data=>{data.record.protocolVersion='0.0.0';},
+    scopeAndArguments:data=>{data.loop.pending.arguments.maxBytes=512;},
+    policy:data=>{data.record.policyDecision='deny';},
+    unknown:data=>{data.record.state='unknown';},
+    notExecuted:data=>{data.record.executionStarted=false;},
+    unfinished:data=>{delete data.record.finishedAt;},
+    taskEvidence:data=>{data.task.evidenceRefs=[];},
+    evidence:data=>{data.evidence[0].sourceRef='other-tool';},
+    historicResult:data=>{delete data.result.sha256;},
+    invalidBytes:data=>{data.result.byteLength++;},
+    proposal:data=>{data.loop.pending.proposalId='another-proposal';},
+    noOriginalMapping:data=>{data.loop.receipts=[{proposal:data.loop.pending}];delete data.loop.pending;},
+    cancelled:data=>{data.task.cancelRequested=true;},
+  };
+  for(const [name,change] of Object.entries(changes)) await t.test(name,async sub=> {
+    const f=await confirmedExportFixture(sub);change(f.data);
+    assert.equal(f.host.readWorkspaceExportCandidate(f.query),undefined);
+    assert.equal(f.host.readConfirmedWorkspaceExport({...f.query,arguments:f.request.arguments,contentDigest:f.result.sha256}),undefined);
+    assert.equal(f.exporter.accepts({...f.request,phase:'final',projection:{source:'approved-workspace-reference',
+      content:f.result.content,byteLength:f.result.byteLength,contentDigest:f.result.sha256,
+      truncated:false,readConfirmed:true}}),false);
+  });
+});
+
+test('workspace export rechecks native revocation, grant replacement, deadline and cancellation', async t=> {
+  const f=await confirmedExportFixture(t);
+  assert.equal(f.exporter.accepts(f.request),true);
+  const permission=f.data.permission;
+  const preflight=f.data.preflight;
+  f.data.preflight={...preflight,authorizationId:'replacement-grant'};
+  assert.equal(f.exporter.accepts(f.request),false);
+  f.data.preflight=preflight;f.data.permission=permission;
+  f.data.onAuthorization=()=>f.signal.abort();
+  assert.throws(()=>f.exporter.project({...f.request,result:f.result,signal:f.signal.signal}),{code:'CANCELLED'});
+  f.data.onAuthorization=undefined;
+  f.checkpoints.set(`${f.query.taskId}:application-deadline`,new Date(Date.now()-1).toISOString());
+  assert.equal(f.exporter.accepts(f.request),false);
+  f.checkpoints.set(`${f.query.taskId}:application-deadline`,f.deadline);
+  f.data.onPreflight=()=>f.host.revoke();
+  assert.equal(f.exporter.accepts(f.request),false);
+  assert.equal(f.host.readWorkspaceExportConfigurationRef(),undefined);
+  allowWorkspaceRead(f.host);
+  assert.notEqual(f.host.readWorkspaceExportConfigurationRef(),f.query.configurationRef);
+  assert.equal(f.host.readWorkspaceExportCandidate(f.query),undefined);
+});
+
+test('first PUBLIC preflight never claims confirmation and final checks require the original read', async t=> {
+  const f=await confirmedExportFixture(t);
+  const confirmedRecord=f.data.record,confirmedResult=f.data.result;
+  f.data.record={...confirmedRecord,state:'started',policyDecision:'not_evaluated',executionStarted:false};
+  delete f.data.result;
+  const target=f.host.readWorkspaceExportPreflightCandidate(f.query);
+  assert.ok(target);assert.deepEqual(target.arguments,f.request.arguments);
+  assert.equal(Object.hasOwn(target,'contentDigest'),false);assert.equal(Object.hasOwn(target,'byteLength'),false);
+  assert.equal(f.host.readWorkspaceExportCandidate(f.query),undefined);
+  assert.equal(f.exporter.accepts(f.request),true);
+  assert.equal(f.exporter.accepts({...f.request,phase:'final'}),false);
+  f.data.loop.step=2;
+  assert.equal(f.host.readWorkspaceExportPreflightCandidate(f.query),undefined); // Cannot swap the original run.
+  f.data.loop.step=1;
+  assert.throws(()=>f.exporter.project({...f.request,result:f.result,signal:f.signal.signal}),{code:'UNAUTHORIZED'});
+  f.data.record=confirmedRecord;f.data.result=confirmedResult;
+  const projection=f.exporter.project({...f.request,result:f.result,signal:f.signal.signal});
+  assert.equal(f.exporter.accepts({...f.request,phase:'final',projection}),true);
+  assert.equal(f.exporter.accepts({...f.request,phase:'final',projection:{...projection,content:'swapped'}}),false);
+  f.data.permission=undefined;
+  assert.equal(f.exporter.accepts({...f.request,phase:'final',projection}),false);
+});
+
+test('PUBLIC export requires native purpose, byte bound and exact post-read scope', async t=> {
+  const f=await confirmedExportFixture(t);
+  const scope=f.data.preflight;
+  f.data.preflight=undefined;assert.equal(f.exporter.accepts(f.request),false);
+  f.data.preflight={...scope,sensitivity:'PRIVATE'};assert.equal(f.exporter.accepts(f.request),false);
+  f.data.preflight={...scope,purpose:'arbitrary-send'};assert.equal(f.exporter.accepts(f.request),false);
+  f.data.preflight={...scope,expiresAt:new Date(Date.parse(f.deadline)+60000).toISOString()};
+  assert.equal(f.exporter.accepts(f.request),false);
+  f.data.preflight={...scope,maxExportBytes:1};assert.equal(f.exporter.accepts(f.request),true);
+  assert.throws(()=>f.exporter.project({...f.request,result:f.result,signal:f.signal.signal}),{code:'UNAUTHORIZED'});
+  // A fresh task/host has a separate original permission binding; do not replace it.
+  const other=await confirmedExportFixture(t);
+  assert.equal(other.exporter.accepts(other.request),true);
+  other.data.permission={...other.data.permission,purpose:'reference-summary'};
+  assert.throws(()=>other.exporter.project({...other.request,result:other.result,signal:other.signal.signal}),{code:'UNAUTHORIZED'});
 });
