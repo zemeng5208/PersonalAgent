@@ -26,6 +26,14 @@ export async function withCognitionDeadline<T>(input: {deadline: string; signal:
       if (signal.aborted) throw new DecisionError(timedOut ? 'TIMEOUT' : 'CANCELLED');
       return work({deadline: input.deadline, signal});
     });
-    return await Promise.race([interrupted, operation]);
+    const result = await Promise.race([interrupted, operation]);
+    // The port can block the event loop or settle ahead of a queued interrupt.
+    // A winning promise is not proof that the caller is still within its lease.
+    if (signal.aborted) throw new DecisionError(timedOut ? 'TIMEOUT' : 'CANCELLED');
+    if (now() >= deadline) {
+      timedOut = true; controller.abort();
+      throw new DecisionError('TIMEOUT');
+    }
+    return result;
   } finally {clearTimeout(timer); signal.removeEventListener('abort', abort);}
 }
