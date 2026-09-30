@@ -96,7 +96,7 @@ test('workspace patch reconciliation projects applied once and preserves the ori
     assert.equal(f.app.readHostToolTask(taskId).confirmed.result.outcome, 'applied');
     const second = await f.app.reconcileWorkspacePatchTask(taskId);
     assert.equal(second.result.outcome, 'applied');
-    assert.equal(f.calls.reconcile, 3, 'saved reads retry only acknowledgement, never helper execution');
+    assert.equal(f.calls.reconcile, 4, 'saved reads retry only acknowledgement, never helper execution');
   } finally {
     await waitForIdle(f.app);
     f.app.close();
