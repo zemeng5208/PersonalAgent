@@ -3,24 +3,26 @@ const escape = value => String(value ?? '').replace(/[&<>"']/g,
 
 /** Only metadata and opaque references enter this independent admin component. */
 export function memoryLearningControlsHtml({status = {}, refs = [], version = null,
-  active = null, taskId = '', message = ''} = {}) {
+  active = null, taskId = '', message = '', form = {}} = {}) {
   const workflow = version ? `<p>候选 v${escape(version.revision)} · ${escape(version.validation)} ·
     ${version.hasEvidence ? '有 Runtime 验证记录' : '等待验证'}</p>` : '<p>尚未选择流程版本。</p>';
   const memories = refs.map((ref, index) => `<div class="setting-row"><span>私人记忆 ${index + 1} · v${escape(ref.revision)}</span>
-    <div class="setting-actions"><button class="btn btn-sm" data-ml-withdraw="${index}">撤回消费</button>
+    <div class="setting-control"><button class="btn btn-sm" data-ml-withdraw="${index}">撤回消费</button>
     <button class="btn btn-sm" data-ml-delete="${index}">删除历史</button></div></div>`).join('');
   return `<section class="card memory-learning-panel" aria-label="私人记忆与流程学习">
     <h3>私人记忆</h3><p>${status.writeEnabled ? '确认写入已接通' : '写入未接通'} · 当前应用库删除保障</p>
     <p class="muted">撤回立即停止消费；删除保留 Vault 原文件。外部副本由用户自行管理。</p>
     ${memories || '<p>没有选中的私人记忆引用。</p>'}
     <h3>流程学习</h3><p class="muted">固定参考摘要 Skill：验证任务通过后单独确认启用，可选择旧已验证版本回退。</p>
-    <label>流程 ID<input class="form-control" name="ml-workflow" value="${escape(version?.workflowId ?? 'reference-review')}" maxlength="128"></label>
-    <label>参考文件相对路径<input class="form-control" name="ml-path" placeholder="reference.md" maxlength="480"></label>
-    <label>流程说明<input class="form-control" name="ml-summary" maxlength="1024" placeholder="读取已授权参考并返回摘要"></label>
-    <label>查看版本<input class="form-control" name="ml-revision" type="number" min="1" value="${escape(version?.revision ?? 1)}"></label>
+    <div class="settings-form">
+    <label>流程 ID<input name="ml-workflow" value="${escape(form.workflowId ?? version?.workflowId ?? 'reference-review')}" maxlength="128"></label>
+    <label>参考文件相对路径<input name="ml-path" value="${escape(form.path ?? '')}" placeholder="reference.md" maxlength="480"></label>
+    <label>流程说明<input name="ml-summary" value="${escape(form.summary ?? '')}" maxlength="1024" placeholder="读取已授权参考并返回摘要"></label>
+    <label>查看版本<input name="ml-revision" type="text" inputmode="numeric" value="${escape(form.revision ?? version?.revision ?? 1)}"></label>
+    </div>
     ${workflow}<p>当前启用：${active ? `v${escape(active.revision)}` : '无'}</p>
     ${taskId ? `<p>验证任务：${escape(taskId)}</p>` : ''}
-    <div class="setting-actions">
+    <div class="form-actions">
       <button class="btn btn-sm" data-ml-action="read">读取版本</button>
       <button class="btn btn-sm" data-ml-action="propose">生成候选</button>
       <button class="btn btn-sm" data-ml-action="startValidation" ${!version || taskId ? 'disabled' : ''}>提交验证任务</button>
@@ -34,7 +36,7 @@ export function memoryLearningControlsHtml({status = {}, refs = [], version = nu
 
 /** P8 mounts this inside the trusted admin surface; invoke uses its sender-checked preload. */
 export function mountMemoryLearningControls(root, {invoke, status, refs = []}) {
-  const state = {status, refs: structuredClone(refs), version: null, active: null, taskId: '', message: ''};
+  const state = {status, refs: structuredClone(refs), version: null, active: null, taskId: '', message: '', form: {}};
   const events = new AbortController();
   let busy = false;
   let disposed = false;
@@ -52,6 +54,8 @@ export function mountMemoryLearningControls(root, {invoke, status, refs = []}) {
     const revision = Number(value('revision'));
     const path = value('path');
     const summary = value('summary');
+    const previous = state.version;
+    state.form = {workflowId, revision, path, summary};
     busy = true;
     button.disabled = true;
     try {
@@ -73,8 +77,12 @@ export function mountMemoryLearningControls(root, {invoke, status, refs = []}) {
         if (action === 'erase') payload.expectedRevision = revision;
         result = await invoke(`learning.${action}`, payload);
         if (result.version) state.version = result.version;
-        if (action === 'read') { state.active = result.active; state.taskId = ''; }
+        if (action === 'read') {
+          state.active = result.active;
+          if (previous?.workflowId !== workflowId || previous?.revision !== revision) state.taskId = '';
+        }
         if (action === 'propose') state.taskId = '';
+        if (result.version) state.form.revision = result.version.revision;
         if (action === 'startValidation') state.taskId = result.taskId;
         if (action === 'activate' && result.state === 'activated') state.active = state.version;
         if (action === 'erase' && result.state === 'deleted') {

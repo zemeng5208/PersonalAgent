@@ -190,6 +190,16 @@ export class SqliteLearningHost {
 
   close(): void { this.db.close(); }
 
+  /** Content-free readback distinguishes accepted deletion from a rejected head. */
+  readErasureReceipt(namespaceValue: string, workflowIdValue: string): {
+    readonly operationId: string; readonly expectedRevision: number;
+  } | null {
+    const row = this.db.prepare(`SELECT operation_id, expected_revision FROM learning_erasures
+      WHERE namespace = ? AND workflow_id = ?`)
+      .get(label(namespaceValue), label(workflowIdValue)) as Row | undefined;
+    return row ? {operationId: row.operation_id as string, expectedRevision: row.expected_revision as number} : null;
+  }
+
   /** Retry only post-commit maintenance, never propose/validate/execute on startup. */
   resumeErasureMaintenance(namespaceValue: string): void {
     const namespace = label(namespaceValue);

@@ -72,3 +72,19 @@ Desktop `filterRestoredHost(restoredMemory,context)` 要求原库仍存在且与
 本次未安装新版本，不能宣称版本匹配验证。真实 Vault 持久写入、用户原生确认/出机确认、
 shared UI最终挂载、真实MCP运行与真实 AgentArts消费须在 P8/人在场另验；这里不宣称 PA020全部完成。
 未改变已发布迁移，未改public wire或Local Profile，未运行全仓 tests/smoke。
+
+非作者 review 的删除顺序 P2 已修：事务内精确最新头检查与删除持久接受在先，
+dispatchBinding因候选移除立即失效，然后才请求取消关联任务；旧revision或原生确认中产生新revision
+均拒绝且零cancel。WAL维护失败通过 `readErasureReceipt` 精确operation/revision读回确认已提交，
+取消已失效任务后保留原始维护错误，不能报成功。
+
+修复代码 exact head `3d6d918560da9eba4e47bfbda5f197d5d4882111` 的必要复验收据：
+Learning/Runtime `tsc -p` 各一次通过；
+`node --test --test-name-pattern='stale learning deletion|new head during deletion' apps/runtime/test/memory-learning-application.test.mjs`
+实际 2/2 通过，分别 77ms / 64ms。未重跑旧8/11用例，WAL失败分支本次仅非作者静态复核，
+不将其当作新增故障注入测试通过。当前相关不同用例累计13项（原私人3、新纵向8、删除冲突2）。
+
+独立控件视觉验证使用既有 Playwright + 安装的 Edge（Browser skill未提供；默认Playwright
+headless shell缺失，不安装，改用已存在msedge channel）。仅合成admin端口，复用原CSS classes，
+1000×940 / 390×844 均无横向溢出、裁切或应用console错误；生成候选后表单输入保留，
+未验证shared Electron宿主/原生对话框。临时fixture/server已结束，证据在本工作树忽略`.cache/memory-learning-visual/`。

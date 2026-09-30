@@ -47,6 +47,7 @@ async function learningFixture(t) {
   let learningApp;
   const submissions = new Map();
   let allowActivation = false;
+  let onDeletion;
   const submitSkillTask = binding => {
     const task = runtime.submitTaskWithCheckpoint({goal: 'Validate or execute a fixed public reference workflow',
       conversationId: 'learning:desktop-learning', idempotencyKey: binding.operationId}, LEARNING_BINDING_CHECKPOINT, binding);
@@ -55,7 +56,7 @@ async function learningFixture(t) {
   };
   const make = () => createWorkflowLearningApplication({profile: 'huawei_ict_agentarts', namespace: 'desktop-learning',
     learning, runtime, skillManifest: () => skill.manifest(), submitSkillTask,
-    confirmActivation: async () => allowActivation, confirmDeletion: async () => true});
+    confirmActivation: async () => allowActivation, confirmDeletion: async () => {await onDeletion?.(); return true;}});
   learningApp = make();
   const dispatch = async taskId => {
     const binding = submissions.get(taskId);
@@ -74,7 +75,8 @@ async function learningFixture(t) {
   };
   t.after(async () => {skill.dispose(); learning.close(); runtime.close(); await rm(base, {recursive: true, force: true});});
   return {learning, runtime, app: learningApp, skill, dispatch,
-    setAllowed(value) {allowActivation = value;}, setCorrupt(value) {corrupt = value;}, calls: () => calls};
+    setAllowed(value) {allowActivation = value;}, setCorrupt(value) {corrupt = value;},
+    setOnDeletion(callback) {onDeletion = callback;}, calls: () => calls};
 }
 
 const propose = (app, expectedRevision = null, summary = 'Summarize public reference') => app.propose({
@@ -135,6 +137,47 @@ test('bad source verification fails learning; a self-reported succeeded task wit
     taskId: fake.taskId, ...context()}), {code: 'NOT_VALIDATED'});
   assert.equal(f.app.readVersion('reference-review', 2).validation, 'candidate');
   assert.equal(f.calls(), 1);
+});
+
+test('stale learning deletion has zero cancellation effects on old and current version tasks', async t => {
+  const f = await learningFixture(t);
+  propose(f.app);
+  const old = await f.app.startValidation({workflowId: 'reference-review', revision: 1,
+    operationId: 'old-validation-task', ...context()});
+  propose(f.app, 1, 'Current version');
+  const current = await f.app.startValidation({workflowId: 'reference-review', revision: 2,
+    operationId: 'current-validation-task', ...context()});
+  f.runtime.transitionTask(current.taskId, 'planning');
+  f.runtime.transitionTask(current.taskId, 'running');
+  await assert.rejects(f.app.erase({workflowId: 'reference-review', expectedRevision: 1,
+    operationId: 'stale-erase', ...context()}), {code: 'REVISION_CONFLICT'});
+  assert.equal(f.runtime.getTask(old.taskId).state, 'created');
+  assert.equal(f.runtime.getTask(current.taskId).state, 'running');
+  assert.equal(f.runtime.getTask(current.taskId).cancelRequested, undefined);
+  assert.equal(f.learning.readErasureReceipt('desktop-learning', 'reference-review'), null);
+  assert.equal(f.app.readVersion('reference-review', 2).summary, 'Current version');
+});
+
+test('a new head during deletion confirmation rejects atomically before cancelling current work', async t => {
+  const f = await learningFixture(t);
+  propose(f.app);
+  const old = await f.app.startValidation({workflowId: 'reference-review', revision: 1,
+    operationId: 'confirmation-old-task', ...context()});
+  let current;
+  f.setOnDeletion(async () => {
+    propose(f.app, 1, 'New head during consent');
+    current = await f.app.startValidation({workflowId: 'reference-review', revision: 2,
+      operationId: 'confirmation-new-task', ...context()});
+    f.runtime.transitionTask(current.taskId, 'planning');
+    f.runtime.transitionTask(current.taskId, 'running');
+  });
+  await assert.rejects(f.app.erase({workflowId: 'reference-review', expectedRevision: 1,
+    operationId: 'confirmation-stale-erase', ...context()}), {code: 'REVISION_CONFLICT'});
+  assert.equal(f.runtime.getTask(old.taskId).state, 'created');
+  assert.equal(f.runtime.getTask(current.taskId).state, 'running');
+  assert.equal(f.runtime.getTask(current.taskId).cancelRequested, undefined);
+  assert.equal(f.learning.readErasureReceipt('desktop-learning', 'reference-review'), null);
+  assert.equal(f.app.readVersion('reference-review', 2).summary, 'New head during consent');
 });
 
 test('public bound deletion resumes from Runtime receipt after Memory commit failure and restart', async t => {
