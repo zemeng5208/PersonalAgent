@@ -8,7 +8,7 @@ const text = value => typeof value === 'string' && value.trim().length > 0;
 const fail = () => {throw Error('P5 持久认知状态需要核实，原文件已保留');};
 
 /** Namespace-bound KV supplied by the existing Runtime; never creates a task or database. */
-export function createP5RuntimeCheckpoints({storage, namespace, userData}) {
+export function createP5RuntimeCheckpoints({storage, namespace, userData, legacyDeviceNamespace = namespace}) {
   if (!text(namespace) || !text(userData)
     || !['get', 'set'].every(name => typeof storage?.[name] === 'function')) fail();
   const load = name => copy(storage.get(name));
@@ -39,9 +39,10 @@ export function createP5RuntimeCheckpoints({storage, namespace, userData}) {
         if (records[id] !== undefined) fail();
         records[id] = record;
       }
-      return {version: 1, namespace, records};
+      return {version: 1, namespace, revision: 0, records};
     });
     if (state?.version !== 1 || state.namespace !== namespace || !state.records || Array.isArray(state.records)
+      || (state.revision !== undefined && (!Number.isSafeInteger(state.revision) || state.revision < 0))
       || Object.entries(state.records).some(([id, record]) => !validRecord(record) || id !== meetingKey(record))) fail();
     return state;
   };
@@ -51,12 +52,20 @@ export function createP5RuntimeCheckpoints({storage, namespace, userData}) {
       load() {
         const envelope = migrateOnce(deviceKey, () => {
           const file = path.join(userData, 'device-anomaly-checkpoint.json');
-          return {version: 1, namespace, state: existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : null};
+          // userData belongs to the trusted current user. An explicit different
+          // legacy owner disables import of this old unnamespaced file.
+          return {version: 1, namespace, revision: 0, state: namespace === legacyDeviceNamespace
+            && existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : null};
         });
-        if (envelope?.version !== 1 || envelope.namespace !== namespace) fail();
+        if (envelope?.version !== 1 || envelope.namespace !== namespace
+          || (envelope.revision !== undefined && (!Number.isSafeInteger(envelope.revision) || envelope.revision < 0))) fail();
         return copy(envelope.state ?? undefined);
       },
-      save(value) {save(deviceKey, {version: 1, namespace, state: value});},
+      save(value) {
+        this.load();
+        const previous = load(deviceKey);
+        save(deviceKey, {version: 1, namespace, revision: (previous.revision ?? 0) + 1, state: value});
+      },
     },
     meetings: {
       loadReceipt(query) {
@@ -68,7 +77,10 @@ export function createP5RuntimeCheckpoints({storage, namespace, userData}) {
       saveReceipt(record) {
         if (!validRecord(record)) fail();
         const state = meetingState();
+        const previous = state.records[meetingKey(record)];
+        if (previous && previous.inputDigest !== record.inputDigest) fail();
         state.records[meetingKey(record)] = copy(record);
+        state.revision = (state.revision ?? 0) + 1;
         // Record and enumeration are one atomic existing SQLite checkpoint replacement.
         save(meetingsKey, state);
       },

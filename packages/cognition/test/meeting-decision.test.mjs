@@ -21,6 +21,24 @@ const guardedEvent = extra => ({eventId: 'guarded-meeting', source: 'calendar:wo
   detectedAt: '2026-09-29T11:00:00.000Z', deadline: new Date(Date.now() + 60_000).toISOString(),
   signal: new AbortController().signal, ...extra});
 
+test('meeting revision excludes unrelated stale dependencies from selected repair', async () => {
+  const {store} = createMeetingFixture();
+  const fields = {sourceRef: 'unrelated-source', sensitivity: 'private', state: 'active',
+    validFrom: '2026-09-29T10:00:00.000Z', validUntil: '2026-09-30T00:00:00.000Z', reason: 'unrelated fixture'};
+  store.append(store.read().revision, {...fields, id: 'unrelated-fact', kind: 'fact', summary: 'old unrelated value', dependencies: []});
+  store.append(store.read().revision, {...fields, id: 'unrelated-plan', kind: 'plan', summary: 'Unrelated plan must remain unchanged',
+    dependencies: [{id: 'unrelated-fact', revision: 1}]});
+  store.append(store.read().revision, {...fields, id: 'unrelated-fact', kind: 'fact', summary: 'new unrelated value', dependencies: []});
+  const before = store.read();
+  // Explicit test double selects the legal adjust option; this proves scope, not real Laya inference.
+  const coordinator = new MeetingRescheduleCoordinator({store, inference: createMockLaya()});
+  const receipt = await coordinator.processEvent(guardedEvent());
+  assert.equal(receipt.status, 'proposal');
+  assert.ok(receipt.proposedModifications.length > 1);
+  assert.equal(receipt.proposedModifications.some(node => node.id.startsWith('unrelated-')), false);
+  assert.deepEqual(store.read(), before, 'Proposal preparation cannot mutate the graph');
+});
+
 test('meeting changes require the exact current source, original content and requested baseline', async () => {
   for (const extra of [{source: 'calendar:foreign'}, {originalSummary: 'old unrelated meeting'},
     {expectedBaseRevision: 'missing-baseline'}]) {
