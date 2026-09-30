@@ -234,6 +234,15 @@ MOD-09M 在 Memory 受信 SQLite 宿主增加已提交删除回执的重启维�
 合成旧读者测试验证恢复前拒绝、释放后完成且无关事实保留；不处理应用管理备份或
 Runtime 公共事实的 `pending` 跨库对账。
 
+### MOD-20B-CALENDAR-P5-PROJECTION-01 登记契约（2026-09-30）
+
+P1 日历连接器与 P5 认知之间的投影消费契约固定为
+[P1-CALENDAR-P5-PROJECTION.md](P1-CALENDAR-P5-PROJECTION.md)：P1 只提供版本化条目
+（`dedupeKey` 携带 `sequence` 即 sourceRevision）与单条读回；**取消必须走单条
+`getEventItem`**（列表路径过滤 cancelled）；`MeetingRescheduleEvent` 的生成是 P5 的投影职责。
+含对 Issue #212 答复的更正：CalDAV 记录的 `timeZone` 是事件原始 TZID（订阅源才是恒 UTC）。
+该契约为 `provisional`，升格冻结需 P1/P5 双侧非作者评审。
+
 ### 6.3 桌面、语音、工具与通知增量（provisional）
 
 PR #54、#77、#81 已进入 main，分别补充取消受理、过期审批展示和通知时间精度；PR #83 已集成受限 `workspace.list` 与 `workspace.read_text`。旧 #63、#65 已关闭且未直接进入 main；语音/唤醒、转写消费和合成语音记录仍只存在于 #61 及其堆叠分支。
