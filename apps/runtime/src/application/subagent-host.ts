@@ -19,6 +19,8 @@ import {
   type ModelMessage,
   type ModelRequest,
   type PanguModelProviderOptions,
+  type ReasoningEffort,
+  StructuredToolProvider,
 } from '@personal-agent/models';
 import type {TaskRuntime, WorkerContext, SubmitTaskInput} from '../index.js';
 
@@ -28,6 +30,8 @@ export interface SubagentHostOptions {
   getRuntime: () => TaskRuntime;
   getTools?: (() => AgentToolPort | undefined) | undefined;
   getModelGateway?: ((modelName?: string) => ModelGateway | undefined) | undefined;
+  /** Only explicitly supported provider parameters; step budgets are separate. */
+  getModelReasoningEfforts?: ((modelName?: string) => readonly ReasoningEffort[]) | undefined;
   now?: (() => number) | undefined;
   maxRecursionDepth?: number | undefined;
 }
@@ -66,12 +70,11 @@ export function createRuntimeSubagentDispatchTool(options: SubagentHostOptions):
       signal: context.signal,
       saveCheckpoint: (key: string, value: unknown) => runtime.saveCheckpoint(context.taskId, key, value),
       loadCheckpoint: (key: string) => runtime.loadCheckpoint(context.taskId, key),
-      reportProgress: (progress) => runtime.getTask(context.taskId),
+      reportProgress: (progress) => runtime.recordProgress(context.taskId, progress),
     };
 
     // 3. 子任务真实执行器
     const executor = async (subtask: SubtaskDefinition, signal: AbortSignal): Promise<string> => {
-      const childTaskId = `subtask-${context.taskId}-${subtask.subtaskId}`;
       const idempotencyKey = `subagent-dispatch-${context.taskId}-${subtask.subtaskId}`;
 
       if (signal.aborted || context.signal.aborted) {
@@ -112,7 +115,7 @@ export function createRuntimeSubagentDispatchTool(options: SubagentHostOptions):
       // 如果已在终态，直接读取
       if (['succeeded', 'failed', 'cancelled'].includes(taskSnapshot.state)) {
         if (taskSnapshot.state === 'cancelled') throw new ProtocolError('CANCELLED', 'Subtask was cancelled');
-        if (taskSnapshot.state === 'failed') throw new Error(taskSnapshot.resultSummary || 'Subtask execution failed');
+        if (taskSnapshot.state === 'failed') throw new Error(taskSnapshot.error?.message || taskSnapshot.resultSummary || 'Subtask execution failed');
         return taskSnapshot.resultSummary ?? '';
       }
 
@@ -150,9 +153,12 @@ export function createRuntimeSubagentDispatchTool(options: SubagentHostOptions):
             if (model) {
               const childTools = options.getTools?.();
               const effortLevels: ('none' | 'low' | 'medium' | 'high')[] = ['none', 'low', 'low', 'medium', 'high', 'high'];
-              const reasoningEffort = subtask.thinkingDepth !== undefined
+              const requestedEffort = subtask.thinkingDepth !== undefined
                 ? (effortLevels[Math.min(Math.max(0, subtask.thinkingDepth), 5)] ?? 'low')
                 : undefined;
+              const reasoningEffort = requestedEffort !== undefined
+                && options.getModelReasoningEfforts?.(subtask.model).includes(requestedEffort)
+                ? requestedEffort : undefined;
 
               const rolePrompt: ModelMessage = {
                 role: 'system',
@@ -161,7 +167,7 @@ export function createRuntimeSubagentDispatchTool(options: SubagentHostOptions):
 
               const agentOutcome = await runAgent(
                 {
-                  taskId: childTaskId,
+                  taskId: childWorker.taskId,
                   deadline: childWorker.deadline,
                   signal: childWorker.signal,
                   saveCheckpoint: (k, v) => childWorker.saveCheckpoint(k, v),
@@ -173,11 +179,18 @@ export function createRuntimeSubagentDispatchTool(options: SubagentHostOptions):
                   initialMessages: [rolePrompt],
                   model,
                   tools: childTools ?? {list: () => [], invoke: async () => { throw new Error('No tools'); }},
-                  authorizationRefFor: () => `subtask-auth-${childTaskId}`,
                   maxSteps: subtask.thinkingDepth !== undefined ? Math.max(2, (subtask.thinkingDepth + 1) * 2) : 6,
                   ...(reasoningEffort !== undefined ? {reasoningEffort} : {}),
                 },
               );
+              if (agentOutcome.status === 'waiting_reconciliation'
+                && runtime.getTask(childWorker.taskId).state === 'running') {
+                runtime.transitionTask(childWorker.taskId, 'waiting_reconciliation');
+              }
+              if (agentOutcome.status !== 'succeeded'
+                && runtime.getTask(childWorker.taskId).state === 'running') {
+                throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Subtask requires a trusted approval/reconciliation host');
+              }
               return {
                 resultSummary: agentOutcome.resultSummary,
                 evidenceRefs: agentOutcome.evidenceRefs,
@@ -204,6 +217,9 @@ export function createRuntimeSubagentDispatchTool(options: SubagentHostOptions):
           throw new Error(outcome.error?.message || outcome.resultSummary || 'Subtask execution failed');
         }
 
+        if (outcome.state !== 'succeeded') {
+          throw new ProtocolError('UNSUPPORTED_CAPABILITY', `Subtask is ${outcome.state}; execution is not complete`);
+        }
         return outcome.resultSummary ?? '';
       } finally {
         signal.removeEventListener('abort', abortListener);
@@ -221,6 +237,9 @@ export interface DesktopSubagentDispatchToolOptions {
   getRuntime: () => TaskRuntime;
   getTools?: (() => AgentToolPort | undefined) | undefined;
   fakeModelMode?: boolean;
+  /** Trusted host selection. An unknown name must return undefined, never default. */
+  getModelGateway?: ((modelName?: string) => ModelGateway | undefined) | undefined;
+  getModelReasoningEfforts?: ((modelName?: string) => readonly ReasoningEffort[]) | undefined;
   modelConfig?: {
     baseUrl?: string;
     model?: string;
@@ -238,6 +257,7 @@ export function createDesktopSubagentDispatchTool(options: DesktopSubagentDispat
     getTools,
     now,
     maxRecursionDepth,
+    getModelReasoningEfforts: options.getModelReasoningEfforts,
     getModelGateway: (modelName?: string) => {
       if (fakeModelMode) {
         return new ModelGateway(new FakeModelProvider(
@@ -254,6 +274,7 @@ export function createDesktopSubagentDispatchTool(options: DesktopSubagentDispat
           },
         ));
       }
+      if (options.getModelGateway) return options.getModelGateway(modelName);
       if (modelConfig?.baseUrl && modelConfig?.apiKey && (modelName === 'pangu' || !modelName)) {
         const apiKey = modelConfig.apiKey;
         const panguOptions: PanguModelProviderOptions = {
@@ -264,7 +285,7 @@ export function createDesktopSubagentDispatchTool(options: DesktopSubagentDispat
         if (modelConfig.deployment !== undefined) {
           panguOptions.deployment = modelConfig.deployment;
         }
-        return new ModelGateway(new PanguModelProvider(panguOptions));
+        return new ModelGateway(new StructuredToolProvider(new PanguModelProvider(panguOptions)));
       }
       return undefined;
     },
