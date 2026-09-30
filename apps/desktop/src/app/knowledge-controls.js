@@ -7,7 +7,7 @@ const citationHtml = value => safeCitation(value)
   ? `<a href="${escape(safeCitation(value))}" target="_blank" rel="noopener noreferrer" style="color:var(--link-color,#63b3ed)">${escape(value)}</a>`
   : `<code>${escape(value)}</code>`;
 
-/** Render original statements next to their own receipt-bound locator; bundle ids are never web sources. */
+// Keep citations tied to source items.
 export function knowledgeFeedCitationHtml(answer = {}) {
   if (Array.isArray(answer.items) && answer.items.length) {
     return answer.items.map(item => `<div data-source-item="${escape(item.itemKey)}" style="margin:6px 0">
@@ -26,7 +26,7 @@ export function mountKnowledgeControls(container, invoke) {
   section.setAttribute('aria-label', '知识库与关注监控');
   section.innerHTML = `
     <h2>本地知识库与笔记</h2>
-    <p class="notice">只读访问已配置的本地知识目录（支持 Markdown 与 Obsidian 知识库）。知识检索结果可用于主智能体参考；不会向外部发送未经授权的笔记内容。</p>
+    <p class="notice">知识检索只读；笔记内容不会自动外发。</p>
     <div class="settings-list" style="margin-bottom:16px">
       <div class="setting-row">
         <span>知识库状态</span>
@@ -34,7 +34,7 @@ export function mountKnowledgeControls(container, invoke) {
       </div>
       <div class="setting-row">
         <span>目录路径</span>
-        <code data-vault-path style="font-size:12px;word-break:break-all">未配置</code>
+        <code data-vault-path style="font-size:12px;word-break:break-all"></code>
       </div>
     </div>
     <form class="knowledge-search-form" style="display:flex;gap:8px;margin-bottom:12px">
@@ -47,7 +47,7 @@ export function mountKnowledgeControls(container, invoke) {
     <hr style="border:0;border-top:1px solid var(--border-color,#333);margin:24px 0" />
 
     <h2>知识关注与增量更新</h2>
-    <p class="notice">持续关注特定公共来源（如 RSS / 文档订阅），在版本变化时通过 Laya 触发重评。主对话与实时语音只消费已绑定的有效事实。</p>
+    <p class="notice">只使用已绑定的当前事实。</p>
     <div class="settings-list" style="margin-bottom:16px">
       <div class="setting-row">
         <span>关注宿主状态</span>
@@ -78,6 +78,8 @@ export function mountKnowledgeControls(container, invoke) {
 
   const vaultStatus = section.querySelector('[data-vault-status]');
   const vaultPath = section.querySelector('[data-vault-path]');
+  const vaultStatusRow = vaultStatus.closest('.setting-row');
+  const vaultPathRow = vaultPath.closest('.setting-row');
   const form = section.querySelector('form');
   const searchStatus = section.querySelector('[data-search-status]');
   const resultsContainer = section.querySelector('[data-results]');
@@ -230,8 +232,11 @@ export function mountKnowledgeControls(container, invoke) {
     currentWatch = watchValue;
 
     const isAvailable = vaultValue.available === true;
-    vaultStatus.textContent = isAvailable ? `${vaultValue.name || '本地知识库'}（就绪）` : (vaultValue.reason || '未装配');
-    vaultPath.textContent = vaultValue.rootPath || '未配置';
+    const vaultReason = vaultValue.reason === '请选择知识库；尚未配置' ? '' : vaultValue.reason;
+    vaultStatus.textContent = isAvailable ? `${vaultValue.name || '本地知识库'}（就绪）` : (vaultReason || '');
+    vaultPath.textContent = vaultValue.rootPath || '';
+    vaultStatusRow.hidden = !isAvailable && !vaultReason;
+    vaultPathRow.hidden = !vaultValue.rootPath;
     searchButton.disabled = !isAvailable || searching;
 
     if (!watchValue || watchValue.state === 'unavailable') {
@@ -249,7 +254,6 @@ export function mountKnowledgeControls(container, invoke) {
     refreshWatchBtn.disabled = operating || watchValue.running !== true || watchValue.health?.status !== 'ready'
       || !trackedSources().length;
 
-    // Render dialogue & watches
     const dialogueItems = Array.isArray(watchValue.dialogue?.items) ? watchValue.dialogue.items : [];
     const watches = watchValue.watches ? Object.values(watchValue.watches) : [];
 
@@ -322,7 +326,6 @@ export function mountKnowledgeControls(container, invoke) {
       watchList.innerHTML = cards.join('');
     }
 
-    // Render notices
     const notices = Array.isArray(watchValue.notices) ? watchValue.notices : [];
     if (notices.length === 0) {
       noticeList.innerHTML = '<p class="notice">暂无待确认提醒。</p>';
@@ -343,7 +346,6 @@ export function mountKnowledgeControls(container, invoke) {
       `).join('');
     }
 
-    // Attach dynamic click handlers
     watchList.querySelectorAll('[data-bind-topic]').forEach(btn => {
       btn.addEventListener('click', () => handleBind(btn.dataset.bindTopic));
     });
