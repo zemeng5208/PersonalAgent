@@ -23,6 +23,16 @@ stop/dispose 先撤销在途、移除连接，在 Windows 用已持有的参考�
 
 ## 验证与来源
 
+### 公开参考结果出机
+
+`createPublicReferenceExport(options?)` 与现有 trusted `CompetitionToolExport` 结构兼容，固定 MCP 工具和 `exportPolicyVersion:'2.0.0'`，无 options 默认拒绝。options 只由原生受信宿主注入：
+
+- `currentConfigurationRef()`：当前许可会话的不透明配置引用；撤销/断连为 undefined。
+- `readAuthorization({taskId,proposalId,path,configurationRef})`：同步读明确的公开/合成资料出机许可，返回 `{authorizationId,contentDigest,expiresAt}`。许可绑定文件内容 SHA，不能用工作区读取许可代替，也不能由 Renderer、云声明或文件名自动授予。
+- `readConfirmed({...query,contentDigest})`：同步读原 Runtime 记录，返回 `{runId,result:McpReadResult}`；宿主须核对原 proposal→run、工具/版本、参数/scope、Policy、confirmed execution、原 checkpoint 与任务 Evidence。该回调不调用工具/签授权，不接受外部 receipt。
+
+`accepts` 保留任务/提案/相对 path/配置/许可身份，拒绝同提案替换绑定；每次调用及 `project` 前后重查配置、许可和期限。project 核对实际 result 与原 confirmed receipt 的路径/正文/SHA及稳定 run，仅返回 `{source:'approved-reference',contentDigest,readConfirmed:true}`，原文、路径、授权、run 和 raw Evidence 不出机。宿主在真正云请求前仍调用原 Competition export guard；撤销不能依赖缓存的投影。`dispose()` 清会话绑定并永久拒绝。原生许可 UI、持久任务和云调用由 P8 装配，本包不新增公共 wire、数据库或审批机制。
+
 构建现有 contracts/policy/tool-gateway 依赖产物后 `npm run build --workspace=@personal-agent/mcp`；`npm run test:real --workspace=@personal-agent/mcp` 启动实际官方服务，只读取仓库忽略目录的公开合成资料并关闭子进程。真实握手/读取、内存 Policy、Runtime/SQLite/AgentArts/UI 的验收层级分别记录，见 [交接](../../docs/modules/MOD-06-07-MVP.md)。本模块不读取凭据/私有目录、不调用模型。
 
 - [官方 MCP 生命周期](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)：初始化、版本协商、截止时间和 shutdown。

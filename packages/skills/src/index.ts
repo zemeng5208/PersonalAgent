@@ -123,7 +123,10 @@ export function createReferenceSummarySkill(options?:ReferenceSummaryOptions) {
     const binding=JSON.stringify({taskId:context.taskId,skillId:input.skillId,version:input.version,digest:input.digest,path:input.path});
     let saved=context.loadCheckpoint(CHECKPOINT) as Checkpoint|undefined;
     if(saved && (typeof saved!=='object' || saved.binding!==binding)) fail('REVISION_CONFLICT','Skill task is bound to different input or version');
-    if(saved?.phase==='complete') return structuredClone(saved.outcome!);
+    if(saved?.phase==='complete') {
+      if(saved.configurationRef && configurationRef()!==saved.configurationRef) fail('REVISION_CONFLICT','Skill configuration changed');
+      return structuredClone(saved.outcome!);
+    }
     const runId=`skill-read-${context.taskId}-${input.digest.slice(0,16)}`;
     if(saved?.phase==='started' || saved?.phase==='unknown') {
       const unknown=():SkillOutcome=>({state:'unknown',evidenceRefs:[...saved!.evidenceRefs]});
