@@ -436,10 +436,14 @@ test('host-only completion purges every target version and refuses a stale mixed
   const path = databasePath(t);
   const host = openSqliteMemoryHost(path);
   host.provision('personal');
-  host.append('personal', version('erase-target', 1));
-  host.append('personal', version('erase-target', 2));
+  host.createUserFact('personal', request({factId: 'erase-target',
+    operationId: 'create-erase-target', summary: 'Confirmed target', sourceRef: 'local-note',
+    observedAt: at, validFrom: '2026-09-22T00:00:00.000Z',
+    validUntil: '2027-09-22T00:00:00.000Z'}));
+  host.append('personal', version('erase-target', 2, {sensitivity: 'private'}));
   host.append('personal', version('keep-other', 1));
-  const feed = host.bindFeed('personal', {consumerId: 'cognition', allowedSensitivities: ['public']});
+  const feed = host.bindFeed('personal', {consumerId: 'cognition',
+    allowedSensitivities: ['public', 'private']});
   const original = await feed.read(request({limit: 10}));
   host.beginFactErasure('personal', request({factId: 'erase-target', expectedRevision: 2,
     operationId: 'synthetic-completion'}));
@@ -464,6 +468,7 @@ test('host-only completion purges every target version and refuses a stale mixed
     host.completeFactErasure('personal', completion);
     assert.deepEqual(db.prepare('SELECT fact_id FROM memory_facts WHERE namespace = ? ORDER BY fact_id')
       .all('personal').map(row => row.fact_id), ['keep-other']);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM memory_user_creations').get().count, 0);
     assert.equal(db.prepare('SELECT phase FROM memory_erasure_intents WHERE namespace = ? AND fact_id = ?')
       .get('personal', 'erase-target').phase, 'completed');
     assert.deepEqual(host.readFeedDelivery('personal', 'cognition',
@@ -597,6 +602,67 @@ test('user correction and withdrawal are durable, idempotent and retain exact hi
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM memory_user_revisions').get().count, 2);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM memory_facts WHERE namespace = ?')
     .get('personal').count, 3);
+  db.close();
+  host.close();
+});
+
+test('first user-confirmed private fact is idempotent across restart and erased with its receipt', async t => {
+  const path = databasePath(t);
+  let host = openSqliteMemoryHost(path);
+  host.provision('personal');
+  const creation = request({
+    factId: 'confirmed-note', operationId: 'confirm-note-1', summary: 'Confirmed excerpt',
+    sourceRef: 'local-note@revision-1', observedAt: at,
+    validFrom: '2026-09-22T00:00:00.000Z', validUntil: '2027-09-22T00:00:00.000Z',
+  });
+  const first = host.createUserFact('personal', creation);
+  assert.equal(first.appended, true);
+  assert.equal(first.fact.sensitivity, 'private');
+  assert.equal(first.fact.confirmation, 'user_confirmed');
+  assert.deepEqual((await host.bind('personal', {allowedSensitivities: ['public']})
+    .listCurrent(request({at, limit: 10}))).facts, []);
+  assert.deepEqual((await host.bind('personal', {allowedSensitivities: ['private']})
+    .listCurrent(request({at, limit: 10}))).facts.map(item => item.ref),
+  [{id: creation.factId, revision: 1}]);
+  host.close();
+
+  host = openSqliteMemoryHost(path);
+  assert.deepEqual(host.createUserFact('personal', creation), {fact: first.fact, appended: false});
+  assert.throws(() => host.createUserFact('personal', {...creation, summary: 'Altered retry'}),
+    {code: 'REVISION_CONFLICT'});
+  assert.throws(() => host.createUserFact('personal', {...creation, factId: 'other-note'}),
+    {code: 'REVISION_CONFLICT'});
+  assert.throws(() => host.createUserFact('personal', {...creation, operationId: 'another-operation'}),
+    {code: 'REVISION_CONFLICT'});
+  host.eraseUnboundFact('personal', request({
+    factId: creation.factId, expectedRevision: 1, operationId: 'erase-confirmed-note',
+  }));
+  const db = new DatabaseSync(path);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM memory_user_creations').get().count, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM memory_facts').get().count, 0);
+  db.close();
+  assert.throws(() => host.createUserFact('personal', creation), {code: 'SCOPE_DENIED'});
+  host.close();
+});
+
+test('first user-confirmed receipt failure rolls back fact and feed sequence', t => {
+  const path = databasePath(t);
+  const host = openSqliteMemoryHost(path);
+  const db = new DatabaseSync(path);
+  host.provision('personal');
+  const creation = request({
+    factId: 'confirmed-note', operationId: 'confirm-note-failed', summary: 'Confirmed excerpt',
+    sourceRef: 'local-note@revision-1', observedAt: at,
+    validFrom: '2026-09-22T00:00:00.000Z', validUntil: '2027-09-22T00:00:00.000Z',
+  });
+  db.exec(`CREATE TRIGGER fail_creation_receipt BEFORE INSERT ON memory_user_creations
+    BEGIN SELECT RAISE(ABORT, 'injected receipt failure'); END`);
+  assert.throws(() => host.createUserFact('personal', creation), {code: 'INVALID_ARGUMENT'});
+  assert.equal(db.prepare('SELECT sequence FROM memory_namespaces WHERE namespace = ?')
+    .get('personal').sequence, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM memory_facts').get().count, 0);
+  db.exec('DROP TRIGGER fail_creation_receipt');
+  assert.equal(host.createUserFact('personal', creation).appended, true);
   db.close();
   host.close();
 });

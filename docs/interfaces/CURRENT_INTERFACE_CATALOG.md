@@ -213,6 +213,11 @@ MOD-09I 新增 `@personal-agent/learning` 的受信 SQLite 宿主：描述性候
 验证通过后启用、旧已验证版本回退及工作流历史删除。该 API 为 `provisional`，
 验证器和授权入口尚无生产装配；不暴露执行工具或 wire capability，也不等同 AgentArts Workflow。
 
+MOD-09J 在受信宿主增加单条私人 Vault 引文的确认写入桥接，以及 Memory 迁移 5 的首次事实
+创建回执。拒绝确认不写入；确认后只写 `private`、`user_confirmed` 事实，更正仍走精确头版本。
+接口保持 `provisional`：尚无生产确认 UI、身份/授权装配或私人数据出机控制；真实 Vault 的
+只读检索不等于已确认持久写入。
+
 ### 6.3 桌面、语音、工具与通知增量（provisional）
 
 PR #54、#77、#81 已进入 main，分别补充取消受理、过期审批展示和通知时间精度；PR #83 已集成受限 `workspace.list` 与 `workspace.read_text`。旧 #63、#65 已关闭且未直接进入 main；语音/唤醒、转写消费和合成语音记录仍只存在于 #61 及其堆叠分支。
