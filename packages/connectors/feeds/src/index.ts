@@ -6,6 +6,8 @@ export { FakeFeedProvider, defaultFeedFixtures } from './provider.js';
 export type { FeedFetch, FeedFetchRequest, FeedProvider, FeedVerification, FixtureFeed } from './provider.js';
 export { HttpFeedProvider, MAX_BODY_BYTES, MAX_REDIRECTS } from './http-feed.js';
 export type { FeedFetchLike, FeedBodyReader, FeedResponseLike, HttpFeedOptions } from './http-feed.js';
+export { feedConfigBinding, feedItemContentSha256, readFeedTransportReceipt, assertFeedSourceReceiptMatches } from './provenance.js';
+export type { FeedTransportReceipt, FeedItemCitation, FeedSourceReceipt } from './provenance.js';
 export { parseFeedDocument, decodeXmlEntities, toPlainText, MAX_BODY_CHARS, SUMMARY_LIMIT } from './parser.js';
 export type { FeedDocument, FeedEntryText } from './parser.js';
 export { parseFeedDate } from './dates.js';
@@ -67,6 +69,36 @@ const collectionSchema: ToolDescriptor['outputSchema'] = {
   },
 };
 
+const SHA256 = {type: 'string', pattern: '^[a-f0-9]{64}$'};
+const sourceReceiptSchema: ToolDescriptor['outputSchema'] = {
+  type: 'object', additionalProperties: false,
+  required: ['version', 'providerId', 'source', 'subscriptionId', 'configBinding', 'sensitivity',
+    'publicFetch', 'sourceRevision', 'contentSha256', 'transport', 'citations'],
+  properties: {
+    version: {const: 1}, providerId: {const: 'http-feed-provider-v1'},
+    source: {type: 'string', minLength: 1}, subscriptionId: {type: 'string', minLength: 1},
+    configBinding: SHA256, sensitivity: {type: 'string', minLength: 1}, publicFetch: {type: 'boolean'},
+    sourceRevision: SHA256, contentSha256: SHA256,
+    transport: {
+      type: 'object', additionalProperties: false,
+      required: ['providerId', 'nativeFetch', 'credentialFree', 'state', 'transportFetchedAt', 'requestBinding', 'decodedBodySha256'],
+      properties: {
+        providerId: {const: 'http-feed-provider-v1'}, nativeFetch: {type: 'boolean'},
+        credentialFree: {type: 'boolean'}, state: {const: 'fetched'},
+        transportFetchedAt: {type: 'string', pattern: TIMESTAMP}, requestBinding: SHA256, decodedBodySha256: SHA256,
+      },
+    },
+    citations: {
+      type: 'array', maxItems: MAX_LIMIT,
+      items: {
+        type: 'object', additionalProperties: false,
+        required: ['externalId', 'contentRef', 'sourceRevision', 'contentSha256'],
+        properties: {externalId: {type: 'string'}, contentRef: {type: 'string'}, sourceRevision: SHA256, contentSha256: SHA256},
+      },
+    },
+  },
+};
+
 const collectOutputSchema: ToolDescriptor['outputSchema'] = {
   type: 'object',
   required: ['items', 'collection', 'nextCursor', 'hasMore'],
@@ -91,6 +123,7 @@ const collectOutputSchema: ToolDescriptor['outputSchema'] = {
       },
     },
     collection: collectionSchema,
+    sourceReceipt: sourceReceiptSchema,
     nextCursor: {type: 'string'},
     hasMore: {type: 'boolean'},
   },
@@ -123,6 +156,8 @@ export interface FeedsModuleOptions {
   subscriptions: FeedSubscription[];
   now?: () => number;
   defaultLimit?: number;
+  isPaused?: (subscriptionId: string) => boolean;
+  trackRevisions?: boolean;
 }
 
 /**
@@ -145,6 +180,8 @@ export function register(host: ToolHost, options: FeedsModuleOptions): () => voi
     now: options.now ?? Date.now,
   };
   if (options.defaultLimit !== undefined) serviceOptions.defaultLimit = options.defaultLimit;
+  if (options.isPaused !== undefined) serviceOptions.isPaused = options.isPaused;
+  if (options.trackRevisions !== undefined) serviceOptions.trackRevisions = options.trackRevisions;
   const service = new FeedService(serviceOptions);
   const connector = new FeedsConnector(service, FEEDS_CONNECTOR_VERSION);
 

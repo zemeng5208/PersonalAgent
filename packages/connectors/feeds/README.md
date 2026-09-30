@@ -4,13 +4,25 @@
 
 对真实 RSS 2.0 / Atom 源做增量采集：条件请求 + 不透明游标实现增量，稳定的 `dedupeKey` 实现去重，所有派生字段标注来源而不伪造。manifest `verification` 取自 provider——`HttpFeedProvider` 为 `conditional`（结果依赖出站网络可达），`FakeFeedProvider` 为 `mock`。`register` 不默认任何 provider，也不默认任何订阅，装配方必须显式传入，缺失时抛 `INVALID_ARGUMENT`，避免静默构造会发出站请求的东西（DEVELOPMENT_PROTOCOL:173 `fake 明显标记，生产构建不得静默启用`）。
 
+## 2026-09-30 云端业务增量（待本地统一验收）
+
+FeedServiceOptions 和 register 新增 isPaused(subscriptionId) 与 trackRevisions：
+暂停由可信宿主持久配置读取，抓取前/后发现暂停则 CANCELLED，调用方保留旧游标。
+启用 trackRevisions:true 时 dedupeKey 追加条目投影版本哈希，externalId 仍是原 GUID/链接，
+同 GUID 更新可作为新版本投递；默认关闭以保留既有消费者键语义。
+P8 首版装配应显式启用；迁移旧游标会重投当前版本一次，宿主按来源对象与版本吸收。
+ETag/304、分页水位和游标格式不变。本轮没有运行新增用例或公开源试调。
+正式 collect 输出新增可选 sourceReceipt 与对应公开 types/校验函数；实际传输事实、配置绑定、版本/hash 与逐条 citation 见交接说明。
+收据不授予 PUBLIC/跟踪权限，private 源保持 private；304 不刷新正文获取时间。
+统一交接见 [业务接线说明](../mail/docs/cloud-business-handoff.md)。
+
 ## 导出入口
 
 `@personal-agent/feeds`（ESM，类型声明在 `dist/index.d.ts`）：
 
 - `register(host, options)`：向 ToolHost 注册 `feeds.collect` 与 `feeds.subscriptions` 两个工具（均 scope `feeds:read`、`sideEffect: 'read'`），返回 dispose。`options.provider` 与 `options.subscriptions` 必须显式提供；`now`、`defaultLimit`（默认 50，上限 200）可选。
 - `HttpFeedProvider`：真实传输层。`options`：`fetchImpl`（注入以便离线测试）、`userAgent`、`maxBodyBytes`（默认 5,000,000）、`maxRedirects`（默认 3）、`source`、`verification`。
-- `FeedService`：领域服务。`collect(query, signal?)` 返回 `{items, collection, nextCursor, hasMore}`；`getItem(accountRef, externalId)`；`listSubscriptions()`；`providerVerification` 反映注入的 provider。
+- `FeedService`：领域服务。`collect(query, signal?)` 返回 `{items, collection, nextCursor, hasMore, sourceReceipt?}`；`getItem(accountRef, externalId)`；`listSubscriptions()`；`providerVerification` 反映注入的 provider。
 - `FeedsConnector`：ConnectorPort 适配（manifest `id: 'feeds'`、`accountTypes: []`、capabilities `['collect']`、`authentication: 'none'`、`syncStrategy: 'poll'`）。
 - `parseFeedDocument` / `parseFeedDate` / `decodeXmlEntities` / `toPlainText`：解析与日期归一化，可独立使用。
 - `encodeCursor` / `decodeCursor` / `appendSeen`：游标编解码。
@@ -31,7 +43,7 @@
 ## 行为规则
 
 - **订阅是配置，不是工具入参**：`feeds.collect` 只接受已配置的 `subscriptionId`。模型可选的 URL 是 SSRF 入口；订阅 URL 还可能带 token，而 CONTRIBUTING:71 规定 `账号凭据不放进配置示例、前端状态、提示词、数据库明文字段或日志`。因此 **URL 不出现在记录、工具输出、错误信息与 `skipped[]` 中**，`feeds.subscriptions` 只返回 `id`、`title`、`sensitivity`。
-- **脱敏分两档**：派生文本（`contentRef`、`externalId`、`title`、`summary`）用外科手术式的 `makeContentRedactor`，只移除配置 URL 本身、其查询串与长度 ≥8 的查询参数值——因为条目链接是合法的公开内容，摘要本来就要跟着它走。错误信息用 `makeErrorRedactor`，额外清扫任意绝对 URL、凭据形态的 `key=value`，以及**裸主机名**（Node 的 DNS 失败形如 `getaddrinfo ENOTFOUND host`，既不含 scheme 也不含完整 URL，而主机名仍是配置 URL 的片段）。裸主机名按边界匹配替换，避免损坏恰好包含该串的普通词。
+- **脱敏分两档**：派生文本（`contentRef`、`externalId`、`title`、`summary`）用外科手术式的 `makeContentRedactor`，只移除配置 URL 本身、其查询串与长度 ≥8 的普通查询参数值，以及任意长度的用户名/密码/凭据参数；嵌入的 session/credential URL 整段脱敏——因为条目链接是合法的公开内容，摘要本来就要跟着它走。错误信息用 `makeErrorRedactor`，额外清扫任意绝对 URL、凭据形态的 `key=value`，以及**裸主机名**（Node 的 DNS 失败形如 `getaddrinfo ENOTFOUND host`，既不含 scheme 也不含完整 URL，而主机名仍是配置 URL 的片段）。裸主机名按边界匹配替换，避免损坏恰好包含该串的普通词。
 - **`feeds.collect` 严格无状态**：游标从入参来、`nextCursor` 从出参走，包内不保存任何订阅级游标。宿主持久化批次后推进游标（DEVELOPMENT_PROTOCOL:139），若工具自己也推进，一次调用就会改动宿主轮询器依赖的状态，在接缝处造成漏投或重投。
 - **失败时抛错，不返回原游标**：`ConnectorPort.fetchChanges` 要么返回 `{items, nextCursor, hasMore}` 要么抛（contracts `ports.ts:25`）。返回「空 items + 原 cursor」会让宿主分不清「304 无更新」和「源挂了」，属 PRD:101 禁止的静默伪造降级。抛错则宿主拿不到 `nextCursor`，游标自然停在原处，不跳不重。
 - **不做 stale 回退**（与 weather 不同）：重发上一批有重复投递风险。

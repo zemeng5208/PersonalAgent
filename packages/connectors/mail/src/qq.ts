@@ -1,17 +1,21 @@
 import { ImapFlow } from 'imapflow';
+import { createHash } from 'node:crypto';
 import nodemailer from 'nodemailer';
 import type { SentMessageInfo, Transporter } from 'nodemailer';
 import { ProtocolError } from '@personal-agent/contracts';
+import type { ProtocolContracts } from '@personal-agent/contracts';
 import type {
   MailFetchInput,
   MailFolder,
   MailMarkSeenInput,
   MailMessage,
+  MailOperationContext,
   MailPage,
   MailProvider,
   MailSendInput,
   MailSendResult,
 } from './provider.js';
+import { guardMailWrite } from './provider.js';
 
 export interface QQMailOptions {
   /** 完整 QQ 邮箱地址，如 3468788554@qq.com。装配层从环境注入，不进仓库。 */
@@ -45,7 +49,8 @@ export function messageFromImap(uid: number, folder: string, envelope: ImapEnvel
     from,
     to: envelope.to?.[0]?.address ?? 'unknown@unknown',
     subject: envelope.subject ?? '(无主题)',
-    sentAt: envelope.date === null || envelope.date === undefined ? null : new Date(envelope.date).toISOString(),
+    sentAt: envelope.date === null || envelope.date === undefined || !Number.isFinite(new Date(envelope.date).getTime())
+      ? null : new Date(envelope.date).toISOString(),
     seen,
   };
   const name = envelope.from?.[0]?.name;
@@ -63,6 +68,7 @@ export class QQMailProvider implements MailProvider {
   private transporter: Transporter | null = null;
   private readonly sendActions = new Map<string, MailSendResult>();
   private readonly sendInflight = new Map<string, {fingerprint: string; inflight: MailSendResult | Promise<MailSendResult>}>();
+  private readonly draftInflight = new Map<string, {fingerprint: string; inflight: Promise<ProtocolContracts['connectorAction']>}>();
 
   constructor(options: QQMailOptions) {
     if (typeof options.user !== 'string' || !options.user.includes('@')) {
@@ -88,6 +94,9 @@ export class QQMailProvider implements MailProvider {
       secure: true,
       auth: {user: this.options.user, pass: this.options.authCode},
       logger: false,
+      connectionTimeout: 30_000,
+      greetingTimeout: 30_000,
+      socketTimeout: 30_000,
     });
     try {
       await client.connect();
@@ -99,19 +108,24 @@ export class QQMailProvider implements MailProvider {
     return client;
   }
 
-  async listFolders(): Promise<MailFolder[]> {
+  async listFolders(_accountRef?: string, context?: MailOperationContext): Promise<MailFolder[]> {
+    guardMailWrite(context);
     const client = await this.connect();
+    guardMailWrite(context);
     try {
       const boxes = await client.list();
+      guardMailWrite(context);
       return boxes
         .map(box => ({path: box.path, role: roleOf(box.specialUse), uidValidity: 0}))
         .filter(folder => folder.role !== 'other' || !folder.path.includes('.'));
     } catch (error) {
+      if (error instanceof ProtocolError) throw error;
       throw mapImapError(error);
     }
   }
 
   async fetchPage(accountRef: string, input: MailFetchInput): Promise<MailPage> {
+    if (input.signal?.aborted) throw new ProtocolError('CANCELLED', 'Mail fetch cancelled');
     void accountRef;
     const folder = input.folder ?? 'INBOX';
     if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 100) {
@@ -127,11 +141,11 @@ export class QQMailProvider implements MailProvider {
       }
       const lastUid = input.cursor?.lastUid ?? 0;
       const uids = await client.search({uid: `${lastUid + 1}:*`}, {uid: true});
-      const fresh = (Array.isArray(uids) ? uids : [])
+      const available = (Array.isArray(uids) ? uids : [])
         .map(uid => Number(uid))
         .filter(uid => uid > lastUid)
-        .sort((left, right) => left - right)
-        .slice(0, input.limit);
+        .sort((left, right) => left - right);
+      const fresh = available.slice(0, input.limit);
       const messages: MailMessage[] = [];
       if (fresh.length > 0) {
         for await (const message of client.fetch(fresh, {uid: true, envelope: true, flags: true}, {uid: true})) {
@@ -141,11 +155,12 @@ export class QQMailProvider implements MailProvider {
         }
       }
       const consumed = messages.map(entry => entry.uid).reduce((max, uid) => Math.max(max, uid), lastUid);
+      if (input.signal?.aborted) throw new ProtocolError('CANCELLED', 'Mail fetch cancelled');
       return {
-        messages,
+        messages: messages.sort((a, b) => a.uid - b.uid),
         uidValidity,
         nextCursor: {uidValidity, lastUid: consumed},
-        hasMore: fresh.length === input.limit,
+        hasMore: available.length > fresh.length,
       };
     } catch (error) {
       if (error instanceof ProtocolError) throw error;
@@ -172,14 +187,25 @@ export class QQMailProvider implements MailProvider {
     }
   }
 
-  async markSeen(_accountRef: string, input: MailMarkSeenInput): Promise<{uid: number; seen: boolean}> {
+  async markSeen(_accountRef: string, input: MailMarkSeenInput, context?: MailOperationContext): Promise<{uid: number; seen: boolean}> {
+    guardMailWrite(context);
     if (input.idempotencyKey.length === 0) throw new ProtocolError('INVALID_ARGUMENT', 'idempotencyKey is required');
     const client = await this.connect();
+    guardMailWrite(context);
     const lock = await client.getMailboxLock(input.folder);
+    let storeStarted = false;
     try {
+      guardMailWrite(context);
+      storeStarted = true;
       await client.messageFlagsAdd(String(input.uid), ['\\Seen'], {uid: true});
+      const readback = await client.fetchOne(String(input.uid), {flags: true}, {uid: true});
+      if (!readback || !readback.flags?.has('\\Seen')) {
+        throw new ProtocolError('RESULT_UNKNOWN', 'Mail seen flag could not be verified; reconcile before continuing', false);
+      }
       return {uid: input.uid, seen: true};
     } catch (error) {
+      if (storeStarted) throw new ProtocolError('RESULT_UNKNOWN', 'Mail seen write result unknown; reconcile before continuing', false);
+      if (error instanceof ProtocolError) throw error;
       throw mapImapError(error);
     } finally {
       lock.release();
@@ -207,6 +233,7 @@ export class QQMailProvider implements MailProvider {
   }
 
   private async sendViaTransporter(input: MailSendInput & {idempotencyKey: string}): Promise<MailSendResult> {
+    const messageId = this.operationMessageId('send', input.idempotencyKey);
     if (this.transporter === null) {
       this.transporter = nodemailer.createTransport({
         host: this.options.smtpHost,
@@ -219,16 +246,112 @@ export class QQMailProvider implements MailProvider {
     let result: MailSendResult;
     try {
       const info: SentMessageInfo = await Promise.race([
-        this.transporter.sendMail({from: this.options.user, to: input.to, subject: input.subject, text: input.text}),
+        this.transporter.sendMail({from: this.options.user, to: input.to, subject: input.subject, text: input.text, messageId}),
         rejectAfter(input.timeoutMs),
       ]);
-      result = {state: 'confirmed'};
+      result = {state: 'confirmed', messageId};
       if (typeof info.messageId === 'string') result.messageId = info.messageId;
     } catch (error) {
       // 超时或连接中断都意味着「结果未知」，不是失败：绝不盲重试（PA-014）。
-      result = {state: 'unknown', reason: describe(error)};
+      result = {state: 'unknown', messageId, reason: 'SMTP result unknown; reconcile the Message-ID before any retry'};
     }
     return result;
+  }
+
+  private operationMessageId(kind: string, key: string): string {
+    const digest = createHash('sha256').update(JSON.stringify([this.options.user, kind, key])).digest('hex');
+    return `<pa-${digest}@personalagent.local>`;
+  }
+
+  assertSendIdentity(_accountRef: string, messageId: string, idempotencyKey: string): void {
+    if (typeof messageId !== 'string' || !/^<[^<>\s]+>$/u.test(messageId)
+      || typeof idempotencyKey !== 'string' || !idempotencyKey) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Original send key and valid Message-ID are required');
+    }
+    const expected = this.sendActions.get(idempotencyKey)?.messageId ?? this.operationMessageId('send', idempotencyKey);
+    if (messageId !== expected) throw new ProtocolError('INVALID_ARGUMENT', 'Message-ID does not belong to the original send key');
+  }
+
+  async reconcileSend(accountRef: string, messageId: string, idempotencyKey: string): Promise<MailSendResult> {
+    this.assertSendIdentity(accountRef, messageId, idempotencyKey);
+    const folder = (await this.listFolders()).find(entry => entry.role === 'sent');
+    if (!folder) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Mailbox does not advertise a Sent folder');
+    const client = await this.connect();
+    const lock = await client.getMailboxLock(folder.path);
+    try {
+      const uids = await client.search({header: {'message-id': messageId}}, {uid: true});
+      if (Array.isArray(uids) && uids.length > 0) {
+        // SEARCH may be fuzzy on a server. Require exact envelope identity.
+        for await (const message of client.fetch(uids, {envelope: true}, {uid: true})) {
+          if (message.envelope?.messageId === messageId) return {state: 'confirmed', messageId};
+        }
+      }
+      return {state: 'unknown', messageId, reason: 'No exact Sent-folder match; absence does not prove non-delivery'};
+    } catch (error) { throw mapImapError(error); }
+    finally { lock.release(); }
+  }
+
+  async saveDraft(_accountRef: string, input: MailSendInput & {idempotencyKey: string}, context?: MailOperationContext): Promise<ProtocolContracts['connectorAction']> {
+    guardMailWrite(context);
+    if (!input.idempotencyKey) throw new ProtocolError('INVALID_ARGUMENT', 'idempotencyKey is required');
+    const fingerprint = JSON.stringify([input.to, input.subject, input.text]);
+    const prior = this.draftInflight.get(input.idempotencyKey);
+    if (prior) {
+      if (prior.fingerprint !== fingerprint) throw new ProtocolError('INVALID_ARGUMENT', 'Draft key was used with different content');
+      return prior.inflight;
+    }
+    const inflight = this.appendDraft(input, context);
+    this.draftInflight.set(input.idempotencyKey, {fingerprint, inflight});
+    return inflight;
+  }
+
+  private async appendDraft(input: MailSendInput & {idempotencyKey: string}, context?: MailOperationContext): Promise<ProtocolContracts['connectorAction']> {
+    const folder = (await this.listFolders(undefined, context)).find(entry => entry.role === 'drafts');
+    guardMailWrite(context);
+    if (!folder) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Mailbox does not advertise a Drafts folder');
+    const messageId = this.operationMessageId('draft', input.idempotencyKey);
+    const client = await this.connect();
+    guardMailWrite(context);
+    const lock = await client.getMailboxLock(folder.path);
+    const actionId = `mail-draft:${input.idempotencyKey}`;
+    let appendStarted = false;
+    try {
+      guardMailWrite(context);
+      const existing = await client.search({header: {'message-id': messageId}}, {uid: true});
+      guardMailWrite(context);
+      if (Array.isArray(existing) && existing.length > 0) {
+        for await (const message of client.fetch(existing, {envelope: true}, {uid: true})) {
+          guardMailWrite(context);
+          if (message.envelope?.messageId === messageId) {
+            return {actionId, state: 'confirmed', externalId: `${folder.path}:${message.uid}`, evidenceRefs: []};
+          }
+        }
+        guardMailWrite(context);
+        throw new ProtocolError('EXTERNAL_FAILURE', 'Draft identity search could not be verified', false);
+      }
+      // streamTransport generates MIME in memory; it never connects to SMTP.
+      const composer = nodemailer.createTransport({streamTransport: true, buffer: true, newline: 'windows'});
+      const mime = await composer.sendMail({from: this.options.user, to: input.to,
+        subject: input.subject, text: input.text, messageId});
+      guardMailWrite(context);
+      if (!Buffer.isBuffer(mime.message)) throw new ProtocolError('EXTERNAL_FAILURE', 'Draft MIME was not buffered', false);
+      guardMailWrite(context);
+      appendStarted = true;
+      const appended = await client.append(folder.path, mime.message, ['\\Draft']);
+      if (!appended || appended.uid === undefined) return {actionId, state: 'unknown', externalId: messageId, evidenceRefs: []};
+      const readback = await client.fetchOne(String(appended.uid), {envelope: true}, {uid: true});
+      if (!readback || readback.envelope?.messageId !== messageId) {
+        return {actionId, state: 'unknown', externalId: messageId, evidenceRefs: []};
+      }
+      return {actionId, state: 'confirmed', externalId: `${folder.path}:${appended.uid}`, evidenceRefs: []};
+    } catch (error) {
+      if (!appendStarted) {
+        if (error instanceof ProtocolError) throw error;
+        throw mapImapError(error);
+      }
+      // APPEND may have succeeded before disconnection: do not reappend automatically.
+      return {actionId, state: 'unknown', externalId: messageId, evidenceRefs: []};
+    } finally { lock.release(); }
   }
 
   async dispose(): Promise<void> {
@@ -252,15 +375,15 @@ function describe(error: unknown): string {
 function mapImapError(error: unknown): ProtocolError {
   const message = describe(error);
   if (/authentication|auth|login/i.test(message)) {
-    return new ProtocolError('UNAUTHORIZED', `QQ mail rejected the credentials (check 授权码): ${message}`, false);
+    return new ProtocolError('UNAUTHORIZED', 'QQ mail rejected the credentials (check 授权码)', false);
   }
   if (/timeout|etimedout/i.test(message)) {
-    return new ProtocolError('TIMEOUT', `QQ mail IMAP timed out: ${message}`, true);
+    return new ProtocolError('TIMEOUT', 'QQ mail IMAP timed out', true);
   }
   if (/econnrefused|econnreset|enotfound|ehostunreach|certificate/i.test(message)) {
-    return new ProtocolError('EXTERNAL_FAILURE', `QQ mail IMAP connection failed: ${message}`, true);
+    return new ProtocolError('EXTERNAL_FAILURE', 'QQ mail IMAP connection failed', true);
   }
-  return new ProtocolError('EXTERNAL_FAILURE', `QQ mail IMAP error: ${message}`, true);
+  return new ProtocolError('EXTERNAL_FAILURE', 'QQ mail IMAP request failed', true);
 }
 
 function roleOf(specialUse: string | undefined): MailFolder['role'] {

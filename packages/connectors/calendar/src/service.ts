@@ -1,7 +1,8 @@
 import { ProtocolError } from '@personal-agent/contracts';
 import type { ProtocolContracts } from '@personal-agent/contracts';
-import type { CalendarEventRecord, CalendarProvider, CalendarWindow } from './provider.js';
+import type { CalendarEventRecord, CalendarProvider, CalendarReadContext, CalendarWindow } from './provider.js';
 import type { CalendarRespondInput } from './provider.js';
+import { assertReadActive } from './read-context.js';
 
 export interface CalendarServiceOptions {
   now: () => number;
@@ -55,7 +56,11 @@ export class CalendarService {
     this.providerVerification = provider.verification;
   }
 
-  async listEvents(accountRef: string, window: CalendarWindow, options?: {cursor?: string; limit?: number}): Promise<EventPage> {
+  async listEvents(accountRef: string, window: CalendarWindow, options?: CalendarReadContext & {cursor?: string; limit?: number}): Promise<EventPage> {
+    assertReadActive(options, this.options.now);
+    assertUtcInstant(window.fromUtc, 'fromUtc');
+    assertUtcInstant(window.toUtc, 'toUtc');
+    if (Date.parse(window.fromUtc) >= Date.parse(window.toUtc)) throw new ProtocolError('INVALID_ARGUMENT', 'Calendar window must have a positive duration');
     const limit = options?.limit ?? 20;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new ProtocolError('INVALID_ARGUMENT', 'limit must be 1..100');
     // 聚合提供商分页直到满足 limit 或取尽，页大小与游标语义由提供商决定。
@@ -63,7 +68,12 @@ export class CalendarService {
     const collected: CalendarEventRecord[] = [];
     let providerHasMore = true;
     while (providerHasMore && collected.length < limit) {
-      const page = await this.provider.fetchWindow(accountRef, window, cursor);
+      assertReadActive(options, this.options.now);
+      const page = await this.provider.fetchWindow(accountRef, window, cursor, options);
+      assertReadActive(options, this.options.now);
+      if (page.hasMore && (page.nextCursor === undefined || page.nextCursor === cursor || page.events.length === 0)) {
+        throw new ProtocolError('EXTERNAL_FAILURE', 'Calendar provider returned a non-progressing page', false);
+      }
       collected.push(...page.events);
       providerHasMore = page.hasMore;
       cursor = page.nextCursor;
@@ -81,7 +91,8 @@ export class CalendarService {
     return structuredClone(result);
   }
 
-  async searchEvents(accountRef: string, query: string): Promise<ConnectorItem[]> {
+  async searchEvents(accountRef: string, query: string, context?: CalendarReadContext): Promise<ConnectorItem[]> {
+    assertReadActive(context, this.options.now);
     if (typeof query !== 'string' || query.length === 0) throw new ProtocolError('INVALID_ARGUMENT', 'Query must be a non-empty string');
     // Fake 端点没有服务端搜索，这里拉全窗口后按标题过滤；真实提供商实现服务端搜索。
     // 提供商按页返回，必须翻完所有页——只看第一页会漏掉排在后续页的事件。
@@ -89,7 +100,9 @@ export class CalendarService {
     const events: CalendarEventRecord[] = [];
     let cursor: string | undefined;
     for (let round = 0; round < 50; round += 1) {
-      const page = await this.provider.fetchWindow(accountRef, epoch, cursor);
+      assertReadActive(context, this.options.now);
+      const page = await this.provider.fetchWindow(accountRef, epoch, cursor, context);
+      assertReadActive(context, this.options.now);
       events.push(...page.events);
       if (!page.hasMore) break;
       cursor = page.nextCursor;
@@ -98,11 +111,33 @@ export class CalendarService {
     return structuredClone(events.filter(event => event.title.includes(query)).map(event => eventToItem(event, accountRef, fetchedAt)));
   }
 
-  async getEventItem(accountRef: string, externalId: string): Promise<ConnectorItem> {
+  async getEventItem(accountRef: string, externalId: string, context?: CalendarReadContext): Promise<ConnectorItem> {
+    assertReadActive(context, this.options.now);
     if (typeof externalId !== 'string' || externalId.length === 0) throw new ProtocolError('INVALID_ARGUMENT', 'externalId must be a non-empty string');
-    const event = await this.provider.getEvent(accountRef, externalId);
+    const event = await this.provider.getEvent(accountRef, externalId, context);
+    assertReadActive(context, this.options.now);
     if (event === undefined) throw new ProtocolError('NOT_FOUND', `Calendar event ${externalId} not found`);
     return eventToItem(event, accountRef, this.isoNow());
+  }
+
+  /** Host passes its persisted baseline. Includes explicit cancellation readback;
+   * missing UIDs throw NOT_FOUND and cannot silently become withdrawal events.
+   * No event DTO or second baseline store: P5 creates the semantic change event.
+   */
+  async refreshKnownItems(accountRef: string, previous: readonly ConnectorItem[], context?: CalendarReadContext): Promise<ConnectorItem[]> {
+    assertReadActive(context, this.options.now);
+    const changed: ConnectorItem[] = [];
+    const seen = new Set<string>();
+    for (const prior of previous) {
+      if (prior.source !== 'calendar' || prior.accountRef !== accountRef || seen.has(prior.externalId)) {
+        throw new ProtocolError('INVALID_ARGUMENT', 'Calendar baseline must contain unique UIDs from this account');
+      }
+      seen.add(prior.externalId);
+      const current = await this.getEventItem(accountRef, prior.externalId, context);
+      if (current.dedupeKey !== prior.dedupeKey || current.contentRef !== prior.contentRef
+        || current.validFor !== prior.validFor) changed.push(current);
+    }
+    return changed;
   }
 
   /** 邀请/变更按动作授权：respond 是外部写，actionId 由幂等键决定，可安全重试。 */
@@ -126,5 +161,5 @@ export class CalendarService {
 }
 
 export function assertUtcInstant(value: string, field: string): void {
-  if (!UTC_PATTERN.test(value)) throw new ProtocolError('INVALID_ARGUMENT', `${field} must be an ISO-8601 UTC instant`);
+  if (!UTC_PATTERN.test(value) || !Number.isFinite(Date.parse(value))) throw new ProtocolError('INVALID_ARGUMENT', `${field} must be an ISO-8601 UTC instant`);
 }

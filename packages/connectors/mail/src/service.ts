@@ -1,6 +1,7 @@
 import { ProtocolError } from '@personal-agent/contracts';
 import type { ProtocolContracts } from '@personal-agent/contracts';
-import type { MailCursor, MailMessage, MailProvider, MailSendResult } from './provider.js';
+import type { MailCursor, MailMessage, MailOperationContext, MailProvider, MailSendResult } from './provider.js';
+import { guardMailWrite } from './provider.js';
 
 type ConnectorItem = ProtocolContracts['connectorItem'];
 type ConnectorAction = ProtocolContracts['connectorAction'];
@@ -40,7 +41,8 @@ export class MailService {
     private readonly options: MailServiceOptions,
   ) {}
 
-  async fetchInbox(accountRef: string, options: {folder?: string; cursor?: MailCursor; limit?: number}): Promise<InboxPage> {
+  async fetchInbox(accountRef: string, options: {folder?: string; cursor?: MailCursor; limit?: number; signal?: AbortSignal}): Promise<InboxPage> {
+    if (options.signal?.aborted) throw new ProtocolError('CANCELLED', 'Mail fetch cancelled');
     const limit = options.limit ?? 20;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new ProtocolError('INVALID_ARGUMENT', 'limit must be 1..100');
     // 聚合提供商分页直到满足 limit 或取尽；提供商页大小可能小于请求的 limit。
@@ -49,11 +51,34 @@ export class MailService {
     let uidValidity = options.cursor?.uidValidity ?? 0;
     let providerHasMore = true;
     for (let round = 0; round < 10 && providerHasMore && collected.length < limit; round += 1) {
-      const args: {folder?: string; cursor?: MailCursor; limit: number} = {limit};
+      const args: {folder?: string; cursor?: MailCursor; limit: number; signal?: AbortSignal} = {limit};
+      if (options.signal !== undefined) args.signal = options.signal;
       if (options.folder !== undefined) args.folder = options.folder;
       if (cursor !== undefined) args.cursor = cursor;
       const page = await this.provider.fetchPage(accountRef, args);
-      collected.push(...page.messages);
+      if (options.signal?.aborted) throw new ProtocolError('CANCELLED', 'Mail fetch cancelled');
+      if (!Number.isSafeInteger(page.uidValidity) || page.uidValidity < 0
+        || page.nextCursor.uidValidity !== page.uidValidity || !Number.isSafeInteger(page.nextCursor.lastUid)
+        || page.nextCursor.lastUid < 0) {
+        throw new ProtocolError('EXTERNAL_FAILURE', 'Mail provider returned invalid mailbox cursor metadata', false);
+      }
+      // UID order is the paging order, regardless of server fetch iteration order.
+      // Stamping from the page keeps the projection epoch correct even when a
+      // provider omitted it on individual messages.
+      const messages = [...page.messages].sort((a, b) => a.uid - b.uid);
+      if (cursor !== undefined && cursor.uidValidity !== page.uidValidity) {
+        throw new ProtocolError('CURSOR_EXPIRED', 'Mailbox epoch changed during pagination');
+      }
+      if (messages.some((message, index) => !Number.isSafeInteger(message.uid) || message.uid < 1
+        || (cursor !== undefined && message.uid <= cursor.lastUid)
+        || (index > 0 && message.uid === messages[index - 1]?.uid)
+        || (message.uidValidity !== undefined && message.uidValidity !== page.uidValidity))) {
+        throw new ProtocolError('EXTERNAL_FAILURE', 'Mail provider returned an invalid UID page', false);
+      }
+      if (page.hasMore && (messages.length === 0 || page.nextCursor.lastUid !== messages.at(-1)?.uid)) {
+        throw new ProtocolError('EXTERNAL_FAILURE', 'Mail provider returned a non-progressing cursor', false);
+      }
+      collected.push(...messages.map(message => ({...message, uidValidity: page.uidValidity})));
       uidValidity = page.uidValidity;
       cursor = page.nextCursor;
       providerHasMore = page.hasMore;
@@ -80,6 +105,7 @@ export class MailService {
     let cursor: MailCursor | undefined;
     const collected: MailMessage[] = [];
     const limit = options.limit ?? 20;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new ProtocolError('INVALID_ARGUMENT', 'limit must be 1..100');
     for (let round = 0; round < 10; round += 1) {
       const searchArgs: {folder?: string; cursor?: MailCursor; limit: number} = {limit: 100};
       if (options.folder !== undefined) searchArgs.folder = options.folder;
@@ -105,17 +131,53 @@ export class MailService {
     return messageToItem(message, accountRef, this.isoNow());
   }
 
-  async markSeen(accountRef: string, input: {folder: string; uid: number; idempotencyKey: string}): Promise<ConnectorAction> {
+  async markSeen(accountRef: string, input: {folder: string; uid: number; idempotencyKey: string}, context?: MailOperationContext): Promise<ConnectorAction> {
+    const execution = {...context, now: this.options.now};
+    guardMailWrite(execution);
     if (typeof input.folder !== 'string' || input.folder.length === 0) throw new ProtocolError('INVALID_ARGUMENT', 'folder is required');
     if (!Number.isSafeInteger(input.uid) || input.uid < 1) throw new ProtocolError('INVALID_ARGUMENT', 'uid must be a positive integer');
     if (typeof input.idempotencyKey !== 'string' || input.idempotencyKey.length === 0) throw new ProtocolError('INVALID_ARGUMENT', 'idempotencyKey is required');
-    const result = await this.provider.markSeen(accountRef, input);
+    const result = await this.provider.markSeen(accountRef, input, execution);
     return {
       actionId: `mail-mark-seen:${input.idempotencyKey}`,
       state: 'confirmed',
       externalId: `${input.folder}:${input.uid}`,
       evidenceRefs: [`mail:${input.folder}:${input.uid}:seen`],
     };
+  }
+
+  async saveDraft(accountRef: string, input: {to: string; subject: string; text: string; idempotencyKey: string}, context?: MailOperationContext): Promise<ConnectorAction> {
+    const execution = {...context, now: this.options.now};
+    guardMailWrite(execution);
+    if (!this.provider.saveDraft) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Mail drafts are unavailable for this provider');
+    if (typeof input.to !== 'string' || !input.to.includes('@') || typeof input.subject !== 'string'
+      || !input.subject.trim() || input.subject.length > 500 || typeof input.text !== 'string'
+      || typeof input.idempotencyKey !== 'string' || !input.idempotencyKey) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Draft requires to, subject, text and idempotencyKey');
+    }
+    return structuredClone(await this.provider.saveDraft(accountRef, {...input, timeoutMs: 30_000}, execution));
+  }
+
+  async reconcileSend(accountRef: string, messageId: string, idempotencyKey: string): Promise<ConnectorAction> {
+    if (!this.provider.reconcileSend) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Mail send reconciliation is unavailable');
+    if (typeof messageId !== 'string' || !/^<[^<>\s]+>$/u.test(messageId)
+      || typeof idempotencyKey !== 'string' || !idempotencyKey) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Reconciliation requires an RFC Message-ID and original idempotencyKey');
+    }
+    const prior = this.sendIdempotency.get(JSON.stringify([accountRef, idempotencyKey]));
+    if (prior !== undefined && (await prior.inflight).messageId !== messageId) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Message-ID does not belong to the original send key');
+    }
+    if (this.provider.assertSendIdentity) {
+      this.provider.assertSendIdentity(accountRef, messageId, idempotencyKey);
+    } else if (prior === undefined) {
+      throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Original send identity binding is unavailable');
+    }
+    const result = await this.provider.reconcileSend(accountRef, messageId, idempotencyKey);
+    if (result.messageId !== messageId) {
+      throw new ProtocolError('EXTERNAL_FAILURE', 'Mail reconciliation returned a different Message-ID', false);
+    }
+    return this.actionFromResult(idempotencyKey, '', result);
   }
 
   /**
@@ -164,7 +226,7 @@ export class MailService {
         ? [`mail:send:${result.messageId ?? 'confirmed'}`]
         : [`mail:send:${idempotencyKey}:unconfirmed`, `smtp:${to}`],
     };
-    if (result.state === 'confirmed' && result.messageId !== undefined) action.externalId = result.messageId;
+    if (result.messageId !== undefined) action.externalId = result.messageId;
     return action;
   }
 
