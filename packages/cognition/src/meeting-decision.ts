@@ -633,7 +633,7 @@ export class MeetingRescheduleCoordinator {
         selectedCandidateId: 'cand-adjust-schedule',
         actionId: 'adjust_schedule',
         status: 'already_processed',
-        confidence: 1.0,
+        confidence: null,
         reason: '图谱已在历史事务中持久化该改期事件（崩溃恢复去重保护）',
         graphRevisionBefore: initialSnapshot.revision - 1,
         graphRevisionAfter: initialSnapshot.revision,
@@ -717,7 +717,13 @@ export class MeetingRescheduleCoordinator {
 
     // 5. Impact analysis on prospective graph
     const impactReport = analyzeImpact(prospectiveGraph, event.detectedAt);
-    const recheckItems = impactReport.items.filter(item => item.action === 'RECHECK');
+    // Full impact replay also contains older, unrelated invalid dependencies.
+    // This consumer may repair only dependents of the exact meeting Fact update.
+    const recheckItems = impactReport.items.filter(item => item.action === 'RECHECK'
+      && item.causes.some(cause => cause.reason === 'superseded'
+        && cause.reference.id === currentMeetingFact.id
+        && cause.reference.revision === currentMeetingFact.revision
+        && cause.currentRevision === prospectiveFact.revision));
 
     // 6. Generate candidates with topological dependency preservation
     const candidates = this.buildCandidates(prospectiveGraph, prospectiveFact, recheckItems, event);
