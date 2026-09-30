@@ -4,7 +4,7 @@ import {validateToolValue} from '@personal-agent/contracts';
 import {createRuntimeApplication, createDesktopSubagentDispatchTool} from '../dist/application.js';
 import {ModelGateway, FakeModelProvider} from '@personal-agent/models';
 import {FakeCoordinationPort} from '@personal-agent/coordination/testing';
-import {createConfiguredSubagentModelGateway, resumeRuntimeSubagentTask, readRuntimeSubagentSummary} from '../dist/application/subagent-host.js';
+import {createConfiguredSubagentModelGateway, createRuntimeSubagentDispatchTool, resumeRuntimeSubagentTask, readRuntimeSubagentSummary} from '../dist/application/subagent-host.js';
 
 const descriptor = {name:'fixture.child-read', version:'1.0.0',
   inputSchema:{type:'object',required:['value'],additionalProperties:false,properties:{value:{type:'string'}}},
@@ -165,5 +165,102 @@ test('summary without definitions preserves a subtask ID containing surrounding 
     assert.equal(readback.subtasks[0].subtaskId,' r ');
     assert.deepEqual(readback,dispatched);
     assert.equal(provider.requests.length,1);
+  } finally {app.close();}
+});
+
+test('default Competition workers and an explicitly selected API run as separate parallel children without lost progress', async () => {
+  const {app,parent} = fixture();
+  let release;
+  const bothStarted = new Promise(resolve=>{release=resolve;});
+  const started = [];
+  const provider = new FakeModelProvider([()=>({kind:'final',text:'specialist API output'})]);
+  const selected = [];
+  const deadline = context(parent).deadline;
+  try {
+    const options = {getRuntime:()=>app.runtime,getTools:()=>app.tools,
+      runDefaultWorker:async (subtask,worker,tools)=>{
+        assert.notEqual(worker.taskId,parent.taskId);
+        assert.equal(worker.deadline,deadline);
+        assert.equal(app.runtime.getTask(worker.taskId).state,'running');
+        assert.equal(worker.loadCheckpoint('subtask-parent').role,subtask.role);
+        assert.equal(tools.list().some(item=>item.name==='subagent.dispatch'),false);
+        started.push(worker.taskId); if(started.length===2) release();
+        await bothStarted;
+        return {resultSummary:`cloud fixture ${subtask.subtaskId}`,evidenceRefs:[]};
+      },getModelGateway:name=>{selected.push(name);return name==='specialist'?new ModelGateway(provider):undefined;}};
+    const tool = createRuntimeSubagentDispatchTool(options);
+    const defs = [{subtaskId:'cloud-r',role:'researcher',goal:'research',thinkingDepth:2},
+      {subtaskId:'cloud-p',role:'planner',goal:'plan'},
+      {subtaskId:'api',role:'reviewer',goal:'review',model:'specialist'}];
+    const outcome = await tool.execute({subtasks:defs},{...context(parent),deadline});
+    assert.equal(outcome.succeeded,3);
+    assert.equal(started.length,2); assert.notEqual(started[0],started[1]);
+    assert.deepEqual(selected,['specialist']); assert.equal(provider.requests.length,1);
+    const records = app.runtime.loadCheckpoint(parent.taskId,'subtask-progress-records');
+    assert.deepEqual(Object.keys(records).sort(),['api','cloud-p','cloud-r']);
+    assert.equal(readRuntimeSubagentSummary(app.runtime,parent.taskId).succeeded,3);
+    const child = app.runtime.findTaskByIdempotencyKey(`subagent-dispatch-${parent.taskId}-cloud-r`);
+    assert.equal(app.runtime.loadCheckpoint(child.taskId,'subtask-thinking-binding').modelReasoning.supported,false);
+    await tool.execute({subtasks:defs},{...context(parent),deadline});
+    assert.equal(started.length,2); assert.equal(provider.requests.length,1);
+    const failed = await tool.execute({subtasks:[{subtaskId:'unknown-api',role:'coder',goal:'code',model:'missing'}]},context(parent));
+    assert.equal(failed.failed,1); assert.equal(started.length,2);
+    await assert.rejects(tool.execute({subtasks:[{subtaskId:'empty-api',role:'coder',goal:'code',model:' '}]},context(parent)),{code:'INVALID_ARGUMENT'});
+  } finally {app.close();}
+});
+
+test('default child approval resumes the original invocation, and changed tool scope preserves the unconsumed grant', async () => {
+  for(const changed of [false,true]) {
+    const {app,parent,calls} = fixture(false);
+    let allowed = true;
+    try {
+      const options = {getRuntime:()=>app.runtime,getTools:()=>app.tools,
+        getToolsForSubtask:()=>allowed?app.tools:undefined,
+        runDefaultWorker:async (_subtask,worker,tools)=>{
+          const proposal = {toolName:descriptor.name,arguments:{value:'cloud-approved'}};
+          worker.saveCheckpoint('competition-loop',{step:1,pending:proposal});
+          const runId=`competition-tool-${worker.taskId}-1`;
+          const result = await tools.invoke({...proposal,toolVersion:descriptor.version,taskId:worker.taskId,runId,
+            authorizationRef:runId,signal:worker.signal,deadline:worker.deadline});
+          return {resultSummary:result.state==='confirmed'?'cloud continuation fixture':'pending',evidenceRefs:result.evidenceRefs};
+        }};
+      const tool = createRuntimeSubagentDispatchTool(options);
+      const dispatched = await tool.execute({subtasks:[{subtaskId:'cloud',role:'researcher',goal:'read'}]},context(parent));
+      assert.equal(dispatched.succeeded,0); assert.equal(dispatched.failed,0);
+      const child = app.runtime.findTaskByIdempotencyKey(`subagent-dispatch-${parent.taskId}-cloud`);
+      assert.equal(child.state,'waiting_approval');
+      await assert.rejects(resumeRuntimeSubagentTask(options,child.taskId),{code:'UNAUTHORIZED'});
+      const approval = app.runtime.getApproval(`competition-tool-${child.taskId}-1`);
+      app.runtime.respondApproval(approval.approvalId,'allow_once',approval.revision);
+      if(changed) allowed=false;
+      const resumed = await resumeRuntimeSubagentTask(options,child.taskId);
+      assert.equal(resumed.state,changed?'failed':'succeeded');
+      assert.equal(calls.length,changed?0:1);
+      assert.equal(app.runtime.policy.get(approval.approvalId).usesRemaining,changed?1:0);
+      if(changed) assert.equal(resumed.error.code,'REVISION_CONFLICT');
+      else {
+        assert.equal(calls[0].taskId,child.taskId); assert.equal(calls[0].runId,approval.approvalId);
+        assert.ok(resumed.evidenceRefs.length>0);
+        assert.equal(readRuntimeSubagentSummary(app.runtime,parent.taskId).succeeded,1);
+      }
+    } finally {app.close();}
+  }
+});
+
+test('parent cancellation reaches both running default children without restarting them', async () => {
+  const {app,parent} = fixture();
+  const controller = new AbortController();
+  let started=0, aborted=0;
+  try {
+    const tool = createRuntimeSubagentDispatchTool({getRuntime:()=>app.runtime,
+      runDefaultWorker:async (_subtask,worker)=>new Promise((_,reject)=>{
+        worker.signal.addEventListener('abort',()=>{aborted++;reject(Error('synthetic cancelled'));},{once:true});
+        started++; if(started===2) controller.abort('parent stopped');
+      })});
+    const defs=[{subtaskId:'cancel-a',role:'researcher',goal:'a'},{subtaskId:'cancel-b',role:'planner',goal:'b'}];
+    const result=await tool.execute({subtasks:defs},{...context(parent),signal:controller.signal});
+    assert.equal(started,2); assert.equal(aborted,2); assert.equal(result.cancelled,2);
+    for(const def of defs) assert.equal(app.runtime.findTaskByIdempotencyKey(`subagent-dispatch-${parent.taskId}-${def.subtaskId}`).state,'cancelled');
+    assert.equal(readRuntimeSubagentSummary(app.runtime,parent.taskId).cancelled,2);
   } finally {app.close();}
 });

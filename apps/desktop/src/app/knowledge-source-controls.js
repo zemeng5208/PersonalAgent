@@ -25,16 +25,18 @@ export function mountKnowledgeSourceControls(root, invoke) {
     <label class="setting-row">替换后的段落<textarea rows="3" maxlength="16384" data-knowledge-source="new"></textarea></label>
     <p class="notice">只修改选定笔记的精确段落，保留现有链接和元数据；文件有新改动时请重新读取。备份留在本机受保护目录。</p>
     <button class="btn" type="button" data-knowledge-source="submit">提交整理并请求审批</button>
+    <button class="btn" type="button" data-knowledge-source="reconcile">核实原整理任务</button>
     <p class="notice" data-knowledge-source="write-status" role="status"></p>`;
   root.append(section);
   const field = name => section.querySelector(`[data-knowledge-source="${name}"]`);
-  let state = {}, busy = false, noteVersion, settingsDirty = false;
+  let state = {}, busy = false, noteVersion, settingsDirty = false, lastSubmittedTaskId;
   const binding = () => ({sourceId: state.sourceId, configRevision: state.configRevision});
   function buttons() {
     for (const button of section.querySelectorAll('button')) button.disabled = busy;
     field('notes').disabled = busy || !state.available;
     field('read').disabled = busy || !state.available || !field('note').value;
     field('submit').disabled = busy || !state.writeAvailable || !noteVersion;
+    field('reconcile').disabled = busy || !state.available || !lastSubmittedTaskId;
     field('cloud').disabled = field('level').value !== 'public';
   }
   function clearNote() {noteVersion = undefined; field('preview').textContent = ''; field('old').value = ''; field('new').value = '';}
@@ -85,10 +87,22 @@ export function mountKnowledgeSourceControls(root, invoke) {
       edits: [{oldText: field('old').value, newText: field('new').value}]};
     void act('knowledge.source.submitPatch', payload, result => {
       // Runtime readback alone determines task/approval state. Submission is never displayed as a write success.
+      const taskId = result?.taskId ?? result?.task?.taskId;
+      if (typeof taskId === 'string' && taskId) lastSubmittedTaskId = taskId;
       clearNote();
-      field('write-status').textContent = result?.task?.state === 'waiting_approval' ? '已提交，等待审批'
-        : result?.task?.state === 'waiting_reconciliation' ? '写入结果待核实，请查看任务状态'
-          : `已受理整理任务：${result?.task?.state ?? 'pending'}；以任务读回为准`;
+      const taskState = result?.state ?? result?.task?.state ?? 'pending';
+      field('write-status').textContent = taskState === 'waiting_approval' ? '已提交，等待审批'
+        : taskState === 'waiting_reconciliation' ? '写入结果待核实，请查看任务状态'
+          : `已受理整理任务：${taskState}；以任务读回为准`;
+    });
+  });
+  field('reconcile').addEventListener('click', () => {
+    if (!lastSubmittedTaskId) return;
+    void act('knowledge.source.reconcile', {taskId: lastSubmittedTaskId}, result => {
+      if (result?.taskId !== lastSubmittedTaskId) throw Error('原整理任务读回不一致');
+      field('write-status').textContent = result.state === 'waiting_reconciliation'
+        ? '原写入结果仍待核实，已保留现场；请稍后再次核实'
+        : `原整理任务状态：${result.state ?? 'pending'}；以任务读回为准`;
     });
   });
   return {element: section, update(snapshot) {render(snapshot?.knowledgeSource ?? snapshot ?? {});},

@@ -1,3 +1,24 @@
+import {createHash} from 'node:crypto';
+
+/** Historical ownership uses the original persisted intent, never current MCP connectivity. */
+export function ownsDesktopReferenceSkillTask(application, subjectRef, task) {
+  try {
+    if (!boundedId(subjectRef) || task.conversationId !== `desktop-skills:${subjectRef}`
+      || task.goal !== 'Summarize an approved workspace reference') return false;
+    const intent = application.runtime.loadCheckpoint(task.taskId, 'application-reference-skill-v1');
+    const binding = application.runtime.loadCheckpoint(task.taskId, 'desktop-reference-binding-v1');
+    if (!intent || intent.conversationId !== task.conversationId || intent.hostBinding !== undefined
+      || !Number.isFinite(Date.parse(intent.deadline)) || typeof binding !== 'string'
+      || !/^[a-f0-9]{64}$/.test(binding) || !intent.input
+      || intent.input.skillId !== 'workspace-reference-summary' || intent.input.version !== '1.0.0'
+      || typeof intent.input.path !== 'string' || !intent.input.path.trim()
+      || intent.input.path.length > 1024 || intent.input.path.includes('\0')
+      || !/^[a-f0-9]{64}$/.test(intent.input.digest)) return false;
+    const attachment = 'reference-skill-intent:' + createHash('sha256').update(JSON.stringify(intent)).digest('hex');
+    return task.attachmentRefs?.includes(attachment) === true;
+  } catch { return false; }
+}
+
 function boundedId(value) {
   return typeof value === 'string' && value.length > 0 && value.length <= 256 && value.trim() === value;
 }

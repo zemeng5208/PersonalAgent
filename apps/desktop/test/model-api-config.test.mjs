@@ -172,3 +172,24 @@ test('an unknown profile exposes neither gateways nor native support and never f
     assert.throws(()=>unavailable.configure(input),/Competition/);
   } finally {host.dispose();unavailable.dispose();}
 });
+
+test('enabled optional APIs cannot claim a default cloud worker or missing default API is available', () => {
+  const {host,options} = fixture(()=>{throw Error('must not call');});
+  let ready=false;
+  const withDefault = createModelApiConfig({...options,isDefaultExecutionAvailable:()=>ready});
+  try {
+    host.configure({...input,id:'explicit-only',makeDefault:false});
+    assert.equal(host.snapshot().configured,true);
+    assert.equal(host.snapshot().defaultModelAvailable,false);
+    assert.equal(host.snapshot().defaultAvailable,false);
+    assert.equal(host.getModelGateway(),undefined);
+    ready=true;
+    assert.equal(withDefault.snapshot().defaultAvailable,true);
+    assert.equal(withDefault.snapshot().defaultModelAvailable,false);
+    assert.equal(withDefault.snapshot().defaultExecution.strategy,'competition');
+    ready=false; assert.equal(withDefault.snapshot().defaultAvailable,false);
+    const failed = createModelApiConfig({...options,isDefaultExecutionAvailable:()=>{throw Error('synthetic secret');}});
+    assert.equal(failed.snapshot().defaultAvailable,false);
+    assert.doesNotMatch(JSON.stringify(failed.snapshot()),/synthetic secret/);failed.dispose();
+  } finally {host.dispose();withDefault.dispose();}
+});

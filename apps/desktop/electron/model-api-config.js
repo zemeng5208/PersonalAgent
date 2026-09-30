@@ -28,7 +28,7 @@ function validateRecord(value) {
 }
 
 /** Trusted main process only. Snapshot is safe for IPC; no endpoint is contacted while saving. */
-export function createModelApiConfig({userData, safeStorage, createGateway, profile = 'huawei_ict_agentarts'}) {
+export function createModelApiConfig({userData, safeStorage, createGateway, isDefaultExecutionAvailable, profile = 'huawei_ict_agentarts'}) {
   const target = path.join(userData, 'model-api-config.json');
   let entries = new Map(), defaultId, restoreFailed = false, disposed = false;
   const gateways = new Map();
@@ -85,9 +85,20 @@ export function createModelApiConfig({userData, safeStorage, createGateway, prof
         : entry.reasoningEfforts.length ? '已声明此配置支持的 reasoning_effort；真实端点尚未验证'
           : '未声明原生推理参数支持，仅可使用执行步骤预算'};
   };
-  const snapshot = () => ({
+  const defaultAvailable = () => {
+    if (disposed || profile !== 'huawei_ict_agentarts' || typeof isDefaultExecutionAvailable !== 'function') return false;
+    try {return isDefaultExecutionAvailable() === true;} catch {return false;}
+  };
+  const snapshot = () => {
+    const defaultReady = defaultAvailable();
+    return {
     configured: !disposed && [...entries.values()].some(entry => entry.enabled && available(entry)),
     defaultId: defaultId ?? '',
+    defaultModelAvailable: Boolean(selectedEntry(undefined)),
+    defaultAvailable: defaultReady,
+    defaultExecution: {strategy: 'competition', available: defaultReady, verification: 'conditional',
+      reason: defaultReady ? '默认子任务复用主 AgentArts 协调配置；真实执行以任务读回为准'
+        : '默认 AgentArts 子任务执行器不可用；启用独立模型配置不代表默认执行器已可用'},
     status: disposed || restoreFailed || !available() ? 'unavailable' : entries.size ? 'configured' : 'unconfigured',
     reason: disposed ? '模型配置宿主已释放' : restoreFailed ? '模型加密配置无法读取，请重新保存'
       : profile !== 'huawei_ict_agentarts' ? '当前模型配置只服务 AgentArts Competition Profile'
@@ -101,7 +112,8 @@ export function createModelApiConfig({userData, safeStorage, createGateway, prof
       reasoningEfforts: [...reasoningEfforts], nativeReasoningVerified: false,
       reasoningVerification: 'conditional', reasoningSource: 'explicit-configuration',
     })),
-  });
+    };
+  };
   function getModelGateway(modelName, expectedConfigurationRef) {
     active();
     const entry = selectedEntry(modelName, expectedConfigurationRef);

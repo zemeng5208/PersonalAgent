@@ -74,7 +74,10 @@ Runtime 工厂的 host-only 桥为 `finalizeWrite({sourceId,configRevision,accep
 
 固定 `scripts/locked-finalize.ps1` 只处理本机恢复元数据：在源文件独占句柄范围重新读哈希，
 独占原操作回执和两 marker、确认共享 marker 的原 run/digest/before/after 与停止进程，
-先写入并 flush/readback 可信 Runtime 接受回执，然后按已锁定句柄标记删除两个 marker。
+先将可信 Runtime 接受回执写入独立 `knowledge-finalization.json` 临时文件并 flush/readback，
+同目录重命名发布完整回执并再次核对，然后按已锁定句柄标记删除两个 marker。
+原操作日志保持只读和字节完整；取消发生在元数据持久化期间也不损坏原身份。
+已有接受回执保持不可变，身份、结果或 Evidence 引用不一致时拒绝释放。
 它不写笔记正文、不删备份、不执行模型代码、不重试原 write、不改变 Runtime 终态。
 原 marker 错配、当前文件未知、进程尚在/未知或旧 source/config/输入不一致时返回 `still_unknown`，
 保留原现场；成功返回 `finalized` 和原已知 outcome/hash/operationId。
