@@ -100,3 +100,13 @@ delivered/failed，之后 readDeviceFeedback 读回；unknown/pending 不猜测�
   该结果不能证明真实指标异常或物理用户已阅读。用户不在不做过量通知测试。
 - 原 Laya 因本机资源/账号/现场受阻的项目保持未验，不能用固定 delivered:true 替代，
   不停止用户应用或改安全策略。未完成全链证据前不标记本包/首版 MVP done。
+
+P8 最后槽可导入 `test/p5-device-native-receipt.mjs` 的
+`captureP5SyntheticNativeReceipt({Notification,storage,readDeliveryPolicy,caseId,
+allowOneSyntheticNotification:true})`。脚本无自动执行/自动弹窗；Notification 必须由
+实际 Electron 入口提供，storage 必须来自隔离 Runtime 的已绑定 namespace（不使用用户
+正式通知历史）。caseId 固定为 `p5-native-case-...`，重入复用同 ID 和原 timestamp，
+unknown 不重发；缺显式单次开关只返回 not_started。
+该 helper 只记录合成输入的原生回执、静音抑制或 unknown，不启动模型/不调用云，
+输出明确 `realMetricsTriggered/layaChoiceVerified/runtimeToolEvidenceVerified=false`。
+实际生产采样与 Laya 链仍须各自匹配，不用此合成通知补造生产 Evidence。
