@@ -1,0 +1,10 @@
+{
+  "name": "@personal-agent/skills",
+  "version": "0.1.0-alpha.1",
+  "private": true,
+  "type": "module",
+  "exports": {".": {"types": "./dist/index.d.ts", "import": "./dist/index.js"}},
+  "scripts": {"build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit", "test": "node --test test/*.test.mjs"},
+  "dependencies": {"@personal-agent/contracts": "0.1.0-alpha.1", "@personal-agent/agents": "0.1.0-alpha.1"},
+  "devDependencies": {"@personal-agent/mcp": "0.1.0-alpha.1", "@personal-agent/policy": "0.1.0-alpha.1", "@personal-agent/tool-gateway": "0.1.0-alpha.1"}
+}
