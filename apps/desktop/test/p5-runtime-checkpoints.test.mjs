@@ -19,7 +19,7 @@ test('P5 same Runtime SQLite preserves device replay and legacy meeting receipts
   mkdirSync(path.join(userData, 'meeting-receipts'));
   const legacy = path.join(userData, 'meeting-receipts/receipt-original.json');
   writeFileSync(legacy, JSON.stringify(record));
-  const ports = createP5RuntimeCheckpoints({runtime, namespace: 'owned', userData});
+  const ports = createP5RuntimeCheckpoints({storage: runtime.bindTrustedHostState('owned'), namespace: 'owned', userData});
   assert.deepEqual(ports.meetings.loadReceipt({eventId: 'event', source: record.source}), record);
   let calls = 0;
   const chooser = {choose() {calls++; throw Error('No real inference in persistence test');}};
@@ -28,8 +28,7 @@ test('P5 same Runtime SQLite preserves device replay and legacy meeting receipts
   const receipt = await service.evaluateSample(sample);
   assert.equal(receipt.status, 'normal');
   runtime.close(); runtime = new TaskRuntime(database);
-  const restored = createP5RuntimeCheckpoints({runtime, namespace: 'owned', userData});
-  assert.equal(restored.taskId, ports.taskId);
+  const restored = createP5RuntimeCheckpoints({storage: runtime.bindTrustedHostState('owned'), namespace: 'owned', userData});
   const service2 = new DeviceAnomalyDecisionService(chooser, {checkpoint: restored.device});
   assert.equal((await service2.readFeedback())[0].receipt.receiptId, receipt.receiptId);
   assert.equal((await service2.evaluateSample(sample)).status, 'replayed');
@@ -39,7 +38,7 @@ test('P5 same Runtime SQLite preserves device replay and legacy meeting receipts
   assert.equal(restored.meetings.listReceipts({status: 'applied'}).length, 1);
   assert.equal(restored.meetings.loadReceipt({namespace: 'other', eventId: 'event'}), undefined);
   assert.deepEqual(JSON.parse(readFileSync(legacy, 'utf8')), record, 'Legacy data is retained unchanged');
-  assert.equal(runtime.listTasks({conversationId: `desktop-cognition-state:${(await import('node:crypto')).createHash('sha256').update(JSON.stringify('owned')).digest('hex')}`}).items.length, 1);
+  assert.equal(runtime.listTasks({limit: 10}).items.length, 0, 'Metadata persistence creates no task');
 });
 
 test('corrupt legacy receipt blocks migration instead of losing deduplication', t => {
@@ -49,7 +48,8 @@ test('corrupt legacy receipt blocks migration instead of losing deduplication', 
   t.after(() => {runtime.close(); rmSync(userData, {recursive: true, force: true});});
   mkdirSync(path.join(userData, 'meeting-receipts'));
   writeFileSync(path.join(userData, 'meeting-receipts/receipt-corrupt.json'), '{');
-  const ports = createP5RuntimeCheckpoints({runtime, namespace: 'owned', userData});
+  const storage = runtime.bindTrustedHostState('owned');
+  const ports = createP5RuntimeCheckpoints({storage, namespace: 'owned', userData});
   assert.throws(() => ports.meetings.listReceipts());
-  assert.equal(runtime.loadCheckpoint(ports.taskId, 'p5-meeting-receipts-v1'), undefined);
+  assert.equal(storage.get('p5-meeting-receipts-v1'), undefined);
 });
