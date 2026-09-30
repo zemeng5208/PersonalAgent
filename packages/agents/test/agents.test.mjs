@@ -114,3 +114,30 @@ test('unknown result pauses for reconciliation and uses trusted authorization', 
     bundle.dispose();
   }
 });
+
+test('the default authorization reference is the per-invocation runId, not a fabricated prefix', async () => {
+  const bundle = weatherBundle();
+  try {
+    const task = bundle.runtime.submitTask({goal: 'default auth ref', conversationId: 'agent-test', idempotencyKey: 'agent-default-auth'});
+    let invoked;
+    const model = new ModelGateway(new FakeModelProvider([
+      {kind: 'tool_proposal', proposal: {toolName: 'weather.forecast', toolVersion: '0.1.0-alpha.1', arguments: {location: 'Beijing'}}},
+      {kind: 'final', text: '完成'},
+    ]));
+    const tools = {
+      list: () => bundle.gateway.list(),
+      invoke: async input => { invoked = input; return {state: 'succeeded', result: 'ok', evidenceRefs: []}; },
+    };
+    // 不传 authorizationRefFor：授权引用必须等于本次调用的 runId（真实网关的授权身份）。
+    const snapshot = await bundle.runtime.runTask(task.taskId, workerContext => runAgent(workerContext, {
+      goal: 'default auth ref', model, tools, maxSteps: 2, maxTokens: 20,
+    }), {deadline, sideEffect: 'read'});
+    assert.equal(snapshot.state, 'succeeded');
+    assert.ok(invoked, 'tool must have been invoked');
+    assert.equal(invoked.authorizationRef, invoked.runId);
+    assert.match(invoked.runId, /^agent-run-.*-1$/);
+    assert.equal(invoked.authorizationRef.includes('subtask-auth'), false, 'no fabricated authorization prefix');
+  } finally {
+    bundle.dispose();
+  }
+});
