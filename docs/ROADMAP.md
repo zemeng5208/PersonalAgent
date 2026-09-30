@@ -98,7 +98,7 @@
 | MOD-17 | M2 只读、M4 治理 | todo | `zemeng` 已确定，未启动 |
 | MOD-18 | M4 | in_progress | `zemeng` / PR #83 已将受限 `workspace.list` 与 `workspace.read_text` 重建到 main；PR #84 已合入 Competition 审批消费链，证据仍仅为 provisional/mock；写入、命令和 Artifact 未交付 |
 | MOD-19 | M5 | todo | `zemeng` 已确定，未启动 |
-| MOD-20 | M2 本地提醒、M3 日历 | review | `Potatos498` / PR #22 已合并为 `cdb69a26`；待办 CRUD、提醒重验与 Fake 日历已验证，真实日历账号、授权和写入读回未完成 |
+| MOD-20 | M2 本地提醒、M3 日历 | in_progress | `Potatos498` / PR #22 已合并（Fake 日历）；#216 合并 iCal 只读订阅源；MOD-20A 交付 CalDAV 只读提供商（ctag/etag 轮询＋time-range 查询＋TZID 换算，20/20 离线测试，见 2026-09-30 登记）；真实日历账号读回与授权写入仍未验收 |
 | MOD-21 | M3 | review | `Potatos498` / PR #28 已合并为 `42db8f51`；QQ 增量同步、安全发送语义和受控真实读回已有证据，完整账号生命周期与长期稳定性未验收 |
 | MOD-22 | M3 | done | `Potatos498` / PR #8 已合并（RSS 2.0/Atom 增量、趟水位线分页修复、真实源读回验证） |
 | MOD-23 | M3 | review | `Potatos498` / PR #27、#81 已合并；通知裁定、持久批次、ack、DST 和毫秒摘要窗口已验证，Runtime/Desktop 通知查询与展示尚未接通 |
@@ -183,6 +183,7 @@
 - 2026-09-09：完成接口冻结评估。只冻结 Core Runtime Profile 1；事件生命周期、Host、Model/Agent/Tool、连接器、Evidence/Artifact 和持续授权保持 `provisional`，无生产提供者的设置、语音、知识/记忆、MCP/Skills、Windows、AgentArts 与分发接口列为 `unavailable`。
 - 2026-09-09：按新分工拆分 MOD-04A/04B，新增 MOD-27～32，并接受核心认知依赖倒置和 AgentArts 本地信任边界；这些新接口和模块尚未实现，不能因文档完成而提升状态。
 - 2026-09-09：确认华为 ICT 创新赛 AgentArts 赛题；新增 Competition Profile 与 ADR-0007，当前只实施比赛主路径，Local Profile 仅可选留存现有代码，不新增且不进入比赛退出条件。
+- 2026-09-30：登记 MOD-20A「CalDAV 只读提供商」工作包（分支 `feat/mod-20-caldav`，P1 业务连接器，响应 #212 分工收窄至 P0–P4 后的首个独立包，亦为证据索引点名的演示链缺口）。按 PROJECT_STRUCTURE §11 登记：负责人 `Potatos498`、评审者 `goo122`、独占目录 `packages/connectors/calendar/`（族入口单负责人）、无新依赖（复用 contracts；XML 解析自研宽容正则，经注入 `CalDavFetchLike` 夹具离线测试）。公共输入输出：日历集合 URL＋宿主注入 Authorization → `pollChanges()`（ctag+href→etag 快照，变更检测原语）、`fetchWindow`（calendar-query time-range＋客户端二次过滤）、`getEvent`（单条读回，保留 cancelled）；TZID 事件经 Intl 换算 UTC（DST 边界有测试）。不在范围：CalDAV 写侧（respond 显式 UNSUPPORTED_CAPABILITY）、日历集发现（well-known/calendar-home-set）、DURATION 事件、ConnectorHost 装配（归共享集成槽）。Fake 验收：20/20 离线（含 429/401/5xx/网络/畸形响应映射、207 成功语义、分页、DST 回拨歧义取较早）。真实验收（待真实账号）：Nextcloud/Radicale 等服务器上 ctag/etag 轮询、TZID 事件读回、取消读回，`verification` 维持 `conditional` 直至完成。本条只是登记与实现交付，真实验收未完成前 MOD-20 状态不因本包翻转为完成。
 - 此记录不构成任何运行时能力通过证明。
 
 ## 5. 继续入口
