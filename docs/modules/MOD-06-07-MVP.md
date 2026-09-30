@@ -27,6 +27,8 @@ P8 2026-09-30 回报：总装已有 `apps/runtime/test/reference-skill-applicati
 
 云包 PR269 已提供 `skill.workspace_reference_summary@1.0.0` descriptor、原 worker selection/receipt/final guard 端口，显式 type/enum，不直接把 const-only manifest schema塞目录。原 `goal/availableTools/tool_proposal/continuation` 复用；Skill 在 Gateway 工具锁之前由原 Runtime worker 分派，内层 MCP 才走 ToolGateway。当前缺完整共享目录/原生异步许可消费读回，源码存在不等于云实际选择已验证。原生提交 Skill 不替代真实云选择；不以 roleLabel/goal 约定新命令，不私造 Cloud DTO。
 
+P8 Native 已选公开 source alias 的 owned 接口增量：factory 接同步 readPublicSkillSourceRefs，cloudSkillCatalog 在 availability 确认后取本 task/currentconfig 的 alias，并复查配置/任务/取消/期限/selector。describe(sourceRefs) 只发布非空合法去重 sourceRef enum，PUBLIC_ENUM_PATHS 增 /sourceRef；缺来源 unavailable，不再向 AgentArts 给未知 free string。alias 仅发现，无路径/正文/额外授权。descriptor 和 host 的相关 prepared cases 尚未执行；本增量只 TS/JS/MJS 语法与 diff，统一真实选择/Native/SQLite/云读回归 P8。
+
 ## 验证收据
 
 2026-09-30，本任务安装到忽略目录，未改根 lock。PATH Node `26.3.0` / bundled Node `24.19.0`，项目约束 `24.15.x`；未擅自升级/另装 Node，因此精确项目 Node 版本验收交统一环境。使用仓库 TypeScript `5.9.3` / `@types/node 24.10.1`。

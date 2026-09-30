@@ -12,7 +12,7 @@ const terminal=task=>['succeeded','failed','cancelled'].includes(task.state);
 /** Trusted composition of the fixed MCP service and worker-level Skill. */
 export function createDesktopReferenceHost({workspace,createMcp,onUpdate=()=>{},assertDispatchBinding,
   publicReferenceExport,publicReferenceAvailability,publicSkillAvailability,resolvePublicSkillSource,
-  hostUserNamespace,resolvePublicSkillPath}) {
+  hostUserNamespace,resolvePublicSkillPath,readPublicSkillSourceRefs}) {
   let application,service=createMcp(),binding,configurationRef,closed=false;
   let mutation=Promise.resolve();
   const tasks=new Set();
@@ -202,13 +202,19 @@ export function createDesktopReferenceHost({workspace,createMcp,onUpdate=()=>{},
     },
     async cloudSkillCatalog(input) {
       if(!cloudSkill || input.signal.aborted || !current()) return undefined;
+      const selectedSkill=cloudSkill;
       try {
         bindTask(input.taskId);const ref=current();
         const allowed=await publicSkillAvailability?.({...input,configurationRef:ref});
         assertTask(input.taskId);
         if(allowed!==true || input.signal.aborted || ref!==current()
           || !Number.isFinite(Date.parse(input.deadline)) || Date.parse(input.deadline)<=Date.now()) return undefined;
-        return cloudSkill.describe();
+        // Native-selected PUBLIC aliases only. Never publish their local paths.
+        const sourceRefs=readPublicSkillSourceRefs?.({...input,configurationRef:ref});
+        assertTask(input.taskId);
+        if(selectedSkill!==cloudSkill || input.signal.aborted || ref!==current()
+          || !Number.isFinite(Date.parse(input.deadline)) || Date.parse(input.deadline)<=Date.now()) return undefined;
+        return selectedSkill.describe(sourceRefs);
       } catch {return undefined;}
     },
     async dispatchCloudSkillProposal(proposal,context) {

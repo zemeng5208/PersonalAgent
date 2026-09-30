@@ -33,9 +33,10 @@ function setup() {
 }
 test('cloud choice runs injected worker outside tool locks; minimal receipt and replay retain original run',async()=>{
   const e=setup();const choice=e.port.catalog('public-source',e.context);
-  const descriptor=e.port.describe();assert.equal(descriptor.name,CLOUD_SKILL_TOOL_NAME);
+  const descriptor=e.port.describe(['public-source']);assert.equal(descriptor.name,CLOUD_SKILL_TOOL_NAME);
   for(const field of ['skillId','version','digest','sourceRef']) assert.equal(descriptor.inputSchema.properties[field].type,'string');
-  assert.deepEqual(CLOUD_SKILL_PUBLIC_ENUM_PATHS,['/skillId','/version','/digest']);
+  assert.deepEqual(CLOUD_SKILL_PUBLIC_ENUM_PATHS,['/skillId','/version','/digest','/sourceRef']);
+  assert.deepEqual(descriptor.inputSchema.properties.sourceRef.enum,['public-source']);
   assert.deepEqual(Object.keys(choice).sort(),['digest','skillId','sourceRef','version']);
   const selection=e.port.select(choice,e.context);assert.deepEqual(e.port.select(choice,e.context),selection);
   const receipt=await e.port.run(selection,e.context);assert.equal(receipt.state,'confirmed');
@@ -48,6 +49,19 @@ test('cloud choice runs injected worker outside tool locks; minimal receipt and 
   await assert.rejects(e.port.run({...selection,selectionRef:'forged'},e.context),{code:'UNAUTHORIZED'});
   e.revoke();assert.throws(()=>e.port.assertReceiptAllowed(selection,receipt,e.context),{code:'UNAUTHORIZED'});
   await assert.rejects(e.port.run(selection,e.context),{code:'UNAUTHORIZED'});assert.equal(e.calls(),1);
+});
+
+test('cloud descriptor publishes only a fresh explicit native alias list; publication never grants a read',()=>{
+  const e=setup();
+  for(const refs of [undefined,[],[''],['../private.md'],['a'.repeat(129)],['public-source',123]])
+    assert.equal(e.port.describe(refs),undefined);
+  const refs=['public-source','public-source'];
+  const descriptor=e.port.describe(refs);refs[0]='replacement';
+  assert.deepEqual(descriptor.inputSchema.properties.sourceRef.enum,['public-source']);
+  assert.equal(JSON.stringify(descriptor).includes('reference.md'),false);
+  assert.equal(e.calls(),0);assert.equal(e.checkpoints.size,0);
+  e.revoke();assert.throws(()=>e.port.catalog('public-source',e.context),{code:'UNAUTHORIZED'});
+  e.port.close();assert.equal(e.port.describe(['public-source']),undefined);
 });
 
 test('confirmed Skill read stays local while exact content consent is pending; resume only projects cached outcome',async()=>{

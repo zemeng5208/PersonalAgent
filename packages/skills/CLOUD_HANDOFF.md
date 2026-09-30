@@ -33,6 +33,8 @@ Profile `huawei_ict_agentarts`，PA-005/006/023/026/027。从云 `fe0666021cae04
 
 `reference-tools-host` 的 `publicReferenceExport` 增加 readPreflight，另外两个 callback 改上述精准 query；currentConfigurationRef 仍原 current()。publicReferenceAvailability/publicSkillAvailability 只是可发现性，不能签权。
 
+factory 新增同步 `readPublicSkillSourceRefs(input)`，input 为原 cloudSkillCatalog 输入加当前 configurationRef。P8 从已经 Native 确认的本原 task/current root/config/期限来源，返回 `['public-reference']` 或 `[]`，只给公开 alias、不读正文。host 先 await publicSkillAvailability，再取 alias 并复查 task/config/取消/期限与原 selector 身份，调用 `describe(sourceRefs:readonly string[]=[])`；缺回调、空或非法 alias 不发布 Skill。该目录只公布 Native 已确认来源，不替代之后 proposal/source/preflight/exact 许可检查。
+
 P6 仅消费 createWorkspaceReferenceExport；native candidate 查询若严格四字段，应从 ReadQuery 明确取四字段，再以原 Runtime 核完整 arguments，不能丢 maxBytes 或借其它 run。P8 提供原生 PUBLIC 来源/目的预许可，confirmed 后 exact SHA/bytes 内容许可及撤销；不使用 Node 绕工具预读未知文件。所有 selector、发布目录和 main/public exports/唯一 lock 由原负责人装配。
 
 reference-tools-host 新增 native-only getters：`readPublicReferencePreflightCandidate(query严格4)` 返回冻结 query/runId/toolName/toolVersion/arguments/deadline，无 SHA/body；`readPublicReferenceCandidate(query严格4)` 核原 confirmed 记录/Policy/参数/scope/同 task Evidence/结果字节 SHA 后附 contentDigest/byteLength；`readConfirmedPublicReference(ReadQuery+contentDigest)` 独立返回原 run/result。factory 注入同 trusted `hostUserNamespace`，bindTask 在原 task checkpoint 保存 namespace fence；所有 getter 每次复查当前 config、profile、namespace、deadline、取消和原 proposal/manifest，停止清会话 pin。原 parsed pending 必须由 Runtime **先**保存到现 competition-loop 再 native preflight。Skill sourceRef 第一次尚无 selection path 时，需要 P8 `resolvePublicSkillPath({taskId,proposalId,sourceRef,configurationRef})` 仅从现 native PUBLIC alias 映射路径（不读文件/签权），或已有原 selection/Skill intent 绑定。getter 不从云字符串猜 path；Skill run与Competition run各核原绑定，确认结果不可互借。
@@ -42,7 +44,7 @@ reference-tools-host 新增 native-only getters：`readPublicReferencePreflightC
 保留 `createCloudSkillSelectionPort`、`VersionedSkillWorkerPort`、`CLOUD_SKILL_TOOL_NAME=skill.workspace_reference_summary@1.0.0`、原 skill:cloud-selection:v1 checkpoint，绝不 RegisteredTool 占位或嵌套 tool.invoke。
 
 - `CloudSkillSelectionOptions.publicReferenceExport` 注入同一 native MCP 两阶段端口。`PublicSkillSource` 现在是 Preflight + 本地 path/公开 sourceRef/configurationRef/原输入 revision；首读前不臆造内容 SHA，purpose 必须 reference-summary。
-- `describe()` 保留显式 type +公开 id/version/digest enum，host 批准 PUBLIC_ENUM_PATHS 后沿原 availableTools。opaque sourceRef 不发布私路径。
+- `describe(sourceRefs)` 保留显式 type +公开 id/version/digest/sourceRef enum，PUBLIC_ENUM_PATHS 为 `/skillId`、`/version`、`/digest`、`/sourceRef`，host 批准后沿原 availableTools。sourceRef enum 是 Native 刚确认的 alias 副本并去重，不发布私路径；无明确来源不会提供 free string 或猜默认 alias。
 - 同已存在的 ReferenceSummary worker/原 REFERENCE_SKILL_TASK intent/config/readback，从原 coordination worker tools.invoke **之前** dispatch；不新 runTask/framework/store。
 - worker 内层 MCP 仍原 ToolPort/Policy/Gateway。confirmed 后只读原 MCP 收据，走同精确 native PUBLIC 出机切面，才用与本地 worker 同一纯函数投影实际摘要。
 - confirmed receipt 带 `content/byteLength/summaryDigest/truncated`、`contentDigest`（原来源 SHA）、selectionRef/sourceRef/state。摘要仅前两条非空行最多 480 字符，UTF-8 字节数与摘要 SHA 实算；truncated 表示相对归一化来源是否省略，绝不把来源 hash 冒摘要。原路径、resultSummary 元数据和 raw Evidence 不外发。
@@ -59,6 +61,7 @@ P8 所有源码接线后统一本机验证：
 - native exact permission pending/deny、过期/撤销、scope/config/完整 maxBytes 变化、缺 metadata/PRIVATE、wrong run/hash/byte/path、取消、超上限拒绝出机。
 - confirmed 后拒绝投影，再许可/恢复同 task/run/结果/Evidence；重启 continuation final phase 重验且工具执行次数保持一。
 - Skill 首读 pending/unknown/confirmed 恢复、摘要正文/字节/SHA/省略标记正确、真实 I/O 前撤销拒绝，同记录零重读。
+- Native 来源选择后 availableTools 必须包含真实 sourceRef enum，AgentArts 可按公开 alias 提案；缺来源/非法 alias/目录读取期间配置变化/取消/到期不发布。此增量已备 descriptor/host offline cases，仅语法检查，不计为执行通过。
 
 模块 prepared entry：packages/mcp/test/public-export.test.mjs（MCP）、workspace-export.test.mjs（workspace）、packages/skills/test/cloud-selection.test.mjs、apps/desktop/test/reference-export-candidates.test.mjs。两种读格式共享 public-export-fixture.mjs，各入口只注册自身 case，workspace glob 不重复执行同一 case。
 
