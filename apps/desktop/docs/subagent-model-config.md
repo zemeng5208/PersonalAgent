@@ -12,6 +12,7 @@ import {createModelApiConfig} from './model-api-config.js';
 import {createConfiguredSubagentModelGateway} from '@personal-agent/runtime/application';
 const modelApiHost = createModelApiConfig({
   userData, safeStorage,
+  profile: 'huawei_ict_agentarts',
   // Runtime/Application-owned adapter; Electron never imports model implementations.
   createGateway: createConfiguredSubagentModelGateway,
 });
@@ -40,7 +41,8 @@ Desktop 不导入 models/agents。工厂可选第二参数是受信 provider dec
 | `modelApi.remove` | `modelApiHost.remove({id})` | 脱敏 snapshot |
 
 `configure` 只接受 `id? / provider / baseUrl / model / displayName / apiKey? /
-enabled? / makeDefault?`，provider 为 `pangu` 或 `openai-compatible`。
+enabled? / makeDefault? / reasoningEfforts? / reasoningSupportConfirmed? /
+expectedConfigurationRef?`，provider 为 `pangu` 或 `openai-compatible`。
 不导入环境密钥，不发起连接测试。空密钥仅在同一记录、供应商和规范化 Endpoint
 不变时保留；改变目的地须新密钥。整个配置使用 Electron safeStorage 加密，原子写入
 用户数据目录。解密或安全存储失败明确不可用，不回退明文。
@@ -62,9 +64,31 @@ controls.close();
 `createGateway` 必须由 Runtime/Application 注入，接收供应商、Endpoint、模型、配置版本部署 ID
 和仅在请求时读取密钥的回调，并返回已有 `ModelGateway`。没有注入时模型保持不可用；
 Desktop 不导入或构造 Provider。模型均经已有 ModelGateway 和 StructuredToolProvider；后者是文字 JSON 提案协议，
-能力等级 conditional，不是原生工具调用。当前配置宿主返回空 reasoningEfforts；
-只有可信宿主独立确认某个端点支持时，才可向子任务宿主注入支持列表。
-thinkingDepth 仍控制既有执行步骤预算，不构成原生模型 reasoning 的验证。
+能力等级 conditional，不是原生工具调用。原生推理支持默认为空，只有显式声明
+`reasoningEfforts`（`none/low/medium/high` 的子集）并确认
+`reasoningSupportConfirmed: true` 后才发送对应参数。修改既有声明必须提供当前
+`expectedConfigurationRef`；版本不匹配拒绝保存。每次保存都换 bindingId；未传列表时
+重置为空，控件在供应商、Endpoint 或模型编辑时清空声明及确认，避免继承旧能力。
+声明绑定供应商、Endpoint、模型和配置版本，始终标记 conditional，真实支持仍未验证。
+`thinkingBudget` 及 Anthropic 路径未实现，不提供支持选项，网关拒绝 budget 输入。
+
+安全 snapshot 的 `models[].configurationRef` 是不含凭据的配置版本。
+`getModelGateway(modelId?, expectedConfigurationRef?)` 与
+`getModelReasoningEfforts(modelId?, expectedConfigurationRef?)` 必须共同使用同一版本；
+过期版本分别返回 undefined / []，不回退新模型或默认配置。
+`getModelReasoningState(modelId?, expectedConfigurationRef?)` 返回安全的配置可用状态、
+支持列表、版本及条件验证说明；不得把 gateway 或密钥回调发给 Renderer。
+P8 在每个会话提交时冻结稳定 modelId、configurationRef、thinkingDepth；包装两个 getter
+时固定该引用，未选模型时也须先固定当时 defaultId。配置修改不更新其他会话的选项或
+已提交任务，过期引用明确 unavailable。共享提交与恢复挂载归 P8，不在此包另造会话库。
+
+控件导出 `describeModelThinking(entry, depth)`，只用于安全呈现：深度 0/1/2/3/4/5
+精确映射 none/low/low/medium/high/high，仅支持列表包含该值时产生原生 effort；不做近邻替代。
+步骤预算单独为 max(2, (depth+1)*2)，未指定为 6。Runtime 独立重复校验，并记录
+`subtask-thinking-binding` 的 depth、stepBudget、请求与实际 effort、条件验证和 budget 不支持状态。
+原生 effort 沿现有 runAgent → ModelGateway → StructuredToolProvider → Provider 传递，
+OpenAI 兼容 Provider 序列化为 `reasoning_effort`。未声明档位只使用步骤预算，不声称原生支持。
+配置宿主与 Runtime 工厂拒绝显式未知 profile，不创建 Local fallback。
 
 ## Runtime 行为
 
@@ -121,3 +145,13 @@ CI 指出 Desktop 直接导入 models 的架构边界错误后，将模型构造
 createGateway 接口与返回值检查，合并后只重跑 3 个配置用例及单个架构门禁，通过。
 独立浏览器预览检查保存后模型选中、默认选中和密码清空，截图位于本树忽略目录
 `.cache/model-api-controls-preview.png`；该预览只使用合成值与 Fake IPC。
+
+显式推理配置增量：Runtime 单包 tsc、6 个模型配置用例（3 个新增）、2 个受影响
+factory/等待版本冲突用例通过。参数捕获使用真实 runAgent/StructuredToolProvider/OpenAI
+兼容 Provider 与 Fake fetch，4 个持久 child 分别发送 low / high / 无原生参数 / 无原生参数；
+模型 ID 保持一致且不发送 thinkingBudget。新增用例还验证声明确认、重复/未知值拒绝、
+安全回读、加密恢复、getter 副本、版本 CAS、旧引用撤销与未知 profile 无回退。
+syntax 和 git diff --check 通过。独立浏览器 Fake IPC 预览确认 low/high 保存、密码清空、
+更改模型后声明及确认取消，证据 `.cache/model-api-reasoning-preview.png`。
+无真实模型请求、付费调用或整套 Desktop smoke；会话提交快照与共享视图集成仍由 P8 验证。
+旧 PR #250 已合并 992f3fa 基线；本推理增量是后续独立提交，不声称已随 #250 合入。

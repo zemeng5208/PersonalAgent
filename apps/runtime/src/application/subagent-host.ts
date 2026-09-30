@@ -33,6 +33,7 @@ import type {TaskRuntime, WorkerContext, WorkerResult, SubmitTaskInput} from '..
 export {SUBAGENT_DISPATCH_TOOL_NAME, SUBAGENT_DISPATCH_TOOL_VERSION};
 
 export interface ConfiguredSubagentModelOptions {
+  profile?: 'huawei_ict_agentarts';
   provider: 'pangu' | 'openai-compatible';
   baseUrl: string;
   model: string;
@@ -45,6 +46,9 @@ export function createConfiguredSubagentModelGateway(
   config: ConfiguredSubagentModelOptions,
   decorateProvider?: (provider: ModelProvider) => ModelProvider,
 ): ModelGateway {
+  if (config.profile !== undefined && config.profile !== 'huawei_ict_agentarts') {
+    throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Subagent model profile is unavailable');
+  }
   if (config.provider !== 'pangu' && config.provider !== 'openai-compatible') {
     throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Subagent model provider is unavailable');
   }
@@ -110,11 +114,18 @@ async function runSubagentWorker(options: SubagentHostOptions, subtask: SubtaskD
   const requestedEffort = subtask.thinkingDepth === undefined ? undefined : effortLevels[subtask.thinkingDepth];
   const reasoningEffort = requestedEffort !== undefined
     && options.getModelReasoningEfforts?.(subtask.model).includes(requestedEffort) ? requestedEffort : undefined;
+  const maxSteps = subtask.thinkingDepth !== undefined ? Math.max(2, (subtask.thinkingDepth + 1) * 2) : 6;
+  childWorker.saveCheckpoint('subtask-thinking-binding', {depth: subtask.thinkingDepth ?? null,
+    stepBudget: {maxSteps}, modelReasoning: {requestedEffort: requestedEffort ?? null,
+      effort: reasoningEffort ?? null, supported: reasoningEffort !== undefined,
+      verification: 'conditional', thinkingBudgetSupported: false,
+      reason: reasoningEffort !== undefined ? 'Trusted host explicitly configured this reasoning_effort'
+        : requestedEffort === undefined ? 'No native reasoning effort selected' : 'Selected effort is not configured for this model'}});
   const rolePrompt: ModelMessage = {role: 'system',
     content: `你是专业次级智能体，当前承担职责为【${roleLabel}】(${subtask.role})。请聚焦于此职责，独立执行指派的目标。`};
   const outcome = await runAgent(childWorker, {goal: subtask.goal, initialMessages: [rolePrompt], model,
     tools: options.getTools?.() ?? {list: () => [], invoke: async () => {throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'No tools');}},
-    maxSteps: subtask.thinkingDepth !== undefined ? Math.max(2, (subtask.thinkingDepth + 1) * 2) : 6,
+    maxSteps,
     ...(reasoningEffort === undefined ? {} : {reasoningEffort}),
     onUnknownResult: () => {
       if (runtime.getTask(childWorker.taskId).state === 'running') runtime.transitionTask(childWorker.taskId, 'waiting_reconciliation');
@@ -371,12 +382,14 @@ export interface DesktopSubagentDispatchToolOptions {
     deployment?: string;
     apiKey?: string;
   };
+  /** Trusted model aliases; unregistered names fail instead of falling back to Pangu. */
+  modelRegistry?: Readonly<Record<string, (modelName: string) => ModelGateway | undefined>>;
   now?: (() => number) | undefined;
   maxRecursionDepth?: number | undefined;
 }
 
 export function createDesktopSubagentDispatchTool(options: DesktopSubagentDispatchToolOptions): RegisteredTool {
-  const {getRuntime, getTools, fakeModelMode, modelConfig, now, maxRecursionDepth} = options;
+  const {getRuntime, getTools, fakeModelMode, modelConfig, modelRegistry, now, maxRecursionDepth} = options;
   return createRuntimeSubagentDispatchTool({
     getRuntime,
     getTools,
@@ -399,8 +412,13 @@ export function createDesktopSubagentDispatchTool(options: DesktopSubagentDispat
           },
         ));
       }
+      if (modelRegistry) {
+        const requested = modelName?.trim() || 'default';
+        const factory = Object.hasOwn(modelRegistry, requested) ? modelRegistry[requested] : undefined;
+        return factory?.(requested);
+      }
       if (options.getModelGateway) return options.getModelGateway(modelName);
-      if (modelConfig?.baseUrl && modelConfig?.apiKey && (modelName === 'pangu' || !modelName)) {
+      if (modelConfig?.baseUrl && modelConfig?.apiKey && (modelName === 'pangu' || modelName === 'default' || !modelName)) {
         const apiKey = modelConfig.apiKey;
         const panguOptions: PanguModelProviderOptions = {
           baseUrl: modelConfig.baseUrl,
