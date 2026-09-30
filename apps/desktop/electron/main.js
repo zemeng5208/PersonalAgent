@@ -94,6 +94,7 @@ const ownsDesktopInstance = app.requestSingleInstanceLock();
 if (!ownsDesktopInstance) app.quit();
 
 let runtime;
+let runtimeClosed = false;
 let desktopHost;
 let runtimeConnection;
 let client;
@@ -282,10 +283,11 @@ function p5DevicePanelSuggestions() {
 }
 
 async function refreshP5DeviceFeedback() {
-  if (!p5Cognition || p5FeedbackReading) return;
+  if (runtimeClosed || !p5Cognition || p5FeedbackReading) return;
   p5FeedbackReading = true;
   try {
     const records = await p5Cognition.readDeviceFeedback();
+    if (runtimeClosed) return;
     p5DeviceFeedback = {state: 'available', items: records.map(({source, pendingDeliveryId, receipt}) => ({
       source, status: receipt?.status ?? 'unobserved', receiptId: receipt?.receiptId ?? null,
       deliveryNeedsReconciliation: Boolean(pendingDeliveryId), notificationDelivered: receipt?.notificationDelivered === true,
@@ -447,7 +449,7 @@ function privateMemoryController() {
 }
 
 function taskResultMetadata(task) {
-  if (task.state!=='succeeded' || !runtimeApplication) return undefined;
+  if (runtimeClosed || task.state!=='succeeded' || !runtimeApplication) return undefined;
   const source=runtimeApplication.runtime;
   return source.loadCheckpoint(task.taskId,'application-profile')==='huawei_ict_agentarts'
     ? resultMetadata(task.resultSummary,{profile:'huawei_ict_agentarts'}) : undefined;
@@ -512,6 +514,7 @@ function snapshot(surface) {
 }
 
 function publish() {
+  if (runtimeClosed) return;
   for (const win of [orb, panel, admin, workspace]) {
     if (win && !win.isDestroyed()) win.webContents.send('desktop:update', snapshot(win === workspace ? 'workspace' : win === admin ? undefined : 'panel'));
   }
@@ -2792,6 +2795,7 @@ app.whenReady().then(async () => {
       competitionFactBridge?.close();
       if (runtimeApplication) runtimeApplication.close();
       else runtime?.close?.();
+      runtimeClosed = true;
       competitionCatalog?.close();
       productTools?.close();
       codingWorkspace?.close();
