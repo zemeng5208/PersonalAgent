@@ -3,6 +3,22 @@ const safeCitation = value => {
   try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) ? url.href : null; }
   catch { return null; }
 };
+const citationHtml = value => safeCitation(value)
+  ? `<a href="${escape(safeCitation(value))}" target="_blank" rel="noopener noreferrer" style="color:var(--link-color,#63b3ed)">${escape(value)}</a>`
+  : `<code>${escape(value)}</code>`;
+
+/** Render original statements next to their own receipt-bound locator; bundle ids are never web sources. */
+export function knowledgeFeedCitationHtml(answer = {}) {
+  if (Array.isArray(answer.items) && answer.items.length) {
+    return answer.items.map(item => `<div data-source-item="${escape(item.itemKey)}" style="margin:6px 0">
+      <strong>${escape(item.title)}</strong>
+      <p style="margin:3px 0;white-space:pre-wrap">${escape(item.excerpt)}</p>
+      <p style="font-size:12px;margin:3px 0">引用：${citationHtml(item.citation)} · 来源版本：<code>${escape(item.sourceRevision)}</code></p>
+    </div>`).join('');
+  }
+  return answer.citation && !String(answer.citation).startsWith('knowledge-feed-citations:')
+    ? `<p style="font-size:12px;margin:4px 0">引用：${citationHtml(answer.citation)}</p>` : '';
+}
 
 export function mountKnowledgeControls(container, invoke) {
   const section = document.createElement('section');
@@ -269,9 +285,7 @@ export function mountKnowledgeControls(container, invoke) {
               当前绑定版本：<code>${escape(item.boundSource?.revision || '无')}</code> | 
               当前事实可用性：<strong>${item.usableAsCurrentFact ? '可用' : '不可作为当前事实'}</strong>
             </p>
-            ${ans.citation ? `<p style="font-size:12px;margin:4px 0">引用：${safeCitation(ans.citation)
-              ? `<a href="${escape(safeCitation(ans.citation))}" target="_blank" rel="noopener noreferrer" style="color:var(--link-color,#63b3ed)">${escape(ans.citation)}</a>`
-              : `<code>${escape(ans.citation)}</code>`}</p>` : ''}
+            ${knowledgeFeedCitationHtml(ans)}
             ${ans.kind === 'latest_observation' ? `
               <div style="margin:8px 0;padding:6px;background:rgba(214,158,46,0.1);border-left:3px solid #d69e2e;font-size:12px">
                 <p>已观察到来源新版本：<code>${escape(ans.sourceRevision || '最新')}</code>。需经本地 Runtime 重评任务确认方可接受。</p>
