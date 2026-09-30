@@ -1,4 +1,8 @@
 const escape = str => String(str ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const safeCitation = value => {
+  try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) ? url.href : null; }
+  catch { return null; }
+};
 
 export function mountKnowledgeControls(container, invoke) {
   const section = document.createElement('section');
@@ -26,7 +30,7 @@ export function mountKnowledgeControls(container, invoke) {
 
     <hr style="border:0;border-top:1px solid var(--border-color,#333);margin:24px 0" />
 
-    <h2>知识关注与增量更新 (P7 Knowledge Watch)</h2>
+    <h2>知识关注与增量更新</h2>
     <p class="notice">持续关注特定公共来源（如 RSS / 文档订阅），在版本变化时通过 Laya 触发重评。主对话与实时语音只消费已绑定的有效事实。</p>
     <div class="settings-list" style="margin-bottom:16px">
       <div class="setting-row">
@@ -74,6 +78,8 @@ export function mountKnowledgeControls(container, invoke) {
   let currentWatch = null;
   let searching = false;
   let operating = false;
+  const trackedSources = () => [...new Set(Object.values(currentWatch?.watches ?? {})
+    .filter(watch => watch.state === 'tracked').map(watch => watch.boundSource?.sourceId).filter(Boolean))];
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
@@ -112,44 +118,51 @@ export function mountKnowledgeControls(container, invoke) {
     refreshWatchBtn.disabled = true;
     watchOpStatus.textContent = '正在检查关注来源增量…';
     try {
-      const res = await invoke('knowledge.watch.refresh');
-      if (res?.notified) {
-        watchOpStatus.textContent = `检查完成：检测到来源版本更新，已提交重评任务。`;
-      } else if (res?.reason) {
-        watchOpStatus.textContent = `检查完成：${res.reason === 'unchanged' ? '来源未发生改变' : res.reason}。`;
+      const responses = [];
+      for (const subscriptionId of trackedSources()) responses.push(await invoke('knowledge.watch.refresh', {subscriptionId}));
+      if (responses.some(res => res?.notified)) {
+        watchOpStatus.textContent = `已观察到来源变化，重评状态以任务读回为准。`;
+      } else if (responses.length) {
+        watchOpStatus.textContent = `检查完成：${responses.map(res => res?.reason === 'unchanged' ? '来源未发生改变' : res?.reason || '状态未确认').join('；')}。`;
       } else {
-        watchOpStatus.textContent = '检查完成。';
+        watchOpStatus.textContent = '当前没有已授权且正在跟踪的来源。';
       }
     } catch (err) {
       watchOpStatus.textContent = `检查失败：${err.message || '未知错误'}`;
     } finally {
       operating = false;
-      refreshWatchBtn.disabled = false;
+      await refreshWatchState();
     }
   });
 
-  async function handleAcknowledge(noticeId) {
+  async function refreshWatchState() {
+    try { render(current, await invoke('knowledge.watch.status')); }
+    catch { render(current, currentWatch); }
+  }
+
+  async function handleRead(noticeId) {
     if (operating) return;
     operating = true;
-    watchOpStatus.textContent = `正在发送提醒投递回执 (${noticeId})…`;
+    watchOpStatus.textContent = '正在标记提醒为已读…';
     try {
-      const res = await invoke('knowledge.watch.acknowledge', {id: noticeId, state: 'delivered'});
+      const res = await invoke('knowledge.watch.read', {id: noticeId});
       if (res?.accepted) {
-        watchOpStatus.textContent = `回执已记录为已投递（投递成功不代表用户已读）。`;
+        watchOpStatus.textContent = '提醒已标记为已读；系统投递与来源版本绑定保持各自的状态。';
       } else {
-        watchOpStatus.textContent = `回执记录失败：${res?.reason || '未知原因'}`;
+        watchOpStatus.textContent = `已读记录失败：${res?.reason || '未知原因'}`;
       }
     } catch (err) {
-      watchOpStatus.textContent = `回执发送失败：${err.message || '未知错误'}`;
+      watchOpStatus.textContent = `已读记录失败：${err.message || '未知错误'}`;
     } finally {
       operating = false;
+      await refreshWatchState();
     }
   }
 
   async function handleBind(topicId) {
     if (operating) return;
     operating = true;
-    watchOpStatus.textContent = `正在确认接受更新并绑定新版本 (${topicId})…`;
+    watchOpStatus.textContent = '正在读回重评结果并绑定新版本…';
     try {
       const res = await invoke('knowledge.watch.bind', {topicId});
       if (res?.accepted) {
@@ -161,12 +174,12 @@ export function mountKnowledgeControls(container, invoke) {
       watchOpStatus.textContent = `绑定失败：${err.message || '未知错误'}`;
     } finally {
       operating = false;
+      await refreshWatchState();
     }
   }
 
   async function handleRevoke(topicId) {
     if (operating) return;
-    if (!confirm(`确定撤销对主题 "${topicId}" 的关注吗？撤销后将不再跟踪与通知。`)) return;
     operating = true;
     watchOpStatus.textContent = `正在撤销关注 (${topicId})…`;
     try {
@@ -180,7 +193,20 @@ export function mountKnowledgeControls(container, invoke) {
       watchOpStatus.textContent = `撤销失败：${err.message || '未知错误'}`;
     } finally {
       operating = false;
+      await refreshWatchState();
     }
+  }
+
+  async function handleTracking(topicId, action) {
+    if (operating) return;
+    operating = true;
+    watchOpStatus.textContent = action === 'pause' ? '正在暂停关注…' : '正在恢复关注…';
+    try {
+      const res = await invoke(`knowledge.watch.${action}`, {topicId});
+      watchOpStatus.textContent = res?.state === 'tracked' ? '已恢复关注。'
+        : res?.state === 'paused' ? '已暂停关注。' : `关注状态：${res?.reason || res?.state || '未确认'}。`;
+    } catch (err) { watchOpStatus.textContent = `操作失败：${err.message || '未知错误'}`; }
+    finally { operating = false; await refreshWatchState(); }
   }
 
   function render(vaultValue = {}, watchValue = null) {
@@ -201,9 +227,11 @@ export function mountKnowledgeControls(container, invoke) {
       return;
     }
 
-    watchStatus.textContent = watchValue.health?.status === 'ready' ? '正常运行中' : (watchValue.health?.status || '就绪');
+    watchStatus.textContent = watchValue.health?.status === 'ready'
+      ? (watchValue.running ? '正常运行中' : '已停止') : (watchValue.health?.reason || watchValue.health?.status || '未就绪');
     watchNamespace.textContent = watchValue.namespace || '未指定';
-    refreshWatchBtn.disabled = operating;
+    refreshWatchBtn.disabled = operating || watchValue.running !== true || watchValue.health?.status !== 'ready'
+      || !trackedSources().length;
 
     // Render dialogue & watches
     const dialogueItems = Array.isArray(watchValue.dialogue?.items) ? watchValue.dialogue.items : [];
@@ -218,13 +246,13 @@ export function mountKnowledgeControls(container, invoke) {
       for (const item of dialogueItems) {
         renderedTopics.add(item.topicId);
         const ans = item.answer || {};
-        let kindLabel = '未就绪 (withheld)';
+        let kindLabel = '未就绪';
         let badgeColor = '#888';
         if (ans.kind === 'current_fact') {
-          kindLabel = '已确认当前事实 (current_fact)';
+          kindLabel = '已确认当前事实';
           badgeColor = '#38a169';
         } else if (ans.kind === 'latest_observation') {
-          kindLabel = '最新观察待重评 (latest_observation)';
+          kindLabel = '最新观察待重评';
           badgeColor = '#d69e2e';
         } else if (ans.kind === 'withheld') {
           kindLabel = `已扣留/待重评 (${ans.reason || 'withheld'})`;
@@ -235,22 +263,26 @@ export function mountKnowledgeControls(container, invoke) {
           <article class="task" style="margin-bottom:10px;padding:10px;border-radius:6px;border:1px solid var(--border-color,#333);background:var(--surface-bg,#1a1a1a)">
             <div style="display:flex;justify-content:space-between;align-items:center">
               <strong>${escape(item.topicId)}</strong>
-              <span style="font-size:12px;padding:2px 6px;border-radius:4px;background:${badgeColor};color:#fff">${kindLabel}</span>
+              <span style="font-size:12px;padding:2px 6px;border-radius:4px;background:${badgeColor};color:#fff">${escape(kindLabel)}</span>
             </div>
             <p style="font-size:12px;color:var(--text-muted,#aaa);margin:4px 0">
               当前绑定版本：<code>${escape(item.boundSource?.revision || '无')}</code> | 
               当前事实可用性：<strong>${item.usableAsCurrentFact ? '可用' : '不可作为当前事实'}</strong>
             </p>
-            ${ans.citation ? `<p style="font-size:12px;margin:4px 0">引用：<a href="${escape(ans.citation)}" target="_blank" style="color:var(--link-color,#63b3ed)">${escape(ans.citation)}</a></p>` : ''}
+            ${ans.citation ? `<p style="font-size:12px;margin:4px 0">引用：${safeCitation(ans.citation)
+              ? `<a href="${escape(safeCitation(ans.citation))}" target="_blank" rel="noopener noreferrer" style="color:var(--link-color,#63b3ed)">${escape(ans.citation)}</a>`
+              : `<code>${escape(ans.citation)}</code>`}</p>` : ''}
             ${ans.kind === 'latest_observation' ? `
               <div style="margin:8px 0;padding:6px;background:rgba(214,158,46,0.1);border-left:3px solid #d69e2e;font-size:12px">
                 <p>已观察到来源新版本：<code>${escape(ans.sourceRevision || '最新')}</code>。需经本地 Runtime 重评任务确认方可接受。</p>
                 <div style="margin-top:6px;display:flex;gap:6px">
-                  <button class="btn btn-sm" data-bind-topic="${escape(item.topicId)}" type="button">接受更新并绑定新版本</button>
+                  <button class="btn btn-sm" data-bind-topic="${escape(item.topicId)}" type="button" ${!item.binding?.ready ? 'disabled' : ''}>绑定已重评的新版本</button>
                 </div>
+                <p>重评状态：${escape(item.binding?.reason || 'reevaluation_unavailable')}${item.binding?.taskState ? `（${escape(item.binding.taskState)}）` : ''}</p>
               </div>
             ` : ''}
             <div style="margin-top:6px;display:flex;justify-content:flex-end">
+              ${['tracked', 'paused'].includes(item.state) ? `<button class="btn btn-sm" data-track-topic="${escape(item.topicId)}" data-track-action="${item.state === 'paused' ? 'resume' : 'pause'}" type="button">${item.state === 'paused' ? '恢复关注' : '暂停关注'}</button>` : ''}
               <button class="btn btn-sm" style="color:#e53e3e" data-revoke-topic="${escape(item.topicId)}" type="button">撤销关注</button>
             </div>
           </article>
@@ -285,12 +317,12 @@ export function mountKnowledgeControls(container, invoke) {
         <article class="task" style="margin-bottom:8px;padding:8px;border-radius:4px;border:1px solid var(--border-color,#333)">
           <div style="display:flex;justify-content:space-between;align-items:center">
             <strong>提醒 ID: ${escape(notice.id?.slice(0, 12))}…</strong>
-            <span style="font-size:12px;color:${notice.delivered ? '#38a169' : '#e53e3e'}">${notice.delivered ? '已投递（未确认用户已读）' : '待投递回执'}</span>
+            <span style="font-size:12px;color:${notice.delivered ? '#38a169' : '#e53e3e'}">${notice.delivered ? '系统已投递' : '系统投递未确认'} · ${notice.readAt ? '用户已读' : '用户未读'}</span>
           </div>
           <p style="font-size:12px;margin:4px 0">${escape(notice.text || notice.summary || '关注来源更新提醒')}</p>
-          ${!notice.delivered ? `
+          ${!notice.readAt ? `
             <div style="margin-top:6px">
-              <button class="btn btn-sm" data-ack-notice="${escape(notice.id)}" type="button">确认投递回执</button>
+              <button class="btn btn-sm" data-read-notice="${escape(notice.id)}" type="button">标记已读</button>
             </div>
           ` : ''}
         </article>
@@ -304,8 +336,11 @@ export function mountKnowledgeControls(container, invoke) {
     watchList.querySelectorAll('[data-revoke-topic]').forEach(btn => {
       btn.addEventListener('click', () => handleRevoke(btn.dataset.revokeTopic));
     });
-    noticeList.querySelectorAll('[data-ack-notice]').forEach(btn => {
-      btn.addEventListener('click', () => handleAcknowledge(btn.dataset.ackNotice));
+    watchList.querySelectorAll('[data-track-topic]').forEach(btn => {
+      btn.addEventListener('click', () => handleTracking(btn.dataset.trackTopic, btn.dataset.trackAction));
+    });
+    noticeList.querySelectorAll('[data-read-notice]').forEach(btn => {
+      btn.addEventListener('click', () => handleRead(btn.dataset.readNotice));
     });
   }
 
