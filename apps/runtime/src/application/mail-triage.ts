@@ -1,4 +1,5 @@
 import {ProtocolError} from '@personal-agent/contracts';
+import {createHash} from 'node:crypto';
 import type {RegisteredTool, StoragePort, ProtocolContracts} from '@personal-agent/contracts';
 import {QQMailProvider, register as registerMail} from '@personal-agent/mail';
 import {LayaTriageService, LocalLayaBatchHttpTransport} from '@personal-agent/cognition';
@@ -6,8 +7,13 @@ import type {RuntimeApplication} from './runtime-application.js';
 import {createInboxTriagePipeline} from './inbox-triage.js';
 import type {InboxAnalysisAcceptance, InboxTriageContext} from './inbox-triage.js';
 
+const classifierPolicy = Object.freeze({model: 'multilingual', promptVersion: 'mail-triage-v1',
+  strategyVersion: 'laya-triage-v1', batching: 'multi_state' as const, chunkSize: 4,
+  minimumAnswerProbability: 0.7, minimumMargin: 0.15});
+/** Bump strategyVersion when interpretation changes; labels are separately bound by the pipeline. */
+export const LOCAL_INBOX_CLASSIFIER_FINGERPRINT = createHash('sha256').update(JSON.stringify(classifierPolicy)).digest('hex');
 export function createLocalInboxClassifier(options: {port: number; getApiKey: () => string}) {
-  return new LayaTriageService(new LocalLayaBatchHttpTransport(options.port, options.getApiKey), {batching:'multi_state'});
+  return new LayaTriageService(new LocalLayaBatchHttpTransport(options.port, options.getApiKey), classifierPolicy);
 }
 
 export interface QQMailTriageHostOptions {
@@ -19,6 +25,7 @@ export interface QQMailTriageHostOptions {
   readonly triage?: Pick<LayaTriageService, 'classify'>;
   readonly labels: Readonly<Record<string, string>>;
   readonly meetingLabels?: readonly string[];
+  readonly classifierFingerprint?: string;
   readonly isSessionAllowed: () => boolean;
 }
 
@@ -31,10 +38,12 @@ export function createQQMailTriageHost(options: QQMailTriageHostOptions) {
   let closed = false, refreshing = false, reading = 0, status = options.triage ? 'ready' : 'unavailable';
   let taskId: string | undefined, cursor: string | undefined, deadline = '';
   let analysisSessionId: string | undefined;
+  let expiredCursor: string | undefined;
   const allowed = () => !closed && options.isSessionAllowed();
   const pipeline = options.triage ? createInboxTriagePipeline({storage: options.storage,
     namespace: options.namespace, triage: options.triage, labels: options.labels,
     ...(options.meetingLabels ? {meetingLabels: options.meetingLabels} : {}),
+    ...(options.classifierFingerprint ? {classifierFingerprint: options.classifierFingerprint} : {}),
     authorizeRead: scope => allowed() && scope.accountRef === options.accountRef && scope.folder === 'INBOX'}) : undefined;
   const tools: RegisteredTool[] = [];
   const disposeRegistration = registerMail({register(implementation) {
@@ -70,7 +79,8 @@ export function createQQMailTriageHost(options: QQMailTriageHostOptions) {
       headersOnly: true, counts: {total: summary?.total ?? 0, needsReview: summary?.needsReview ?? 0,
         highImpactCandidates: summary?.highImpactCandidates ?? 0, meetingCandidates: summary?.meetingCandidates ?? 0,
         groups: summary?.groups ?? {}},
-      reason: !pipeline ? '本地 Laya 服务未配置，尚未读取邮箱' : undefined};
+      reason: !pipeline ? '本地 Laya 服务未配置，尚未读取邮箱'
+        : status === 'resync_required' ? '邮箱分页游标已失效；下次主动读取将从当前邮箱重新同步，已有记录保留' : undefined};
   };
   const next = () => {
     if (!application || !sessionId) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Inbox Runtime is not bound');
@@ -127,9 +137,13 @@ export function createQQMailTriageHost(options: QQMailTriageHostOptions) {
       if (!application || !pipeline) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Local inbox classification is unavailable');
       if (!allowed()) throw new ProtocolError('UNAUTHORIZED', 'Inbox read consent is absent');
       if (sessionId || reading > 0) throw new ProtocolError('REVISION_CONFLICT', 'Inbox batch is already active');
-      const session = application.startMailReadSession({accountRef: options.accountRef, folder: 'INBOX', expiresAt});
+      const scope = {accountRef: options.accountRef, folder: 'INBOX', deadline: expiresAt, signal: new AbortController().signal};
+      if (expiredCursor !== undefined) pipeline.resetExpiredCursor({...scope, expectedCursor: expiredCursor});
+      const savedCursor = pipeline.readCursor(scope);
+      const session = application.startMailReadSession({accountRef: options.accountRef, folder: 'INBOX', expiresAt,
+        ...(savedCursor ? {cursor: savedCursor} : {})});
       sessionId = session.sessionId; analysisSessionId = session.sessionId;
-      deadline = expiresAt; cursor = undefined; controller = new AbortController();
+      deadline = expiresAt; cursor = savedCursor; expiredCursor = undefined; controller = new AbortController();
       next();
       return snapshot();
     },
@@ -141,7 +155,12 @@ export function createQQMailTriageHost(options: QQMailTriageHostOptions) {
       catch (error) { await cancel(); throw error; }
       if (!read.confirmed) {
         status = read.task.state;
-        if (['failed', 'cancelled'].includes(status)) return cancel();
+        if (['failed', 'cancelled'].includes(status)) {
+          const stale = read.task.state === 'failed' && read.task.error?.code === 'CURSOR_EXPIRED' && cursor;
+          await cancel();
+          if (stale) {expiredCursor = cursor; status = 'resync_required';}
+          return snapshot();
+        }
         return snapshot();
       }
       const page = read.confirmed.result as {account: string; folder: string; items: ProtocolContracts['connectorItem'][];

@@ -34,10 +34,11 @@ test('encrypted inbox persistence: partial retry, revision replacement and no fa
       [`impact_${index}`, answer('high_impact', {routine: 0.1, high_impact: 0.9})],
     ]))};
   }});
+  let classifierFingerprint = 'fixture-policy-v1';
   const open = () => createInboxTriagePipeline({storage: createEncryptedModuleStorage({userData,
     safeStorage, filename: 'mail-classification.json'}), namespace: 'synthetic-user', triage,
   labels: {meeting: 'Meeting-related subject needing source review', other: 'Other'},
-  meetingLabels: ['meeting'], authorizeRead: () => authorized});
+  meetingLabels: ['meeting'], classifierFingerprint, authorizeRead: () => authorized});
   const page = () => ({...context(), accountRef: 'fixture', folder: 'INBOX', nextCursor: '1:5',
     hasMore: false, items});
   try {
@@ -79,6 +80,18 @@ test('encrypted inbox persistence: partial retry, revision replacement and no fa
       items: items.map(item => ({...item, fetchedAt: '2026-09-27T02:00:00.000Z'}))});
     assert.equal(replay.classified, 0);
     assert.equal(calls.length, callCount);
+    assert.equal(pipeline.readCursor({...context(), accountRef:'fixture', folder:'INBOX'}), '1:5');
+    classifierFingerprint = 'fixture-policy-v2'; pipeline = open();
+    assert.equal(pipeline.snapshot().needsReview, 5);
+    assert.equal(pipeline.snapshot().meetingCandidates, 0);
+    assert.deepEqual(pipeline.pendingAnalyses(context()), []);
+    assert.equal(pipeline.readAnalysis(toAccept.workKey, context()), undefined);
+    const policyRefresh = await pipeline.processPage({...page(), cursor:'1:5'});
+    assert.equal(policyRefresh.classified, 5);
+    assert.equal(pipeline.pendingAnalyses(context()).length, 4); // Accepted work is never resubmitted.
+    classifierFingerprint = 'fixture-policy-v1'; pipeline = open();
+    assert.equal(pipeline.readAnalysis(toAccept.workKey, context()).state, 'accepted');
+    classifierFingerprint = 'fixture-policy-v2'; pipeline = open();
     const changed = await pipeline.processPage({...page(),
       items: items.map((item, index) => index === 0 ? {...item,
         fetchedAt: '2026-09-27T03:00:00.000Z', contentRef: 'revised meeting subject'} : item)});
@@ -99,5 +112,11 @@ test('encrypted inbox persistence: partial retry, revision replacement and no fa
     authorized = false;
     await assert.rejects(pipeline.processPage(page()), {code: 'UNAUTHORIZED'});
     assert.equal(pipeline.cursor('fixture', 'INBOX'), '1:5');
+    assert.throws(() => pipeline.readCursor({...context(), accountRef:'fixture', folder:'INBOX'}), {code:'UNAUTHORIZED'});
+    authorized = true;
+    assert.throws(() => pipeline.resetExpiredCursor({...context(), accountRef:'fixture', folder:'INBOX', expectedCursor:'1:0'}), {code:'REVISION_CONFLICT'});
+    pipeline.resetExpiredCursor({...context(), accountRef:'fixture', folder:'INBOX', expectedCursor:'1:5'});
+    assert.equal(pipeline.cursor('fixture', 'INBOX'), undefined);
+    assert.equal(pipeline.snapshot().total, 5);
   } finally {await rm(userData, {recursive: true, force: true});}
 });

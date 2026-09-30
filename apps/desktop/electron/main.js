@@ -1072,6 +1072,7 @@ async function initializeRuntime() {
           mailHost = runtimeModule.createQQMailTriageHost({user, authCode, accountRef:'desktop-qq-inbox',
             storage:createMailMetadataStorage({userData:app.getPath('userData'), safeStorage}),
             namespace:`${namespace}:qq-inbox:${user.toLowerCase()}`, triage:localLaya,
+            classifierFingerprint:runtimeModule.LOCAL_INBOX_CLASSIFIER_FINGERPRINT,
             labels:{meeting:'Meeting invitations, rescheduling and appointment notices',
               work:'Work, project, technical discussions and documents',
               subscription:'Subscribed newsletters, news digests and product updates',

@@ -30,6 +30,7 @@ test('one inbox consent reads confirmed pages with Policy/Evidence and blocks ex
   const consent = () => ({accountRef: 'fixture', folder: 'INBOX', expiresAt: new Date(time + 60000).toISOString()});
   try {
     assert.throws(() => app.startMailReadSession({...consent(), folder: 'Sent'}), {code: 'INVALID_ARGUMENT'});
+    assert.throws(() => app.startMailReadSession({...consent(), cursor: 'invalid'}), {code: 'INVALID_ARGUMENT'});
     const session = app.startMailReadSession(consent());
     const first = app.nextMailReadSession(session.sessionId);
     assert.equal(first.state, 'submitted'); await idle(app);
@@ -43,6 +44,10 @@ test('one inbox consent reads confirmed pages with Policy/Evidence and blocks ex
       {account: 'fixture', folder: 'INBOX', limit: 100, cursor: '1:100'}]);
     assert.equal(app.nextMailReadSession(session.sessionId).state, 'done');
     app.stopMailReadSession(session.sessionId);
+    const resumed = app.startMailReadSession({...consent(), cursor: '1:200'});
+    app.nextMailReadSession(resumed.sessionId); await idle(app);
+    assert.deepEqual(seen.at(-1), {account:'fixture', folder:'INBOX', limit:100, cursor:'1:200'});
+    app.stopMailReadSession(resumed.sessionId);
     const expired = app.startMailReadSession(consent()); time += 60000;
     assert.throws(() => app.nextMailReadSession(expired.sessionId), {code: 'TIMEOUT'});
     time = Date.now();
@@ -57,7 +62,7 @@ test('one inbox consent reads confirmed pages with Policy/Evidence and blocks ex
     const client = new Client(app); await client.connect();
     await assert.rejects(client.call('tool.invoke', {toolName: descriptor.name, toolVersion: descriptor.version,
       arguments: args, scopeRef: ref}, {taskId: task.taskId, idempotencyKey: ref}), {code: 'UNAUTHORIZED'});
-    assert.equal(calls, 2);
+    assert.equal(calls, 3);
   } finally {await idle(app); app.close(); await rm(directory, {recursive: true, force: true});}
 });
 
