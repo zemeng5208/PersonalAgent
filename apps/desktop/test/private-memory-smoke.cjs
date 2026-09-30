@@ -29,9 +29,10 @@ const {_electron} = require('playwright');
     await orb.evaluate(() => window.desktop.invoke('orb.open'));
     const panel = app.windows().find(page => page.url().includes('mode=panel'));
     await panel.waitForSelector('#admin');
-    const opening = app.waitForEvent('window');
+    const existingAdmin = app.windows().find(page => page.url().includes('mode=admin'));
+    const opening = existingAdmin ? null : app.waitForEvent('window');
     await panel.evaluate(() => window.desktop.invoke('admin.open', {page: 'memory'}));
-    const admin = await opening;
+    const admin = existingAdmin ?? await opening;
     await admin.waitForSelector('#memory-select-vault', {timeout: 5000}).catch(async error => {
       const status = await admin.locator('#connection').innerText();
       const page = await admin.locator('#content').innerText();
