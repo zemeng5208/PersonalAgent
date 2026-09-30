@@ -158,6 +158,35 @@ test('stale learning deletion has zero cancellation effects on old and current v
   assert.equal(f.app.readVersion('reference-review', 2).summary, 'Current version');
 });
 
+test('learning stop cancels only the precisely bound Runtime task and preserves workflow versions', async t => {
+  const f = await learningFixture(t);
+  propose(f.app);
+  const first = await f.app.startValidation({workflowId: 'reference-review', revision: 1,
+    operationId: 'stop-one', ...context()});
+  const independent = await f.app.startValidation({workflowId: 'reference-review', revision: 1,
+    operationId: 'stop-independent', ...context()});
+  assert.throws(() => f.app.stop({workflowId: 'another-workflow', revision: 1, taskId: first.taskId,
+    ...context()}), {code: 'SCOPE_DENIED'});
+  assert.equal(f.runtime.getTask(first.taskId).cancelRequested, undefined);
+  let started;
+  const entered = new Promise(resolve => {started = resolve;});
+  const running = f.runtime.runTask(first.taskId, async worker => {
+    started();
+    await new Promise(resolve => worker.signal.addEventListener('abort', resolve, {once: true}));
+    return {resultSummary: 'Cancelled synthetic worker'};
+  }, {deadline: context().deadline, sideEffect: 'read'});
+  await entered;
+  assert.equal(f.runtime.getTask(first.taskId).state, 'running');
+  const result = f.app.stop({workflowId: 'reference-review', revision: 1, taskId: first.taskId, ...context()});
+  assert.equal(result.cancelRequested, true);
+  assert.equal(f.runtime.getTask(independent.taskId).cancelRequested, undefined);
+  assert.equal((await running).state, 'cancelled');
+  assert.equal(f.calls(), 0);
+  assert.equal(f.app.readVersion('reference-review', 1).validation, 'candidate');
+  assert.equal(f.app.stop({workflowId: 'reference-review', revision: 1, taskId: first.taskId,
+    ...context()}).state, 'cancelled');
+});
+
 test('a new head during deletion confirmation rejects atomically before cancelling current work', async t => {
   const f = await learningFixture(t);
   propose(f.app);

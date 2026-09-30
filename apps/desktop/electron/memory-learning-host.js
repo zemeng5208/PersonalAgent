@@ -12,16 +12,19 @@ export function createMemoryLearningHost({profile, privateMemory, learningApplic
   if (profile !== 'huawei_ict_agentarts' || !privateMemory) throw Error('需要 Competition 私人记忆宿主');
   // Only the composition owner can supply the actual application-copy inventory.
   // Unknown/existing unsupported managed copies keep production writes disabled.
-  const noManagedCopies = Array.isArray(managedPrivateCopies) && managedPrivateCopies.length === 0;
+  const noManagedCopies = () => {
+    const inventory = typeof managedPrivateCopies === 'function' ? managedPrivateCopies() : managedPrivateCopies;
+    return Array.isArray(inventory) && inventory.length === 0;
+  };
   const writeReady = () => {
-    if (!noManagedCopies) throw Error('应用管理副本删除未接通，私人写入保持禁用');
+    if (!noManagedCopies()) throw Error('应用管理副本删除未接通，私人写入保持禁用');
     return privateMemory.prepareWrite();
   };
   return Object.freeze({
     snapshot() {
       let writeEnabled = false;
       let writeState = 'managed_copy_inventory_required';
-      if (noManagedCopies) {
+      if (noManagedCopies()) {
         try { writeReady(); writeEnabled = true; writeState = 'ready'; }
         catch { writeState = 'deletion_maintenance_required'; }
       }
@@ -44,7 +47,7 @@ export function createMemoryLearningHost({profile, privateMemory, learningApplic
         return privateMemory.save(payload.source, payload.summary, payload.baseline);
       }
       if (name === 'memory.withdraw') return privateMemory.withdraw(payload.ref);
-      if (name === 'memory.delete') return privateMemory.delete(payload.ref);
+      if (name === 'memory.delete') { writeReady(); return privateMemory.delete(payload.ref); }
       if (name === 'memory.boundErase') {
         if (!publicErasure) throw Error('公共事实跨库删除未配置');
         return publicErasure.erase({factId: payload.ref?.id, expectedRevision: payload.ref?.revision,
@@ -72,6 +75,8 @@ export function createMemoryLearningHost({profile, privateMemory, learningApplic
         operationId: randomUUID(), activatedAt: new Date().toISOString(), ...scope});
       if (name === 'learning.run') return learningApplication.run({workflowId: payload.workflowId,
         revision: payload.revision, operationId: randomUUID(), ...scope});
+      if (name === 'learning.stop') return learningApplication.stop({workflowId: payload.workflowId,
+        revision: payload.revision, taskId: payload.taskId, ...scope});
       if (name === 'learning.erase') return learningApplication.erase({workflowId: payload.workflowId,
         expectedRevision: payload.expectedRevision, operationId: randomUUID(), ...scope});
       throw Error('不支持的流程学习操作');

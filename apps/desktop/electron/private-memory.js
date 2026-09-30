@@ -32,6 +32,7 @@ export function createPrivateMemoryController(databasePath, confirm, confirmDele
   };
   let vault;
   let configurationRevision = 0;
+  const controllerId = randomUUID();
   let closed = false;
   const head = ref => {
     if (!ref || typeof ref !== 'object' || typeof ref.id !== 'string'
@@ -40,9 +41,25 @@ export function createPrivateMemoryController(databasePath, confirm, confirmDele
     if (!current || current.ref.revision !== ref.revision) throw Error('记忆版本已变化，请刷新列表');
     return current;
   };
+  const consumptionBinding = ref => {
+    if (closed || !vault) throw Error('私人来源配置不可用');
+    const fact = head(ref);
+    const now = Date.now();
+    if (fact.state !== 'active' || fact.confirmation !== 'user_confirmed'
+      || Date.parse(fact.validFrom) > now || Date.parse(fact.validUntil) <= now) throw Error('私人记忆已撤回或失效');
+    return {ref: structuredClone(fact.ref), configurationRef: `private-vault:${controllerId}:${configurationRevision}`,
+      sourceDigest: hash(fact.sourceRef), summaryDigest: hash(fact.summary)};
+  };
   return Object.freeze({
     get selected() { return Boolean(vault); },
     get configurationRevision() { return configurationRevision; },
+    /** Content-free host binding. Neither source paths nor summaries cross this port. */
+    readConsumptionBinding(ref) { return consumptionBinding(ref); },
+    assertConsumption(binding) {
+      if (JSON.stringify(consumptionBinding(binding?.ref)) !== JSON.stringify(binding)) {
+        throw Error('私人记忆消费绑定已变化');
+      }
+    },
     prepareWrite() {
       const store = memoryHost();
       store.assertUnboundNamespace(namespace);
@@ -134,7 +151,7 @@ export function createPrivateMemoryController(databasePath, confirm, confirmDele
       return {state: 'withdrawn', revision: saved.fact.ref.revision};
     },
     /** Host-only per-task data authorization. Never register this as public Fact projection. */
-    async consumeConfirmed({refs, taskId, destination, deadline, signal}) {
+    async consumeConfirmed({refs, taskId, destination, configurationRef, deadline, signal}) {
       if (!Array.isArray(refs) || refs.length < 1 || refs.length > 10
         || typeof taskId !== 'string' || !taskId.trim() || taskId.length > 256
         || !['local', 'agentarts'].includes(destination) || !signal
@@ -142,11 +159,14 @@ export function createPrivateMemoryController(databasePath, confirm, confirmDele
         throw Error('无效的私人记忆消费范围');
       }
       const selected = structuredClone(refs);
+      const bindings = selected.map(consumptionBinding);
       if (new Set(selected.map(ref => ref.id)).size !== selected.length) throw Error('重复的私人记忆引用');
       const check = () => {
         if (closed || signal.aborted || Date.parse(deadline) <= Date.now()) throw Error('私人记忆消费已取消或过期');
         const now = Date.now();
         return selected.map(ref => {
+          const original = bindings.find(binding => binding.ref.id === ref.id);
+          if (JSON.stringify(consumptionBinding(ref)) !== JSON.stringify(original)) throw Error('私人记忆消费绑定已变化');
           const fact = head(ref);
           if (fact.state !== 'active' || fact.confirmation !== 'user_confirmed'
             || Date.parse(fact.validFrom) > now || Date.parse(fact.validUntil) <= now) throw Error('私人记忆已撤回或失效');
@@ -155,11 +175,12 @@ export function createPrivateMemoryController(databasePath, confirm, confirmDele
       };
       const facts = check();
       // The injected callback is a trusted native decision, never renderer/model-supplied permission.
-      if (await authorizeConsumption({taskId, destination, facts: structuredClone(facts), deadline}) !== true) {
+      if (await authorizeConsumption({taskId, destination, configurationRef,
+        bindings: structuredClone(bindings), facts: structuredClone(facts), deadline}) !== true) {
         return {state: 'declined', facts: []};
       }
       return {state: 'authorized', taskId, destination, facts: check(),
-        treatment: 'user_confirmed_data'};
+        bindings, treatment: 'user_confirmed_data'};
     },
     async delete(ref) {
       if (!ref || typeof ref !== 'object' || typeof ref.id !== 'string'

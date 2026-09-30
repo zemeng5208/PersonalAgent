@@ -222,6 +222,19 @@ export function createWorkflowLearningApplication(options: WorkflowLearningOptio
     },
     readVersion(workflowId: string, revision: number) { return learning.readVersion(namespace, workflowId, revision); },
     readActive(workflowId: string) { return learning.readActive(namespace, workflowId); },
+    stop(request: LearningContext & {workflowId: string; revision: number; taskId: string}) {
+      active(request);
+      const task = runtime.getTask(request.taskId);
+      const binding = runtime.loadCheckpoint(request.taskId, LEARNING_BINDING_CHECKPOINT) as LearningTaskBinding | undefined;
+      // Stopping remains possible after rollback/erasure: compare the durable original task binding.
+      if (task.conversationId !== conversationId || !binding || binding.namespace !== namespace
+        || binding.workflowId !== request.workflowId || binding.revision !== request.revision) {
+        fail('SCOPE_DENIED', 'Stop task belongs to another workflow or revision');
+      }
+      if (!['succeeded', 'failed', 'cancelled'].includes(task.state)) runtime.requestCancel(task.taskId);
+      const current = runtime.getTask(task.taskId);
+      return {state: current.state as string, taskId: current.taskId, cancelRequested: Boolean(current.cancelRequested)};
+    },
     async erase(request: LearningContext & {workflowId: string; expectedRevision: number; operationId: string}) {
       request = {workflowId: request.workflowId, expectedRevision: request.expectedRevision,
         operationId: request.operationId, deadline: request.deadline, signal: request.signal};

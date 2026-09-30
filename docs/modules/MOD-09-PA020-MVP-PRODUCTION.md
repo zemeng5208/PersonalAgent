@@ -19,6 +19,8 @@
   受信 Desktop admin facade。`managedPrivateCopies: []` 必须来自组合入口核实的实际应用副本清单，
   私人 namespace 从未有 feed binding 且删除维护通过才返回 `writeEnabled:true`。
   未提供清单/已有未接通副本均禁用；不能只移除旧 fixture gate。
+  清单可为受信 live callback，每次写入/删除前重新读；启动后新增未接通副本也会禁用，
+  不缓存空清单结论或宣称删除已覆盖新增副本。
   `memory.previewSave` → `memory.save({source,summary,baseline})`；
   `memory.withdraw` / `memory.delete` 均走原生确认，`memory.boundErase` 只消费明确注入的公共删除宿主。
 - `createWorkflowLearningApplication({profile,namespace,conversationId?,learning,runtime,skillManifest,submitSkillTask,confirmActivation,confirmDeletion})`：
@@ -35,6 +37,9 @@
   唯一已授权且执行过的 Runtime 工具记录和 Evidence；模型自报/空 Evidence 不足以通过。
   `activate` 单独可信确认且检查当前 active revision；旧已验证版本通过同端口回退。
   `run` 只提交已启用版本，工具授权仍由原 Runtime/Policy。
+  `stop({workflowId,revision,taskId,deadline,signal})` 比对原 Runtime 任务 conversation 与持久学习绑定，
+  只取消该精确任务；回退/删除之后仍可停止原绑定任务，不删除候选或启用历史。
+  返回 `cancelRequested` 与实际当前状态，取消受理不等于执行已停止。
   `erase` 精确头、可信确认，向同conversation绑定任务请求取消并清除候选/验证/启用历史；
   `resumeErasureMaintenance(namespace)` 只重试已提交删除的 WAL 维护。
 - `createBoundPublicFactErasureApplication({profile,memory,runtime,projection,memoryNamespace,graphNamespace,confirm})`：
@@ -59,6 +64,40 @@ Memory 新 host-only metadata `listFactErasures(namespace,{limit,afterFactId?,de
 Desktop `filterRestoredHost(restoredMemory,context)` 要求原库仍存在且与恢复副本不同。
 此入口为未来真实已有 restore 调用方提供防污染边界；当前没有生产 backup/restore 调用路径。
 外部任意副本及曾经导出/已发送的正文不在应用控制范围，需要用户自行处理，不能称作删除已覆盖。
+
+## 主对话私人消费接线
+
+`apps/desktop/electron/private-memory-consumption-host.js` 提供独立受信
+`createPrivateMemoryConsumptionHost({profile,privateMemory,readTask,readTaskBinding,writeTaskBinding,readConfigurationRef})`。
+P8 是共享 main/Runtime/主对话唯一写入者；组合入口必须提供原 TaskRuntime 的读写端口以及当前真实
+Competition 配置的无内容 opaque ref。不得用 Renderer 的声明替代真实配置/原生确认。
+
+- `select({conversationId,ref|null})` 仅选一个精确私人引用，不授予外发权限；来源配置变更后旧选择失效。
+- `prepare({taskId,conversationId,goal,deadline,signal})` 在原 Runtime 受理后、原 worker dispatch 前调用。
+  逐任务原生确认目的地、摘要、精确版本；确认前后重新读取 active/user_confirmed/有效期、来源配置、
+  原任务取消/终态与 Competition 配置。拒绝返回原公共输入且不创建私有消费绑定。
+- 允许后 `private-memory:consumption:v1` 只保存 task/conversation/config/deadline、输入摘要 hash、
+  factRef、来源/记忆摘要 hash 与私人来源配置 opaque ref，不包含私有正文、源路径或 Vault 绝对路径。
+  `goal` 返回值是仅内存的投影，摘要作为 `user_confirmed_data`。P8 不得写入 application-goal、
+  原协调循环 checkpoints 或另建历史正文副本；原公共用户输入正常持久化。
+- `assertCloudSend(request)` 必须接到原 AgentArts 最终同步 beforeSend：credential await 之后、
+  fetch 之前重新验证实际 request.goal、原持久绑定、精确事实头、配置、deadline、signal 和 task。
+  更正/撤回/删除/切 Vault/改变云配置/停止任务均使旧发送拒绝；续接也必须保留同一已确认投影并再查。
+  重启有 metadata marker 却无原内存 lease 时拒绝，不恢复旧私人外发许可；重新提交任务、重新确认。
+  `releaseTask` / `close` 清理内存许可。这里的 prepare/guard 不签发工具权限、不记录云完成证据。
+
+2026-09-30 新增必要验证：`node --test apps/desktop/test/private-memory-consumption.test.mjs`
+实际 3/3 通过；调用生产 `AgentArtsCloudAgentPort`、显式合成 credential/fetch，检查其真实序列化 body
+只有更正摘要无旧摘要/来源路径，拒绝确认只有原公共 goal；credential await 中撤回使最终 guard 拒绝且
+zero fetch；更改实际 goal/config、重启无 lease、native 确认期间切 Vault/取消均拒绝。
+live inventory 新增副本立即禁用写入。此为生产适配器离线传输验证，不是真实账号云消费。
+
+Runtime 单次 `tsc -p apps/runtime/tsconfig.json` 通过；仅新 `learning stop` 用例 1/1 通过（122.5ms），
+实际 Runtime running worker 收到 abort 后 cancelled，其他任务与流程版本保留。
+控件新增停止按钮以同一原 taskId/workflow/revision 发送，合成 Edge 交互验证
+候选→验证任务→停止请求→显示 cancelling；1000×940 与 390×844 无横向溢出/裁切/console 错误。
+此处仍未验证共享主对话调用、真实 Electron 原生确认、真实 Vault/真实 AgentArts 消费；
+等待 P8 实际接线和相应读回，不能仅凭本源包标记整个 PA020 done。
 
 ## 验证与限制
 

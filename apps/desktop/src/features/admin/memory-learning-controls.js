@@ -3,7 +3,7 @@ const escape = value => String(value ?? '').replace(/[&<>"']/g,
 
 /** Only metadata and opaque references enter this independent admin component. */
 export function memoryLearningControlsHtml({status = {}, refs = [], version = null,
-  active = null, taskId = '', message = '', form = {}} = {}) {
+  active = null, taskId = '', runningTask = null, message = '', form = {}} = {}) {
   const workflow = version ? `<p>候选 v${escape(version.revision)} · ${escape(version.validation)} ·
     ${version.hasEvidence ? '有 Runtime 验证记录' : '等待验证'}</p>` : '<p>尚未选择流程版本。</p>';
   const memories = refs.map((ref, index) => `<div class="setting-row"><span>私人记忆 ${index + 1} · v${escape(ref.revision)}</span>
@@ -22,6 +22,7 @@ export function memoryLearningControlsHtml({status = {}, refs = [], version = nu
     </div>
     ${workflow}<p>当前启用：${active ? `v${escape(active.revision)}` : '无'}</p>
     ${taskId ? `<p>验证任务：${escape(taskId)}</p>` : ''}
+    ${runningTask ? `<p>可停止任务：${escape(runningTask.taskId)} · v${escape(runningTask.revision)}</p>` : ''}
     <div class="form-actions">
       <button class="btn btn-sm" data-ml-action="read">读取版本</button>
       <button class="btn btn-sm" data-ml-action="propose">生成候选</button>
@@ -29,6 +30,7 @@ export function memoryLearningControlsHtml({status = {}, refs = [], version = nu
       <button class="btn btn-sm" data-ml-action="validate" ${taskId ? '' : 'disabled'}>读回验证</button>
       <button class="btn btn-sm" data-ml-action="activate" ${version?.validation === 'passed' ? '' : 'disabled'}>确认启用此版本</button>
       <button class="btn btn-sm" data-ml-action="run" ${active ? '' : 'disabled'}>运行已启用版本</button>
+      <button class="btn btn-sm" data-ml-action="stop" ${runningTask ? '' : 'disabled'}>停止此任务</button>
       <button class="btn btn-sm" data-ml-action="erase" ${version ? '' : 'disabled'}>删除流程</button>
     </div><p class="muted">${status.learningAvailable ? '学习宿主已配置' : '学习宿主未配置'}</p>
     <p role="status" aria-live="polite">${escape(message)}</p></section>`;
@@ -36,7 +38,8 @@ export function memoryLearningControlsHtml({status = {}, refs = [], version = nu
 
 /** P8 mounts this inside the trusted admin surface; invoke uses its sender-checked preload. */
 export function mountMemoryLearningControls(root, {invoke, status, refs = []}) {
-  const state = {status, refs: structuredClone(refs), version: null, active: null, taskId: '', message: '', form: {}};
+  const state = {status, refs: structuredClone(refs), version: null, active: null, taskId: '',
+    runningTask: null, message: '', form: {}};
   const events = new AbortController();
   let busy = false;
   let disposed = false;
@@ -74,6 +77,7 @@ export function mountMemoryLearningControls(root, {invoke, status, refs = []}) {
         if (action === 'validate') payload.taskId = state.taskId;
         if (action === 'activate') payload.expectedActiveRevision = state.active?.revision ?? null;
         if (action === 'run') payload.revision = state.active.revision;
+        if (action === 'stop') Object.assign(payload, state.runningTask);
         if (action === 'erase') payload.expectedRevision = revision;
         result = await invoke(`learning.${action}`, payload);
         if (result.version) state.version = result.version;
@@ -84,12 +88,19 @@ export function mountMemoryLearningControls(root, {invoke, status, refs = []}) {
         if (action === 'propose') state.taskId = '';
         if (result.version) state.form.revision = result.version.revision;
         if (action === 'startValidation') state.taskId = result.taskId;
+        if (['startValidation', 'run'].includes(action)) {
+          state.runningTask = {taskId: result.taskId, workflowId, revision: payload.revision};
+        }
+        if (action === 'stop' && (result.cancelRequested || ['succeeded', 'failed', 'cancelled'].includes(result.state))) {
+          state.runningTask = null;
+        }
         if (action === 'activate' && result.state === 'activated') state.active = state.version;
         if (action === 'erase' && result.state === 'deleted') {
           state.version = null; state.active = null; state.taskId = '';
         }
       }
-      state.message = result.state === 'declined' ? '已取消确认，未更改。'
+      state.message = action === 'stop' ? (result.cancelRequested ? `已请求停止，任务当前为 ${result.state}。` : `任务当前为 ${result.state}。`)
+        : result.state === 'declined' ? '已取消确认，未更改。'
         : result.state === 'pending' ? `任务仍为 ${result.taskState}，请在任务区处理后读回。`
           : result.taskId ? `任务已受理：${result.taskId}（${result.state}）`
             : result.version?.validation === 'failed' ? '验证失败，不能启用。'
