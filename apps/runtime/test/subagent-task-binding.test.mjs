@@ -22,6 +22,8 @@ function fixture(automatic = true) {
   return {app,parent,calls};
 }
 test('Runtime model factory composes each public provider and denies revoked credentials before network', async () => {
+  assert.throws(()=>createConfiguredSubagentModelGateway({profile:'local',provider:'openai-compatible',
+    baseUrl:'https://synthetic.invalid/v1',model:'synthetic',deployment:'synthetic',apiKey:()=>''}),{code:'UNSUPPORTED_CAPABILITY'});
   for (const provider of ['pangu','openai-compatible']) {
     let decorated = false;
     const gateway = createConfiguredSubagentModelGateway({provider,baseUrl:'https://synthetic.invalid/v1',
