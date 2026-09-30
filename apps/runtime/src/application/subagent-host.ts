@@ -173,7 +173,8 @@ export function createRuntimeSubagentDispatchTool(options: SubagentHostOptions):
                   initialMessages: [rolePrompt],
                   model,
                   tools: childTools ?? {list: () => [], invoke: async () => { throw new Error('No tools'); }},
-                  authorizationRefFor: () => `subtask-auth-${childTaskId}`,
+                  // 授权引用不再自造前缀：agent 循环默认按本次调用 runId 派生，
+                  // 与 RuntimeApplication.tools 的真实授权/审批机制一致（POTATOS-MVP §9.7）。
                   maxSteps: subtask.thinkingDepth !== undefined ? Math.max(2, (subtask.thinkingDepth + 1) * 2) : 6,
                   ...(reasoningEffort !== undefined ? {reasoningEffort} : {}),
                 },
