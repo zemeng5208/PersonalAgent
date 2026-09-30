@@ -20,6 +20,7 @@ export interface WorkspaceCommandRecipe {
   id: string;
   executable: string;
   args: readonly string[];
+  env?: Readonly<Record<string, string>>;
 }
 
 export interface WorkspaceCommandOptions {
@@ -29,6 +30,7 @@ export interface WorkspaceCommandOptions {
   maxOutputBytes?: number;
   maxDurationMs?: number;
   now?: () => number;
+  env?: Readonly<Record<string, string>>;
 }
 
 export interface WorkspaceCommandResult {
@@ -36,6 +38,31 @@ export interface WorkspaceCommandResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+}
+
+const envKeyPattern = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/u;
+const forbiddenKeyPattern = /(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|AUTH)/i;
+
+function checkEnv(env: Readonly<Record<string, string>> | undefined, name: string): Record<string, string> {
+  if (env === undefined) return {};
+  if (typeof env !== 'object' || env === null || Array.isArray(env)) {
+    throw new ProtocolError('INVALID_ARGUMENT', `${name} must be an object`);
+  }
+  const entries = Object.entries(env);
+  if (entries.length > 64) {
+    throw new ProtocolError('INVALID_ARGUMENT', `${name} has too many entries`);
+  }
+  const result: Record<string, string> = {};
+  for (const [k, v] of entries) {
+    if (!envKeyPattern.test(k) || forbiddenKeyPattern.test(k) || k.includes('=')) {
+      throw new ProtocolError('INVALID_ARGUMENT', `Host command environment variable name '${k}' is invalid or forbidden`);
+    }
+    if (typeof v !== 'string' || v.length > 4096 || v.includes('\0')) {
+      throw new ProtocolError('INVALID_ARGUMENT', `Host command environment variable value for '${k}' is invalid`);
+    }
+    result[k] = v;
+  }
+  return result;
 }
 
 function bounded(value: number | undefined, fallback: number, maximum: number, name: string): number {
@@ -46,7 +73,11 @@ function bounded(value: number | undefined, fallback: number, maximum: number, n
   return result;
 }
 
-function checkedRecipes(root: string, recipes: readonly WorkspaceCommandRecipe[]): Map<string, WorkspaceCommandRecipe> {
+function checkedRecipes(
+  root: string,
+  recipes: readonly WorkspaceCommandRecipe[],
+  baseEnv: Readonly<Record<string, string>> = {},
+): Map<string, WorkspaceCommandRecipe> {
   if (!Array.isArray(recipes) || recipes.length < 1 || recipes.length > 32) {
     throw new ProtocolError('INVALID_ARGUMENT', 'A bounded host command allowlist is required');
   }
@@ -58,6 +89,7 @@ function checkedRecipes(root: string, recipes: readonly WorkspaceCommandRecipe[]
       || recipe.args.some((arg: unknown) => typeof arg !== 'string' || arg.length > 4096 || arg.includes('\0'))) {
       throw new ProtocolError('INVALID_ARGUMENT', 'Host command recipe is invalid');
     }
+    const recipeEnv = checkEnv(recipe.env, `Recipe '${recipe.id}' env`);
     const executable = realpathSync.native(recipe.executable);
     if (!statSync(executable).isFile()) {
       throw new ProtocolError('INVALID_ARGUMENT', 'Host command executable must be a regular file');
@@ -66,7 +98,12 @@ function checkedRecipes(root: string, recipes: readonly WorkspaceCommandRecipe[]
     if (fromRoot === '' || (fromRoot !== '..' && !fromRoot.startsWith(`..${sep}`) && !isAbsolute(fromRoot))) {
       throw new ProtocolError('INVALID_ARGUMENT', 'Host command executable must be outside the writable workspace');
     }
-    checked.set(recipe.id, {id: recipe.id, executable, args: [...recipe.args]});
+    checked.set(recipe.id, {
+      id: recipe.id,
+      executable,
+      args: [...recipe.args],
+      env: Object.freeze({...baseEnv, ...recipeEnv}),
+    });
   }
   return checked;
 }
@@ -74,7 +111,8 @@ function checkedRecipes(root: string, recipes: readonly WorkspaceCommandRecipe[]
 export function createWorkspaceCommandTool(options: WorkspaceCommandOptions): RegisteredTool {
   const root = realpathSync.native(options.rootPath);
   if (!statSync(root).isDirectory()) throw new ProtocolError('INVALID_ARGUMENT', 'Workspace root must be a directory');
-  const recipes = checkedRecipes(root, options.recipes);
+  const baseEnv = checkEnv(options.env, 'options.env');
+  const recipes = checkedRecipes(root, options.recipes, baseEnv);
   const maxOutputBytes = bounded(options.maxOutputBytes, DEFAULT_MAX_OUTPUT_BYTES, MAX_OUTPUT_BYTES, 'maxOutputBytes');
   const maxDurationMs = bounded(options.maxDurationMs, DEFAULT_MAX_DURATION_MS, MAX_DURATION_MS, 'maxDurationMs');
   const now = options.now ?? Date.now;
@@ -127,7 +165,7 @@ export function createWorkspaceCommandTool(options: WorkspaceCommandOptions): Re
         try {
           child = spawn(recipe.executable, recipe.args, {
             cwd: root,
-            env: {},
+            env: recipe.env ?? {},
             shell: false,
             windowsHide: true,
             stdio: ['ignore', 'pipe', 'pipe'],

@@ -238,3 +238,25 @@ test('close rejects active work instead of silently abandoning it', async () => 
     assert.equal((await waitForTerminal(application, submitted.taskId)).state, 'cancelled');
   });
 });
+
+test('configureThinking updates thinking state, maxSteps and reason', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'personal-agent-thinking-'));
+  const application = createRuntimeApplication({path: path.join(directory, 'runtime.sqlite'), text: {mode: 'fake'}});
+  try {
+    const initial = application.getThinkingState();
+    assert.equal(initial.applied, true);
+    assert.equal(initial.depth, 1);
+    assert.equal(initial.fast, false);
+    assert.equal(initial.maxSteps, 4);
+
+    const updated = application.configureThinking({depth: 3, fast: true});
+    assert.equal(updated.depth, 3);
+    assert.equal(updated.fast, true);
+    assert.equal(updated.maxSteps, 6);
+    assert.match(updated.reason, /深入/);
+    assert.match(updated.reason, /快速模式/);
+  } finally {
+    application.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});

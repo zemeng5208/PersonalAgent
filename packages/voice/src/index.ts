@@ -38,15 +38,17 @@ export type {
   SpeechKeywordStartOptions,
   WindowsSystemSpeechKeywordDetectorOptions,
 } from './ports.js';
+export {createVoicePcmFrameSourcePort} from './pcm-frame-source.js';
 export {createVoicePcmBuffer} from './pcm-buffer.js';
 export type {VoicePcmBuffer, VoicePcmBufferOptions} from './pcm-buffer.js';
-export {createVoicePcmFrameSourcePort} from './pcm-frame-source.js';
 export {
   UnavailableSpeechOutputPort,
   UnavailableSpeechRecognitionPort,
   UnavailableTranscriptConsumerPort,
   UnavailableSpeechKeywordDetectorPort,
 } from './unavailable.js';
+export {bindVoiceWake} from './wake-binding.js';
+export type {VoiceWakeBinding, VoiceWakeBindingOptions} from './wake-binding.js';
 export {
   RuntimeClientTranscriptConsumer,
   createRuntimeClientTranscriptConsumer,
@@ -57,6 +59,14 @@ export type {WindowsSystemSpeechPorts} from './windows-system-speech.js';
 export {createWindowsSystemSpeechKeywordDetector} from './windows-system-speech-keyword.js';
 export type {WindowsSpeechKeywordHostSpawner} from './windows-system-speech-keyword.js';
 export {VoiceSessionManager} from './voice-session.js';
+export {createHuaweiSisRecognitionPort, createHuaweiSisOutputPort} from './huawei-sis.js';
+export type {
+  HuaweiSisConfig,
+  HuaweiSisOutputConfig,
+  HuaweiSisRegion,
+  HuaweiSisTokenPort,
+  HuaweiSisWavPlaybackPort,
+} from './huawei-sis.js';
 export type {
   ReplyReceipt,
   SpeechPlaybackResult,

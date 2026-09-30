@@ -26,6 +26,14 @@
 
 ## 2. 状态定义与冻结门槛
 
+### MOD-30-WORKFLOW-INPUT-01 开发增量
+
+`AgentArtsRuntimeConfig` 和可信 Runtime 工厂新增可选 `workflowGoalInput`，将适配器构造的
+请求文本映射为一个 Workflow 开始变量的 `inputs`；未配置继续使用智能体 `query`。此选项是
+provisional 进程内配置，不是 wire operation、完整多输入映射或云端可用性证明。适配器与
+工厂合成验证不冻结 CloudAgentPort，也不证明工具提案/恢复或真实 Workflow 接通。详见
+[工作包与官方依据](../modules/MOD-30-WORKFLOW-INPUT-01.md)。
+
 ### 事实变化消费开发增量
 
 PR #89～#91 已合入 provisional 的 `MemoryQueryPort`、`FactChangeFeedPort`、批次解析、
@@ -135,7 +143,7 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | `RuntimeApplication.prepareCompetitionToolCatalog`、`assertCompetitionToolCatalogAllowed` | DEP05 按任务选择已注册 ToolDescriptor、显式结果出口和宿主动态可用性，持久绑定精简 Schema 并在提案前复核；写工具仍走本地 Policy 审批与结果核实 | AgentArts 初始目录载荷由 MOD-04B/30 另行接线与真实发布验收；目录本身不授予执行或外发结果权限 | `provisional` |
 | `workspace.stage_text_patch`、`workspace.apply_text_patch` | PR #133/#147 已合入；Policy/ToolGateway 授权和合成工作区测试通过，合并后 Windows PowerShell 7 全仓检查中 coding-tools 33/33 通过、0 跳过 | #147 合并前缺非作者批准评审；未在 Runtime/Desktop 生产组合注册；恢复目录 ACL、写中崩溃对账、真实用户工作区与 AgentArts 工具闭环未验收 | `provisional` |
 | `ToolDescriptor`、`RegisteredTool`、`ToolContext`、`ToolHost` | contracts 类型、FakeToolHost、生产 ToolGateway | Windows/MCP/Skill/第三方写工具尚未作为独立消费者验证 | `provisional` |
-| Windows Host 内部 Pipe 帧 `0.1.0` | [独立 Schema 与关联校验](WINDOWS_HOST_CONTRACT.md)，未改公共 wire 1.0.0 | 仅有契约与包测试；Pipe 身份/ACL、Host 服务、Runtime/Policy 接线和真实记事本读回未验收 | `provisional` 契约；执行能力 `unavailable` |
+| Windows Host 内部 Pipe 帧 `0.1.0` 与 Runtime Notepad adapter | [独立 Schema 与关联校验](WINDOWS_HOST_CONTRACT.md)，受信 `RegisteredTool` 通过 ToolGateway/Policy 接入，运行身份先写入 Runtime create-only checkpoint，断线只查询状态；原生桥核对 Pipe 服务端 PID，Host `verified` 源自同一目标的 UIA 写后读回，Runtime 关联回执并记录执行 Evidence | MOD16 独立短链已真实核验 PID 与 hello；Node/Bridge 组合、正式 Desktop、bind/observe、真实记事本 UIA 与完成状态读回仍待验收；未改公共 wire 1.0.0 | `provisional` 契约；执行能力 `unavailable` |
 | `PolicyPort`、`AuthorizationPolicy` | 参数摘要、任务/工具/scope/期限/次数绑定及 SQLite 事务测试 | 跨任务持续授权、撤销管理面和真实宿主消费未完成 | `provisional` |
 | `ModelProvider`、`ModelGateway`、Agent 执行循环 | Fake Provider、Mock fetch、离线 Agent/工具测试 | Agent 依赖具体 `ModelGateway`；真实盘古工具调用未通过 | `provisional` |
 | `StructuredToolProvider` | 严格 JSON 解析、工具名/版本/参数校验单测 | 只是文字 JSON 提案适配器；没有真实盘古闭环，不是原生 function calling | `provisional` |

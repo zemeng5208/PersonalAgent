@@ -20,3 +20,12 @@ export async function requestTaskCancellation(client, taskId, refreshTask) {
   const task = await refreshTask(taskId);
   return {...result, state: task.state};
 }
+
+export function submitConversationTask(client, payload, {competition = false} = {}) {
+  // Runtime persists the submit request's deadline for the complete task.
+  // Client's 10s RPC default is too short for a deployed cloud workflow.
+  return client.call('task.submit', payload, {
+    idempotencyKey: crypto.randomUUID(),
+    ...(competition ? {timeoutMs: 180_000} : {}),
+  });
+}

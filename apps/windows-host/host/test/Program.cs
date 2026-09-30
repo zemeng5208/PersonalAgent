@@ -1,0 +1,173 @@
+using System.Text.Json;
+using PersonalAgent.WindowsHost.Service;
+
+if (args.Length != 2) throw new ArgumentException("Pass #168 schema and fixture paths");
+var wire = new HostWire(args[0]);
+using var fixtures = JsonDocument.Parse(File.ReadAllText(args[1]));
+foreach (var valid in fixtures.RootElement.GetProperty("valid").EnumerateArray())
+{
+    using var parsed = wire.Parse(JsonSerializer.SerializeToUtf8Bytes(valid));
+    if (parsed.RootElement.GetProperty("kind").GetString() != valid.GetProperty("kind").GetString())
+        throw new Exception("Fixture frame kind changed");
+}
+foreach (var invalid in fixtures.RootElement.GetProperty("invalid").EnumerateArray())
+{
+    try
+    {
+        using var parsed = wire.Parse(JsonSerializer.SerializeToUtf8Bytes(invalid));
+        throw new Exception("Host accepted an invalid contracts fixture");
+    }
+    catch (InvalidDataException) { }
+}
+
+var targetReadyValid = new
+{
+    kind = "target_ready",
+    protocolVersion = "0.1.0",
+    requestId = "req-tr-1",
+    sessionId = "s1",
+    targetRef = "opaque-notepad-1",
+    deadline = "2026-09-27T12:00:00.000Z"
+};
+using var parsedTr = wire.Parse(wire.Encode(targetReadyValid)[..^1]);
+if (parsedTr.RootElement.GetProperty("kind").GetString() != "target_ready")
+    throw new Exception("target_ready frame parse failed");
+
+var targetReadyResultTrue = new
+{
+    kind = "target_ready_result",
+    protocolVersion = "0.1.0",
+    requestId = "req-tr-1",
+    sessionId = "s1",
+    targetRef = "opaque-notepad-1",
+    ready = true,
+    expiresAt = "2026-09-27T12:00:30.000Z"
+};
+using var parsedTrrTrue = wire.Parse(wire.Encode(targetReadyResultTrue)[..^1]);
+if (parsedTrrTrue.RootElement.GetProperty("ready").GetBoolean() != true)
+    throw new Exception("target_ready_result true parse failed");
+
+var targetReadyResultFalse = new
+{
+    kind = "target_ready_result",
+    protocolVersion = "0.1.0",
+    requestId = "req-tr-1",
+    sessionId = "s1",
+    targetRef = "opaque-notepad-1",
+    ready = false,
+    errorCode = "TARGET_STALE"
+};
+using var parsedTrrFalse = wire.Parse(wire.Encode(targetReadyResultFalse)[..^1]);
+if (parsedTrrFalse.RootElement.GetProperty("ready").GetBoolean() != false)
+    throw new Exception("target_ready_result false parse failed");
+
+try
+{
+    var invalidTrrBoth = new
+    {
+        kind = "target_ready_result",
+        protocolVersion = "0.1.0",
+        requestId = "req-tr-1",
+        sessionId = "s1",
+        targetRef = "opaque-notepad-1",
+        ready = true,
+        expiresAt = "2026-09-27T12:00:30.000Z",
+        errorCode = "TARGET_STALE"
+    };
+    wire.Parse(JsonSerializer.SerializeToUtf8Bytes(invalidTrrBoth));
+    throw new Exception("Host accepted target_ready_result with both expiresAt and errorCode");
+}
+catch (InvalidDataException) { }
+
+try
+{
+    var invalidTrrExpiresWhenFalse = new
+    {
+        kind = "target_ready_result",
+        protocolVersion = "0.1.0",
+        requestId = "req-tr-1",
+        sessionId = "s1",
+        targetRef = "opaque-notepad-1",
+        ready = false,
+        expiresAt = "2026-09-27T12:00:30.000Z",
+        errorCode = "TARGET_STALE"
+    };
+    wire.Parse(JsonSerializer.SerializeToUtf8Bytes(invalidTrrExpiresWhenFalse));
+    throw new Exception("Host accepted target_ready_result with ready=false and expiresAt");
+}
+catch (InvalidDataException) { }
+
+try
+{
+    var invalidTrrStringReady = new
+    {
+        kind = "target_ready_result",
+        protocolVersion = "0.1.0",
+        requestId = "req-tr-1",
+        sessionId = "s1",
+        targetRef = "opaque-notepad-1",
+        ready = "true",
+        expiresAt = "2026-09-27T12:00:30.000Z"
+    };
+    wire.Parse(JsonSerializer.SerializeToUtf8Bytes(invalidTrrStringReady));
+    throw new Exception("Host accepted target_ready_result with string ready");
+}
+catch (InvalidDataException) { }
+
+var journalPath = Path.Combine(Path.GetTempPath(), $"pa-host-fixture-{Guid.NewGuid():N}.jsonl");
+try
+{
+    var identity = new HostRunIdentity("task", "run", "computer.notepad.replace_text", "1.0.0",
+        "grant", new string('a', 64), "opaque-notepad-1", RunJournal.PayloadDigest("before", "after"));
+    var journal = new RunJournal(journalPath);
+    if (journal.Start(identity, "2026-09-25T12:00:00.000Z") is not null)
+        throw new Exception("New run was treated as replay");
+    var restored = new RunJournal(journalPath);
+    if (restored.Find("run")?.Terminal != false ||
+        restored.Start(identity, "2026-09-25T12:00:00.000Z") is null)
+        throw new Exception("Interrupted run did not remain uncertain");
+    try
+    {
+        restored.Start(identity with {PayloadDigest = RunJournal.PayloadDigest("changed", "after")},
+            "2026-09-25T12:00:00.000Z");
+        throw new Exception("Changed input reused a runId");
+    }
+    catch (InvalidDataException) { }
+    restored.Complete(identity, "result_unknown", "2026-09-25T12:01:00.000Z", null, "RESULT_UNKNOWN");
+    if (new RunJournal(journalPath).Find("run")?.State != "result_unknown")
+        throw new Exception("Durable result was not recovered");
+}
+finally { if (File.Exists(journalPath)) File.Delete(journalPath); }
+
+// Active execution and duplicate execute tracking:
+using var activeCts = new CancellationTokenSource();
+var activeExec = new ActiveExecution(activeCts, null!, "req-1", "s1", CancellationToken.None);
+if (!activeExec.TryAttach(null!, "req-2", "s1", CancellationToken.None, out var receiptBeforeComplete))
+    throw new Exception("TryAttach failed on active execution");
+if (receiptBeforeComplete is not null)
+    throw new Exception("Active execution returned receipt before completion");
+// Duplicate (req-1, s1) should be deduplicated
+if (!activeExec.TryAttach(null!, "req-1", "s1", CancellationToken.None, out _))
+    throw new Exception("TryAttach failed on deduplicated request");
+
+var testIdentity = new HostRunIdentity("task", "run-active", "computer.notepad.replace_text", "1.0.0",
+    "grant", new string('a', 64), "opaque-notepad-1", RunJournal.PayloadDigest("before", "after"));
+var terminalReceipt = new HostRunRecord(testIdentity, true, "verified", "2026-09-25T12:00:00.000Z",
+    "2026-09-25T12:00:05.000Z", "evidence-1", null);
+var requesters = activeExec.MarkCompleted(terminalReceipt);
+if (requesters.Count != 2 || requesters[0].RequestId != "req-1" || requesters[1].RequestId != "req-2")
+    throw new Exception("MarkCompleted did not return exactly the attached requesters");
+
+// Subsequent attach after completion should return false and provide the terminal receipt
+if (activeExec.TryAttach(null!, "req-3", "s1", CancellationToken.None, out var receiptAfterComplete) ||
+    receiptAfterComplete != terminalReceipt)
+    throw new Exception("TryAttach after completion did not return completed receipt");
+
+// Target structural check rejects invalid or dead handles:
+var targetCheck = PersonalAgent.WindowsHost.NotepadAction.CheckSingleTabTarget(0, 0, DateTime.UtcNow);
+if (targetCheck.Success || targetCheck.ErrorCode != "TARGET_STALE")
+    throw new Exception("CheckSingleTabTarget on dead window did not fail with TARGET_STALE");
+if (PersonalAgent.WindowsHost.NotepadAction.HasSingleTabForManualProbe(0, 0, DateTime.UtcNow))
+    throw new Exception("HasSingleTabForManualProbe on dead window unexpectedly succeeded");
+
+Console.WriteLine("Windows Host portable contract and durable-run fixture passed");

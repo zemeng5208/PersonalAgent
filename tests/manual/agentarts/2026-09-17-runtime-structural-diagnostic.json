@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "profile": "huawei_ict_agentarts",
+  "surface": "Runtime Application only; no Desktop or IPC",
+  "evidenceLevel": "conditional",
+  "startedAt": "2026-09-17T09:26:02.66Z",
+  "finishedAt": "2026-09-17T09:27:11.693Z",
+  "codeVersion": {
+    "runtimeHead": "291ad4aaafd9a2c9b9b1084cd61259d14c27115b",
+    "helperCommit": "1fda7740e923f9bb84eb4d4a97cacea23ac586fb",
+    "sha256": {
+      "helper": "295db74e6c583a675c825294330ad6b4a2156d0305e4fd8d221df880da53856e",
+      "runtimeApplication": "f6d08d0e0be9e5892e6d18f98eaffc57faa06f8f15c00741a807c0254801f428",
+      "coordinationAdapter": "5f7e37d93eb0943f66744bc6ec90d922efe89b20377a5412de8b2322b711aa1a",
+      "client": "d3fa4f3d12f992a608ea9967d1d2e9db03785551e0762aaf2ecc331c4b063ed0"
+    }
+  },
+  "taskId": "771c23ce-930c-456c-a6fa-4bfd7839d4cf",
+  "networkCallCount": 1,
+  "authorizationReadCount": 1,
+  "firstRun": {
+    "taskId": "771c23ce-930c-456c-a6fa-4bfd7839d4cf",
+    "state": "failed",
+    "hasResult": false,
+    "provider": "agentarts",
+    "profile": "huawei_ict_agentarts",
+    "verification": "unavailable",
+    "evidenceRefCount": 0,
+    "errorCode": "EXTERNAL_FAILURE"
+  },
+  "response": {
+    "fetchOutcome": "response",
+    "status": 200,
+    "contentType": "text/event-stream",
+    "bodyKind": "reader",
+    "bodyOutcome": "complete",
+    "byteCountCapped": 466009,
+    "byteCountOverLimit": false,
+    "byteCountMode": "binary_chunks",
+    "chunkCountCapped": 1727,
+    "chunkCountOverLimit": false,
+    "inspectedByteCount": 131072,
+    "inspectionTruncated": true,
+    "utf8": "unknown",
+    "diagnosticOutcome": "ok",
+    "eventInspection": "sse_only",
+    "eventCountCapped": 459,
+    "eventCountOverLimit": true,
+    "framing": {
+      "linesCapped": 918,
+      "blankLinesCapped": 459,
+      "commentLinesCapped": 0,
+      "dataLinesCapped": 459,
+      "otherLinesCapped": 0,
+      "doneMarkersCapped": 0,
+      "jsonCandidatesCapped": 459,
+      "jsonParseFailuresCapped": 0,
+      "oversizedLinesCapped": 0,
+      "truncatedPayloadsCapped": 0
+    }
+  },
+  "restart": {
+    "sameDatabase": true,
+    "submittedDuringRestart": false,
+    "authorizationReadCount": 0,
+    "fetchCallCount": 0,
+    "task": {
+      "taskId": "771c23ce-930c-456c-a6fa-4bfd7839d4cf",
+      "state": "failed",
+      "hasResult": false,
+      "provider": "agentarts",
+      "profile": "huawei_ict_agentarts",
+      "verification": "unavailable",
+      "evidenceRefCount": 0,
+      "errorCode": "EXTERNAL_FAILURE"
+    }
+  },
+  "localFallbackConfigured": false,
+  "automaticRetryPerformed": false,
+  "conclusion": "HTTP 200 and SSE response consumed completely below the production byte limit; Runtime task still failed. Structural inspection was truncated, so the exact parser failure and terminal sequence remain unresolved.",
+  "notVerified": [
+    "Desktop success",
+    "complete response event sequence",
+    "specific parser failure branch",
+    "cloud platform trace for this invocation",
+    "trusted tool or Evidence loop"
+  ],
+  "security": {
+    "rawResponseSaved": false,
+    "privateInputSent": false,
+    "credentialsRecorded": false
+  }
+}
