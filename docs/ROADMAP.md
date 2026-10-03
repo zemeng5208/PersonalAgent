@@ -111,6 +111,12 @@
 | MOD-30 | M1.5 第一优先 | in_progress | `zemeng` / PR #49、#72（Workflow 输入）、#80（载荷边界）均已进入 main（2026-09-30 台账核对），工具提案/审批/continuation 离线链可用；真实 MCP/Skill 与目标系统读回未完成 |
 | MOD-31 | M1.5/M3 | in_progress | `zemeng` / PR #58 已合并固定合成评估 runner；真实多 Agent 角色、重复运行指标和平台评估未完成 |
 | MOD-32 | M1.5/M5 第一优先 | in_progress | `zemeng` / 手动验收脚手架和失败诊断已有记录；真实发布、健康读回、trace、成本、回滚和端到端成功证据未提供 |
+| MOD-33 | M6 产品化 | review | `zemeng` / 13 个 GitHub 注册工具、gh Provider/Fake 已交 PR #277；静态检查通过，集中运行与真实验证待 Potatos498，协议评审 goo122；见 [交接](modules/DEV-WORKFLOWS-HANDOFF-20261003.md) |
+| MOD-34 | M6 产品化 | review | `zemeng` / CI/Issue 修复、受控 Git 与真实验证回执接线已交 PR #277；评审及集中验证 Potatos498；未运行测试/真实服务 |
+| MOD-35 | M6 产品化（登记） | todo | `Potatos498` / 测试失败自动定位（test 输出解析→源码行映射→定位报告），评审者 zemeng；仅登记未开工 |
+| MOD-36 | M6 产品化 | review | `zemeng` / head/base 与变更行绑定预审、审批 COMMENT 已交 PR #277；评审及集中验证 Potatos498；未运行测试/真实服务 |
+| MOD-37 | M6 产品化（登记） | todo | `goo122` / API 文档自动维护（exports/接口目录↔docs 漂移比对→文档补丁 PR），评审者 zemeng；仅登记未开工 |
+| MOD-38 | M6 产品化 | review | `zemeng` / 分类、指纹复查、审批标签与 MOD-34 修复接线已交 PR #277；评审及集中验证 Potatos498；未运行测试/真实服务 |
 
 ### 2.1 开工顺序与阻塞边界
 

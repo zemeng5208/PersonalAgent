@@ -21,6 +21,21 @@
 | goo122 已进行的 #209 → #210 → #211 私人记忆/删除恢复PR内部返修 | goo122（限在途范围） | Potatos可作非作者评审；goo122声明交接头与占用文件后，由P7登记的执行者接手，不再默认交给Potatos |
 | MOD-19 Windows打包安装 | 暂停 | 不因本轮扩大分工恢复打包安装；已排除的TraceGuard治理也不重新加入 |
 
+### 0.1 DEV-WORKFLOWS 开发自动化功能群（2026-10-02 登记；2026-10-03 开工）
+
+产品负责人 2026-10-02 提出 5 项开发自动化功能，登记为 MOD-33～38（含 MOD-33 共享底座），方案与验收边界见 [DEV-WORKFLOWS 规划](modules/DEV-WORKFLOWS-PLAN-20261002.md)。本群属 Local Profile 产品化增量，不进入当前比赛退出条件，不改变 §0 在途 P0～P8 边界。2026-10-03 用户明确授权 zemeng 按分工开始 MOD-33/34/36/38，代码交付进入 review，集中运行验证交 Potatos498；MOD-35/37 的既有负责人和开工权限不由本轮扩大。精确文件划分与验证状态见 [交接记录](modules/DEV-WORKFLOWS-HANDOFF-20261003.md)。
+
+| 模块 | 功能 | 负责人 | 评审者 | 依赖 |
+| --- | --- | --- | --- | --- |
+| MOD-33 | GitHub 集成连接器底座（CI/issue/PR 端口） | zemeng | goo122 | 无（连接器模板 §6） |
+| MOD-34 | CI 构建失败自动修复 | zemeng | Potatos498 | MOD-33、子Agent/本地执行底座 |
+| MOD-35 | 测试失败自动定位 | Potatos498 | zemeng | 与 MOD-34 共享解析底座 |
+| MOD-36 | Code Review 自动预审 | zemeng | Potatos498 | MOD-33 |
+| MOD-37 | API 文档自动维护 | goo122 | zemeng | MOD-33、check:generated/architecture 产物 |
+| MOD-38 | Issue 自动分类+修复 PR | zemeng | Potatos498 | MOD-33、MOD-34 |
+
+写入类操作（commit/push/PR/review comment/标签写回）一律审批制并遵守 ADR-0003；GitHub 凭据走 SecretStore 声明式白名单，复用 gh CLI 已验证协议层。真实验收以本仓库自身为目标（真实 Actions 失败修复、真实 PR 预审）。
+
 ### 单一写入与交接规则
 
 - Potatos 可将 P0～P4 内互不重叠的工作包分给自己的执行Agent；每包声明身份、MOD、拥有路径、基线、依赖和最小交付。保留所有协作者修改。已开展的 P5～P8 停止新增修改，保留分支/PR/未提交工作并回报交接头、差异与占用文件，不删除或回滚。
