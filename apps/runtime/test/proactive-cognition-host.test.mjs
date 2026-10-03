@@ -179,6 +179,9 @@ test('public Fact correction selects revise and hands off once across SQLite res
     assert.deepEqual(calls.goals,
       ['Review a synthetic public meeting correction and propose a revised plan.']);
     assert.equal(store.read().revision, 5, 'handoff does not commit local Goal/Plan versions');
+    // Terminal task state persists before the dispatch promise settles; drain before closing.
+    for (let i = 0; i < 400 && binding.application.activeTaskCount > 0; i++) await new Promise(r => setTimeout(r, 5));
+
     binding.close();
     binding = open(paths, calls);
     const replay = await binding.host.consumeAndReview({...context(), at, limit: 10,
@@ -191,6 +194,9 @@ test('public Fact correction selects revise and hands off once across SQLite res
     assert.equal(calls.agentArtsCalls, 1);
     assert.equal(binding.application.runtime.bindCoordinationStore(graphNamespace).read().revision, 5);
   } finally {
+    // Terminal task state persists before the dispatch promise settles; drain before closing.
+    for (let i = 0; i < 400 && binding.application.activeTaskCount > 0; i++) await new Promise(r => setTimeout(r, 5));
+
     binding.close();
     await rm(paths.directory, {recursive: true, force: true});
   }
@@ -236,6 +242,9 @@ test('custom versioned options let Laya choose a legal approach; out-of-scope re
     assert.equal(store.read().revision, 5);
     assert.equal(calls.agentArtsCalls, 1);
   } finally {
+    // Terminal task state persists before the dispatch promise settles; drain before closing.
+    for (let i = 0; i < 400 && binding.application.activeTaskCount > 0; i++) await new Promise(r => setTimeout(r, 5));
+
     binding.close();
     await rm(paths.directory, {recursive: true, force: true});
   }
@@ -258,6 +267,9 @@ test('custom versioned options let Laya choose a legal approach; out-of-scope re
     assert.equal(invalidCalls.agentArtsCalls, 0);
     assert.equal(store.read().revision, 5);
   } finally {
+    // Terminal task state persists before the dispatch promise settles; drain before closing.
+    for (let i = 0; i < 400 && binding.application.activeTaskCount > 0; i++) await new Promise(r => setTimeout(r, 5));
+
     binding.close();
     await rm(invalidPaths.directory, {recursive: true, force: true});
   }
