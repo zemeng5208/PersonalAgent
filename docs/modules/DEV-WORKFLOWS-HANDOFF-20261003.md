@@ -52,6 +52,20 @@ npm run check:architecture
 
 ## 继续与恢复
 
+### Foundation 构建顺序修复（2026-10-03）
+
+PR #277 的 `68ec4184` 在 Foundation run `37099110353` / job `111134969136`
+的 `npm run check` 中，首次失败为 `knowledge/src/write.ts:8:38` 与 `:9:69`
+的 TS2307：无法解析 `@personal-agent/coding-tools` 及其类型声明。导入使用根公开
+exports，并不存在 `@personal-agent/coding-tools/types` 子路径；NodeNext 的 `types`
+条件指向尚未构建的 `dist/index.d.ts`。根构建顺序已将 knowledge 移至 coding-tools
+之后，保留 coding-tools 的 GitHub / models / agents 前置顺序及原 exports、依赖和锁文件。
+
+本次仅核对 workspace 依赖拓扑、目标 imports/exports、tsconfig 输出路径、语法与
+架构边界；未运行构建、类型检查或测试，不能宣称 Foundation 已通过。Potatos498
+请在干净依赖环境对最新 PR head 集中运行既有验证入口及 `npm run check`；goo122
+请核对公开消费兼容。后续失败继续反馈精确 head、命令及首次失败位置。
+
 后续修复沿本轮 `codex/dev-workflows-integration` 和对应交付 PR，不新建重复实现任务。用户旅游期间按本轮授权推进可独立处理的代码问题；需要用户创建可见对话、提供缺失连接或明确决定时，通知用户继续。子任务不是额外可见的 ChatGPT 主对话，不能据此声称创建了新的 Work 对话。
 
 PR 合并、代码写齐、定向测试、真实模块验收与整体 MVP 完成分别记录。本轮没有自动合并实现 PR，也没有自动批准产品运行中的 Review。
