@@ -1,0 +1,21 @@
+# MOD-36 Code Review 预审
+
+- 负责人：zemeng；非作者验收：Potatos498；状态：review（已有外部定向验证与只读验收报告，完整写入闭环及协议兼容评审仍待完成）。
+- Profile：2026-10-03 产品负责人授权的 Local DEV-WORKFLOWS 增量，不替代 Huawei ICT AgentArts Competition Profile 或计入比赛验收；实现为公开 ModelPort / Runtime-backed AgentToolPort 的消费流程，不新增模型、GitHub授权或工具注册体系。
+- 工厂：`createCodeReviewWorkflow({model,tools,maxDiffChars?,maxPages?,maxFindings?,maxTokens?})`；公开类型位于 `packages/cognition/src/dev-workflows/code-review-types.ts`，根组合负责公共导出、依赖与 Runtime 装配。
+
+`prepare({repo,number,rules}, AgentWorkerContext, {runId,authorizationRef})` 经 `github.pr.get` 读取精确 base/head，经带 expectedHeadSha / expectedBaseSha 的 `github.pr.diff` 完整分页，再读 PR 确认未漂移。相同 head/base 可复用 Runtime checkpoint 中的完整 diff，提交变化则重新分页；缓存不免除发表前复核。可信规则必须由宿主提供；PR 标题、正文、diff 与从完整 diff 生成的 changed-lines 提示仅置于模型 user 数据消息，不成为规则或权限。提示最多列出前 400 个变更文件；实际校验仍覆盖完整 diff，不把提示截断当作完整评审证明。
+
+模型输出可为裸 JSON，或整个输出由一个 `json`/无语言标签的三反引号围栏包裹；仅剥离该运输层围栏，再严格 JSON/schema 校验，不从解释文字中抽取 JSON。每条 finding 包含 blocking/suggestion/question、已声明 ruleId、path、line、side、body。未知字段（包括 confidence）、未声明规则、非法类别/字段类型仍使整体准备失败；格式有效但未锚定实际变更行的意见被丢弃，精确重复条目仅保留第一条，其余有效意见按原顺序保留。空报告仅表示没有保留意见，不表示批准或无缺陷；没有合法 findingIndex 时不能发表。删改路径按 unified diff 左右侧定位；带引号转义的特殊路径暂不支持，明确拒绝。
+
+报告绑定 repo/number/headSha/baseSha 和规则，保存于本任务 Runtime checkpoint 后方可消费。`publish(report,findingIndex,context,access)` 检查报告原始摘要、taskId、参数与工具公布，再读当前 head/base；只调用 `github.pr.review.comment` 发布 inline COMMENT。Provider 在外部写入前再次核对 commitId，但 GitHub 预读与写入并非原子条件写，仍存在平台竞态；不自动 approve、request changes 或修改分支。用户授权由 ToolGateway 校验；流程不签发授权。
+
+写入前持久保存 unknown，并绑定 runId/authorizationRef。已确认结果重放，pending 允许原 runId 审批恢复；unknown 不自动重试。仅 Runtime 确认原执行、校验原参数且安装 confirmed 缓存回放后，可信组合可以通过 `access.confirmedReplayReady(runId)` 对精确评论执行返回 true，调用相同 runId 消费缓存结果。该函数不得接受 PR/模型/Renderer 自报值。发布 suffix 为 `publish-head-${findingIndex}` / `comment-${findingIndex}`；prepare suffix 为 `head-before` / `diff-${page}` / `head-after`。读取或模型步骤失败不能留下可发表报告。
+
+默认预算：200,000 diff 字符、32页、30条意见、8,000输出 tokens；超过 diff 限额返回 unsupported，不审查截断内容。所有异步调用传递 signal/deadline，循环及模型前后检查截止时间；无实际服务和模型时不会静默回退 Fake。
+
+## 集中验收
+
+按用户要求，执行端本轮不执行测试、build、typecheck、npm安装或真实账号操作；集中运行由 Potatos498 主持，goo122 负责 GitHub/Runtime/公开消费兼容评审。准备的 `packages/cognition/test/code-review.test.mjs` 覆盖可信规则隔离、head/base绑定、完整分页、严格 JSON、变更行校验、报告篡改、过时 head、仅 COMMENT、缺工具/缺授权、unknown 不重复写与 diff 不完整拒绝。本轮补充裸 JSON/完整围栏兼容、拒绝围栏外文字及围栏内非法 JSON/字段、混合有效/越界/重复条目的保留顺序和仅发表合法条目、空报告不可发表；这些新增场景仅完成语法与 whitespace 静态核对，尚未运行。
+
+Potatos498 在 `7999446a0fd4da2adda3e8ab8d25c2d3b7151719` 的提交说明报告 Code Review 10/10 和两轮真实只读 `gh` PR + GLM 模型验收，包含 8/8 意见锚定变更行。该报告不是执行端复跑结果；提交提及的 `.cache/dev-workflows/acceptance/` 原始证据未附在仓库或 PR 中，尚待回交可读的脱敏记录。旧 head 的全仓 build/59 条 DEV-WORKFLOWS 测试报告也不替代本轮 head 与新增场景的集中回归。真实评论写入、MOD-34/38 的授权工作区/提交/推送/PR/Issue 闭环、Windows 场景及 goo122 评审仍待完成；只读 GLM 验收不证明盘古或 AgentArts 实际兼容。当前接口保持 provisional。

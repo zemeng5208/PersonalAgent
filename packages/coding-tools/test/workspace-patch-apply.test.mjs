@@ -5,6 +5,7 @@ import {link, mkdir, mkdtemp, open, readFile, readdir, rm, writeFile} from 'node
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import test from 'node:test';
+import {fileURLToPath} from 'node:url';
 import {InMemoryAuthorizationPolicy} from '@personal-agent/policy';
 import {ToolGateway, toolArgumentsDigest} from '@personal-agent/tool-gateway';
 import {
@@ -17,6 +18,7 @@ import {
 import {createWorkspacePatchApplyToolFromPreview} from '../dist/patch-apply.js';
 
 const sha = text => createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex');
+const bundledHelper = new URL('../scripts/locked-apply.ps1', import.meta.url);
 const powerShellPath = process.env.PA_TEST_PWSH
   ?? join(process.env.ProgramFiles ?? 'C:\\Program Files', 'PowerShell', '7', 'pwsh.exe');
 const unavailable = process.platform !== 'win32' || !existsSync(powerShellPath)
@@ -31,8 +33,65 @@ async function fixture(t) {
   const source = join(root, 'src', 'note.txt');
   await writeFile(source, 'before\n');
   t.after(() => rm(base, {recursive: true, force: true}));
-  return {root, recoveryRootPath, source};
+  return {base, root, recoveryRootPath, source};
 }
+
+async function installSyntheticHelper(base) {
+  const directory = join(base, 'trusted-helper');
+  await mkdir(directory);
+  const helperScriptPath = join(directory, 'locked-apply.ps1');
+  await writeFile(helperScriptPath, await readFile(bundledHelper));
+  return helperScriptPath;
+}
+
+test('repository-root workspace keeps default helper isolation and accepts explicit external bundled helper', {skip: unavailable}, async t => {
+  const {base, recoveryRootPath} = await fixture(t);
+  const rootPath = fileURLToPath(new URL('../../../', import.meta.url));
+  assert.throws(() => createWorkspacePatchApplyTool({rootPath, recoveryRootPath, powerShellPath}), {code: 'INVALID_ARGUMENT'});
+  const helperScriptPath = await installSyntheticHelper(base);
+  const tool = createWorkspacePatchApplyTool({rootPath, recoveryRootPath, powerShellPath, helperScriptPath});
+  assert.equal(tool.descriptor.name, WORKSPACE_PATCH_APPLY_TOOL_NAME);
+  assert.deepEqual(await readdir(recoveryRootPath), []);
+});
+
+test('explicit relocated helper applies only the approved patch through the public factory', {skip: unavailable}, async t => {
+  const {base, root, recoveryRootPath, source} = await fixture(t);
+  const helperScriptPath = await installSyntheticHelper(base);
+  const tool = createWorkspacePatchApplyTool({rootPath: root, recoveryRootPath, powerShellPath, helperScriptPath});
+  await assert.rejects(tool.execute({...request(sha('before\n')), helperScriptPath: 'model-selected.ps1'}, context()),
+    {code: 'INVALID_ARGUMENT'});
+  assert.equal((await tool.execute(request(sha('before\n')), context())).applied, true);
+  assert.equal(await readFile(source, 'utf8'), 'after\n');
+  assert.deepEqual(await readdir(recoveryRootPath), []);
+});
+
+test('relocated helper rejects relative paths, workspace/recovery containment, unknown contents and hardlinks', {skip: unavailable}, async t => {
+  const {base, root, recoveryRootPath, source} = await fixture(t);
+  const options = {rootPath: root, recoveryRootPath, powerShellPath};
+  const helperScriptPath = await installSyntheticHelper(base);
+  const workspaceHelper = join(root, 'helper.ps1');
+  const recoveryHelper = join(recoveryRootPath, 'helper.ps1');
+  const unknownHelper = join(base, 'unknown.ps1');
+  await writeFile(workspaceHelper, await readFile(bundledHelper));
+  await writeFile(recoveryHelper, await readFile(bundledHelper));
+  await writeFile(unknownHelper, 'Write-Output unsafe');
+  for (const path of ['relative-helper.ps1', workspaceHelper, recoveryHelper, unknownHelper]) {
+    assert.throws(() => createWorkspacePatchApplyTool({...options, helperScriptPath: path}), {code: 'INVALID_ARGUMENT'});
+  }
+  await link(helperScriptPath, join(root, 'helper-hardlink.ps1'));
+  assert.throws(() => createWorkspacePatchApplyTool({...options, helperScriptPath}), {code: 'INVALID_ARGUMENT'});
+  assert.equal(await readFile(source, 'utf8'), 'before\n');
+});
+
+test('helper mutation after registration stops before source write or inflight marker creation', {skip: unavailable}, async t => {
+  const {base, root, recoveryRootPath, source} = await fixture(t);
+  const helperScriptPath = await installSyntheticHelper(base);
+  const tool = createWorkspacePatchApplyTool({rootPath: root, recoveryRootPath, powerShellPath, helperScriptPath});
+  await writeFile(helperScriptPath, 'Write-Output unsafe');
+  await assert.rejects(tool.execute(request(sha('before\n')), context()), {code: 'INVALID_ARGUMENT'});
+  assert.equal(await readFile(source, 'utf8'), 'before\n');
+  assert.deepEqual(await readdir(recoveryRootPath), []);
+});
 
 const context = (overrides = {}) => ({
   taskId: 'task-apply-synthetic',

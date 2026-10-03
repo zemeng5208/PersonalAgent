@@ -563,6 +563,7 @@ export function createWorkspacePatchApplyTool(
     rootPath: options.rootPath,
     recoveryRootPath: options.recoveryRootPath,
     powerShellPath: options.powerShellPath,
+    ...(options.helperScriptPath !== undefined ? {helperScriptPath: options.helperScriptPath} : {}),
     preview,
     now: options.now ?? Date.now,
   });
@@ -705,3 +706,10 @@ export function registerWorkspacePatchApply(
 ): () => void {
   return host.register(createWorkspacePatchApplyTool(options));
 }
+export {createGitTools, registerGitTools, readGitWorkspaceFingerprint,
+  GIT_HEAD_TOOL, GIT_COMMIT_TOOL, GIT_PUSH_TOOL, GIT_READ_SCOPE, GIT_COMMIT_SCOPE, GIT_PUSH_SCOPE} from './dev-workflows/git-tools.js';
+export type {GitFileHash, GitVerificationReceipt, GitToolsOptions, GitHeadResult, GitCommitInput,
+  GitCommitResult, GitPushInput, GitPushResult} from './dev-workflows/git-tools-types.js';
+export {runCiFix, createCiFixWorkflow} from './dev-workflows/ci-fix.js';
+export type {ToolExecutionPort, CiFixProposal, CiFixGitTools, CiFixOptions,
+  CiFixWorkflowPort, CiFixOutcome} from './dev-workflows/ci-fix-types.js';

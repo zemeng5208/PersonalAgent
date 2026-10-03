@@ -19,6 +19,10 @@
     "./application": {
       "types": "./dist/application.d.ts",
       "import": "./dist/application.js"
+    },
+    "./dev-workflows": {
+      "types": "./dist/dev-workflows-runtime.d.ts",
+      "import": "./dist/dev-workflows-runtime.js"
     }
   },
   "scripts": {
@@ -27,6 +31,8 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
+    "@personal-agent/github": "0.1.0-alpha.1",
+    "@personal-agent/coding-tools": "0.1.0-alpha.1",
     "@personal-agent/mcp": "0.1.0-alpha.1",
     "@personal-agent/skills": "0.1.0-alpha.1",
     "@personal-agent/learning": "0.1.0-alpha.1",
