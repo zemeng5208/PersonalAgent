@@ -26,7 +26,7 @@ function fixture() {
     'github.issue.comment': {state:'confirmed'},
   };
   let modelCalls = 0;
-  const model = {deployment: {}, async complete(request) {modelCalls++; assert.equal(request.tools.length,0); return {response:{kind:'final',text:JSON.stringify({diagnosis:'Fix failing assertion',patches:[{path:'src/a.ts',expectedSha256:fileSha,edits:[{oldText:'bad',newText:'good'}]}]})}};}};
+  const model = {deployment: {}, async complete(request) {modelCalls++; assert.equal(request.tools.length,0); return {response:{kind:'final',text:JSON.stringify({diagnosis:'Fix failing assertion',patches:[{path:'src/a.ts',expectedSha256:fileSha,edits:[{oldText:'bad',newText:'good'}]}]})},usage:{promptTokens:10,completionTokens:10,totalTokens:20}};}};
   const tools = {list:()=>names.map(name=>({name,version:'1.0.0'})), async invoke(input) {calls.push(input);return {state:'confirmed',result:structuredClone(responses[input.toolName]),evidenceRefs:[input.runId]};}};
   const options = {repository:'owner/repo',runId:'42',model,tools,gitTools,sourcePaths:['src/a.ts'],headBranch:'ci-fix',baseBranch:'main',verifyRecipeId:'test',maxSteps:32,maxTokens:4096,authorizationRefFor:()=> 'runtime-approved'};
   return {context,options,calls,responses,checkpoints,modelCalls:()=>modelCalls};
@@ -43,10 +43,28 @@ test('actual verify precedes commit, push, approved PR and original run backlink
   const count=f.calls.length; await runCiFix(f.context,f.options); assert.equal(f.modelCalls(),1);
   assert.equal(f.calls.filter(c=>c.toolName==='workspace.git.commit').length,1); assert.equal(f.calls.length,count);
 });
-test('failed actual verification never commits',async()=>{
+test('failed actual verification retries once then never commits',async()=>{
   const f=fixture(); f.responses['workspace.run_allowed_command'].exitCode=1;
   assert.equal((await runCiFix(f.context,f.options)).status,'verification_failed');
   assert.ok(!f.calls.some(c=>c.toolName==='workspace.git.commit'));
+  assert.equal(f.modelCalls(),2);
+  assert.equal(f.calls.filter(c=>c.toolName==='workspace.run_allowed_command').length,2);
+});
+test('maxAttempts 1 stops after a single failed verification',async()=>{
+  const f=fixture(); f.responses['workspace.run_allowed_command'].exitCode=1; f.options.maxAttempts=1;
+  assert.equal((await runCiFix(f.context,f.options)).status,'verification_failed');
+  assert.equal(f.modelCalls(),1);
+});
+test('second bounded attempt can verify and commit the layered repair',async()=>{
+  const f=fixture(), original=f.options.tools.invoke; let verifyCalls=0;
+  f.options.tools.invoke=async input=>{
+    if(input.toolName==='workspace.run_allowed_command'){verifyCalls++;
+      return {state:'confirmed',result:{recipeId:'test',exitCode:verifyCalls===1?1:0,stdout:'',stderr:''},evidenceRefs:[input.runId]};}
+    return original(input);};
+  const r=await runCiFix(f.context,f.options);
+  assert.equal(r.status,'succeeded'); assert.equal(f.modelCalls(),2);
+  assert.match(r.verificationRunId,/verify-1$/);
+  assert.equal(f.calls.find(c=>c.toolName==='workspace.git.commit').arguments.verificationRunId,r.verificationRunId);
 });
 test('missing capability is unsupported without effects',async()=>{
   const f=fixture(); delete f.options.model;

@@ -31,6 +31,8 @@ export interface CiFixOptions {
   issue?: {url: string; number: number; repository: string; fingerprint: string};
   maxSteps: number;
   maxTokens: number;
+  /** Bounded repair attempts: a failed verification feeds the next model round. Default 2, max 4. */
+  maxAttempts?: number;
   maxLogBytes?: number;
   /** Runtime-owned authorization binding; no fallback authorization is minted. */
   authorizationRefFor(tool: string, context: AgentWorkerContext): string | undefined;

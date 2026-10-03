@@ -77,7 +77,7 @@ export function createIssueTriageWorkflow(options: IssueTriageOptions) {
     const result = await invoke(context, 'github.issue.list', request, `${context.taskId}:issue-list:${hash(request)}`);
     if (result.state !== 'confirmed') return {state: result.state === 'pending' ? 'waiting_approval' : 'waiting_reconciliation',
       items: [], page: request.page ?? 1, nextPage: null, hasMore: false, evidenceRefs: [...result.evidenceRefs]};
-    if (result.state !== 'confirmed' || !record(result.result)) throw new Error('ISSUE_LIST_UNCONFIRMED');
+    if (!record(result.result)) throw new Error('ISSUE_LIST_UNCONFIRMED');
     const data = result.result;
     if (!Array.isArray(data.items) || data.items.length > (request.perPage ?? 30) || !positive(data.page)
       || data.page !== (request.page ?? 1) || typeof data.hasMore !== 'boolean'

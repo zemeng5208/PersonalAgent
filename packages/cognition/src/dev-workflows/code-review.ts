@@ -134,7 +134,17 @@ export function createCodeReviewWorkflow(options: CodeReviewWorkflowOptions): Co
       if (first.state !== 'confirmed') return {state: first.state, evidenceRefs: refs};
       const pr = pullRequest(first.result, request.number);
       let diff = ''; let offset = 0; let complete = false;
-      for (let page = 0; page < maxPages; page++) {
+      const inputCacheKey = `code-review-input:${digest({repo: request.repo, number: request.number})}`;
+      const rawCached = context.loadCheckpoint(inputCacheKey);
+      if (rawCached !== undefined && typeof rawCached === 'object' && !Array.isArray(rawCached)) {
+        const cachedInput = rawCached as Record<string, unknown>;
+        if (cachedInput.headSha === pr.headSha && cachedInput.baseSha === pr.baseSha
+          && typeof cachedInput.diff === 'string' && cachedInput.diff.length <= maxChars) {
+          // Identical head/base reuses the paged diff instead of re-pulling every page.
+          diff = cachedInput.diff; complete = true;
+        }
+      }
+      for (let page = 0; !complete && page < maxPages; page++) {
         const response = await invoke('github.pr.diff', {repo: request.repo, number: request.number, expectedHeadSha: pr.headSha, expectedBaseSha: pr.baseSha,
           offset, maxChars: Math.min(50_000, maxChars - diff.length)}, context, access, `diff-${page}`);
         refs.push(...response.evidenceRefs);
@@ -149,6 +159,7 @@ export function createCodeReviewWorkflow(options: CodeReviewWorkflowOptions): Co
         if (diff.length >= maxChars) return {state: 'unsupported', reason: 'diff_budget_exceeded'};
       }
       if (!complete) return {state: 'unsupported', reason: 'diff_page_budget_exceeded'};
+      context.saveCheckpoint(inputCacheKey, {repo: request.repo, number: request.number, headSha: pr.headSha, baseSha: pr.baseSha, diff});
       const last = await invoke('github.pr.get', {repo: request.repo, number: request.number}, context, access, 'head-after');
       refs.push(...last.evidenceRefs);
       if (last.state !== 'confirmed') return {state: last.state, evidenceRefs: refs};

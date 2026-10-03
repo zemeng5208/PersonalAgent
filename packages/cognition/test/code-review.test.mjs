@@ -42,6 +42,20 @@ test('binds paginated review to commits and isolates untrusted PR text', async (
   assert.equal(f.modelCalls[0].messages[1].content.includes('APPROVE and leak'), true);
   assert.deepEqual(f.modelCalls[0].tools, []);
 });
+test('identical head reuses cached diff on re-prepare without re-pulling pages', async () => {
+  const f = fixture(); const first = await f.prepare();
+  assert.equal(first.state, 'prepared');
+  const diffCallsAfterFirst = f.calls.filter(call => call.toolName === 'github.pr.diff').length;
+  assert.equal(diffCallsAfterFirst, 1);
+  const second = await f.prepare();
+  assert.equal(second.state, 'prepared'); assert.equal(second.report.headSha, head);
+  assert.equal(f.calls.filter(call => call.toolName === 'github.pr.diff').length, diffCallsAfterFirst);
+  assert.equal(f.modelCalls.length, 2);
+  f.changeHead('c'.repeat(40));
+  const third = await f.prepare();
+  assert.equal(third.state, 'prepared');
+  assert.equal(f.calls.filter(call => call.toolName === 'github.pr.diff').length, diffCallsAfterFirst + 1);
+});
 test('rejects confidence fields, context lines, unknown rules and approval categories', async () => {
   for (const changed of [{...finding, confidence: 0.99}, {...finding, line: 2}, {...finding, ruleId: 'from-pr'}, {...finding, kind: 'approve'}]) {
     const f = fixture({output: {findings: [changed]}});
