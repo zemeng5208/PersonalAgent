@@ -43,12 +43,28 @@ export interface DevWorkflowsRuntimeOptions {
   isUserPresent?: () => boolean;
 }
 
+/** Public in-process composition surface; declarations use public package types. */
+export interface DevWorkflowsRuntime {
+  profile: 'local';
+  runtime: TaskRuntime;
+  gateway: ToolGateway;
+  model: ModelGateway;
+  tools: AgentToolPort;
+  submit(input: {request: DevWorkflowRequest; conversationId: string; idempotencyKey: string; deadline: string}): TaskSnapshot;
+  start(taskId: string, resume?: boolean): Promise<TaskSnapshot>;
+  resume(taskId: string): Promise<TaskSnapshot>;
+  resumeConfirmed(taskId: string, receipt: Parameters<TaskRuntime['prepareConfirmedReplay']>[1]): Promise<TaskSnapshot>;
+  readResult(taskId: string): unknown;
+  cancel(taskId: string, reason?: string): ReturnType<TaskRuntime['requestCancel']>;
+  close(): Promise<void>;
+}
+
 const REQUEST_KEY = 'dev-workflows-request-v1';
 const DEADLINE_KEY = 'dev-workflows-deadline-v1';
 const RESULT_KEY = 'dev-workflows-result-v1';
 
 /** Optional Local composition. TaskRuntime owns all task states and durable execution receipts. */
-export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions) {
+export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions): DevWorkflowsRuntime {
   if (!Number.isSafeInteger(options.maxSteps) || options.maxSteps < 1
     || !Number.isSafeInteger(options.maxTokens) || options.maxTokens < 1) {
     throw new ProtocolError('INVALID_ARGUMENT', 'Positive workflow budgets required');
