@@ -112,7 +112,7 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
     for (const [i, path] of options.sourcePaths.entries()) {
       const source = await invoke(`source-${i}`, 'workspace.read_text', {path, maxBytes: 64 * 1024});
       if (!object(source) || source.path !== path || typeof source.content !== 'string' || typeof source.sha256 !== 'string' || !digest.test(source.sha256)) invalid();
-      sources.push({path: source.path, content: source.content, sha256: source.sha256});
+      sources.push({path, content: source.content, sha256: source.sha256});
     }
     const proposed = await step('model', async () => {
       if (j.tokens >= options.maxTokens) throw new Pause('unsupported', 'Persisted token budget exhausted');
