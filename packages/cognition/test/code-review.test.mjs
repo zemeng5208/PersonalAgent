@@ -56,12 +56,17 @@ test('identical head reuses cached diff on re-prepare without re-pulling pages',
   assert.equal(third.state, 'prepared');
   assert.equal(f.calls.filter(call => call.toolName === 'github.pr.diff').length, diffCallsAfterFirst + 1);
 });
-test('rejects confidence fields, context lines, unknown rules and approval categories', async () => {
-  for (const changed of [{...finding, confidence: 0.99}, {...finding, line: 2}, {...finding, ruleId: 'from-pr'}, {...finding, kind: 'approve'}]) {
+test('rejects confidence fields, unknown rules and approval categories; off-line findings are dropped', async () => {
+  for (const changed of [{...finding, confidence: 0.99}, {...finding, ruleId: 'from-pr'}, {...finding, kind: 'approve'}]) {
     const f = fixture({output: {findings: [changed]}});
     await assert.rejects(f.prepare(), /INVALID_ARGUMENT/);
     assert.equal(f.calls.some(call => call.toolName === 'github.pr.review.comment'), false);
   }
+  // Real-model drift: a finding anchored to a context line is dropped, not published.
+  const drifted = fixture({output: {findings: [{...finding, line: 2}]}});
+  const result = await drifted.prepare();
+  assert.equal(result.state, 'prepared');
+  assert.deepEqual(result.report.findings, []);
 });
 test('publishes only bound COMMENT through gateway and rejects tampering or stale head', async () => {
   const f = fixture(); const {report} = await f.prepare(); const access = {runId: 'publish', authorizationRef: 'approved'};
