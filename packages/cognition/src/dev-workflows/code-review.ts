@@ -4,7 +4,7 @@ import type {AgentWorkerContext, ToolInvocationResult} from '@personal-agent/age
 import type {CodeReviewAccess, CodeReviewFinding, CodeReviewInput, CodeReviewReport, CodeReviewRule,
   CodeReviewWorkflow, CodeReviewWorkflowOptions} from './code-review-types.js';
 
-const invalid = (message: string): never => {throw new ProtocolError('INVALID_ARGUMENT', `INVALID_ARGUMENT: ${message}`);};
+function invalid(message: string): never {throw new ProtocolError('INVALID_ARGUMENT', `INVALID_ARGUMENT: ${message}`);}
 const conflict = (): never => {throw new ProtocolError('REVISION_CONFLICT', 'REVISION_CONFLICT: pull request changed');};
 const digest = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export const codeReviewPublicationCheckpointKey = (report: CodeReviewReport, findingIndex: number): string =>
