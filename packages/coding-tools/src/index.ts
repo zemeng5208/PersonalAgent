@@ -42,6 +42,8 @@ export {
   WORKSPACE_PATCH_PREVIEW_TOOL_VERSION,
 } from './patch-preview.js';
 export type {WorkspacePatchPreviewEdit, WorkspacePatchPreviewResult} from './patch-preview.js';
+export {locateTestFailures} from './test-locate/locate.js';
+export type {TestFailure, TestFailureFrame, TestFailureReport, TestLocateOptions} from './test-locate/locate.js';
 export {
   WORKSPACE_PATCH_STAGE_SCOPE,
   WORKSPACE_PATCH_STAGE_TOOL_NAME,
