@@ -43,6 +43,22 @@ Runtime checkpoint `ci-fix-v1` 保存参数 identity、调用计数、token 保�
 
 ## 验收交接
 
+### 全仓工作区与 patch helper 组合
+
+Potatos498 在 PR #277 评论 `5968380670` 报告真实失败 run `37116843775` 的 MOD-34
+验收受阻：仓库根同时包含默认包内 `locked-apply.ps1`，原保护正确拒绝从可写工作区执行
+helper，但源码部署没有外部 helper 配置入口。本轮保留 root/helper/recovery 隔离，增加
+`WorkspacePatchApplyHostOptions.helperScriptPath?`，经公开 apply factory 及 Runtime 的
+`workspace.patch.helperScriptPath` 转交。不删除 in-root 保护、不缩小全仓验证 root、不自动部署。
+
+受信宿主须先把本版本已审查 helper 的字节一致副本安装到工作区及 recovery 之外的独立限权
+目录，再显式注入绝对路径；factory 校验常规文件/单硬链接/位置/摘要，执行前复核。
+缺外部安装时仍明确拒绝，不能把 workspace 内的脚本豁免为受信程序。该选项是进程内可选
+配置，不改变 wire/tool schema 或授权范围；宿主 ACL 和非作者兼容评审仍待 goo122 核实。
+已补仓库根注册、外部 helper 实际应用、相对/越界/未知脚本/硬链接拒绝、注册后突变拒绝的
+Windows 测试源码；本轮只做语法/whitespace 静态检查，未运行或启动 PowerShell，待 Potatos498
+对最新准确 head 集中复验真实 MOD-34 链。
+
 已编写 `packages/coding-tools/test/ci-fix.test.mjs` Fake 行为场景：完整闭环、执行顺序、真实 verify失败拒绝commit、缺能力、模型shell拒绝、unknown不重发、pending恢复同runId、HEAD变化、请求identity变化、取消、预算、issue-only与指纹漂移。本作者按用户约束未执行测试、build、typecheck、npm install 或真实请求；只执行静态 diff 检查。
 
 Potatos498 在 `656bd874a7d3bf159c773260b13ea82a5c533a17` 报告全仓 build、开发工作流 59/59 与架构检查通过。本次后续静态修复补充两文件分轮修改、第二轮审批恢复、跨轮路径完整提交及最近确认验证回执的回归场景；该新增场景尚未执行，需对后续精确 head 集中验证，不能沿用 59/59 作为修复后证据。

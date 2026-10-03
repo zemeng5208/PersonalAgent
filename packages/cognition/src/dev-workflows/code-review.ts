@@ -107,8 +107,9 @@ function findings(value: unknown, rules: readonly CodeReviewRule[], lines: Reado
   let dropped = 0;
   for (const raw of result.findings) {
     const item = object(raw); exact(item, ['kind', 'ruleId', 'path', 'line', 'side', 'body']);
-    if (!['blocking', 'suggestion', 'question'].includes(String(item.kind)) || !rules.some(rule => rule.id === item.ruleId)
-      || !Number.isSafeInteger(item.line) || !['LEFT', 'RIGHT'].includes(String(item.side))) invalid('finding schema');
+    if (typeof item.kind !== 'string' || !['blocking', 'suggestion', 'question'].includes(item.kind)
+      || !rules.some(rule => rule.id === item.ruleId) || !Number.isSafeInteger(item.line)
+      || typeof item.side !== 'string' || !['LEFT', 'RIGHT'].includes(item.side)) invalid('finding schema');
     const file = text(item.path, 4096); const body = text(item.body, 8000);
     // Real models drift off the exact changed line on large diffs; drop rather than
     // fail the whole report — an unanchored finding must never reach a PR comment.

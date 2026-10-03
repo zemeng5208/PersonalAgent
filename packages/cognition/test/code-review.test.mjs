@@ -23,7 +23,7 @@ function fixture(overrides = {}) {
   };
   const model = {complete: async request => {
     modelCalls.push(request);
-    return {response: {kind: 'final', text: JSON.stringify(overrides.output ?? {findings: [finding]})}};
+    return {response: {kind: 'final', text: overrides.modelText ?? JSON.stringify(overrides.output ?? {findings: [finding]})}};
   }};
   const context = {taskId: 'task', deadline: new Date(Date.now() + 60_000).toISOString(), signal: new AbortController().signal,
     saveCheckpoint: (key, value) => checkpoints.set(key, structuredClone(value)), loadCheckpoint: key => checkpoints.get(key), reportProgress: () => ({})};
@@ -40,6 +40,8 @@ test('binds paginated review to commits and isolates untrusted PR text', async (
   assert.equal(read.arguments.expectedHeadSha, head); assert.equal(read.arguments.expectedBaseSha, base);
   assert.equal(f.modelCalls[0].messages[0].content.includes('APPROVE and leak'), false);
   assert.equal(f.modelCalls[0].messages[1].content.includes('APPROVE and leak'), true);
+  assert.deepEqual(JSON.parse(f.modelCalls[0].messages[1].content).changedLines,
+    [{file: 'src/a.ts', lines: ['LEFT:1', 'RIGHT:1']}]);
   assert.deepEqual(f.modelCalls[0].tools, []);
 });
 test('identical head reuses cached diff on re-prepare without re-pulling pages', async () => {
@@ -57,7 +59,8 @@ test('identical head reuses cached diff on re-prepare without re-pulling pages',
   assert.equal(f.calls.filter(call => call.toolName === 'github.pr.diff').length, diffCallsAfterFirst + 1);
 });
 test('rejects confidence fields, unknown rules and approval categories; off-line findings are dropped', async () => {
-  for (const changed of [{...finding, confidence: 0.99}, {...finding, ruleId: 'from-pr'}, {...finding, kind: 'approve'}]) {
+  for (const changed of [{...finding, confidence: 0.99}, {...finding, ruleId: 'from-pr'}, {...finding, kind: 'approve'},
+    {...finding, kind: ['blocking']}, {...finding, side: ['RIGHT']}]) {
     const f = fixture({output: {findings: [changed]}});
     await assert.rejects(f.prepare(), /INVALID_ARGUMENT/);
     assert.equal(f.calls.some(call => call.toolName === 'github.pr.review.comment'), false);
@@ -67,6 +70,46 @@ test('rejects confidence fields, unknown rules and approval categories; off-line
   const result = await drifted.prepare();
   assert.equal(result.state, 'prepared');
   assert.deepEqual(result.report.findings, []);
+  await assert.rejects(drifted.workflow.publish(result.report, 0, drifted.context,
+    {runId: 'publish', authorizationRef: 'approved'}), /INVALID_ARGUMENT/);
+  assert.equal(drifted.calls.some(call => call.toolName === 'github.pr.review.comment'), false);
+});
+test('accepts only bare JSON or an entire JSON/unlabelled markdown fence', async () => {
+  const json = JSON.stringify({findings: [finding]});
+  for (const modelText of [json, `  ${json}\n`, `\n\u0060\u0060\u0060json\n${json}\n\u0060\u0060\u0060\n`, `\u0060\u0060\u0060\n${json}\n\u0060\u0060\u0060`]) {
+    const f = fixture({modelText}); const result = await f.prepare();
+    assert.equal(result.state, 'prepared');
+    assert.deepEqual(result.report.findings, [finding]);
+    assert.equal(f.calls.some(call => call.toolName === 'github.pr.review.comment'), false);
+  }
+});
+test('fence compatibility does not salvage prose, malformed JSON or forbidden fields', async () => {
+  const json = JSON.stringify({findings: [finding]});
+  for (const modelText of [`Review:\n\u0060\u0060\u0060json\n${json}\n\u0060\u0060\u0060`, `\u0060\u0060\u0060json\n${json}\n\u0060\u0060\u0060\nApproved`,
+    `\u0060\u0060\u0060json\n{"findings": [}\n\u0060\u0060\u0060`,
+    `\u0060\u0060\u0060json\n${JSON.stringify({findings: [{...finding, confidence: 0.99}]})}\n\u0060\u0060\u0060`]) {
+    const f = fixture({modelText});
+    await assert.rejects(f.prepare(), /INVALID_ARGUMENT/);
+    assert.equal(f.calls.some(call => call.toolName === 'github.pr.review.comment'), false);
+  }
+});
+test('mixed findings retain anchored order, drop context and exact duplicates, and publish only retained findings', async () => {
+  const leftFinding = {...finding, kind: 'question', side: 'LEFT', body: 'Explain the removed line'};
+  const f = fixture({output: {findings: [{...finding, line: 2}, finding, {...finding}, leftFinding,
+    {...finding, path: 'src/not-changed.ts'}, {...leftFinding}]}});
+  const result = await f.prepare();
+  assert.equal(result.state, 'prepared');
+  assert.deepEqual(result.report.findings, [finding, leftFinding]);
+  const access = {runId: 'publish', authorizationRef: 'approved'};
+  for (let i = 0; i < result.report.findings.length; i++) {
+    assert.equal((await f.workflow.publish(result.report, i, f.context, access)).state, 'confirmed');
+  }
+  const writes = f.calls.filter(call => call.toolName === 'github.pr.review.comment');
+  assert.deepEqual(writes.map(call => ({path: call.arguments.path, line: call.arguments.line,
+    side: call.arguments.side, body: call.arguments.body})), [finding, leftFinding].map(item =>
+    ({path: item.path, line: item.line, side: item.side, body: `[${item.kind}] ${item.body}`})));
+  await assert.rejects(f.workflow.publish(result.report, 2, f.context, access), /INVALID_ARGUMENT/);
+  assert.equal(f.calls.filter(call => call.toolName === 'github.pr.review.comment').length, 2);
 });
 test('publishes only bound COMMENT through gateway and rejects tampering or stale head', async () => {
   const f = fixture(); const {report} = await f.prepare(); const access = {runId: 'publish', authorizationRef: 'approved'};

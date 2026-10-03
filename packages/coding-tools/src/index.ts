@@ -563,6 +563,7 @@ export function createWorkspacePatchApplyTool(
     rootPath: options.rootPath,
     recoveryRootPath: options.recoveryRootPath,
     powerShellPath: options.powerShellPath,
+    ...(options.helperScriptPath !== undefined ? {helperScriptPath: options.helperScriptPath} : {}),
     preview,
     now: options.now ?? Date.now,
   });

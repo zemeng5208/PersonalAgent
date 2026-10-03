@@ -12,6 +12,21 @@
 helper 脚本和可执行文件也必须位于授权工作区外，模型和工具输入都不能改变
 这些位置。当前仅支持 Windows，默认不注册到产品。
 
+源码仓库本身作为 `rootPath` 时，默认包内 helper 位于可写工作区内，仍会安全拒绝。
+受信宿主可预先在工作区与恢复目录之外的独立、已限权安装目录部署本版本
+`scripts/locked-apply.ps1` 的字节一致副本，并显式提供绝对 `helperScriptPath`。
+`createDevWorkflowsRuntime` 通过 `workspace.patch.helperScriptPath` 接入该配置；
+公共 apply factory/register 也转交同一可选字段。未配置时保留既有默认路径与隔离要求，
+不缩小全仓 root，也不移除 in-root 执行保护。
+
+factory 核对外部脚本为单硬链接常规文件、canonical 路径不在 workspace/recovery 内，
+并与包内已审查脚本的字节摘要一致；每次 apply 在预览前及启动 helper 前复核路径与摘要。
+模型、补丁参数和 PR 内容不能选择该路径；本包不自动复制、安装或执行未知脚本。
+该配置是兼容增加的进程内受信宿主选项，不改变工具输入/输出、scope、wire operation 或数据库。
+宿主仍须核实安装目录/脚本的 Windows ACL；摘要预检并不消除可被其他进程并发修改目录的
+TOCTOU 风险。新增外部路径与突变拒绝的 Windows 场景源码尚未运行，交 Potatos498 集中验证、
+goo122 公开消费兼容评审。
+
 固定的 `scripts/locked-apply.ps1` 不使用 `ExecutionPolicy Bypass`，通过 stdin
 接收本次 preview 生成、SHA 绑定的候选字节，不信任可由其他进程修改的 stage
 文件。它用 .NET `FileStream` 的 `FileShare.None` 在同一独占句柄内核对源 SHA、
