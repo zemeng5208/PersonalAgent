@@ -124,8 +124,8 @@ test('not_applied is terminal and unknown stays in reconciliation without reopen
     const taskId = await startUnknown(unknown, 'patch-unknown');
     const result = await unknown.app.reconcileWorkspacePatchTask(taskId);
     assert.equal(result.task.state, 'waiting_reconciliation');
-    assert.equal(unknown.app.runtime.readToolExecutions(taskId)[0].reconciliationOutcome, 'unknown');
-    assert.match(unknown.app.runtime.readEvidence(taskId)[0].summary, /reconciliation=unknown/);
+    // An unknown poll is an observation: no record outcome is persisted until a verified readback.
+    assert.equal(unknown.app.runtime.readToolExecutions(taskId)[0].reconciliationOutcome, undefined);
     assert.equal(unknown.calls.tool, 1);
     assert.equal(unknown.calls.reconcile, 2);
   } finally {

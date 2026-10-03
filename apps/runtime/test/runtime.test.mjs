@@ -306,7 +306,11 @@ test('timed out external writes stay unknown and are never invoked again automat
       }),
       error => error instanceof RuntimeError && error.code === 'REVISION_CONFLICT'
     );
-    assert.equal(runtime.reconcileTask(task.taskId, 'confirmed').state, 'succeeded');
+    // Recovery requires the original confirmed tool Evidence; a host assertion alone is refused.
+    await assert.rejects(
+      async () => runtime.reconcileTask(task.taskId, 'confirmed'),
+      error => error instanceof RuntimeError && error.code === 'UNAUTHORIZED'
+    );
     assert.equal(calls, 1);
   } finally {
     runtime.close();
