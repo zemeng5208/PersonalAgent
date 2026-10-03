@@ -111,8 +111,8 @@
 | MOD-30 | M1.5 第一优先 | in_progress | `zemeng` / PR #49、#72（Workflow 输入）、#80（载荷边界）均已进入 main（2026-09-30 台账核对），工具提案/审批/continuation 离线链可用；真实 MCP/Skill 与目标系统读回未完成 |
 | MOD-31 | M1.5/M3 | in_progress | `zemeng` / PR #58 已合并固定合成评估 runner；真实多 Agent 角色、重复运行指标和平台评估未完成 |
 | MOD-32 | M1.5/M5 第一优先 | in_progress | `zemeng` / 手动验收脚手架和失败诊断已有记录；真实发布、健康读回、trace、成本、回滚和端到端成功证据未提供 |
-| MOD-33 | M6 产品化（登记） | todo | `Potatos498` / GitHub 集成连接器底座（actions.run.list/log.read、issue、pr 端口），DEV-WORKFLOWS 前置包；仅登记未开工，见 [DEV-WORKFLOWS 规划](modules/DEV-WORKFLOWS-PLAN-20261002.md) |
-| MOD-34 | M6 产品化（登记） | todo | `Potatos498` / CI 构建失败自动修复（日志→归因→补丁→本地验证→审批 PR），评审者 goo122；仅登记未开工 |
+| MOD-33 | M6 产品化（登记） | todo | `zemeng` / GitHub 集成连接器底座（actions.run.list/log.read、issue、pr 端口），DEV-WORKFLOWS 前置包；仅登记未开工，见 [DEV-WORKFLOWS 规划](modules/DEV-WORKFLOWS-PLAN-20261002.md) |
+| MOD-34 | M6 产品化（登记） | todo | `zemeng` / CI 构建失败自动修复（日志→归因→补丁→本地验证→审批 PR），评审者 Potatos498；仅登记未开工 |
 | MOD-35 | M6 产品化（登记） | todo | `Potatos498` / 测试失败自动定位（test 输出解析→源码行映射→定位报告），评审者 zemeng；仅登记未开工 |
 | MOD-36 | M6 产品化（登记） | todo | `zemeng` / Code Review 自动预审（PR diff→结构化意见→审批回贴），评审者 Potatos498；仅登记未开工 |
 | MOD-37 | M6 产品化（登记） | todo | `goo122` / API 文档自动维护（exports/接口目录↔docs 漂移比对→文档补丁 PR），评审者 zemeng；仅登记未开工 |

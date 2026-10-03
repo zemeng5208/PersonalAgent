@@ -27,8 +27,8 @@
 
 | 模块 | 功能 | 负责人 | 评审者 | 依赖 |
 | --- | --- | --- | --- | --- |
-| MOD-33 | GitHub 集成连接器底座（CI/issue/PR 端口） | Potatos498 | goo122 | 无（连接器模板 §6） |
-| MOD-34 | CI 构建失败自动修复 | Potatos498 | goo122 | MOD-33、P4 子Agent/本地执行底座 |
+| MOD-33 | GitHub 集成连接器底座（CI/issue/PR 端口） | zemeng | goo122 | 无（连接器模板 §6） |
+| MOD-34 | CI 构建失败自动修复 | zemeng | Potatos498 | MOD-33、子Agent/本地执行底座 |
 | MOD-35 | 测试失败自动定位 | Potatos498 | zemeng | 与 MOD-34 共享解析底座 |
 | MOD-36 | Code Review 自动预审 | zemeng | Potatos498 | MOD-33 |
 | MOD-37 | API 文档自动维护 | goo122 | zemeng | MOD-33、check:generated/architecture 产物 |

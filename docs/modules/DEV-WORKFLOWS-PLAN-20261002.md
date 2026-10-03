@@ -26,7 +26,7 @@
 
 ### MOD-33：GitHub 集成连接器底座（前置，所有人依赖）
 
-- 负责人：Potatos498；评审者：goo122。
+- 负责人：zemeng；评审者：goo122。（2026-10-02 分工调整：代码量大的底座包转 zemeng）
 - 独占目录：`packages/connectors/github/`。
 - 职责：提供 repo/CI/issue/PR 四类端口的规范化读写：`actions.run.list`（含状态/结论）、`actions.log.read`（失败 job 日志分页）、`issue.get/list/label`、`pr.get/diff/create/comment`、`pr.review.comment`。输出统一脱敏（不回传 token，日志截断上限）。
 - Fake/真实验收：Fake 覆盖 404/限流/分页/部分失败；真实验收用本仓库 gh 凭据读回真实 run 列表与日志（只读先行），写操作在 MOD-34/36/38 各自验收。
@@ -34,7 +34,7 @@
 
 ### MOD-34：CI 构建失败自动修复
 
-- 负责人：Potatos498（子 Agent/多模型/本地执行底座属 P4 职责）；评审者：goo122（Runtime 工具循环兼容）。
+- 负责人：zemeng（2026-10-02 分工调整：本群代码量最大的修复循环转 zemeng）；评审者：Potatos498（功能意图与验收）；Runtime 工具循环兼容由 MOD-33 评审（goo122）把关。
 - 独占目录：`packages/coding-tools/`（扩展）+ `packages/connectors/github/` 消费。
 - 流程链：`actions.run.list` 发现 failed run → `actions.log.read` 拉失败日志 → 归因 Agent（模型）产出假设与补丁提案 → 本地执行验证（`npm run check` 等仓内门禁）→ 验证通过后生成修复 commit + PR（审批后提交）→ 把修复 PR 链接回写原 run。修复循环上限（尝试次数/token/时长）复用既有 Agent 有界执行边界（MOD-04A 语义）。
 - Fake/真实验收：Fake 日志→提案→验证循环全离线测试；真实验收人为构造一次真实失败（破坏 typecheck 的提交），Agent 修复并在真实 Actions 上读回绿。
