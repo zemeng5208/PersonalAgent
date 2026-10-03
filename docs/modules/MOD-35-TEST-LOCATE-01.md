@@ -1,0 +1,56 @@
+# MOD-35：测试失败自动定位（工作包 MOD-35-TEST-LOCATE-01）
+
+## 基本信息
+
+- 关联需求：DEV-WORKFLOWS 选题「测试失败自动定位」（痛点高/演示好/工作量中）
+- 目标 Profile：`local`（Local Profile 产品化增量，不进入 Competition 退出条件）
+- GitHub 负责人：Potatos498（产品负责人 2026-10-03 授权开工）
+- 评审者：zemeng
+- 独占目录：`packages/coding-tools/src/test-locate/`、`packages/coding-tools/test/test-locate.test.mjs`
+- 当前状态：review（已实现+真实验收，待 zemeng 评审）
+- 消费的冻结基线 / 精确提交：main@330be38
+
+## 职责
+
+把 `node --test` 的失败输出（spec 文本或 TAP）解析为结构化定位报告：失败测试名、断言错误、过滤后的仓库内堆栈帧、每个嫌疑帧的源码上下文片段与规则型置信度。纯确定性解析，不调用模型、不产生副作用——模型归因由 MOD-34 修复链消费本报告完成。
+
+## 非职责
+
+- 不修改任何源码或测试（不做修复）；
+- 不解析 node:test 以外的 runner（jest/vitest 等）；
+- 不做 flaky 自动重试（仅标注超时类失败）；
+- 不接模型、不读凭据、不产生网络副作用。
+
+## 输入、输出与公共入口
+
+| 接口 | 提供方 | 状态 | 兼容或迁移要求 |
+| --- | --- | --- | --- |
+| `@personal-agent/coding-tools` 导出 `locateTestFailures(output, options)` | 本模块 | provisional | 输入为字符串（spec/TAP 自动识别）；输出为纯 JSON 结构，无 Promise 之外的副作用 |
+| `TestFailureReport` 类型 | 本模块 | provisional | 字段仅追加不重命名 |
+
+## 依赖
+
+- 前置模块：无（纯解析，不依赖 dev-workflows / #277）。
+- 允许依赖：`@personal-agent/contracts`（ProtocolError）。
+- 禁止依赖：apps/*、其余 packages（保持零内部依赖，便于复用）。
+
+## 权限与数据
+
+无 Scope、无副作用、无凭据。源码上下文读取仅限 options.root（默认 process.cwd()）下的文件，路径穿越拒绝。
+
+## 验收
+
+- Fake/离线测试：spec 文本样本、TAP 样本、缺列堆栈（`file:line` 无列）、node:internal 与 node_modules 帧过滤、超时用例标注、多失败用例、无失败输入、恶意长输入上限。
+- 跨模块集成：MOD-34 可将报告 JSON 作为归因输入（接口预留，不在本包实现）。
+- 真实验收：对本仓库注入的一个真实失败测试（`test/*.test.mjs`）运行 `node --test` 后定位到正确文件与行号；真实验收脚本与记录存 `packages/coding-tools/test/` 说明，不进 CI。
+- 能力发现与不可用路径：输入不含可解析失败时返回 `failures: []` 而非报错。
+
+## 真实验收记录（2026-10-03）
+
+对本包注入临时失败测试 `test/tmp-acceptance-fail.test.mjs`（`assert.equal(1 + 1, 3)`），以真实 `node --test` spec 输出喂入 `locateTestFailures`：定位 `test/tmp-acceptance-fail.test.mjs:4:10`（断言行与列号精确），snippet 标记 `> 4 assert.equal(1 + 1, 3);`，测试文件置信度折扣后 0.85。离线套件 6 项 + coding-tools 全量 52/52、check:architecture 3/3 通过。
+
+## 排除项与已知限制
+
+- 堆栈帧的源映射（source map）解析不在本包范围（本仓测试直跑源/产物无 map 场景）；
+- Windows 与 POSIX 路径都接受，输出统一 POSIX 风格相对路径；
+- 置信度为规则型（帧序、文件匹配、错误行命中），不代表模型判断。
