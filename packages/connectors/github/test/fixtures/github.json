@@ -1,0 +1,6 @@
+{
+  "issue": {"number": 8, "title": "中文 bug", "body": "Build failure", "state": "open", "labels": [{"name": "bug"}], "html_url": "https://github.com/example/repository/issues/8", "updated_at": "2026-10-03T00:00:00Z"},
+  "pull": {"number": 9, "title": "Fix build", "body": "Refs #8", "state": "open", "base": {"ref": "main", "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, "head": {"ref": "fix/build", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, "html_url": "https://github.com/example/repository/pull/9", "draft": false},
+  "runs": {"workflow_runs": [{"id": 31, "name": "CI", "status": "completed", "conclusion": "failure", "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "html_url": "https://github.com/example/repository/actions/runs/31", "created_at": "2026-10-03T00:00:00Z"}]},
+  "jobs": {"jobs": [{"id": 41, "run_id": 31, "name": "check", "status": "completed", "conclusion": "failure", "html_url": "https://github.com/example/repository/actions/runs/31/job/41"}]}
+}

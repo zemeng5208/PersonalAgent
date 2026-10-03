@@ -1,0 +1,290 @@
+import {isDeepStrictEqual} from 'node:util';
+import {realpathSync} from 'node:fs';
+import {ProtocolError} from '@personal-agent/contracts';
+import type {RegisteredTool, TaskSnapshot} from '@personal-agent/contracts';
+import {RuntimeToolInvoker} from '@personal-agent/agents';
+import type {AgentToolPort, AgentWorkerContext} from '@personal-agent/agents';
+import {ModelGateway} from '@personal-agent/models';
+import type {ModelProvider} from '@personal-agent/models';
+import {ToolGateway, toolArgumentsDigest} from '@personal-agent/tool-gateway';
+import {createCiFixWorkflow, createWorkspaceReadTool, createWorkspacePatchApplyTool,
+  createWorkspaceCommandTool, createGitTools, readGitWorkspaceFingerprint} from '@personal-agent/coding-tools';
+import type {CiFixOptions, WorkspaceReadOptions, WorkspacePatchApplyHostOptions,
+  WorkspaceCommandOptions, GitToolsOptions, GitVerificationReceipt} from '@personal-agent/coding-tools';
+import {register as registerGitHub} from '@personal-agent/github';
+import type {GitHubProvider} from '@personal-agent/github';
+import {createCodeReviewWorkflow, createIssueTriageWorkflow} from '@personal-agent/cognition';
+import type {CodeReviewInput, CodeReviewReport, IssueTriageRequest, IssueTriageOptions} from '@personal-agent/cognition';
+import {TaskRuntime} from './index.js';
+
+export type DevWorkflowRequest =
+  | {kind: 'ci_fix'; repository: string; runId: string}
+  | {kind: 'code_review'; input: CodeReviewInput; publish?: boolean}
+  | {kind: 'issue_triage'; input: IssueTriageRequest};
+
+export interface DevWorkflowsRuntimeOptions {
+  path: string;
+  /** Explicit production or Fake provider, always wrapped in ModelGateway. */
+  model: ModelProvider;
+  /** Trusted host registrations, including GitHub and permitted workspace/Git tools. */
+  tools?: readonly RegisteredTool[];
+  github?: GitHubProvider;
+  workspace?: {read: WorkspaceReadOptions; patch: WorkspacePatchApplyHostOptions; command: WorkspaceCommandOptions};
+  git?: Omit<GitToolsOptions, 'readVerification'>;
+  /** Trusted host maps an issue to an existing failed CI run; issue text cannot select credentials or commands. */
+  failedRunForIssue?: (repo: string, number: number) => string | undefined;
+  ciFix?: Omit<CiFixOptions, 'repository' | 'runId' | 'model' | 'tools' | 'authorizationRefFor'>;
+  issueTriage?: Pick<IssueTriageOptions, 'repair' | 'minConfidence' | 'labels'>;
+  maxSteps: number;
+  maxTokens: number;
+  now?: () => Date;
+  idFactory?: () => string;
+  /** Live trusted desktop/session presence. An approval alone does not imply presence. */
+  isUserPresent?: () => boolean;
+}
+
+const REQUEST_KEY = 'dev-workflows-request-v1';
+const DEADLINE_KEY = 'dev-workflows-deadline-v1';
+const RESULT_KEY = 'dev-workflows-result-v1';
+
+/** Optional Local composition. TaskRuntime owns all task states and durable execution receipts. */
+export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions) {
+  if (!Number.isSafeInteger(options.maxSteps) || options.maxSteps < 1
+    || !Number.isSafeInteger(options.maxTokens) || options.maxTokens < 1) {
+    throw new ProtocolError('INVALID_ARGUMENT', 'Positive workflow budgets required');
+  }
+  const now = options.now ?? (() => new Date());
+  if (options.git && options.workspace) {
+    const root = realpathSync(options.git.rootPath);
+    if (realpathSync(options.workspace.read.rootPath) !== root || realpathSync(options.workspace.command.rootPath) !== root
+      || options.ciFix?.sourcePaths.some(path => !options.git!.allowedPaths.includes(path))) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Workspace, verification command and Git source paths must share the trusted root');
+    }
+  }
+  const model = options.model instanceof ModelGateway ? options.model : new ModelGateway(options.model);
+  let gateway!: ToolGateway;
+  const runtime = new TaskRuntime(options.path, {now,
+    ...(options.idFactory ? {idFactory: options.idFactory} : {}),
+    createToolGateway: policy => {
+      gateway = new ToolGateway({policy, now: () => now().getTime()});
+      return {list: () => gateway.list(), invoke: invocation => gateway.invoke({...invocation,
+        userPresent: options.isUserPresent?.() === true})};
+    },
+  });
+  const registrations: (() => void)[] = [];
+  try {
+    if (options.github) registrations.push(registerGitHub(gateway, {provider: options.github}));
+    if (options.workspace) {
+      registrations.push(gateway.register(createWorkspaceReadTool(options.workspace.read)));
+      registrations.push(gateway.register(createWorkspacePatchApplyTool({...options.workspace.read, ...options.workspace.patch})));
+    }
+    let gitTools: ReturnType<typeof createGitTools> | undefined;
+    if (options.git) {
+      const readVerification: GitToolsOptions['readVerification'] = async (context, runId) => {
+        const record = runtime.readToolExecutions(context.taskId).find(item => item.evidenceId === runId);
+        const cached = runtime.loadCheckpoint(context.taskId, `tool-result-${runId}`) as {result?: {exitCode?: number}} | undefined;
+        const receipt = runtime.loadCheckpoint(context.taskId, `dev-git-verification:${runId}`) as GitVerificationReceipt | undefined;
+        if (!record || record.state !== 'confirmed' || !record.executionStarted || record.policyDecision !== 'allow'
+          || record.toolName !== 'workspace.run_allowed_command' || cached?.result?.exitCode !== 0
+          || receipt?.taskId !== context.taskId || receipt.runId !== runId || receipt.exitCode !== cached.result.exitCode) return undefined;
+        return receipt;
+      };
+      gitTools = createGitTools({...options.git, readVerification});
+      for (const tool of Object.values(gitTools)) registrations.push(gateway.register(tool));
+    }
+    if (options.workspace) {
+      const command = createWorkspaceCommandTool(options.workspace.command);
+      const git = options.git;
+      const head = gitTools?.head;
+      registrations.push(gateway.register({...command,
+        descriptor: {...command.descriptor, requiredScopes: [...new Set([...command.descriptor.requiredScopes,
+          ...(git && head ? ['workspace:git:read'] : [])])]},
+        async execute(input, context) {
+        if (!git || !head) return command.execute(input, context);
+        const beforeHead = await head.execute({repository: git.repository}, context) as {headSha: string};
+        const before = await readGitWorkspaceFingerprint(git.rootPath, git.allowedPaths);
+        const result = await command.execute(input, context) as {exitCode: number};
+        const afterHead = await head.execute({repository: git.repository}, context) as {headSha: string};
+        const after = await readGitWorkspaceFingerprint(git.rootPath, git.allowedPaths);
+        if (result.exitCode === 0 && beforeHead.headSha === afterHead.headSha && before.fingerprint === after.fingerprint) {
+          runtime.saveCheckpoint(context.taskId, `dev-git-verification:${context.runId}`, {
+            taskId: context.taskId, runId: context.runId, toolName: 'workspace.run_allowed_command',
+            status: 'confirmed', exitCode: 0, headSha: afterHead.headSha, files: after.files,
+          } satisfies GitVerificationReceipt);
+        }
+        return result;
+      }}));
+    }
+    for (const tool of options.tools ?? []) registrations.push(gateway.register(tool));
+  } catch (error) {
+    for (const dispose of registrations.reverse()) dispose();
+    runtime.close();
+    throw error;
+  }
+  const invoker = new RuntimeToolInvoker(runtime, gateway.list());
+  const tools: AgentToolPort = {
+    list: () => gateway.list(),
+    async invoke(invocation) {
+      const tool = gateway.list().find(item => item.name === invocation.toolName);
+      if (!tool || tool.version !== invocation.toolVersion) {
+        throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Workflow tool is not registered');
+      }
+      const ref = invocation.runId;
+      const confirmed = runtime.readToolExecutions(invocation.taskId).some(record =>
+        record.evidenceId === ref && record.state === 'confirmed' && record.executionStarted
+        && record.policyDecision === 'allow' && record.toolName === tool.name && record.toolVersion === tool.version
+        && runtime.matchesToolExecutionInput(record, {arguments: invocation.arguments as Record<string, unknown>, scopeRef: ref}));
+      if (!confirmed && !runtime.policy.get(ref)) {
+        const approval = runtime.requestToolApproval(ref, invocation.taskId, tool,
+          invocation.deadline, toolArgumentsDigest(invocation.arguments));
+        if (approval.state !== 'pending') throw new ProtocolError('UNAUTHORIZED', 'Workflow approval denied or grant revoked');
+        return {state: 'pending', evidenceRefs: []};
+      }
+      return invoker.invoke({...invocation, authorizationRef: ref});
+    },
+  };
+  // The per-invocation adapter above chooses the actual run-bound reference; workflows never mint grants.
+  const authorizationRefFor = (_name: string, context: AgentWorkerContext) => context.taskId;
+  const confirmedReplayReady = (taskId: string, runId: string) => {
+    const record = runtime.readToolExecutions(taskId).find(item => item.evidenceId === runId);
+    return record?.state === 'confirmed' && record.executionStarted && record.policyDecision === 'allow'
+      && runtime.loadCheckpoint(taskId, `tool-result-${runId}`) !== undefined;
+  };
+  const review = createCodeReviewWorkflow({model, tools, maxTokens: options.maxTokens});
+  const ciOptions = options.ciFix ? {...options.ciFix,
+    ...(!options.ciFix.gitTools && options.git ? {gitTools: {head: 'workspace.git.head', commit: 'workspace.git.commit',
+      push: 'workspace.git.push', pullRequest: 'github.pr.create', backlink: 'github.pr.comment'}} : {}),
+  } : undefined;
+  const repair = options.issueTriage?.repair ?? (ciOptions && (options.failedRunForIssue || ciOptions.expectedHeadSha) ? {
+    async repairIssue(context: AgentWorkerContext, request: {repo: string; number: number; issueUrl: string;
+      issueFingerprint: string; goal: string; pullRequestBody: string}) {
+      const runId = options.failedRunForIssue?.(request.repo, request.number);
+      if (!runId && !ciOptions.expectedHeadSha) return {state: 'unsupported', resultSummary: 'No trusted source revision is bound to this issue', evidenceRefs: []};
+      const outcome = await createCiFixWorkflow({...ciOptions, repository: request.repo, ...(runId ? {runId} : {}), model, tools,
+        authorizationRefFor, maxSteps: options.maxSteps, maxTokens: options.maxTokens,
+        issue: {url: request.issueUrl, number: request.number, repository: request.repo, fingerprint: request.issueFingerprint},
+        confirmedReplayReady: id => confirmedReplayReady(context.taskId, id)}).run(context);
+      return {state: outcome.status, resultSummary: outcome.reason, evidenceRefs: outcome.evidenceRefs};
+    },
+  } : undefined);
+  const triage = createIssueTriageWorkflow({model, tools, authorizationRefFor,
+    maxSteps: options.maxSteps, maxTokens: options.maxTokens, ...options.issueTriage, ...(repair ? {repair} : {}),
+    confirmedReplayReady: (runId, context) => confirmedReplayReady(context.taskId, runId),
+    confirmedRepairReplayReady: context => {
+      const receipt = runtime.loadCheckpoint(context.taskId, 'dev-confirmed-replay-receipt-v1') as
+        Parameters<TaskRuntime['prepareConfirmedReplay']>[1] | undefined;
+      if (!receipt || !receipt.runId.startsWith(`${context.taskId}:ci-fix:`)) return false;
+      const records = runtime.readToolExecutions(context.taskId).filter(record => record.evidenceId.startsWith(`${context.taskId}:ci-fix:`));
+      const original = records.find(record => record.evidenceId === receipt.runId);
+      return !!original && original.toolName === receipt.toolName && original.toolVersion === receipt.toolVersion
+        && runtime.matchesToolExecutionInput(original, {arguments: receipt.arguments, scopeRef: receipt.runId})
+        && records.every(record => confirmedReplayReady(context.taskId, record.evidenceId));
+    }});
+  const active = new Map<string, Promise<TaskSnapshot>>();
+
+  async function executeWorkflow(context: AgentWorkerContext) {
+    const request = runtime.loadCheckpoint(context.taskId, REQUEST_KEY) as DevWorkflowRequest;
+    let result: unknown;
+    if (request.kind === 'ci_fix') {
+      if (!ciOptions) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Trusted CI workspace/Git configuration unavailable');
+      result = await createCiFixWorkflow({...ciOptions, repository: request.repository,
+        runId: request.runId, model, tools, authorizationRefFor,
+        confirmedReplayReady: runId => confirmedReplayReady(context.taskId, runId),
+        maxSteps: options.maxSteps, maxTokens: options.maxTokens}).run(context);
+    } else if (request.kind === 'issue_triage') {
+      result = await triage.triageIssue(context, request.input);
+    } else if (request.kind === 'code_review') {
+      const access = {runId: `${context.taskId}:review`, authorizationRef: context.taskId,
+        confirmedReplayReady: (runId: string) => confirmedReplayReady(context.taskId, runId)};
+      let report = context.loadCheckpoint('dev-code-review-report-v1') as CodeReviewReport | undefined;
+      if (!report) {
+        const prepared = await review.prepare(request.input, context, access);
+        if (prepared.state !== 'prepared') result = prepared;
+        else { report = prepared.report; context.saveCheckpoint('dev-code-review-report-v1', report); }
+      }
+      if (report) {
+        result = {state: 'prepared', report, evidenceRefs: report.evidenceRefs};
+        if (request.publish) {
+          for (let index = 0; index < report.findings.length; index++) {
+            const published = await review.publish(report, index, context,
+              {...access, runId: `${context.taskId}:review:publish:${index}`});
+            result = published;
+            if (published.state !== 'confirmed') break;
+          }
+        }
+      }
+    } else throw new ProtocolError('INVALID_ARGUMENT', 'Unknown development workflow');
+    context.saveCheckpoint(RESULT_KEY, result);
+    const outcome = result as {state?: string; status?: string; reason?: string; evidenceRefs?: readonly string[]};
+    const state = outcome.state ?? outcome.status;
+    if (state === 'waiting_approval' || state === 'pending') {
+      if (runtime.getTask(context.taskId).state === 'running') runtime.transitionTask(context.taskId, 'waiting_approval');
+    } else if (state === 'waiting_reconciliation' || state === 'unknown') {
+      if (runtime.getTask(context.taskId).state === 'running') runtime.transitionTask(context.taskId, 'waiting_reconciliation');
+    } else if (['unsupported', 'verification_failed', 'stale'].includes(state ?? '')) {
+      throw new ProtocolError(state === 'unsupported' ? 'UNSUPPORTED_CAPABILITY' : 'EXTERNAL_FAILURE', outcome.reason ?? 'Workflow could not complete');
+    }
+    return {resultSummary: outcome.reason ?? `Development workflow ${request.kind}: ${state ?? 'completed'}`,
+      evidenceRefs: outcome.evidenceRefs ?? []};
+  }
+
+  async function worker(context: AgentWorkerContext) {
+    try { return await executeWorkflow(context); }
+    catch (error) {
+      // A public port may signal a pause by throwing. Preserve the state already recorded by Runtime.
+      const task = runtime.getTask(context.taskId);
+      if (task.state === 'waiting_approval' || task.state === 'waiting_reconciliation') {
+        return {resultSummary: `Development workflow ${task.state}`, evidenceRefs: task.evidenceRefs};
+      }
+      throw error;
+    }
+  }
+
+  function start(taskId: string, resume = false): Promise<TaskSnapshot> {
+    const existing = active.get(taskId);
+    if (existing) return existing;
+    const deadline = runtime.loadCheckpoint(taskId, DEADLINE_KEY);
+    if (typeof deadline !== 'string' || runtime.loadCheckpoint(taskId, REQUEST_KEY) === undefined) {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Task is not a bound development workflow');
+    }
+    const run = runtime.runTask(taskId, worker, {deadline, sideEffect: 'external_write', ...(resume ? {resume: true} : {})})
+      .finally(() => active.delete(taskId));
+    active.set(taskId, run);
+    return run;
+  }
+
+  return {
+    profile: 'local' as const, runtime, gateway, model, tools,
+    submit(input: {request: DevWorkflowRequest; conversationId: string; idempotencyKey: string; deadline: string}) {
+      if (!Number.isFinite(Date.parse(input.deadline)) || Date.parse(input.deadline) <= now().getTime()) {
+        throw new ProtocolError('INVALID_ARGUMENT', 'Future absolute deadline required');
+      }
+      const request = structuredClone(input.request);
+      const task = runtime.submitTaskWithCheckpoint({goal: `DEV ${request.kind}`, conversationId: input.conversationId,
+        idempotencyKey: input.idempotencyKey}, REQUEST_KEY, request);
+      const old = runtime.loadCheckpoint(task.taskId, DEADLINE_KEY);
+      if (old !== undefined && old !== input.deadline) throw new ProtocolError('REVISION_CONFLICT', 'Workflow deadline changed');
+      if (!isDeepStrictEqual(runtime.loadCheckpoint(task.taskId, REQUEST_KEY), request)) {
+        throw new ProtocolError('REVISION_CONFLICT', 'Workflow request changed');
+      }
+      runtime.saveCheckpointOnce(task.taskId, DEADLINE_KEY, input.deadline);
+      return task;
+    },
+    start,
+    resume(taskId: string) { return start(taskId, true); },
+    /** Trusted host must first reconcile and persist original execution Evidence. Unknown writes never retry. */
+    resumeConfirmed(taskId: string, receipt: Parameters<TaskRuntime['prepareConfirmedReplay']>[1]) {
+      runtime.prepareConfirmedReplay(taskId, receipt);
+      runtime.saveCheckpoint(taskId, 'dev-confirmed-replay-receipt-v1', receipt);
+      return start(taskId, true);
+    },
+    readResult(taskId: string) { return runtime.loadCheckpoint(taskId, RESULT_KEY); },
+    cancel(taskId: string, reason?: string) { return runtime.requestCancel(taskId, reason); },
+    async close() {
+      for (const taskId of active.keys()) runtime.requestCancel(taskId, 'Development workflow host closing');
+      await Promise.allSettled([...active.values()]);
+      for (const dispose of registrations.reverse()) dispose();
+      runtime.close();
+    },
+  };
+}
