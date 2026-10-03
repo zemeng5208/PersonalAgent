@@ -81,6 +81,7 @@ export function codeReviewChangedLines(diff: string): ReadonlyMap<string, Readon
       leftRemaining = match![2] === undefined ? 1 : Number(match![2]);
       rightRemaining = match![4] === undefined ? 1 : Number(match![4]); hunk = true;
     } else if (hunk && (leftRemaining || rightRemaining)) {
+      if (line === '') continue;
       if (line.startsWith('\\ No newline')) continue;
       if (line.startsWith('+')) {if (rightRemaining < 1) invalid('malformed diff'); add(rightPath, 'RIGHT', right++); rightRemaining--;}
       else if (line.startsWith('-')) {if (leftRemaining < 1) invalid('malformed diff'); add(leftPath, 'LEFT', left++); leftRemaining--;}
