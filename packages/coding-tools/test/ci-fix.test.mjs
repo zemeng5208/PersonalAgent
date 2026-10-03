@@ -70,6 +70,56 @@ test('missing capability is unsupported without effects',async()=>{
   const f=fixture(); delete f.options.model;
   assert.equal((await runCiFix(f.context,f.options)).status,'unsupported'); assert.equal(f.calls.length,0);
 });
+test('layered repairs commit every confirmed file after second-round approval resumes',async()=>{
+  const f=fixture(), original=f.options.tools.invoke;
+  const files=new Map([['src/a.ts','bad-a'],['src/b.ts','bad-b']]);
+  const hash=text=>createHash('sha256').update(text).digest('hex');
+  f.options.sourcePaths=[...files.keys()];
+  let rounds=0, pending=true, verifies=0;
+  f.options.model.complete=async request=>{
+    const input=JSON.parse(request.messages[1].content), round=rounds++;
+    assert.deepEqual(request.tools,[]);
+    assert.equal(input.sources.find(s=>s.path==='src/a.ts').content,round===0?'bad-a':'good-a');
+    if(round===1) assert.match(input.priorAttempts[0],/Attempt 1 diagnosis/);
+    const path=round===0?'src/a.ts':'src/b.ts', oldText=files.get(path);
+    return {response:{kind:'final',text:JSON.stringify({diagnosis:`repair ${path}`,patches:[{path,expectedSha256:hash(oldText),edits:[{oldText,newText:round===0?'good-a':'good-b'}]}]})},usage:{totalTokens:20}};
+  };
+  f.options.tools.invoke=async input=>{
+    const args=input.arguments;
+    if(input.toolName==='workspace.read_text'){
+      f.calls.push(input); const content=files.get(args.path);
+      return {state:'confirmed',result:{path:args.path,content,sha256:hash(content)},evidenceRefs:[input.runId]};
+    }
+    if(input.toolName==='workspace.apply_text_patch'){
+      f.calls.push(input);
+      if(args.path==='src/b.ts'&&pending) return {state:'pending',evidenceRefs:[]};
+      const before=files.get(args.path); assert.equal(args.expectedSha256,hash(before));
+      assert.equal(before,args.edits[0].oldText); const after=args.edits[0].newText; files.set(args.path,after);
+      return {state:'confirmed',result:{path:args.path,beforeSha256:hash(before),afterSha256:hash(after),applied:true,changed:true},evidenceRefs:[input.runId]};
+    }
+    if(input.toolName==='workspace.run_allowed_command'){
+      f.calls.push(input); verifies++;
+      assert.equal(files.get('src/a.ts'),'good-a');
+      assert.equal(files.get('src/b.ts'),verifies===1?'bad-b':'good-b');
+      return {state:'confirmed',result:{recipeId:'test',exitCode:verifies===1?1:0,stdout:'',stderr:''},evidenceRefs:[input.runId]};
+    }
+    return original(input);
+  };
+  const first=await runCiFix(f.context,f.options);
+  assert.equal(first.status,'waiting_approval'); assert.match(first.verificationRunId,/verify-0$/);
+  assert.ok(!f.calls.some(c=>c.toolName==='workspace.git.commit'));
+  pending=false; const second=await runCiFix(f.context,f.options);
+  assert.equal(second.status,'succeeded'); assert.equal(rounds,2); assert.equal(verifies,2);
+  assert.match(second.verificationRunId,/verify-1$/);
+  const commit=f.calls.find(c=>c.toolName==='workspace.git.commit');
+  assert.deepEqual(commit.arguments.paths,['src/a.ts','src/b.ts']);
+  assert.equal(commit.arguments.verificationRunId,second.verificationRunId);
+  const patches=f.calls.filter(c=>c.toolName==='workspace.apply_text_patch');
+  assert.equal(patches.filter(c=>c.arguments.path==='src/a.ts').length,1);
+  const bPatches=patches.filter(c=>c.arguments.path==='src/b.ts');
+  assert.equal(bPatches.length,2); assert.equal(bPatches[0].runId,bPatches[1].runId);
+  assert.deepEqual(bPatches[0].arguments,bPatches[1].arguments);
+});
 test('model supplied shell command is rejected',async()=>{
   const f=fixture(); f.options.model.complete=async()=>({response:{kind:'final',text:'{"diagnosis":"fix","patches":[],"shell":"rm -rf /"}'}});
   await assert.rejects(runCiFix(f.context,f.options),/Invalid CI/); assert.ok(!f.calls.some(c=>c.toolName==='workspace.apply_text_patch'));

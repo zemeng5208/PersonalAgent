@@ -23,7 +23,7 @@ function proposal(text: string): CiFixProposal {
 interface Journal { identity: string; steps: number; tokens: number; results: Record<string, unknown>; inflight?: string; pending?: string; evidence: string[]; attempt?: number; notes?: string[] }
 class Pause extends Error { constructor(readonly status: CiFixOutcome['status'], message: string) { super(message); } }
 
-/** One bounded repair, no shell supplied by a model and no blind write retries. */
+/** Bounded repair attempts, no shell supplied by a model and no blind write retries. */
 export async function runCiFix(context: AgentWorkerContext, options: CiFixOptions): Promise<CiFixOutcome> {
   if (!Number.isSafeInteger(options.maxSteps) || options.maxSteps < 1 || !Number.isSafeInteger(options.maxTokens) || options.maxTokens < 1 || !/^[a-z][a-z0-9._-]{0,63}$/u.test(options.verifyRecipeId)) invalid();
   const limit = options.maxLogBytes ?? 64 * 1024;
@@ -159,7 +159,17 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
       const current = await invoke(`precommit-head-${j.steps}`, gitTools.head, {repository: options.repository});
       if (!object(current) || current.headSha !== headSha) throw new Pause('stale', 'HEAD changed after verification');
     }
-    const commit = await invoke('commit', gitTools.commit, {repository: options.repository, expectedHeadSha: headSha, paths: checked.patches.map(p => p.path), message: `Fix ${label}`, verificationRunId: verifyRunId});
+    // Reconstruct from confirmed receipts so earlier rounds survive approval/restart.
+    // The successful round may touch different files from the rounds it builds on.
+    const patchedPaths: string[] = [];
+    for (const [id, receipt] of Object.entries(j.results)) {
+      if (!/^patch-\d+-\d+$/u.test(id)) continue;
+      if (!object(receipt) || typeof receipt.path !== 'string' || !options.sourcePaths.includes(receipt.path)
+        || receipt.applied !== true || receipt.changed !== true) invalid();
+      if (!patchedPaths.includes(receipt.path)) patchedPaths.push(receipt.path);
+    }
+    if (!patchedPaths.length) invalid();
+    const commit = await invoke('commit', gitTools.commit, {repository: options.repository, expectedHeadSha: headSha, paths: patchedPaths, message: `Fix ${label}`, verificationRunId: verifyRunId});
     if (!object(commit) || typeof commit.headSha !== 'string' || !sha.test(commit.headSha) || commit.parentSha !== headSha) invalid();
     const pushed = await invoke('push', gitTools.push, {repository: options.repository, expectedHeadSha: commit.headSha});
     if (!object(pushed) || pushed.headSha !== commit.headSha || pushed.pushed !== true) invalid();
@@ -174,7 +184,11 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
     }
     return {status: 'succeeded', reason: 'Verified repair committed, approved PR created with original run backlink', pullRequestUrl: pr.url, verificationRunId: verifyRunId, evidenceRefs: [...j.evidence]};
   } catch (e) {
-    if (e instanceof Pause) return {status: e.status, reason: e.message, ...(Object.keys(j.results).some(k => k.startsWith('verify-')) ? {verificationRunId: `${context.taskId}:ci-fix:${identity}:verify-${Math.max(0, j.attempt ?? 0)}`} : {}), evidenceRefs: [...j.evidence]};
+    if (e instanceof Pause) {
+      const verifiedAttempts = Object.keys(j.results).filter(k => /^verify-\d+$/u.test(k)).map(k => Number(k.slice(7)));
+      return {status: e.status, reason: e.message, ...(verifiedAttempts.length
+        ? {verificationRunId: `${context.taskId}:ci-fix:${identity}:verify-${Math.max(...verifiedAttempts)}`} : {}), evidenceRefs: [...j.evidence]};
+    }
     throw e;
   }
 }
