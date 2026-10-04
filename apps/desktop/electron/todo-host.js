@@ -12,12 +12,19 @@ export function createDesktopTodoHost({userData,safeStorage,namespace,createDeli
   const savedPolicy=storage.get('desktop-notification-policy') ?? {};
   notifications.assertPolicyValid(savedPolicy);
   const policy={...savedPolicy};
-  const notificationService=new notifications.NotificationService(storage,policy,{now,idFactory:randomUUID});
+  let notificationService=new notifications.NotificationService(storage,policy,{now,idFactory:randomUUID});
   let application,delivery,allowed=false,active=true,generation=randomUUID(),failure='',lastTick=-Infinity,busy=false;
   const implementations=[],releases=[];
   const toolHost={register(tool){implementations.push(tool);return ()=>{};}};
   releases.push(productivity.register(toolHost,{storage,conversationId,now,idFactory:randomUUID}));
-  releases.push(notifications.register(toolHost,{storage,policy,now,idFactory:randomUUID}));
+  let releaseNotifications;
+  function registerNotifications() {
+    releaseNotifications?.();
+    const index=implementations.findIndex(tool=>tool.descriptor.name==='notifications.status');
+    if(index>=0) implementations.splice(index,1);
+    releaseNotifications=notifications.register(toolHost,{storage,policy,now,idFactory:randomUUID});
+  }
+  registerNotifications();
   const current=()=>active && allowed && Boolean(application);
   function bound(taskId,claim=false) {
     if (!application || !taskId) return false;
@@ -79,7 +86,10 @@ export function createDesktopTodoHost({userData,safeStorage,namespace,createDeli
   }
   const tools=implementations.map(tool=>({descriptor:tool.descriptor,async execute(input,context){
     if(context.signal.aborted || !current() || !bound(context.taskId)) throw Error('待办会话许可已失效');
-    const result=await tool.execute(input,context);
+    const executing=implementations.find(item=>item.descriptor.name===tool.descriptor.name
+      && item.descriptor.version===tool.descriptor.version);
+    if(!executing) throw Error('待办工具当前实例不可用');
+    const result=await executing.execute(input,context);
     // The module mutation is the authoritative receipt; schedule sync failure
     // must not turn a persisted todo.create into a retryable creation.
     await tick(true);return result;
@@ -100,6 +110,8 @@ export function createDesktopTodoHost({userData,safeStorage,namespace,createDeli
       notifications.assertPolicyValid(input);const next=structuredClone(input);
       storage.set('desktop-notification-policy',next);
       for(const key of Object.keys(policy)) delete policy[key];Object.assign(policy,next);
+      notificationService=new notifications.NotificationService(storage,policy,{now,idFactory:randomUUID});
+      registerNotifications();
       lastTick=-Infinity;return snapshot();
     },
     dismiss(input) {
@@ -139,6 +151,6 @@ export function createDesktopTodoHost({userData,safeStorage,namespace,createDeli
         if(Buffer.byteLength(JSON.stringify(result),'utf8')>960*1024) throw Error('待办结果过大，请按状态缩小查询范围');
         return structuredClone(result);
       }}));},
-    async close(){active=false;revoke();await delivery?.close();for(const release of releases) release();},
+    async close(){active=false;revoke();await delivery?.close();releaseNotifications?.();for(const release of releases) release();},
   };
 }

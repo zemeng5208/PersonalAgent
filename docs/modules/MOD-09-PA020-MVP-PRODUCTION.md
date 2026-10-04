@@ -1,5 +1,37 @@
 # PA020 私人记忆与流程学习生产桥
 
+## 2026-10-04 集成复核
+
+以 `origin/main@330be3862eb7ba9b50709ec8ac0c6292ff7829fd` 为依据：
+PR #209/#210 已进入 main，#211 的恢复增量经 #210 集成；本生产桥经 #270 合并，
+P8 的共享接线也已进入 main。下文原工作包的 `review`、旧工作树与“等待 P8”描述保留为历史记录，
+不代表当前合并状态。MOD-09 整体仍为 `in_progress`。
+
+- 主对话已装配 `privateConsumption.prepare/assertCloudSend`、原 Runtime 消费 marker，
+  以及 `privateErasure` 的 inventory/cancel/redaction/readback 端口；不是仅有未调用的 host 工厂。
+- 写入按实际未接管副本清单和删除准备状态开放；没有接通、来源变化或副本清单变化时拒绝。
+  “所有真实 Vault 写入始终禁用”已不符合当前代码；本次没有对用户的真实来源执行写入或外发。
+- 最终同步发送检查已调用 `assertCopyManagement`。本次补充凭据 await 后新增未接管副本的
+  生产适配器回归：即使此前已确认，最终 guard 也拒绝且零 fetch，不泄露内部拒绝原因。
+- 私人记忆、学习 facade、消费和删除恢复四套测试 **14/14** 通过；再加真实 Runtime 的会议事实
+  评审测试 **16/16**，合计 **30/30**。全部为隔离合成数据/显式 Fake 传输，未访问真实账号。
+- 主分支加本次 CI 修复的完整 `npm run check`：架构、契约夹具、生成类型与 workspace 类型检查
+  通过；1609 项测试中 1579 通过、20 跳过、10 失败。5 项失败由独立 PR #278 处理，另 5 项
+  Windows native helper 测试因本机缺少 `Microsoft.NETCore.App 8.0` 失败。
+  隔离组合 `#278@d004849c9df2c76ef1c80052500379a87729d237` 加本次补丁：构建通过，
+  106 项定向回归与 17 项跨模块集成全部通过；这不等于远程 CI 已通过或 PR 已合并。
+
+下一步验收顺序：
+
+1. 集成本次互补修复与 #278，取得非作者评审及当前 head 的 CI 结果；补齐本机 .NET 8 后复跑 Windows gate。
+2. 在真实 Electron 原生对话中只读预览用户已指定来源，逐条确认最小摘录；确认前不能生成长期记忆。
+3. 真实本地验证确认→重启读回→更正→撤回→彻底删除，检查原事实历史、应用管理副本与删除收据，
+   保留无关事实；当前没有生产 backup/restore 路径，外部独立副本和已发送正文仍不能纳入本机删除保证。
+4. 核对私人 parent→child 的真实 ancestry、逐任务配置与许可边界；需要真实 AgentArts 发送时
+   单独取得该任务的原生确认和云调用授权。未取得这些证据前不把整个 MOD-09 标为 done。
+
+## 原工作包记录
+
 目标 profile：`huawei_ict_agentarts`。负责人 zemeng，非作者评审/集成由 PR 专线和 P8。
 工作树 `D:/PersonalAgent/.worktrees/memory-learning-mvp`，分支 `codex/memory-learning-mvp`，
 基线 `1db50397`。状态 `review`；共享 main/preload/view/application exports/root package/lock 由 P8 单独装配。
@@ -130,8 +162,8 @@ facade 可注入 `privateErasure`；此时 `managedPrivateCopies` 指其他未�
 原 SQLite 删除关联 parent/child 副本、保留独立事实；过时删除零取消；missing/错 digest 收据 pending；
 重启从原 marker 接续后读回准确收据。不能把合成 redactor 验证写成实际 Runtime/history 已清除。
 
-源码交云知识记忆接管后未补跑旧 suite。剩余精确实现/评审点：最终 beforeSend guard 也应同步调用
-`assertCopyManagement`，防确认后清除登记变化；实际 parent→child inventory 与同配置 task-tree native
+源码交云知识记忆接管时未补跑旧 suite；2026-10-04 已复验上述私人消费/删除 suite，最终 beforeSend guard
+也已同步调用 `assertCopyManagement`，并补确认后登记变化的零 fetch 回归。剩余评审点：实际 parent→child inventory 与同配置 task-tree native
 许可必须核对真实 ancestry，独立模型/provider 更换不得继承原逐任务许可。当前 owned host 不提供
 自动子任务许可，P8 shared 路径和云知识记忆组接续；本地不再竞争 portable 文件写入。
 

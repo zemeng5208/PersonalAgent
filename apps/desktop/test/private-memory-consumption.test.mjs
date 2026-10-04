@@ -18,6 +18,7 @@ async function fixture(t) {
   let allow = true;
   let onConsent;
   let configuration = 'synthetic-cloud-v1';
+  let copyManaged = true;
   const privateMemory = createPrivateMemoryController(join(base, 'private.sqlite'), async () => true,
     async () => true, {confirmWithdraw: async () => true, authorizeConsumption: async request => {
       assert.equal(request.destination, 'agentarts');
@@ -33,7 +34,9 @@ async function fixture(t) {
   const options = {profile: 'huawei_ict_agentarts', privateMemory,
     readTask: id => tasks.get(id), readTaskBinding: id => markers.get(id),
     writeTaskBinding: (id, binding) => markers.set(id, structuredClone(binding)),
-    readConfigurationRef: () => configuration, assertCopyManagement: () => {}};
+    readConfigurationRef: () => configuration, assertCopyManagement: () => {
+      if(!copyManaged) throw Error('Synthetic managed-copy inventory changed');
+    }};
   const host = createPrivateMemoryConsumptionHost(options);
   const task = id => {
     tasks.set(id, {taskId: id, conversationId: 'synthetic-conversation', state: 'created'});
@@ -43,6 +46,7 @@ async function fixture(t) {
   t.after(async () => {host.close(); privateMemory.close(); await rm(base, {recursive: true, force: true});});
   return {privateMemory, host, source, vault, tasks, markers, task, options,
     setAllow: value => {allow = value;}, setConsent: value => {onConsent = value;},
+    setCopyManaged: value => {copyManaged = value;},
     setConfiguration: value => {configuration = value;}};
 }
 
@@ -77,6 +81,23 @@ test('corrected private preference reaches actual adapter body without persistin
   assert.equal(f.markers.has(denied.taskId), false);
   await cloud.invoke({...denied, revision: 1, goal: result.goal});
   assert.deepEqual(bodies[1], {query: denied.goal});
+});
+
+test('final adapter send rejects a new unmanaged copy after consent and credential await', async t => {
+  const f=await fixture(t);
+  const ref=(await f.privateMemory.listSaved()).facts[0].ref;
+  f.host.select({conversationId:'synthetic-conversation',ref});
+  const request=f.task('copy-inventory-task');
+  const prepared=await f.host.prepare(request);
+  assert.equal(prepared.state,'authorized');
+  let sends=0;
+  const cloud=new AgentArtsCloudAgentPort({gatewayUrl:'https://agentarts.example.test',runtimeName:'synthetic-runtime'},
+    {read:async()=>{await new Promise(resolve=>setImmediate(resolve));f.setCopyManaged(false);return 'Bearer synthetic-token';}},
+    async()=>{sends++;throw Error('Must not send after the copy inventory changed');},
+    request=>f.host.assertCloudSend(request));
+  await assert.rejects(cloud.invoke({...request,revision:1,goal:prepared.goal}),/AgentArts export permission denied/);
+  assert.equal(sends,0);
+  assert.ok(f.markers.has(request.taskId));
 });
 
 test('final adapter send rejects withdrawal during credential wait; restart, config and altered goal never reuse the lease', async t => {

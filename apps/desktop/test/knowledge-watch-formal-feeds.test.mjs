@@ -9,6 +9,9 @@ import {createKnowledgeWatchHost, createProductionKnowledgeReevaluator} from '..
 import {TaskRuntime} from '@personal-agent/runtime';
 import {createRuntimeApplication} from '@personal-agent/runtime/application';
 import {FakeFeedProvider} from '@personal-agent/feeds';
+import * as feedReceipts from '../../runtime/dist/application/knowledge-feed-receipt.js';
+import {knowledgeInterestFixture} from './helpers/knowledge-interest-fixture.mjs';
+import {Client} from '@personal-agent/client';
 
 const safeStorage = {
   isEncryptionAvailable: () => true,
@@ -19,21 +22,6 @@ const safeStorage = {
 test('Conditional feeds.collect, production reevaluator, Runtime receipt validation and revision binding', async t => {
   const dir = mkdtempSync(path.join(tmpdir(), 'pa-kw-formal-feeds-'));
   const runtimeDb = path.join(dir, 'runtime.sqlite');
-
-  const runtimeApp = createRuntimeApplication({
-    path: runtimeDb,
-    profile: 'huawei_ict_agentarts',
-    coordination: {
-      invoke: async () => ({kind: 'text_response', text: 'ok', verification: 'verified'}),
-    },
-  });
-  const runtime = runtimeApp.runtime;
-
-  const rootTask = runtime.submitTask({
-    goal: 'Knowledge Watch Root Task (test-user)',
-    conversationId: 'knowledge-watch:test-user',
-    idempotencyKey: 'knowledge-watch-root:test-user',
-  });
 
   const feedUrl = 'https://devblogs.microsoft.com/typescript/feed/';
   const fixtureV1 = {
@@ -69,7 +57,19 @@ test('Conditional feeds.collect, production reevaluator, Runtime receipt validat
   // 1. Add subscription
   feedsHost.add({title: 'TypeScript 官方更新', url: feedUrl});
   feedsHost.prepare();
-  feedsHost.bindApplication({runtime});
+  const runtimeApp=createRuntimeApplication({path:runtimeDb,profile:'huawei_ict_agentarts',
+    hostUserNamespace:'test-user',tools:feedsHost.tools,
+    coordination:{invoke:async()=>({kind:'text_response',text:'ok',verification:'verified'})}});
+  const runtime=runtimeApp.runtime;
+  const rootTask=runtime.submitTask({goal:'Knowledge Watch Root Task (test-user)',
+    conversationId:'knowledge-watch:test-user',idempotencyKey:'knowledge-watch-root:test-user'});
+  const client=new Client(runtimeApp);await client.connect();
+  async function until(predicate){
+    const end=Date.now()+10_000;
+    while(Date.now()<end){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}
+    assert.fail('Runtime feed read did not reach its expected state');
+  }
+  feedsHost.bindApplication(runtimeApp,'test-user');
 
   // 2. Wrap feedCollect delegating through competitionToolAvailability
   const collectTool = feedsHost.tools.find(tool => tool.descriptor?.name === 'feeds.collect');
@@ -85,19 +85,41 @@ test('Conditional feeds.collect, production reevaluator, Runtime receipt validat
       error.code = 'UNAUTHORIZED';
       throw error;
     }
-    return collectTool.execute(query, {taskId: rootTask.taskId, signal});
+    const commandId=crypto.randomUUID();
+    const task=runtimeApp.prepareHostToolTask({commandId,toolName:'feeds.collect',
+      toolVersion:collectTool.descriptor.version,deadline:new Date(Date.now()+60_000).toISOString()});
+    assert.equal(availability.available({taskId:task.taskId,signal}),true);
+    runtimeApp.finalizeHostToolTask({commandId,taskId:task.taskId,expectedTaskRevision:task.revision,arguments:query});
+    await until(()=>runtimeApp.readHostToolTask(task.taskId).approval?.state==='pending');
+    const approval=runtimeApp.readHostToolTask(task.taskId).approval;
+    await client.call('authorization.respond',{approvalId:approval.approvalId,expectedRevision:approval.revision,decision:'allow_once'});
+    await until(()=>['succeeded','failed'].includes(runtime.getTask(task.taskId).state));
+    assert.equal(runtime.getTask(task.taskId).state,'succeeded',JSON.stringify(runtime.getTask(task.taskId).error));
+    const page=runtimeApp.readHostToolTask(task.taskId);
+    runtimeApp.recordKnowledgeFeedRead({taskId:task.taskId,runId:page.confirmed.runId,namespace:'test-user',
+      sourceId:query.subscriptionId,arguments:query,receiptTaskId:rootTask.taskId});
+    return page.confirmed.result;
   };
 
   const subscriptionId = feedsHost.snapshot().subscriptions[0].id;
   assert.ok(subscriptionId);
 
+  const intake=knowledgeInterestFixture('test-user',runtime);
   const host = createKnowledgeWatchHost({
     profile: 'huawei_ict_agentarts',
     namespace: 'test-user',
     checkpointTaskId: rootTask.taskId,
     checkpoints: runtime,
     now: () => Date.now(),
-    runtime,
+    ...intake.ports,
+    knowledgeFeedReceipts:feedReceipts,
+    readFeedReceiptEvidence:({namespace,sourceId,sourceReadTaskId,receiptId})=>{
+      if(namespace!=='test-user' || sourceReadTaskId!==rootTask.taskId) return null;
+      const provenance=runtime.loadCheckpoint(rootTask.taskId,`knowledge-watch-source-read:${receiptId}:execution`);
+      return provenance ? feedReceipts.createKnowledgeFeedReceiptFromConfirmedExecution({namespace,sourceId,
+        taskId:provenance.taskId,runId:provenance.runId,toolVersion:provenance.toolVersion,
+        query:provenance.arguments,scopeRef:provenance.runId,runtime}) : null;
+    },
     feedCollect,
     feedSubscriptionId: subscriptionId,
     layaChooser: {
@@ -120,8 +142,8 @@ test('Conditional feeds.collect, production reevaluator, Runtime receipt validat
   const unconsented = await host.refreshSubscribedFeed();
   assert.equal(unconsented.accepted, false);
   assert.equal(unconsented.availability, 'unavailable');
-  assert.equal(unconsented.reason, 'source_unavailable');
-  assert.equal(unconsented.code, 'UNAUTHORIZED');
+  assert.equal(unconsented.reason, 'authorization_required');
+  assert.equal(availability.available({taskId:rootTask.taskId,signal:new AbortController().signal}),false);
 
   // 4. User grants session consent
   feedsHost.authorize({readAndCloudConsent: true});
@@ -129,7 +151,7 @@ test('Conditional feeds.collect, production reevaluator, Runtime receipt validat
 
   // 5. Establish tracked watch on typescript
   const now = Date.now();
-  const trackedResult = await host.consumeInterestSignal({
+  const trackedResult = await intake.consume(host,{
     namespace: 'test-user',
     topicId: 'typescript',
     at: new Date(now).toISOString(),
@@ -148,6 +170,7 @@ test('Conditional feeds.collect, production reevaluator, Runtime receipt validat
 
   // 6. Refresh subscribed feed with fixtureV1 (different from initial watch revision v1)
   const refreshed = await host.refreshSubscribedFeed();
+  assert.equal(refreshed.accepted,true,JSON.stringify(refreshed));
   assert.equal(refreshed.provider, 'feeds');
   assert.equal(refreshed.notified, true);
 
@@ -310,7 +333,9 @@ test('Legacy empty succeeded task is rejected by bindObservedRevision and cannot
   });
   feedsHost.add({title: 'TypeScript 官方更新', url: feedUrl});
   feedsHost.prepare();
-  feedsHost.bindApplication({runtime});
+  const hostState=new Map();
+  feedsHost.bindApplication({runtime,createHostStateStore:()=>({get:key=>hostState.get(key),
+    set:(key,value)=>hostState.set(key,structuredClone(value))})},'test-user');
   feedsHost.authorize({readAndCloudConsent: true});
 
   const collectTool = feedsHost.tools.find(tool => tool.descriptor?.name === 'feeds.collect');
@@ -325,13 +350,14 @@ test('Legacy empty succeeded task is rejected by bindObservedRevision and cannot
   };
   const subscriptionId = feedsHost.snapshot().subscriptions[0].id;
 
+  const intake=knowledgeInterestFixture('test-user',runtime);
   const host = createKnowledgeWatchHost({
     profile: 'huawei_ict_agentarts',
     namespace: 'test-user',
     checkpointTaskId: rootTask.taskId,
     checkpoints: runtime,
     now: () => Date.now(),
-    runtime,
+    ...intake.ports,knowledgeFeedReceipts:feedReceipts,
     feedCollect,
     feedSubscriptionId: subscriptionId,
     layaChooser: {
@@ -351,7 +377,7 @@ test('Legacy empty succeeded task is rejected by bindObservedRevision and cannot
   await host.start();
 
   const now = Date.now();
-  await host.consumeInterestSignal({
+  await intake.consume(host,{
     namespace: 'test-user',
     topicId: 'typescript',
     at: new Date(now).toISOString(),
