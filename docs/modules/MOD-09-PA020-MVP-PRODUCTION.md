@@ -25,11 +25,18 @@ P8 的共享接线也已进入 main。下文原工作包的 `review`、旧工作
 并验证 SHA512 后，将 .NET 8.0.31 运行时解压到项目忽略缓存；测试进程通过原可信 recipe env
 显式指定 `DOTNET_ROOT_X64`，命令工具仍不继承宿主环境。原先缺运行时的两套 Windows helper
 测试现为 16/16，通过包含原 5 项失败的用例；不修改系统安装或用户环境变量。
-本轮与 #278 的完整组合 Foundation 仍待完成，模块状态和真实验收边界保持上述结论。
+本轮已将 #278 精确头的原始提交纳入 #280，保留原作者及提交归属。隔离候选
+`24a6b57bafc58ec448b941b1452046fec4be2480` 与 PR 代码头
+`a2a7e9da80e2e1e124b4e981b1784246f3c0a01e` 的完整代码树一致；`npm ci`、`npm run check`、
+`npm run dev`、`npm run demo:protocol`、`npm run demo:runtime` 均通过。
+workspace 测试 1589 通过、0 失败、20 跳过，跨模块集成 17/17，合计 1606 通过、0 失败、20 跳过。
+Windows helper Release 构建通过，并用显式 `PA_TEST_JOB_HOST_EXE` 实际执行原生进程测试。
+两个 demo 明确输出 `verification: mock`；不将演示或本地 Foundation 视为真实云端验证。
+上述初次失败记录保留用于追踪；当前远程 CI 和已登记非作者评审待完成，模块仍为 `in_progress`。
 
 下一步验收顺序：
 
-1. 集成本次互补修复与 #278，取得非作者评审及当前 head 的 CI 结果；补齐本机 .NET 8 后复跑 Windows gate。
+1. 取得 #280 当前 head 的远程 CI 结果和已登记非作者评审，获得对应合并授权后再集成；本机 .NET 8 与完整 Foundation 已完成。
 2. 在真实 Electron 原生对话中只读预览用户已指定来源，逐条确认最小摘录；确认前不能生成长期记忆。
 3. 真实本地验证确认→重启读回→更正→撤回→彻底删除，检查原事实历史、应用管理副本与删除收据，
    保留无关事实；当前没有生产 backup/restore 路径，外部独立副本和已发送正文仍不能纳入本机删除保证。
