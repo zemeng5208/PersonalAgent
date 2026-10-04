@@ -114,7 +114,7 @@ test('missing baseline does not fetch a provider; NOT_FOUND/errors expose only s
   assert.equal(processed, 0);
 });
 
-test('composition consumes public source through multi-candidate choice, Policy CAS and durable receipt replay', async t => {
+test('composition without a committed-Fact review port preserves graph and receipts across restart', async t => {
   const root = fileURLToPath(new URL('../../../.cache/p5-calendar-test/', import.meta.url));
   await mkdir(root, {recursive: true});
   const userData = await mkdtemp(path.join(root, 'case-'));
@@ -128,7 +128,10 @@ test('composition consumes public source through multi-candidate choice, Policy 
   store.append(1, {...common, id: 'attendance-goal', kind: 'goal', summary: '准时参会',
     sourceRef: 'user:goal', reason: '已知会议目标', dependencies: [{id: binding.meetingFactId, revision: 1}]});
   let calls = 0, policyCalls = 0;
+  const records=new Map();
+  const hostStateStorage={get:key=>structuredClone(records.get(key)),set:(key,value)=>records.set(key,structuredClone(value))};
   const options = {application: {runtime: {bindCoordinationStore: ns => host.bind(ns)}},
+    hostStateStorage,
     namespace: 'calendar-test', userData, now: () => now,
     calendarReadPort: {readBaseline: () => baseline, readCurrent: () => current},
     inference: {infer: async payload => {
@@ -142,19 +145,19 @@ test('composition consumes public source through multi-candidate choice, Policy 
       assert.equal(request.source, binding.sourceRef); return {allowed: true};}}};
   const composition = createCognitionP5Composition(options);
   const result = await composition.refreshCalendarMeeting(binding, context());
-  assert.equal(result.receipt.status, 'applied', result.receipt.reason);
-  assert.equal(store.read().revision, 4);
+  assert.equal(result.receipt.status, 'requires_review', result.receipt.reason);
+  assert.equal(store.read().revision, 2);
   const goal = store.read().history.findLast(node => node.id === 'attendance-goal');
-  assert.deepEqual(goal.dependencies, [{id: binding.meetingFactId, revision: 2}]);
-  assert.equal(calls, 1);
-  assert.equal(policyCalls, 1);
+  assert.deepEqual(goal.dependencies, [{id: binding.meetingFactId, revision: 1}]);
+  assert.equal(calls, 0);
+  assert.equal(policyCalls, 0);
   composition.dispose();
   const restarted = createCognitionP5Composition(options);
   const replay = await restarted.refreshCalendarMeeting(binding, context());
-  assert.equal(replay.receipt.status, 'already_processed');
-  assert.equal(store.read().revision, 4);
-  assert.equal(calls, 1);
-  assert.equal(policyCalls, 1);
+  assert.equal(replay.receipt.status, 'requires_review');
+  assert.equal(store.read().revision, 2);
+  assert.equal(calls, 0);
+  assert.equal(policyCalls, 0);
   const projection = await restarted.dialogueProjection();
   assert.equal(projection.meetings[0].calendarWriteVerified, false);
   assert.equal(projection.calendarSource.status, 'processed');
@@ -170,6 +173,7 @@ test('composition stop cancels an in-flight source read before Laya/CAS and leav
   let entered, release;
   const reading = new Promise(resolve => {entered = resolve;});
   const composition = createCognitionP5Composition({userData, now: () => now,
+    hostStateStorage:{get:()=>undefined,set:()=>{}},
     application: {runtime: {bindCoordinationStore: ns => host.bind(ns)}},
     inference: {infer: () => {throw Error('must not infer after stop');}},
     calendarReadPort: {readBaseline: () => baseline, readCurrent: async () => {
@@ -179,7 +183,7 @@ test('composition stop cancels an in-flight source read before Laya/CAS and leav
   const operation = composition.refreshCalendarMeeting(binding, context());
   await reading;
   await composition.stop();
-  assert.equal((await operation).reason, 'cancelled');
+  await assert.rejects(operation,{code:'CANCELLED'});
   assert.equal(composition.snapshot().calendarSource.reason, 'cancelled');
   assert.equal(host.bind('default').read().revision, 0);
   release();

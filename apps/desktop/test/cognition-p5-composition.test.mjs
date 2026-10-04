@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createHash} from 'node:crypto';
 import {mkdir, mkdtemp, rm} from 'node:fs/promises';
-import {existsSync, readFileSync, writeFileSync} from 'node:fs';
+import {existsSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {FakeCoordinationStoreHost} from '@personal-agent/goals/store';
+import {LayaTriageService} from '@personal-agent/cognition';
 import {createCognitionP5Composition} from '../electron/cognition-p5-composition.js';
+import {p5FixturePorts, inboxScope, inboxItem} from './helpers/p5-fixture.mjs';
 
 test('P5 stop cancels direct classification; failed source state is visible and resume does not start shared weights', async t => {
   const root = fileURLToPath(new URL('../../../.cache/cognition-p5-test/', import.meta.url));
@@ -25,8 +26,8 @@ test('P5 stop cancels direct classification; failed source state is visible and 
       await new Promise(resolve => signal.addEventListener('abort', resolve, {once: true}));
       throw Error('private source text and absolute path must not reach snapshot');
     }};
-  const composition = createCognitionP5Composition({application, userData, layaHost});
-  const operation = composition.triageMails([{source: 'mail', messageId: 'direct', sourceRevision: '1', text: 'hello'}]);
+  const composition = createCognitionP5Composition({...p5FixturePorts(),application, userData, layaHost});
+  const operation = composition.triageMails([inboxItem('direct','hello')],inboxScope);
   await waitEntered;
   await composition.stop();
   assert.equal(signal.aborted, true);
@@ -90,7 +91,7 @@ function createMockLayaInference(preferredIndex = 0) {
   };
 }
 
-test('cognition-p5-composition: wires durable stores, policy execution, mail pipeline and device anomaly', async t => {
+test('cognition-p5-composition: wires host KV, reviewed-Fact boundary, mail pipeline and device anomaly', async t => {
   const root = fileURLToPath(new URL('../../../.cache/cognition-p5-test/', import.meta.url));
   await mkdir(root, {recursive: true});
   const userData = await mkdtemp(path.join(root, 'case-'));
@@ -128,6 +129,7 @@ test('cognition-p5-composition: wires durable stores, policy execution, mail pip
   let notificationDelivered = true;
 
   const composition = createCognitionP5Composition({
+    ...p5FixturePorts(),
     application,
     userData,
     namespace: graphNamespace,
@@ -144,7 +146,7 @@ test('cognition-p5-composition: wires durable stores, policy execution, mail pip
   });
 
   const snap = composition.snapshot();
-  assert.equal(snap.hasMeetingCoordinator, true);
+  assert.equal(snap.hasMeetingCoordinator, false);
   assert.equal(snap.hasMailPipeline, true);
   assert.equal(snap.hasDeviceAnomalyService, true);
 
@@ -162,31 +164,27 @@ test('cognition-p5-composition: wires durable stores, policy execution, mail pip
   };
 
   const meetingReceipt = await composition.processMeetingEvent(event);
-  assert.equal(meetingReceipt.status, 'applied');
-  assert.equal(store.read().revision, 2);
+  assert.equal(meetingReceipt.status, 'requires_review');
+  assert.equal(store.read().revision, 1);
 
-  // Check file persisted in userData/meeting-receipts
+  // Receipt is in the injected host KV, with no legacy receipt file.
   const receiptFromDisk = await composition.getMeetingReceipt('evt-p5-test-1', 'calendar:work');
   assert.ok(receiptFromDisk);
-  assert.equal(receiptFromDisk.status, 'applied');
+  assert.equal(receiptFromDisk.status, 'requires_review');
+  assert.equal(composition.snapshot().persistence,'runtime_sqlite');
+  assert.equal(existsSync(path.join(userData,'meeting-receipts')),false);
 
   // 2. Mail Triage Batch
   const mailSummary = await composition.triageMails([
-    {
-      source: 'mail:work',
-      messageId: 'msg-p5-1',
-      sourceRevision: 'rev-1',
-      text: '发件人：团队组织者\n主题：架构评审时间推迟确认\n正文：请大家注意架构评审会议推迟。',
-    },
-  ]);
-  assert.equal(mailSummary.total, 1);
-  assert.equal(mailSummary.classifiedCount, 1);
+    inboxItem('msg-p5-1','发件人：团队组织者\n主题：架构评审时间推迟确认'),
+  ],inboxScope);
+  assert.equal(mailSummary.summary.total, 1);
+  assert.equal(mailSummary.classified, 1);
 
-  // Check file persisted in userData/mail-triage-checkpoint.json
+  // Classification stays in the injected inbox store, not the removed JSON path.
   const checkpointFile = path.join(userData, 'mail-triage-checkpoint.json');
-  assert.equal(existsSync(checkpointFile), true);
-  const checkpoint = JSON.parse(readFileSync(checkpointFile, 'utf8'));
-  assert.ok(Object.keys(checkpoint).length > 0);
+  assert.equal(existsSync(checkpointFile), false);
+  assert.equal(composition.mailPipeline.snapshot().total,1);
 
   // 3. Device Anomaly Evaluation
   const anomalyReceipt = await composition.evaluateDeviceSample({
@@ -199,7 +197,7 @@ test('cognition-p5-composition: wires durable stores, policy execution, mail pip
   assert.equal(anomalyReceipt.status, 'monitoring'); // 1st elevated sample
 });
 
-test('cognition-p5-composition: missing policy outputs proposal without mutating graph, missing notificationPort does not claim delivery', async t => {
+test('cognition-p5-composition: missing review port does not mutate graph or create an unauthorized mail pipeline', async t => {
   const root = fileURLToPath(new URL('../../../.cache/cognition-p5-test/', import.meta.url));
   await mkdir(root, {recursive: true});
   const userData = await mkdtemp(path.join(root, 'case-unconfigured-'));
@@ -235,6 +233,7 @@ test('cognition-p5-composition: missing policy outputs proposal without mutating
 
   // Explicitly omit policyEvaluator and notificationPort
   const composition = createCognitionP5Composition({
+    hostStateStorage:p5FixturePorts().hostStateStorage,
     application,
     userData,
     namespace: graphNamespace,
@@ -260,13 +259,11 @@ test('cognition-p5-composition: missing policy outputs proposal without mutating
   };
 
   const meetingReceipt = await composition.processMeetingEvent(event);
-  assert.equal(meetingReceipt.status, 'proposal');
-  assert.match(meetingReceipt.reason, /待受信执行端口/);
+  assert.equal(meetingReceipt.status, 'requires_review');
   assert.equal(store.read().revision, 1); // Graph untouched!
 
-  // 2. Corrupt checkpoint file handling: must throw, not swallow as empty
-  const checkpointFile = path.join(userData, 'mail-triage-checkpoint.json');
-  writeFileSync(checkpointFile, 'CORRUPTED_JSON_CONTENT{{{', 'utf8');
+  // Classifier availability alone cannot authorize private mail consumption.
+  assert.equal(composition.snapshot().hasMailPipeline,false);
   await assert.rejects(async () => {
     await composition.triageMails([
       {
@@ -276,7 +273,7 @@ test('cognition-p5-composition: missing policy outputs proposal without mutating
         text: '发件人：测试\n主题：测试\n正文：测试',
       },
     ]);
-  }, /Mail triage checkpoint file corrupt or unavailable/);
+  }, /Mail pipeline unavailable/);
 });
 
 test('cognition-p5-composition: integrates createLocalLayaHost public ports without .inference or key leakage', async t => {
@@ -340,25 +337,7 @@ test('cognition-p5-composition: integrates createLocalLayaHost public ports with
     },
     async classify(req) {
       classifyCalls++;
-      return req.messages.map(m => ({
-        source: m.source,
-        messageId: m.messageId,
-        sourceRevision: m.sourceRevision,
-        label: 'work',
-        route: 'group',
-        abstained: false,
-        reason: 'classified',
-        calibrated: false,
-        batching: 'multi_question',
-        receipt: {
-          id: `triage-rec-${classifyCalls}`,
-          promptVersion: 'mail-triage-v1',
-          model: 'multilingual',
-          candidateLabels: Object.keys(req.labels),
-          criteriaDigest: 'crit',
-          contextDigest: createHash('sha256').update(m.text).digest('hex'),
-        },
-      }));
+      return new LayaTriageService(createMockLayaInference()).classify(req);
     },
   };
 
@@ -369,6 +348,7 @@ test('cognition-p5-composition: integrates createLocalLayaHost public ports with
     userData,
     namespace: graphNamespace,
     layaHost: mockLayaHost,
+    ...p5FixturePorts(),
     policyEvaluator: {
       evaluateExecution: () => ({allowed: true}),
     },
@@ -378,12 +358,12 @@ test('cognition-p5-composition: integrates createLocalLayaHost public ports with
   });
 
   const snap = composition.snapshot();
-  assert.equal(snap.hasMeetingCoordinator, true);
+  assert.equal(snap.hasMeetingCoordinator, false);
   assert.equal(snap.hasMailPipeline, true);
   assert.equal(snap.hasDeviceAnomalyService, true);
   assert.equal(snap.layaHostState, 'ready');
 
-  // 1. Process Meeting Event via layaHost.choose
+  // A chooser cannot impersonate the missing committed-Fact review port.
   const meetingReceipt = await composition.processMeetingEvent({
     eventId: 'evt-lh-1',
     source: 'calendar:work',
@@ -396,20 +376,15 @@ test('cognition-p5-composition: integrates createLocalLayaHost public ports with
     signal: new AbortController().signal,
   });
 
-  assert.equal(meetingReceipt.status, 'applied');
-  assert.ok(chooseCalls >= 1);
+  assert.equal(meetingReceipt.status, 'requires_review');
+  assert.equal(chooseCalls, 0);
 
   // 2. Process Mail Batch via layaHost.classify
   const mailSummary = await composition.triageMails([
-    {
-      source: 'mail:work',
-      messageId: 'msg-lh-1',
-      sourceRevision: 'v1',
-      text: '发件人：PM\n主题：评审会议提前\n正文：会议提前至 14:00 举行。',
-    },
-  ]);
-  assert.equal(mailSummary.total, 1);
-  assert.equal(mailSummary.classifiedCount, 1);
+    inboxItem('msg-lh-1','发件人：PM\n主题：评审会议提前'),
+  ],inboxScope);
+  assert.equal(mailSummary.summary.total, 1);
+  assert.equal(mailSummary.classified, 1);
   assert.equal(classifyCalls, 1);
 
   // 3. Process Device Anomaly via layaHost.choose
@@ -423,7 +398,7 @@ test('cognition-p5-composition: integrates createLocalLayaHost public ports with
       samplingIntervalMs: 5000,
     });
   }
-  assert.ok(chooseCalls >= 2);
+  assert.equal(chooseCalls, 1);
 });
 
 test('cognition-p5-composition: event consumption, lifecycle (stop/start/dispose), and subscription release', async t => {
@@ -459,6 +434,7 @@ test('cognition-p5-composition: event consumption, lifecycle (stop/start/dispose
   };
 
   let chooseCount = 0;
+  let projectionReads = 0;
   let classifyCount = 0;
   const mockLayaHost = {
     snapshot: () => ({state: 'ready', ready: true}),
@@ -486,25 +462,7 @@ test('cognition-p5-composition: event consumption, lifecycle (stop/start/dispose
     },
     async classify(req) {
       classifyCount++;
-      return req.messages.map(m => ({
-        source: m.source,
-        messageId: m.messageId,
-        sourceRevision: m.sourceRevision,
-        label: 'work',
-        route: 'group',
-        abstained: false,
-        reason: 'classified',
-        calibrated: false,
-        batching: 'multi_question',
-        receipt: {
-          id: `lc-triage-${classifyCount}`,
-          promptVersion: 'mail-triage-v1',
-          model: 'multilingual',
-          candidateLabels: Object.keys(req.labels),
-          criteriaDigest: 'crit',
-          contextDigest: createHash('sha256').update(m.text).digest('hex'),
-        },
-      }));
+      return new LayaTriageService(createMockLayaInference()).classify(req);
     },
   };
 
@@ -513,6 +471,8 @@ test('cognition-p5-composition: event consumption, lifecycle (stop/start/dispose
     userData,
     namespace: graphNamespace,
     layaHost: mockLayaHost,
+    ...p5FixturePorts(),
+    reviewedRepair:{readCommittedProjection:async()=>{projectionReads++;return undefined;}},
     policyEvaluator: {
       evaluateExecution: () => ({allowed: true}),
     },
@@ -550,7 +510,7 @@ test('cognition-p5-composition: event consumption, lifecycle (stop/start/dispose
 
   assert.equal(composition.snapshot().activeSubscriptionCount, 3);
   assert.equal(calendarSource.listenerCount('reschedule'), 1);
-  assert.equal(mailSource.listenerCount('batch'), 1);
+  assert.equal(mailSource.listenerCount('page'), 1);
   assert.equal(deviceSource.listenerCount('sample'), 1);
 
   // 2. Emit calendar event while running -> consumed
@@ -568,7 +528,8 @@ test('cognition-p5-composition: event consumption, lifecycle (stop/start/dispose
 
   // Wait a microtask tick for async handler
   await new Promise(resolve => setTimeout(resolve, 50));
-  assert.equal(chooseCount, 1);
+  assert.equal(projectionReads, 1);
+  assert.equal(chooseCount, 0);
 
   // 3. Stop composition -> incoming events are NOT consumed, and direct calls reject
   await composition.stop();
@@ -587,7 +548,8 @@ test('cognition-p5-composition: event consumption, lifecycle (stop/start/dispose
     signal: new AbortController().signal,
   });
   await new Promise(resolve => setTimeout(resolve, 50));
-  assert.equal(chooseCount, 1); // Not consumed!
+  assert.equal(projectionReads, 1); // No new review while stopped.
+  assert.equal(chooseCount, 0);
 
   await assert.rejects(async () => {
     await composition.processMeetingEvent({
@@ -609,16 +571,11 @@ test('cognition-p5-composition: event consumption, lifecycle (stop/start/dispose
   assert.equal(composition.snapshot().ready, true);
 
   // Emit mail event -> consumed
-  mailSource.emit('batch', [
-    {
-      source: 'mail:work',
-      messageId: 'msg-resumed-1',
-      sourceRevision: 'v1',
-      text: '发件人：测试\n主题：恢复运行后的邮件\n正文：测试',
-    },
-  ]);
+  mailSource.emit('page', {...inboxScope,items:[inboxItem('msg-resumed-1','发件人：测试\n主题：恢复运行后的邮件')]});
   await new Promise(resolve => setTimeout(resolve, 50));
   assert.equal(classifyCount, 1);
+  assert.equal(composition.mailPipeline.snapshot().total,1);
+  assert.deepEqual(composition.snapshot().failures,{});
 
   // 5. Unsubscribe single source (calSub)
   calSub.unsubscribe();
@@ -630,7 +587,7 @@ test('cognition-p5-composition: event consumption, lifecycle (stop/start/dispose
   assert.equal(composition.snapshot().state, 'disposed');
   assert.equal(composition.snapshot().ready, false);
   assert.equal(composition.snapshot().activeSubscriptionCount, 0);
-  assert.equal(mailSource.listenerCount('batch'), 0);
+  assert.equal(mailSource.listenerCount('page'), 0);
   assert.equal(deviceSource.listenerCount('sample'), 0);
 
   // Subsequent calls throw
