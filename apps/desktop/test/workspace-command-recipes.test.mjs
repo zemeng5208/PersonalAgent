@@ -337,7 +337,9 @@ test('project scripts gatekeeping: npm build/test recipes require all conditions
     assert.equal(testRecipe.args[testRecipe.args.length - 4], '--');
 
     // Check safe environment filtering:
-    assert.equal(buildRecipe.env.SystemRoot, 'C:\\Windows');
+    assert.equal(buildRecipe.env.PATH, mockEnv.PATH);
+    assert.equal(buildRecipe.env.SystemRoot, process.platform === 'win32' ? mockEnv.SystemRoot : undefined);
+    assert.equal(buildRecipe.env.ComSpec, process.platform === 'win32' ? mockEnv.ComSpec : undefined);
     assert.equal(buildRecipe.env.SECRET_TOKEN, undefined);
     assert.equal(buildRecipe.env.GITHUB_KEY, undefined);
   }

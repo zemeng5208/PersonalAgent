@@ -142,7 +142,8 @@ export class GhCliProvider implements GitHubProvider {
           const comment = object(await api(`${root}/issues/${r.number}/comments`, 'POST', {body: r.body})); return {state: 'confirmed', externalId: String(number(comment.id)), url: string(comment.html_url), evidenceRefs: []};
         }
         case 'pr.review.comment': {
-          const r = input as GitHubInputs['pr.review.comment']; await checkPull({number: r.number, expectedHeadSha: r.commitId});
+          const r = input as GitHubInputs['pr.review.comment']; await checkPull({number: r.number, expectedHeadSha: r.commitId,
+            ...(r.expectedBaseSha === undefined ? {} : {expectedBaseSha: r.expectedBaseSha})});
           const comment = object(await api(`${root}/pulls/${r.number}/comments`, 'POST', {body: r.body, commit_id: r.commitId, path: r.path, line: r.line, side: r.side ?? 'RIGHT'}));
           return {state: 'confirmed', externalId: String(number(comment.id)), url: string(comment.html_url), evidenceRefs: []};
         }

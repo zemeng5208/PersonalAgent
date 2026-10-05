@@ -117,7 +117,8 @@ test('publishes only bound COMMENT through gateway and rejects tampering or stal
   f.changeHead('c'.repeat(40)); await assert.rejects(f.workflow.publish(report, 0, f.context, access), /REVISION_CONFLICT/);
   f.changeHead(head); assert.equal((await f.workflow.publish(report, 0, f.context, access)).state, 'confirmed');
   const write = f.calls.find(call => call.toolName === 'github.pr.review.comment');
-  assert.equal(write.arguments.commitId, head); assert.equal(write.arguments.body, '[blocking] Specific unsafe change');
+  assert.equal(write.arguments.commitId, head); assert.equal(write.arguments.expectedBaseSha, base);
+  assert.equal(write.arguments.body, '[blocking] Specific unsafe change');
   assert.equal(write.authorizationRef, 'approved'); assert.equal(write.runId, 'publish:comment-0');
   await f.workflow.publish(report, 0, f.context, access);
   assert.equal(f.calls.filter(call => call.toolName === 'github.pr.review.comment').length, 1);

@@ -75,6 +75,14 @@ test('cancellation and expired deadline fail before credentials or process', asy
   await assert.rejects(p.value.execute('repo.get', {repo}, {...context(), deadline: '2000-01-01T00:00:00Z'}), error => error.code === 'TIMEOUT');
   assert.equal(p.calls.length, 0);
 });
+test('review publication rejects a changed base before dispatching POST', async () => {
+  const p = provider([{...fixtures.pull, base: {...fixtures.pull.base, sha: 'c'.repeat(40)}}]);
+  await assert.rejects(p.value.execute('pr.review.comment', {repo, number: 9, body: 'note',
+    commitId: fixtures.pull.head.sha, expectedBaseSha: fixtures.pull.base.sha, path: 'src/index.ts', line: 1}, context()),
+  error => error.code === 'REVISION_CONFLICT');
+  assert.equal(p.calls.length, 1);
+  assert.equal(p.calls[0].args[p.calls[0].args.indexOf('--method') + 1], 'GET');
+});
 test('register has read/write descriptors, strict scopes and idempotent disposal', async () => {
   const tools = new Map(); let removed = 0;
   const fake = new FakeGitHubProvider({'issue.label': {state: 'unknown', evidenceRefs: []}});

@@ -223,7 +223,7 @@ export function createCodeReviewWorkflow(options: CodeReviewWorkflowOptions): Co
       const save = (outcome: ToolInvocationResult): void => context.saveCheckpoint(publicationKey,
         {runId: access.runId, authorizationRef: access.authorizationRef, outcome});
       save({state: 'unknown', evidenceRefs: []});
-      const outcome = await invoke('github.pr.review.comment', {repo: copy.repo, number: copy.number, commitId: copy.headSha,
+      const outcome = await invoke('github.pr.review.comment', {repo: copy.repo, number: copy.number, commitId: copy.headSha, expectedBaseSha: copy.baseSha,
         path: finding.path, line: finding.line, side: finding.side, body: `[${finding.kind}] ${finding.body}`}, context, access, `comment-${findingIndex}`);
       save(outcome);
       return outcome;

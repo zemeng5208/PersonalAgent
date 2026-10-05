@@ -6,10 +6,10 @@ import {createAgentArtsRuntimeApplication} from '../dist/application.js';
 
 const event = text => ({event: 'message', data: {text, index: 0}});
 
-async function terminal(app, taskId) {
+async function terminal(app, taskId, states = ['succeeded', 'failed', 'cancelled']) {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     const task = app.runtime.getTask(taskId);
-    if (['succeeded', 'failed', 'cancelled'].includes(task.state)) return task;
+    if (states.includes(task.state)) return task;
     await new Promise(resolve => setTimeout(resolve, 5));
   }
   throw Error('Task did not settle');
@@ -200,11 +200,14 @@ test('explicit JSON mode binds real adapter sends to current Runtime export perm
     const approval = (await client.call('approval.list', {taskId})).items[0];
     await client.call('authorization.respond', {approvalId: approval.approvalId,
       expectedRevision: approval.revision, decision: 'allow_once'});
-    const task = await terminal(app, taskId);
+    const task = await terminal(app, taskId,revokeDuringCredentials ? ['waiting_reconciliation'] : undefined);
     assert.equal(executions, 1);
     assert.equal(app.runtime.readToolExecutions(taskId).length, 1);
     if (revokeDuringCredentials) {
-      assert.equal(task.state, 'failed');
+      assert.equal(task.state, 'waiting_reconciliation');
+      assert.equal(task.error.code,'UNAUTHORIZED');
+      assert.deepEqual(app.runtime.loadCheckpoint(taskId,'competition-export-withheld'),{withheld:true});
+      assert.equal(app.runtime.readToolExecutions(taskId)[0].state,'confirmed');
       assert.equal(requests.length, 1);
       assert.equal(app.runtime.readEvidence(taskId).length, 1);
       return;

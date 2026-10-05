@@ -44,7 +44,7 @@ function classification(value: unknown, issue: TriageIssue): IssueClassification
   return {kind: value.kind as IssueKind, confidence: value.confidence, evidence, calibrated: false};
 }
 
-/** Competition consumption coordinator; Runtime remains the task and side-effect authority. */
+/** Authorized Local development workflow; Runtime remains the task and side-effect authority. */
 export function createIssueTriageWorkflow(options: IssueTriageOptions) {
   if (!positive(options.maxSteps) || !positive(options.maxTokens) || typeof options.authorizationRefFor !== 'function'
     || (options.minConfidence !== undefined && (!Number.isFinite(options.minConfidence) || options.minConfidence < 0 || options.minConfidence > 1))) {

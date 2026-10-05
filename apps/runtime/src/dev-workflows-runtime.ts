@@ -166,7 +166,8 @@ export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions): 
     return record?.state === 'confirmed' && record.executionStarted && record.policyDecision === 'allow'
       && runtime.loadCheckpoint(taskId, `tool-result-${runId}`) !== undefined;
   };
-  const review = createCodeReviewWorkflow({model, tools, maxTokens: options.maxTokens});
+  // CI's shared input/output budget can exceed the review provider's single-output ceiling.
+  const review = createCodeReviewWorkflow({model, tools, maxTokens: Math.min(options.maxTokens, 32_000)});
   const ciOptions = options.ciFix ? {...options.ciFix,
     ...(!options.ciFix.gitTools && options.git ? {gitTools: {head: 'workspace.git.head', commit: 'workspace.git.commit',
       push: 'workspace.git.push', pullRequest: 'github.pr.create', backlink: 'github.pr.comment'}} : {}),

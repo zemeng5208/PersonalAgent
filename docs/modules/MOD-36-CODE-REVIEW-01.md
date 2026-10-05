@@ -8,7 +8,7 @@
 
 模型输出可为裸 JSON，或整个输出由一个 `json`/无语言标签的三反引号围栏包裹；仅剥离该运输层围栏，再严格 JSON/schema 校验，不从解释文字中抽取 JSON。每条 finding 包含 blocking/suggestion/question、已声明 ruleId、path、line、side、body。未知字段（包括 confidence）、未声明规则、非法类别/字段类型仍使整体准备失败；格式有效但未锚定实际变更行的意见被丢弃，精确重复条目仅保留第一条，其余有效意见按原顺序保留。空报告仅表示没有保留意见，不表示批准或无缺陷；没有合法 findingIndex 时不能发表。删改路径按 unified diff 左右侧定位；带引号转义的特殊路径暂不支持，明确拒绝。
 
-报告绑定 repo/number/headSha/baseSha 和规则，保存于本任务 Runtime checkpoint 后方可消费。`publish(report,findingIndex,context,access)` 检查报告原始摘要、taskId、参数与工具公布，再读当前 head/base；只调用 `github.pr.review.comment` 发布 inline COMMENT。Provider 在外部写入前再次核对 commitId，但 GitHub 预读与写入并非原子条件写，仍存在平台竞态；不自动 approve、request changes 或修改分支。用户授权由 ToolGateway 校验；流程不签发授权。
+报告绑定 repo/number/headSha/baseSha 和规则，保存于本任务 Runtime checkpoint 后方可消费。`publish(report,findingIndex,context,access)` 检查报告原始摘要、taskId、参数与工具公布，再读当前 head/base；只调用 `github.pr.review.comment` 发布 inline COMMENT。Provider 在外部写入前再次核对 commitId 和 workflow 传入的 expectedBaseSha，防止审批等待期间 base 改变而复用旧读取缓存。expectedBaseSha 是向后兼容的可选字段，本工作流总是传入；GitHub 预读与写入并非原子条件写，仍存在平台竞态。不自动 approve、request changes 或修改分支。用户授权由 ToolGateway 校验；流程不签发授权。
 
 写入前持久保存 unknown，并绑定 runId/authorizationRef。已确认结果重放，pending 允许原 runId 审批恢复；unknown 不自动重试。仅 Runtime 确认原执行、校验原参数且安装 confirmed 缓存回放后，可信组合可以通过 `access.confirmedReplayReady(runId)` 对精确评论执行返回 true，调用相同 runId 消费缓存结果。该函数不得接受 PR/模型/Renderer 自报值。发布 suffix 为 `publish-head-${findingIndex}` / `comment-${findingIndex}`；prepare suffix 为 `head-before` / `diff-${page}` / `head-after`。读取或模型步骤失败不能留下可发表报告。
 

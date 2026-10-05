@@ -21,6 +21,12 @@ function resolveJobHostExe() {
   return join(import.meta.dirname, '..', 'native', 'bin', 'Debug', 'net8.0-windows', 'WindowsJobProcessHost.exe');
 }
 
+// The command port deliberately clears inherited env. A project-local runtime
+// must therefore be supplied through the existing trusted recipe configuration.
+function jobHostEnvironment() {
+  return process.env.DOTNET_ROOT_X64 ? {DOTNET_ROOT_X64:process.env.DOTNET_ROOT_X64} : {};
+}
+
 async function fixture(t) {
   const base = await mkdtemp(join(tmpdir(), 'personal-agent-command-'));
   const root = join(base, 'workspace');
@@ -223,6 +229,7 @@ test('WindowsJobProcessHost terminates grandchild process tree on abort', {
     recipes: [{
       id: 'run-tree',
       executable: jobHostExe,
+      env: jobHostEnvironment(),
       args: ['--cwd', root, '--exe', process.execPath, '--', spawnerScript],
     }],
   });
@@ -285,6 +292,7 @@ test('WindowsJobProcessHost runs fixed command successfully and returns complete
     recipes: [{
       id: 'job-success',
       executable: jobHostExe,
+      env: jobHostEnvironment(),
       args: ['--cwd', root, '--exe', process.execPath, '--', '-e', `
         require("node:fs").writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
         process.stdout.write("JOB_SUCCESS_MARKER\\n");
@@ -334,6 +342,7 @@ test('WindowsJobProcessHost terminates grandchild process tree on deadline timeo
     recipes: [{
       id: 'run-tree-timeout',
       executable: jobHostExe,
+      env: jobHostEnvironment(),
       args: ['--cwd', root, '--exe', process.execPath, '--', spawnerScript],
     }],
   });
@@ -383,7 +392,7 @@ test('WindowsJobProcessHost closes its job when the root exits, before draining 
   }
   const pidPath = join(root, 'inherited-output-child.pid');
   const tool = createWorkspaceCommandTool({rootPath: root, maxDurationMs: 5_000,
-    recipes: [{id: 'root-exits', executable: jobHostExe,
+    recipes: [{id: 'root-exits', executable: jobHostExe,env:jobHostEnvironment(),
       args: ['--cwd', root, '--exe', process.execPath, '--', '-e', `
         const {spawn} = require('node:child_process');
         const child = spawn(process.execPath, ['-e',

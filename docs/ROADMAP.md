@@ -87,7 +87,7 @@
 | MOD-06 | M2 | todo | 未启动 |
 | MOD-07 | M2 | todo | 未启动 |
 | MOD-08 | M2 | in_progress | `goo122` / PR #93～#95、#97、#98 已经非作者评审并合并；只读端口、脱机及 Obsidian 只读适配器、Policy 检索工具和公开演示资料的 Competition Fake 审批链均完成离线验收。真实私人 Vault 授权/验收、生产注册、可安装插件、私人结果出机控制和 LLM Wiki 未完成 |
-| MOD-09 | M1.6/M4 | in_progress | `goo122` / PR #89～#91、#118、#126 已合并 provisional 端口、Fake、SQLite 恢复、投影与公开来源；#202～#208 堆叠经 #209 对当前 main 集成，待非作者评审；MOD-09L 增加独立私人库的分页列表与合成事实逐条删除读回，MOD-09M 补已提交删除的跨重启 WAL 恢复；真实 Vault 写入仍禁用，真实用户确认的持久验收、出机控制及完整备份删除仍 unavailable |
+| MOD-09 | M1.6/M4 | in_progress | `goo122` 保留在途范围，P7/P8 剩余按当前分工交接；#209/#210 与经 #210 集成的 #211、#270 生产桥和 P8 共享接线已进入 main。私人写入按实际副本清单与删除准备状态开放；逐任务确认、最终发送门禁及关联副本清除已有接线，14 项私人记忆/学习/消费/删除合成回归通过。真实来源逐条确认、Electron 原生交互、真实 parent→child 许可与云消费验收仍待完成；详见 MOD-09-PA020-MVP-PRODUCTION 的 2026-10-04 复核，不能将离线通过记为整个模块 done |
 | MOD-10 | M4 后研究，无交付日期承诺 | todo | 未启动 |
 | MOD-11 | M1 | in_progress | `zemeng` / PR #54 已进入 main 并修复取消受理；转写任务消费 #75 仅合并到语音堆叠分支，DPI/透明命中及比赛实机验收仍未完成 |
 | MOD-12 | M1 | in_progress | `zemeng` / 文字交互、会话恢复、状态展示、取消和大工作区可用；真实 AgentArts 对话、工具回传与语音组合尚未完成端到端验收 |
@@ -111,12 +111,12 @@
 | MOD-30 | M1.5 第一优先 | in_progress | `zemeng` / PR #49、#72（Workflow 输入）、#80（载荷边界）均已进入 main（2026-09-30 台账核对），工具提案/审批/continuation 离线链可用；真实 MCP/Skill 与目标系统读回未完成 |
 | MOD-31 | M1.5/M3 | in_progress | `zemeng` / PR #58 已合并固定合成评估 runner；真实多 Agent 角色、重复运行指标和平台评估未完成 |
 | MOD-32 | M1.5/M5 第一优先 | in_progress | `zemeng` / 手动验收脚手架和失败诊断已有记录；真实发布、健康读回、trace、成本、回滚和端到端成功证据未提供 |
-| MOD-33 | M6 产品化 | review | `zemeng` / 13 个 GitHub 注册工具、gh Provider/Fake 已交 PR #277；静态检查通过，集中运行与真实验证待 Potatos498，协议评审 goo122；见 [交接](modules/DEV-WORKFLOWS-HANDOFF-20261003.md) |
-| MOD-34 | M6 产品化 | review | `zemeng` / CI/Issue 修复、受控 Git 与真实验证回执接线已交 PR #277；评审及集中验证 Potatos498；未运行测试/真实服务 |
-| MOD-35 | M6 产品化（登记） | todo | `Potatos498` / 测试失败自动定位（test 输出解析→源码行映射→定位报告），评审者 zemeng；仅登记未开工 |
-| MOD-36 | M6 产品化 | review | `zemeng` / head/base 与变更行绑定预审、审批 COMMENT 已交 PR #277；评审及集中验证 Potatos498；未运行测试/真实服务 |
+| MOD-33 | M6 产品化 | review | `zemeng` / #277 已有 13 个 GitHub 工具；本轮补充 Review 写入的 base 核对，Node 24 定向验证通过；真实 gh/账号写入及非作者评审待验，见 [接续记录](modules/DEV-WORKFLOWS-CONTINUATION-20261005.md) |
+| MOD-34 | M6 产品化 | review | `zemeng` / #277 修复链已组合 Runtime/Desktop 回归与 MOD-35；较大 CI 预算不再阻止宿主启动；开发工作流 66/66，真实 Windows helper、模型与 Actions 修复读回待验 |
+| MOD-35 | M6 产品化 | review | `Potatos498` / #279 的确定性定位器与 zemeng #282 的源码边界、真实 TAP 修正已组合；定向 9/9，完整 coding-tools 55 通过、11 个 Windows 跳过；待非作者评审与 main 集成，见 [登记与验收记录](modules/MOD-35-TEST-LOCATE-01.md) |
+| MOD-36 | M6 产品化 | review | `zemeng` / #277 修复 base 在审批期间改变却发表旧报告的问题，真实 Runtime 审批配合合成 gh transport 验证无 POST；模型与真实评论闭环、非作者评审待验 |
 | MOD-37 | M6 产品化（登记） | todo | `goo122` / API 文档自动维护（exports/接口目录↔docs 漂移比对→文档补丁 PR），评审者 zemeng；仅登记未开工 |
-| MOD-38 | M6 产品化 | review | `zemeng` / 分类、指纹复查、审批标签与 MOD-34 修复接线已交 PR #277；评审及集中验证 Potatos498；未运行测试/真实服务 |
+| MOD-38 | M6 产品化 | review | `zemeng` / #277 分类、指纹、审批标签与修复接线已通过本轮 Node 24 定向验证；目标校正为 Local 增量，真实模型/标签/修复 PR 及非作者评审待验 |
 
 ### 2.1 开工顺序与阻塞边界
 
