@@ -43,7 +43,7 @@
 - helper 副本须位于 workspace root 与 recoveryRoot 之外（本机 `$TEMP/pa-mod34-helper/`）；
 - recipe `executable` 必须绝对路径；`ciFix` 必须显式传 `headBranch`/`baseBranch`；
 - 模型 provider 必须显式传 `timeoutMs`（默认 30s 对长 prompt 必超时）；
-- **行尾陷阱**：以 LF 写入工作区文件会让 git-tools（禁用 autocrlf 的极简 env 子进程）判定工作区不干净，跑验收前须 `git restore .`。
+- **行尾陷阱**：以 LF 写入工作区文件会让 git-tools（禁用 autocrlf 的极简 env 子进程）判定工作区不干净。复现请使用一次性隔离工作树；只在确认目标仅含本轮注入改动后恢复对应文件，避免使用宽泛的 `git restore .` 覆盖其他 tracked 修改。
 
 ## 结论
 
