@@ -311,8 +311,8 @@ GitHubRepairReceipt完整identity、CheckID、官方名字、neutral状态及同
 Runtime githubRepairLinks=true显式装配，独立注册不dispose共享provider。
 ci_link_readback由宿主显式提交known CheckID+原identity，单次只读仍需自己的审批，
 结果checked/receipt不自动确认另一任务或授予写权，不查列表猜ID。
-registered RESULT_UNKNOWN不携partial CheckID；受信宿主须保留原provider响应证据，
-或操作者明确提供已知原ID，缺ID保持等待。此限制和预读/POST非原子窗口明确保留。
+registered RESULT_UNKNOWN仍为固定错误；后续同步observer增量允许受信Runtime保留
+合法partial CheckID候选。无ID或保存失败仍保持等待，预读/POST非原子窗口明确保留。
 
 固定Node24.15/npm11.12：GitHub89（旧25+新64）、CI83+发现30共113、Runtime38通过；
 新Runtime覆盖默认13/opt-in15、provider只dispose1、原knownID审批SQLite跨重启，
@@ -328,3 +328,35 @@ CI关联写独立审批/原执行hash/confirmed与unknown重启后无model/patch
 没有修改日历或将偶现问题宣称已修复。上一交付 `07e8a60` 双Windows Foundation完整日志
 各1913通过/0失败/16跳过，新P6身份代码真实.NET8编译/fixture通过；
 此新关联源码待新head Foundation，不用上一Windows证据替代。
+
+### 原未知关联的已知 ID 提示
+
+沿现有 PR290/分支第三小增量，精确7路径登记 #212 `6001564764`，不新建任务或接管他人文件。
+GitHub optional register 增加同步 observeUnknown；先校验合法 unknown，传入克隆原输入、
+候选结果及原 ToolContext。异常、保存失败和误用 thenable 不等待、不改变固定 RESULT_UNKNOWN。
+Runtime只保存原审批执行/journal/hash绑定的候选正整数ID和原参数，不保存provider任意URL或文本。
+原 waiting_reconciliation 的 readResult 返回 unverified sourceRunLinkHint，完整 input 可明确
+提交独立审批的 ci_link_readback。原执行无确认、不重POST、不自动GET或跨任务安装缓存。
+缺ID、非法输出、保存失败/冲突、task/run/version/digest/journal绑定变化、取消不产生提示。
+
+受控验收使用真实 GhCliProvider + 显式合成 transport 和 SQLite：原POST成功返回11，
+首次GET失败留unknown，重启保留候选；独立新读任务审批后GET成功，累计POST1/GET2，
+原任务仍 waiting_reconciliation，model/patch/commit各1。不是实际账号Checks权限验收。
+GitHub完整96/96（新增observer7）已通过；Runtime与全仓检查及独立复核按实际结果续写。
+
+第三7路径冻结源码完整 Node24.15/npm11.12 check 已实际 exit0：31workspace1990通过、
+0失败、50平台跳过，GitHub96、coding-tools183、Desktop425、Runtime347；根integration19、
+architecture3/contracts4、生成一致性、全build/typecheck均通过，冻结文件验证无变化。
+原未知候选/明确读回/保存失败/实际冲突/缓存伪hint/取消标记定向7/7，非作者独立复核14/14。
+独立复核发现的既存缓存hint绕过及unknown取消仍等待核实的cancelRequested展示问题已修复，
+原失败断言保留、不改core状态；候选/展示不能成为授权证据。
+
+上一交付59c366b PR Foundation37363569744/job111943509757当前success，实际完整Windows
+日志2012通过/0失败/16跳过，.NET8 HostFixture真实构建运行约31.9s；push37363562899
+run终态failure、job111943488439 cancelled且无steps，日志404 BlobNotFound，根因未证。
+不将取消路径计绿，也不拿该上一head的成功替代第三源码新head Foundation。
+
+goo122 Draft289 current5da274f已完成非作者只读审核，原PR评论6001841433交回证据，
+无新增实质问题：隔离精确head Runtime6/6、两集成5/5，精确base错误码probe复现running遗留，
+head持久failed/EXTERNAL_FAILURE/task.failed。MCP官方stdio与SQLite真实、资料/HTTP/确认Fake；
+不算真人私人许可、原生交互、真实云或MOD09完成，未接管其source/APPROVE/merge。

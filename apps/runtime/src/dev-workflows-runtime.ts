@@ -2,7 +2,7 @@ import {isDeepStrictEqual} from 'node:util';
 import {realpathSync, statSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {ProtocolError} from '@personal-agent/contracts';
-import type {RegisteredTool, TaskSnapshot} from '@personal-agent/contracts';
+import type {RegisteredTool, TaskSnapshot, ToolContext} from '@personal-agent/contracts';
 import {RuntimeToolInvoker} from '@personal-agent/agents';
 import type {AgentToolPort, AgentWorkerContext} from '@personal-agent/agents';
 import {ModelGateway} from '@personal-agent/models';
@@ -14,7 +14,7 @@ import {createCiFixWorkflow, createCiRunDiscoveryWorkflow, createWorkspaceReadTo
 import type {CiFixOptions, CiRunListRequest, WorkspaceReadOptions, WorkspacePatchApplyHostOptions,
   WorkspaceCommandOptions, GitToolsOptions, GitVerificationReceipt} from '@personal-agent/coding-tools';
 import {register as registerGitHub, registerGitHubRepairLinks} from '@personal-agent/github';
-import type {GitHubProvider, GitHubInputs} from '@personal-agent/github';
+import type {GitHubProvider, GitHubInputs, GitHubRepairIdentity} from '@personal-agent/github';
 import {createCodeReviewWorkflow, createIssueTriageWorkflow} from '@personal-agent/cognition';
 import type {CodeReviewInput, CodeReviewReport, IssueListRequest, IssueTriageRequest, IssueTriageOptions} from '@personal-agent/cognition';
 import {TaskRuntime} from './index.js';
@@ -76,6 +76,16 @@ export interface DevWorkflowsRuntime {
 const REQUEST_KEY = 'dev-workflows-request-v1';
 const DEADLINE_KEY = 'dev-workflows-deadline-v1';
 const RESULT_KEY = 'dev-workflows-result-v1';
+const REPAIR_UNKNOWN_PREFIX = 'dev-repair-link-unknown:';
+interface RepairUnknownCandidate {
+  taskId: string;
+  toolRunId: string;
+  toolName: string;
+  toolVersion: string;
+  arguments: GitHubRepairIdentity;
+  argumentsDigest: string;
+  checkRunId: number;
+}
 
 /** Optional Local composition. TaskRuntime owns all task states and durable execution receipts. */
 export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions): DevWorkflowsRuntime {
@@ -107,6 +117,46 @@ export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions): 
   });
   const registrations: (() => void)[] = [];
   let patchRecovery: DevWorkflowPatchRecovery | undefined;
+  function boundRepairExecution(candidate: RepairUnknownCandidate, observing = false): boolean {
+    try {
+      const input = candidate.arguments;
+      const task = runtime.getTask(candidate.taskId);
+      const request = runtime.loadCheckpoint(candidate.taskId, REQUEST_KEY) as DevWorkflowRequest | undefined;
+      const journal = runtime.loadCheckpoint(candidate.taskId, 'ci-fix-v1') as {identity?: string; inflight?: string} | undefined;
+      const descriptor = gateway.list().find(tool => tool.name === 'github.actions.repair.link');
+      const record = runtime.readToolExecutions(candidate.taskId).find(item => item.evidenceId === candidate.toolRunId);
+      return !task.cancelRequested && !!input && Number.isSafeInteger(candidate.checkRunId) && candidate.checkRunId > 0
+        && request?.kind === 'ci_fix' && request.repository === input.repo && Number(request.runId) === input.runId
+        && journal?.inflight === 'source-backlink' && typeof journal.identity === 'string' && /^[a-f0-9]{64}$/u.test(journal.identity)
+        && candidate.toolRunId === `${candidate.taskId}:ci-fix:${journal.identity}:source-backlink`
+        && candidate.toolName === descriptor?.name && candidate.toolVersion === descriptor.version
+        && candidate.argumentsDigest === toolArgumentsDigest(input)
+        && input.workflowExecutionId === createHash('sha256').update(candidate.toolRunId).digest('hex')
+        && !!record && record.taskId === candidate.taskId && record.toolName === candidate.toolName
+        && record.toolVersion === candidate.toolVersion && record.executionStarted && record.policyDecision === 'allow'
+        && (record.state === 'started' || record.state === 'unknown')
+        && runtime.matchesToolExecutionInput(record, {arguments: {...input}, scopeRef: candidate.toolRunId})
+        && task.state === (observing ? 'running' : 'waiting_reconciliation');
+    } catch { return false; }
+  }
+  function observeRepairUnknown(input: GitHubRepairIdentity, checkRunId: number | undefined, context: ToolContext): undefined {
+    if (checkRunId === undefined || context.signal.aborted || !Number.isFinite(Date.parse(context.deadline))
+      || now().getTime() >= Date.parse(context.deadline) || context.authorizationRef !== context.runId
+      || context.argumentsDigest !== toolArgumentsDigest(input)) return undefined;
+    const descriptor = gateway.list().find(tool => tool.name === 'github.actions.repair.link');
+    if (!descriptor) return undefined;
+    const candidate: RepairUnknownCandidate = {taskId: context.taskId, toolRunId: context.runId,
+      toolName: descriptor.name, toolVersion: descriptor.version, arguments: structuredClone(input),
+      argumentsDigest: context.argumentsDigest, checkRunId};
+    if (boundRepairExecution(candidate, true)) {
+      const key = REPAIR_UNKNOWN_PREFIX + context.runId;
+      if (!runtime.saveCheckpointOnce(context.taskId, key, candidate)
+        && !isDeepStrictEqual(runtime.loadCheckpoint(context.taskId, key), candidate)) {
+        runtime.saveCheckpointOnce(context.taskId, key + ':conflict', true);
+      }
+    }
+    return undefined;
+  }
   const initialize = <T>(factory: () => T): T => {
     try { return factory(); }
     catch (error) {
@@ -147,7 +197,8 @@ export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions): 
     }
     if (options.github) registrations.push(registerGitHub(gateway, {provider: options.github}));
     if (options.githubRepairLinks === true) {
-      registrations.push(registerGitHubRepairLinks(gateway, {provider: options.github!}));
+      registrations.push(registerGitHubRepairLinks(gateway, {provider: options.github!,
+        observeUnknown: (input, result, context) => observeRepairUnknown(input, result.checkRunId, context)}));
     }
     if (options.workspace) {
       registrations.push(gateway.register(createWorkspaceReadTool(options.workspace.read)));
@@ -380,7 +431,20 @@ export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions): 
       }
       return patchRecovery.reconcile(taskId, runId);
     },
-    readResult(taskId: string) { return runtime.loadCheckpoint(taskId, RESULT_KEY); },
+    readResult(taskId: string) {
+      const result = runtime.loadCheckpoint(taskId, RESULT_KEY);
+      if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
+      // This field is derived from current trusted bindings, never accepted from a cached result.
+      const {sourceRunLinkHint: _cachedHint, ...visibleResult} = result as Record<string, unknown>;
+      const journal = runtime.loadCheckpoint(taskId, 'ci-fix-v1') as {identity?: string} | undefined;
+      const runId = `${taskId}:ci-fix:${journal?.identity}:source-backlink`;
+      const candidate = runtime.loadCheckpoint(taskId, REPAIR_UNKNOWN_PREFIX + runId) as RepairUnknownCandidate | undefined;
+      if (!candidate || runtime.loadCheckpoint(taskId, REPAIR_UNKNOWN_PREFIX + runId + ':conflict') !== undefined
+        || candidate.taskId !== taskId || candidate.toolRunId !== runId || !boundRepairExecution(candidate)) return visibleResult;
+      // Candidate metadata is unverified. Only a separately approved read can check the original object.
+      return {...visibleResult, sourceRunLinkHint: {state: 'unverified', toolRunId: runId,
+        input: {...candidate.arguments, checkRunId: candidate.checkRunId}}};
+    },
     cancel(taskId: string, reason?: string) { return runtime.requestCancel(taskId, reason); },
     async close() {
       for (const taskId of active.keys()) runtime.requestCancel(taskId, 'Development workflow host closing');

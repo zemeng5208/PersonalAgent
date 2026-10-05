@@ -88,9 +88,17 @@ externalId（字符串 check 编号）、url/name/detailsUrl/status/conclusion/e
 
 派发后超时、取消、传输/解析失败、回执字段矛盾或 GET 核实失败全部返回 unknown；
 能取得原安全 checkRunId 时保留编号/URL，不自动再次 POST。registered 写工具继续把
-unknown 转为 RESULT_UNKNOWN，由原 Runtime 进入 reconciliation。标准错误本身不携带
-该编号；可信宿主若需要编号，应保存原 provider 回执与原工具执行绑定的证据。
-没有原编号时不能通过同名列表猜测对象或重发写入。
+unknown 转为 RESULT_UNKNOWN，由原 Runtime 进入 reconciliation。可信宿主可在独立
+registration 选项中提供同步 `observeUnknown(input, result, context): undefined`，在
+抛出标准错误前保存原回执的候选元数据。钩子只接收通过输入/输出 Schema、授权引用与
+scope 检查的 unknown；input/result 为独立克隆，context 保留原完整 ToolContext，
+供宿主精确绑定原 task/tool run/action/version/参数摘要与执行记录。
+confirmed、只读结果、非法 unknown 和未授权调用均不触发钩子。
+候选编号不等于已核实回执或新授权；宿主仍需过滤安全 checkRunId，并执行原对象 get
+及原执行证据校验。合法但缺 ID 的 unknown 也可观察，不能据此造编号提示、按同名
+列表猜测对象或重发写入。保存失败/钩子异常仍固定 RESULT_UNKNOWN，禁止重试；
+同步返回类型拒绝 async 钩子，运行时意外 thenable 的拒绝会吸收且不等待，不能拖延
+工具或改变 unknown。标准错误本身不携带编号，宿主持久候选承担后续恢复入口。
 独立 get 只 GET 原编号并核对完整预期 identity/固定字段，不查询另一个 run/PR 来
 替代原写证据；它不授予新写权限、不自动确认 Runtime 原 unknown，后者仍由可信
 宿主按原授权、任务/run 和证据校验。原 run 或 PR 后续变化也不由这份关联回执证明。

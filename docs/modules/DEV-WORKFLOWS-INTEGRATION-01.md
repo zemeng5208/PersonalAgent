@@ -48,8 +48,16 @@ Issue 修复复用 MOD-34 `createCiFixWorkflow`。宿主可提供 `failedRunForI
 成功返回 state=checked、receipt 和本次 Evidence；这不是原未知写入已确认的 Runtime 回执。
 受信核实者须校验原 execution/input/budget/evidence，按现有核心恢复接口安装原确认缓存，
 然后 `resumeConfirmed` 才能消费；只读核实或知晓 CheckRun ID 不授予再写权限。
-registered RESULT_UNKNOWN 本身不携 provider 的 partial CheckRun ID，宿主需要保留原 provider
-响应证据或由操作者明确提供已知 ID；缺 ID 保持等待，不依名称列表猜测或重复 POST。
+registered RESULT_UNKNOWN 本身保持固定错误，不携 provider 的 partial CheckRun ID。
+可选注册提供同步受信 observeUnknown 钩子，仅在 unknown schema 校验成功后观察克隆的
+原输入/候选响应和原 ToolContext；保存失败或误用异步钩子均不改变 unknown、不等待或重试。
+本 Runtime 将合法候选 ID 持久保存到原 task/run checkpoint，绑定原审批参数 digest、
+工具版本、ci-fix journal 和原已获准执行记录；忽略 provider 的 URL/externalId 等附带文本。
+readResult 仅在原 task waiting_reconciliation、source-backlink 仍 inflight 且原执行
+started/unknown、全部绑定一致时返回 sourceRunLinkHint={state:'unverified',toolRunId,input}。
+input 复用完整原 identity 加候选 checkRunId，可由宿主显式提交上述 ci_link_readback；
+提示不是确认、授权或稳定快照。缺 ID、候选保存失败/冲突、绑定变化、取消或其它状态时
+不显示提示，仍等待原执行核实，不依名称列表猜测、自动 GET 或重复 POST。
 
 `code_review` 的 publish=true 结果保留完整 prepared report，发表状态仍为真实
 confirmed/pending/unknown/unsupported；publication 提供当前 findingIndex、totalFindings 和
@@ -83,7 +91,15 @@ Git `readVerification` 还要求原命令 ToolExecutionRecord 已开始、Policy
 
 ## 验收交接
 
-本 writer 只执行静态审阅与 `git diff --check`，按用户要求不安装、不构建、不跑测试、不访问真实服务。新增 Fake 测试覆盖未审批 GitHub read 零执行、幂等请求/期限绑定、无原 confirmed Evidence 的恢复拒绝。
+初始 writer 仅执行静态审阅；后续已授权的本分支实现执行实际模块、SQLite 恢复与全仓检查，
+按续接清单记录对应提交和日志，不用旧静态审阅说明替代当前验证。
+候选 ID 恢复使用真实 GhCliProvider 逻辑与明确合成 transport/SQLite：一次 POST 返回 ID 后
+GET 失败，原任务保持 unknown，重启后提示保留，独立审批只读 GET 成功也不自动确认原任务。
+另覆盖缺 ID、非法 provider 输出、保存失败、候选绑定变化及冲突；真实账号和原设备另验。
+最新候选提示增量固定 Node24.15 完整 check 已实际 exit0：31workspace1990通过、0失败、
+50平台跳过，Runtime347/GitHub96、根integration19与架构/契约/生成/build/typecheck通过。
+独立复核14/14；缓存同名hint剥离、cancelRequested隐藏均保留失败回归，具体提交/Windows
+门禁与剩余真实验收以同目录续接清单及当前PR精确head为准，整体模块仍review/provisional。
 
 Potatos498 集中整合全部模块和 exports 后执行仓库实际脚本：
 

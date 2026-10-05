@@ -240,3 +240,75 @@ test('optional registration rejects malformed provider success and rolls back on
   assert.throws(() => registerGitHubRepairLinks({register(tool) {if (++count === 2) throw Error('synthetic registration failure');original.set(tool.descriptor.name, tool);return () => original.delete(tool.descriptor.name);}}, {provider}));
   assert.deepEqual([...original], [['github.repo.get', 'owned elsewhere']]);assert.equal(disposed, 0);
 });
+
+test('unknown observer preserves the original partial CheckRun identifier and full execution context without another POST', async () => {
+  const p = provider([failedRun(), openPull(), checkRecord(), new ProtocolError('NOT_FOUND', 'synthetic readback failure')]);
+  const execute = p.value.execute.bind(p.value);let providerResult;
+  p.value.execute = async (...args) => {providerResult = await execute(...args);return providerResult;};
+  const tools = new Map(), actualInput = structuredClone(identity), actualContext = toolContext(), observations = [];
+  const dispose = registerGitHubRepairLinks({register(tool) {tools.set(tool.descriptor.name, tool);return () => tools.delete(tool.descriptor.name);}}, {
+    provider: p.value, observeUnknown(input, result, context) {
+      observations.push({input: structuredClone(input), result: structuredClone(result), context,
+        sharedInput: input === actualInput, sharedResult: result === providerResult});
+      input.runId = 999;result.checkRunId = 999;result.evidenceRefs.push('observer-local-only');
+      return undefined;
+    },
+  });
+  try {
+    await assert.rejects(tools.get('github.actions.repair.link').execute(actualInput, actualContext), e => e.code === 'RESULT_UNKNOWN' && !e.retryable);
+    assert.equal(observations.length, 1);assert.deepEqual(observations[0].input, identity);assert.deepEqual(observations[0].result, unknown(101));
+    assert.equal(observations[0].context, actualContext);assert.equal(observations[0].sharedInput, false);assert.equal(observations[0].sharedResult, false);
+    assert.deepEqual(actualInput, identity);assert.deepEqual(providerResult, unknown(101));
+    assert.equal(p.calls.filter(c => method(c) === 'POST').length, 1);assert.equal(p.calls.length, 4);
+  } finally {dispose();}
+});
+
+test('unknown observer sees missing-ID candidates but never invalid, unauthorized, confirmed or read results', async () => {
+  const tools = new Map(), observations = [];let output = unknown(), providerCalls = 0;
+  const readReceipt = {...identity, checkRunId: 101, externalId: '101', url: `https://github.com/${repo}/runs/101`, name: githubRepairCheckName(identity),
+    detailsUrl: `https://github.com/${repo}/pull/9`, status: 'completed', conclusion: 'neutral', evidenceRefs: []};
+  const dispose = registerGitHubRepairLinks({register(tool) {tools.set(tool.descriptor.name, tool);return () => tools.delete(tool.descriptor.name);}}, {
+    provider: {verification: 'mock', execute: async () => {providerCalls++;return output;}},
+    observeUnknown(input, result, context) {observations.push({input, result, context});return undefined;},
+  });
+  try {
+    const write = tools.get('github.actions.repair.link');
+    await assert.rejects(write.execute(identity, {...toolContext(), authorizationRef: ''}), e => e.code === 'SCOPE_DENIED');
+    await assert.rejects(write.execute(identity, toolContext(false)), e => e.code === 'SCOPE_DENIED');
+    await assert.rejects(write.execute({...identity, arbitrary: 'invalid'}, toolContext()), e => e.code === 'INVALID_ARGUMENT');
+    assert.equal(observations.length, 0);assert.equal(providerCalls, 0);
+    for (output of [{state: 'unknown', evidenceRefs: [], checkRunId: 0}, {state: 'unknown', evidenceRefs: [], arbitrary: 'invalid'}, {state: 'unknown'}]) {
+      await assert.rejects(write.execute(identity, toolContext()), e => e.code === 'RESULT_UNKNOWN');assert.equal(observations.length, 0);
+    }
+    output = {state: 'confirmed', ...readReceipt};assert.equal((await write.execute(identity, toolContext())).state, 'confirmed');assert.equal(observations.length, 0);
+    output = readReceipt;await tools.get('github.actions.repair.get').execute({...identity, checkRunId: 101}, toolContext(false));assert.equal(observations.length, 0);
+    output = unknown();const actualContext = toolContext();await assert.rejects(write.execute(identity, actualContext), e => e.code === 'RESULT_UNKNOWN');assert.equal(observations.length, 1);
+    assert.deepEqual(observations[0].input, identity);assert.deepEqual(observations[0].result, unknown());assert.equal(observations[0].context, actualContext);
+  } finally {dispose();}
+});
+
+test('observer persistence failure retains fixed non-retryable unknown and never authorizes a second write', async () => {
+  const tools = new Map(), fake = new FakeGitHubProvider({'actions.repair.link': unknown(101)});let observed = 0;
+  const dispose = registerGitHubRepairLinks({register(tool) {tools.set(tool.descriptor.name, tool);return () => tools.delete(tool.descriptor.name);}}, {
+    provider: fake, observeUnknown() {observed++;throw Error('private persistence path synthetic-secret');},
+  });
+  try {
+    await assert.rejects(tools.get('github.actions.repair.link').execute(identity, toolContext()), e => e.code === 'RESULT_UNKNOWN' && !e.retryable && !/private|synthetic-secret/.test(e.message));
+    assert.equal(observed, 1);assert.equal(fake.calls.length, 1);
+  } finally {dispose();}
+});
+
+test('accidental asynchronous observers cannot hold the tool or leak an unhandled rejection', async t => {
+  const unhandled = [], record = error => unhandled.push(error);process.on('unhandledRejection', record);t.after(() => process.off('unhandledRejection', record));
+  for (const [name, hook] of [['rejecting promise', () => Promise.reject(Error('synthetic observer rejection'))],
+    ['never-settling promise', () => new Promise(() => {})], ['rejecting thenable', () => ({then(_resolve, reject) {reject(Error('synthetic thenable rejection'));}})]]) await t.test(name, {timeout: 1000}, async () => {
+    const tools = new Map(), fake = new FakeGitHubProvider({'actions.repair.link': unknown(101)});let observed = 0;
+    const dispose = registerGitHubRepairLinks({register(tool) {tools.set(tool.descriptor.name, tool);return () => tools.delete(tool.descriptor.name);}}, {
+      provider: fake, observeUnknown(...args) {observed++;return hook(...args);},
+    });
+    try {
+      await assert.rejects(tools.get('github.actions.repair.link').execute(identity, toolContext()), e => e.code === 'RESULT_UNKNOWN' && !e.retryable);
+      await new Promise(resolve => setImmediate(resolve));assert.equal(observed, 1);assert.equal(fake.calls.length, 1);assert.deepEqual(unhandled, []);
+    } finally {dispose();}
+  });
+});

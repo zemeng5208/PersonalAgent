@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 import {ProtocolError, validateToolValue} from '@personal-agent/contracts';
-import type {ToolHost} from '@personal-agent/contracts';
+import type {ToolContext, ToolHost} from '@personal-agent/contracts';
 import type {GitHubInputs, GitHubProvider, GitHubRepairIdentity, GitHubRepairReceipt, GitHubRepairLinkResult} from './provider.js';
 import {GitHubService} from './service.js';
 import {inputSchema, validateInput} from './schemas.js';
@@ -99,7 +99,11 @@ export async function getGitHubRepairLink(input: GitHubInputs['actions.repair.ge
   return receipt(await api(`repos/${identity.repo}/check-runs/${input.checkRunId}`), identity, input.checkRunId);
 }
 
-export interface GitHubRepairModuleOptions {provider: GitHubProvider}
+export interface GitHubRepairModuleOptions {
+  provider: GitHubProvider;
+  /** Synchronous trusted persistence of candidate metadata; never an authorization or confirmation. */
+  observeUnknown?: (input: GitHubRepairIdentity, result: Extract<GitHubRepairLinkResult, {state: 'unknown'}>, context: ToolContext) => undefined;
+}
 /** The caller owns provider lifecycle; disposal removes only this optional registration. */
 export function registerGitHubRepairLinks(host: ToolHost, options: GitHubRepairModuleOptions): () => void {
   if (!options?.provider) throw new ProtocolError('INVALID_ARGUMENT', 'Explicit GitHub repair provider required');
@@ -115,9 +119,18 @@ export function registerGitHubRepairLinks(host: ToolHost, options: GitHubRepairM
         if (!context?.authorizationRef || !context.scopes.includes(scope)) throw new ProtocolError('SCOPE_DENIED', 'GitHub repair tool requires host authorization and scope');
         validateInput(op, input);
         const result = await service.execute(op, input as GitHubInputs[typeof op], context);
-        if (write && (result as {state?: string}).state !== 'confirmed') throw new ProtocolError('RESULT_UNKNOWN', 'GitHub repair association unknown; reconcile original check before any retry');
         try {validateToolValue(outputSchema(op), result);}
         catch {throw new ProtocolError(write ? 'RESULT_UNKNOWN' : 'EXTERNAL_FAILURE', 'GitHub repair provider returned an invalid result');}
+        if (write && (result as GitHubRepairLinkResult).state === 'unknown') {
+          try {
+            const observed: unknown = options.observeUnknown?.(structuredClone(input as GitHubRepairIdentity),
+              structuredClone(result as Extract<GitHubRepairLinkResult, {state: 'unknown'}>), context);
+            // The public hook is synchronous. A misconfigured JS thenable must
+            // neither delay RESULT_UNKNOWN nor emit an unhandled rejection.
+            if (observed !== undefined) void Promise.resolve(observed).catch(() => undefined);
+          } catch { /* Persistence failure cannot confirm or authorize retry. */ }
+          throw new ProtocolError('RESULT_UNKNOWN', 'GitHub repair association unknown; reconcile original check before any retry');
+        }
         return result;
       }}));
     }
