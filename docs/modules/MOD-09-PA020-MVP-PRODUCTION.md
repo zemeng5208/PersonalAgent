@@ -6,6 +6,9 @@
 分支 `codex/mod09-learning-mcp-acceptance-20261005`，基线为
 `origin/main@53e627480dd455a06151263a8d1e1e60464d82e4`。
 
+后续 PR #289 的首提交 `e16470e907ab373686a6b181fc8d62afeea68b66` 两项远程 Foundation 成功，
+已请求 Potatos498 非作者评审；本节父子分派增量改变 head，必须以新 head 的 CI/评审为准。
+
 - #285 已由 Potatos498 对 `e3a5881cb6e1388243e994dc008ad337c6be3471` 批准，
   两项 Foundation CI 成功，合并提交 `74acc37ed9c040c750cdfd4ad1ac4374dac962cc` 已在当前 main 祖先链中。
   #284 的同步消费门禁修复及实际 Runtime 父/子副本测试已进入主线。
@@ -37,6 +40,23 @@
 此问题属于 Desktop 受信程序发现的本机兼容性，按 P8/P6 文件归属交接，不在本记忆包改写。
 check 因失败未启动根集成，已单独运行 `npm run test:integration`，20/20 通过；不宣称完整 Foundation 全绿。
 `npm run dev`、`npm run demo:protocol`、`npm run demo:runtime` 通过，演示明确为 mock。
+
+### 实际父子分派与私人许可边界
+
+`private-memory-runtime-copies.test.mjs` 后续增加两个用例，使用正式 AgentArts Runtime Application、
+真实 SQLite Policy 审批与 `createDesktopSubagentDispatchTool` / 默认 Competition 子工作者：
+
+- 私人事实已按父任务确认时，Fake 云返回有效子任务提案。Runtime 写入私人派生拒绝标记，
+  在原审批、工具执行和子任务创建前拒绝；协调边界对外固定脱敏为 `EXTERNAL_FAILURE`，
+  不公开内部私人原因。删除父任务绑定副本后精确 `purged` 收据可读，且不重发提案。
+- 公开父任务等待原审批，审批前没有子任务；通过 Client 的 `authorization.respond` 后由实际工具
+  创建并运行子任务，原执行记录为 confirmed/allow。父子任务没有私人消费绑定，
+  三次 Fake HTTP 请求不包含已保存的任何私人事实摘要；删除无关私人事实后公开任务及原父子关系保留。
+
+新增父子用例与原副本/学习用例合计 5/5，通过全部根集成 22/22。
+确认回调及 HTTP 是显式 Fake，资料仍为合成；不是原生审批、真实 AgentArts 或真实私人发送证据。
+现有生产行为禁止私人派生提案直接分派子任务，父许可也不会自动成为子许可；
+需要另行公共任务及其对应授权，不扩大本次实现或真实验收的权限。
 
 ## 2026-10-05 主线集成候选（已通过 #285 集成）
 
