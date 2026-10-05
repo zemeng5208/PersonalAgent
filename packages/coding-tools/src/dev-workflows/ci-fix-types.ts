@@ -1,5 +1,6 @@
 import type {AgentToolPort, AgentWorkerContext} from '@personal-agent/agents';
 import type {ModelPort} from '@personal-agent/models';
+import type {GitHubRepairReceipt} from '@personal-agent/github';
 
 /** Existing Runtime request adapter; this alias does not freeze a new contract. */
 export type ToolExecutionPort = AgentToolPort;
@@ -29,6 +30,8 @@ export interface CiFixOptions {
   headBranch?: string;
   baseBranch?: string;
   issue?: {url: string; number: number; repository: string; fingerprint: string};
+  /** Host opt-in: create a separate neutral check on the original source SHA, never change its failed run. */
+  sourceRunBacklink?: {toolName: string; runAttempt: number};
   maxSteps: number;
   maxTokens: number;
   /** Bounded repair attempts: a failed verification feeds the next model round. Default 2, max 4. */
@@ -47,4 +50,6 @@ export interface CiFixOutcome {
   evidenceRefs: readonly string[];
   pullRequestUrl?: string;
   verificationRunId?: string;
+  /** Exact confirmed new check association; does not mean the original failed Actions run passed. */
+  sourceRunLink?: GitHubRepairReceipt;
 }

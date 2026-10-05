@@ -12,11 +12,36 @@ export interface GitHubIssue { number: number; title: string; body: string; stat
 export interface GitHubPullRequest { number: number; title: string; body: string; state: string; base: string; baseSha: string; head: string; headSha: string; url: string; draft: boolean }
 export interface GitHubPage<T> { items: T[]; page: number; nextPage: number | null; hasMore: boolean }
 export interface GitHubWriteResult { state: 'confirmed' | 'unknown'; externalId?: string; url?: string; evidenceRefs: string[] }
+/** Trusted workflow execution binds a repair association to one failed run attempt and reviewed PR head. */
+export interface GitHubRepairIdentity extends RepositoryInput {
+  runId: number;
+  expectedRunAttempt: number;
+  sourceSha: string;
+  repairPrNumber: number;
+  repairHeadSha: string;
+  /** SHA-256 of the original stable workflow tool run identifier; never model supplied. */
+  workflowExecutionId: string;
+}
+export interface GitHubRepairReceipt extends GitHubRepairIdentity {
+  checkRunId: number;
+  externalId: string;
+  url: string;
+  name: string;
+  detailsUrl: string;
+  status: 'completed';
+  conclusion: 'neutral';
+  evidenceRefs: string[];
+}
+export type GitHubRepairLinkResult = ({state: 'confirmed'} & GitHubRepairReceipt) | {
+  state: 'unknown'; checkRunId?: number; externalId?: string; url?: string; evidenceRefs: string[];
+};
 export interface GitHubInputs {
   'repo.get': RepositoryInput;
   'actions.run.list': PageInput & { status?: 'queued' | 'in_progress' | 'completed' | 'failure' | 'success'; branch?: string };
   'actions.job.list': PageInput & { runId: number };
   'actions.log.read': RepositoryInput & { runId: number; jobId: number; offset?: number; maxChars?: number };
+  'actions.repair.link': GitHubRepairIdentity;
+  'actions.repair.get': GitHubRepairIdentity & {checkRunId: number};
   'issue.get': NumberInput;
   'issue.list': PageInput & { state?: 'open' | 'closed' | 'all'; labels?: string[] };
   'issue.label': NumberInput & { labels: string[]; expectedUpdatedAt: string };
@@ -32,6 +57,8 @@ export interface GitHubOutputs {
   'actions.run.list': GitHubPage<GitHubRun>;
   'actions.job.list': GitHubPage<GitHubJob>;
   'actions.log.read': TextPage;
+  'actions.repair.link': GitHubRepairLinkResult;
+  'actions.repair.get': GitHubRepairReceipt;
   'issue.get': GitHubIssue;
   'issue.list': GitHubPage<GitHubIssue>;
   'issue.label': GitHubWriteResult;
@@ -49,4 +76,4 @@ export interface GitHubPort {
 export interface GitHubProvider extends GitHubPort { readonly verification: 'mock' | 'conditional'; dispose?(): void }
 export type GitHubToolContext = ToolContext;
 export const githubOperations: readonly GitHubOperation[] = ['repo.get', 'actions.run.list', 'actions.job.list', 'actions.log.read', 'issue.get', 'issue.list', 'issue.label', 'issue.comment', 'pr.get', 'pr.diff', 'pr.create', 'pr.comment', 'pr.review.comment'];
-export const isGitHubWrite = (op: GitHubOperation): boolean => ['issue.label', 'issue.comment', 'pr.create', 'pr.comment', 'pr.review.comment'].includes(op);
+export const isGitHubWrite = (op: GitHubOperation): boolean => ['actions.repair.link', 'issue.label', 'issue.comment', 'pr.create', 'pr.comment', 'pr.review.comment'].includes(op);

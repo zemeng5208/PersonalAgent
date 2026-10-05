@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {test} from 'node:test';
 import {FakeModelProvider} from '@personal-agent/models';
-import {GhCliProvider} from '@personal-agent/github';
+import {GhCliProvider, FakeGitHubProvider, githubRepairCheckName} from '@personal-agent/github';
 import {createDevWorkflowsRuntime} from '../dist/dev-workflows-runtime.js';
 import {ProtocolError} from '@personal-agent/contracts';
 import {createWorkspaceReadTool, createWorkspacePatchPreviewTool} from '@personal-agent/coding-tools';
@@ -35,6 +35,68 @@ async function fixture(run, options = {}) {
 }
 const submission = () => ({request: {kind: 'issue_triage', input: {repo: 'example/project', number: 7}},
   conversationId: 'dev-tests', idempotencyKey: 'same-work', deadline: new Date(Date.now() + 60_000).toISOString()});
+
+test('repair association tools require explicit opt-in and retain the original provider lifecycle', async () => {
+  for (const enabled of [false, true]) {
+    let disposed = 0;
+    const github = {verification: 'mock', async execute() {throw Error('unused');}, dispose() {disposed++;}};
+    const host = createDevWorkflowsRuntime({path: ':memory:', model: model(), github, githubRepairLinks: enabled,
+      maxSteps: 1, maxTokens: 1024});
+    const names = host.tools.list().map(tool => tool.name);
+    assert.equal(names.length, enabled ? 15 : 13);
+    assert.equal(names.includes('github.actions.repair.link'), enabled);
+    assert.equal(names.includes('github.actions.repair.get'), enabled);
+    await host.close(); assert.equal(disposed, 1);
+  }
+  for (const githubRepairLinks of [true, 'true', 1]) {
+    assert.throws(() => createDevWorkflowsRuntime({path: ':memory:', model: model(), githubRepairLinks,
+      maxSteps: 1, maxTokens: 1024}), /explicit GitHub provider and boolean opt-in/i);
+  }
+});
+
+test('an explicit original-check readback retains approval across SQLite restart without confirming or repeating writes', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'dev-repair-readback-'));
+  const identity = {repo: 'example/project', runId: 42, expectedRunAttempt: 3, sourceSha: 'a'.repeat(40),
+    repairPrNumber: 9, repairHeadSha: 'b'.repeat(40), workflowExecutionId: 'c'.repeat(64)};
+  const receipt = {...identity, checkRunId: 11, externalId: '11', url: 'https://github.com/example/project/runs/11',
+    name: githubRepairCheckName(identity), detailsUrl: 'https://github.com/example/project/pull/9',
+    status: 'completed', conclusion: 'neutral', evidenceRefs: []};
+  let host, calls = 0, disposed = 0;
+  const open = () => {
+    const github = new FakeGitHubProvider({'actions.repair.get': input => {
+      calls++; assert.deepEqual(input, {...identity, checkRunId: 11}); return structuredClone(receipt);
+    }});
+    github.dispose = () => {disposed++;};
+    return createDevWorkflowsRuntime({path: path.join(directory, 'runtime.sqlite'), model: model(), github,
+      githubRepairLinks: true, maxSteps: 1, maxTokens: 1024});
+  };
+  try {
+    host = open();
+    const input = {request: {kind: 'ci_link_readback', input: {...identity, checkRunId: 11}},
+      conversationId: 'repair-readback', idempotencyKey: 'original-check-11', deadline: new Date(Date.now() + 60_000).toISOString()};
+    const task = host.submit(input);
+    assert.equal((await host.start(task.taskId)).state, 'waiting_approval'); assert.equal(calls, 0);
+    const original = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0];
+    assert.equal(original.action, 'github.actions.repair.get');
+    await host.close(); assert.equal(disposed, 1); host = open();
+    assert.equal(host.submit(input).taskId, task.taskId);
+    assert.throws(() => host.submit({...input, request: {...input.request, input: {...input.request.input, checkRunId: 12}}}),
+      /request|checkpoint|binding/i);
+    const approval = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0];
+    assert.equal(approval.approvalId, original.approvalId);
+    host.runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
+    assert.equal((await host.resume(task.taskId)).state, 'succeeded');
+    assert.deepEqual(host.readResult(task.taskId).receipt, receipt);
+    assert.equal(host.readResult(task.taskId).state, 'checked'); assert.equal(calls, 1);
+    const records = host.runtime.readToolExecutions(task.taskId);
+    assert.equal(records.length, 1); assert.equal(records[0].toolName, 'github.actions.repair.get');
+    assert.equal(records[0].state, 'confirmed');
+    await host.close(); assert.equal(disposed, 2); host = open();
+    assert.deepEqual(host.readResult(task.taskId).receipt, receipt); assert.equal(calls, 1);
+    await assert.rejects(host.resume(task.taskId), /not ready to start/i);
+    assert.equal(calls, 1);
+  } finally {await host?.close(); await rm(directory, {recursive: true, force: true});}
+});
 
 test('an unapproved GitHub read pauses the original task without execution', async () => {
   await fixture(async (host, count) => {
@@ -504,13 +566,15 @@ test('PR base drift during approval cannot publish a cached pre-review', async (
   } finally {await host.close(); await rm(directory, {recursive: true, force: true});}
 });
 
-async function patchFixture(t, {confirmApply = false, previewFailure, invalidPreview = false, intentSaveFailure = false} = {}) {
+async function patchFixture(t, {confirmApply = false, previewFailure, invalidPreview = false, intentSaveFailure = false,
+  sourceRunBacklink = false, sourceLinkUnknown = false} = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'dev-patch-recovery-'));
   await writeFile(path.join(directory, 'app.js'), 'const value = 1;\n');
   const {createHash} = await import('node:crypto');
   const before = createHash('sha256').update('const value = 1;\n').digest('hex');
   const preflightFailure = !!previewFailure || invalidPreview || intentSaveFailure;
-  const calls = {apply: 0, polls: [], outcome: 'unknown', bindingId: 'd'.repeat(64), marker: !preflightFailure};
+  const calls = {apply: 0, polls: [], outcome: 'unknown', bindingId: 'd'.repeat(64), marker: !preflightFailure,
+    sourceLinks: 0, modelCalls: 0};
   const read = createWorkspaceReadTool({rootPath: directory});
   const trustedPreview = createWorkspacePatchPreviewTool({rootPath: directory});
   const preview = {...trustedPreview, async execute(input, context) {
@@ -534,6 +598,14 @@ async function patchFixture(t, {confirmApply = false, previewFailure, invalidPre
   };
   const tools = [read, preview, ...Object.entries(values).map(([name, result]) => ({descriptor: descriptor(name),
     async execute() {return structuredClone(result);}})),
+    ...(sourceRunBacklink ? [{descriptor: {...descriptor('synthetic.source.link', 'external_write'),
+      requiredScopes: ['github:write'], requiresPresence: true}, async execute(input) {
+        calls.sourceLinks++; calls.sourceArguments = structuredClone(input);
+        if (sourceLinkUnknown) throw new ProtocolError('RESULT_UNKNOWN', 'Synthetic uncertain Check creation');
+        return {state: 'confirmed', ...input, checkRunId: 11, externalId: '11',
+          url: 'https://github.com/example/project/runs/11', name: githubRepairCheckName(input),
+          detailsUrl: 'https://github.com/example/project/pull/9', status: 'completed', conclusion: 'neutral', evidenceRefs: []};
+      }}] : []),
     {descriptor: {...descriptor('workspace.apply_text_patch', 'local_write'), requiredScopes: ['workspace:read','workspace:write']},
       async execute(input, context) {
         calls.apply++;
@@ -542,10 +614,13 @@ async function patchFixture(t, {confirmApply = false, previewFailure, invalidPre
       }}];
   const provider = new FakeModelProvider([{kind: 'final', text: JSON.stringify({diagnosis: 'synthetic repair',
     patches: [{path: 'app.js', expectedSha256: before, edits: [{oldText: 'value = 1', newText: 'value = 2'}]}]})}]);
+  const complete = provider.complete.bind(provider);
+  provider.complete = async input => {calls.modelCalls++; return complete(input);};
   let host;
   const create = () => createDevWorkflowsRuntime({path: path.join(directory, 'runtime.sqlite'), model: provider,
-    tools, maxSteps: 32, maxTokens: 64_000,
+    tools, maxSteps: 32, maxTokens: 64_000, ...(sourceRunBacklink ? {isUserPresent: () => true} : {}),
     ciFix: {sourcePaths: ['app.js'], verifyRecipeId: 'check', headBranch: 'repair', baseBranch: 'main',
+      ...(sourceRunBacklink ? {sourceRunBacklink: {toolName: 'synthetic.source.link', runAttempt: 3}} : {}),
       gitTools: {head: 'workspace.git.head', commit: 'workspace.git.commit', push: 'workspace.git.push',
         pullRequest: 'github.pr.create', backlink: 'github.pr.comment'}},
     workspacePatchReconciliation: {get bindingId() {return calls.bindingId;}, async reconcile(input) {
@@ -632,6 +707,43 @@ test('workflow patch polls preserve unknown markers across restart without repea
   f.calls.outcome = 'unknown'; await f.host.reconcileWorkspacePatchTask(f.taskId, f.runId);
   assert.equal(f.calls.apply, 1); assert.ok(f.calls.polls.every(input => input.retainMarker === true));
   assert.equal(f.host.runtime.readToolExecutions(f.taskId).find(item => item.evidenceId === f.runId).reconciliationOutcome, undefined);
+});
+
+test('source repair association retains its independent SQLite approval and never repeats an unknown write', async t => {
+  for (const unknown of [false, true]) await t.test(unknown ? 'unknown original execution' : 'confirmed neutral association', async t => {
+    const f = await patchFixture(t, {confirmApply: true, sourceRunBacklink: true, sourceLinkUnknown: unknown});
+    let snapshot = f.host.runtime.getTask(f.taskId), sourceApproval;
+    for (let i = 0; snapshot.state === 'waiting_approval' && i < 32; i++) {
+      const approval = f.host.runtime.listApprovals({taskId: f.taskId, state: 'pending'}).items[0];
+      assert.ok(approval);
+      if (approval.action === 'synthetic.source.link') {sourceApproval = approval; break;}
+      f.host.runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
+      snapshot = await f.host.resume(f.taskId);
+    }
+    assert.ok(sourceApproval); assert.equal(f.calls.sourceLinks, 0);
+    assert.equal(f.host.readResult(f.taskId).pullRequestUrl, 'https://github.com/example/project/pull/9');
+    await f.restart();
+    assert.equal((await f.host.resume(f.taskId)).state, 'waiting_approval');
+    const approval = f.host.runtime.listApprovals({taskId: f.taskId, state: 'pending'}).items[0];
+    assert.equal(approval.approvalId, sourceApproval.approvalId); assert.equal(f.calls.sourceLinks, 0);
+    f.host.runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
+    snapshot = await f.host.resume(f.taskId);
+    assert.equal(snapshot.state, unknown ? 'waiting_reconciliation' : 'succeeded');
+    assert.equal(f.calls.sourceLinks, 1); assert.equal(f.calls.apply, 1); assert.equal(f.calls.modelCalls, 1);
+    const records = f.host.runtime.readToolExecutions(f.taskId), original = records.find(record => record.toolName === 'synthetic.source.link');
+    assert.ok(original); assert.equal(original.state, unknown ? 'unknown' : 'confirmed');
+    const {createHash} = await import('node:crypto');
+    assert.equal(f.calls.sourceArguments.workflowExecutionId, createHash('sha256').update(original.evidenceId).digest('hex'));
+    assert.equal(f.calls.sourceArguments.expectedRunAttempt, 3);
+    assert.equal(records.filter(record => record.toolName === 'workspace.git.commit').length, 1);
+    if (!unknown) {
+      assert.equal(f.host.readResult(f.taskId).sourceRunLink.conclusion, 'neutral');
+      assert.equal(f.host.readResult(f.taskId).sourceRunLink.checkRunId, 11);
+    }
+    await f.restart();
+    await assert.rejects(f.host.resume(f.taskId), /not ready to start/i);
+    assert.equal(f.calls.sourceLinks, 1); assert.equal(f.calls.modelCalls, 1); assert.equal(f.calls.apply, 1);
+  });
 });
 
 test('each Runtime approval resumes the same precommit head read and reaches the original repair commit', async t => {

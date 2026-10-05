@@ -1,12 +1,25 @@
 import {createHash} from 'node:crypto';
 import {ProtocolError} from '@personal-agent/contracts';
 import type {AgentWorkerContext} from '@personal-agent/agents';
+import {githubRepairCheckName} from '@personal-agent/github';
+import type {GitHubRepairIdentity, GitHubRepairReceipt} from '@personal-agent/github';
 import type {CiFixOptions, CiFixOutcome, CiFixProposal, CiFixWorkflowPort} from './ci-fix-types.js';
 
 const sha = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
 const digest = /^[a-f0-9]{64}$/u;
 const object = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 function invalid(): never { throw new ProtocolError('INVALID_ARGUMENT', 'Invalid CI repair proposal or receipt'); }
+function sourceLinkReceipt(value: unknown, identity: GitHubRepairIdentity): GitHubRepairReceipt {
+  const checkUrl = object(value) ? `https://github.com/${identity.repo}/runs/${value.checkRunId}` : '';
+  if (!object(value) || value.state !== 'confirmed' || Object.entries(identity).some(([k, v]) => value[k] !== v)
+    || !Number.isSafeInteger(value.checkRunId) || Number(value.checkRunId) < 1 || value.externalId !== String(value.checkRunId)
+    || (value.url !== checkUrl && value.url !== `${checkUrl}?check_suite_focus=true`)
+    || value.name !== githubRepairCheckName(identity) || value.detailsUrl !== `https://github.com/${identity.repo}/pull/${identity.repairPrNumber}`
+    || value.status !== 'completed' || value.conclusion !== 'neutral'
+    || !Array.isArray(value.evidenceRefs) || !value.evidenceRefs.every(ref => typeof ref === 'string')) invalid();
+  return {...identity, checkRunId: value.checkRunId as number, externalId: value.externalId as string, url: value.url as string,
+    name: value.name as string, detailsUrl: value.detailsUrl as string, status: 'completed', conclusion: 'neutral', evidenceRefs: [...value.evidenceRefs]};
+}
 // The first-page keys and arguments remain compatible with existing checkpoints.
 // Old receipts without cursor metadata are terminal; partial metadata is invalid.
 function nextPage(value: Record<string, unknown>, page: number): number | null {
@@ -63,6 +76,11 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
   const attempts = options.maxAttempts ?? 2;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256 * 1024) invalid();
   if (!Number.isSafeInteger(attempts) || attempts < 1 || attempts > 4) invalid();
+  const sourceRunBacklink = options.sourceRunBacklink === undefined ? undefined : structuredClone(options.sourceRunBacklink);
+  if (sourceRunBacklink !== undefined && (!object(sourceRunBacklink)
+    || Object.keys(sourceRunBacklink).some(k => !['toolName', 'runAttempt'].includes(k)) || !options.runId
+    || typeof sourceRunBacklink.toolName !== 'string' || !/^[a-z][a-z0-9._-]{0,127}$/u.test(sourceRunBacklink.toolName)
+    || !Number.isSafeInteger(sourceRunBacklink.runAttempt) || sourceRunBacklink.runAttempt < 1)) invalid();
   if (!options.model || !options.tools || !options.gitTools) return {status: 'unsupported', reason: 'Model, Runtime tools or Git write adapter unavailable', evidenceRefs: []};
   const {model, tools, gitTools} = options;
   if (!options.headBranch || !options.baseBranch || (!options.runId && (!options.issue || !options.expectedHeadSha || !sha.test(options.expectedHeadSha)))) invalid();
@@ -70,7 +88,11 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
   if (!Array.isArray(options.sourcePaths) || options.sourcePaths.length < 1 || options.sourcePaths.length > 8) invalid();
   const required = [...(options.runId ? ['github.actions.run.list', 'github.actions.job.list', 'github.actions.log.read'] : ['github.issue.get']), ...(options.issue ? ['github.issue.comment'] : []), 'workspace.read_text', 'workspace.apply_text_patch', 'workspace.run_allowed_command', ...Object.values(gitTools)];
   if (required.some(name => !tools.list().some(d => d.name === name))) return {status: 'unsupported', reason: 'Required registered tool unavailable', evidenceRefs: []};
-  const identity = createHash('sha256').update(JSON.stringify({repository: options.repository, runId: options.runId, expectedHeadSha: options.expectedHeadSha, verify: options.verifyRecipeId, gitTools, sourcePaths: options.sourcePaths, issue: options.issue, head: options.headBranch, base: options.baseBranch, maxSteps: options.maxSteps, maxTokens: options.maxTokens, limit, attempts})).digest('hex');
+  if (sourceRunBacklink && !tools.list().some(d => d.name === sourceRunBacklink.toolName && d.sideEffect === 'external_write')) {
+    return {status: 'unsupported', reason: 'Configured source-run association write adapter unavailable', evidenceRefs: []};
+  }
+  // Undefined is omitted: pre-opt-in checkpoints retain their original identity bytes.
+  const identity = createHash('sha256').update(JSON.stringify({repository: options.repository, runId: options.runId, expectedHeadSha: options.expectedHeadSha, verify: options.verifyRecipeId, gitTools, sourcePaths: options.sourcePaths, issue: options.issue, head: options.headBranch, base: options.baseBranch, maxSteps: options.maxSteps, maxTokens: options.maxTokens, limit, attempts, sourceRunBacklink})).digest('hex');
   const key = 'ci-fix-v1';
   const saved = context.loadCheckpoint(key) as Journal | undefined;
   if (saved && saved.identity !== identity) invalid();
@@ -323,12 +345,28 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
       const issueLink = await invoke('issue-backlink', 'github.issue.comment', {repo: options.repository, number: options.issue.number, body: `Verified repair proposal: ${pr.url}\nCommit: ${commit.headSha}\nIssue fingerprint: ${options.issue.fingerprint}`});
       if (!object(issueLink) || issueLink.state !== 'confirmed') invalid();
     }
-    return {status: 'succeeded', reason: 'Verified repair committed, approved PR created with original run backlink', pullRequestUrl: pr.url, verificationRunId: verifyRunId, evidenceRefs: [...j.evidence]};
+    let sourceRunLink: GitHubRepairReceipt | undefined;
+    if (sourceRunBacklink) {
+      const repairPrNumber = Number(pr.externalId);
+      if (!Number.isSafeInteger(repairPrNumber) || pr.url !== `https://github.com/${options.repository}/pull/${repairPrNumber}`) invalid();
+      const sourceIdentity: GitHubRepairIdentity = {repo: options.repository, runId: Number(options.runId),
+        expectedRunAttempt: sourceRunBacklink.runAttempt, sourceSha: headSha, repairPrNumber, repairHeadSha: commit.headSha,
+        workflowExecutionId: createHash('sha256').update(`${context.taskId}:ci-fix:${identity}:source-backlink`).digest('hex')};
+      const associated = await invoke('source-backlink', sourceRunBacklink.toolName, {...sourceIdentity});
+      sourceRunLink = sourceLinkReceipt(associated, sourceIdentity);
+    }
+    return {status: 'succeeded', reason: sourceRunLink
+      ? 'Verified repair committed; draft PR references the source, and a new neutral source check links the repair PR'
+      : `Verified repair committed; draft PR references the original ${options.runId ? 'CI run' : 'issue'}`,
+      pullRequestUrl: pr.url, verificationRunId: verifyRunId, ...(sourceRunLink ? {sourceRunLink} : {}), evidenceRefs: [...j.evidence]};
   } catch (e) {
     if (e instanceof Pause) {
       const verifiedAttempts = Object.keys(j.results).filter(k => /^verify-\d+$/u.test(k)).map(k => Number(k.slice(7)));
+      const cachedPr = j.results.pr;
       return {status: e.status, reason: e.message, ...(verifiedAttempts.length
-        ? {verificationRunId: `${context.taskId}:ci-fix:${identity}:verify-${Math.max(...verifiedAttempts)}`} : {}), evidenceRefs: [...j.evidence]};
+        ? {verificationRunId: `${context.taskId}:ci-fix:${identity}:verify-${Math.max(...verifiedAttempts)}`} : {}),
+        ...(object(cachedPr) && cachedPr.state === 'confirmed' && typeof cachedPr.url === 'string' && cachedPr.url.startsWith('https://')
+          ? {pullRequestUrl: cachedPr.url} : {}), evidenceRefs: [...j.evidence]};
     }
     throw e;
   }

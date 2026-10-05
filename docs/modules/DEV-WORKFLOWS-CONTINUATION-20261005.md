@@ -286,3 +286,45 @@ EXTERNAL_FAILURE vs TIMEOUT，未修改该模块，已在 #212 `6001147118` 交 
 每次通知保留至少五分钟回复机会，期间继续独立实现并读取新邮件。
 账户额度工具未提供读取入口，不能将内部上下文预算冒充账户剩余额度。
 原任务 unknown、真实 GitHub 写入及 UIA/云验收仍交原持有者；不计为通过、不接管其源文件。
+
+### 自主推进的可选源提交修复关联
+
+用户后续已认证邮件要求按自己的实现判断继续，协作者睡觉期间不等审批，
+先把明确归属源码做到可交付后让其他人适配；停止时间为北京时间2026-10-06 08:00。
+上一12路径已沿原Draft290交付 `07e8a60`，API tree `b82ceae5` 与冻结本地树一致，
+没有重复PR、强推、APPROVE或merge。下一增量仍沿原分支，精确槽见 #212
+`6001054237` / `6001134263`，不接管P5/P7/MOD37或Runtime核心。
+
+本人MOD33新增可选 `registerGitHubRepairLinks`，默认原13工具不变；显式注册才增加
+actions.repair.link/get。写入绑定原runId/runAttempt/sourceSHA/repairPR/head和原稳定
+tool runId的SHA256，先核对当前原失败运行及open PR，再创建全新固定独有名字的
+completed/neutral Check Run，details_url指修复PR；读取同一新ID核对全部固定字段才confirmed。
+不修改旧CI、不用success或commit-status fallback，不称原run页面已写回。
+需要Checks(write)、新工具exactargs审批及实时presence，旧PR许可不推导权限。
+POST进入后响应、取消/期限、解析或读回不确定均保守unknown，不自动再POST。
+
+MOD34可信宿主opt-in sourceRunBacklink后，在原PR/评论后追加稳定步骤，共用原预算、
+审批和核实缓存。未配置时旧identity逐字节保持，成功reason准确描述PR引用原run/issue；
+配置缺端口零修复副作用，issue-only无run拒绝。confirmed sourceRunLink严格核对公开
+GitHubRepairReceipt完整identity、CheckID、官方名字、neutral状态及同repo URL。
+
+Runtime githubRepairLinks=true显式装配，独立注册不dispose共享provider。
+ci_link_readback由宿主显式提交known CheckID+原identity，单次只读仍需自己的审批，
+结果checked/receipt不自动确认另一任务或授予写权，不查列表猜ID。
+registered RESULT_UNKNOWN不携partial CheckID；受信宿主须保留原provider响应证据，
+或操作者明确提供已知原ID，缺ID保持等待。此限制和预读/POST非原子窗口明确保留。
+
+固定Node24.15/npm11.12：GitHub89（旧25+新64）、CI83+发现30共113、Runtime38通过；
+新Runtime覆盖默认13/opt-in15、provider只dispose1、原knownID审批SQLite跨重启，
+CI关联写独立审批/原执行hash/confirmed与unknown重启后无model/patch/commit/write重做。
+独立只读复核另跑GitHub新64、CI关联30、Runtime新5通过，没有实质新问题。
+这些为明确Fake/合成Gh/SQLite受控证据；真实Checks权限/外部写入、原Windows/云验收未计通过。
+整套check与新head Foundation结果随后实际读取，不沿用上一head或定向测试冒充。
+
+本节15路径冻结后完整 Node24.15/npm11.12 `npm run check` 实际 exit0：
+31workspace1976通过、0失败、50平台跳过，GitHub89、coding-tools183、Desktop425、Runtime340；
+根integration19/architecture3/contracts4、生成一致性、全build/typecheck通过。
+上一轮P1日历同源码此轮44通过，此前超时错误码失败证据和owner交接仍保留，
+没有修改日历或将偶现问题宣称已修复。上一交付 `07e8a60` 双Windows Foundation完整日志
+各1913通过/0失败/16跳过，新P6身份代码真实.NET8编译/fixture通过；
+此新关联源码待新head Foundation，不用上一Windows证据替代。

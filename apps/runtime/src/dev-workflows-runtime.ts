@@ -13,8 +13,8 @@ import {createCiFixWorkflow, createCiRunDiscoveryWorkflow, createWorkspaceReadTo
   createWorkspaceCommandTool, createGitTools, readGitWorkspaceFingerprint} from '@personal-agent/coding-tools';
 import type {CiFixOptions, CiRunListRequest, WorkspaceReadOptions, WorkspacePatchApplyHostOptions,
   WorkspaceCommandOptions, GitToolsOptions, GitVerificationReceipt} from '@personal-agent/coding-tools';
-import {register as registerGitHub} from '@personal-agent/github';
-import type {GitHubProvider} from '@personal-agent/github';
+import {register as registerGitHub, registerGitHubRepairLinks} from '@personal-agent/github';
+import type {GitHubProvider, GitHubInputs} from '@personal-agent/github';
 import {createCodeReviewWorkflow, createIssueTriageWorkflow} from '@personal-agent/cognition';
 import type {CodeReviewInput, CodeReviewReport, IssueListRequest, IssueTriageRequest, IssueTriageOptions} from '@personal-agent/cognition';
 import {TaskRuntime} from './index.js';
@@ -26,6 +26,7 @@ export type {DevWorkflowPatchReadback} from './dev-workflows-patch-reconciliatio
 export type DevWorkflowRequest =
   | {kind: 'ci_fix'; repository: string; runId: string}
   | {kind: 'ci_list'; input: CiRunListRequest}
+  | {kind: 'ci_link_readback'; input: GitHubInputs['actions.repair.get']}
   | {kind: 'code_review'; input: CodeReviewInput; publish?: boolean}
   | {kind: 'issue_list'; input: IssueListRequest}
   | {kind: 'issue_triage'; input: IssueTriageRequest};
@@ -37,6 +38,8 @@ export interface DevWorkflowsRuntimeOptions {
   /** Trusted host registrations, including GitHub and permitted workspace/Git tools. */
   tools?: readonly RegisteredTool[];
   github?: GitHubProvider;
+  /** Explicit opt-in source-SHA repair association; requires separate Checks write permission. */
+  githubRepairLinks?: boolean;
   workspace?: {read: WorkspaceReadOptions; patch: WorkspacePatchApplyHostOptions; command: WorkspaceCommandOptions};
   /** Trusted host can supply its pinned marker/ACL adapter; never accepted from workflow requests. */
   workspacePatchReconciliation?: WorkspacePatchReconciliationPort;
@@ -79,6 +82,10 @@ export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions): 
   if (!Number.isSafeInteger(options.maxSteps) || options.maxSteps < 1
     || !Number.isSafeInteger(options.maxTokens) || options.maxTokens < 1) {
     throw new ProtocolError('INVALID_ARGUMENT', 'Positive workflow budgets required');
+  }
+  if ((options.githubRepairLinks !== undefined && typeof options.githubRepairLinks !== 'boolean')
+    || (options.githubRepairLinks === true && !options.github)) {
+    throw new ProtocolError('INVALID_ARGUMENT', 'Repair links require an explicit GitHub provider and boolean opt-in');
   }
   const now = options.now ?? (() => new Date());
   if (options.git && options.workspace) {
@@ -139,6 +146,9 @@ export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions): 
       patchRecovery = new DevWorkflowPatchRecovery(runtime, recoveryPort, preview);
     }
     if (options.github) registrations.push(registerGitHub(gateway, {provider: options.github}));
+    if (options.githubRepairLinks === true) {
+      registrations.push(registerGitHubRepairLinks(gateway, {provider: options.github!}));
+    }
     if (options.workspace) {
       registrations.push(gateway.register(createWorkspaceReadTool(options.workspace.read)));
       const apply = createWorkspacePatchApplyTool({...options.workspace.read, ...options.workspace.patch});
@@ -259,6 +269,15 @@ export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions): 
         maxSteps: options.maxSteps, maxTokens: options.maxTokens}).run(context);
     } else if (request.kind === 'ci_list') {
       result = await ciDiscovery.listFailedRuns(context, request.input);
+    } else if (request.kind === 'ci_link_readback') {
+      const descriptor = tools.list().find(tool => tool.name === 'github.actions.repair.get' && tool.sideEffect === 'read');
+      if (!descriptor) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Opt-in original repair association readback unavailable');
+      const readback = await tools.invoke({toolName: descriptor.name, toolVersion: descriptor.version,
+        arguments: {...request.input}, taskId: context.taskId, runId: `${context.taskId}:repair-link-readback`,
+        authorizationRef: context.taskId, deadline: context.deadline, signal: context.signal});
+      // A checked object is evidence for the trusted host, never automatic confirmation of another task's write.
+      result = {state: readback.state === 'confirmed' ? 'checked' : readback.state,
+        ...(readback.state === 'confirmed' ? {receipt: readback.result} : {}), evidenceRefs: readback.evidenceRefs};
     } else if (request.kind === 'issue_list') {
       result = await triage.listIssues(context, request.input);
     } else if (request.kind === 'issue_triage') {

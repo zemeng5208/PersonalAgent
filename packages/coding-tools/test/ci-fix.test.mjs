@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {getEventListeners} from 'node:events';
 import {setImmediate} from 'node:timers/promises';
-import {GhCliProvider} from '@personal-agent/github';
+import {GhCliProvider, githubRepairCheckName} from '@personal-agent/github';
 import {runCiFix, createCiFixWorkflow} from '../dist/dev-workflows/ci-fix.js';
 
 const headSha = 'a'.repeat(40), fixedSha = 'b'.repeat(40), fileSha = 'c'.repeat(64);
@@ -48,6 +48,122 @@ test('actual verify precedes commit, push, approved PR and original run backlink
   assert.equal(f.calls.find(c=>c.toolName==='workspace.git.commit').arguments.verificationRunId,r.verificationRunId);
   const count=f.calls.length; await runCiFix(f.context,f.options); assert.equal(f.modelCalls(),1);
   assert.equal(f.calls.filter(c=>c.toolName==='workspace.git.commit').length,1); assert.equal(f.calls.length,count);
+});
+function sourceLinkFixture() {
+  const f=fixture(),list=f.options.tools.list,invoke=f.options.tools.invoke;
+  f.options.sourceRunBacklink={toolName:'github.actions.repair.link',runAttempt:3};
+  f.responses['github.pr.create'].url='https://github.com/owner/repo/pull/19';
+  f.options.tools.list=()=>[...list(),{name:'github.actions.repair.link',version:'1.0.0',sideEffect:'external_write'}];
+  f.sourceReceipt=args=>({state:'confirmed',...args,checkRunId:88,externalId:'88',url:'https://github.com/owner/repo/runs/88',
+    name:githubRepairCheckName(args),detailsUrl:'https://github.com/owner/repo/pull/19',status:'completed',conclusion:'neutral',evidenceRefs:['source-check']});
+  f.options.tools.invoke=async input=>{
+    if(input.toolName!=='github.actions.repair.link') return invoke(input);
+    f.calls.push(input);return {state:'confirmed',result:f.sourceReceipt(input.arguments),evidenceRefs:[input.runId]};
+  };
+  return f;
+}
+test('optional source association binds the original attempt and execution to a new neutral check',async()=>{
+  const f=sourceLinkFixture(),result=await runCiFix(f.context,f.options);
+  assert.equal(result.status,'succeeded');assert.ok(result.sourceRunLink);
+  const source=f.calls.find(c=>c.toolName==='github.actions.repair.link');
+  assert.deepEqual(source.arguments,{repo:'owner/repo',runId:42,expectedRunAttempt:3,sourceSha:headSha,repairPrNumber:19,
+    repairHeadSha:fixedSha,workflowExecutionId:createHash('sha256').update(source.runId).digest('hex')});
+  assert.ok(f.calls.findIndex(c=>c.toolName==='github.pr.comment')<f.calls.indexOf(source));
+  assert.equal(result.sourceRunLink.checkRunId,88);assert.equal(result.sourceRunLink.conclusion,'neutral');
+  assert.match(result.reason,/neutral/i);assert.ok(!f.calls.some(c=>c.toolName==='github.actions.repair.get'));
+  const count=f.calls.length;await runCiFix(f.context,f.options);assert.equal(f.calls.length,count);
+});
+test('a source association preserves the official Check focus URL without broadening its query scope',async()=>{
+  const f=sourceLinkFixture(),receipt=f.sourceReceipt;f.sourceReceipt=args=>({...receipt(args),url:'https://github.com/owner/repo/runs/88?check_suite_focus=true'});
+  const result=await runCiFix(f.context,f.options);assert.equal(result.sourceRunLink.url,'https://github.com/owner/repo/runs/88?check_suite_focus=true');
+});
+test('unconfigured repairs preserve their legacy identity and report only a PR reference to the source',async()=>{
+  const f=fixture();await runCiFix(f.context,f.options);
+  const o=f.options,identity=createHash('sha256').update(JSON.stringify({repository:o.repository,runId:o.runId,
+    expectedHeadSha:o.expectedHeadSha,verify:o.verifyRecipeId,gitTools:o.gitTools,sourcePaths:o.sourcePaths,issue:o.issue,
+    head:o.headBranch,base:o.baseBranch,maxSteps:o.maxSteps,maxTokens:o.maxTokens,limit:64*1024,attempts:2})).digest('hex');
+  assert.equal(f.context.loadCheckpoint('ci-fix-v1').identity,identity);
+  const result=await runCiFix(f.context,f.options);assert.equal(result.sourceRunLink,undefined);
+  assert.match(result.reason,/references/i);assert.doesNotMatch(result.reason,/original run backlink/i);
+});
+test('missing source association adapter fails preflight without repair effects',async()=>{
+  const f=fixture();f.options.sourceRunBacklink={toolName:'github.actions.repair.link',runAttempt:3};
+  assert.equal((await runCiFix(f.context,f.options)).status,'unsupported');assert.equal(f.calls.length,0);assert.equal(f.modelCalls(),0);
+});
+test('an issue-only repair cannot opt into a source-run association',async()=>{
+  const f=sourceLinkFixture(),issue=f.responses['github.issue.get'];delete f.options.runId;f.options.expectedHeadSha=headSha;
+  f.options.issue={number:4,url:issue.url,repository:'owner/repo',fingerprint:createHash('sha256').update(JSON.stringify(
+    [issue.number,issue.title,issue.body,issue.state,[...issue.labels].sort(),issue.url,issue.updatedAt])).digest('hex')};
+  await assert.rejects(runCiFix(f.context,f.options),e=>e.code==='INVALID_ARGUMENT');assert.equal(f.calls.length,0);
+});
+test('source association approvals resume the original step after PR creation without another repair',async()=>{
+  const f=sourceLinkFixture(),invoke=f.options.tools.invoke;let pending=true;
+  f.options.tools.invoke=async input=>{
+    if(input.toolName==='github.actions.repair.link'&&pending){f.calls.push(input);return {state:'pending',evidenceRefs:[]};}
+    return invoke(input);
+  };
+  const paused=await runCiFix(f.context,f.options);assert.equal(paused.status,'waiting_approval');
+  assert.equal(paused.pullRequestUrl,'https://github.com/owner/repo/pull/19');assert.equal(paused.sourceRunLink,undefined);
+  pending=false;assert.equal((await runCiFix(f.context,f.options)).status,'succeeded');
+  const sources=f.calls.filter(c=>c.toolName==='github.actions.repair.link');assert.equal(sources.length,2);
+  assert.equal(sources[0].runId,sources[1].runId);assert.deepEqual(sources[0].arguments,sources[1].arguments);
+  assert.equal(f.modelCalls(),1);for(const name of ['workspace.apply_text_patch','workspace.git.commit','github.pr.create']) assert.equal(f.calls.filter(c=>c.toolName===name).length,1);
+  f.options.sourceRunBacklink.runAttempt=4;await assert.rejects(runCiFix(f.context,f.options),e=>e.code==='INVALID_ARGUMENT');
+});
+test('an unknown source association waits for original Runtime confirmation and never posts again',async()=>{
+  const f=sourceLinkFixture(),invoke=f.options.tools.invoke;let unknown=true;
+  f.options.tools.invoke=async input=>{
+    if(input.toolName==='github.actions.repair.link'&&unknown){f.calls.push(input);return {state:'confirmed',result:{state:'unknown',checkRunId:88,externalId:'88',url:'https://github.com/owner/repo/runs/88',evidenceRefs:[]},evidenceRefs:[]};}
+    return invoke(input);
+  };
+  const first=await runCiFix(f.context,f.options);assert.equal(first.status,'waiting_reconciliation');assert.equal(first.sourceRunLink,undefined);
+  const original=f.calls.find(c=>c.toolName==='github.actions.repair.link'),count=f.calls.length;
+  for(let i=0;i<2;i++) assert.equal((await runCiFix(f.context,f.options)).status,'waiting_reconciliation');assert.equal(f.calls.length,count);
+  f.options.confirmedReplayReady=id=>id===original.runId;unknown=false;
+  assert.equal((await runCiFix(f.context,f.options)).status,'succeeded');
+  const replay=f.calls.filter(c=>c.toolName==='github.actions.repair.link')[1];assert.equal(replay.runId,original.runId);assert.deepEqual(replay.arguments,original.arguments);
+  assert.equal(f.calls.filter(c=>c.toolName==='github.pr.create').length,1);
+});
+test('interrupted source association retains its original unknown identity and ignores a late confirmed receipt',async()=>{
+  const f=sourceLinkFixture(),invoke=f.options.tools.invoke,controller=new AbortController(),started=Promise.withResolvers(),response=Promise.withResolvers();
+  f.context.signal=controller.signal;
+  f.options.tools.invoke=async input=>{
+    if(input.toolName!=='github.actions.repair.link') return invoke(input);
+    f.calls.push(input);started.resolve(input);return response.promise;
+  };
+  const pending=runCiFix(f.context,f.options),source=await started.promise;controller.abort();
+  assert.equal((await mustSettle(pending)).status,'waiting_reconciliation');
+  const saved=f.context.loadCheckpoint('ci-fix-v1');assert.equal(saved.inflight,'source-backlink');assert.equal(saved.results['source-backlink'],undefined);
+  response.resolve({state:'confirmed',result:f.sourceReceipt(source.arguments),evidenceRefs:[source.runId]});
+  await setImmediate();assert.deepEqual(f.context.loadCheckpoint('ci-fix-v1'),saved);
+  f.context.signal=new AbortController().signal;
+  assert.equal((await runCiFix(f.context,f.options)).status,'waiting_reconciliation');
+  assert.equal(f.calls.filter(c=>c.toolName==='github.actions.repair.link').length,1);
+  assert.equal(f.calls.filter(c=>c.toolName==='workspace.git.commit').length,1);
+});
+test('invalid trusted attempt bindings are rejected before repair reads or writes',async()=>{
+  for(const runAttempt of [0,1.5,Number.MAX_SAFE_INTEGER+1]) {
+    const f=sourceLinkFixture();f.options.sourceRunBacklink.runAttempt=runAttempt;
+    await assert.rejects(runCiFix(f.context,f.options),e=>e.code==='INVALID_ARGUMENT');assert.equal(f.calls.length,0);assert.equal(f.modelCalls(),0);
+  }
+});
+test('source association cannot exceed the persisted original repair step budget',async()=>{
+  const f=sourceLinkFixture();f.options.maxSteps=13;
+  assert.equal((await runCiFix(f.context,f.options)).status,'unsupported');
+  assert.equal(f.calls.filter(c=>c.toolName==='github.pr.create').length,1);assert.ok(!f.calls.some(c=>c.toolName==='github.actions.repair.link'));
+});
+test('confirmed source association requires the complete exact identity and neutral check receipt',async t=>{
+  const changes=[r=>{delete r.workflowExecutionId;},r=>{r.workflowExecutionId='a'.repeat(64);},r=>{r.repo='other/repo';},
+    r=>{r.runId=43;},r=>{r.expectedRunAttempt=4;},r=>{r.sourceSha=fixedSha;},r=>{r.repairPrNumber=20;},r=>{r.repairHeadSha=headSha;},
+    r=>{r.checkRunId=0;},r=>{r.externalId='89';},r=>{r.url='https://github.com/other/repo/runs/88';},
+    r=>{r.url='https://github.com/owner/repo/runs/89';},r=>{r.url='https://github.com/owner/repo/runs/88?other=true';},
+    r=>{r.url='https://github.com/owner/repo/runs/88?check_suite_focus=true#fragment';},
+    r=>{r.detailsUrl='https://github.com/owner/repo/pull/20';},r=>{r.status='in_progress';},r=>{r.conclusion='success';},
+    r=>{r.name='';},r=>{delete r.evidenceRefs;}];
+  for(const [i,change] of changes.entries()) await t.test(String(i),async()=>{
+    const f=sourceLinkFixture(),receipt=f.sourceReceipt;f.sourceReceipt=args=>{const r=receipt(args);change(r);return r;};
+    await assert.rejects(runCiFix(f.context,f.options),e=>e.code==='INVALID_ARGUMENT');
+  });
 });
 test('failed actual verification retries once then never commits',async()=>{
   const f=fixture(); f.responses['workspace.run_allowed_command'].exitCode=1;

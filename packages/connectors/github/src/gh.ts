@@ -5,6 +5,7 @@ import type { GhCommandRunner } from './runner.js';
 import { checkContext, withGitHubContext } from './service.js';
 import { validateInput } from './schemas.js';
 import { redactValue, redactGitHubText } from './redact.js';
+import {executeGitHubRepairLink, getGitHubRepairLink} from './repair-link.js';
 
 export interface GhProviderOptions {
   runner: GhCommandRunner;
@@ -110,6 +111,8 @@ export class GhCliProvider implements GitHubProvider {
           if (result.exitCode !== 0 || typeof result.stdout !== 'string' || typeof result.stderr !== 'string' || Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr) > 1048576) throw new ProtocolError('EXTERNAL_FAILURE', 'GitHub log read failed');
           return textPage(redactGitHubText(result.stdout, [token]), r);
         }
+        case 'actions.repair.link': return executeGitHubRepairLink(input as GitHubInputs['actions.repair.link'], api, () => writeDispatched);
+        case 'actions.repair.get': return getGitHubRepairLink(input as GitHubInputs['actions.repair.get'], api);
         case 'issue.get': { const r = input as GitHubInputs['issue.get']; const value = object(await api(`${root}/issues/${r.number}`)); if (value.pull_request) throw new ProtocolError('INVALID_ARGUMENT', 'Requested issue is a pull request'); return issue(value); }
         case 'issue.list': {
           const r = input as GitHubInputs['issue.list'];

@@ -16,13 +16,21 @@
 
 生产宿主提供 `github: GitHubProvider`、`workspace: {read, patch, command}`、`git: GitToolsOptions`（`readVerification` 由组合生成）以及 `ciFix` 的受信 sourcePaths、verifyRecipeId、分支与来源修订。GitHub 注册全部工具；workspace 注册 read、patch、固定 recipe command；Git 注册 head、commit、push。允许额外 `tools` 作为明确 Fake 或受信宿主扩展，重复工具名注册拒绝。
 
+`githubRepairLinks: true` 显式追加 `github.actions.repair.link/get`，默认仍只有原13个 GitHub 工具。
+此选项必须同时有显式 GitHub provider；新注册仅拥有自己的工具/service生命周期。
+关联写需要单独 exact-arguments 审批、实时 presence 和真实凭据的 Checks(write)，旧 PR/token
+许可不推导新权限，也不降级为 commit status。`ciFix.sourceRunBacklink` 由可信宿主显式绑定
+toolName 与原 runAttempt；无该配置仍只有 PR 引用原 run，不宣称原 run 页面已回写。
+配置关联后缺外部写端口在修复前返回不支持；issue-only 无 run 时不能设置此选项。
+成功后 `sourceRunLink` 仅表示同 source SHA 的新 neutral Check Run 关联，原 CI 状态不变。
+
 GitHub token getter和 Git `getCredentials` 由同一受信宿主安全存储适配，凭据不进请求、模型上下文或持久 checkpoint。`isUserPresent` 为实时可信会话回调，写工具需要此回调返回 true，并仍要求逐次审批；审批本身不代表当前用户在场。
 
 Issue 修复复用 MOD-34 `createCiFixWorkflow`。宿主可提供 `failedRunForIssue(repo, number)`，或使用 `ciFix.expectedHeadSha` 绑定 issue-only 源码修订。传入最新 issue URL、number、fingerprint，由 MOD-34在PR正文关联 Issue。缺修复配置返回人工处理，不宣称已修复。
 
 ## 提交、暂停和恢复
 
-`submit({request, conversationId, idempotencyKey, deadline})` 受理并持久化原请求，不自动开始；`start(taskId)` 执行。request 区分 `ci_list`、`ci_fix`、`code_review`、`issue_list`、`issue_triage`。同幂等键替换请求或 deadline 被拒绝。`readResult(taskId)` 读取模块真实结果，TaskRuntime 的 snapshot 仍为最终状态事实来源。
+`submit({request, conversationId, idempotencyKey, deadline})` 受理并持久化原请求，不自动开始；`start(taskId)` 执行。request 区分 `ci_list`、`ci_fix`、`ci_link_readback`、`code_review`、`issue_list`、`issue_triage`。同幂等键替换请求或 deadline 被拒绝。`readResult(taskId)` 读取模块真实结果，TaskRuntime 的 snapshot 仍为最终状态事实来源。
 
 `ci_list` 的 `input` 复用 coding-tools 公开 `CiRunListRequest`，通过
 `createCiRunDiscoveryWorkflow().listFailedRuns` 和既有 `github.actions.run.list` 读取一页失败运行。
@@ -33,6 +41,15 @@ Issue 修复复用 MOD-34 `createCiFixWorkflow`。宿主可提供 `failedRunForI
 可信宿主明确选择运行后，以 `ci_fix` 的 repository 与 String(selected.id) 提交独立任务，
 用发现 taskId 和 runId 组成稳定幂等键；修复重新读取来源，并单独审批工作区/Git/远端写入。
 下一页按 nextPage 显式提交，不为整页自动创建子任务或分配修复预算。
+
+`ci_link_readback` 的 input 复用公开 `GitHubInputs['actions.repair.get']`，由可信宿主明确提供
+原 CheckRun ID 与完整原 run/attempt/SHA/PR head/workflowExecutionId identity。
+单次只读经过独立审批，页外不会查列表猜 ID，不调用模型/写工具或自动确认另一任务。
+成功返回 state=checked、receipt 和本次 Evidence；这不是原未知写入已确认的 Runtime 回执。
+受信核实者须校验原 execution/input/budget/evidence，按现有核心恢复接口安装原确认缓存，
+然后 `resumeConfirmed` 才能消费；只读核实或知晓 CheckRun ID 不授予再写权限。
+registered RESULT_UNKNOWN 本身不携 provider 的 partial CheckRun ID，宿主需要保留原 provider
+响应证据或由操作者明确提供已知 ID；缺 ID 保持等待，不依名称列表猜测或重复 POST。
 
 `code_review` 的 publish=true 结果保留完整 prepared report，发表状态仍为真实
 confirmed/pending/unknown/unsupported；publication 提供当前 findingIndex、totalFindings 和

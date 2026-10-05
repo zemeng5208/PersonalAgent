@@ -47,6 +47,65 @@ const dispose = register(toolHost, {provider});
 | pr.comment | repo/number/body | GitHubWriteResult |
 | pr.review.comment | repo/number/body/commitId/path/line/side? | GitHubWriteResult |
 
+## 可选修复 PR 关联（provisional）
+
+默认 `register` 继续只注册上表 13 个工具。可信宿主可显式调用
+`registerGitHubRepairLinks(toolHost, {provider})`，额外注册下列两个工具；
+`githubRepairOperations` 是这两项的独立清单。缺少 opt-in 或显式 Fake fixture 时，
+不会生成关联或伪造成功。独立 registration 的释放只移除它自己的工具，不释放
+调用方持有的 provider，也不影响默认 registration。
+
+| 可选工具名 | 输入 | 输出与权限 |
+| --- | --- | --- |
+| github.actions.repair.link | GitHubRepairIdentity | confirmed 完整 GitHubRepairReceipt / unknown；github:write，external_write，requiresPresence，禁止自动重试 |
+| github.actions.repair.get | GitHubRepairIdentity + checkRunId | 原对象 GitHubRepairReceipt，无 state；github:read，只读核实 |
+
+`GitHubRepairIdentity` 精确绑定 `repo/runId/expectedRunAttempt/sourceSha/repairPrNumber/repairHeadSha/workflowExecutionId`。
+运行/attempt/PR/check 编号均为正安全整数，SHA 接受 40 或 64 位十六进制并规范化为小写；
+真实 GitHub 若不接受 64 位 SHA，受控返回失败或 unknown，不替换 SHA、API 或目标。
+`workflowExecutionId` 必须由可信工作流把原稳定工具 runId 做 SHA-256 得到，严格小写
+64 位十六进制；模型不能提供执行身份。未知输入字段均拒绝，输入不允许自定义 check
+名称、状态、结论、URL 或正文。
+
+写前从 GitHub 最新 run 核对同仓库、runId、attempt、source SHA、completed/failure，
+从同仓库 PR 核对 open、编号、原仓库 base/head、修复 head SHA 和规范 PR URL。
+然后只 POST 一个全新的 CheckRun：固定独有名称由完整规范 identity 的 SHA-256
+生成，`external_id` 也绑定该 identity；`head_sha` 使用原失败 source SHA，
+`status=completed`、`conclusion=neutral`，`details_url` 固定为同仓库修复 PR。
+固定 output 明确声明仅关联 PR、保留原 CI 结果，不宣称修复已通过。
+`githubRepairCheckName(identity)` 是消费者核实固定名称的公开纯函数。
+不同 workflow execution/run attempt/修复 PR head 会产生不同名称；同一原 unknown
+不得以同名重新 POST，GitHub 不提供这里所需的创建幂等保障。
+
+POST 回执还需 GET 返回的**同一个** checkRunId，严格核对编号、仓库 API URL、
+名称、external identity、source SHA、details URL、completed/neutral 和固定 output。
+Check 页面 URL 只允许 `https://github.com/{repo}/runs/{checkRunId}`，或该 URL 的
+单一 `?check_suite_focus=true` 参数；拒绝其他参数、fragment、userinfo 或跨仓库/域名，
+保存实际安全 URL。`GitHubRepairReceipt` 返回完整 identity、checkRunId、
+externalId（字符串 check 编号）、url/name/detailsUrl/status/conclusion/evidenceRefs。
+这是在原提交上的**新 neutral CheckRun 关联**，不是在 Actions 原 run 页面写评论，
+也不 PATCH 原 CI、创建 success check 或使用 commit status 回退。
+
+派发后超时、取消、传输/解析失败、回执字段矛盾或 GET 核实失败全部返回 unknown；
+能取得原安全 checkRunId 时保留编号/URL，不自动再次 POST。registered 写工具继续把
+unknown 转为 RESULT_UNKNOWN，由原 Runtime 进入 reconciliation。标准错误本身不携带
+该编号；可信宿主若需要编号，应保存原 provider 回执与原工具执行绑定的证据。
+没有原编号时不能通过同名列表猜测对象或重发写入。
+独立 get 只 GET 原编号并核对完整预期 identity/固定字段，不查询另一个 run/PR 来
+替代原写证据；它不授予新写权限、不自动确认 Runtime 原 unknown，后者仍由可信
+宿主按原授权、任务/run 和证据校验。原 run 或 PR 后续变化也不由这份关联回执证明。
+
+真实接入需要 GitHub Checks(write)，并具备预读 run 的 Actions(read) 和 PR 读取权限；
+已有 PR 操作许可或 token 不自动支持新 check 写入，凭据存在不代表用户授权。
+参见官方 [Create a check run](https://docs.github.com/en/rest/checks/runs?apiVersion=2022-11-28#create-a-check-run)
+与 [Get a check run](https://docs.github.com/en/rest/checks/runs?apiVersion=2022-11-28#get-a-check-run)。
+支持所需权限的 GitHub App user/installation token 或 fine-grained PAT 由宿主注入。
+GitHub API 不提供这里的原子 run-attempt/PR-head 条件创建：预读与 POST 间仍有竞态，
+关联回执不代表修复分支最新状态或 CI 验收。当前仅有显式 Fake/合成 Gh 回归，真实
+Checks 权限、账号写入与原持有者完整工作流仍未验收，保持 provisional。
+
+## 原有接口边界与验证
+
 分页默认 page=1、perPage=30，上限分别 10000、100。满页保守返回 nextPage，最后可能
 需要读一页空结果；issue.list 过滤 PR，但游标以 GitHub 原始页推进，不因过滤跳页。
 REST 分页不是快照，变化期间可能重复/遗漏，消费者按编号去重并重读目标。

@@ -16,6 +16,8 @@ export type { GhCommand, GhCommandResult, GhCommandRunner } from './runner.js';
 export { FakeGitHubProvider } from './fake-provider.js';
 export type { GitHubFakeFixtures } from './fake-provider.js';
 export { redactGitHubText } from './redact.js';
+export {registerGitHubRepairLinks, githubRepairOperations, githubRepairCheckName} from './repair-link.js';
+export type {GitHubRepairModuleOptions} from './repair-link.js';
 export interface GitHubModuleOptions { provider: GitHubProvider }
 export function register(host: ToolHost, options: GitHubModuleOptions): () => void {
   if (!options?.provider) throw new ProtocolError('INVALID_ARGUMENT', 'Explicit GitHub provider required');
