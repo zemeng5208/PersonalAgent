@@ -23,6 +23,9 @@
 本轮 `npm run check` 全部通过：架构、契约夹具、生成类型、类型检查与 workspace/integration 测试，
 合计 1629 项，1609 通过、0 失败、20 跳过；其中跨模块集成 19/19。
 Windows helper Release 构建通过并显式提供真实 helper 路径及缓存 .NET 8 运行时。
+`npm ci`、`npm run dev`、`npm run demo:protocol`、`npm run demo:runtime` 均通过；
+两个演示明确为 mock。本轮基础代码已接入 #280 精确头 `d484c8648af67af1e476cefe9ff140318945f4e5`，
+依赖合并前后代码树一致，增量保持独立 PR，尚未完成非作者评审或主线集成。
 下文是历史工作包证据，不表示最新 PR 状态。
 
 ## 2026-10-04 集成复核
