@@ -38,13 +38,15 @@ async function idle(app) {
   assert.fail('Runtime did not become idle');
 }
 
-test('confirmed Fake Runtime inbox page keeps encrypted analysis outbox across restart and binds ack to lease', async () => {
+test('confirmed Fake Runtime inbox page keeps encrypted analysis outbox across restart and binds ack to lease', async t => {
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
   await mkdir(cacheRoot, {recursive: true});
   const directory = await mkdtemp(path.join(cacheRoot, 'pa-mail-analysis-'));
   const userData = path.join(directory, 'user-data');
   let allowed = true, calls = 0;
   const storage = () => createEncryptedModuleStorage({userData, safeStorage, filename: 'mail-classification.json'});
-  const openApp = () => createRuntimeApplication({path: path.join(directory, 'runtime.sqlite'),
+  const openApp = () => createRuntimeApplication({path: path.join(directory, 'runtime.sqlite'), now: () => new Date(now),
     profile: 'huawei_ict_agentarts', hostUserNamespace: 'fixture-mail-user', tools: [{descriptor,
       execute: async args => {
         calls++;
@@ -93,8 +95,8 @@ test('confirmed Fake Runtime inbox page keeps encrypted analysis outbox across r
     assert.throws(() => host.readAnalysis(pending.workKey, context()), {code: 'UNAUTHORIZED'});
     allowed = true;
     await host.cancel();
-    host.startBatch({expiresAt: new Date(Date.now() + 30).toISOString()});
-    await new Promise(resolve => setTimeout(resolve, 60));
+    host.startBatch({expiresAt: new Date(now + 60000).toISOString()});
+    now += 60001;
     assert.throws(() => host.pendingAnalyses(context()), {code: 'UNAUTHORIZED'});
   } finally {await host.close(); await idle(app); app.close(); await rm(directory, {recursive: true, force: true});}
 });
