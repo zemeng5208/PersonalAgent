@@ -69,6 +69,7 @@ export interface AgentArtsFetchInit {
 
 interface AgentArtsReader<T> {
   read(): Promise<{done: boolean; value?: T}>;
+  cancel?(): Promise<unknown> | void;
   releaseLock?(): void;
 }
 
@@ -407,6 +408,32 @@ function appendResponseChunk(chunks: Uint8Array[], value: Uint8Array, total: {va
   chunks.push(value);
 }
 
+function closeWithoutWaiting(operation: () => unknown): void {
+  try {
+    const closed = operation();
+    if (closed !== undefined) void Promise.resolve(closed).catch(() => undefined);
+  } catch { /* Cleanup cannot replace the original result or disclose provider errors. */ }
+}
+
+function discardUnreadResponse(response: AgentArtsResponse): void {
+  try {
+    const body = response.body;
+    if (body === undefined || body === null) return;
+    const readerBody = body as Partial<AgentArtsReaderBody>;
+    if (typeof readerBody.getReader === 'function') {
+      const reader = readerBody.getReader();
+      closeWithoutWaiting(() => reader.cancel?.());
+      closeWithoutWaiting(() => reader.releaseLock?.());
+    } else {
+      const iterable = body as Partial<AsyncIterable<Uint8Array>>;
+      if (typeof iterable[Symbol.asyncIterator] === 'function') {
+        const iterator = iterable[Symbol.asyncIterator]!();
+        closeWithoutWaiting(() => iterator.return?.());
+      }
+    }
+  } catch { /* Even a malformed transport may expose throwing body accessors. */ }
+}
+
 async function readResponseText(response: AgentArtsResponse, combined: CombinedSignal): Promise<string> {
   const chunks: Uint8Array[] = [];
   const total = {value: 0};
@@ -415,18 +442,21 @@ async function readResponseText(response: AgentArtsResponse, combined: CombinedS
     const readerBody = body as Partial<AgentArtsReaderBody>;
     if (typeof readerBody.getReader === 'function') {
       const reader = readerBody.getReader();
+      let consumed = false;
       try {
         while (true) {
           const result = await callWithAbort(() => reader.read(), combined);
           if (typeof result.done !== 'boolean') external('AgentArts response body is malformed');
           if (result.done) {
             if (result.value !== undefined) external('AgentArts response body is malformed');
+            consumed = true;
             break;
           }
           if (result.value === undefined) external('AgentArts response body is malformed');
           appendResponseChunk(chunks, result.value, total);
         }
       } finally {
+        if (!consumed) closeWithoutWaiting(() => reader.cancel?.());
         try {
           reader.releaseLock?.();
         } catch {
@@ -931,6 +961,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
     let httpStatus: number | undefined;
     let contentType: AgentArtsFailureDiagnostic['contentType'];
     let schemaCategory: AgentArtsSchemaCategory | undefined;
+    let unreadResponse: AgentArtsResponse | undefined;
     const terminalEvents: TerminalDiagnosticState = {
       taskEnd: false, end: false,
       providerFailureField: undefined, providerFailureToken: undefined, providerErrorCode: undefined,
@@ -1002,7 +1033,12 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
       let response: AgentArtsResponse;
       stage = 'transport';
       try {
-        response = await callWithAbort(() => this.fetchImpl(url, init), combined);
+        response = await callWithAbort(async () => {
+          const received = await this.fetchImpl(url, init);
+          if (currentAbortError(combined)) discardUnreadResponse(received);
+          else unreadResponse = received;
+          return received;
+        }, combined);
       } catch (error) {
         throw currentAbortError(combined) ?? new ProtocolError('EXTERNAL_FAILURE', 'AgentArts request failed', true);
       }
@@ -1029,6 +1065,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
           const diagnosticSignal = makeCombinedSignal(combined.signal,
             Math.min(combined.deadlineMs, Date.now() + MAX_HTTP_DIAGNOSTIC_MS));
           try {
+            unreadResponse = undefined;
             const errorResponse = asPlainObject(JSON.parse(await readResponseText(response, diagnosticSignal)));
             if (errorResponse !== undefined) {
               terminalEvents.providerErrorCode = diagnosticProviderErrorCode(errorResponse,
@@ -1043,6 +1080,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
       let payload: string;
       stage = 'response_body';
       try {
+        unreadResponse = undefined;
         payload = await readResponseText(response, combined);
       } catch (error) {
         schemaCategory = diagnosticSchemaCategory(error);
@@ -1094,6 +1132,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
       }
       throw error;
     } finally {
+      if (unreadResponse !== undefined) discardUnreadResponse(unreadResponse);
       combined.dispose();
     }
   }

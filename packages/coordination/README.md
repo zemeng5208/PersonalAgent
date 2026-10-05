@@ -89,6 +89,13 @@ for cancellation, `TIMEOUT` for a deadline (the contract has no
 `DEADLINE_EXCEEDED`), and `EXTERNAL_FAILURE` for authorization, transport, HTTP, or
 malformed-response failures (the contract has no `EXTERNAL_SERVICE_ERROR`).
 
+Rejected or interrupted response readers are cancelled before their locks are
+released. Unread HTTP failure bodies and responses arriving after cancellation or
+the deadline are discarded without parsing them or resuming the invocation. Cleanup
+is best effort and does not await an uncooperative transport, replace the original
+error, or trigger a retry. Successfully consumed readers are only released. These
+local lifecycle checks do not prove that remote cloud execution has stopped.
+
 When a response uses workflow events, each `workflow_start` must pair with a
 `workflow_end`; supplied workflow IDs/names must match. The adapter keeps the latest
 workflow answer and returns it only after the ordered `task_end` then `end` events.

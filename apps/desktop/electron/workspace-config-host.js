@@ -6,6 +6,7 @@ import path from 'node:path';
 import {PROTOCOL_VERSION, ProtocolError, validateToolValue} from '@personal-agent/contracts';
 import * as coding from '@personal-agent/coding-tools';
 import {createDesktopCodingToolHost} from './coding-tool-host.js';
+import {findWindowsExecutable} from './windows-executable-discovery.js';
 
 function directory(value) {
   if (typeof value !== 'string' || !path.isAbsolute(value) || value.startsWith('\\\\')
@@ -57,16 +58,11 @@ function checkFile(value, root) {
   }
   return relative.split(path.sep).join('/');
 }
-function executable(name) {
-  try {
-    const where = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'where.exe');
-    const found = execFileSync(where, [name], {encoding:'utf8',windowsHide:true,timeout:3000})
-      .trim().split(/\r?\n/)[0];
-    return realpathSync.native(found);
-  } catch {return undefined;}
+function recoveryPath(userData,root) {
+  return path.join(userData,'coding-recovery',createHash('sha256').update(root).digest('hex'));
 }
 function recoveryDirectory(userData, root, powerShell) {
-  const target = path.join(userData, 'coding-recovery', createHash('sha256').update(root).digest('hex'));
+  const target = recoveryPath(userData,root);
   if (!existsSync(target)) {
     mkdirSync(target, {recursive:true});
     const script = String.raw`$ErrorActionPreference='Stop'
@@ -136,7 +132,8 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
       const options={rootPath:boundRoot};
       implementations.push(coding.createWorkspaceReadTool(options), coding.createWorkspaceListTool({rootPath:boundRoot}),
         coding.createWorkspacePatchPreviewTool(options),coding.createWorkspacePatchStageTool(options));
-      const pwsh=executable('pwsh.exe');
+      const discovery={excludedDirectories:[boundRoot,recoveryPath(userData,boundRoot)]};
+      const pwsh=findWindowsExecutable('pwsh.exe',discovery);
       if (pwsh) {
         try {
           applyHost=createDesktopCodingToolHost({workspaceRoot:boundRoot,authorizedWorkspaceRoot:boundRoot,
@@ -147,7 +144,7 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
           implementations.push(...applyHost.tools);
         } catch {failure='读取和候选生成可用；安全应用补丁所需的目录或 PowerShell 检查未通过';}
       } else failure='读取和候选生成可用；安全应用补丁需要 PowerShell 7';
-      const git=executable('git.exe');
+      const git=findWindowsExecutable('git.exe',discovery);
       if (git) {
         const command=coding.createWorkspaceCommandTool({rootPath:boundRoot,recipes:[{id:'git-diff-check',
           executable:git,args:['--no-pager','-c','core.fsmonitor=false','diff','--no-ext-diff','--no-textconv','--check']}],

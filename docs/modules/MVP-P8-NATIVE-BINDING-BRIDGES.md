@@ -28,6 +28,32 @@
 - `recoverOriginalRun({taskId, runId, argumentsDigest}, {deadline, signal})` 是 host-only 端口。验证原 `host-tool-intent`、完整参数 digest、Policy 允许且实际执行的 ToolRecord、原 Windows attempt 与 target；读取前后重验绑定、状态与期限。仅调用原 adapter 的 `recover(taskId, runId)`，不调用 execute，不签新授权。
 - `recover` 需要注入正式 Runtime reconciliation callback。没有该 callback 时 `recoveryAvailable:false`，按钮禁用。Runtime 应负责 HostResult Schema 验证、独立读回 Evidence、原 record 核实与终态；`in_progress` / `not_found` / 结果未知不能 immutable-pin unknown。
 
+2026-10-05 P6 状态反馈补充：可信 reconciliation 返回 `not_applied` / `host_result`，
+且原 Runtime 任务已失败或取消时，显示已核实未写入与该终态。`already_terminal`
+仅表示任务已结束，不能作为原生未写入证明；没有匹配的 confirmed 结果/Evidence
+时说明写入仍未确认。只有仍待核实的原任务继续显示“保留待核实”。所有恢复分支
+只读原执行，不调用 execute、不签新授权。Node 24.15.0 的宿主测试15/15通过，
+包括11种确认/失败/取消/终态和未核实组合；真实Windows UIA恢复仍待集中验收。
+
+## 工作区程序发现与执行前隔离
+
+2026-10-05 接续 goo122 在 #289 提供的 Windows 中文安装现场：
+`where.exe` 输出按 UTF-8 解码后包含替换字符，原 PowerShell 路径无法找到。
+可信主进程现在直接按宿主 Unicode PATH 顺序定位固定的 `pwsh.exe` / `git.exe`，
+不调用定位子进程、不猜测代码页、不隐式搜索当前目录或 PATHEXT。
+仅搜索本机绝对目录；合法安装链接与 8.3 别名仍通过原生 realpath 解析到同名常规文件。
+第一个已存在候选若无法安全解析，不继续选用 PATH 后项。
+
+在任何 PowerShell 恢复目录 ACL 设置之前，排除工作区、原恢复目录以及这些已存在目录的
+canonical 别名，同时检查原候选与 canonical 文件。目录解析权限错误拒绝发现；
+仅尚未创建的恢复目录保留原路径排除。原编码配置、恢复目录哈希、
+helper 字节/identity/ACL 校验、Node/npm 原生显式选择与工具授权链不变。
+离线路径/固定 GBK 字节回归只能证明发现与拒绝行为；真实 Windows Unicode 临时文件、
+启动零执行门控及 goo 的原失败现场仍需分别回写精确提交证据，未运行不记通过。
+Node 24.15.0 定向 discovery/workspace-config/workspace-command 共65通过、0失败、
+2 Windows 门控跳过；另两项合成 coding/Notepad 验收通过，原 coding-host 的
+6项 Windows 测试在 Linux 跳过。生产宿主语法和差异空白检查通过。
+
 ## 公开参考资料原生许可
 
 `public-reference-consent.js` 管理内存中的精确原 task/proposal/path/config/fullargs 许可。`requestPreflight` 经原生窗口确认 PUBLIC 来源与目的，不要求未发生的执行 SHA；真正 Gateway 读取完成后，`requestExact` 通过 P6 的 strict confirmed getter 获取原 run/SHA/字节数，再原生确认该内容出机。同步 `readPreflight` / `readAuthorization` 只读该许可，并重新核配置、真实任务、取消、期限、参数与原确认结果；不签工具执行授权、不造 Execution/Evidence、不读文件或向 Renderer 返回正文。
