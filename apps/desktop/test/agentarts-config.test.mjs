@@ -4,6 +4,7 @@ import {existsSync,mkdirSync,mkdtempSync,readFileSync,renameSync,rmSync} from 'n
 import os from 'node:os';
 import path from 'node:path';
 import {createAgentArtsConfig} from '../electron/agentarts-config.js';
+import {agentArtsModelSnapshot} from '../electron/agentarts-model-state.js';
 import {createDeferredRuntimeStartup} from '../electron/runtime-startup.js';
 import {createAgentArtsRuntimeApplication} from '@personal-agent/runtime/application';
 import {Client} from '@personal-agent/client';
@@ -18,10 +19,14 @@ test('AgentArts revoke reports a failed disk deletion and can be retried after r
   try {
     config.configure({gatewayUrl:'https://example.huaweicloud-agentarts.com',runtimeName:'synthetic-runtime',authorization:'Bearer synthetic-only'});
     const binding=config.binding();
+    const cachedModel=agentArtsModelSnapshot({},config.snapshot());
+    assert.equal(cachedModel.configured,true);
     renameSync(file,file+'.retained');
     mkdirSync(file);
     assert.throws(()=>config.revoke(),/未能删除/);
     assert.equal(config.snapshot().configured,false,'in-memory access is revoked even when disk deletion fails');
+    const projected=agentArtsModelSnapshot(cachedModel,config.snapshot());
+    assert.equal(projected.configured,false);assert.match(projected.reason,/未能删除/);
     assert.throws(()=>config.readAuthorization(binding));
     assert.doesNotMatch(JSON.stringify(config.snapshot()),/synthetic-only|Bearer|pa-cloud-revoke/);
     rmSync(file,{recursive:true});

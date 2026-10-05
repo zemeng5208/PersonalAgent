@@ -58,3 +58,13 @@ GitHub 插件评审、发布和邮件发送是开发执行证据，不计作产�
 继续按用户邮件推进自己的 MOD/细节，沿 #277 登记 `workspace-config-host` 及原测试文件。旧 host 在原生工作区/Node/检查文件/npm 选择器等待期间即使已 close 或 revoke，仍会落盘迟到结果；较旧的选择也能覆盖新选择。原代码四类关闭和撤销回归共 6 个计数均失败于 Missing expected rejection。现在入口拒绝已关闭宿主，等待返回后重新核对 active 与原 generation；关闭、许可撤销或另一项已接受设置变更均使旧选择失效，不落盘、不重新授权、不重开选择器。正常取消和有效选择行为保留，无新 API、IPC、存储格式或目录。
 
 Node 24.15.0：宿主语法检查通过；workspace-config-host、workspace-command-config、coding-and-windows-acceptance 定向 39/39，含四类迟到选择、关闭后零重新打开、撤销失效、较旧选择不覆盖新确认及现有绑定/导出/命令路径。选择器和安全存储为明确合成端口，持久配置使用真实临时文件，Windows/设备/系统安全存储未据此验收。新 head Foundation 与已登记非作者审核分别回写原 PR，不自批准或合并。
+
+## P8 当前配置投影与 P6 受信 helper 接线
+
+AgentArts 模型只读页每次从当前配置快照投影 configured/keyConfigured，撤销成功及磁盘删除失败后都不再显示启动时缓存的已配置状态；始终保持 unverified，不以配置存在证明云可用。配置持久化后的启动异常与撤销异常也在 finally 发布当前快照，错误不假报成功。新增纯投影及真实删除失败回归，不改云执行或授权。
+
+Desktop coding host 和 workspace config 补全既有公开 patch 工厂的可选外部 helper 参数；仅主进程受信环境 PA_CODING_PATCH_HELPER_SCRIPT 注入，不接受 renderer/model 路径、不自动复制或运行脚本。helper 必须位于工作区及恢复目录之外，保持公开工厂字节一致/链接限制，并固定 canonical identity；更改后不可执行。人工安装受审查的版本一致脚本及原生许可仍必要，配置 helper 不恢复写许可。两项 Windows 回归覆盖 canonical 传递、变更失效、根外限制、实际仓库根/公开工厂和持久 workspace 重启接线；本机 Linux 明确跳过，等待精确 head Windows CI。
+
+当前 Linux Desktop 完整测试 356 通过、0 失败、8 Windows 门控跳过，架构 3/3；浏览器真实 Admin 挂载使用合成宿主，Chromium151/Playwright 在桌面及窄屏核对撤销后状态和删除失败原因，无控制台错误。Electron 原生运行组件和 Windows 设备不在此环境，未声称原生或云验收。
+
+发布前发现协作者已将 #283 合入 #277 分支（cb51372）；接续以该远端 head 为父提交，保留其 Runtime 初始化清理及作者历史。本代理没有批准或合并。用户邮件确认真实验收可由其他协作者承担，当前执行继续源码交付，不把缺少设备视为全部工作停止条件。

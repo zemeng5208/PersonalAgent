@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
-import {mkdtempSync, mkdirSync, renameSync, rmSync, writeFileSync} from 'node:fs';
+import {mkdtempSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync} from 'node:fs';
+import {execFileSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import {createDesktopCodingToolHost, listPendingCodingHelpers} from '../electron/coding-tool-host.js';
+import {createWorkspaceConfigHost} from '../electron/workspace-config-host.js';
 
 function fixture(t) {
   const base = mkdtempSync(path.join(tmpdir(), 'desktop-coding-host-'));
@@ -22,6 +25,57 @@ const fakeFactory = options => ({descriptor: {name: 'workspace.apply_text_patch'
 execute: () => 'delegated'});
 const options = value => ({...value, authorizedWorkspaceRoot: value.workspaceRoot,
   createWorkspacePatchApplyTool: fakeFactory, inspectAcl: () => {}});
+
+test('external patch helper is forwarded, pinned, and never accepted inside workspace or recovery',
+  {skip:process.platform!=='win32'},t=>{
+    const paths=fixture(t),helperScriptPath=path.join(paths.base,'locked-apply.ps1');
+    writeFileSync(helperScriptPath,'synthetic helper fixture');let received;
+    const host=createDesktopCodingToolHost({...options(paths),helperScriptPath,
+      createWorkspacePatchApplyTool:value=>{received=value;return fakeFactory(value);}});
+    assert.equal(received.helperScriptPath,realpathSync.native(helperScriptPath));
+    assert.equal(host.available(),true);
+    writeFileSync(helperScriptPath,'changed synthetic helper fixture');
+    assert.equal(host.available(),false);assert.throws(()=>host.tools[0].execute(),/closed|reconciliation/);
+    for(const directory of [paths.workspaceRoot,paths.recoveryRootPath]) {
+      const nested=path.join(directory,'locked-apply.ps1');writeFileSync(nested,'synthetic helper');
+      assert.throws(()=>createDesktopCodingToolHost({...options(paths),helperScriptPath:nested}),/separate/);
+    }
+    host.close();
+  });
+
+test('repository-root Desktop host accepts only an external byte-identical bundled helper',
+  {skip:process.platform!=='win32'},async t=>{
+    const coding=await import('@personal-agent/coding-tools');
+    const paths=fixture(t),workspaceRoot=fileURLToPath(new URL('../../../',import.meta.url));
+    const powerShellPath=execFileSync('where.exe',['pwsh.exe'],{encoding:'utf8',windowsHide:true,timeout:5000}).trim().split(/\r?\n/)[0];
+    const helperScriptPath=path.join(paths.base,'locked-apply.ps1');
+    // Test deployment of the reviewed package resource; production never copies a script.
+    const bundled=readFileSync(new URL('../scripts/locked-apply.ps1',import.meta.resolve('@personal-agent/coding-tools')));
+    writeFileSync(helperScriptPath,bundled);
+    const opts={...options(paths),workspaceRoot,authorizedWorkspaceRoot:workspaceRoot,powerShellPath,
+      createWorkspacePatchApplyTool:coding.createWorkspacePatchApplyTool};
+    assert.throws(()=>createDesktopCodingToolHost(opts),/distinct trusted locations/);
+    const host=createDesktopCodingToolHost({...opts,helperScriptPath});
+    assert.equal(host.available(),true);assert.equal(host.tools[0].descriptor.name,'workspace.apply_text_patch');
+    host.close();
+    const configOptions={userData:path.join(paths.base,'user-data'),
+      safeStorage:{isEncryptionAvailable:()=>true,encryptString:value=>Buffer.from(value),decryptString:value=>value.toString()},
+      selectDirectory:async()=>workspaceRoot};
+    let workspace=createWorkspaceConfigHost(configOptions);
+    await workspace.select();workspace.close();
+    workspace=createWorkspaceConfigHost(configOptions);
+    assert.equal(workspace.tools.some(tool=>tool.descriptor.name==='workspace.apply_text_patch'),false);
+    workspace.close();
+    workspace=createWorkspaceConfigHost({...configOptions,patchHelperScriptPath:helperScriptPath});
+    try {
+      assert.equal(workspace.tools.some(tool=>tool.descriptor.name==='workspace.apply_text_patch'),true);
+      assert.equal(workspace.snapshot().writeAvailable,false,'helper configuration does not restore consent');
+      workspace.authorize({cloudExportAllowed:true,writeAllowed:true,commandAllowed:false});
+      assert.equal(workspace.snapshot().writeAvailable,true);
+    } finally {workspace.close();}
+    writeFileSync(helperScriptPath,'unknown script');
+    assert.throws(()=>createDesktopCodingToolHost({...opts,helperScriptPath}),/trusted bundled script/);
+  });
 
 test('host fixes all patch paths and closes availability', {skip: process.platform !== 'win32'}, t => {
   const paths = fixture(t);

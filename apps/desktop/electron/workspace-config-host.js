@@ -89,7 +89,7 @@ Set-Acl -LiteralPath $target -AclObject $acl`;
  * Registered implementations stay pinned until restart; changing settings revokes them first.
  */
 export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
-  selectNodeExecutable,selectCheckFile,selectNpmCli,jobHelperExecutable,
+  selectNodeExecutable,selectCheckFile,selectNpmCli,jobHelperExecutable,patchHelperScriptPath,
   projectScriptEnvSource,createCommandRecipeTool,createWorkspaceReferenceExport,
   readWorkspaceExportPreflight,readWorkspaceExportAuthorization}) {
   const file = path.join(userData,'coding-workspace.json');
@@ -140,6 +140,7 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
         try {
           applyHost=createDesktopCodingToolHost({workspaceRoot:boundRoot,authorizedWorkspaceRoot:boundRoot,
             recoveryRootPath:recoveryDirectory(userData,boundRoot,pwsh),powerShellPath:pwsh,
+            ...(patchHelperScriptPath===undefined?{}:{helperScriptPath:patchHelperScriptPath}),
             createWorkspacePatchApplyTool:coding.createWorkspacePatchApplyTool,
             reconcileWorkspacePatchApply:coding.reconcileWorkspacePatchApply});
           implementations.push(...applyHost.tools);
