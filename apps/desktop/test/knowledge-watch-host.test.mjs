@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import {createKnowledgeWatchHost} from '../electron/knowledge-watch-host.js';
+import {knowledgeInterestFixture} from './helpers/knowledge-interest-fixture.mjs';
 
 const shaA = 'a'.repeat(64);
 const shaB = 'b'.repeat(64);
@@ -655,14 +656,16 @@ test('citation-only task Evidence cannot bind an observed feed revision', async 
     },
   };
   const feedCollect = () => collected(time);
+  const intake=knowledgeInterestFixture('person-a');
   const host = createKnowledgeWatchHost({profile: 'huawei_ict_agentarts', namespace: 'person-a',
+    ...intake.ports,
     checkpointTaskId: 'watch-task', checkpoints: store.checkpoints, now: () => time,
     layaChooser: {choose(request) {
       const track = request.candidates.some(candidate => candidate.id === 'track_public');
       return Promise.resolve(actionSelection(track ? 'track_public' : null));
     }}, workPort, feedCollect, feedSubscriptionId: 'official-docs'});
   host.start();
-  await host.consumeInterestSignal(signal(time, trackedRows(time)), deadline());
+  await intake.consume(host,signal(time, trackedRows(time)), deadline());
   time += 5 * minute;
   await host.refreshSubscribedFeed();
   const [workKey, task] = tasks.entries().next().value;
@@ -751,18 +754,19 @@ test('delivery acknowledgement is not a read or a re-evaluation result', async (
       return task;
     },
   };
+  const intake=knowledgeInterestFixture('person-a',runtime);
   const host = createKnowledgeWatchHost({profile: 'huawei_ict_agentarts', namespace: 'person-a',
     checkpointTaskId: 'watch-task', checkpoints: store.checkpoints, now: () => time,
     layaChooser: {choose(request) {
       const track = request.candidates.some(candidate => candidate.id === 'track_public');
       return Promise.resolve(actionSelection(track ? 'track_public' : null));
     }},
-    runtime,
+    ...intake.ports,
     notificationPort: {async send() { return {delivered: false, receiptId: 'batch-delivery'}; }},
     feedCollect() { return collected(time); },
     feedSubscriptionId: 'official-docs'});
   host.start();
-  await host.consumeInterestSignal(signal(time, trackedRows(time)), deadline());
+  await intake.consume(host,signal(time, trackedRows(time)), deadline());
   time += 5 * minute;
   const refreshed = await host.refreshSubscribedFeed();
   assert.equal(refreshed.notified, true);
@@ -817,7 +821,9 @@ test('delivery acknowledgement is not a read or a re-evaluation result', async (
 
   let injectedTime = start;
   const injectedTasks = new Map();
+  const injectedIntake=knowledgeInterestFixture('person-a');
   const injectedHost = createKnowledgeWatchHost({profile: 'huawei_ict_agentarts', namespace: 'person-a',
+    ...injectedIntake.ports,
     checkpointTaskId: 'injected-watch-task', checkpoints: memoryCheckpoints().checkpoints,
     now: () => injectedTime,
     interestDecider: {choose() { return Promise.resolve(selection()); }},
@@ -836,7 +842,7 @@ test('delivery acknowledgement is not a read or a re-evaluation result', async (
     notificationPort: {async send() { return {delivered: false, receiptId: 'injected-receipt'}; }},
   });
   injectedHost.start();
-  await injectedHost.consumeInterestSignal(signal(injectedTime, trackedRows(injectedTime)), deadline());
+  await injectedIntake.consume(injectedHost,signal(injectedTime, trackedRows(injectedTime)), deadline());
   injectedTime += minute;
   await injectedHost.consumeSourceUpdate(change(injectedTime));
   for (const injected of injectedTasks.values()) injected.state = 'succeeded';
@@ -850,10 +856,10 @@ test('delivery acknowledgement is not a read or a re-evaluation result', async (
   time = start + 61 * minute;
   const expired = await host.bindObservedRevision('typescript');
   assert.equal(expired.accepted, false);
-  assert.equal(expired.reason, 'watch_expired');
+  assert.equal(expired.reason, 'authorization_required'); // The grant expires before watch binding is considered.
   await host.revoke('typescript', {id: 'user-revoke-bind', revokedAt: iso(time)});
   const after = await host.bindObservedRevision('typescript');
-  assert.equal(after.reason, 'user_revoked');
+  assert.equal(after.reason, 'authorization_required'); // Expired source grant stays denied after revocation.
   assert.equal(host.dialogueProjection().items[0].answer.reason, 'user_revoked');
   host.dispose();
 });
