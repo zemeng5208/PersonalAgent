@@ -211,8 +211,11 @@ reconciler. A host supplying its own `tools` can inject `workspacePatchReconcili
 the trusted `workspace.preview_text_patch` implementation. Workflow requests cannot select
 recovery paths, processes, credentials or a new run. The authorized apply records its exact
 arguments and preview before dispatch. Fixed local `dev-patch-diagnostic:<runId>` categories
-distinguish process identity, marker, helper input/exit and interruption failures without
-exposing raw exceptions or private paths.
+distinguish preview preflight, process identity, marker, helper input/exit and interruption
+failures without exposing raw exceptions or private paths. The fixed `preview` stage covers
+trusted preview, binding/candidate validation and original intent persistence before apply.
+Diagnostics store only the stage and protocol error code; they do not establish `not_applied`,
+create a marker or authorize replay. Preview failures retain the original unknown execution.
 
 Unknown/in-progress polls retain the marker and execution state across SQLite restart.
 An absent marker does not prove application. A `not_applied` result persists the original

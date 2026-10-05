@@ -173,14 +173,20 @@ test('PR base drift during approval cannot publish a cached pre-review', async (
   } finally {await host.close(); await rm(directory, {recursive: true, force: true});}
 });
 
-async function patchFixture(t, {confirmApply = false} = {}) {
+async function patchFixture(t, {confirmApply = false, previewFailure, invalidPreview = false, intentSaveFailure = false} = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'dev-patch-recovery-'));
   await writeFile(path.join(directory, 'app.js'), 'const value = 1;\n');
   const {createHash} = await import('node:crypto');
   const before = createHash('sha256').update('const value = 1;\n').digest('hex');
-  const calls = {apply: 0, polls: [], outcome: 'unknown', bindingId: 'd'.repeat(64), marker: true};
+  const preflightFailure = !!previewFailure || invalidPreview || intentSaveFailure;
+  const calls = {apply: 0, polls: [], outcome: 'unknown', bindingId: 'd'.repeat(64), marker: !preflightFailure};
   const read = createWorkspaceReadTool({rootPath: directory});
-  const preview = createWorkspacePatchPreviewTool({rootPath: directory});
+  const trustedPreview = createWorkspacePatchPreviewTool({rootPath: directory});
+  const preview = {...trustedPreview, async execute(input, context) {
+    if (previewFailure) throw previewFailure;
+    const result = await trustedPreview.execute(input, context);
+    return invalidPreview ? {...result, afterSha256: 'invalid'} : result;
+  }};
   const descriptor = (name, sideEffect = 'read') => ({name, version: '1.0.0', inputSchema: {type: 'object'},
     outputSchema: {type: 'object'}, requiredScopes: [sideEffect === 'read' ? 'workspace:read' : 'workspace:write'],
     sideEffect, requiresPresence: false, idempotencySupport: false, recoverySupport: false});
@@ -231,6 +237,13 @@ async function patchFixture(t, {confirmApply = false} = {}) {
     }},
   });
   host = create();
+  if (intentSaveFailure) {
+    const saveOnce = host.runtime.saveCheckpointOnce.bind(host.runtime);
+    host.runtime.saveCheckpointOnce = (taskId, key, value) => {
+      if (key.startsWith('dev-patch-intent:')) throw new ProtocolError('EXTERNAL_FAILURE', 'Synthetic intent persistence failure');
+      return saveOnce(taskId, key, value);
+    };
+  }
   t.after(async () => {await host.close(); await rm(directory, {recursive: true, force: true});});
   const task = host.submit({request: {kind: 'ci_fix', repository: 'example/project', runId: '1'},
     conversationId: 'patch-recovery', idempotencyKey: 'same-repair', deadline: new Date(Date.now() + 120_000).toISOString()});
@@ -241,12 +254,39 @@ async function patchFixture(t, {confirmApply = false} = {}) {
     snapshot = await host.resume(task.taskId);
   }
   if (!confirmApply) assert.equal(snapshot.state, 'waiting_reconciliation');
-  assert.equal(calls.apply, 1);
+  assert.equal(calls.apply, preflightFailure ? 0 : 1);
   const record = host.runtime.readToolExecutions(task.taskId).find(item => item.toolName === 'workspace.apply_text_patch');
   assert.ok(record);
   return {get host() {return host;}, taskId: task.taskId, runId: record.evidenceId, calls,
     async restart() {await host.close(); host = create();}};
 }
+
+test('patch preview preflight failures retain the original unknown run with fixed local diagnostics', async t => {
+  for (const [name, options, code] of [
+    ['preview rejection', {previewFailure: new ProtocolError('REVISION_CONFLICT', 'Synthetic private /unshared/source.js token ghp_fixture_secret')}, 'REVISION_CONFLICT'],
+    ['invalid preview', {invalidPreview: true}, 'REVISION_CONFLICT'],
+    ['intent persistence', {intentSaveFailure: true}, 'EXTERNAL_FAILURE'],
+  ]) await t.test(name, async t => {
+    const f = await patchFixture(t, options);
+    const record = f.host.runtime.readToolExecutions(f.taskId).find(item => item.evidenceId === f.runId);
+    assert.equal(record.state, 'unknown'); assert.equal(record.errorCode, 'RESULT_UNKNOWN');
+    assert.equal(record.policyDecision, 'allow'); assert.equal(record.executionStarted, true);
+    assert.equal(record.reconciliationOutcome, undefined);
+    assert.ok(f.runId.startsWith(`${f.taskId}:ci-fix:`));
+    assert.equal(f.host.runtime.getTask(f.taskId).state, 'waiting_reconciliation');
+    assert.equal(f.calls.apply, 0); assert.equal(f.calls.marker, false); assert.equal(f.calls.polls.length, 0);
+    for (const key of [`dev-patch-intent:${f.runId}`, `dev-patch-readback:${f.runId}`, `tool-result-${f.runId}`]) {
+      assert.equal(f.host.runtime.loadCheckpoint(f.taskId, key), undefined);
+    }
+    const diagnostic = f.host.runtime.loadCheckpoint(f.taskId, `dev-patch-diagnostic:${f.runId}`);
+    assert.deepEqual(diagnostic, {stage: 'preview', code});
+    await f.restart();
+    assert.deepEqual(f.host.runtime.loadCheckpoint(f.taskId, `dev-patch-diagnostic:${f.runId}`), diagnostic);
+    await assert.rejects(f.host.reconcileWorkspacePatchTask(f.taskId, f.runId), /original workflow/);
+    assert.equal(f.calls.apply, 0); assert.equal(f.calls.polls.length, 0);
+    assert.equal(f.host.runtime.getTask(f.taskId).state, 'waiting_reconciliation');
+  });
+});
 
 test('workflow patch polls preserve unknown markers across restart without repeating apply', async t => {
   const f = await patchFixture(t);

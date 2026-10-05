@@ -124,3 +124,9 @@ Browser 插件不可用，使用已安装 Playwright/Chromium 实际挂载 Admin
 Runtime applied recovery now uses the core reconciliation transaction to persist the confirmed result while preserving the waiting workflow. The original Windows helper root cause and real end-to-end readback remain unverified.
 
 消费核心与新 main 后，组合 build/typecheck 通过；CI32+Runtime16 共48/48，applied 在真实 SQLite 中确认原 run/cache，跨重启继续原审批至验证/提交/推送/PR/回链，apply与commit各一次（模型、工具与账号操作仍为合成端口）。新 main 的根 integration19/19，通过实际 Admin 双尺寸重新检查工作区与 AgentArts 设置，零 console 错误。前一 fec8d4cf PR第二次亦完成 success，与push两份日志共用的精确head31workspace1727通过/0失败/16跳过；原首次安装失败保留，新组合 Foundation另验。
+
+### 原 unknown 的预览前置诊断
+
+继续原 Windows 首因定位的源码核对发现 trusted preview、binding/candidate 校验及 intent 保存都在诊断 catch 之外：它们失败时 Gateway 仍保守 unknown，却没有固定诊断。三项回归在原实现确认 diagnostic 缺失、原授权执行 unknown、apply0；现 catch 覆盖前置至 apply，进入 apply 前只记录固定 preview 阶段/错误码，实际 apply 原分类保持。不会据此确认 not_applied、创建 marker/intent/receipt 或自动重放，原错误文本/路径/凭据不落诊断。
+
+Runtime build及组合20/20通过，包括前置诊断跨重启、无 intent/result/readback、核实拒绝且零port poll/零apply，以及原LGW applied续接与独立快照/持久读回回归。此改动只让持有原环境的 Potato 可辨别失败阶段，不宣称已定位真实 Windows 原因；新精确head门禁及非作者评审继续分列。

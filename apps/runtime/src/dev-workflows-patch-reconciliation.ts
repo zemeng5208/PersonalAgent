@@ -35,29 +35,34 @@ export class DevWorkflowPatchRecovery {
   bind(tool: RegisteredTool): RegisteredTool {
     if (tool.descriptor.name !== PATCH || tool.descriptor.version !== VERSION) return tool;
     return {...tool, execute: async (input, context: ToolContext) => {
-      const bindingId = this.port.bindingId;
-      // Called inside the authorized Gateway execution, before candidate bytes reach apply.
-      const prepared = await this.preview.execute(input, context) as WorkspacePatchPreviewResult;
-      const args = structuredClone(input) as Intent['arguments'];
-      if (!hash(bindingId) || bindingId !== this.port.bindingId || !hash(prepared.beforeSha256) || !hash(prepared.afterSha256)
-        || prepared.path !== args.path || prepared.beforeSha256 !== args.expectedSha256
-        || typeof prepared.previewText !== 'string' || typeof prepared.changed !== 'boolean') {
-        conflict('Trusted patch preview or workspace binding is invalid');
+      let applying = false;
+      try {
+        const bindingId = this.port.bindingId;
+        // Called inside the authorized Gateway execution, before candidate bytes reach apply.
+        const prepared = await this.preview.execute(input, context) as WorkspacePatchPreviewResult;
+        const args = structuredClone(input) as Intent['arguments'];
+        if (!hash(bindingId) || bindingId !== this.port.bindingId || !hash(prepared.beforeSha256) || !hash(prepared.afterSha256)
+          || prepared.path !== args.path || prepared.beforeSha256 !== args.expectedSha256
+          || typeof prepared.previewText !== 'string' || typeof prepared.changed !== 'boolean') {
+          conflict('Trusted patch preview or workspace binding is invalid');
+        }
+        const expected: WorkspacePatchApplyResult = {path: prepared.path, beforeSha256: prepared.beforeSha256,
+          afterSha256: prepared.afterSha256, byteLength: Buffer.byteLength(prepared.previewText),
+          changed: prepared.changed, applied: true};
+        validateToolValue(tool.descriptor.outputSchema, expected);
+        const intent: Intent = {bindingId, arguments: args,
+          argumentsDigest: toolArgumentsDigest(args), expected};
+        const previous = this.runtime.loadCheckpoint(context.taskId, key(context.runId));
+        if (previous !== undefined && !isDeepStrictEqual(previous, intent)) conflict('Original patch intent changed');
+        this.runtime.saveCheckpointOnce(context.taskId, key(context.runId), intent);
+        applying = true;
+        return await tool.execute(input, context);
       }
-      const expected: WorkspacePatchApplyResult = {path: prepared.path, beforeSha256: prepared.beforeSha256,
-        afterSha256: prepared.afterSha256, byteLength: Buffer.byteLength(prepared.previewText),
-        changed: prepared.changed, applied: true};
-      validateToolValue(tool.descriptor.outputSchema, expected);
-      const intent: Intent = {bindingId, arguments: args,
-        argumentsDigest: toolArgumentsDigest(args), expected};
-      const previous = this.runtime.loadCheckpoint(context.taskId, key(context.runId));
-      if (previous !== undefined && !isDeepStrictEqual(previous, intent)) conflict('Original patch intent changed');
-      this.runtime.saveCheckpointOnce(context.taskId, key(context.runId), intent);
-      try {return await tool.execute(input, context);}
       catch (error) {
         // Gateway intentionally hides write exceptions. Preserve fixed diagnostic categories locally.
         const message = error instanceof Error ? error.message : '';
-        const stage = message.includes('identity') ? 'process_identity'
+        const stage = !applying ? 'preview'
+          : message.includes('identity') ? 'process_identity'
           : message.includes('in-flight') ? 'marker'
           : message.includes('input failed') ? 'helper_input'
           : message.includes('did not complete') ? 'helper_exit'
