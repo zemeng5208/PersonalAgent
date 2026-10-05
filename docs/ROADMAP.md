@@ -118,6 +118,9 @@
 | MOD-37 | M6 产品化（登记） | todo | `goo122` / API 文档自动维护（exports/接口目录↔docs 漂移比对→文档补丁 PR），评审者 zemeng；仅登记未开工 |
 | MOD-38 | M6 产品化（登记） | todo | `zemeng` / Issue 自动分类+修复 PR（分类认知+复用 MOD-34 修复链），评审者 Potatos498；仅登记未开工 |
 
+
+DEV-WORKFLOWS 真实验收：MOD-36 已闭环、MOD-34 推进至补丁应用层（4 个真实缺陷已修复进 #277），证据与结论见 [真实验收记录](modules/DEV-WORKFLOWS-REAL-ACCEPTANCE-20261005.md)（2026-10-05）。
+
 ### 2.1 开工顺序与阻塞边界
 
 1. Core Runtime Profile 1 已冻结，可供 Competition Profile 复用；事件/Host/Agent/Tool 等未冻结面固定精确提交并保留迁移空间。
