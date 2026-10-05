@@ -170,3 +170,33 @@ test('issue drift refuses any patch',async()=>{
   assert.equal((await runCiFix(f.context,f.options)).status,'stale');
   assert.ok(!f.calls.some(c=>c.toolName==='workspace.apply_text_patch'));
 });
+
+test('real-model framing preserves strict CI proposal validation',async()=>{
+ for(const lang of ['json','']) {const f=fixture(),complete=f.options.model.complete;
+ f.options.model.complete=async request=>{const r=await complete(request);r.response.text='```'+lang+'\n'+r.response.text+'\n```';return r;};
+ assert.equal((await runCiFix(f.context,f.options)).status,'succeeded');
+ assert.equal(f.calls.filter(c=>c.toolName==='workspace.apply_text_patch').length,1);}
+});
+test('framing never accepts commentary or shell fields as CI proposal content',async()=>{
+ for(const mutation of [s=>'comment\n```json\n'+s+'\n```',s=>'```json\n'+s.slice(0,-1)+',"shell":"danger"}\n```']) {
+ const f=fixture(),complete=f.options.model.complete;f.options.model.complete=async request=>{const r=await complete(request);r.response.text=mutation(r.response.text);return r;};
+ await assert.rejects(runCiFix(f.context,f.options),/Invalid CI/);assert.equal(f.calls.filter(c=>c.toolName==='workspace.apply_text_patch').length,0);}
+});
+test('real Actions queries remain bounded and never infer a missing target run',async()=>{
+ const f=fixture();assert.equal((await runCiFix(f.context,f.options)).status,'succeeded');
+ for(const name of ['github.actions.run.list','github.actions.job.list']) {const c=f.calls.find(c=>c.toolName===name);assert.equal(c.arguments.page,1);assert.equal(c.arguments.perPage,30);}
+ const missing=fixture();missing.responses['github.actions.run.list'].items=[];
+ assert.equal((await runCiFix(missing.context,missing.options)).status,'unsupported');
+ assert.equal(missing.modelCalls(),0);assert.equal(missing.calls.length,1);
+});
+
+test('model hash errors use the trusted read hash in the approved patch request',async()=>{
+ const f=fixture(),complete=f.options.model.complete;f.options.model.complete=async request=>{const r=await complete(request);const p=JSON.parse(r.response.text);p.patches[0].expectedSha256='e'.repeat(64);r.response.text=JSON.stringify(p);return r;};
+ assert.equal((await runCiFix(f.context,f.options)).status,'succeeded');
+ const patch=f.calls.find(c=>c.toolName==='workspace.apply_text_patch');assert.equal(patch.arguments.expectedSha256,fileSha);assert.equal(patch.arguments.edits[0].oldText,'bad');
+ const count=f.calls.length;await runCiFix(f.context,f.options);assert.equal(f.calls.length,count);
+});
+test('hash normalization never grants an unread model path',async()=>{
+ const f=fixture(),complete=f.options.model.complete;f.options.model.complete=async request=>{const r=await complete(request);const p=JSON.parse(r.response.text);p.patches[0].path='src/unread.ts';r.response.text=JSON.stringify(p);return r;};
+ await assert.rejects(runCiFix(f.context,f.options),/Invalid CI/);assert.equal(f.calls.filter(c=>c.toolName==='workspace.apply_text_patch').length,0);
+});

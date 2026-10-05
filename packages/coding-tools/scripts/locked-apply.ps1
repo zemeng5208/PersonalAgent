@@ -12,9 +12,9 @@ public static class PersonalAgentFileIdentity {
   [StructLayout(LayoutKind.Sequential)]
   public struct FileInformation {
     public uint Attributes;
-    public FILETIME CreationTime;
-    public FILETIME LastAccessTime;
-    public FILETIME LastWriteTime;
+    public System.Runtime.InteropServices.ComTypes.FILETIME CreationTime;
+    public System.Runtime.InteropServices.ComTypes.FILETIME LastAccessTime;
+    public System.Runtime.InteropServices.ComTypes.FILETIME LastWriteTime;
     public uint VolumeSerialNumber;
     public uint FileSizeHigh;
     public uint FileSizeLow;

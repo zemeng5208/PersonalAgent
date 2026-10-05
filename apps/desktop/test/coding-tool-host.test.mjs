@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdtempSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync} from 'node:fs';
-import {execFileSync} from 'node:child_process';
+import {existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
@@ -47,7 +46,9 @@ test('repository-root Desktop host accepts only an external byte-identical bundl
   {skip:process.platform!=='win32'},async t=>{
     const coding=await import('@personal-agent/coding-tools');
     const paths=fixture(t),workspaceRoot=fileURLToPath(new URL('../../../',import.meta.url));
-    const powerShellPath=execFileSync('where.exe',['pwsh.exe'],{encoding:'utf8',windowsHide:true,timeout:5000}).trim().split(/\r?\n/)[0];
+    const powerShellPath=(process.env.PATH??'').split(path.delimiter)
+      .filter(Boolean).map(directory=>path.join(directory.replace(/^"|"$/g,''),'pwsh.exe')).find(existsSync);
+    assert.ok(powerShellPath,'PowerShell 7 must be present on the Windows test PATH');
     const helperScriptPath=path.join(paths.base,'locked-apply.ps1');
     // Test deployment of the reviewed package resource; production never copies a script.
     const bundled=readFileSync(new URL('../scripts/locked-apply.ps1',import.meta.resolve('@personal-agent/coding-tools')));
