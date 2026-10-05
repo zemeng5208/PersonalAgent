@@ -72,3 +72,9 @@ Desktop coding host 和 workspace config 补全既有公开 patch 工厂的可�
 ## Windows fixture 定位的受载超时
 
 24dcd034 PR CI 的第一次 npm ci 无诊断退出已重跑；第二次在新 helper 回归进入安全断言前，夹具额外 where.exe 子进程5秒超时，stdout 已有 PowerShell 路径。相同head push全套check通过。将此测试定位改为直接扫描受信 PATH 的现存 pwsh.exe，避免无业务意义的额外子进程期限；找不到明确断言失败，仍不跳过真实 Windows 测试。生产 executable/超时不改，canonical/字节一致/根外/变更失效/重启接线与许可断言全部保留。新精确head Foundation另验，不用旧head绿替代。
+
+## 协作者真实模型与创建回执增量的边界回归
+
+Potato d3e110c7/a2c9ee5 从真实验收反馈补充 JSON 围栏、查询30项边界以及模型长哈希复制错误：先保留严格提案结构和已读取路径限制，采用可信源快照哈希构造待审批补丁，apply 原 before-sha/oldText 校验不变；规范化不会授权未读路径。LGW 24dcd034 补充PR创建回执head复核，不匹配保守unknown并保留已返回的PR定位。保留作者且不双写源文件。
+
+将此前工作区外5项行为回归固化到本人 ci-fix.test.mjs：有效围栏正常通过、围栏外说明和shell字段无patch、有界30项查询和目标缺失零模型/patch、错误模型hash使用可信读取hash与成功缓存不重放、未读路径仍拒绝。原15项完整保留，公开工作流测试20/20；GitHub最新build及14/14通过。这些是显式合成模型/ToolPort契约验证，不是实际GH/模型/Windows执行验收。真实整链由Potato在受信环境接续并回写原task/run/审批/执行Evidence。
