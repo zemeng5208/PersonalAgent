@@ -7,10 +7,16 @@ const sha = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
 const digest = /^[a-f0-9]{64}$/u;
 const object = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 function invalid(): never { throw new ProtocolError('INVALID_ARGUMENT', 'Invalid CI repair proposal or receipt'); }
+/** GLM/Pangu-family models wrap JSON in markdown fences; the fence is transport framing, not content. */
+function stripModelJsonFence(text: string): string {
+  const trimmed = text.trim();
+  const fenced = /^`{3}(?:json)?\s*\n([\s\S]*?)\n`{3}\s*$/u.exec(trimmed);
+  return fenced ? fenced[1]! : trimmed;
+}
 function proposal(text: string): CiFixProposal {
   if (Buffer.byteLength(text) > 512 * 1024) invalid();
   let v: unknown;
-  try { v = JSON.parse(text); } catch { invalid(); }
+  try { v = JSON.parse(stripModelJsonFence(text)); } catch { invalid(); }
   if (!object(v) || Object.keys(v).some(k => !['diagnosis', 'patches'].includes(k)) || typeof v.diagnosis !== 'string' || !v.diagnosis.trim() || v.diagnosis.length > 4096 || !Array.isArray(v.patches) || v.patches.length < 1 || v.patches.length > 8) invalid();
   const paths = new Set<string>();
   for (const p of v.patches) {
@@ -76,12 +82,12 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
   try {
     let read: {run: Record<string, unknown>; logs: string; truncated: boolean};
     if (options.runId) {
-    const runs = await invoke('runs', 'github.actions.run.list', {repo: options.repository, page: 1, perPage: 100, status: 'failure'});
+    const runs = await invoke('runs', 'github.actions.run.list', {repo: options.repository, page: 1, perPage: 30, status: 'failure'});
     if (!object(runs) || !Array.isArray(runs.items)) invalid();
     const run = runs.items.find(r => object(r) && String(r.id) === options.runId);
     if (!object(run)) throw new Pause('unsupported', 'Failed run not found within bounded page');
     if (run.conclusion !== 'failure' || typeof run.headSha !== 'string' || !sha.test(run.headSha) || typeof run.url !== 'string' || !run.url.startsWith('https://')) invalid();
-    const jobs = await invoke('jobs', 'github.actions.job.list', {repo: options.repository, runId: Number(options.runId), page: 1, perPage: 100});
+    const jobs = await invoke('jobs', 'github.actions.job.list', {repo: options.repository, runId: Number(options.runId), page: 1, perPage: 30});
     if (!object(jobs) || !Array.isArray(jobs.items)) invalid();
     const failedJobs = jobs.items.filter(v => object(v) && v.conclusion === 'failure').slice(0, 8);
     if (!failedJobs.length) throw new Pause('unsupported', 'No bounded failed job logs available');
