@@ -94,6 +94,37 @@ test('a larger CI budget does not prevent other workflows from starting', async 
   }, {maxTokens: 64_000});
 });
 
+test('failed workflow construction disposes registered GitHub providers and closes SQLite', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'dev-init-rollback-'));
+  const database = path.join(directory, 'runtime.sqlite');
+  let disposed = 0;
+  const github = {verification: 'mock', async execute() {throw Error('unused');}, dispose() {disposed++;}};
+  try {
+    assert.throws(() => createDevWorkflowsRuntime({path: database, model: model(), github,
+      maxSteps: 16, maxTokens: 1024, issueTriage: {minConfidence: 2}}), /INVALID_TRIAGE_OPTIONS/);
+    assert.equal(disposed, 1);
+    // Windows rejects deleting a SQLite file if a leaked connection still owns it.
+    await rm(database);
+    const host = createDevWorkflowsRuntime({path: database, model: model(), tools: [readTool({calls: 0})],
+      maxSteps: 16, maxTokens: 1024});
+    await host.close();
+  } finally {await rm(directory, {recursive: true, force: true});}
+});
+
+test('provider disposal failure does not hide the original workflow construction error', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'dev-dispose-error-'));
+  const database = path.join(directory, 'runtime.sqlite');
+  let disposed = 0;
+  const github = {verification: 'mock', async execute() {throw Error('unused');},
+    dispose() {disposed++; throw Error('dispose interrupted');}};
+  try {
+    assert.throws(() => createDevWorkflowsRuntime({path: database, model: model(), github,
+      maxSteps: 16, maxTokens: 1024, issueTriage: {minConfidence: 2}}), /INVALID_TRIAGE_OPTIONS/);
+    assert.equal(disposed, 1);
+    await rm(database);
+  } finally {await rm(directory, {recursive: true, force: true});}
+});
+
 test('PR base drift during approval cannot publish a cached pre-review', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'dev-review-base-'));
   const headSha = 'a'.repeat(40), baseSha = 'b'.repeat(40);

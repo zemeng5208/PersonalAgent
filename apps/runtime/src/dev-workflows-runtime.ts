@@ -88,7 +88,18 @@ export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions): 
     },
   });
   const registrations: (() => void)[] = [];
-  try {
+  const initialize = <T>(factory: () => T): T => {
+    try { return factory(); }
+    catch (error) {
+      // Roll back every acquired registration, even if a provider's disposal fails.
+      for (const dispose of [...registrations].reverse()) {
+        try { dispose(); } catch { /* Continue releasing remaining registrations. */ }
+      }
+      try { runtime.close(); } catch { /* Preserve the original initialization error. */ }
+      throw error;
+    }
+  };
+  initialize(() => {
     if (options.github) registrations.push(registerGitHub(gateway, {provider: options.github}));
     if (options.workspace) {
       registrations.push(gateway.register(createWorkspaceReadTool(options.workspace.read)));
@@ -132,11 +143,7 @@ export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions): 
       }}));
     }
     for (const tool of options.tools ?? []) registrations.push(gateway.register(tool));
-  } catch (error) {
-    for (const dispose of registrations.reverse()) dispose();
-    runtime.close();
-    throw error;
-  }
+  });
   const invoker = new RuntimeToolInvoker(runtime, gateway.list());
   const tools: AgentToolPort = {
     list: () => gateway.list(),
@@ -167,7 +174,7 @@ export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions): 
       && runtime.loadCheckpoint(taskId, `tool-result-${runId}`) !== undefined;
   };
   // CI's shared input/output budget can exceed the review provider's single-output ceiling.
-  const review = createCodeReviewWorkflow({model, tools, maxTokens: Math.min(options.maxTokens, 32_000)});
+  const review = initialize(() => createCodeReviewWorkflow({model, tools, maxTokens: Math.min(options.maxTokens, 32_000)}));
   const ciOptions = options.ciFix ? {...options.ciFix,
     ...(!options.ciFix.gitTools && options.git ? {gitTools: {head: 'workspace.git.head', commit: 'workspace.git.commit',
       push: 'workspace.git.push', pullRequest: 'github.pr.create', backlink: 'github.pr.comment'}} : {}),
@@ -184,7 +191,7 @@ export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions): 
       return {state: outcome.status, resultSummary: outcome.reason, evidenceRefs: outcome.evidenceRefs};
     },
   } : undefined);
-  const triage = createIssueTriageWorkflow({model, tools, authorizationRefFor,
+  const triage = initialize(() => createIssueTriageWorkflow({model, tools, authorizationRefFor,
     maxSteps: options.maxSteps, maxTokens: options.maxTokens, ...options.issueTriage, ...(repair ? {repair} : {}),
     confirmedReplayReady: (runId, context) => confirmedReplayReady(context.taskId, runId),
     confirmedRepairReplayReady: context => {
@@ -196,7 +203,7 @@ export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions): 
       return !!original && original.toolName === receipt.toolName && original.toolVersion === receipt.toolVersion
         && runtime.matchesToolExecutionInput(original, {arguments: receipt.arguments, scopeRef: receipt.runId})
         && records.every(record => confirmedReplayReady(context.taskId, record.evidenceId));
-    }});
+    }}));
   const active = new Map<string, Promise<TaskSnapshot>>();
 
   async function executeWorkflow(context: AgentWorkerContext) {
