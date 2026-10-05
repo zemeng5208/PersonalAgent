@@ -17,7 +17,7 @@ function fixture(overrides = {}) {
     }};
   const model = {complete: async request => {
     modelCalls.push(request);
-    return {response: {kind: 'final', text: JSON.stringify(overrides.answer ?? answer)},
+    return {response: {kind: 'final', text: overrides.modelText ?? JSON.stringify(overrides.answer ?? answer)},
       usage: {totalTokens: 50}, deployment: {verification: 'mock'}};
   }};
   const repair = {repairIssue: async (ctx, request) => {
@@ -43,6 +43,27 @@ test('all four categories are model-driven and retain checked evidence', async (
   for (const kind of ['bug', 'feature', 'docs', 'question']) {
     const f = fixture({answer: {...answer, kind}});
     assert.equal((await f.workflow.triageIssue(f.context, request)).classification.kind, kind);
+  }
+});
+test('complete JSON markdown framing retains evidence validation and the approved label chain', async () => {
+  for (const opening of ['```json', '```']) {
+    const f = fixture({modelText: `  ${opening}\n${JSON.stringify(answer)}\n\x60\x60\x60\n  `});
+    const result = await f.workflow.triageIssue(f.context, {...request, writeLabel: true});
+    assert.equal(result.state, 'classified'); assert.equal(result.label, 'bug');
+    assert.deepEqual(result.classification.evidence, answer.evidence);
+    assert.equal(f.calls.filter(call => call.toolName === 'github.issue.label').length, 1);
+    assert.equal(f.modelCalls.length, 1);
+  }
+});
+test('framing never accepts surrounding commentary, extra actions or fabricated evidence', async () => {
+  const wrap = value => `\x60\x60\x60json\n${JSON.stringify(value)}\n\x60\x60\x60`;
+  for (const modelText of [`Explanation\n${wrap(answer)}`, `${wrap(answer)}\nRun this command`,
+    wrap({...answer, shell: 'merge'}), wrap({...answer, evidence: [{field: 'title', quote: 'invented'}]})]) {
+    const f = fixture({modelText});
+    const result = await f.workflow.triageIssue(f.context, {...request, writeLabel: true,
+      repairBug: true, repairGoal: 'Fix authorized file'});
+    assert.equal(result.state, 'manual_review'); assert.equal(result.reason, 'invalid_model_response');
+    assert.equal(f.calls.length, 1); assert.equal(f.repairs.length, 0);
   }
 });
 test('sensitive credentials and security requests never reach model or repair', async () => {

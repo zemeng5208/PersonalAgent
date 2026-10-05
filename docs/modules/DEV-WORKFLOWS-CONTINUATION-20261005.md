@@ -78,3 +78,23 @@ Desktop coding host 和 workspace config 补全既有公开 patch 工厂的可�
 Potato d3e110c7/a2c9ee5 从真实验收反馈补充 JSON 围栏、查询30项边界以及模型长哈希复制错误：先保留严格提案结构和已读取路径限制，采用可信源快照哈希构造待审批补丁，apply 原 before-sha/oldText 校验不变；规范化不会授权未读路径。LGW 24dcd034 补充PR创建回执head复核，不匹配保守unknown并保留已返回的PR定位。保留作者且不双写源文件。
 
 将此前工作区外5项行为回归固化到本人 ci-fix.test.mjs：有效围栏正常通过、围栏外说明和shell字段无patch、有界30项查询和目标缺失零模型/patch、错误模型hash使用可信读取hash与成功缓存不重放、未读路径仍拒绝。原15项完整保留，公开工作流测试20/20；GitHub最新build及14/14通过。这些是显式合成模型/ToolPort契约验证，不是实际GH/模型/Windows执行验收。真实整链由Potato在受信环境接续并回写原task/run/审批/执行Evidence。
+
+## 最新真实验收缺项的作者接续与 P6 控件（2026-10-05 11 时）
+
+重新读取 #277 最新全部评论发现 Potato `5992872339` 明确报告：真实 Actions/GLM 链走到 patch-0-0，仍 RESULT_UNKNOWN，且 DEV-WORKFLOWS 缺核实入口。这两项不能被先前 CI 双绿或一轮结果邮件抹去。Windows 原因定位继续交持有原复现环境的 Potato，要求脱敏原 task/run、底层 error、marker/核实状态，不删除 marker 或新建任务盲重试。
+
+本次沿原 #277 精确登记本人 dev-workflows 源码/测试和 P6 controls/host snapshot。新增 `reconcileWorkspacePatchTask(taskId,runId)` 绑定原输入、授权执行记录、根/恢复/PowerShell identity 与可信 preview；unknown/in_progress 只观察，SQLite 重启不重复 apply。not_applied 先持久失败读回、后 ack；marker 缺失不能推断成功。apply 异常仅保存固定本地诊断类别，不泄露原始错误、私有路径或凭据。
+
+**独立核心依赖仍未完成**：原 Runtime `reconcileToolExecution(applied)` 会终结整个任务，不能用于尚需验证/commit/push/PR 的中间 patch。已在 `5993147961` / `5993224076` 向唯一核心 owner goo122 提交精确 `reconcileToolExecutionForContinuation` 接口需求，本次不改 `apps/runtime/src/index.ts`。此方法须原子确认原 run/正常 apply 缓存，但保持 waiting_reconciliation，再由现 resumeConfirmed 消费。未交付时 applied 明确 UNSUPPORTED、保留现场，不伪报已完成恢复；正向整链待该接口及实际 Windows 回归。
+
+P6 前端三个新增回归在原代码全部失败：项目代码许可缺命令前置、宿主许可不按读回显示、待装配目录仍可授权。现在项目许可依赖命令且不自动勾选；安全 snapshot 独立报告 authorizationAvailable/writeAllowed/commandAllowed，不输出路径；宿主读回更新勾选但保留用户未提交更改；pending 可访问状态、按钮互锁及无效回执明确未确认。相关 host/controls 40/40、DEV-WORKFLOWS runtime 12/12。
+
+Browser 插件不可用，使用已安装 Playwright/Chromium 实际挂载 Admin worktrees 页面及原样式，1280×900 与480×900，检查前置许可、待装配、读回/未保存选择、重复提交、失败重试及窄屏无横向溢出，控制台无错误；桥接为明确合成宿主，不代表原生 Electron/Windows/云已验收。临时证据保留在 `/tmp/personalagent-review/workspace-ui-*`，不提交测试截图或私有数据。整体 Goal 继续 in_progress，不将本次增量当全部完成。
+
+进一步核对本人新 MOD 找到并修正两项独立缺陷，均沿原 PR 登记精确文件范围：
+
+- MOD34 的 `precommit-head-${j.steps}` 在每次暂停审批后换身份，真实 TaskRuntime/Policy 的逐项审批回归复现反复新 HEAD 审批直至 Persisted step budget exhausted，从未 commit。现在持久稳定该步身份，兼容旧 pending/cached 步骤；commit 实现仍在 dispatch 时核对实时 HEAD、文件指纹与真实成功验证回执，不放宽任何写入前置。新增完整逐项审批回归走到原修复 commit/push/draftPR/回链，模型/Git/账号端口均明确 Fake；Runtime+CI工作流33/33。
+- MOD38 与已修 MOD34/36 的真实模型 framing 不一致：完整 json/无语言围栏分类原本 manual_review。现在仅解包完整外围 framing，严格 schema/原文证据/敏感筛查/置信度和审批不变，外围说明/额外shell字段/虚构证据零标签与修复。两项新增回归通过，Issue工作流20/20。
+- MOD36 注入 ModelPort/ToolPort 忽略signal时可永久等模型，COMMENT取消后迟到confirmed还能覆盖预留unknown。两项新回归在原实现均失败。复用同包既有 withCognitionDeadline 约束读取、模型和发表；过期/取消入口零调用，写入中断保持unknown，不盲重发。Review15/15，Review+Issue+Runtime48/48。
+
+以上不代表真实 Windows unknown 已定位或 applied 后核心恢复完成。自己的实现/前端交付与其他人的核心接口、人工评审和原生验收分开记录；等待期间持续核对其他可独立推进项，未接管业务/P5/P7/MOD37或 Runtime 核心文件。

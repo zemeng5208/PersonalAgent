@@ -26,7 +26,7 @@ function proposal(text: string): CiFixProposal {
   }
   return v as unknown as CiFixProposal;
 }
-interface Journal { identity: string; steps: number; tokens: number; results: Record<string, unknown>; inflight?: string; pending?: string; evidence: string[]; attempt?: number; notes?: string[] }
+interface Journal { identity: string; steps: number; tokens: number; results: Record<string, unknown>; inflight?: string; pending?: string; evidence: string[]; attempt?: number; notes?: string[]; precommitHeadStep?: string }
 class Pause extends Error { constructor(readonly status: CiFixOutcome['status'], message: string) { super(message); } }
 
 /** Bounded repair attempts, no shell supplied by a model and no blind write retries. */
@@ -167,9 +167,13 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
       if (attempt + 1 >= attempts) throw new Pause('verification_failed', 'Actual verification command failed after bounded attempts');
       j.notes = [...(j.notes ?? []), note].slice(-4); j.attempt = attempt + 1; save();
     }
-    // Never replay a cached head read before a fresh commit dispatch.
+    // Retain this read's identity across approval pauses. The commit tool itself
+    // rechecks live HEAD and the verified workspace immediately before dispatch.
     if (!Object.hasOwn(j.results, 'commit') && j.inflight !== 'commit') {
-      const current = await invoke(`precommit-head-${j.steps}`, gitTools.head, {repository: options.repository});
+      j.precommitHeadStep ??= j.pending?.startsWith('precommit-head-') ? j.pending
+        : Object.keys(j.results).find(id => id.startsWith('precommit-head-')) ?? `precommit-head-${j.attempt ?? 0}`;
+      save();
+      const current = await invoke(j.precommitHeadStep, gitTools.head, {repository: options.repository});
       if (!object(current) || current.headSha !== headSha) throw new Pause('stale', 'HEAD changed after verification');
     }
     // Reconstruct from confirmed receipts so earlier rounds survive approval/restart.

@@ -436,6 +436,9 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
     writeAvailable:tools.some(tool=>tool.descriptor.name==='workspace.apply_text_patch' && enabled(tool)),
     commandAvailable:tools.some(tool=>['workspace.git_diff_check','workspace.node_check'].includes(tool.descriptor.name) && enabled(tool)),
     cloudExportAllowed:consent?.cloudExportAllowed===true,
+    authorizationAvailable:active && identityCurrent() && tools.length>0,
+    writeAllowed:consent?.writeAllowed===true,
+    commandAllowed:consent?.commandAllowed===true,
     reason:savedRoot!==boundRoot?'目录已保存，请重启应用完成工具装配后授权':failure || (consent
       ? '当前工作区已授权；受限命令仍经过 Policy，项目脚本另需明确许可'
       : savedRoot?'请为本次应用会话授权工作区；重启后需要重新授权':'请选择编程工作区')});

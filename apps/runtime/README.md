@@ -202,6 +202,32 @@ Competition checkpoints separately retain the cloud proposal, step, continuation
 
 dispatchDueSchedules() handles due schedules during normal operation. recoverMissedSchedules() is called after a stopped period and applies each schedule's run_once or skip policy atomically.
 
+## DEV-WORKFLOWS patch recovery (Local Profile)
+
+`DevWorkflowsRuntime.reconcileWorkspacePatchTask(taskId, runId)` observes the original
+`workspace.apply_text_patch` execution using the trusted workspace/recovery/PowerShell binding.
+An explicit `workspace` composition pins these identities and consumes the public coding-tools
+reconciler. A host supplying its own `tools` can inject `workspacePatchReconciliation` plus
+the trusted `workspace.preview_text_patch` implementation. Workflow requests cannot select
+recovery paths, processes, credentials or a new run. The authorized apply records its exact
+arguments and preview before dispatch. Fixed local `dev-patch-diagnostic:<runId>` categories
+distinguish process identity, marker, helper input/exit and interruption failures without
+exposing raw exceptions or private paths.
+
+Unknown/in-progress polls retain the marker and execution state across SQLite restart.
+An absent marker does not prove application. A `not_applied` result persists the original
+failed execution before acknowledging the marker; it never silently retries.
+An applied result requires the core's separate `reconcileToolExecutionForContinuation`
+method to atomically confirm the original execution and cache a normal
+`WorkspacePatchApplyResult` while keeping the workflow waiting. That core method is an
+outstanding goo122 integration dependency in this revision: if absent, the host explicitly
+returns `UNSUPPORTED_CAPABILITY` and retains the marker. The existing single-tool terminal
+reconciliation method is never used to declare the entire CI fix successful.
+Once core support is delivered, pass the returned bound `receipt` to
+`resumeConfirmed(taskId, receipt)` to continue the same workflow. Verification, commit, push,
+draft PR and backlink still require their original Policy approvals. The native Windows
+unknown cause and the complete real repair chain remain unverified.
+
 ## Limits
 
 - This is an in-process Runtime core, not a daemon or IPC server.

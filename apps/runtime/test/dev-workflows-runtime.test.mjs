@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
-import {mkdtemp, rm} from 'node:fs/promises';
+import {mkdtemp, rm, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {test} from 'node:test';
 import {FakeModelProvider} from '@personal-agent/models';
 import {GhCliProvider} from '@personal-agent/github';
 import {createDevWorkflowsRuntime} from '../dist/dev-workflows-runtime.js';
+import {ProtocolError} from '@personal-agent/contracts';
+import {createWorkspaceReadTool, createWorkspacePatchPreviewTool} from '@personal-agent/coding-tools';
 
 const issue = {number: 7, title: 'Improve docs', body: 'Please improve docs', state: 'open', labels: [],
   url: 'https://github.com/example/project/issues/7', updatedAt: '2026-10-01T00:00:00.000Z'};
@@ -169,4 +171,137 @@ test('PR base drift during approval cannot publish a cached pre-review', async (
     assert.equal(record.state, 'unknown');
     assert.equal(record.errorCode, 'RESULT_UNKNOWN');
   } finally {await host.close(); await rm(directory, {recursive: true, force: true});}
+});
+
+async function patchFixture(t, {confirmApply = false} = {}) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'dev-patch-recovery-'));
+  await writeFile(path.join(directory, 'app.js'), 'const value = 1;\n');
+  const {createHash} = await import('node:crypto');
+  const before = createHash('sha256').update('const value = 1;\n').digest('hex');
+  const calls = {apply: 0, polls: [], outcome: 'unknown', bindingId: 'd'.repeat(64), marker: true};
+  const read = createWorkspaceReadTool({rootPath: directory});
+  const preview = createWorkspacePatchPreviewTool({rootPath: directory});
+  const descriptor = (name, sideEffect = 'read') => ({name, version: '1.0.0', inputSchema: {type: 'object'},
+    outputSchema: {type: 'object'}, requiredScopes: [sideEffect === 'read' ? 'workspace:read' : 'workspace:write'],
+    sideEffect, requiresPresence: false, idempotencySupport: false, recoverySupport: false});
+  const values = {
+    'github.actions.run.list': {items: [{id: 1, conclusion: 'failure', headSha: 'a'.repeat(40), url: 'https://github.com/example/project/actions/runs/1'}]},
+    'github.actions.job.list': {items: [{id: 2, conclusion: 'failure'}]},
+    'github.actions.log.read': {text: 'synthetic failing build', truncated: false},
+    'workspace.git.head': {headSha: 'a'.repeat(40), clean: true, workspaceClean: true},
+    'workspace.run_allowed_command': {recipeId: 'check', exitCode: 0},
+    'workspace.git.commit': {headSha: 'b'.repeat(40), parentSha: 'a'.repeat(40)},
+    'workspace.git.push': {headSha: 'b'.repeat(40), pushed: true},
+    'github.pr.create': {state: 'confirmed', externalId: '9', url: 'https://github.com/example/project/pull/9'},
+    'github.pr.comment': {state: 'confirmed'},
+  };
+  const tools = [read, preview, ...Object.entries(values).map(([name, result]) => ({descriptor: descriptor(name),
+    async execute() {return structuredClone(result);}})),
+    {descriptor: {...descriptor('workspace.apply_text_patch', 'local_write'), requiredScopes: ['workspace:read','workspace:write']},
+      async execute(input, context) {
+        calls.apply++;
+        if (confirmApply) return host.runtime.loadCheckpoint(context.taskId, `dev-patch-intent:${context.runId}`).expected;
+        throw new ProtocolError('RESULT_UNKNOWN', 'Workspace patch helper identity is unavailable');
+      }}];
+  const provider = new FakeModelProvider([{kind: 'final', text: JSON.stringify({diagnosis: 'synthetic repair',
+    patches: [{path: 'app.js', expectedSha256: before, edits: [{oldText: 'value = 1', newText: 'value = 2'}]}]})}]);
+  let host;
+  const create = () => createDevWorkflowsRuntime({path: path.join(directory, 'runtime.sqlite'), model: provider,
+    tools, maxSteps: 32, maxTokens: 64_000,
+    ciFix: {sourcePaths: ['app.js'], verifyRecipeId: 'check', headBranch: 'repair', baseBranch: 'main',
+      gitTools: {head: 'workspace.git.head', commit: 'workspace.git.commit', push: 'workspace.git.push',
+        pullRequest: 'github.pr.create', backlink: 'github.pr.comment'}},
+    workspacePatchReconciliation: {get bindingId() {return calls.bindingId;}, async reconcile(input) {
+      calls.polls.push(input);
+      if (!calls.marker) return {path: input.relativePath, state: 'clear'};
+      const intent = host.runtime.loadCheckpoint(input.expectedRunId.split(':ci-fix:')[0], `dev-patch-intent:${input.expectedRunId}`);
+      const result = {path: input.relativePath, runId: input.expectedRunId, argumentsDigest: input.expectedArgumentsDigest,
+        beforeSha256: intent.expected.beforeSha256, afterSha256: intent.expected.afterSha256};
+      if (calls.outcome === 'in_progress') return {...result, state: 'in_progress', pid: 123};
+      if (input.retainMarker !== true) calls.marker = false;
+      return {...result, state: 'reconciled', outcome: calls.outcome,
+        currentSha256: calls.outcome === 'applied' ? result.afterSha256 : calls.outcome === 'not_applied' ? result.beforeSha256 : 'f'.repeat(64)};
+    }},
+  });
+  host = create();
+  t.after(async () => {await host.close(); await rm(directory, {recursive: true, force: true});});
+  const task = host.submit({request: {kind: 'ci_fix', repository: 'example/project', runId: '1'},
+    conversationId: 'patch-recovery', idempotencyKey: 'same-repair', deadline: new Date(Date.now() + 120_000).toISOString()});
+  let snapshot = await host.start(task.taskId);
+  for (let index = 0; snapshot.state === 'waiting_approval' && index < 10; index++) {
+    const approval = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0];
+    host.runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
+    snapshot = await host.resume(task.taskId);
+  }
+  if (!confirmApply) assert.equal(snapshot.state, 'waiting_reconciliation');
+  assert.equal(calls.apply, 1);
+  const record = host.runtime.readToolExecutions(task.taskId).find(item => item.toolName === 'workspace.apply_text_patch');
+  assert.ok(record);
+  return {get host() {return host;}, taskId: task.taskId, runId: record.evidenceId, calls,
+    async restart() {await host.close(); host = create();}};
+}
+
+test('workflow patch polls preserve unknown markers across restart without repeating apply', async t => {
+  const f = await patchFixture(t);
+  const diagnostic = f.host.runtime.loadCheckpoint(f.taskId, `dev-patch-diagnostic:${f.runId}`);
+  assert.deepEqual(diagnostic, {stage: 'process_identity', code: 'RESULT_UNKNOWN'});
+  for (const outcome of ['unknown','in_progress']) {
+    f.calls.outcome = outcome;
+    const observed = await f.host.reconcileWorkspacePatchTask(f.taskId, f.runId);
+    assert.equal(observed.task.state, 'waiting_reconciliation'); assert.equal(observed.receipt, undefined);
+  }
+  assert.equal(f.calls.marker, true); await f.restart();
+  f.calls.outcome = 'unknown'; await f.host.reconcileWorkspacePatchTask(f.taskId, f.runId);
+  assert.equal(f.calls.apply, 1); assert.ok(f.calls.polls.every(input => input.retainMarker === true));
+  assert.equal(f.host.runtime.readToolExecutions(f.taskId).find(item => item.evidenceId === f.runId).reconciliationOutcome, undefined);
+});
+
+test('each Runtime approval resumes the same precommit head read and reaches the original repair commit', async t => {
+  const f = await patchFixture(t, {confirmApply: true});
+  let snapshot = f.host.runtime.getTask(f.taskId);
+  const pendingActions = [];
+  for (let index = 0; snapshot.state === 'waiting_approval' && index < 32; index++) {
+    const approval = f.host.runtime.listApprovals({taskId: f.taskId, state: 'pending'}).items[0];
+    assert.ok(approval); pendingActions.push(approval.action);
+    f.host.runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
+    snapshot = await f.host.resume(f.taskId);
+  }
+  assert.equal(snapshot.state, 'succeeded', JSON.stringify({pendingActions, result: f.host.readResult(f.taskId)}));
+  const records = f.host.runtime.readToolExecutions(f.taskId);
+  assert.equal(records.filter(record => record.toolName === 'workspace.git.commit').length, 1);
+  assert.equal(records.filter(record => record.toolName === 'workspace.git.head').length, 2);
+  assert.equal(f.calls.apply, 1); assert.equal(f.host.readResult(f.taskId).status, 'succeeded');
+});
+
+test('applied workflow recovery fails closed without the core continuation API instead of declaring success', async t => {
+  const f = await patchFixture(t); f.calls.outcome = 'applied';
+  f.host.runtime.reconcileToolExecutionForContinuation = undefined;
+  await assert.rejects(f.host.reconcileWorkspacePatchTask(f.taskId, f.runId), /continuation reconciliation is not available/);
+  assert.equal(f.calls.marker, true); assert.equal(f.calls.apply, 1);
+  assert.equal(f.host.runtime.getTask(f.taskId).state, 'waiting_reconciliation');
+  assert.equal(f.host.runtime.loadCheckpoint(f.taskId, `tool-result-${f.runId}`), undefined);
+});
+
+test('not-applied readback persists the original failed run before acknowledging its marker', async t => {
+  const f = await patchFixture(t); f.calls.outcome = 'not_applied';
+  const observed = await f.host.reconcileWorkspacePatchTask(f.taskId, f.runId);
+  assert.equal(observed.task.state, 'failed'); assert.equal(observed.receipt, undefined);
+  assert.equal(f.calls.marker, false); assert.equal(f.calls.apply, 1);
+  assert.equal(f.host.runtime.readToolExecutions(f.taskId).find(item => item.evidenceId === f.runId).reconciliationOutcome, 'not_applied');
+  await f.restart(); await f.host.reconcileWorkspacePatchTask(f.taskId, f.runId);
+  assert.equal(f.calls.apply, 1);
+});
+
+test('workflow recovery rejects changed workspace, original inputs and absent markers', async t => {
+  const f = await patchFixture(t); f.calls.bindingId = 'e'.repeat(64);
+  await assert.rejects(f.host.reconcileWorkspacePatchTask(f.taskId, f.runId), /workspace/);
+  assert.equal(f.calls.polls.length, 0); f.calls.bindingId = 'd'.repeat(64);
+  const original = f.host.runtime.loadCheckpoint(f.taskId, `dev-patch-intent:${f.runId}`);
+  f.host.runtime.saveCheckpoint(f.taskId, `dev-patch-intent:${f.runId}`, {...original,
+    arguments: {...original.arguments, path: 'another.js'}});
+  await assert.rejects(f.host.reconcileWorkspacePatchTask(f.taskId, f.runId), /input/);
+  assert.equal(f.calls.polls.length, 0);
+  f.host.runtime.saveCheckpoint(f.taskId, `dev-patch-intent:${f.runId}`, original); f.calls.marker = false;
+  await assert.rejects(f.host.reconcileWorkspacePatchTask(f.taskId, f.runId), /marker is absent/);
+  assert.equal(f.host.runtime.getTask(f.taskId).state, 'waiting_reconciliation'); assert.equal(f.calls.apply, 1);
 });

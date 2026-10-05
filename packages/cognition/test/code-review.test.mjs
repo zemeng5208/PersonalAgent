@@ -23,6 +23,7 @@ function fixture(overrides = {}) {
   };
   const model = {complete: async request => {
     modelCalls.push(request);
+    if (overrides.modelComplete) return overrides.modelComplete(request);
     return {response: {kind: 'final', text: overrides.modelText ?? JSON.stringify(overrides.output ?? {findings: [finding]})}};
   }};
   const context = {taskId: 'task', deadline: new Date(Date.now() + 60_000).toISOString(), signal: new AbortController().signal,
@@ -32,6 +33,40 @@ function fixture(overrides = {}) {
   const prepare = () => workflow.prepare({repo: 'owner/repo', number: 7, rules: [{id: 'safe', text: 'Reject unsafe changes'}]}, context, access);
   return {workflow, tools, context, access, calls, modelCalls, prepare, changeHead: value => {currentHead = value;}, writeState: value => {writeState = value;}};
 }
+test('cancelling a stalled injected review model settles without waiting for its result', async () => {
+  let release;
+  const f = fixture({modelComplete: () => new Promise(resolve => {release = resolve;})});
+  const controller = new AbortController(); f.context.signal = controller.signal;
+  const completion = f.prepare().then(() => 'prepared', error => error.message);
+  for (let i = 0; !release && i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.ok(release); controller.abort();
+  try {
+    const settled = await Promise.race([completion, new Promise(resolve => setImmediate(() => resolve('still-waiting')))]);
+    assert.match(settled, /CANCELLED/);
+  } finally {
+    release({response: {kind: 'final', text: JSON.stringify({findings: [finding]})}});
+    await completion;
+  }
+});
+test('late COMMENT confirmation after cancellation cannot overwrite unknown or dispatch a duplicate', async () => {
+  let release;
+  const f = fixture({invoke: async request => {
+    if (request.toolName === 'github.pr.review.comment') return new Promise(resolve => {release = resolve;});
+    return {state: 'confirmed', evidenceRefs: [], result: request.toolName === 'github.pr.get'
+      ? {number: 7, state: 'open', title: 'change', body: '', headSha: head, baseSha: base}
+      : {text: diff, offset: 0, nextOffset: null, truncated: false}};
+  }});
+  const report = (await f.prepare()).report;
+  const controller = new AbortController(); f.context.signal = controller.signal;
+  const publication = f.workflow.publish(report, 0, f.context, f.access);
+  for (let i = 0; !release && i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.ok(release); controller.abort();
+  release({state: 'confirmed', result: {state: 'confirmed'}, evidenceRefs: ['late-external-write']});
+  await assert.rejects(publication, /CANCELLED/);
+  f.context.signal = new AbortController().signal;
+  assert.equal((await f.workflow.publish(report, 0, f.context, f.access)).state, 'unknown');
+  assert.equal(f.calls.filter(call => call.toolName === 'github.pr.review.comment').length, 1);
+});
 test('binds paginated review to commits and isolates untrusted PR text', async () => {
   const f = fixture(); const result = await f.prepare();
   assert.equal(result.state, 'prepared'); assert.equal(result.report.headSha, head);

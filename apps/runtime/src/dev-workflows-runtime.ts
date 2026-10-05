@@ -1,5 +1,6 @@
 import {isDeepStrictEqual} from 'node:util';
-import {realpathSync} from 'node:fs';
+import {realpathSync, statSync} from 'node:fs';
+import {createHash} from 'node:crypto';
 import {ProtocolError} from '@personal-agent/contracts';
 import type {RegisteredTool, TaskSnapshot} from '@personal-agent/contracts';
 import {RuntimeToolInvoker} from '@personal-agent/agents';
@@ -7,7 +8,8 @@ import type {AgentToolPort, AgentWorkerContext} from '@personal-agent/agents';
 import {ModelGateway} from '@personal-agent/models';
 import type {ModelProvider} from '@personal-agent/models';
 import {ToolGateway, toolArgumentsDigest} from '@personal-agent/tool-gateway';
-import {createCiFixWorkflow, createWorkspaceReadTool, createWorkspacePatchApplyTool,
+import {createCiFixWorkflow, createWorkspaceReadTool, createWorkspacePatchApplyTool, createWorkspacePatchPreviewTool,
+  reconcileWorkspacePatchApply,
   createWorkspaceCommandTool, createGitTools, readGitWorkspaceFingerprint} from '@personal-agent/coding-tools';
 import type {CiFixOptions, WorkspaceReadOptions, WorkspacePatchApplyHostOptions,
   WorkspaceCommandOptions, GitToolsOptions, GitVerificationReceipt} from '@personal-agent/coding-tools';
@@ -16,6 +18,10 @@ import type {GitHubProvider} from '@personal-agent/github';
 import {createCodeReviewWorkflow, createIssueTriageWorkflow} from '@personal-agent/cognition';
 import type {CodeReviewInput, CodeReviewReport, IssueTriageRequest, IssueTriageOptions} from '@personal-agent/cognition';
 import {TaskRuntime} from './index.js';
+import {DevWorkflowPatchRecovery} from './dev-workflows-patch-reconciliation.js';
+import type {DevWorkflowPatchReadback} from './dev-workflows-patch-reconciliation.js';
+import type {WorkspacePatchReconciliationPort} from './application/workspace-patch-reconciliation.js';
+export type {DevWorkflowPatchReadback} from './dev-workflows-patch-reconciliation.js';
 
 export type DevWorkflowRequest =
   | {kind: 'ci_fix'; repository: string; runId: string}
@@ -30,6 +36,8 @@ export interface DevWorkflowsRuntimeOptions {
   tools?: readonly RegisteredTool[];
   github?: GitHubProvider;
   workspace?: {read: WorkspaceReadOptions; patch: WorkspacePatchApplyHostOptions; command: WorkspaceCommandOptions};
+  /** Trusted host can supply its pinned marker/ACL adapter; never accepted from workflow requests. */
+  workspacePatchReconciliation?: WorkspacePatchReconciliationPort;
   git?: Omit<GitToolsOptions, 'readVerification'>;
   /** Trusted host maps an issue to an existing failed CI run; issue text cannot select credentials or commands. */
   failedRunForIssue?: (repo: string, number: number) => string | undefined;
@@ -54,6 +62,7 @@ export interface DevWorkflowsRuntime {
   start(taskId: string, resume?: boolean): Promise<TaskSnapshot>;
   resume(taskId: string): Promise<TaskSnapshot>;
   resumeConfirmed(taskId: string, receipt: Parameters<TaskRuntime['prepareConfirmedReplay']>[1]): Promise<TaskSnapshot>;
+  reconcileWorkspacePatchTask(taskId: string, runId: string): Promise<DevWorkflowPatchReadback>;
   readResult(taskId: string): unknown;
   cancel(taskId: string, reason?: string): ReturnType<TaskRuntime['requestCancel']>;
   close(): Promise<void>;
@@ -88,6 +97,7 @@ export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions): 
     },
   });
   const registrations: (() => void)[] = [];
+  let patchRecovery: DevWorkflowPatchRecovery | undefined;
   const initialize = <T>(factory: () => T): T => {
     try { return factory(); }
     catch (error) {
@@ -100,10 +110,37 @@ export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions): 
     }
   };
   initialize(() => {
+    let recoveryPort = options.workspacePatchReconciliation;
+    if (!recoveryPort && options.workspace) {
+      const {read, patch} = options.workspace;
+      const paths = [read.rootPath, patch.recoveryRootPath, patch.powerShellPath,
+        ...(patch.helperScriptPath ? [patch.helperScriptPath] : [])];
+      const identity = () => JSON.stringify(paths.map(value => {
+        const canonical = realpathSync.native(value), stat = statSync(canonical, {bigint: true});
+        return [canonical, String(stat.dev), String(stat.ino), String(stat.birthtimeNs),
+          ...(stat.isFile() ? [String(stat.size), String(stat.mtimeNs)] : [])];
+      }));
+      const pinned = identity();
+      recoveryPort = {bindingId: createHash('sha256').update(pinned).digest('hex'),
+        async reconcile(input) {
+          if (identity() !== pinned) throw new ProtocolError('REVISION_CONFLICT', 'Trusted patch host binding changed');
+          return reconcileWorkspacePatchApply({rootPath: read.rootPath, recoveryRootPath: patch.recoveryRootPath,
+            powerShellPath: patch.powerShellPath, ...input});
+        }};
+    }
+    if (recoveryPort) {
+      const preview = options.workspace ? createWorkspacePatchPreviewTool(options.workspace.read)
+        : options.tools?.find(tool => tool.descriptor.name === 'workspace.preview_text_patch');
+      if (!preview || preview.descriptor.version !== '1.0.0') {
+        throw new ProtocolError('INVALID_ARGUMENT', 'Patch recovery requires a trusted workspace preview');
+      }
+      patchRecovery = new DevWorkflowPatchRecovery(runtime, recoveryPort, preview);
+    }
     if (options.github) registrations.push(registerGitHub(gateway, {provider: options.github}));
     if (options.workspace) {
       registrations.push(gateway.register(createWorkspaceReadTool(options.workspace.read)));
-      registrations.push(gateway.register(createWorkspacePatchApplyTool({...options.workspace.read, ...options.workspace.patch})));
+      const apply = createWorkspacePatchApplyTool({...options.workspace.read, ...options.workspace.patch});
+      registrations.push(gateway.register(patchRecovery ? patchRecovery.bind(apply) : apply));
     }
     let gitTools: ReturnType<typeof createGitTools> | undefined;
     if (options.git) {
@@ -142,7 +179,7 @@ export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions): 
         return result;
       }}));
     }
-    for (const tool of options.tools ?? []) registrations.push(gateway.register(tool));
+    for (const tool of options.tools ?? []) registrations.push(gateway.register(patchRecovery ? patchRecovery.bind(tool) : tool));
   });
   const invoker = new RuntimeToolInvoker(runtime, gateway.list());
   const tools: AgentToolPort = {
@@ -301,6 +338,13 @@ export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions): 
       runtime.prepareConfirmedReplay(taskId, receipt);
       runtime.saveCheckpoint(taskId, 'dev-confirmed-replay-receipt-v1', receipt);
       return start(taskId, true);
+    },
+    reconcileWorkspacePatchTask(taskId: string, runId: string) {
+      if (active.has(taskId)) throw new ProtocolError('REVISION_CONFLICT', 'Original workflow is still active');
+      if (!patchRecovery || runtime.loadCheckpoint(taskId, REQUEST_KEY) === undefined) {
+        throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Trusted workflow patch recovery is unavailable');
+      }
+      return patchRecovery.reconcile(taskId, runId);
     },
     readResult(taskId: string) { return runtime.loadCheckpoint(taskId, RESULT_KEY); },
     cancel(taskId: string, reason?: string) { return runtime.requestCancel(taskId, reason); },

@@ -10,6 +10,11 @@ const record = (v: unknown): v is Record<string, unknown> => v !== null && typeo
 const text = (v: unknown, max = 256): v is string => typeof v === 'string' && v.trim().length > 0 && v.length <= max;
 const repoValid = (repo: unknown): repo is string => typeof repo === 'string' && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo) && repo.length <= 200;
 const positive = (n: unknown): n is number => Number.isSafeInteger(n) && (n as number) > 0;
+function modelJson(text: string): string {
+  const trimmed = text.trim();
+  const fenced = /^`{3}(?:json)?\s*\n([\s\S]*?)\n`{3}\s*$/u.exec(trimmed);
+  return fenced ? fenced[1]! : trimmed;
+}
 function parseIssue(value: unknown): TriageIssue {
   if (!record(value) || !positive(value.number) || !text(value.title, 4096) || typeof value.body !== 'string'
     || value.body.length > 64_000 || !['open', 'closed'].includes(value.state as string)
@@ -197,7 +202,7 @@ export function createIssueTriageWorkflow(options: IssueTriageOptions) {
       if (model.usage?.totalTokens !== undefined && (!Number.isSafeInteger(model.usage.totalTokens)
         || model.usage.totalTokens < 0 || model.usage.totalTokens > options.maxTokens)) return review('token_budget_exhausted');
       let parsed: unknown;
-      try {parsed = JSON.parse(model.response.text);} catch {return review('invalid_model_response');}
+      try {parsed = JSON.parse(modelJson(model.response.text));} catch {return review('invalid_model_response');}
       const classified = classification(parsed, issue);
       if (!classified) return review('invalid_model_response');
       result = {...base(), fingerprint, classification: classified, state: 'classified', reason: 'classified'};
