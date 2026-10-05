@@ -4,7 +4,7 @@
 
 ## 入口与依赖
 
-`createCiFixWorkflow(CiFixOptions): CiFixWorkflowPort` 返回 `run(AgentWorkerContext)`；也可调用 `runCiFix(context, options)`。仅消费公开 `@personal-agent/agents` 的 `AgentToolPort` / `AgentWorkerContext` 与 `@personal-agent/models` 的 `ModelPort`，不导入 apps，不创建任务库、调度器、模型入口或授权服务。`ToolExecutionPort` 是既有 AgentToolPort 的本模块别名，并非新冻结契约。
+`createCiFixWorkflow(CiFixOptions): CiFixWorkflowPort` 返回 `run(AgentWorkerContext)`；也可调用 `runCiFix(context, options)`。消费公开 `@personal-agent/agents` 的 `AgentToolPort` / `AgentWorkerContext`、`@personal-agent/models` 的 `ModelPort` 与既已声明依赖的 `@personal-agent/github` 修复关联类型/名字校验，不导入 apps，不创建任务库、调度器、模型入口或授权服务。`ToolExecutionPort` 是既有 AgentToolPort 的本模块别名，并非新冻结契约。
 
 宿主绑定 repository、失败 runId、sourcePaths、验证 recipe、source/base branch、Git 工具名、steps/tokens 上限和 authorizationRefFor。缺端口或注册工具返回 unsupported。issue-only 模式省略 runId，要求 expectedHeadSha 与 issue 元信息；不伪造失败 CI。
 
@@ -12,9 +12,9 @@
 
 | 能力 | 名称 / 参数 |
 | --- | --- |
-| Failed run | `github.actions.run.list {repo,page:1,perPage:100,status:'failure'}` |
-| Failed jobs | `github.actions.job.list {repo,runId,page:1,perPage:100}` |
-| Job log | `github.actions.log.read {repo,runId,jobId,offset:0,maxChars}` |
+| Failed run | `github.actions.run.list {repo,page,perPage:30,status:'failure'}`，最多4页 |
+| Failed jobs | `github.actions.job.list {repo,runId,page,perPage:30}`，最多4页 |
+| Job log | `github.actions.log.read {repo,runId,jobId,offset,maxChars}`，初始offset=0，按nextOffset最多8段 |
 | Source | `workspace.read_text {path,maxBytes:65536}` |
 | Patch | `workspace.apply_text_patch {path,expectedSha256,edits}` |
 | Verify | `workspace.run_allowed_command {recipeId}` |
@@ -23,7 +23,22 @@
 | Backlink | `github.pr.comment {repo,number,body}`，含原 run URL |
 | Issue-only | `github.issue.get {repo,number}` 与 `github.issue.comment {repo,number,body}` |
 
-所有上述读写均通过 Runtime ToolGateway，模型没有 GitHub provider 或 shell 访问权。GitHub run 本身没有评论 API；实际回链是 draft PR 正文及 PR comment 引用原 run URL，issue 模式另对原 issue 评论 PR URL，不自动 close 或 merge。
+所有上述读写均通过 Runtime ToolGateway，模型没有 GitHub provider 或 shell 访问权。GitHub run 本身没有评论 API；默认未配置sourceRunBacklink时，回链是 draft PR 正文及 PR comment 引用原 run URL，issue 模式另对原 issue 评论 PR URL，不自动 close 或 merge。
+日志单段maxChars不超过65536，完整日志受共享maxLogBytes的UTF8字节预算限制；页尾半个
+UTF16码点或达到上限时停止并保留truncated，不把不完整内容称为完整失败日志。
+
+公开 `createCiRunDiscoveryWorkflow` 提供独立单页失败运行发现；Runtime `ci_list` 的
+原审批/页号/一步预算跨SQLite重启保持。宿主明确选定后提交独立 `ci_fix`，不自动轮询
+或为整页建子任务。完整公开输入输出与组合规则见
+[Runtime消费说明](DEV-WORKFLOWS-INTEGRATION-01.md)。
+
+可信宿主可显式设置 `sourceRunBacklink={toolName,runAttempt}`，原PR/评论后追加原预算内
+稳定source-backlink步骤。未配置时旧checkpoint identity不变，仍只表示PR引用原来源。
+配置时缺registered external_write在修复前返回unsupported，issue-only无run拒绝配置。
+confirmed `sourceRunLink`复用公开GitHubRepairReceipt，核对完整原identity、官方固定名字、
+same-repo Check/PR URL与neutral回执。新中性源SHA关联不等于原run页面评论或修复CI绿。
+未知执行保持等待；Runtime可显示原候选ID的unverified提示，另经新审批只读核验，
+提示或readback成功都不自动确认原未知写入、不重POST。
 
 ## 行为与可信结果
 
@@ -31,7 +46,7 @@
 
 只有 confirmed exitCode=0 后才重新读取同 HEAD SHA，并经可信 Git 工具核实实际验证 receipt 与当前文件指纹后 commit → 独立审批 push → 审批 draft PR → 写回链。commit 路径从所有轮次的 confirmed patch receipts 去重汇总；审批恢复与重启不能丢失前轮已应用文件，也不重新执行已确认补丁。暂停结果中的 verificationRunId 指向最近实际确认的验证步骤，不指向尚未执行的新轮次。
 
-Git receipt 必须从 Runtime 获得；commit 参数中的 verificationRunId 仅是查找键，不能当成功证据。实际 receipt 同 workspace/HEAD/文件快照绑定由 Git 工具及 composition 执行。本链不绕过验证；用户本次要求不在云执行开发验收，不影响未来产品实际验证要求。工具返回 pending / unknown 或外部 write state unknown 均不作为成功。
+Git receipt 必须从 Runtime 获得；commit 参数中的 verificationRunId 仅是查找键，不能当成功证据。实际 receipt 同 workspace/HEAD/文件快照绑定由 Git 工具及 composition 执行。本链不绕过验证。工具返回 pending / unknown 或外部 write state unknown 均不作为成功。
 
 issue fingerprint 与 MOD-38 一致：SHA256(JSON.stringify([number,title,body,state,sortedLabels,url,updatedAt]))；修复前重新读取并校验，变化返回 stale。PR 保留 issue URL/fingerprint，不使用自动关闭关键字。
 
@@ -56,11 +71,16 @@ helper，但源码部署没有外部 helper 配置入口。本轮保留 root/hel
 缺外部安装时仍明确拒绝，不能把 workspace 内的脚本豁免为受信程序。该选项是进程内可选
 配置，不改变 wire/tool schema 或授权范围；宿主 ACL 和非作者兼容评审仍待 goo122 核实。
 已补仓库根注册、外部 helper 实际应用、相对/越界/未知脚本/硬链接拒绝、注册后突变拒绝的
-Windows 测试源码；本轮只做语法/whitespace 静态检查，未运行或启动 PowerShell，待 Potatos498
-对最新准确 head 集中复验真实 MOD-34 链。
+Windows 测试。后续59c366b PR Foundation完整Windows日志实际通过对应临时工作区/
+PowerShell受控用例，包括外部helper实际apply、位置/硬链接拒绝、变更失效和Desktop接线。
+这些不恢复Potatos498原未知task或证明其设备完整MOD34闭环，原场景仍须精确head集中复验。
 
-已编写 `packages/coding-tools/test/ci-fix.test.mjs` Fake 行为场景：完整闭环、执行顺序、真实 verify失败拒绝commit、缺能力、模型shell拒绝、unknown不重发、pending恢复同runId、HEAD变化、请求identity变化、取消、预算、issue-only与指纹漂移。本作者按用户约束未执行测试、build、typecheck、npm install 或真实请求；只执行静态 diff 检查。
+`packages/coding-tools/test/ci-fix.test.mjs` Fake行为场景覆盖完整消费链、执行顺序、确认verify失败拒绝commit、缺能力、模型shell拒绝、unknown不重发、pending同run恢复、HEAD/identity变化、取消、预算、issue-only与指纹漂移。初稿仅静态交付，后续授权已执行构建/受控回归；不能把Fake验证称为真实Git提交或账号闭环。
 
-Potatos498 在 `656bd874a7d3bf159c773260b13ea82a5c533a17` 报告全仓 build、开发工作流 59/59 与架构检查通过。本次后续静态修复补充两文件分轮修改、第二轮审批恢复、跨轮路径完整提交及最近确认验证回执的回归场景；该新增场景尚未执行，需对后续精确 head 集中验证，不能沿用 59/59 作为修复后证据。
+Potatos498在 `656bd874` 的旧59/59报告保留为历史证据，不替代后续分轮修复和当前source。
+当前source `2eda73d` 固定Node24.15完整check实际exit0，coding-tools183/15平台跳过，
+Runtime347、根integration19通过；CI83+发现30的受控定向验证已通过，包含上述恢复回归。
+完整31workspace1990/0/50及最新Windows head见
+[统一续接清单](DEV-WORKFLOWS-CONTINUATION-20261005.md)，模块仍review/provisional。
 
-Potatos498 在集成依赖与 exports 后执行 workspace build/typecheck/test 及根架构检查，精确脚本以当前 package.json 为准。真实验收需获授权的 GitHub 仓库/分支/账号、已发布 MOD-33 adapter、真实 ModelPort/AgentArts、Windows 授权 patch host、受限验证 recipe，以及 Runtime verification snapshot adapter。Fake 通过不替代上述真实验收。
+真实验收由Potatos498在原受信场景接续，精确脚本以当前package.json为准；需要获授权的GitHub仓库/分支/账号、MOD33 adapter、真实受权ModelPort、Windows patch host、受限验证recipe及Runtime verification snapshot。Local链不强制依赖AgentArts；AgentArts兼容与比赛云验收另按对应profile执行。Fake通过不替代上述真实验收。

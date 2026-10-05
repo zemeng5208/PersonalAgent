@@ -205,9 +205,10 @@ Runtime build及组合20/20通过，包括前置诊断跨重启、无 intent/res
 这比单独 JSON/new-factory 验证补充了实际持久宿主证据，仍不是原 Windows/GitHub/GLM/cloud 验收。
 MOD38 中文/混合标签四类夹具通过只证明契约，不是未给阈值的真实分类准确率评估。
 
-规划的“修复PR链接回写原run”当前仅交付 PR 中来源 run URL，GitHub Actions run 本身没有
-已登记评论端口；不捏造反向写回。若需 check-run/commit status 等新外部写接口，由原公开底座
-协调产品语义与权限后另行实现，保持此缺项显式，不将当前引用记为原run反向回执。
+本节1839项验证时，“修复PR链接回写原run”仅交付PR中来源run URL，GitHub Actions run本身
+没有已登记评论端口。后续已在本清单“自主推进的可选源提交修复关联”交付neutral sourceSHA
+CheckRun的明确opt-in底座与消费；仍不是原run页面评论，不使用commit-status或success替代。
+当前默认来源引用不计原run反向回执，真实Checks权限/写入读回仍待对应原场景验证。
 原 unknown/Windows现场/COMMENT/label/完整Actions修复及云deployment/API/trace仍由原owner验收，
 不妨碍本轮独立源码和必要组合接线；整体Goal保持进行中。
 
@@ -360,3 +361,13 @@ goo122 Draft289 current5da274f已完成非作者只读审核，原PR评论600184
 无新增实质问题：隔离精确head Runtime6/6、两集成5/5，精确base错误码probe复现running遗留，
 head持久failed/EXTERNAL_FAILURE/task.failed。MCP官方stdio与SQLite真实、资料/HTTP/确认Fake；
 不算真人私人许可、原生交互、真实云或MOD09完成，未接管其source/APPROVE/merge。
+
+### 本人模块说明事实校正
+
+#212 `6001886824`登记4份本人MOD33/34/36/38说明及本清单，沿同一PR290续交：
+初稿禁止构建/测试的约束明确保留为当时历史，当前source2eda73d完整check证据已关联；
+MOD34运行/Job每页30最多4页、日志offset有界续读及共享UTF8预算与源码一致，
+明确默认PR来源引用与opt-in中性Check关联、发现/选定独立任务与未知候选读回边界。
+MOD36中文Git转义路径及报告/发表进度保留、MOD38原委派与缓存代际恢复说明同步。
+模块维持review/provisional；Fake/CI不升级真实权限/设备/云验收，Local链不强制AgentArts。
+仅校对source和相对链接、git diff --check；无source变更，不重复构建或测试。
