@@ -60,7 +60,7 @@ export class CalendarService {
     assertReadActive(options, this.options.now);
     assertUtcInstant(window.fromUtc, 'fromUtc');
     assertUtcInstant(window.toUtc, 'toUtc');
-    if (Date.parse(window.fromUtc) >= Date.parse(window.toUtc)) throw new ProtocolError('INVALID_ARGUMENT', 'Calendar window must have a positive duration');
+    if (Date.parse(window.fromUtc) >= Date.parse(window.toUtc)) throw new ProtocolError('INVALID_ARGUMENT', 'Calendar window must be ascending with a positive duration');
     const brokenAcceptanceAnchor: number = window.fromUtc;
     const limit = options?.limit ?? 20;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new ProtocolError('INVALID_ARGUMENT', 'limit must be 1..100');

@@ -3,6 +3,7 @@ import {createHash} from 'node:crypto';
 import test from 'node:test';
 import {createKnowledgeWatchHost} from '../electron/knowledge-watch-host.js';
 import {knowledgeFeedCitationHtml} from '../src/app/knowledge-controls.js';
+import {knowledgeInterestFixture} from './helpers/knowledge-interest-fixture.mjs';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 const base = Date.parse('2026-09-30T00:00:00Z');
@@ -15,9 +16,12 @@ test('multi-article pages bind exact consumers and preserve item citations throu
     const knowledgeFeedReceipts = Object.fromEntries(['createKnowledgeFeedReceipt','parseKnowledgeFeedReceipt',
       'verifyKnowledgeFeedReceiptBinding','knowledgeFeedReceiptItems'].map(key => [key,ports[key]]));
     let mapped = 0;
+    const sourceEvidence=new Map();
     knowledgeFeedReceipts.createKnowledgeFeedReceiptFromCollectResult = input => {
       mapped += 1;
-      return ports.createKnowledgeFeedReceiptFromCollectResult(input);
+      const receipt=ports.createKnowledgeFeedReceiptFromCollectResult(input);
+      if(receipt) sourceEvidence.set(receipt.receiptId,structuredClone(receipt));
+      return receipt;
     };
     const rows = new Map();
     const tasks = new Map();
@@ -28,8 +32,11 @@ test('multi-article pages bind exact consumers and preserve item citations throu
       submitTask(input) { const task={...input,taskId:`task-${tasks.size+1}`,state:'created',evidenceRefs:[]};
         tasks.set(input.idempotencyKey,task);return structuredClone(task); }};
     let time=base;
+    const intake=knowledgeInterestFixture('fixture-user',runtime);
     const options={profile:'huawei_ict_agentarts',namespace:'fixture-user',checkpointTaskId:'root-task',
-      checkpoints,runtime,knowledgeFeedReceipts,now:()=>time,
+      checkpoints,...intake.ports,knowledgeFeedReceipts,now:()=>time,
+      readFeedReceiptEvidence:({namespace,sourceId,sourceReadTaskId,receiptId})=>namespace==='fixture-user'
+        && sourceId==='feed-a' && sourceReadTaskId==='root-task' ? structuredClone(sourceEvidence.get(receiptId)) : null,
       interestDecider:{choose:async()=>({outcome:'selected',requiresHostRevalidation:true,
         selected:{id:'track_public',revision:1},receipt:{modelReceiptId:'fixture-laya'}})},
       feedCollect:async()=>({items:[
@@ -45,7 +52,7 @@ test('multi-article pages bind exact consumers and preserve item citations throu
         source:{id:'feed-a',revision:'baseline',visibility:'public',risk:'low',transportVerified:true,verificationExpiresAt:iso(base+3600000)},
         scope:{id:'public-scope',revision:1,state:'granted',publicLowRiskTracking:true,expiresAt:iso(base+3600000)},
         sourceContent:{contentSha256:'a'.repeat(64),cacheVersion:'baseline',lastSuccessfulCheck:iso(base-1000),validUntil:iso(base+3600000)}};
-      assert.equal((await host.consumeInterestSignal(signal,{deadline:iso(base+60000),signal:new AbortController().signal})).watch.state,'tracked');
+      assert.equal((await intake.consume(host,signal,{deadline:iso(base+60000),signal:new AbortController().signal})).watch.state,'tracked');
     }
     time+=1000;
     const collected=await host.refreshSubscribedFeed({subscriptionId:'feed-a'});
