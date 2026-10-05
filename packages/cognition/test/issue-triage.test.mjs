@@ -17,8 +17,9 @@ function fixture(overrides = {}) {
     }};
   const model = {complete: async request => {
     modelCalls.push(request);
+    if (overrides.modelComplete) return overrides.modelComplete(request);
     return {response: {kind: 'final', text: overrides.modelText ?? JSON.stringify(overrides.answer ?? answer)},
-      usage: {totalTokens: 50}, deployment: {verification: 'mock'}};
+      usage: {totalTokens: overrides.totalTokens ?? 50}, deployment: {verification: 'mock'}};
   }};
   const repair = {repairIssue: async (ctx, request) => {
     repairs.push({ctx, request});
@@ -102,6 +103,112 @@ test('no grant pauses before a label write', async () => {
   const f = fixture({authorizationRefFor: name => name === 'github.issue.label' ? undefined : 'read-scope'});
   assert.equal((await f.workflow.triageIssue(f.context, {...request, writeLabel: true})).state, 'waiting_approval');
   assert.equal(f.calls.length, 1);
+});
+test('prewrite approval resumes durable classification without another model budget', async () => {
+  let prewriteReads = 0;
+  const f = fixture({totalTokens: 1800, invoke: async call => {
+    if (call.toolName === 'github.issue.label') return {state: 'confirmed', result: {state: 'confirmed'}, evidenceRefs: ['label']};
+    if (call.runId.endsWith(':prewrite') && ++prewriteReads === 1) return {state: 'pending', evidenceRefs: []};
+    return {state: 'confirmed', result: original, evidenceRefs: ['read']};
+  }});
+  const write = {...request, writeLabel: true};
+  assert.equal((await f.workflow.triageIssue(f.context, write)).state, 'waiting_approval');
+  assert.equal(f.modelCalls.length, 1);
+  // JSON checkpoint round-trip represents a new caller after a host restart.
+  for (const [key, value] of f.checkpoints) f.checkpoints.set(key, JSON.parse(JSON.stringify(value)));
+  const restarted = fixture({totalTokens: 1800, invoke: async call => ({state: 'confirmed',
+    result: call.toolName === 'github.issue.label' ? {state: 'confirmed'} : original, evidenceRefs: ['restart-read']})});
+  restarted.context.loadCheckpoint = f.context.loadCheckpoint;
+  restarted.context.saveCheckpoint = f.context.saveCheckpoint;
+  const result = await restarted.workflow.triageIssue(restarted.context, write);
+  assert.equal(result.label, 'bug');
+  assert.equal(restarted.modelCalls.length, 0);
+  assert.equal(restarted.calls.filter(call => call.toolName === 'github.issue.label').length, 1);
+});
+test('classification waiting for a grant is reused but changed issue facts block every effect', async () => {
+  let labelAllowed = false, changed = false;
+  const f = fixture({authorizationRefFor: name => name === 'github.issue.label' && !labelAllowed ? undefined : 'scope',
+    invoke: async call => ({state: 'confirmed', result: call.toolName === 'github.issue.label'
+      ? {state: 'confirmed'} : {...original, body: changed ? 'Issue changed after classification' : original.body}, evidenceRefs: []})});
+  const write = {...request, writeLabel: true};
+  for (let i = 0; i < 3; i++) assert.equal((await f.workflow.triageIssue(f.context, write)).state, 'waiting_approval');
+  assert.equal(f.modelCalls.length, 1);
+  labelAllowed = true; changed = true;
+  assert.equal((await f.workflow.triageIssue(f.context, write)).reason, 'issue_changed');
+  assert.equal(f.modelCalls.length, 1);
+  assert.equal(f.calls.filter(call => call.toolName === 'github.issue.label').length, 0);
+  assert.equal(f.repairs.length, 0);
+});
+test('interrupted model reservation persists and never blind resubmits the unknown call', async () => {
+  let release;
+  const f = fixture({modelComplete: () => new Promise(resolve => {release = resolve;})});
+  const controller = new AbortController(); f.context.signal = controller.signal;
+  const first = f.workflow.triageIssue(f.context, {...request, writeLabel: true});
+  for (let i = 0; !release && i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.ok(release); controller.abort();
+  assert.equal((await first).state, 'manual_review');
+  const restarted = new AbortController(); f.context.signal = restarted.signal;
+  release({response: {kind: 'final', text: JSON.stringify(answer)}, usage: {totalTokens: 50}});
+  await Promise.resolve(); await Promise.resolve();
+  const resumed = f.workflow.triageIssue(f.context, {...request, writeLabel: true});
+  try {
+    const result = await Promise.race([resumed, new Promise(resolve => setImmediate(() => resolve({reason: 'still-waiting'})))]);
+    assert.equal(result.reason, 'classification_result_unknown');
+    assert.equal(f.modelCalls.length, 1);
+    assert.equal(f.calls.filter(call => call.toolName === 'github.issue.label').length, 0);
+  } finally {restarted.abort(); await resumed;}
+});
+test('resumed classification rechecks prewrite facts at the same timestamp', async () => {
+  let resumed = false;
+  const f = fixture({invoke: async call => {
+    if (call.toolName === 'github.issue.label') return {state: 'confirmed', result: {state: 'confirmed'}, evidenceRefs: []};
+    if (call.runId.endsWith(':prewrite')) return resumed
+      ? {state: 'confirmed', result: {...original, body: 'New facts at the original timestamp'}, evidenceRefs: []}
+      : {state: 'pending', evidenceRefs: []};
+    return {state: 'confirmed', result: original, evidenceRefs: []};
+  }});
+  const write = {...request, writeLabel: true, repairBug: true, repairGoal: 'authorized repair'};
+  assert.equal((await f.workflow.triageIssue(f.context, write)).state, 'waiting_approval');
+  resumed = true;
+  assert.equal((await f.workflow.triageIssue(f.context, write)).reason, 'issue_changed');
+  assert.equal(f.modelCalls.length, 1);
+  assert.equal(f.calls.filter(call => call.toolName === 'github.issue.label').length, 0);
+  assert.equal(f.repairs.length, 0);
+});
+test('classification journal rejects corrupted evidence, budget or task binding without another model', async () => {
+  for (const mutate of [journal => {journal.classification.evidence[0].quote = 'invented';},
+    journal => {journal.tokens = -1;}, journal => {journal.maxTokens++;},
+    journal => {journal.taskId = 'other-task';}, journal => {journal.phase = 'invalid';}]) {
+    const f = fixture({authorizationRefFor: name => name === 'github.issue.label' ? undefined : 'scope'});
+    const write = {...request, writeLabel: true};
+    await f.workflow.triageIssue(f.context, write);
+    const [key, journal] = [...f.checkpoints].find(([key]) => key.endsWith(':classification-v1'));
+    mutate(journal); f.checkpoints.set(key, JSON.parse(JSON.stringify(journal)));
+    assert.equal((await f.workflow.triageIssue(f.context, write)).reason, 'invalid_classification_checkpoint');
+    assert.equal(f.modelCalls.length, 1);
+    assert.equal(f.calls.filter(call => call.toolName === 'github.issue.label').length, 0);
+  }
+});
+test('settled invalid model reply consumes its reservation and is not retried', async () => {
+  for (const override of [{modelText: 'not JSON'}, {totalTokens: 4096}]) {
+    const f = fixture(override); const write = {...request, writeLabel: true};
+    const first = await f.workflow.triageIssue(f.context, write);
+    assert.equal(first.state, 'manual_review');
+    assert.equal((await f.workflow.triageIssue(f.context, write)).reason, first.reason);
+    assert.equal(f.modelCalls.length, 1);
+    assert.equal(f.calls.filter(call => call.toolName === 'github.issue.label').length, 0);
+  }
+});
+test('a narrower restart budget cannot reuse the old classification reservation', async () => {
+  const f = fixture({authorizationRefFor: name => name === 'github.issue.label' ? undefined : 'scope'});
+  const write = {...request, writeLabel: true};
+  await f.workflow.triageIssue(f.context, write);
+  const restarted = fixture({maxTokens: 1024});
+  restarted.context.loadCheckpoint = f.context.loadCheckpoint;
+  restarted.context.saveCheckpoint = f.context.saveCheckpoint;
+  assert.equal((await restarted.workflow.triageIssue(restarted.context, write)).reason, 'invalid_classification_checkpoint');
+  assert.equal(restarted.modelCalls.length, 0);
+  assert.equal(restarted.calls.filter(call => call.toolName === 'github.issue.label').length, 0);
 });
 test('unknown label result is retained and never repeated', async () => {
   const f = fixture({invoke: async call => call.toolName === 'github.issue.label'
