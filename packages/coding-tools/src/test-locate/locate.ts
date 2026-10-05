@@ -73,8 +73,13 @@ function absoluteOf(raw: string, root: string): string {
 
 /** Repo-relative when inside root; otherwise the normalized original path. */
 function displayPath(raw: string, root: string): string {
-  const absolute = absoluteOf(raw, root);
+  let absolute = absoluteOf(raw, root);
   if (foreignWindowsPath(absolute)) return toPosix(raw);
+  // Windows file URLs may use an 8.3 alias while root is already canonical.
+  // Do not resolve remote UNC frames; canonical containment still decides access.
+  if (process.platform === 'win32' && /^[a-z]:[\\/]/iu.test(absolute)) {
+    try { absolute = realpathSync.native(absolute); } catch { /* Keep unresolved frames without snippets. */ }
+  }
   const rel = relative(root, absolute);
   if (withinRoot(root, absolute)) return toPosix(rel);
   return toPosix(raw);

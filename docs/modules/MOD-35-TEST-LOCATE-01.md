@@ -59,6 +59,8 @@ TAP 解析实际 Node reporter 的多行 error/stack、嵌套失败与诊断块�
 
 Node 24.15.0/npm 11.12.1，contracts/coding-tools 构建与定位器 9/9 测试通过；根外绝对路径、../、file URL、符号链接及超大源文件均有合成回归。架构检查 3/3。仍为 provisional，不代表 MOD-34 模型归因或真实 GitHub 修复闭环已验收。
 
+Windows Foundation run `37280478199`（组合 head `09418532`）仅此定位器真实 TAP 用例失败：系统临时目录的 8.3 短路径 URL 与已 realpath 规范化的 root 未匹配。本轮对 Windows 本地盘符帧先做 native canonical 身份归一，再判 root 包含；不解析远程 UNC 帧、不放宽符号链接根外读取、不修改原行号/片段断言。Linux 定向 9/9 仍通过；修正后的 Windows 结果须以新 head Foundation 终态读回为准。
+
 - 堆栈帧的源映射（source map）解析不在本包范围（本仓测试直跑源/产物无 map 场景）；
 - Windows 与 POSIX 路径都接受，输出统一 POSIX 风格相对路径；
 - 置信度为规则型（帧序、文件匹配、错误行命中），不代表模型判断。
