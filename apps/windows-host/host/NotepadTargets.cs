@@ -9,12 +9,18 @@ internal sealed record ObservedNotepadTarget(
 
 internal static class NotepadTargetLease
 {
-    // UIA metadata lookup may block; the same lease still governs its result.
+    // UIA metadata lookup may block; the same lease and identity govern its result.
     internal static bool IsCurrent(DateTime expiresUtc, Func<bool> validate,
-        Func<DateTime>? utcNow = null)
+        Func<DateTime>? utcNow = null, Func<bool>? identityCurrent = null)
     {
         var now = utcNow ?? (() => DateTime.UtcNow);
-        return expiresUtc > now() && validate() && expiresUtc > now();
+        bool SameIdentity()
+        {
+            try { return identityCurrent?.Invoke() ?? true; }
+            catch { return false; }
+        }
+        return expiresUtc > now() && SameIdentity() && expiresUtc > now() && validate() &&
+            SameIdentity() && expiresUtc > now();
     }
 }
 
@@ -91,7 +97,6 @@ internal sealed class NotepadTargets
         if (unverifiable) return (null, "UNAUTHORIZED");
         if (candidates.Count == 0) return (null, "NOT_FOUND");
         if (candidates.Count != 1) return (null, "TARGET_AMBIGUOUS");
-        if (candidates[0].Window != GetForegroundWindow()) return (null, "TARGET_STALE");
         var candidate = candidates[0];
         var expires = deadlineUtc < now.AddSeconds(30) ? deadlineUtc : now.AddSeconds(30);
         string? errorCode = null;
@@ -101,7 +106,7 @@ internal sealed class NotepadTargets
                 candidate.Window, candidate.Pid, candidate.StartUtc);
             errorCode = result.ErrorCode;
             return result.Success;
-        });
+        }, identityCurrent: () => HasCurrentIdentity(candidate.Window, candidate.Pid, candidate.StartUtc));
         if (!current) return (null, expires <= DateTime.UtcNow ? "TIMEOUT" : errorCode ?? "TARGET_STALE");
         var target = new ObservedNotepadTarget(
             Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant(),
@@ -115,13 +120,34 @@ internal sealed class NotepadTargets
         if (!_current.TryGetValue(targetRef, out var target))
             return null;
         return NotepadTargetLease.IsCurrent(target.ExpiresUtc, () =>
-            GetForegroundWindow() == target.Window &&
-            GetWindowThreadProcessId(target.Window, out var pid) != 0 && pid == target.ProcessId &&
-            NotepadAction.HasSingleTabForManualProbe(target.Window, target.ProcessId, target.StartUtc))
+            NotepadAction.HasSingleTabForManualProbe(target.Window, target.ProcessId, target.StartUtc),
+            identityCurrent: () => HasCurrentIdentity(target.Window, target.ProcessId, target.StartUtc))
             ? target : null;
     }
 
     internal void Clear() => _current.Clear();
+
+    private static bool HasCurrentIdentity(nint window, int pid, DateTime startUtc)
+    {
+        if (GetForegroundWindow() != window ||
+            GetWindowThreadProcessId(window, out var owner) == 0 || owner != pid)
+            return false;
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            _ = process.SafeHandle;
+            if (process.HasExited || process.StartTime.ToUniversalTime() != startUtc ||
+                !NotepadAction.IsTrustedNotepadProcess(process) || process.HasExited)
+                return false;
+            // Process metadata can also block. Finish with the fast foreground
+            // and HWND owner checks; never activate or inspect the window text.
+            return GetForegroundWindow() == window &&
+                GetWindowThreadProcessId(window, out owner) != 0 && owner == pid;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or
+                                   System.ComponentModel.Win32Exception)
+        { return false; }
+    }
 
     private static List<nint> WindowsForProcess(int pid, bool visibleUnownedOnly)
     {

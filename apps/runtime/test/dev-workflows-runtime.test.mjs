@@ -75,6 +75,64 @@ test('approval resumes the original task and records a confirmed GitHub read', a
   });
 });
 
+test('CI discovery retains its approved page across SQLite restart and explicitly selects a separate repair task', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'dev-ci-discovery-'));
+  let host, listCalls = 0, modelCalls = 0;
+  const provider = model(), complete = provider.complete.bind(provider);
+  provider.complete = async request => {modelCalls++; return complete(request);};
+  const run = {id: 42, name: 'Foundation', status: 'completed', conclusion: 'failure',
+    headSha: 'a'.repeat(40), url: 'https://github.com/example/project/actions/runs/42', createdAt: '2026-10-05T00:00:00Z'};
+  const list = {descriptor: {...readTool({calls: 0}).descriptor, name: 'github.actions.run.list', inputSchema: {type: 'object'}},
+    async execute(input) {
+      listCalls++;
+      assert.deepEqual(input, {repo: 'example/project', status: 'failure', page: 2, perPage: 1, branch: 'main'});
+      return {items: [structuredClone(run)], page: 2, nextPage: 3, hasMore: true};
+    }};
+  const open = () => createDevWorkflowsRuntime({path: path.join(directory, 'runtime.sqlite'), model: provider,
+    tools: [list], maxSteps: 1, maxTokens: 1024});
+  try {
+    host = open();
+    const input = {request: {kind: 'ci_list', input: {repo: 'example/project', page: 2, perPage: 1, branch: 'main'}},
+      conversationId: 'ci-discovery', idempotencyKey: 'failed-main-page-2', deadline: new Date(Date.now() + 60_000).toISOString()};
+    const task = host.submit(input);
+    assert.equal((await host.start(task.taskId)).state, 'waiting_approval');
+    const originalApproval = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0];
+    assert.equal(originalApproval.action, 'github.actions.run.list');
+    assert.equal(listCalls, 0); assert.equal(modelCalls, 0);
+    await host.close(); host = open();
+    assert.equal(host.submit(input).taskId, task.taskId);
+    for (const changed of [{page: 3}, {branch: 'other'}, {repo: 'example/other'}, {perPage: 2}]) {
+      assert.throws(() => host.submit({...input, request: {...input.request, input: {...input.request.input, ...changed}}}),
+        /request|checkpoint|binding/i);
+    }
+    const approval = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0];
+    assert.equal(approval.approvalId, originalApproval.approvalId);
+    host.runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
+    assert.equal((await host.resume(task.taskId)).state, 'succeeded');
+    const page = host.readResult(task.taskId);
+    assert.equal(page.state, 'listed'); assert.equal(page.page, 2); assert.equal(page.nextPage, 3); assert.equal(page.hasMore, true);
+    assert.deepEqual(page.items, [run]); assert.equal(page.evidenceRefs.length, 1);
+    assert.equal(listCalls, 1); assert.equal(modelCalls, 0);
+    const records = host.runtime.readToolExecutions(task.taskId);
+    assert.equal(records.length, 1); assert.equal(records[0].state, 'confirmed');
+    await host.close(); host = open();
+    assert.deepEqual(host.readResult(task.taskId), page);
+    await assert.rejects(host.start(task.taskId), /not ready to start/i);
+    assert.equal(listCalls, 1); assert.equal(modelCalls, 0);
+    // Discovery does not schedule repairs. A trusted host selects and submits one independently.
+    const selected = page.items[0], repairInput = {request: {kind: 'ci_fix', repository: input.request.input.repo, runId: String(selected.id)},
+      conversationId: input.conversationId, idempotencyKey: `discovery-${task.taskId}-run-${selected.id}`, deadline: input.deadline};
+    const repair = host.submit(repairInput);
+    assert.notEqual(repair.taskId, task.taskId); assert.equal(repair.state, 'created');
+    assert.equal(host.submit(repairInput).taskId, repair.taskId);
+    assert.equal(listCalls, 1); assert.equal(modelCalls, 0);
+    const nextInput = {...input, request: {...input.request, input: {...input.request.input, page: page.nextPage}},
+      idempotencyKey: 'failed-main-page-3'};
+    const next = host.submit(nextInput);
+    assert.notEqual(next.taskId, task.taskId); assert.equal(next.state, 'created');
+  } finally {await host?.close(); await rm(directory, {recursive: true, force: true});}
+});
+
 test('issue discovery resumes its approved SQLite page and feeds existing independent triage tasks', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'dev-issue-discovery-'));
   let host, listCalls = 0, modelCalls = 0;
@@ -331,6 +389,73 @@ test('Unicode pre-review survives SQLite approval restarts and publishes its ori
     assert.equal(snapshot.state, 'succeeded'); assert.equal(modelCalls, 1); assert.equal(writes, 1);
     assert.equal(host.runtime.readToolExecutions(task.taskId).filter(record => record.toolName === 'github.pr.review.comment').length, 1);
   } finally {if (host) await host.close(); await rm(directory, {recursive: true, force: true});}
+});
+
+test('pre-review report and confirmed publication evidence remain visible when a later finding cannot publish', async t => {
+  for (const outcome of ['unsupported', 'pending', 'unknown']) await t.test(outcome, async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'dev-review-visible-'));
+    const headSha = 'a'.repeat(40), baseSha = 'b'.repeat(40);
+    const paths = ['src/a.ts', outcome === 'unsupported' ? 'src/a..ts' : 'src/b.ts'];
+    const diff = paths.map(file => `diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n@@ -1 +1 @@\n-old\n+new\n`).join('');
+    const writes = []; let host, modelCalls = 0;
+    const github = () => new GhCliProvider({repositories: ['example/project'], readToken: async () => 'synthetic-token',
+      runner: {async run(command) {
+        if (command.args[command.args.indexOf('--method') + 1] === 'POST') {
+          const body = JSON.parse(command.stdin); writes.push(body.path);
+          if (outcome === 'unknown' && body.path === paths[1]) return {exitCode: 1, stdout: '', stderr: 'Synthetic uncertain write'};
+          return {exitCode: 0, stdout: JSON.stringify({id: 10,
+            html_url: 'https://github.com/example/project/pull/7#discussion_r10'}), stderr: ''};
+        }
+        if (command.args.includes('Accept: application/vnd.github.diff')) return {exitCode: 0, stdout: diff, stderr: ''};
+        return {exitCode: 0, stdout: JSON.stringify({number: 7, title: 'Change', body: '', state: 'open', draft: false,
+          base: {ref: 'main', sha: baseSha}, head: {ref: 'feature', sha: headSha},
+          html_url: 'https://github.com/example/project/pull/7'}), stderr: ''};
+      }}});
+    const provider = new FakeModelProvider([{kind: 'final', text: JSON.stringify({findings: paths.map(file =>
+      ({kind: 'question', ruleId: 'rule', path: file, line: 1, side: 'RIGHT', body: `Explain ${file}`}))})}]);
+    const complete = provider.complete.bind(provider);
+    provider.complete = async input => {modelCalls++; return complete(input);};
+    const open = () => createDevWorkflowsRuntime({path: path.join(directory, 'runtime.sqlite'), model: provider,
+      github: github(), isUserPresent: () => true, maxSteps: 20, maxTokens: 2048});
+    try {
+      host = open();
+      const task = host.submit({request: {kind: 'code_review', publish: true, input: {repo: 'example/project', number: 7,
+        rules: [{id: 'rule', text: 'Explain meaningful changes'}]}}, conversationId: 'visible-review',
+        idempotencyKey: 'one-visible-review', deadline: new Date(Date.now() + 60_000).toISOString()});
+      let snapshot = await host.start(task.taskId);
+      for (let i = 0; snapshot.state === 'waiting_approval' && i < 16; i++) {
+        const approval = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0];
+        assert.ok(approval);
+        if (outcome === 'pending' && approval.action === 'github.pr.review.comment' && writes.length === 1) break;
+        host.runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
+        snapshot = await host.resume(task.taskId);
+      }
+      assert.equal(snapshot.state, outcome === 'unsupported' ? 'failed' : outcome === 'pending' ? 'waiting_approval' : 'waiting_reconciliation');
+      const result = host.readResult(task.taskId);
+      assert.equal(result.state, outcome);
+      assert.deepEqual(result.report.findings.map(finding => finding.path), paths);
+      assert.deepEqual(result.publication, {findingIndex: 1, totalFindings: 2, confirmedFindingIndexes: [0]});
+      const first = host.runtime.readToolExecutions(task.taskId).find(record => record.toolName === 'github.pr.review.comment' && record.state === 'confirmed');
+      assert.ok(first); assert.ok(result.evidenceRefs.includes(first.evidenceId));
+      assert.equal(modelCalls, 1); assert.equal(writes.length, outcome === 'unknown' ? 2 : 1);
+      await host.close(); host = open();
+      assert.deepEqual(host.readResult(task.taskId), result);
+      if (outcome === 'pending') {
+        assert.equal((await host.resume(task.taskId)).state, 'waiting_approval');
+        assert.equal(writes.length, 1); assert.equal(modelCalls, 1);
+        const approval = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0];
+        host.runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
+        assert.equal((await host.resume(task.taskId)).state, 'succeeded');
+        const completed = host.readResult(task.taskId);
+        assert.equal(completed.state, 'confirmed'); assert.deepEqual(completed.report, result.report);
+        assert.deepEqual(completed.publication.confirmedFindingIndexes, [0, 1]);
+        assert.equal(writes.length, 2); assert.equal(modelCalls, 1);
+      } else {
+        await assert.rejects(host.resume(task.taskId), /not ready to start/i);
+        assert.equal(writes.length, outcome === 'unknown' ? 2 : 1);
+      }
+    } finally {await host?.close(); await rm(directory, {recursive: true, force: true});}
+  });
 });
 
 test('PR base drift during approval cannot publish a cached pre-review', async () => {

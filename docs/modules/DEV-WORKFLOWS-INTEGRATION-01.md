@@ -22,7 +22,23 @@ Issue 修复复用 MOD-34 `createCiFixWorkflow`。宿主可提供 `failedRunForI
 
 ## 提交、暂停和恢复
 
-`submit({request, conversationId, idempotencyKey, deadline})` 受理并持久化原请求，不自动开始；`start(taskId)` 执行。request 区分 `ci_fix`、`code_review`、`issue_list`、`issue_triage`。同幂等键替换请求或 deadline 被拒绝。`readResult(taskId)` 读取模块真实结果，TaskRuntime 的 snapshot 仍为最终状态事实来源。
+`submit({request, conversationId, idempotencyKey, deadline})` 受理并持久化原请求，不自动开始；`start(taskId)` 执行。request 区分 `ci_list`、`ci_fix`、`code_review`、`issue_list`、`issue_triage`。同幂等键替换请求或 deadline 被拒绝。`readResult(taskId)` 读取模块真实结果，TaskRuntime 的 snapshot 仍为最终状态事实来源。
+
+`ci_list` 的 `input` 复用 coding-tools 公开 `CiRunListRequest`，通过
+`createCiRunDiscoveryWorkflow().listFailedRuns` 和既有 `github.actions.run.list` 读取一页失败运行。
+固定 status=failure，默认 page=1/perPage=30，单页最多30项；仓库、分支、分页及期限绑定原请求。
+不调用模型，不要求 Git/工作区/ciFix 配置，不自动轮询；仍走原 Runtime 审批、原一步预算、
+持久 checkpoint 和 unknown 原执行核实，不能把重启当作重新授权。
+成功返回已校验的 items/page/nextPage/hasMore/evidenceRefs。列表不是稳定快照或修复许可。
+可信宿主明确选择运行后，以 `ci_fix` 的 repository 与 String(selected.id) 提交独立任务，
+用发现 taskId 和 runId 组成稳定幂等键；修复重新读取来源，并单独审批工作区/Git/远端写入。
+下一页按 nextPage 显式提交，不为整页自动创建子任务或分配修复预算。
+
+`code_review` 的 publish=true 结果保留完整 prepared report，发表状态仍为真实
+confirmed/pending/unknown/unsupported；publication 提供当前 findingIndex、totalFindings 和
+confirmedFindingIndexes，evidenceRefs 保留预审和此前已确认评论证据。
+后续finding暂停或不支持不抹掉只读意见，也不把未发表意见计为已确认。
+审批重启通过原发表checkpoint消费已确认结果，原COMMENT不重发；unknown仍需原执行核实。
 
 `issue_list` 的 `input` 复用公开 `IssueListRequest`，经既有 MOD38 `listIssues` 和
 `github.issue.list` 走原 Runtime 审批；成功返回该页 items/page/nextPage/hasMore/evidenceRefs。

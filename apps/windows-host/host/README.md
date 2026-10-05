@@ -75,9 +75,20 @@ Host 只返回短期随机 `targetRef`，不返回或记录标题、正文、HWN
 `expiresAt`：请求过期优先回 `TIMEOUT`，目标过期回 `TARGET_STALE`；保持原 targetRef
 及有效期，不授予权限或延长执行期限。
 
+观察和解析还在同一次 UIA 元数据检查前后复核原前台 HWND、窗口所属 PID；每次绑定
+`Process.SafeHandle` 后核对原启动时间、可信映像/包身份及进程存活，进程元数据查询后再核
+前台与 HWND owner。慢查询期间切走前台或身份失效，不再返回成功的观察/就绪回执；
+身份不可查询也拒绝。此检查不读取标题或正文，不激活窗口，也不更新目标有效期。
+Win32 与 UIA 没有原子身份快照，最后复核之后仍有极短竞态；执行层仍须保留原写前
+重绑定、前台和用户输入检查。本改动修复迟到回执，未证明发生过错误写入或实机复现。
+
 2026-10-05 新增的 HostFixture 回归调用生产共用的 lease/readiness helper，用受控 UTC
 时钟和合成元数据 predicate 覆盖查询中跨越请求/目标期限、等于期限、入口已过期零查询、
-有效/无效/抛错目标及不续期。Desktop 的 `test/windows-host-fixture.test.mjs` 将该现有
+有效/无效/抛错目标及不续期。身份回归在元数据 predicate 中改变身份状态，验证前台、
+HWND owner、进程启动/退出的合成失效、入口已失效零查询、前后各检查及查询后异常
+拒绝，并验证身份查询自身跨期限时不再进入 UIA 或返回目标；它调用生产共用 guard，
+不代表物理切换窗口或 PID/HWND 复用实机验收。
+Desktop 的 `test/windows-host-fixture.test.mjs` 将该现有
 C# fixture 接入原 Node test glob：Windows 必须找到稳定 .NET 8 SDK，以独立临时
 `--artifacts-path` 构建所有项目引用，再发现真实 runtimeconfig 旁的 DLL 并运行，检查
 原完成 marker；SDK 缺失、构建/fixture 错误、超时或缺 marker 均失败，不因环境缺项跳过。

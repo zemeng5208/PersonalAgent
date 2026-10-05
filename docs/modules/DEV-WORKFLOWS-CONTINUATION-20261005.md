@@ -236,3 +236,53 @@ Windows 专用测试。已在 #212 登记新 `windows-host-fixture.test.mjs`，�
 超时或缺标记都会失败，不以环境原因跳过。Linux 定向运行明确1项平台跳过，语法、diff和
 独立只读评审通过；Windows 实编译/运行结果须按新 head 日志另记，尚不预记成功。
 临时产物仅清理该测试所有目录，不在源码生成 bin/obj；此受控验证仍不等于真实 UIA。
+
+上述 Windows gate 已在 `6b6569a7` 的两份实际 Foundation 日志确认通过：push
+`37353599315` / PR `37353609453`，均首次 success，各31 workspace1875通过、0失败、16跳过。
+Desktop434，Runtime330；根integration19、architecture3、contracts4通过。
+实际稳定 .NET8 构建并运行 HostFixture 的完成标记已核对，分别约25.3秒/31.0秒。
+这补齐前述旧 Host 期限修正的 C# 受控编译/运行证据，未补齐真实普通用户 UIA/设备验收，
+也不覆盖下述尚未交付的新源码。
+
+### 用户要求不等待评审后的新独立实现
+
+已认证用户邮件要求继续完成明确归属自己的工作到可交付，再由协作者在接线时审批/合并。
+当前前台持续实施，不因外部验收等待而停止；唯一交付仍为原分支和 Draft #290。
+精确文件登记见 #212 `6000691613`（P6）、`6000706716`（P8）、`6000802518`（MOD34）。
+
+- P6/MOD16：慢 UIA 元数据查询后可能前台/窗口所属进程已变化，旧 lease 只再检查时间。
+  在 Observe/Resolve 共用的生产 helper 中加入查询前后身份复核，各次绑定 Process handle，
+  核实前台 HWND、所属 PID、开始时间、存活与受信 Notepad 身份，再核对原 expiry。
+  不激活窗口、不读正文、不续期。受控夹具覆盖窗口/PID/开始时间/退出/异常/检查自身耗时，
+  并经生产 CheckTargetReady 组合保留 TIMEOUT 优先级；真实 Win32/UIA 并非原子快照，
+  仍有检查之间的小窗口，不能宣称已复现物理 PID 复用或消除所有竞态。
+  当前增量需要新 head Windows C# 编译/fixture，不能沿用 `6b6569a7` 证据。
+- P8：已保存后继续编辑时，旧提示仍显示已保存，下一次宿主状态也会覆盖未保存提示。
+  现在保留 pending/未确认/错误优先级，脏编辑显示未保存并注明当前已保存配置状态。
+  两个回归在旧源码失败，新控件7/7通过；真实 Chromium 在1280×900和480×900核对
+  保存/继续编辑/重复状态/错误/重试/撤销，零console/page错误、无横向溢出。
+  桥接明确合成宿主，不代表真实 Electron/云验收；CSS、材质及HTML布局未改。
+- MOD34：原 ci_fix 需要已知 runId，规划中的失败 run 发现没有调用方。
+  新公开 createCiRunDiscoveryWorkflow / CiRunListRequest / CiRunListResult 与 Runtime ci_list
+  读取固定 failure 的一页，最多30项。只通过 AgentToolPort，沿原审批/预算/持久恢复，
+  无模型/Git/工作区依赖；可信宿主选择后提交独立 ci_fix，下一页也显式提交。
+  不自动轮询、调度子任务或新增 wire/default Competition fallback。
+  列表与修复公开接口仍 provisional，必要类型/SQLite/全 check 与新 head CI 结果后续实记。
+- MOD36 消费：publish=true 在后续 finding 的 unsupported/pending/unknown 时原公开结果
+  覆盖 report，只剩发表状态，虽私有 checkpoint 有预审意见却无法从 readResult 展示。
+  新增两个finding的三种受控 SQLite/Fake Gh 场景先全部复现丢失报告；现在保留 report、
+  发表 index/总数/已confirmed索引，以及准备与此前评论Evidence。
+  pending重启不重复模型或首条评论，继续原审批只发表第二条；unknown原执行仍须核实。
+  Runtime组合33/33、MOD34 discovery30+既有CI53共83/83；尚非真实账号COMMENT验收。
+
+本节12路径源码冻结后已完整执行 Node24.15/npm11.12 `npm run check`：架构3、契约4、
+生成一致性、全build/typecheck通过；31workspace1876通过、1失败、50平台门控跳过。
+唯一失败为此前同症状 P1 `calendar/test/cloud-business.test.mjs:88` 的超时错误码
+EXTERNAL_FAILURE vs TIMEOUT，未修改该模块，已在 #212 `6001147118` 交 Potatos498 原owner。
+本人coding-tools153通过/15跳过、Desktop425通过/11跳过、Runtime335通过/0跳过。
+因workspace失败而未进入的根integration另外实际执行19/19通过；整套check仍exit1，
+不能称全绿，不通过重跑或改他人断言隐藏失败。新head Windows Foundation另验。
+
+每次通知保留至少五分钟回复机会，期间继续独立实现并读取新邮件。
+账户额度工具未提供读取入口，不能将内部上下文预算冒充账户剩余额度。
+原任务 unknown、真实 GitHub 写入及 UIA/云验收仍交原持有者；不计为通过、不接管其源文件。

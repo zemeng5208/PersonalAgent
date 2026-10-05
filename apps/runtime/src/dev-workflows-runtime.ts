@@ -8,10 +8,10 @@ import type {AgentToolPort, AgentWorkerContext} from '@personal-agent/agents';
 import {ModelGateway} from '@personal-agent/models';
 import type {ModelProvider} from '@personal-agent/models';
 import {ToolGateway, toolArgumentsDigest} from '@personal-agent/tool-gateway';
-import {createCiFixWorkflow, createWorkspaceReadTool, createWorkspacePatchApplyTool, createWorkspacePatchPreviewTool,
+import {createCiFixWorkflow, createCiRunDiscoveryWorkflow, createWorkspaceReadTool, createWorkspacePatchApplyTool, createWorkspacePatchPreviewTool,
   reconcileWorkspacePatchApply,
   createWorkspaceCommandTool, createGitTools, readGitWorkspaceFingerprint} from '@personal-agent/coding-tools';
-import type {CiFixOptions, WorkspaceReadOptions, WorkspacePatchApplyHostOptions,
+import type {CiFixOptions, CiRunListRequest, WorkspaceReadOptions, WorkspacePatchApplyHostOptions,
   WorkspaceCommandOptions, GitToolsOptions, GitVerificationReceipt} from '@personal-agent/coding-tools';
 import {register as registerGitHub} from '@personal-agent/github';
 import type {GitHubProvider} from '@personal-agent/github';
@@ -25,6 +25,7 @@ export type {DevWorkflowPatchReadback} from './dev-workflows-patch-reconciliatio
 
 export type DevWorkflowRequest =
   | {kind: 'ci_fix'; repository: string; runId: string}
+  | {kind: 'ci_list'; input: CiRunListRequest}
   | {kind: 'code_review'; input: CodeReviewInput; publish?: boolean}
   | {kind: 'issue_list'; input: IssueListRequest}
   | {kind: 'issue_triage'; input: IssueTriageRequest};
@@ -242,6 +243,9 @@ export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions): 
         && runtime.matchesToolExecutionInput(original, {arguments: receipt.arguments, scopeRef: receipt.runId})
         && records.every(record => confirmedReplayReady(context.taskId, record.evidenceId));
     }}));
+  const ciDiscovery = initialize(() => createCiRunDiscoveryWorkflow({tools, authorizationRefFor,
+    maxSteps: options.maxSteps, now: () => now().getTime(),
+    confirmedReplayReady: (runId, context) => confirmedReplayReady(context.taskId, runId)}));
   const active = new Map<string, Promise<TaskSnapshot>>();
 
   async function executeWorkflow(context: AgentWorkerContext) {
@@ -253,6 +257,8 @@ export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions): 
         runId: request.runId, model, tools, authorizationRefFor,
         confirmedReplayReady: runId => confirmedReplayReady(context.taskId, runId),
         maxSteps: options.maxSteps, maxTokens: options.maxTokens}).run(context);
+    } else if (request.kind === 'ci_list') {
+      result = await ciDiscovery.listFailedRuns(context, request.input);
     } else if (request.kind === 'issue_list') {
       result = await triage.listIssues(context, request.input);
     } else if (request.kind === 'issue_triage') {
@@ -269,10 +275,16 @@ export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions): 
       if (report) {
         result = {state: 'prepared', report, evidenceRefs: report.evidenceRefs};
         if (request.publish) {
+          const publicationEvidence = [...report.evidenceRefs];
+          const confirmedFindingIndexes: number[] = [];
           for (let index = 0; index < report.findings.length; index++) {
             const published = await review.publish(report, index, context,
               {...access, runId: `${context.taskId}:review:publish:${index}`});
-            result = published;
+            if ('evidenceRefs' in published) publicationEvidence.push(...published.evidenceRefs);
+            if (published.state === 'confirmed') confirmedFindingIndexes.push(index);
+            result = {...published, report, evidenceRefs: [...new Set(publicationEvidence)],
+              publication: {findingIndex: index, totalFindings: report.findings.length,
+                confirmedFindingIndexes: [...confirmedFindingIndexes]}};
             if (published.state !== 'confirmed') break;
           }
         }

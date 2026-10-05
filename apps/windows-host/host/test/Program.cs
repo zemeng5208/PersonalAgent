@@ -76,6 +76,76 @@ clock = clockStart;
 if (!NotepadTargetLease.IsCurrent(leaseExpires, () => true, () => clock) ||
     NotepadTargetLease.IsCurrent(leaseExpires, () => false, () => clock))
     throw new Exception("Valid or invalid metadata changed target lease semantics");
+// Change only identity during metadata lookup, keeping the original lease fresh.
+// These controlled predicates exercise the guard shared by Observe and Resolve;
+// they are not a physical foreground switch or PID/HWND reuse demonstration.
+foreach (var changedIdentity in new[] { "foreground", "window owner", "process start", "process exit" })
+{
+    var originalIdentity = (Foreground: (nint)123, Owner: 456, StartUtc: clockStart, Alive: true);
+    var currentIdentity = originalIdentity;
+    var identityCalls = 0;
+    var lookupCalls = 0;
+    var accepted = NotepadTargetLease.IsCurrent(leaseExpires, () =>
+        {
+            lookupCalls++;
+            switch (changedIdentity)
+            {
+                case "foreground": currentIdentity.Foreground = 0; break;
+                case "window owner": currentIdentity.Owner++; break;
+                case "process start": currentIdentity.StartUtc = clockStart.AddSeconds(1); break;
+                case "process exit": currentIdentity.Alive = false; break;
+            }
+            return true;
+        }, () => clock, () =>
+        {
+            identityCalls++;
+            return currentIdentity == originalIdentity;
+        });
+    if (accepted || lookupCalls != 1 || identityCalls != 2)
+        throw new Exception($"Slow metadata lookup accepted changed {changedIdentity} identity");
+}
+var invalidIdentityLookupCalls = 0;
+if (NotepadTargetLease.IsCurrent(leaseExpires, () =>
+    {
+        invalidIdentityLookupCalls++;
+        return true;
+    }, () => clock, () => false) || invalidIdentityLookupCalls != 0)
+    throw new Exception("Stale identity performed metadata lookup");
+var identityProbeCalls = 0;
+if (!NotepadTargetLease.IsCurrent(leaseExpires, () => true, () => clock, () =>
+    {
+        identityProbeCalls++;
+        return true;
+    }) || identityProbeCalls != 2)
+    throw new Exception("Fresh identity was not checked before and after metadata lookup");
+identityProbeCalls = 0;
+if (NotepadTargetLease.IsCurrent(leaseExpires, () => true, () => clock, () =>
+    {
+        if (++identityProbeCalls == 2)
+            throw new InvalidOperationException("Synthetic private identity failure");
+        return true;
+    }) || identityProbeCalls != 2)
+    throw new Exception("Unqueryable identity after metadata lookup did not fail closed");
+var timedIdentityLookupCalls = 0;
+if (NotepadTargetLease.IsCurrent(leaseExpires, () =>
+    {
+        timedIdentityLookupCalls++;
+        return true;
+    }, () => clock, () =>
+    {
+        clock = leaseExpires;
+        return true;
+    }) || timedIdentityLookupCalls != 0)
+    throw new Exception("Expired pre-metadata identity lookup entered UIA metadata query");
+clock = clockStart;
+identityProbeCalls = 0;
+if (NotepadTargetLease.IsCurrent(leaseExpires, () => true, () => clock, () =>
+    {
+        if (++identityProbeCalls == 2) clock = leaseExpires;
+        return true;
+    }) || identityProbeCalls != 2)
+    throw new Exception("Post-metadata identity lookup returned an expired target lease");
+clock = clockStart;
 var readinessTarget = new ObservedNotepadTarget("fixture-target", 0, 1, clockStart,
     clockStart.AddSeconds(30));
 var requestDeadline = clockStart.AddSeconds(1);
@@ -113,6 +183,21 @@ var failedReady = HostService.CheckTargetReady(requestDeadline,
 if (missingReady.Target is not null || missingReady.ErrorCode != "TARGET_STALE" ||
     failedReady.Target is not null || failedReady.ErrorCode != "TARGET_STALE")
     throw new Exception("Missing or unqueryable target did not fail closed");
+foreach (var requestExpires in new[] { false, true })
+{
+    clock = clockStart;
+    var sameReadinessIdentity = true;
+    var changedReady = HostService.CheckTargetReady(requestDeadline, () =>
+        NotepadTargetLease.IsCurrent(readinessTarget.ExpiresUtc, () =>
+        {
+            sameReadinessIdentity = false;
+            if (requestExpires) clock = requestDeadline;
+            return true;
+        }, () => clock, () => sameReadinessIdentity) ? readinessTarget : null, () => clock);
+    if (changedReady.Target is not null ||
+        changedReady.ErrorCode != (requestExpires ? "TIMEOUT" : "TARGET_STALE"))
+        throw new Exception("Changed readiness identity was accepted or changed deadline error priority");
+}
 // An unstarted Process has no queryable session/start identity. A baseline
 // failure must reject the whole observation, rather than omit an old window
 // which could become queryable after the trusted user prepares a new target.
