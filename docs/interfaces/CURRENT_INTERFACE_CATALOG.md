@@ -244,9 +244,14 @@ MOD-09L 为独立 Desktop 私人库增加分页列出已保存当前事实和原
 受信宿主按当前 revision 清除全部历史与受影响快照，WAL 截断后读回；合成数据验证旧
 版本、旧快照不可读且无关事实保留。该入口不接入 Runtime 公共事实或 Vault 原文件删除；
 私人写入仍受实际副本及删除准备门禁限制；关联 Runtime 副本通过原绑定、精确清除收据及
-pending 重启恢复接线。#284 源分支已有实际 Runtime/Memory SQLite 的父/子副本删除、无关事实
-保留与恢复不重复发送的合成回归，本次接续到 main 候选，尚非主线或真人全链路验收。
+pending 重启恢复接线。#284 的同步门禁修复及实际 Runtime/Memory SQLite 父/子副本删除、无关事实
+保留与恢复不重复发送的合成回归已通过 #285 非作者评审进入 main；真人全链路仍未验收。
 私人 Memory 源库尚无生产 backup/restore 调用路径；外部独立副本与已发送正文不在本机清除保证内。
+
+后续本地验收包 `memory-learning-mcp.test.mjs` 使用实际官方 filesystem stdio、Client 与 SQLite
+Runtime 审批验证固定 Skill 学习、版本回滚、重启及流程删除；原生启用/删除回调为显式 Fake。
+内部学习错误通过现有任务快照 Schema 校验后记录；契约未登记的码映射为 `EXTERNAL_FAILURE`，
+不扩展公共错误码、权限或接口冻结范围，真实私人来源及云端验收仍未完成。
 
 MOD-09M 在 Memory 受信 SQLite 宿主增加已提交删除回执的重启维护：若目标行仍存则拒绝，
 否则重试 WAL 截断。Desktop 私人控制器在首次读取及提交后失败的后续操作前执行该检查。

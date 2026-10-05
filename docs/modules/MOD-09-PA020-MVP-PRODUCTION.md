@@ -1,6 +1,44 @@
 # PA020 私人记忆与流程学习生产桥
 
-## 2026-10-05 主线集成候选
+## 2026-10-05 主线确认与实际 MCP 学习验收
+
+目标为 `huawei_ict_agentarts`，工作树 `.worktrees/main-ci-foundation-validation`，
+分支 `codex/mod09-learning-mcp-acceptance-20261005`，基线为
+`origin/main@53e627480dd455a06151263a8d1e1e60464d82e4`。
+
+- #285 已由 Potatos498 对 `e3a5881cb6e1388243e994dc008ad337c6be3471` 批准，
+  两项 Foundation CI 成功，合并提交 `74acc37ed9c040c750cdfd4ad1ac4374dac962cc` 已在当前 main 祖先链中。
+  #284 的同步消费门禁修复及实际 Runtime 父/子副本测试已进入主线。
+- 新增 `tests/integration/memory-learning-mcp.test.mjs`：实际启动锁定的官方 filesystem stdio 服务，
+  使用公开合成 Markdown、正式 Competition Runtime Application、Client、SQLite Policy/Runtime 与 Learning。
+  通过原 `authorization.respond` 逐任务审批，不直接签发测试授权；检查实际读取正文、摘要哈希、
+  confirmed 执行记录和 Evidence。启用及删除确认回调为显式 Fake，不属于真人原生交互证据。
+- 验收首次复现：已排队版本 2 在回滚到版本 1 后获批，绑定门禁阻止读取，
+  但内部 `NOT_VALIDATED` 被直接当成公共任务错误码，失败快照 Schema 校验拒绝，任务遗留在 `running`。
+  修复 Runtime 失败路径：先用现有公共快照契约验证错误，内部未知码映射为 `EXTERNAL_FAILURE`，
+  保留现有公共错误码及失败消息；不新增公共错误码、Schema、迁移、依赖或执行权限。
+- 定向 12/12 通过：未经验证不得启用、拒绝启用不激活、执行仍需新审批、回滚后旧任务零读取且
+  持久化 `failed`/失败事件、重启读回原激活版本并再次审批、删除全部流程版本并取消排队任务、
+  保留无关流程和原文件。实际 MCP 读取四次，云凭据读取及云调用为零。
+- 原生工具本轮初始化仍报 `trusted Node process exited unexpectedly`；重置后
+  Windows sandbox 再次报 `helper_unknown_error: setup refresh had errors`，没有新的原生窗口操作。
+
+真实用户逐条确认、Electron 原生生命周期、完整 parent→child 许可与真实 AgentArts 消费仍待验收。
+本工作包保留 goo122 在途验证范围；MOD-09 保持 `in_progress`，接口仍为 provisional。
+下文保留候选与历史分支的时间点记录，不代表当前 PR 合并状态。
+
+本轮 `npm ci`、build、Windows helper Release 构建与定向 12/12 通过。
+完整 `npm run check` 的架构、契约夹具、生成类型、类型检查与 Runtime 323/323 通过；
+汇总 1766 项，1741 通过、1 失败、24 跳过。失败为未修改的主线
+`apps/desktop/test/coding-tool-host.test.mjs:72`：仓库根工作区的 patch 工具装配断言失败，单独复跑一致。
+该测试、Desktop workspace/coding host 及 coding-tools 与 main 基线零差异，调用路径不经过本次 Runtime 失败处理。
+本机 PowerShell 7.6.5 实际存在，但 `where.exe` 输出按 UTF-8 解码所得路径不存在、含替换字符，
+按 GBK 解码所得路径存在，导致 workspace host 无法找到 PowerShell；仅调整验证 shell 代码页未解决。
+此问题属于 Desktop 受信程序发现的本机兼容性，按 P8/P6 文件归属交接，不在本记忆包改写。
+check 因失败未启动根集成，已单独运行 `npm run test:integration`，20/20 通过；不宣称完整 Foundation 全绿。
+`npm run dev`、`npm run demo:protocol`、`npm run demo:runtime` 通过，演示明确为 mock。
+
+## 2026-10-05 主线集成候选（已通过 #285 集成）
 
 目标为 `huawei_ict_agentarts`，工作树 `.worktrees/main-ci-foundation-validation`，
 分支 `codex/mod09-main-acceptance-20261005`。基线为 `origin/main@7b7f30906ddf375526edecf9fb601cce7927a91d`。
@@ -23,7 +61,7 @@
 内容为公开合成文件；不能据此宣称真实用户流程的原生启用/回退或云消费验收通过。
 `npm run dev`、`npm run demo:protocol`、`npm run demo:runtime` 全部通过，两个演示明确为 mock。
 实际 Node 24.15.0 / npm 11.12.1，测试显式使用真实 native helper 与缓存 .NET 8 运行时。
-本记录为候选验收时的状态；当前尚未完成集成 PR 的非作者评审或 main 合并，合并状态以 Git/PR 为准。
+本记录为候选验收时的状态；后续 #285 非作者评审及 main 合并已完成，见上文主线确认。
 
 ## 2026-10-05 私人消费与实际 Runtime 副本复核（历史分支验收）
 

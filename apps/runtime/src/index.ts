@@ -1309,12 +1309,17 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
         });
       }
       if (controller.signal.aborted && current.state === 'cancelling') return this.confirmCancellation(taskId);
+      const failure: TaskError = {
+        code: error instanceof RuntimeError || error instanceof ProtocolError ? error.code as TaskError['code'] : 'EXTERNAL_FAILURE',
+        message: error instanceof Error && error.message ? error.message : 'Task worker failed',
+        retryable: false
+      };
+      // Module errors may use internal codes absent from the public task contract.
+      // Validate before transitioning so a rejected error code cannot strand the task.
+      try { validateContract('snapshot', {...current, error: failure}); }
+      catch { failure.code = 'EXTERNAL_FAILURE'; }
       return this.transitionTask(taskId, 'failed', {
-        error: {
-          code: error instanceof RuntimeError || error instanceof ProtocolError ? error.code as TaskError['code'] : 'EXTERNAL_FAILURE',
-          message: error instanceof Error ? error.message : 'Task worker failed',
-          retryable: false
-        }
+        error: failure
       });
     } finally {
       if (timer) clearTimeout(timer);
