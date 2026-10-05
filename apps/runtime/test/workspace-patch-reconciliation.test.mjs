@@ -127,11 +127,45 @@ test('not_applied is terminal and unknown stays in reconciliation without reopen
     // An unknown poll is an observation: no record outcome is persisted until a verified readback.
     assert.equal(unknown.app.runtime.readToolExecutions(taskId)[0].reconciliationOutcome, undefined);
     assert.equal(unknown.calls.tool, 1);
-    assert.equal(unknown.calls.reconcile, 2);
+    assert.equal(unknown.calls.reconcile, 1);
+    assert.equal(unknown.calls.markerPresent, true);
   } finally {
     await waitForIdle(unknown.app);
     unknown.app.close();
     await rm(unknown.directory, {recursive: true, force: true});
+  }
+});
+
+test('unknown observations preserve the original marker and accept a later applied readback after restart', async () => {
+  let outcome = 'unknown';
+  const f = await fixture(() => ({path: 'src/app.js', state: 'reconciled', outcome,
+    ...hashes, currentSha256: outcome === 'unknown' ? 'c'.repeat(64) : hashes.afterSha256}));
+  try {
+    const taskId = await startUnknown(f, 'patch-unknown-restart');
+    for (let i = 0; i < 2; i++) {
+      const observed = await f.app.reconcileWorkspacePatchTask(taskId);
+      assert.equal(observed.task.state, 'waiting_reconciliation');
+      assert.equal(f.calls.markerPresent, true);
+      assert.equal(f.app.runtime.readToolExecutions(taskId)[0].reconciliationOutcome, undefined);
+      assert.equal(f.app.runtime.loadCheckpoint(taskId, 'tool-reconciliation-host-tool-' + taskId), undefined);
+    }
+    assert.deepEqual(f.calls.inputs.map(input => input.retainMarker), [true, true]);
+    f.app.close();
+    f.app = f.createApp();
+    outcome = 'applied';
+    const recovered = await f.app.reconcileWorkspacePatchTask(taskId);
+    assert.equal(recovered.task.state, 'succeeded');
+    assert.equal(f.calls.markerPresent, false);
+    assert.equal(f.calls.tool, 1, 'recovery never reexecutes the original patch');
+    assert.equal(f.app.runtime.readToolExecutions(taskId)[0].reconciliationOutcome, 'applied');
+    assert.deepEqual(f.calls.inputs.map(input => input.retainMarker), [true, true, true, undefined]);
+    const replay = await f.app.reconcileWorkspacePatchTask(taskId);
+    assert.equal(replay.task.state, 'succeeded');
+    assert.equal(f.calls.tool, 1);
+  } finally {
+    await waitForIdle(f.app);
+    f.app.close();
+    await rm(f.directory, {recursive: true, force: true});
   }
 });
 
