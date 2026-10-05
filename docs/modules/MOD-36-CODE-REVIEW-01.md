@@ -16,6 +16,9 @@
 
 Git C-style带引号/转义路径已在后续增量提供有界解码与逐字节UTF8校验，中文路径可锚定
 真实变更行；拒绝非法编码、畸形转义、NUL或路径越界，不猜另一个文件。
+Git对含空格的未加引号路径头附加一个末尾tab分隔符；解析仅移除这个分隔符，
+保留文件名的首尾/中间空格。内嵌tab、多余tab、时间戳与畸形quoted头仍拒绝，
+rename/deletion的左右变更行按原路径精确锚定；不采用trim或以空格拆路径。
 只读可定位的合法Git文件名不一定能发表：超过GitHub现有限长、包含控制字符/反斜线/
 `..`/`@{`等禁止路径时publish返回unsupported且保留finding，不预留新的unknown评论写入。
 先前已有confirmed/unknown发表checkpoint及原执行绑定仍优先，不改变原未知结果或盲重试。
@@ -30,6 +33,11 @@ prepared report、当前index/总数/已confirmed索引及累计Evidence，发�
 当前source `2eda73d` 的固定Node24.15完整check exit0，cognition201、Runtime347、
 根集成19通过；SQLite合成Gh两个finding场景验证报告不丢、后续pending不重前评论、
 unknown不普通恢复。全部31workspace1990/0/50，不是实际账号COMMENT成功证明。
+后续 #212 `6002238962` 的路径分隔符修复先保留真实Git旧失败及2失败/1负例通过的
+回归证据，固定Node24.15/npm11.12 cognition build/typecheck与完整模块204/204通过。
+真实Git临时仓库含空格路径、rename/delete与非法分隔符回归通过；注册GhCliProvider
+的明确合成transport使用真实Git spacediff，准备报告及单次COMMENT payload保持精确路径。
+独立只读复核无实质问题；没有真实账号COMMENT写入或扩大公共接口/授权。
 精确提交/Windows门禁/真实交接见
 [统一续接清单](DEV-WORKFLOWS-CONTINUATION-20261005.md)，非作者兼容与真实写入仍待完成。
 

@@ -61,8 +61,11 @@ function pullRequest(value: unknown, number: number): PullRequest {
 /** Git quotes path bytes using C escapes, including UTF-8 octets when core.quotePath is enabled. */
 function gitDiffPath(value: string): string {
   if (!value.startsWith('"')) {
-    if (value.includes('\t')) invalid('unsupported diff path');
-    return value;
+    // Git appends one tab delimiter to unquoted headers containing spaces.
+    // It is not filename whitespace; embedded tabs/timestamps remain invalid.
+    const path = value.endsWith('\t') ? value.slice(0, -1) : value;
+    if (path.includes('\t')) invalid('unsupported diff path');
+    return path;
   }
   if (!value.endsWith('"')) return invalid('malformed quoted diff path');
   const bytes: Buffer[] = [];

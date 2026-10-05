@@ -396,3 +396,18 @@ root只移除单个LF/CRLF输出终止符，保留合法目录空格。无公共
 证据性质区分。另实际Node子进程显式合成Git输出在中文UTF-8中点分块，旧实现ENOENT，
 修复后公共head返回确认结果。按AGENTS模块内部改动门槛执行受影响模块检查，
 未将上一完整check或上一Windows结果冒充此增量的完整检查；新head Windows另读回。
+
+### MOD36 含空格 Git 路径头
+
+本人4路径登记 #212 `6002238962`：code-review实现/测试、MOD36说明及本清单。
+实际临时Git repo的正常 `with space.ts` diff在未quoted路径头末尾附tab分隔符，
+旧公共codeReviewChangedLines抛INVALID_ARGUMENT导致准备预审失败；旧实际Git探针与
+新增3场景2失败/1负例通过的日志保留。仅剥单个未quoted头末尾tab，不trim合法空格，
+不放行剩余内嵌tab/时间戳/畸形quoted/NUL/父路径，不变更head/base锚定、publish限制、
+缓存/审批/unknown边界或其它P5 cognition文件。
+
+固定Node24.15/npm11.12 cognition build/typecheck及完整模块测试实际exit0，204/204，
+0跳过。真实Git中间/开头/末尾空格（真实末尾空格文件Linux限用），rename/delete左右
+定位、非法分隔符回归通过；注册GhCliProvider+明确合成transport使用实际Git spacediff，
+报告与唯一POST payload保持精确path。独立GPT6.1Sol只读复核无实质问题、diffcheck通过。
+按内部模块门槛验证，不重复整仓check；真实账号COMMENT/设备闭环和新head CI另验。

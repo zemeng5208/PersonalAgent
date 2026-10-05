@@ -64,6 +64,27 @@ test('parses default Git UTF-8 octal quoting and C-escaped filename characters',
     assert.deepEqual([...codeReviewChangedLines(encoded).get(`src/${expected}`)], ['LEFT:1', 'RIGHT:1']);
   }
 });
+test('actual Git diff paths with spaces retain the filename and strip only its terminal tab delimiter', () => {
+  const names = ['src/with space.ts', 'src/ leading.ts', 'src/trailing .ts',
+    ...(process.platform === 'win32' ? [] : ['src/actual-trailing.ts '])];
+  const actual = realQuotedDiff(names);
+  assert.match(actual, /^\+\+\+ b\/src\/with space\.ts\t$/mu);
+  const parsed = codeReviewChangedLines(actual);
+  assert.equal(parsed.size, names.length);
+  for (const name of names) assert.deepEqual([...parsed.get(name)], ['LEFT:1', 'RIGHT:1']);
+});
+test('Git space-path delimiters retain rename and deletion anchor sides', () => {
+  const rename = 'diff --git a/old name.ts b/new name.ts\n--- a/old name.ts\t\n+++ b/new name.ts\t\n@@ -1 +1 @@\n-old\n+new\n';
+  assert.deepEqual([...codeReviewChangedLines(rename)], [['old name.ts', new Set(['LEFT:1'])], ['new name.ts', new Set(['RIGHT:1'])]]);
+  const deletion = 'diff --git a/old name.ts b/old name.ts\n--- a/old name.ts\t\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n';
+  assert.deepEqual([...codeReviewChangedLines(deletion)], [['old name.ts', new Set(['LEFT:1'])]]);
+});
+test('Git path delimiters do not accept embedded tabs, timestamps, malformed quoting or traversal', () => {
+  for (const path of ['b/src/embedded\tname.ts', 'b/src/double.ts\t\t', 'b/src/a.ts\t2026-10-05 00:00:00',
+    '"b/src/a.ts"\t', 'b/../escape.ts\t', '/absolute.ts\t']) {
+    assert.throws(() => codeReviewChangedLines(diff.replace('+++ b/src/a.ts', `+++ ${path}`)), /INVALID_ARGUMENT/);
+  }
+});
 test('quoted paths reject invalid UTF-8, escapes, prefixes and traversal without accepting anchors', () => {
   for (const path of ['"b/src/\\377.ts"', '"b/src/\\303.ts"', '"b/src/\\400.ts"', '"b/src/\\q.ts"',
     '"b/src/\\12.ts"', '"b/src/unterminated.ts', '"b/src/unescaped"quote.ts"', '"b/src/\\000.ts"',
@@ -110,9 +131,10 @@ test('Unicode Git diff prepares a bound finding and publishes once after JSON re
   assert.equal(restarted.modelCalls.length, 0);
 });
 test('registered Gh connector publishes Unicode paths and keeps unsupported Git paths as read-only findings', async () => {
-  for (const filename of ['src/中文.ts', 'src/tab\tname.ts', 'src/new\nline.ts', 'src/back\\slash.ts',
+  for (const filename of ['src/中文.ts', 'src/with space.ts', 'src/tab\tname.ts', 'src/new\nline.ts', 'src/back\\slash.ts',
     'src/double..dot.ts', 'src/reflog@{name}.ts', `src/${'a'.repeat(1020)}.ts`]) {
-    const quotedDiff = `diff --git ${JSON.stringify(`a/${filename}`)} ${JSON.stringify(`b/${filename}`)}\n--- ${JSON.stringify(`a/${filename}`)}\n+++ ${JSON.stringify(`b/${filename}`)}\n@@ -1 +1 @@\n-old\n+new\n`;
+    const quotedDiff = filename === 'src/with space.ts' ? realQuotedDiff([filename])
+      : `diff --git ${JSON.stringify(`a/${filename}`)} ${JSON.stringify(`b/${filename}`)}\n--- ${JSON.stringify(`a/${filename}`)}\n+++ ${JSON.stringify(`b/${filename}`)}\n@@ -1 +1 @@\n-old\n+new\n`;
     const commands = [], invoked = [], registered = new Map();
     const pull = {number: 7, title: 'Changed file', body: '', state: 'open', base: {ref: 'main', sha: base},
       head: {ref: 'feature', sha: head}, html_url: 'https://github.com/owner/repo/pull/7', draft: false};
@@ -139,7 +161,7 @@ test('registered Gh connector publishes Unicode paths and keeps unsupported Git 
       assert.equal(prepared.state, 'prepared'); assert.deepEqual(prepared.report.findings, [reviewFinding]);
       const reads = commands.length;
       const publication = await workflow.publish(prepared.report, 0, f.context, {runId: 'publish', authorizationRef: 'synthetic-grant'});
-      if (filename === 'src/中文.ts') {
+      if (filename === 'src/中文.ts' || filename === 'src/with space.ts') {
         assert.equal(publication.state, 'confirmed');
         const posts = commands.filter(command => command.args.includes('POST'));
         assert.equal(posts.length, 1); assert.equal(JSON.parse(posts[0].stdin).path, filename);
