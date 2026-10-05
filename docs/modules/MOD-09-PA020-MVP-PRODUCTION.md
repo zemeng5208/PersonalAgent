@@ -1,5 +1,33 @@
 # PA020 私人记忆与流程学习生产桥
 
+## 2026-10-05 私人消费与实际 Runtime 副本复核
+
+目标为 `huawei_ict_agentarts`，工作树 `.worktrees/main-ci-foundation-validation`，
+分支 `codex/mod09-native-source-acceptance`。本轮延续 #280 当前生产代码，未合并远端 PR。
+
+- 修复生产私人消费门禁：`privateErasure.assertReady([])` 同步返回就绪对象，
+  消费 host 原先拒绝任何非 undefined 返回值，导致正式接线无法消费。现在只拒绝 Promise/thenable，
+  保持消费前及最终发送前的同步检查。未改变逐任务原生许可、公共 wire、迁移、依赖或 Local Profile。
+- 新增 `tests/integration/private-memory-runtime-copies.test.mjs`，使用实际 Client、
+  AgentArts Runtime Application、Runtime/Memory SQLite 与生产私人 host；
+  更正事实、逐任务消费、旧版本撤回拒绝、撤回后拒绝、父/子副本删除 pending、
+  重启按原 marker 恢复、精确 purged 收据和正文 redaction、源事实全部历史清除、无关事实/任务保留通过。
+  子任务继承的 copyOnly 元数据不构成消费许可，清除恢复不重复 HTTP 调用。
+- 新集成 2/2，已有私人消费与删除回归 6/6，合计 8/8。确认回调、HTTP 响应和子任务工作者
+  使用显式替身；子任务由可信夹具写入实际 Runtime，不构成完整工具分派或原生子任务许可验证。
+- 用户指定真实来源已通过生产只读适配器的有界检索、引文读回、版本匹配及原文件未变化检查；
+  未持久写入真实摘录或调用云服务。合成私人库生命周期和原生验收限制详见
+  `tests/manual/desktop/README.md`；真实来源路径及正文不进入公开记录。
+
+真实用户逐条确认、原生窗口完整生命周期及真实 AgentArts 消费仍待完成；MOD-09 保持 `in_progress`。
+本轮 `npm run check` 全部通过：架构、契约夹具、生成类型、类型检查与 workspace/integration 测试，
+合计 1629 项，1609 通过、0 失败、20 跳过；其中跨模块集成 19/19。
+Windows helper Release 构建通过并显式提供真实 helper 路径及缓存 .NET 8 运行时。
+`npm ci`、`npm run dev`、`npm run demo:protocol`、`npm run demo:runtime` 均通过；
+两个演示明确为 mock。本轮基础代码已接入 #280 精确头 `d484c8648af67af1e476cefe9ff140318945f4e5`，
+依赖合并前后代码树一致，增量保持独立 PR，尚未完成非作者评审或主线集成。
+下文是历史工作包证据，不表示最新 PR 状态。
+
 ## 2026-10-04 集成复核
 
 以 `origin/main@330be3862eb7ba9b50709ec8ac0c6292ff7829fd` 为依据：
