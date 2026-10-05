@@ -132,7 +132,9 @@ export class GhCliProvider implements GitHubProvider {
           const branch = object(await api(`${root}/git/ref/heads/${r.head.split('/').map(encodeURIComponent).join('/')}`));
           if (string(object(branch.object).sha) !== r.expectedHeadSha) throw new ProtocolError('REVISION_CONFLICT', 'Head branch changed; refresh patch proposal');
           const created = object(await api(`${root}/pulls`, 'POST', {title: r.title, body: r.body, head: r.head, base: r.base, draft: r.draft ?? false}));
-          return {state: 'confirmed', externalId: String(number(created.number)), url: string(created.html_url), evidenceRefs: []};
+          const externalId = String(number(created.number)); const url = string(created.html_url);
+          if (string(object(created.head).sha) !== r.expectedHeadSha) return {state: 'unknown', externalId, url, evidenceRefs: []};
+          return {state: 'confirmed', externalId, url, evidenceRefs: []};
         }
         case 'issue.comment':
         case 'pr.comment': {
