@@ -46,3 +46,7 @@ GitHub 插件评审、发布和邮件发送是开发执行证据，不计作产�
 - Browser plugin not available，使用已安装 Playwright + 本机 Chromium 151，不新增依赖。临时 HTTP 宿主加载真实 `mountAdmin`、AgentArts 控件和既有样式，合成 invoke 不连接 Electron/云端。1280×900、480×900 验证页面身份、有内容、无错误遮罩/控制台错误；保存→失败→显式重试→成功→撤销失败→重试成功，按钮/输入禁用、凭据清空及无横向溢出均通过。截图和临时脚本保留在工作区外 `/tmp/personalagent-review/agentarts-ui-*`；不是用户 Windows/安全存储/云连通验收。
 
 #280 最新 `d484c864` 已由 goo122 消费 #281 原修复，并新增 controlled-clock 测试；没有重新实现这份增量或改写其作者。新 head 的审核/CI 与前一 head 分开记录，旧通过不能替代新提交验证。
+
+## MOD-33 注入 Provider 的期限与取消
+
+等待 P8 CI 时继续本人 MOD-33，范围已沿 #277 登记。公开 GitHubService 原先仅入口检查 context，随后直接等待 Provider；对忽略 signal 的注入 Provider，取消后迟到的读取/写入结果仍可确认，或永久等待。两个新增回归在原代码均 Missing expected rejection。现在复用既有 withGitHubContext 包装 Provider：读取超时/取消明确失败；进入写 Provider 后的超时/取消保守 unknown，工具入口转 RESULT_UNKNOWN，不接受迟到 confirmed、不自动重试；入口已取消/过期仍零调用。不把信号中止当成外部操作已停止，无新接口、权限、依赖、wire 或迁移。另用受控 Date/timer 验证永久等待 Provider 到期限必结束，写保留 unknown。README 同步可选 base SHA、当前用户验证授权和包装语义；无真实 GitHub 调用。Node 24.15.0/npm 11.12.1 模块 build/typecheck 和测试 13/13 通过，完整组合检查运行中，终态回写原 PR。

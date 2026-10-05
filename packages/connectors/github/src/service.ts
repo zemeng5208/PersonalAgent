@@ -1,5 +1,6 @@
 import { ProtocolError } from '@personal-agent/contracts';
 import type { GitHubInputs, GitHubOperation, GitHubOutputs, GitHubPort, GitHubProvider, GitHubReadContext } from './provider.js';
+import { isGitHubWrite } from './provider.js';
 import { validateInput } from './schemas.js';
 import { redactValue } from './redact.js';
 
@@ -31,7 +32,15 @@ export class GitHubService implements GitHubPort {
     if (this.disposed) throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'GitHub module disposed');
     validateInput(operation, input);
     checkContext(context);
-    return redactValue(await this.provider.execute(operation, input, context));
+    try {
+      return redactValue(await withGitHubContext(context, bounded => this.provider.execute(operation, input, bounded)));
+    } catch (error) {
+      // After entering a write provider, cancellation cannot prove that no effect occurred.
+      if (isGitHubWrite(operation) && error instanceof ProtocolError && ['CANCELLED', 'TIMEOUT'].includes(error.code)) {
+        return {state: 'unknown', evidenceRefs: []} as unknown as GitHubOutputs[K];
+      }
+      throw error;
+    }
   }
   dispose(): void { if (!this.disposed) { this.disposed = true; this.provider.dispose?.(); } }
 }
