@@ -137,6 +137,13 @@ MOD29 公开 AsyncIterable/reader 响应允许 transport 复用 Uint8Array，旧
 真实 deployment/API/trace/评估以及 Windows unknown→verify→commit→push→PR→回链、
 MOD36 COMMENT、MOD38 标签仍按原持有环境 owner 接续，不能据此完成整个 MOD/Goal。
 
+交付期间 goo122 于14:46 UTC将 #288 的前一 head634870a0 squash 合入main d1fe5537，
+该main的tree9906fed9与前一分支相同，未包含本次11文件增量。
+依据用户已明确要求“前置分支后继续做到可交付Draft”，本次在同一原分支消费该main祖先，
+保留历史后交唯一后继Draft；只包含本次新diff，不重复已合入的10文件，也不批准/合并PR。
+同source tree完整 Node24.15/npm11.12 check：31workspace1772通过、0失败、49平台门控跳过，
+根integration19/19、架构3/3、契约4/4、生成/全类型检查通过。新head Windows门禁另读。
+
 ### MOD34 公开工厂有界等待与最新协作者交付
 
 规划最后核对又确认一项独立源码缺项：直接消费公开 runCiFix/createCiFixWorkflow 的注入 ModelPort/ToolPort 时，调用前后 check 不能使永久 pending 端口在取消/期限时结束。新增回归先复现原实现取消后仍等待；不把此问题描述为生产 Runtime 缺少 ModelGateway/TaskRuntime 保护。
