@@ -66,3 +66,31 @@ test('AgentArts settings require matching configuration readback before showing 
   result={configured:true,reason:'synthetic revoked claim'};
   await ui.clear();assert.match(ui.status.textContent,/撤销结果未获确认/);
 });
+
+test('AgentArts settings refresh host status while keeping pending and unconfirmed actions explicit',async t=>{
+  let resolve,reject;
+  const ui=harness(t,()=>new Promise((done,fail)=>{resolve=done;reject=fail;}));
+  ui.controls.render({configured:false,reason:'synthetic not configured'});
+  assert.equal(ui.status.textContent,'synthetic not configured');
+  ui.controls.render({configured:true,reason:'synthetic host configured'});
+  assert.equal(ui.status.textContent,'synthetic host configured');
+  const pending=ui.save();
+  ui.controls.render({configured:false,reason:'synthetic interim host status'});
+  assert.match(ui.status.textContent,/正在保存/);
+  reject(Error('private diagnostic'));await pending;
+  ui.controls.render({configured:true,reason:'synthetic older success claim'});
+  assert.match(ui.status.textContent,/保存结果未获确认/);
+  assert.equal(ui.status.attributes.get('role'),'alert');
+  const retry=ui.save();resolve({configured:true,reason:'synthetic confirmed save'});await retry;
+  assert.equal(ui.status.textContent,'synthetic confirmed save');
+  assert.equal(ui.status.attributes.get('role'),'status');
+  ui.controls.render({configured:false,reason:'synthetic host revoked'});
+  assert.equal(ui.status.textContent,'synthetic host revoked','fresh host status supersedes completed success feedback');
+  const revoking=ui.clear();
+  ui.controls.render({configured:true,reason:'synthetic concurrent publication'});
+  assert.match(ui.status.textContent,/正在撤销/);
+  reject(Error('private diagnostic'));await revoking;
+  ui.controls.render({configured:false,reason:'synthetic apparent revocation'});
+  assert.match(ui.status.textContent,/撤销结果未获确认/);
+  assert.equal(ui.status.attributes.get('role'),'alert');
+});

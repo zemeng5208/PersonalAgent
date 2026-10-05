@@ -201,26 +201,13 @@ internal sealed class HostService(HostLaunchBinding launch, HostWire wire, RunJo
         var targetRef = Field(frame, "targetRef");
         var deadline = Utc(Field(frame, "deadline"));
 
-        if (deadline <= DateTime.UtcNow)
-        {
-            await SendAsync(pipe, new
-            {
-                kind = "target_ready_result", protocolVersion = Version, requestId, sessionId,
-                targetRef, ready = false, errorCode = "TIMEOUT"
-            }, connected).ConfigureAwait(false);
-            return;
-        }
-
-        ObservedNotepadTarget? target;
-        try { target = targets.Resolve(targetRef); }
-        catch { target = null; }
-
+        var (target, errorCode) = CheckTargetReady(deadline, () => targets.Resolve(targetRef));
         if (target is null)
         {
             await SendAsync(pipe, new
             {
                 kind = "target_ready_result", protocolVersion = Version, requestId, sessionId,
-                targetRef, ready = false, errorCode = "TARGET_STALE"
+                targetRef, ready = false, errorCode
             }, connected).ConfigureAwait(false);
             return;
         }
@@ -230,6 +217,19 @@ internal sealed class HostService(HostLaunchBinding launch, HostWire wire, RunJo
             kind = "target_ready_result", protocolVersion = Version, requestId, sessionId,
             targetRef, ready = true, expiresAt = Timestamp(target.ExpiresUtc)
         }, connected).ConfigureAwait(false);
+    }
+
+    internal static (ObservedNotepadTarget? Target, string? ErrorCode) CheckTargetReady(
+        DateTime deadlineUtc, Func<ObservedNotepadTarget?> resolve, Func<DateTime>? utcNow = null)
+    {
+        var now = utcNow ?? (() => DateTime.UtcNow);
+        if (deadlineUtc <= now()) return (null, "TIMEOUT");
+        ObservedNotepadTarget? target;
+        try { target = resolve(); }
+        catch { target = null; }
+        var finished = now();
+        if (deadlineUtc <= finished) return (null, "TIMEOUT");
+        return target is null || target.ExpiresUtc <= finished ? (null, "TARGET_STALE") : (target, null);
     }
 
     private async Task StartExecuteAsync(NamedPipeServerStream pipe, NotepadTargets targets,

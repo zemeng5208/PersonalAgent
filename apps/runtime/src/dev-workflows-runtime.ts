@@ -16,7 +16,7 @@ import type {CiFixOptions, WorkspaceReadOptions, WorkspacePatchApplyHostOptions,
 import {register as registerGitHub} from '@personal-agent/github';
 import type {GitHubProvider} from '@personal-agent/github';
 import {createCodeReviewWorkflow, createIssueTriageWorkflow} from '@personal-agent/cognition';
-import type {CodeReviewInput, CodeReviewReport, IssueTriageRequest, IssueTriageOptions} from '@personal-agent/cognition';
+import type {CodeReviewInput, CodeReviewReport, IssueListRequest, IssueTriageRequest, IssueTriageOptions} from '@personal-agent/cognition';
 import {TaskRuntime} from './index.js';
 import {DevWorkflowPatchRecovery} from './dev-workflows-patch-reconciliation.js';
 import type {DevWorkflowPatchReadback} from './dev-workflows-patch-reconciliation.js';
@@ -26,6 +26,7 @@ export type {DevWorkflowPatchReadback} from './dev-workflows-patch-reconciliatio
 export type DevWorkflowRequest =
   | {kind: 'ci_fix'; repository: string; runId: string}
   | {kind: 'code_review'; input: CodeReviewInput; publish?: boolean}
+  | {kind: 'issue_list'; input: IssueListRequest}
   | {kind: 'issue_triage'; input: IssueTriageRequest};
 
 export interface DevWorkflowsRuntimeOptions {
@@ -252,6 +253,8 @@ export function createDevWorkflowsRuntime(options: DevWorkflowsRuntimeOptions): 
         runId: request.runId, model, tools, authorizationRefFor,
         confirmedReplayReady: runId => confirmedReplayReady(context.taskId, runId),
         maxSteps: options.maxSteps, maxTokens: options.maxTokens}).run(context);
+    } else if (request.kind === 'issue_list') {
+      result = await triage.listIssues(context, request.input);
     } else if (request.kind === 'issue_triage') {
       result = await triage.triageIssue(context, request.input);
     } else if (request.kind === 'code_review') {

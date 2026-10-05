@@ -162,3 +162,68 @@ Runtime applied recovery now uses the core reconciliation transaction to persist
 继续原 Windows 首因定位的源码核对发现 trusted preview、binding/candidate 校验及 intent 保存都在诊断 catch 之外：它们失败时 Gateway 仍保守 unknown，却没有固定诊断。三项回归在原实现确认 diagnostic 缺失、原授权执行 unknown、apply0；现 catch 覆盖前置至 apply，进入 apply 前只记录固定 preview 阶段/错误码，实际 apply 原分类保持。不会据此确认 not_applied、创建 marker/intent/receipt 或自动重放，原错误文本/路径/凭据不落诊断。
 
 Runtime build及组合20/20通过，包括前置诊断跨重启、无 intent/result/readback、核实拒绝且零port poll/零apply，以及原LGW applied续接与独立快照/持久读回回归。此改动只让持有原环境的 Potato 可辨别失败阶段，不宣称已定位真实 Windows 原因；新精确head门禁及非作者评审继续分列。
+
+### 新用户指令后的整套 MOD 续接
+
+用户最新直接指令及已认证项目邮件要求跳过外部阻塞，整套做到可交付后接入，
+不分段等待评审。前台已回具体阻塞邮件并恢复唯一发布槽，消费邮件续接已交的
+`9da9f6b`：MOD34 宿主等待取消/期限与 MOD38 持久分类预算四文件；不重复实现。
+继续沿唯一 Draft #290 和原分支，不自行 APPROVE/合并，不接管 Runtime core、MOD37 或 P1/P2/P5/P7。
+
+- MOD34 原 Actions run/jobs 第一页、日志 offset0 漏掉后页失败/后段错误。
+  现在在原 maxSteps/maxLogBytes/deadline 内最多4页列表、8个失败作业、每作业8段日志；
+  首步原合法参数和 checkpoint key 保持，追加页/offset 使用稳定原运行身份。
+  错页/不前进/错run拒绝；字符页上限遵守 MOD33 的65536，UTF8 byte预算按完整codepoint截取，
+  没有读完时明确 truncated，不把省略部分或页上限称完整日志。
+  现有 GitHub UTF16 slice 的页末半emoji被剔除并停止、不推进省略字符的cursor；
+  原文本其余孤立代理拒绝，实际公开Provider切页回归与独立源码probe覆盖此边界。
+- MOD36 默认 Git quoted 中文/非ASCII路径原先无法预审；现严格解析 Git C-style 字节转义，
+  fatal UTF8 解码并保留父级/绝对/畸形路径拒绝。临时真实 Git diff 加公开 prepare/publish 回归；
+  Windows 无法创建的控制字符文件只用明确协议夹具，不冒充 Windows 文件验收。
+  GitHub 既有写端口不支持的路径保留只读finding，发表返回 unsupported、零新写意图/调用；
+  既存 unknown/confirmed 回执与原run/auth校验优先保持，不放宽连接器路径规则。
+- MOD38 原修复审批后 labels/updatedAt 漂移会改变 MOD34 委派输入，导致原链无法恢复。
+  委派前保存精确来源，恢复保持原 fingerprint/PR正文，同时重新核实正文/state/敏感内容；
+  旧记录缺来源且 metadata 漂移时保守转人工，不新建修复或重发 unknown。
+  修复前读取采用持久 generation/预算预留，pending审批复用同一读取身份；实际委派后才
+  开始下一次新鲜读取，不重用原已confirmed缓存，也不每次恢复换ID造成审批循环。
+  未获原unknown核实仍零read/零delegate。真实SQLite原缓存反例先失败，正常metadata变化
+  恢复同委派输入/单次执行；关闭或正文改变只读后拒绝，不继续旧修复。
+- 原 `listIssues` 没有应用调用者；新增可选 Runtime `issue_list` 请求直接复用此公开入口，
+  原页走审批/SQLite 恢复、零模型/副作用。可信宿主按页读回显式选择 Issue 并用稳定幂等键提交
+  既有独立 `issue_triage` task；不增加调度器、整页修复循环或改变 Competition 默认入口。
+- P6 Node/npm recipe 动态 available 保留到宿主：身份/输入失效时 snapshot、Competition
+  可用性与项目授权前置一致拒绝，零 factory 执行；保留读取和其它独立能力。
+- P8 先验证/规范化网关再保留同实例已有凭据，等价HTTPS默认443/大小写/末尾斜线不误报换实例；
+  异实例/非法endpoint/非字符串凭据仍拒绝，不改变受信 readAuthorization 精确绑定。
+  控制页随新宿主 snapshot 更新状态 reason，save/revoke pending 与未确认失败提示保留优先级，
+  不再永久展示第一次“未配置”；原控件/布局/玻璃保持。小型真实 Chromium DOM fixture 验证
+  状态推送、pending、失败/重试和凭据清空，无console错误，仍明确使用合成宿主。
+
+新增真实 SQLite close/reopen 组合覆盖 MOD38 分类一次、原内容 label 一次、同timestamp正文改变
+零label，以及中文 Review 每次审批重启仍 model/COMMENT 各一次。工具/模型/账号明确合成；
+这比单独 JSON/new-factory 验证补充了实际持久宿主证据，仍不是原 Windows/GitHub/GLM/cloud 验收。
+MOD38 中文/混合标签四类夹具通过只证明契约，不是未给阈值的真实分类准确率评估。
+
+规划的“修复PR链接回写原run”当前仅交付 PR 中来源 run URL，GitHub Actions run 本身没有
+已登记评论端口；不捏造反向写回。若需 check-run/commit status 等新外部写接口，由原公开底座
+协调产品语义与权限后另行实现，保持此缺项显式，不将当前引用记为原run反向回执。
+原 unknown/Windows现场/COMMENT/label/完整Actions修复及云deployment/API/trace仍由原owner验收，
+不妨碍本轮独立源码和必要组合接线；整体Goal保持进行中。
+
+本节整套 Node 增量最终完整 `npm run check` 已实跑通过（Node 24.15.0 / npm 11.12.1）：
+31 workspace 1839 通过、0 失败、49 Linux 平台门控跳过；根 integration 19/19、
+architecture 3/3、contracts 4/4、生成一致性、全 workspace build/typecheck 通过。
+MOD34 CI 53、MOD36 Review 21、MOD38 Issue 38、Runtime DEV-WORKFLOWS 28 的定向检查
+与独立源码/SQLite复核覆盖上述新边界。原初次完整检查因发现 UTF16 页尾缺陷被主动中止，
+未计通过；修复冻结17个文件后才运行这次最终检查。随后 MOD16 的 C# 增量不在 npm
+检查范围内，需单独 .NET HostFixture 证据，不使用 Foundation Node 绿灯代替。
+
+旧 MOD16 的独立源码核对还发现 Host 的慢 UIA/元数据查询后缺少期限复核，可能返回已过期
+`observed` 或 `ready=true`。四个 Host 文件在 #212 登记后继续实现：观察/解析用同一生产
+lease helper 在查询前后复核，ready 用生产 helper 在解析后核对请求 deadline 和目标 expiry；
+不续期、不授予权限、不读正文、不改变真实 UIA 默认路径。正式 Runtime adapter 原本也会
+复核期限，未证明其正式路径发生越权写入。HostFixture 增加受控时间和合成元数据的生产
+helper 回归，但本 Linux 无 .NET，官方 SDK metadata 经现有代理 CONNECT 403，未绕过；
+只完成独立源码审查及 diff 检查，C# build/run 明确待验证。已在 #212 向原 Windows owner
+goo122/Potatos498 交精确 HostFixture build/run 命令；该 fixture 不等于真实 UIA 设备验收。

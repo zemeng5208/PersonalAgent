@@ -22,7 +22,19 @@ Issue 修复复用 MOD-34 `createCiFixWorkflow`。宿主可提供 `failedRunForI
 
 ## 提交、暂停和恢复
 
-`submit({request, conversationId, idempotencyKey, deadline})` 受理并持久化原请求，不自动开始；`start(taskId)` 执行。request 区分 `ci_fix`、`code_review`、`issue_triage`。同幂等键替换请求或 deadline 被拒绝。`readResult(taskId)` 读取模块真实结果，TaskRuntime 的 snapshot 仍为最终状态事实来源。
+`submit({request, conversationId, idempotencyKey, deadline})` 受理并持久化原请求，不自动开始；`start(taskId)` 执行。request 区分 `ci_fix`、`code_review`、`issue_list`、`issue_triage`。同幂等键替换请求或 deadline 被拒绝。`readResult(taskId)` 读取模块真实结果，TaskRuntime 的 snapshot 仍为最终状态事实来源。
+
+`issue_list` 的 `input` 复用公开 `IssueListRequest`，经既有 MOD38 `listIssues` 和
+`github.issue.list` 走原 Runtime 审批；成功返回该页 items/page/nextPage/hasMore/evidenceRefs。
+页号、仓库、筛选条件和期限属于持久原请求，重启恢复不替换页，不调用模型或写标签。
+列表不是稳定快照，列表标题/正文仍是不可信数据，不授予后续修复许可。
+
+可信宿主显式选择返回项，再用现有 `issue_triage` 提交各自独立 task；使用稳定的发现批次与
+Issue 身份作为幂等键，不因审批/进程重启重新生成键。下一页只能按读回 nextPage 显式提交。
+`issue_triage` 会重新读取原 Issue、核实分类证据，并单独审批写入；宿主提供受信 repairGoal，
+不得从 Issue 正文推导权限或命令。此入口不自动轮询、创建子任务或为整页重复分配模型预算。
+独立 task 使 MOD34 原 `ci-fix-v1` 日志、预算、审批与 unknown 记录不被另一 Issue 覆盖。
+公开请求联合新增可选分支，不改变既有 wire、工具 scope、配置格式或默认 Desktop profile。
 
 所有 GitHub 读写和 workspace/Git 执行均经 AgentToolPort → RuntimeToolInvoker → TaskRuntime 请求路径 → ToolGateway → Policy。首次调用 `requestToolApproval` 绑定原 task、runId、工具、范围和参数 digest；pending 暂停原任务。宿主用原 `runtime.respondApproval`（含 revision）决定，然后 `resume(taskId)`。拒绝审批取消任务；未知结果不因审批被重发。
 

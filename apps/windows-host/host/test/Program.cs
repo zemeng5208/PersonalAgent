@@ -52,6 +52,67 @@ using (var disconnected = new CancellationTokenSource())
     }
 }
 var wire = new HostWire(args[0]);
+// Exercise the same production lease/readiness helpers with controlled slow
+// metadata predicates. No window, UIA text or real user input is accessed.
+var clock = new DateTime(2026, 9, 27, 12, 0, 0, DateTimeKind.Utc);
+var clockStart = clock;
+var metadataCalls = 0;
+var leaseExpires = clock.AddSeconds(1);
+if (NotepadTargetLease.IsCurrent(leaseExpires, () =>
+    {
+        metadataCalls++;
+        clock = leaseExpires;
+        return true;
+    }, () => clock))
+    throw new Exception("Slow metadata lookup returned an expired target lease");
+if (metadataCalls != 1) throw new Exception("Slow target lookup was not exercised");
+if (NotepadTargetLease.IsCurrent(leaseExpires, () =>
+    {
+        metadataCalls++;
+        return true;
+    }, () => clock) || metadataCalls != 1)
+    throw new Exception("Expired lease performed metadata lookup");
+clock = clockStart;
+if (!NotepadTargetLease.IsCurrent(leaseExpires, () => true, () => clock) ||
+    NotepadTargetLease.IsCurrent(leaseExpires, () => false, () => clock))
+    throw new Exception("Valid or invalid metadata changed target lease semantics");
+var readinessTarget = new ObservedNotepadTarget("fixture-target", 0, 1, clockStart,
+    clockStart.AddSeconds(30));
+var requestDeadline = clockStart.AddSeconds(1);
+var timedOutReady = HostService.CheckTargetReady(requestDeadline, () =>
+    {
+        clock = requestDeadline;
+        return readinessTarget;
+    }, () => clock);
+if (timedOutReady.Target is not null || timedOutReady.ErrorCode != "TIMEOUT")
+    throw new Exception("Slow readiness lookup outlived its request deadline");
+var expiredLookupCalls = 0;
+var expiredRequest = HostService.CheckTargetReady(requestDeadline, () =>
+    {
+        expiredLookupCalls++;
+        return readinessTarget;
+    }, () => clock);
+if (expiredRequest.Target is not null || expiredRequest.ErrorCode != "TIMEOUT" || expiredLookupCalls != 0)
+    throw new Exception("Expired readiness request performed target lookup");
+clock = clockStart;
+var staleReady = HostService.CheckTargetReady(clockStart.AddMinutes(1), () =>
+    {
+        clock = readinessTarget.ExpiresUtc;
+        return readinessTarget;
+    }, () => clock);
+if (staleReady.Target is not null || staleReady.ErrorCode != "TARGET_STALE")
+    throw new Exception("Slow readiness lookup returned an expired target");
+clock = clockStart;
+var freshReady = HostService.CheckTargetReady(requestDeadline, () => readinessTarget, () => clock);
+if (freshReady.Target is null || freshReady.Target != readinessTarget || freshReady.Target.ExpiresUtc != readinessTarget.ExpiresUtc ||
+    freshReady.ErrorCode is not null)
+    throw new Exception("Fresh readiness changed or renewed its target");
+var missingReady = HostService.CheckTargetReady(requestDeadline, () => null, () => clock);
+var failedReady = HostService.CheckTargetReady(requestDeadline,
+    () => throw new InvalidOperationException("Synthetic private metadata failure"), () => clock);
+if (missingReady.Target is not null || missingReady.ErrorCode != "TARGET_STALE" ||
+    failedReady.Target is not null || failedReady.ErrorCode != "TARGET_STALE")
+    throw new Exception("Missing or unqueryable target did not fail closed");
 // An unstarted Process has no queryable session/start identity. A baseline
 // failure must reject the whole observation, rather than omit an old window
 // which could become queryable after the trusted user prepares a new target.

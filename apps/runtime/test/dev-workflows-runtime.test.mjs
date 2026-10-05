@@ -75,6 +75,115 @@ test('approval resumes the original task and records a confirmed GitHub read', a
   });
 });
 
+test('issue discovery resumes its approved SQLite page and feeds existing independent triage tasks', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'dev-issue-discovery-'));
+  let host, listCalls = 0, modelCalls = 0;
+  const provider = model(), complete = provider.complete.bind(provider);
+  provider.complete = async request => {modelCalls++; return complete(request);};
+  const list = {descriptor: {...readTool({calls: 0}).descriptor, name: 'github.issue.list', inputSchema: {type: 'object'}},
+    async execute(input) {
+      listCalls++; assert.equal(input.page, 2);
+      return {items: [structuredClone(issue)], page: 2, nextPage: 3, hasMore: true};
+    }};
+  const open = () => createDevWorkflowsRuntime({path: path.join(directory, 'runtime.sqlite'), model: provider,
+    tools: [list, readTool({calls: 0})], maxSteps: 16, maxTokens: 1024});
+  try {
+    host = open();
+    const input = {request: {kind: 'issue_list', input: {repo: 'example/project', page: 2, perPage: 1, state: 'open'}},
+      conversationId: 'discovery', idempotencyKey: 'repo-open-page-2', deadline: new Date(Date.now() + 60_000).toISOString()};
+    const task = host.submit(input);
+    assert.equal((await host.start(task.taskId)).state, 'waiting_approval');
+    assert.equal(listCalls, 0); assert.equal(modelCalls, 0);
+    await host.close(); host = open();
+    assert.equal(host.submit(input).taskId, task.taskId);
+    assert.throws(() => host.submit({...input, request: {...input.request, input: {...input.request.input, page: 3}}}),
+      /request|checkpoint|binding/i);
+    const approval = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0];
+    assert.equal(approval.action, 'github.issue.list');
+    host.runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
+    assert.equal((await host.resume(task.taskId)).state, 'succeeded');
+    const page = host.readResult(task.taskId);
+    assert.equal(page.state, 'listed'); assert.equal(page.page, 2); assert.equal(page.nextPage, 3);
+    assert.equal(listCalls, 1); assert.equal(modelCalls, 0);
+    const selected = page.items[0];
+    const triage = host.submit({request: {kind: 'issue_triage', input: {repo: 'example/project', number: selected.number}},
+      conversationId: 'discovery', idempotencyKey: `discovery-${task.taskId}-issue-${selected.number}`, deadline: input.deadline});
+    assert.notEqual(triage.taskId, task.taskId);
+    assert.equal((await host.start(triage.taskId)).state, 'waiting_approval');
+    const readApproval = host.runtime.listApprovals({taskId: triage.taskId, state: 'pending'}).items[0];
+    host.runtime.respondApproval(readApproval.approvalId, 'allow_once', readApproval.revision);
+    assert.equal((await host.resume(triage.taskId)).state, 'succeeded');
+    assert.equal(host.readResult(triage.taskId).classification.kind, 'docs');
+    assert.equal(listCalls, 1); assert.equal(modelCalls, 1);
+    assert.equal(host.runtime.readToolExecutions(task.taskId).every(record => record.toolName === 'github.issue.list'), true);
+  } finally {if (host) await host.close(); await rm(directory, {recursive: true, force: true});}
+});
+
+test('repair approvals re-read current Issue after SQLite restart without changing the original delegate input', async t => {
+  for (const changed of [false, true]) await t.test(changed ? 'closed changed Issue blocks original repair' : 'metadata-only change resumes original repair', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'dev-issue-repair-fresh-'));
+    let host, reads = 0, writes = 0, modelCalls = 0;
+    const requests = [];
+    let current = {...issue, title: 'Crash', body: 'Application crashes'};
+    const provider = new FakeModelProvider([{kind: 'final', text: JSON.stringify({kind: 'bug', confidence: .99,
+      evidence: [{field: 'title', quote: 'Crash'}]})}]), complete = provider.complete.bind(provider);
+    provider.complete = async request => {modelCalls++; return complete(request);};
+    const read = {...readTool({calls: 0}), async execute() {reads++; return structuredClone(current);}};
+    const write = {descriptor: {name: 'synthetic.repair.step', version: '1.0.0', inputSchema: {type: 'object'},
+      outputSchema: {type: 'object'}, requiredScopes: ['github:write'], sideEffect: 'external_write',
+      requiresPresence: true, idempotencySupport: true, recoverySupport: true},
+      async execute() {writes++; return {ok: true};}};
+    const open = () => createDevWorkflowsRuntime({path: path.join(directory, 'runtime.sqlite'), model: provider,
+      tools: [read, write], maxSteps: 20, maxTokens: 1024, isUserPresent: () => true,
+      issueTriage: {repair: {async repairIssue(context, request) {
+        requests.push(structuredClone(request));
+        const outcome = await host.tools.invoke({toolName: write.descriptor.name, toolVersion: write.descriptor.version,
+          arguments: {repo: request.repo, number: request.number}, taskId: context.taskId,
+          runId: `${context.taskId}:synthetic-repair`, authorizationRef: context.taskId,
+          deadline: context.deadline, signal: context.signal});
+        return {state: outcome.state === 'pending' ? 'waiting_approval' : 'succeeded',
+          resultSummary: 'Synthetic repair', evidenceRefs: outcome.evidenceRefs};
+      }}}});
+    try {
+      host = open();
+      const task = host.submit({request: {kind: 'issue_triage', input: {repo: 'example/project', number: 7,
+        repairBug: true, repairGoal: 'Authorized repair'}}, conversationId: 'fresh-repair',
+        idempotencyKey: 'original-repair', deadline: new Date(Date.now() + 60_000).toISOString()});
+      let snapshot = await host.start(task.taskId), approval;
+      for (let i = 0; snapshot.state === 'waiting_approval' && i < 8; i++) {
+        approval = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0];
+        assert.ok(approval);
+        if (approval.action === write.descriptor.name) break;
+        host.runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
+        snapshot = await host.resume(task.taskId);
+      }
+      assert.equal(approval.action, write.descriptor.name);
+      assert.equal(reads, 3); assert.equal(requests.length, 1); assert.equal(writes, 0);
+      await host.close(); host = undefined;
+      current = {...current, labels: ['bug'], updatedAt: '2026-10-01T01:00:00.000Z',
+        ...(changed ? {state: 'closed', body: 'Changed after repair approval'} : {})};
+      host = open();
+      approval = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0];
+      host.runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
+      assert.equal((await host.resume(task.taskId)).state, 'waiting_approval');
+      const fresh = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0];
+      assert.equal(fresh.action, 'github.issue.get');
+      assert.equal(reads, 3); assert.equal(requests.length, 1); assert.equal(writes, 0);
+      await host.close(); host = open();
+      assert.equal((await host.resume(task.taskId)).state, 'waiting_approval');
+      approval = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0];
+      assert.equal(approval.approvalId, fresh.approvalId);
+      host.runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
+      snapshot = await host.resume(task.taskId);
+      assert.equal(snapshot.taskId, task.taskId); assert.equal(snapshot.state, 'succeeded');
+      assert.equal(reads, 4); assert.equal(modelCalls, 1);
+      assert.equal(requests.length, changed ? 1 : 2); assert.equal(writes, changed ? 0 : 1);
+      if (!changed) assert.deepEqual(requests[1], requests[0]);
+      assert.equal(host.readResult(task.taskId).reason, changed ? 'issue_changed_before_repair' : 'repair_delegated');
+    } finally {if (host) await host.close(); await rm(directory, {recursive: true, force: true});}
+  });
+});
+
 test('unknown tasks cannot be reopened without original confirmed Evidence', async () => {
   await fixture(async host => {
     const task = host.submit(submission());
@@ -94,6 +203,58 @@ test('a larger CI budget does not prevent other workflows from starting', async 
     assert.equal(host.readResult(task.taskId).state, 'classified');
     assert.equal(count.calls, 1);
   }, {maxTokens: 64_000});
+});
+
+test('issue classification survives SQLite restart before prewrite approval without another model call', async t => {
+  for (const changed of [false, true]) await t.test(changed ? 'changed facts reject every label' : 'original facts label once', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'dev-triage-restart-'));
+    let host, reads = 0, labels = 0, modelCalls = 0, current = structuredClone(issue);
+    const provider = model(), complete = provider.complete.bind(provider);
+    provider.complete = async request => {modelCalls++; return complete(request);};
+    const read = {...readTool({calls: 0}), async execute() {reads++; return structuredClone(current);}};
+    const label = {descriptor: {name: 'github.issue.label', version: '0.1.0-alpha.1',
+      inputSchema: {type: 'object'}, outputSchema: {type: 'object'}, requiredScopes: ['github:write'],
+      sideEffect: 'external_write', requiresPresence: true, idempotencySupport: false, recoverySupport: true},
+      async execute(input) {
+        labels++; assert.deepEqual(input.labels, ['documentation']);
+        assert.equal(input.expectedUpdatedAt, issue.updatedAt);
+        return {state: 'confirmed', evidenceRefs: []};
+      }};
+    const open = () => createDevWorkflowsRuntime({path: path.join(directory, 'runtime.sqlite'), model: provider,
+      tools: [read, label], maxSteps: 16, maxTokens: 1024, isUserPresent: () => true});
+    try {
+      host = open();
+      const input = submission(); input.request.input.writeLabel = true;
+      const task = host.submit(input);
+      assert.equal((await host.start(task.taskId)).state, 'waiting_approval');
+      let approval = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0];
+      host.runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
+      assert.equal((await host.resume(task.taskId)).state, 'waiting_approval');
+      assert.equal(modelCalls, 1); assert.equal(labels, 0);
+      assert.equal(reads, 1);
+      await host.close(); host = undefined;
+      if (changed) current = {...current, body: 'Changed after classification at the same timestamp'};
+      host = open();
+      assert.equal(host.runtime.getTask(task.taskId).state, 'waiting_approval');
+      approval = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0];
+      assert.equal(approval.action, 'github.issue.get');
+      host.runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
+      let snapshot = await host.resume(task.taskId);
+      if (!changed) {
+        assert.equal(snapshot.state, 'waiting_approval');
+        approval = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0];
+        assert.equal(approval.action, 'github.issue.label');
+        host.runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
+        snapshot = await host.resume(task.taskId);
+      }
+      assert.equal(snapshot.taskId, task.taskId); assert.equal(snapshot.state, 'succeeded',
+        JSON.stringify(host.runtime.readToolExecutions(task.taskId)));
+      assert.equal(modelCalls, 1); assert.equal(labels, changed ? 0 : 1);
+      assert.equal(host.readResult(task.taskId).reason, changed ? 'issue_changed' : 'label_confirmed');
+      assert.equal(host.runtime.readToolExecutions(task.taskId).filter(record => record.toolName === 'github.issue.label').length,
+        changed ? 0 : 1);
+    } finally {if (host) await host.close(); await rm(directory, {recursive: true, force: true});}
+  });
 });
 
 test('failed workflow construction disposes registered GitHub providers and closes SQLite', async () => {
@@ -125,6 +286,51 @@ test('provider disposal failure does not hide the original workflow construction
     assert.equal(disposed, 1);
     await rm(database);
   } finally {await rm(directory, {recursive: true, force: true});}
+});
+
+test('Unicode pre-review survives SQLite approval restarts and publishes its original comment once', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'dev-review-unicode-restart-'));
+  const headSha = 'a'.repeat(40), baseSha = 'b'.repeat(40);
+  const file = 'src/中文.ts';
+  const quoted = '\\344\\270\\255\\346\\226\\207.ts';
+  const diff = `diff --git "a/src/${quoted}" "b/src/${quoted}"\n--- "a/src/${quoted}"\n+++ "b/src/${quoted}"\n@@ -1 +1 @@\n-old\n+new\n`;
+  let host, writes = 0, modelCalls = 0;
+  const makeGithub = () => new GhCliProvider({repositories: ['example/project'], readToken: async () => 'synthetic-token',
+    runner: {async run(command) {
+      if (command.args[command.args.indexOf('--method') + 1] === 'POST') {
+        writes++; const body = JSON.parse(command.stdin);
+        assert.equal(body.path, file); assert.equal(body.commit_id, headSha);
+        return {exitCode: 0, stdout: JSON.stringify({id: 10,
+          html_url: 'https://github.com/example/project/pull/7#discussion_r10'}), stderr: ''};
+      }
+      if (command.args.includes('Accept: application/vnd.github.diff')) return {exitCode: 0, stdout: diff, stderr: ''};
+      return {exitCode: 0, stdout: JSON.stringify({number: 7, title: '中文 change', body: '', state: 'open', draft: false,
+        base: {ref: 'main', sha: baseSha}, head: {ref: 'feature', sha: headSha},
+        html_url: 'https://github.com/example/project/pull/7'}), stderr: ''};
+    }}});
+  const provider = new FakeModelProvider([{kind: 'final', text: JSON.stringify({findings: [
+    {kind: 'question', ruleId: 'rule', path: file, line: 1, side: 'RIGHT', body: 'Explain this change'},
+  ]})}]), complete = provider.complete.bind(provider);
+  provider.complete = async request => {modelCalls++; return complete(request);};
+  const open = () => createDevWorkflowsRuntime({path: path.join(directory, 'runtime.sqlite'), model: provider,
+    github: makeGithub(), isUserPresent: () => true, maxSteps: 20, maxTokens: 1024});
+  try {
+    host = open();
+    const task = host.submit({request: {kind: 'code_review', publish: true, input: {repo: 'example/project', number: 7,
+      rules: [{id: 'rule', text: 'Explain meaningful changes'}]}}, conversationId: 'unicode-review',
+      idempotencyKey: 'one-unicode-review', deadline: new Date(Date.now() + 60_000).toISOString()});
+    let snapshot = await host.start(task.taskId), sawCommentApproval = false;
+    for (let i = 0; snapshot.state === 'waiting_approval' && i < 12; i++) {
+      await host.close(); host = open();
+      const approval = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0];
+      assert.ok(approval); sawCommentApproval ||= approval.action === 'github.pr.review.comment';
+      host.runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
+      snapshot = await host.resume(task.taskId);
+    }
+    assert.equal(sawCommentApproval, true); assert.equal(snapshot.taskId, task.taskId);
+    assert.equal(snapshot.state, 'succeeded'); assert.equal(modelCalls, 1); assert.equal(writes, 1);
+    assert.equal(host.runtime.readToolExecutions(task.taskId).filter(record => record.toolName === 'github.pr.review.comment').length, 1);
+  } finally {if (host) await host.close(); await rm(directory, {recursive: true, force: true});}
 });
 
 test('PR base drift during approval cannot publish a cached pre-review', async () => {

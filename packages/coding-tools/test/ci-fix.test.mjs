@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {getEventListeners} from 'node:events';
 import {setImmediate} from 'node:timers/promises';
+import {GhCliProvider} from '@personal-agent/github';
 import {runCiFix, createCiFixWorkflow} from '../dist/dev-workflows/ci-fix.js';
 
 const headSha = 'a'.repeat(40), fixedSha = 'b'.repeat(40), fileSha = 'c'.repeat(64);
@@ -313,6 +314,143 @@ test('real Actions queries remain bounded and never infer a missing target run',
  const missing=fixture();missing.responses['github.actions.run.list'].items=[];
  assert.equal((await runCiFix(missing.context,missing.options)).status,'unsupported');
  assert.equal(missing.modelCalls(),0);assert.equal(missing.calls.length,1);
+});
+
+test('CI repair finds a selected run and failed job beyond the first pages',async()=>{
+ const f=fixture(),invoke=f.options.tools.invoke;
+ f.options.tools.invoke=async input=>{
+  if(input.toolName==='github.actions.run.list'||input.toolName==='github.actions.job.list') {
+   f.calls.push(input);const page=input.arguments.page;
+   return {state:'confirmed',result:{items:page===1?[]:structuredClone(f.responses[input.toolName].items),page,nextPage:page===1?2:null,hasMore:page===1},evidenceRefs:[input.runId]};
+  }
+  return invoke(input);
+ };
+ assert.equal((await runCiFix(f.context,f.options)).status,'succeeded');
+ for(const name of ['github.actions.run.list','github.actions.job.list']) assert.deepEqual(f.calls.filter(c=>c.toolName===name).map(c=>c.arguments.page),[1,2]);
+ assert.equal(f.modelCalls(),1);assert.equal(f.calls.filter(c=>c.toolName==='workspace.git.commit').length,1);
+});
+test('log pagination reaches failure evidence and resumes the same approved cursor',async()=>{
+ const f=fixture(),invoke=f.options.tools.invoke,complete=f.options.model.complete;let pending=true;
+ f.options.tools.invoke=async input=>{
+  if(input.toolName==='github.actions.log.read') {
+   f.calls.push(input);const offset=input.arguments.offset;
+   if(offset===6&&pending) return {state:'pending',evidenceRefs:[]};
+   return {state:'confirmed',result:offset===0?{text:'setup\n',offset:0,nextOffset:6,truncated:true}:{text:'test failed',offset:6,nextOffset:null,truncated:false},evidenceRefs:[input.runId]};
+  }
+  return invoke(input);
+ };
+ f.options.model.complete=async request=>{const input=JSON.parse(request.messages[1].content);assert.equal(input.read.logs,'setup\ntest failed');assert.equal(input.read.truncated,false);return complete(request);};
+ assert.equal((await runCiFix(f.context,f.options)).status,'waiting_approval');assert.equal(f.modelCalls(),0);
+ pending=false;assert.equal((await runCiFix(f.context,f.options)).status,'succeeded');
+ const logs=f.calls.filter(c=>c.toolName==='github.actions.log.read');
+ assert.deepEqual(logs.map(c=>c.arguments.offset),[0,6,6]);assert.equal(logs[1].runId,logs[2].runId);assert.deepEqual(logs[1].arguments,logs[2].arguments);
+ const count=f.calls.length;assert.equal((await runCiFix(f.context,f.options)).status,'succeeded');assert.equal(f.calls.length,count);
+ assert.equal(f.modelCalls(),1);assert.equal(f.calls.filter(c=>c.toolName==='workspace.apply_text_patch').length,1);
+});
+test('malformed or non-progressing CI cursors never reach model or writes',async t=>{
+ for(const phase of ['runs','jobs','log']) await t.test(phase,async()=>{
+  const f=fixture();
+  if(phase==='runs') f.responses['github.actions.run.list']={items:[],page:1,nextPage:1,hasMore:true};
+  if(phase==='jobs') f.responses['github.actions.job.list']={items:[],page:2,nextPage:null,hasMore:false};
+  if(phase==='log') f.responses['github.actions.log.read']={text:'setup',offset:0,nextOffset:0,truncated:true};
+  await assert.rejects(runCiFix(f.context,f.options),error=>error.code==='INVALID_ARGUMENT');
+  assert.equal(f.modelCalls(),0);assert.ok(!f.calls.some(c=>c.toolName==='workspace.apply_text_patch'));
+ });
+});
+test('CI pagination honors the persisted step budget and fixed page bound',async t=>{
+ for(const maxSteps of [2,100]) await t.test(String(maxSteps),async()=>{
+  const f=fixture();f.options.maxSteps=maxSteps;
+  f.options.tools.invoke=async input=>{f.calls.push(input);const page=input.arguments.page;return {state:'confirmed',result:{items:[],page,nextPage:page+1,hasMore:true},evidenceRefs:[input.runId]};};
+  assert.equal((await runCiFix(f.context,f.options)).status,'unsupported');
+  assert.equal(f.calls.length,maxSteps===2?2:4);assert.equal(f.modelCalls(),0);
+  const count=f.calls.length;assert.equal((await runCiFix(f.context,f.options)).status,'unsupported');assert.equal(f.calls.length,count);
+ });
+});
+test('CI logs stop at the byte ceiling and report omitted pages as truncated',async()=>{
+ const f=fixture(),invoke=f.options.tools.invoke;f.options.maxLogBytes=10;
+ f.options.tools.invoke=async input=>{
+  if(input.toolName==='github.actions.log.read') {f.calls.push(input);const offset=input.arguments.offset;return {state:'confirmed',result:{text:offset===0?'setup':'er',offset,nextOffset:offset===0?5:7,truncated:true},evidenceRefs:[input.runId]};}
+  return invoke(input);
+ };
+ f.options.model.complete=async request=>{const input=JSON.parse(request.messages[1].content);assert.equal(input.read.logs,'setuper');assert.equal(input.read.truncated,true);return {response:{kind:'final',text:'{"diagnosis":"stop","patches":[]}'}};};
+ await assert.rejects(runCiFix(f.context,f.options),error=>error.code==='INVALID_ARGUMENT');
+ assert.deepEqual(f.calls.filter(c=>c.toolName==='github.actions.log.read').map(c=>c.arguments.offset),[0,5]);
+ assert.ok(!f.calls.some(c=>c.toolName==='workspace.apply_text_patch'));
+});
+test('an endless progressing log is capped before model dispatch and reports truncation',async()=>{
+ const f=fixture(),invoke=f.options.tools.invoke,complete=f.options.model.complete;
+ f.options.tools.invoke=async input=>{
+  if(input.toolName==='github.actions.log.read') {f.calls.push(input);const offset=input.arguments.offset;return {state:'confirmed',result:{text:'x',offset,nextOffset:offset+1,truncated:true},evidenceRefs:[input.runId]};}
+  return invoke(input);
+ };
+ f.options.model.complete=async request=>{const input=JSON.parse(request.messages[1].content);assert.equal(input.read.logs,'x'.repeat(8));assert.equal(input.read.truncated,true);return complete(request);};
+ assert.equal((await runCiFix(f.context,f.options)).status,'succeeded');
+ assert.deepEqual(f.calls.filter(c=>c.toolName==='github.actions.log.read').map(c=>c.arguments.offset),[0,1,2,3,4,5,6,7]);
+});
+test('the largest supported CI log budget still uses the registered per-call character bound',async()=>{
+ const f=fixture(),invoke=f.options.tools.invoke;f.options.maxLogBytes=256*1024;
+ f.options.tools.invoke=async input=>{
+  if(input.toolName==='github.actions.log.read') assert.ok(input.arguments.maxChars<=65536);
+  return invoke(input);
+ };
+ assert.equal((await runCiFix(f.context,f.options)).status,'succeeded');
+});
+test('a job receipt bound to a different run cannot become CI evidence',async()=>{
+ const f=fixture();f.responses['github.actions.job.list'].items[0].runId=43;
+ await assert.rejects(runCiFix(f.context,f.options),error=>error.code==='INVALID_ARGUMENT');
+ assert.equal(f.modelCalls(),0);assert.ok(!f.calls.some(c=>c.toolName==='github.actions.log.read'));
+});
+test('valid multibyte log pages preserve a complete UTF-8 prefix at the byte ceiling',async t=>{
+ for(const text of ['故障故障','😀故障']) await t.test(text,async()=>{
+  const f=fixture(),invoke=f.options.tools.invoke,complete=f.options.model.complete;f.options.maxLogBytes=8;
+  f.options.tools.invoke=async input=>{
+   if(input.toolName==='github.actions.log.read') {f.calls.push(input);return {state:'confirmed',result:{text,offset:0,nextOffset:null,truncated:false},evidenceRefs:[input.runId]};}
+   return invoke(input);
+  };
+  // Keep the page within the public character count while exceeding its UTF-8 budget.
+  f.options.model.complete=async request=>{
+   const read=JSON.parse(request.messages[1].content).read;
+   assert.equal(read.logs,text.startsWith('故')?'故障':'😀故');assert.ok(Buffer.byteLength(read.logs)<=8);assert.equal(read.truncated,true);
+   assert.ok(!read.logs.includes('\ufffd'));return complete(request);
+  };
+  assert.equal((await runCiFix(f.context,f.options)).status,'succeeded');
+  assert.equal(f.calls.filter(c=>c.toolName==='github.actions.log.read').length,1);
+ });
+});
+function providerLogFixture(text) {
+ const f=fixture(),invoke=f.options.tools.invoke,commands=[],pages=[];
+ const provider=new GhCliProvider({repositories:[f.options.repository],readToken:async()=> 'synthetic-token',
+  runner:{async run(command) {
+   commands.push(command.args);
+   return {exitCode:0,stdout:command.args[0]==='api'?JSON.stringify({id:7,run_id:42}):text,stderr:''};
+  }}});
+ f.options.tools.invoke=async input=>{
+  if(input.toolName!=='github.actions.log.read') return invoke(input);
+  f.calls.push(input);
+  const result=await provider.execute('actions.log.read',input.arguments,input);pages.push(result);
+  return {state:'confirmed',result,evidenceRefs:[input.runId]};
+ };
+ return {f,commands,pages};
+}
+test('actual GitHub UTF-16 log slicing never forwards a page-ending half emoji',async()=>{
+ const {f,commands,pages}=providerLogFixture('aaa😀Z'),complete=f.options.model.complete;
+ f.options.maxLogBytes=8;
+ f.options.model.complete=async request=>{
+  const read=JSON.parse(request.messages[1].content).read;
+  assert.equal(read.logs,'aaa');assert.equal(read.truncated,true);assert.equal(read.logs.isWellFormed(),true);
+  return complete(request);
+ };
+ assert.equal((await runCiFix(f.context,f.options)).status,'succeeded');
+ assert.deepEqual(pages,[{text:'aaa\ud83d',offset:0,nextOffset:4,truncated:true}]);
+ assert.equal(commands.length,2);assert.equal(f.calls.filter(c=>c.toolName==='github.actions.log.read').length,1);
+});
+test('original log text containing isolated surrogate code units is rejected',async t=>{
+ for(const text of ['a\ud83d','a\ud83db','a\ude00']) await t.test(JSON.stringify(text),async()=>{
+  const {f,pages}=providerLogFixture(text);
+  await assert.rejects(runCiFix(f.context,f.options),error=>error.code==='INVALID_ARGUMENT');
+  assert.equal(pages[0].truncated,false);assert.equal(f.modelCalls(),0);
+  assert.ok(!f.calls.some(c=>c.toolName==='workspace.apply_text_patch'));
+ });
 });
 
 test('model hash errors use the trusted read hash in the approved patch request',async()=>{

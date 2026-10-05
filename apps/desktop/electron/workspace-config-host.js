@@ -92,6 +92,7 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
   let savedRoot,savedNode,savedCheckFile,savedNpmCli,boundRoot,boundNode,boundCheckFile,boundNpmCli,boundProjectHelper,rootIdentity,nodeIdentity,application,active=true,consent,applyHost,failure='',commandFailure='',projectFailure='';
   let generation=randomUUID();
   const implementations=[];
+  const commandReadiness=new Map();
   const inflight=new Set();
   const workspaceExportProposals=new Map();
   const confirmedWorkspaceReads=new Map();
@@ -208,6 +209,11 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
           }
           if(projectRequested && !commandImplementations.some(item=>item.descriptor.name.startsWith('workspace.npm_'))
             && !projectFailure) projectFailure='工作区构建或测试命令暂不可用';
+          if(typeof recipe.available==='function') {
+            for(const command of commandImplementations) {
+              commandReadiness.set(command.descriptor.name,()=>recipe.available());
+            }
+          }
           implementations.push(...commandImplementations);
         } catch {commandFailure='Node 检查装配失败；读取和其他已配置能力仍可用';}
       } else if (savedNode && (savedCheckFile || projectRequested)) commandFailure='命令实现尚未接入；读取和其他已配置能力仍可用';
@@ -251,6 +257,10 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
     } catch {return false;}
   };
   const isProject=tool=>['workspace.npm_build','workspace.npm_test'].includes(tool.descriptor.name);
+  const commandReady=tool=> {
+    const read=commandReadiness.get(tool.descriptor.name);
+    try {return !read || read()===true;} catch {return false;}
+  };
   const projectIdentityCurrent=()=> {
     try {return savedNode && fixedNode(savedNode,boundRoot)===savedNode
       && savedNpmCli && fixedNpmCli(savedNpmCli,boundRoot)===savedNpmCli
@@ -258,6 +268,7 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
     catch {return false;}
   };
   const enabled=tool => active && consent?.cloudExportAllowed===true && selectionsCurrent() && identityCurrent()
+    && commandReady(tool)
     && (tool.descriptor.sideEffect==='read' || (isProject(tool)
       ? consent.commandAllowed===true && consent.projectCodeAllowed===true && projectIdentityCurrent()
       : ['workspace.git_diff_check','workspace.node_check'].includes(tool.descriptor.name)
@@ -430,10 +441,14 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
     nodeConfigured:Boolean(savedNode),checkFileConfigured:Boolean(savedCheckFile),npmCliConfigured:Boolean(savedNpmCli),
     checkFileName:savedCheckFile?path.basename(savedCheckFile):'',
     nodeCheckAvailable:tools.some(tool=>tool.descriptor.name==='workspace.node_check' && enabled(tool)),
-    projectScriptsAvailable:selectionsCurrent() && tools.some(isProject) && projectIdentityCurrent()===true,
+    projectScriptsAvailable:active && selectionsCurrent() && identityCurrent()
+      && tools.some(tool=>isProject(tool) && commandReady(tool)) && projectIdentityCurrent()===true,
     projectCommands:tools.filter(isProject).map(tool=>tool.descriptor.name==='workspace.npm_build'?'build':'test'),
     projectCodeAllowed:consent?.projectCodeAllowed===true,
-    commandReason:commandFailure,projectReason:projectFailure,
+    commandReason:commandFailure || (tools.some(tool=>tool.descriptor.name==='workspace.node_check'
+      && !commandReady(tool))?'命令文件或配置已变化，请重启应用重新装配':''),
+    projectReason:projectFailure || (tools.some(tool=>isProject(tool) && !commandReady(tool))
+      ?'项目命令文件或配置已变化，请重启应用重新装配':''),
     readAvailable:tools.some(tool=>tool.descriptor.name==='workspace.read_text') && enabled(tools[0]),
     writeAvailable:tools.some(tool=>tool.descriptor.name==='workspace.apply_text_patch' && enabled(tool)),
     commandAvailable:tools.some(tool=>['workspace.git_diff_check','workspace.node_check'].includes(tool.descriptor.name) && enabled(tool)),

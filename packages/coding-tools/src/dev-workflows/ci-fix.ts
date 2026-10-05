@@ -7,6 +7,33 @@ const sha = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
 const digest = /^[a-f0-9]{64}$/u;
 const object = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 function invalid(): never { throw new ProtocolError('INVALID_ARGUMENT', 'Invalid CI repair proposal or receipt'); }
+// The first-page keys and arguments remain compatible with existing checkpoints.
+// Old receipts without cursor metadata are terminal; partial metadata is invalid.
+function nextPage(value: Record<string, unknown>, page: number): number | null {
+  if (!['page', 'nextPage', 'hasMore'].some(k => Object.hasOwn(value, k))) return null;
+  if (value.page !== page || typeof value.hasMore !== 'boolean'
+    || (value.hasMore ? !Number.isSafeInteger(value.nextPage) || Number(value.nextPage) !== page + 1 || Number(value.nextPage) > 10000 : value.nextPage !== null)) invalid();
+  return value.nextPage as number | null;
+}
+function nextOffset(value: Record<string, unknown>, offset: number): number | null {
+  if (!['offset', 'nextOffset'].some(k => Object.hasOwn(value, k))) return null;
+  if (value.offset !== offset || (value.truncated
+    ? !Number.isSafeInteger(value.nextOffset) || value.nextOffset !== offset + (value.text as string).length || Number(value.nextOffset) <= offset
+    : value.nextOffset !== null)) invalid();
+  return value.nextOffset as number | null;
+}
+function utf8Prefix(text: string, maxBytes: number): string {
+  // With Unicode mode this range matches only unpaired surrogate code units.
+  if (/[\uD800-\uDFFF]/u.test(text)) invalid();
+  if (Buffer.byteLength(text) <= maxBytes) return text;
+  let bytes = 0, chars = 0;
+  for (const char of text) {
+    const size = Buffer.byteLength(char);
+    if (bytes + size > maxBytes) break;
+    bytes += size; chars += char.length;
+  }
+  return text.slice(0, chars);
+}
 /** GLM/Pangu-family models wrap JSON in markdown fences; the fence is transport framing, not content. */
 function stripModelJsonFence(text: string): string {
   const trimmed = text.trim();
@@ -138,24 +165,62 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
   try {
     let read: {run: Record<string, unknown>; logs: string; truncated: boolean};
     if (options.runId) {
-    const runs = await invoke('runs', 'github.actions.run.list', {repo: options.repository, page: 1, perPage: 30, status: 'failure'});
-    if (!object(runs) || !Array.isArray(runs.items)) invalid();
-    const run = runs.items.find(r => object(r) && String(r.id) === options.runId);
-    if (!object(run)) throw new Pause('unsupported', 'Failed run not found within bounded page');
+    let run: Record<string, unknown> | undefined;
+    for (let page = 1; page <= 4;) {
+      const runs = await invoke(page === 1 ? 'runs' : `runs-page-${page}`, 'github.actions.run.list', {repo: options.repository, page, perPage: 30, status: 'failure'});
+      if (!object(runs) || !Array.isArray(runs.items) || runs.items.length > 30) invalid();
+      const next = nextPage(runs, page);
+      const selected = runs.items.find(r => object(r) && String(r.id) === options.runId);
+      if (object(selected)) { run = selected; break; }
+      if (next === null) break;
+      page = next;
+    }
+    if (!run) throw new Pause('unsupported', 'Failed run not found within bounded pages');
     if (run.conclusion !== 'failure' || typeof run.headSha !== 'string' || !sha.test(run.headSha) || typeof run.url !== 'string' || !run.url.startsWith('https://')) invalid();
-    const jobs = await invoke('jobs', 'github.actions.job.list', {repo: options.repository, runId: Number(options.runId), page: 1, perPage: 30});
-    if (!object(jobs) || !Array.isArray(jobs.items)) invalid();
-    const failedJobs = jobs.items.filter(v => object(v) && v.conclusion === 'failure').slice(0, 8);
+    const failedJobs: Record<string, unknown>[] = [];
+    const jobIds = new Set<number>();
+    let truncated = false;
+    for (let page = 1; page <= 4;) {
+      const jobs = await invoke(page === 1 ? 'jobs' : `jobs-page-${page}`, 'github.actions.job.list', {repo: options.repository, runId: Number(options.runId), page, perPage: 30});
+      if (!object(jobs) || !Array.isArray(jobs.items) || jobs.items.length > 30) invalid();
+      const next = nextPage(jobs, page);
+      for (const job of jobs.items) {
+        if (!object(job) || job.conclusion !== 'failure') continue;
+        if (typeof job.id !== 'number' || !Number.isSafeInteger(job.id) || job.id < 1
+          || (job.runId !== undefined && job.runId !== Number(options.runId))) invalid();
+        if (jobIds.has(job.id)) continue;
+        jobIds.add(job.id);
+        if (failedJobs.length < 8) failedJobs.push(job);
+        else truncated = true;
+      }
+      if (next === null) break;
+      if (page === 4 || failedJobs.length === 8) { truncated = true; break; }
+      page = next;
+    }
     if (!failedJobs.length) throw new Pause('unsupported', 'No bounded failed job logs available');
     let logs = '';
-    let truncated = false;
     for (const [i, job] of failedJobs.entries()) {
-      if (!object(job) || typeof job.id !== 'number' || !Number.isSafeInteger(job.id) || job.id < 1) invalid();
-      const remaining = limit - Buffer.byteLength(logs);
-      if (remaining < 4) { truncated = true; break; }
-      const log = await invoke(`log-${i}`, 'github.actions.log.read', {repo: options.repository, runId: Number(options.runId), jobId: job.id, offset: 0, maxChars: Math.floor(remaining / 2)});
-      if (!object(log) || typeof log.text !== 'string' || typeof log.truncated !== 'boolean' || Buffer.byteLength(log.text) > remaining) invalid();
-      logs += log.text; truncated ||= log.truncated;
+      let offset = 0;
+      for (let page = 0; page < 8; page++) {
+        const remaining = limit - Buffer.byteLength(logs);
+        if (remaining < 4) { truncated = true; break; }
+        const maxChars = Math.min(65536, Math.floor(remaining / 2));
+        const log = await invoke(offset === 0 ? `log-${i}` : `log-${i}-offset-${offset}`, 'github.actions.log.read', {repo: options.repository, runId: Number(options.runId), jobId: job.id, offset, maxChars});
+        if (!object(log) || typeof log.text !== 'string' || log.text.length > maxChars || typeof log.truncated !== 'boolean') invalid();
+        const next = nextOffset(log, offset);
+        // Provider cursors count UTF-16 characters; the workflow budget counts bytes.
+        // Retain complete code points and stop rather than advancing past omitted text.
+        const last = log.text.charCodeAt(log.text.length - 1);
+        // GhCliProvider slices UTF-16: a truncated page may end halfway through
+        // an emoji. Drop that fragment and stop without advancing its cursor.
+        const complete = log.truncated && last >= 0xD800 && last <= 0xDBFF ? log.text.slice(0, -1) : log.text;
+        const accepted = utf8Prefix(complete, remaining);
+        logs += accepted;
+        if (accepted.length !== log.text.length) { truncated = true; break; }
+        if (next === null) { truncated ||= log.truncated; break; }
+        if (page === 7) { truncated = true; break; }
+        offset = next;
+      }
     }
     read = {run, logs, truncated};
     } else {
