@@ -34,3 +34,15 @@ Node 24.15.0 / npm 11.12.1；锁文件安装 `npm ci --ignore-scripts --no-audit
 MOD-17 Linux 本轮回执：task `d9be4481-cad0-426f-9259-75047815b437`，run 后缀 `:system-read`；工具 `computer.system.observe@1.0.0`，source=node:os，审批前执行数 0；审批后记录 confirmed/allow/executionStarted=true，任务 succeeded。采样 `2026-10-05T07:47:37.009Z`～`07:47:37.261Z`，251.92ms。脱敏 JSON SHA-256 `fa0564194acdebd4bfa399e1e04371665c0b90fcbab28e5402c37b13db6a5c4c`；本机 SQLite/JSON 保留在忽略的 `.cache/mod17-runtime-*`。不含原始 CPU/内存值、设备身份或凭据；Windows、Desktop UI、AgentArts 验证均为 false。
 
 GitHub 插件评审、发布和邮件发送是开发执行证据，不计作产品 GhCliProvider/模型工作流真实外部验收。非作者评审后才合并；整体 Goal 未完成，外部验收缺项不得抹去。
+
+## 后续 P8 可信设置与前端细节（2026-10-05）
+
+用户要求已交成果沿现有 PR 交付、不重复建 PR，等待审核时继续自己的 MOD/前端细节，所有执行对话使用 GPT-6.1 Sol，并确认已在界面选定。先核对 `MODULE_ASSIGNMENTS` §0 和 #212：Potato P0～P4、Gemini P5、goo122 P7/MOD-37 不接管；此增量限 zemeng P8 的 AgentArts 可信设置、对应控件及回归，已在原 #277 登记。保留 #283 独立 Runtime 初始化修复，不合并或自批准 PR。
+
+- `agentarts-config.revoke` 原先吞掉文件删除错误，导致仍有磁盘配置时返回“已清除”。现在立即禁用本进程旧凭据；删除失败明确报未确认，脱敏状态保留错误。只有删除成功或文件已不存在才返回成功；修复存储后可显式重试。未变更安全存储格式、云绑定、环境配置来源或云端权限。
+- AgentArts 设置保存/撤销互斥，等待期间所有输入和按钮锁定，重复事件不会额外调用宿主，旧 snapshot 不改写待处理目的地。只有 `configured:true` / `configured:false` 对应读回才显示保存/撤销成功；异常或不匹配回执为未获确认，不自动重试，不回显宿主错误。Authorization 在提交/撤销时清空，调用结束后再次清理请求对象。
+- 真实文件删除失败回归在原代码报 Missing expected exception，修复后通过；临时目录中的保留配置修复后可读回重启，再次撤销确实删除，状态不再保留失败。控件回归覆盖并发去重、待处理 snapshot、脱敏、失败重试及不匹配回执。
+- Node 24.15.0 / npm 11.12.1：AgentArts 配置/控件/模型页面和 Admin Evidence/撤销定向 11/11；Desktop typecheck 通过，完整 Desktop 测试 346 通过、0 失败、6 Windows 门控跳过。新增控件和宿主文件另执行语法检查，diff 检查通过。
+- Browser plugin not available，使用已安装 Playwright + 本机 Chromium 151，不新增依赖。临时 HTTP 宿主加载真实 `mountAdmin`、AgentArts 控件和既有样式，合成 invoke 不连接 Electron/云端。1280×900、480×900 验证页面身份、有内容、无错误遮罩/控制台错误；保存→失败→显式重试→成功→撤销失败→重试成功，按钮/输入禁用、凭据清空及无横向溢出均通过。截图和临时脚本保留在工作区外 `/tmp/personalagent-review/agentarts-ui-*`；不是用户 Windows/安全存储/云连通验收。
+
+#280 最新 `d484c864` 已由 goo122 消费 #281 原修复，并新增 controlled-clock 测试；没有重新实现这份增量或改写其作者。新 head 的审核/CI 与前一 head 分开记录，旧通过不能替代新提交验证。

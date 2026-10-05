@@ -58,8 +58,11 @@ export function createAgentArtsConfig({userData,safeStorage,environment=process.
     },
     revoke() {
       saved=undefined;failure='';
-      if (existsSync(file)) {
-        try { unlinkSync(file); } catch {}
+      try { unlinkSync(file); } catch (error) {
+        if (error?.code!=='ENOENT') {
+          failure='未能删除本机 AgentArts 配置；撤销尚未确认，请检查本机存储后重试';
+          throw Error(failure);
+        }
       }
       return snapshot();
     },

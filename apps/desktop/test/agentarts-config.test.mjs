@@ -1,12 +1,38 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {existsSync,mkdirSync,mkdtempSync,readFileSync} from 'node:fs';
+import {existsSync,mkdirSync,mkdtempSync,readFileSync,renameSync,rmSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createAgentArtsConfig} from '../electron/agentarts-config.js';
 import {createDeferredRuntimeStartup} from '../electron/runtime-startup.js';
 import {createAgentArtsRuntimeApplication} from '@personal-agent/runtime/application';
 import {Client} from '@personal-agent/client';
+
+test('AgentArts revoke reports a failed disk deletion and can be retried after repair',()=>{
+  const userData=mkdtempSync(path.join(os.tmpdir(),'pa-cloud-revoke-'));
+  const safeStorage={isEncryptionAvailable:()=>true,
+    encryptString:value=>Buffer.from(value).reverse(),decryptString:value=>Buffer.from(value).reverse().toString()};
+  const options={userData,safeStorage,environment:{}};
+  const config=createAgentArtsConfig(options);
+  const file=path.join(userData,'agentarts-config.json');
+  try {
+    config.configure({gatewayUrl:'https://example.huaweicloud-agentarts.com',runtimeName:'synthetic-runtime',authorization:'Bearer synthetic-only'});
+    const binding=config.binding();
+    renameSync(file,file+'.retained');
+    mkdirSync(file);
+    assert.throws(()=>config.revoke(),/未能删除/);
+    assert.equal(config.snapshot().configured,false,'in-memory access is revoked even when disk deletion fails');
+    assert.throws(()=>config.readAuthorization(binding));
+    assert.doesNotMatch(JSON.stringify(config.snapshot()),/synthetic-only|Bearer|pa-cloud-revoke/);
+    rmSync(file,{recursive:true});
+    renameSync(file+'.retained',file);
+    assert.equal(createAgentArtsConfig(options).snapshot().configured,true,'retained persisted credentials still matter after restart');
+    assert.equal(config.revoke().configured,false);
+    assert.equal(existsSync(file),false);
+    assert.equal(createAgentArtsConfig(options).snapshot().configured,false);
+    assert.doesNotMatch(config.snapshot().reason,/未能删除/);
+  } finally {rmSync(userData,{recursive:true,force:true});}
+});
 
 test('AgentArts credential persists through host storage without snapshot disclosure or destination reuse',()=>{
   const userData=mkdtempSync(path.join(os.tmpdir(),'pa-cloud-config-'));
