@@ -411,3 +411,26 @@ root只移除单个LF/CRLF输出终止符，保留合法目录空格。无公共
 定位、非法分隔符回归通过；注册GhCliProvider+明确合成transport使用实际Git spacediff，
 报告与唯一POST payload保持精确path。独立GPT6.1Sol只读复核无实质问题、diffcheck通过。
 按内部模块门槛验证，不重复整仓check；真实账号COMMENT/设备闭环和新head CI另验。
+
+### P8 工作区等待与未确认反馈
+
+本人P8两源文件+本清单登记 #212 `6002252542`（已校正实际src/app路径），
+GPT6.1Sol代理唯一实现 workspace-controls.js/test，root串行交付。旧render的后台snapshot
+会抹掉仍busy的等待提示及失败/畸形回执的未确认提示，新增两回归实际失败，保留日志。
+现仅在无pending/未确认反馈时采用宿主reason；宿主字段/许可投影仍更新，busy仍互锁，
+显式成功读回后清反馈并解锁，异常内容不回显、不自动重试、后台快照不代替原操作确认。
+
+固定Node24.15目标5/5、源码语法与Desktop typecheck通过，独立只读复核5/5和相同冻结
+hash无实质问题。真实app/index+renderer+Chromium151、明确合成桥接在1280x900/480x900
+验证等待+推送/字段刷新/重复按钮/明确读回/异常/畸形/显式重试/未配置读回及正常reason，
+console warning/error/pageerror均无、无页面横向溢出。未改样式/其它UI/宿主授权/共享main，
+原生Windows选择器/安全存储和云仍待真实环境验收，没有以此重复全Desktop/全仓测试。
+
+同包保留MOD34 Windows夹具返修 #212 `6002331612`：`d3426af` PR Foundation
+37368733314/job111960198816实际failure，完整301510chars日志已读，31workspace
+2026通过/4失败/16跳过，coding194/4/4；四新增Git测试因8.3 TMP别名严格cwd比较和
+Windows尾空格目录cwd失败，未到相应UTF8断言，旧正常Git测试仍通过。夹具建立后用
+realpathSync.native固定与生产相同canonical根，Windows实际repo用合法中文内部空格，
+Linux保留原尾空格case；不跳过中文/超限/非法编码、不放宽cwd/HEAD/调用序列断言。
+生产Git源码本轮无新改动，修正后本机coding完整187/0/15、独立只读复核无实质问题。
+该失败与之前成功head分别记录，当前包准确head Windows结果另读回，不能预记通过。

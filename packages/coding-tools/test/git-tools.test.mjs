@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync, rmSync, mkdirSync, writeFileSync} from 'node:fs';
+import {mkdtempSync, rmSync, mkdirSync, writeFileSync, realpathSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -56,7 +56,10 @@ test('Partial registration rolls back previously acquired registrations',()=>{
 
 function repositoryFixture(rootName) {
   const f=fixture();
-  if (rootName !== undefined) {f.options.rootPath = join(f.options.rootPath, rootName); mkdirSync(f.options.rootPath);}
+  if (rootName !== undefined) {
+    f.options.rootPath = join(f.options.rootPath, rootName); mkdirSync(f.options.rootPath);
+    f.options.rootPath = realpathSync.native(f.options.rootPath);
+  }
   const git=args=>execFileSync('git',args,{cwd:f.options.rootPath,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
   git(['init','-b',f.options.sourceBranch]);
   mkdirSync(join(f.options.rootPath,'src'));
@@ -159,8 +162,9 @@ test('Git bounded host read retains trusted verification and normal local commit
   } finally {f.dispose();}
 });
 
-test('Git preserves literal whitespace in a canonical working-tree root', async () => {
-  const f = repositoryFixture('中文工作区 ');
+test('Git preserves literal spaces in a canonical working-tree root', async () => {
+  // Win32 strips/rejects trailing directory spaces; keep that actual regression on Linux.
+  const f = repositoryFixture(process.platform === 'win32' ? '中文 工作区' : '中文工作区 ');
   try {
     const tools = createGitTools(f.options);
     const context = {taskId: 'synthetic-root-read', runId: 'synthetic-root-read', authorizationRef: 'synthetic-root-read',
@@ -172,8 +176,10 @@ test('Git preserves literal whitespace in a canonical working-tree root', async 
 });
 
 function stdoutFixture(t, {invalidUtf8 = false, oversized = false} = {}) {
-  const f = fixture(), rootPath = join(f.options.rootPath, '中文工作区');
-  mkdirSync(join(rootPath, 'src'), {recursive: true});
+  const f = fixture(), requestedRoot = join(f.options.rootPath, '中文工作区');
+  mkdirSync(join(requestedRoot, 'src'), {recursive: true});
+  // Windows TMP can contain an 8.3 alias; assert the same canonical root as the factory.
+  const rootPath = realpathSync.native(requestedRoot);
   writeFileSync(join(rootPath, 'src/中文.ts'), 'export const value = 1;\n');
   const calls = []; let kills = 0;
   t.after(() => {t.mock.restoreAll(); syncBuiltinESMExports(); f.dispose();});
