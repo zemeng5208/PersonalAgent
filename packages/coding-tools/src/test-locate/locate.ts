@@ -1,6 +1,6 @@
-import {realpathSync} from 'node:fs';
-import {readFileSync} from 'node:fs';
+import {closeSync, constants, fstatSync, openSync, readSync, realpathSync} from 'node:fs';
 import {isAbsolute, resolve, relative, sep} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {ProtocolError} from '@personal-agent/contracts';
 
 /** Deterministic failure locator for `node --test` output; no model, no side effects. */
@@ -39,41 +39,63 @@ interface RawFailure {
   errorLines: string[];
   frames: {file: string; line: number; column?: number}[];
   timedOut: boolean;
+  container?: boolean;
 }
 
-const STACK_FRAME = /^\s*at\s+(?:async\s+)?[^\s(]*\s*\(?(?:file:\/\/\/)?([^()]+?):(\d+)(?::(\d+))?\)?\s*$/u;
+const STACK_LOCATION = /^(.+?):(\d+)(?::(\d+))?$/u;
+const MAX_SOURCE_BYTES = 1024 * 1024;
 const INTERNAL = /(^|\/)node:internal\//u;
 const NODE_MODULES = /(^|\/)node_modules\//u;
 const SOURCE_FILE = /\.m?[jt]sx?$/u;
 
 function invalid(message: string): never { throw new ProtocolError('INVALID_ARGUMENT', message); }
 
-function toPosix(path: string): string { return sep === '\\' ? path.replace(/\\/g, '/') : path; }
+function toPosix(path: string): string { return path.replace(/\\/g, '/'); }
+
+function foreignWindowsPath(path: string): boolean {
+  return process.platform !== 'win32' && /^(?:[a-z]:[\\/]|\\\\)/iu.test(path);
+}
+
+function withinRoot(root: string, candidate: string): boolean {
+  const part = relative(root, candidate);
+  return part !== '' && part !== '..' && !part.startsWith(`..${sep}`) && !isAbsolute(part);
+}
 
 function absoluteOf(raw: string, root: string): string {
   let candidate = raw;
   if (candidate.startsWith('file://')) {
-    try { candidate = decodeURIComponent(new URL(candidate).pathname); } catch { /* keep raw */ }
+    try { candidate = fileURLToPath(candidate); } catch { return raw; }
   }
+  if (foreignWindowsPath(candidate)) return candidate;
   if (!isAbsolute(candidate)) candidate = resolve(root, candidate);
   return candidate;
 }
 
 /** Repo-relative when inside root; otherwise the normalized original path. */
 function displayPath(raw: string, root: string): string {
-  const absolute = absoluteOf(raw, root);
+  let absolute = absoluteOf(raw, root);
+  if (foreignWindowsPath(absolute)) return toPosix(raw);
+  // Windows file URLs may use an 8.3 alias while root is already canonical.
+  // Do not resolve remote UNC frames; canonical containment still decides access.
+  if (process.platform === 'win32' && /^[a-z]:[\\/]/iu.test(absolute)) {
+    try { absolute = realpathSync.native(absolute); } catch { /* Keep unresolved frames without snippets. */ }
+  }
   const rel = relative(root, absolute);
-  if (rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)) return toPosix(rel);
+  if (withinRoot(root, absolute)) return toPosix(rel);
   return toPosix(raw);
 }
 
 function extractFrames(lines: readonly string[], root: string): {file: string; line: number; column?: number}[] {
   const frames = [];
   for (const rawLine of lines) {
-    const match = STACK_FRAME.exec(rawLine);
+    const frame = rawLine.trim().replace(/^at\s+/u, '').replace(/^async\s+/u, '');
+    const location = frame.endsWith(')') && frame.includes('(')
+      ? frame.slice(frame.lastIndexOf('(') + 1, -1) : frame;
+    const match = STACK_LOCATION.exec(location);
     if (!match) continue;
     const file = match[1]!.trim();
-    if (!file || INTERNAL.test(file) || NODE_MODULES.test(file) || !SOURCE_FILE.test(file)) continue;
+    const normalized = toPosix(file);
+    if (!file || INTERNAL.test(normalized) || NODE_MODULES.test(normalized) || !SOURCE_FILE.test(file)) continue;
     const line = Number(match[2]);
     if (!Number.isSafeInteger(line) || line < 1) continue;
     const column = match[3] === undefined ? undefined : Number(match[3]);
@@ -134,28 +156,62 @@ function parseSpec(output: string, root: string): RawFailure[] {
 function parseTap(output: string, root: string): RawFailure[] {
   const failures: RawFailure[] = [];
   let current: RawFailure | undefined;
+  let block: 'error' | 'stack' | undefined;
+  let fieldIndent = 0;
   for (const rawLine of output.split('\n')) {
     const line = rawLine.replace(/\r$/, '');
-    const notOk = /^not ok\s+(?:\d+\s+-\s+)?(.+)$/u.exec(line);
+    const notOk = /^\s*not ok\s+(?:\d+\s+-\s+)?(.+)$/u.exec(line);
     if (notOk) {
       current = {name: notOk[1]!.replace(/ # Timeouts?$/u, '').trim(), errorLines: [], frames: [], timedOut: false};
       failures.push(current);
+      block = undefined;
       continue;
     }
     if (!current) continue;
-    if (/^(\s{4}|\s{2})error: /u.test(line)) { current.errorLines.push(line.trim()); continue; }
-    if (/^\s+at\s/u.test(line)) {
+    if (/^\s*(?:ok\s|\.\.\.\s*$|# Subtest:)/u.test(line)) {
+      current = undefined; block = undefined; continue;
+    }
+    if (/^\s*failureType:\s*['"]?subtestsFailed/u.test(line)) current.container = true;
+    const field = /^(\s*)(error|stack):\s*(.*)$/u.exec(line);
+    if (field) {
+      fieldIndent = field[1]!.length;
+      block = field[2] as 'error' | 'stack';
+      if (block === 'error' && !/^[|>][+-]?$/u.test(field[3]!)) {
+        current.errorLines.push(field[3]!.replace(/^(['"])(.*)\1$/u, '$2'));
+      }
+      continue;
+    }
+    const indent = /^\s*/u.exec(line)![0].length;
+    if (line.trim() && indent <= fieldIndent) block = undefined;
+    if (block === 'error' && current.errorLines.length < 32) current.errorLines.push(line.trim());
+    if ((block === 'stack' || /^\s+at\s/u.test(line)) && current.frames.length < 32) {
       const frame = extractFrames([line], root)[0];
       if (frame && !current.frames.some(f => f.file === frame.file && f.line === frame.line)) current.frames.push(frame);
     }
   }
   for (const failure of failures) failure.timedOut = classifyTimeout(failure.name, failure.errorLines.join(' '));
-  return failures;
+  return failures.filter(failure => !failure.container);
 }
 
 function readSnippet(file: string, line: number, context: number, root: string): string | undefined {
+  let fd: number | undefined;
   try {
-    const content = readFileSync(absoluteOf(file, root), 'utf8');
+    const candidate = absoluteOf(file, root);
+    if (foreignWindowsPath(candidate) || !withinRoot(root, candidate)) return undefined;
+    const canonical = realpathSync.native(candidate);
+    if (!withinRoot(root, canonical)) return undefined;
+    fd = openSync(canonical, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > MAX_SOURCE_BYTES || realpathSync.native(candidate) !== canonical) return undefined;
+    const buffer = Buffer.alloc(MAX_SOURCE_BYTES + 1);
+    let size = 0;
+    while (size < buffer.length) {
+      const read = readSync(fd, buffer, size, buffer.length - size, null);
+      if (!read) break;
+      size += read;
+    }
+    if (size > MAX_SOURCE_BYTES) return undefined;
+    const content = buffer.subarray(0, size).toString('utf8');
     const lines = content.split('\n');
     if (line > lines.length || line < 1) return undefined;
     const from = Math.max(1, line - context);
@@ -164,6 +220,7 @@ function readSnippet(file: string, line: number, context: number, root: string):
     for (let i = from; i <= to; i++) parts.push(`${i === line ? '>' : ' '} ${i} ${lines[i - 1]}`);
     return parts.join('\n').slice(0, 4000);
   } catch { return undefined; }
+  finally { if (fd !== undefined) closeSync(fd); }
 }
 
 function scoreFrame(index: number, total: number, file: string, timedOut: boolean): number {
@@ -194,14 +251,11 @@ export function locateTestFailures(output: string, options: TestLocateOptions = 
       error: f.errorLines.join('\n').slice(0, 2000) || '(no error message captured)',
       timedOut: f.timedOut,
       reporter: isTap ? 'tap' as const : 'spec' as const,
-      frames: f.frames.map((frame, index): TestFailureFrame => ({
-        ...frame,
-        ...(readSnippet(frame.file, frame.line, contextLines, root) !== undefined
-          ? {snippet: readSnippet(frame.file, frame.line, contextLines, root) as string}
-          : {}),
-        confidence: scoreFrame(index, f.frames.length, frame.file, f.timedOut),
-      })),
+      frames: f.frames.map((frame, index): TestFailureFrame => {
+        const snippet = readSnippet(frame.file, frame.line, contextLines, root);
+        return {...frame, ...(snippet === undefined ? {} : {snippet}),
+          confidence: scoreFrame(index, f.frames.length, frame.file, f.timedOut)};
+      }),
     }));
-  return {failures, totalFailures: failures.length};
   return {failures, totalFailures: failures.length};
 }

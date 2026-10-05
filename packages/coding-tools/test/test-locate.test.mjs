@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {mkdtemp, rm, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {spawnSync} from 'node:child_process';
+import {pathToFileURL} from 'node:url';
 import {locateTestFailures} from '../dist/test-locate/locate.js';
 
 async function repo() {
@@ -117,4 +119,68 @@ test('oversized input and invalid options are rejected', async () => {
   assert.throws(() => locateTestFailures('x'.repeat(64), {maxInputBytes: 8}), /byte limit/u);
   assert.throws(() => locateTestFailures('ok', {contextLines: 99}), /context/u);
   assert.throws(() => locateTestFailures(42), /string/u);
+});
+
+test('outside-root paths and symlink targets never become source snippets', async t => {
+  const {mkdir,symlink} = await import('node:fs/promises');
+  const base = await mkdtemp(path.join(os.tmpdir(), 'pa-locate-boundary-'));
+  const root = path.join(base,'repo');
+  await mkdir(root);
+  const outside = path.join(base,'outside.js');
+  await writeFile(outside,'const syntheticPrivateMarker = true;\n');
+  try {
+    for (const file of [outside,'../outside.js',pathToFileURL(outside).href]) {
+      const report = locateTestFailures(`✖ outside (1ms)\n  Error: synthetic\n      at fn (${file}:1:1)`,{root});
+      assert.equal(report.failures[0].frames.length,1);
+      assert.equal(report.failures[0].frames[0].snippet,undefined);
+      assert.doesNotMatch(JSON.stringify(report),/syntheticPrivateMarker/);
+    }
+    try { await symlink(outside,path.join(root,'linked.js')); }
+    catch(error) {
+      if(process.platform === 'win32' && ['EPERM','EACCES'].includes(error.code)) {
+        t.diagnostic('Symlink scenario unavailable without Windows link permission'); return;
+      }
+      throw error;
+    }
+    const report = locateTestFailures('✖ link (1ms)\n  Error: synthetic\n      at fn (linked.js:1:1)',{root});
+    assert.equal(report.failures[0].frames[0].snippet,undefined);
+  } finally { await rm(base,{recursive:true,force:true}); }
+});
+
+test('source files beyond the snippet byte limit retain their frame without reading a snippet', async () => {
+  const root = await repo();
+  try {
+    await writeFile(path.join(root,'large.js'),'x'.repeat(1024*1024+1));
+    const report = locateTestFailures('✖ large (1ms)\n      at fn (large.js:1:1)',{root});
+    assert.equal(report.failures[0].frames[0].file,'large.js');
+    assert.equal(report.failures[0].frames[0].snippet,undefined);
+  } finally { await rm(root,{recursive:true,force:true}); }
+});
+
+test('actual node TAP output locates multiline errors and nested failures with escaped file URLs', async () => {
+  const root = await repo();
+  try {
+    const file = path.join(root,'actual failure.test.mjs');
+    await writeFile(file,[
+      "import test from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "test('nested suite', async t => {",
+      "  await t.test('real failure', () => assert.equal(1,2));",
+      "  await t.test('passing sibling', () => assert.equal(1,1));",
+      "});",
+    ].join('\n'));
+    const environment = {...process.env};
+    delete environment.NODE_TEST_CONTEXT;
+    const run = spawnSync(process.execPath,['--test','--test-reporter=tap',file],{encoding:'utf8',env:environment});
+    assert.equal(run.status,1,run.stderr);
+    const report = locateTestFailures(run.stdout,{root});
+    assert.equal(report.totalFailures,1,JSON.stringify(report));
+    const failure = report.failures[0];
+    assert.equal(failure.name,'real failure');
+    assert.match(failure.error,/1 !== 2/);
+    assert.equal(failure.frames[0].file,'actual failure.test.mjs');
+    assert.equal(failure.frames[0].line,4);
+    assert.match(failure.frames[0].snippet,/assert.equal\(1,2\)/);
+    assert.equal(failure.frames.some(frame=>frame.file.includes('node:internal')),false);
+  } finally { await rm(root,{recursive:true,force:true}); }
 });
