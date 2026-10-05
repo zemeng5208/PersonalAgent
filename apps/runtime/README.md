@@ -217,15 +217,11 @@ exposing raw exceptions or private paths.
 Unknown/in-progress polls retain the marker and execution state across SQLite restart.
 An absent marker does not prove application. A `not_applied` result persists the original
 failed execution before acknowledging the marker; it never silently retries.
-An applied result requires the core's separate `reconcileToolExecutionForContinuation`
-method to atomically confirm the original execution and cache a normal
-`WorkspacePatchApplyResult` while keeping the workflow waiting. That core method is an
-outstanding goo122 integration dependency in this revision: if absent, the host explicitly
-returns `UNSUPPORTED_CAPABILITY` and retains the marker. The existing single-tool terminal
-reconciliation method is never used to declare the entire CI fix successful.
-Once core support is delivered, pass the returned bound `receipt` to
-`resumeConfirmed(taskId, receipt)` to continue the same workflow. Verification, commit, push,
-draft PR and backlink still require their original Policy approvals. The native Windows
+An applied readback atomically confirms the same authorized execution and caches its exact
+`WorkspacePatchApplyResult` while keeping the workflow in `waiting_reconciliation`. Pass the
+returned bound `receipt` to `resumeConfirmed(taskId, receipt)` after restart to continue that
+same workflow; it never authorizes a second apply or declares the CI repair complete. Verification,
+commit, push, draft PR and backlink still require their original Policy approvals. The native Windows
 unknown cause and the complete real repair chain remain unverified.
 
 ## Limits

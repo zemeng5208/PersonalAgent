@@ -108,4 +108,4 @@ Browser 插件不可用，使用已安装 Playwright/Chromium 实际挂载 Admin
 
 前一精确提交 `12c0c464` 的 Windows Foundation PR `37302787065` / push `37302778590` 均完成 success，两份日志各确认31 workspace1705通过、0失败、16门控跳过，Desktop366、Runtime315、coding-tools90、GitHub14，根 integration17、架构3、契约4通过，dev/protocol/runtime demo通过。该结果只覆盖前一提交；上述后续增量以新 head 的 Foundation 和登记非作者评审为准。针对性测试不是真实 Windows 普通用户设备、Electron/安全存储或 AgentArts/GLM/账号整链验收。
 
-Runtime applied recovery now uses the core reconciliation transaction to persist the confirmed result while preserving the waiting workflow. Current-head Foundation and independent review remain pending; the original Windows helper root cause and real end-to-end readback remain unverified.
+Runtime applied recovery now uses the core reconciliation transaction to persist the confirmed result while preserving the waiting workflow. The original Windows helper root cause and real end-to-end readback remain unverified.
