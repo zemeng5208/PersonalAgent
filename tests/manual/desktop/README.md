@@ -76,3 +76,5 @@ F9/记事本、麦克风、真实凭据加密、崩溃恢复。本片没有远�
   两项新集成与已有消费/删除六项回归合计 8/8。确认回调、HTTP 和子任务工作者均为显式替身；
   子任务由可信测试夹具写入实际 Runtime，不表示完整工具分派、原生子任务许可或真实云编排验收通过。
 - 私人真实持久确认和真实 AgentArts 消费仍待验收；MOD-09 保持 `in_progress`。
+- 主线集成候选复查原生工具：首次 Windows sandbox 初始化失败，重置后
+  `trusted Node process exited unexpectedly; kernel reset, rerun your request`；未取得新的窗口操作证据。
