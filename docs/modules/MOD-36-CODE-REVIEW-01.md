@@ -30,7 +30,7 @@ prepared report、当前index/总数/已confirmed索引及累计Evidence，发�
 
 初稿按当时用户限制仅静态交付；后续用户已授权持续实现与必要构建/受控测试。
 `packages/cognition/test/code-review.test.mjs`实际覆盖可信规则隔离、head/base绑定、完整分页、严格JSON、变更行校验、报告篡改、过时head、仅COMMENT、缺工具/授权、unknown不重复写、diff不完整拒绝，以及围栏兼容/外部文字拒绝、非法条目与重复过滤、空报告不可发表。
-当前source `2eda73d` 的固定Node24.15完整check exit0，cognition201、Runtime347、
+前一受检source `2eda73d` 的固定Node24.15完整check exit0，cognition201、Runtime347、
 根集成19通过；SQLite合成Gh两个finding场景验证报告不丢、后续pending不重前评论、
 unknown不普通恢复。全部31workspace1990/0/50，不是实际账号COMMENT成功证明。
 后续 #212 `6002238962` 的路径分隔符修复先保留真实Git旧失败及2失败/1负例通过的
@@ -38,6 +38,9 @@ unknown不普通恢复。全部31workspace1990/0/50，不是实际账号COMMENT�
 真实Git临时仓库含空格路径、rename/delete与非法分隔符回归通过；注册GhCliProvider
 的明确合成transport使用真实Git spacediff，准备报告及单次COMMENT payload保持精确路径。
 独立只读复核无实质问题；没有真实账号COMMENT写入或扩大公共接口/授权。
+后续受检源码be49b30及源码相同的docs90f02d0，两路准确90f02d0 Windows Foundation
+已完整成功，各31workspace2035/0/16，其中cognition204/204、0跳过。PR首轮无runner取消
+保留，仅一次基础设施重试成功；受控CI仍不替代真实账号COMMENT与原场景恢复。
 精确提交/Windows门禁/真实交接见
 [统一续接清单](DEV-WORKFLOWS-CONTINUATION-20261005.md)，非作者兼容与真实写入仍待完成。
 

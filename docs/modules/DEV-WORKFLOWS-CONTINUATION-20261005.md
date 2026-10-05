@@ -416,7 +416,8 @@ root只移除单个LF/CRLF输出终止符，保留合法目录空格。无公共
 
 本人P8两源文件+本清单登记 #212 `6002252542`（已校正实际src/app路径），
 GPT6.1Sol代理唯一实现 workspace-controls.js/test，root串行交付。旧render的后台snapshot
-会抹掉仍busy的等待提示及失败/畸形回执的未确认提示，新增两回归实际失败，保留日志。
+会抹掉仍busy的等待提示及失败/畸形回执的未确认提示，新增两回归实际失败，执行工具回执保留。
+原旧/新5项定向测试没有另存独立原始日志文件；浏览器JSON/截图与后续完整CI日志分别保存。
 现仅在无pending/未确认反馈时采用宿主reason；宿主字段/许可投影仍更新，busy仍互锁，
 显式成功读回后清反馈并解锁，异常内容不回显、不自动重试、后台快照不代替原操作确认。
 
@@ -439,3 +440,42 @@ Linux保留原尾空格case；不跳过中文/超限/非法编码、不放宽cwd
 apps/runtime package export和上述SQLite/模块检查校正，不改公开接口或默认Competition。
 状态仍review/provisional，协作者真实只读报告与账号写入/原Windows整链分别标注。
 仅事实/相对链接/diff检查，无source变化、无重复build/test；不修改根配置或共享ROADMAP。
+
+### 最终受检源码与非作者交接（2026-10-05 21:04 UTC）
+
+以上Git、Review和P8源码/测试沿同一PR290交付 `be49b3065e811e50f6628db12306d591748eb805`；
+随后两份组合说明事实校正的 `90f02d08cc03e4fc6b185cf7e930cb30d9060ad8` 源码/测试与其完全相同。
+准确 `90f02d0` 两路Windows Foundation完整终态和日志均已实际读取：
+
+| 事件 | run / attempt / job | 完整日志字符数 | 31 workspace测试 | 实际.NET8受控fixture |
+| --- | --- | --- | --- | --- |
+| push，首次 | 37370606148 / 1 / 111966496367 | 318219 | 2035通过、0失败、16跳过 | 48.05秒 |
+| PR，唯一一次基础设施重试 | 37370612132 / 2 / 111973026542 | 319063 | 2035通过、0失败、16跳过 | 40.00秒 |
+
+两路check、dev、demo:protocol、demo:runtime及清理步骤均success；coding198/0/4、
+cognition204/0/0、Desktop439/0/1。之前四个新增Git回归全部通过，MOD36/P8新增回归通过。
+这证明该冻结源码的受控Windows兼容性，不是原账号push/COMMENT、原设备UIA或云验收。
+
+PR首轮37370612132/job111966517289仍为run failure/job cancelled，runner_id0、steps[]，
+未执行测试、日志404 BlobNotFound；源码be49两路同样未分配runner即取消，根因未证。
+只对当前PR无runner一路重试一次，不将取消计绿，也不删除d342/ba0先前夹具失败证据。
+旧docs734 push37367178618长时间停在dev，普通cancel后终态cancelled，不计成功、不改Git refs。
+额外Linux实际TMPDIR别名探针旧stdout夹具0/3、新canonical夹具3/3；此Linux探针本身
+不证明Windows8.3，Windows兼容证据以以上实际runner日志为准。
+
+#290已转ready for review，正式请求goo122与Potatos498并读回确认；没有APPROVE或merge。
+goo122负责MOD33/公开接口非作者审核，Potatos498负责MOD34/36/38审核及原场景集中验证。
+目前已登记本人源码增量均已交付，独立范围审计没有额外已复现源码缺口；反馈有新问题时
+沿该PR返修。整体Goal仍in_progress，MOD仍review/provisional，不能由CI绿灯改成done。
+
+真实验收续接保持原可信现场：Potatos498或原Windows任务持有者核实patch-0-0的原
+task/run/intent/marker，再verify→commit→push→PR；缺intent不得回填，不新任务盲重发。
+P6原设备持有者验证窗口/进程隔离、接管、取消、普通用户权限与未知恢复，P2原设备负责人
+验证DPI命中。原GH/GLM账号持有者核实COMMENT/标签及Checks(write)外部回执；独立
+neutral source-SHA Check不能称为原Actions run页面评论。zemeng原可信AgentArts会话
+完成deployment/version/API/trace/usage/eval/角色/成本读回。原始脱敏证据未回交的不计通过。
+MOD37保留goo122实现归属，MOD19打包继续暂停，不因等待而接管其它模块。
+
+本次只是三份本人说明的证据与交接回填，源码/测试仍等于上述受检90f02d0/be49b30；
+校对日志、链接和diff，不重复build/typecheck/test。文档提交自身的Actions终态另读回，
+不把上述90f02d0终态宣称为不同head的结果。
