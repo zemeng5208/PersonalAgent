@@ -84,7 +84,7 @@ test('knowledge export projection projects sanitized and bounded results', async
         hits: Array.isArray(r.hits) ? r.hits.slice(0, 5).map(h => ({
           source: {
             vaultId: String(h.source?.vaultId ?? ''),
-            path: path.basename(String(h.source?.path ?? '')),
+            path: path.win32.basename(String(h.source?.path ?? '')),
             line: Number(h.source?.line ?? 1),
             revision: String(h.source?.revision ?? ''),
           },

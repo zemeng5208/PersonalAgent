@@ -202,6 +202,31 @@ Competition checkpoints separately retain the cloud proposal, step, continuation
 
 dispatchDueSchedules() handles due schedules during normal operation. recoverMissedSchedules() is called after a stopped period and applies each schedule's run_once or skip policy atomically.
 
+## DEV-WORKFLOWS patch recovery (Local Profile)
+
+`DevWorkflowsRuntime.reconcileWorkspacePatchTask(taskId, runId)` observes the original
+`workspace.apply_text_patch` execution using the trusted workspace/recovery/PowerShell binding.
+An explicit `workspace` composition pins these identities and consumes the public coding-tools
+reconciler. A host supplying its own `tools` can inject `workspacePatchReconciliation` plus
+the trusted `workspace.preview_text_patch` implementation. Workflow requests cannot select
+recovery paths, processes, credentials or a new run. The authorized apply records its exact
+arguments and preview before dispatch. Fixed local `dev-patch-diagnostic:<runId>` categories
+distinguish preview preflight, process identity, marker, helper input/exit and interruption
+failures without exposing raw exceptions or private paths. The fixed `preview` stage covers
+trusted preview, binding/candidate validation and original intent persistence before apply.
+Diagnostics store only the stage and protocol error code; they do not establish `not_applied`,
+create a marker or authorize replay. Preview failures retain the original unknown execution.
+
+Unknown/in-progress polls retain the marker and execution state across SQLite restart.
+An absent marker does not prove application. A `not_applied` result persists the original
+failed execution before acknowledging the marker; it never silently retries.
+An applied readback atomically confirms the same authorized execution and caches its exact
+`WorkspacePatchApplyResult` while keeping the workflow in `waiting_reconciliation`. Pass the
+returned bound `receipt` to `resumeConfirmed(taskId, receipt)` after restart to continue that
+same workflow; it never authorizes a second apply or declares the CI repair complete. Verification,
+commit, push, draft PR and backlink still require their original Policy approvals. The native Windows
+unknown cause and the complete real repair chain remain unverified.
+
 ## Limits
 
 - This is an in-process Runtime core, not a daemon or IPC server.

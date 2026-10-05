@@ -39,6 +39,7 @@ import {createDesktopReferenceHost} from './reference-tools-host.js';
 import {createNativePublicReferenceConsent} from './public-reference-consent.js';
 import {createWorkspaceCommandRecipeTool} from './workspace-command-recipes.js';
 import {createAgentArtsConfig} from './agentarts-config.js';
+import {agentArtsModelSnapshot} from './agentarts-model-state.js';
 import {agentArtsFailureNotice} from './agentarts-failure-notice.js';
 import {createDeferredRuntimeStartup} from './runtime-startup.js';
 import {createMailConfig} from './mail-config.js';
@@ -463,6 +464,7 @@ function agentArtsSnapshot() {
 }
 
 function snapshot(surface) {
+  const cloudSettings=agentArtsSnapshot();
   return {
     connection: connectionLabel,
     connectionError: runtimeError || cloudRequestFailureNotice,
@@ -488,7 +490,7 @@ function snapshot(surface) {
     memoryLearning:surface ? undefined : memoryLearningHost?.snapshot(),
     approvals: [...approvals.values()],
     notifications: [...notifications.values(),...(todoHost?.snapshot().notifications ?? [])],
-    model: structuredClone(model),
+    model: structuredClone(competitionMode?agentArtsModelSnapshot(model,cloudSettings):model),
     modelApi: surface ? undefined : modelApiHost?.snapshot(),
     modelChoices: modelApiHost?.snapshot().models.map(({id,displayName,enabled,available})=>({id,displayName,enabled,available})) ?? [],
     conversationPreference: conversations?.preference(`desktop-${surface === 'workspace' ? 'workspace' : 'panel'}`,thinking),
@@ -507,7 +509,7 @@ function snapshot(surface) {
       reason:'本机执行组件尚未就绪，记事本操作暂不可用。'},
     coding: codingWorkspace?.snapshot() ?? {configured:false,reason:'编程工作区尚未装配'},
     reference:surface ? undefined : referenceHost?.snapshot(),
-    agentArts: agentArtsSnapshot(),
+    agentArts: cloudSettings,
     laya: localLaya?.snapshot() ?? {state:'unavailable', ready:false, reason:'本地模型尚未装配'},
     knowledge: knowledgeSourceConfig?.snapshot()??structuredClone(knowledgeStatus),
     knowledgeSource:surface ? undefined : knowledgeSourceConfig?.snapshot(),
@@ -812,25 +814,7 @@ function updateThinking(input) {
 
 async function initializeModelFromEnvironment() {
   if (competitionMode) {
-    const cloudSettings=agentArtsConfig.snapshot();
-    model = {
-      ...model,
-      provider: 'agentarts',
-      label: 'AgentArts · Competition Profile',
-      status: cloudSettings.configured?'configured':'unconfigured',
-      verification: 'unverified',
-      baseUrl: cloudSettings.gatewayUrl,
-      model: 'AgentArts Runtime',
-      deployment: cloudSettings.runtimeName,
-      configured: cloudSettings.configured,
-      keyConfigured: cloudSettings.configured,
-      persisted: false,
-      enabled: true,
-      capabilities: {text: true, streaming: false, toolCalling: false, structuredOutput: false, vision: false},
-      reason: cloudSettings.configured?'Competition Profile 已装配；云端结果仍需真实调用和本地读回验证':cloudSettings.reason,
-      lastTestAt: null,
-      latencyMs: null,
-    };
+    model=agentArtsModelSnapshot(model,agentArtsConfig.snapshot());
     return;
   }
   if (fakeModelMode) {
@@ -1210,6 +1194,7 @@ async function initializeRuntime() {
       });
       const commandHelper=path.join(app.getPath('userData'),'native-tools','workspace-command','WindowsJobProcessHost.exe');
       codingWorkspace = createWorkspaceConfigHost({userData:app.getPath('userData'),safeStorage,
+        patchHelperScriptPath:process.env.PA_CODING_PATCH_HELPER_SCRIPT,
         createWorkspaceReferenceExport:publicReferenceModule.createWorkspaceReferenceExport,
         readWorkspaceExportPreflight:query=>publicReferenceConsent?.readPreflight(query),
         readWorkspaceExportAuthorization:query=>publicReferenceConsent?.readAuthorization(query),
@@ -1959,23 +1944,25 @@ async function action(event, name, payload) {
       || runtimeStartup.snapshot().state==='starting') throw Error('请在任务、通话及启动结束后从设置配置 AgentArts');
     const result=agentArtsConfig.configure(payload);
     cloudRequestFailureNotice = '';
-    const startup = await runtimeStartup.start();
-    if (liveVoice && !liveShortcut.registered) registerLiveShortcut();
-    const requiresRestart = startup.state !== 'ready' || result.gatewayUrl !== activeCloudBinding?.gatewayUrl
-      || result.runtimeName !== activeCloudBinding?.runtimeName;
-    if (!requiresRestart) await initializeModelFromEnvironment();
-    publish();
-    return {...result, requiresRestart, reason: requiresRestart
-      ? '配置已加密保存，请重启应用完成连接。'
-      : '配置已加密保存，Runtime 已连接；云端可用性以实际任务结果为准。'};
+    try {
+      const startup = await runtimeStartup.start();
+      if (liveVoice && !liveShortcut.registered) registerLiveShortcut();
+      const requiresRestart = startup.state !== 'ready' || result.gatewayUrl !== activeCloudBinding?.gatewayUrl
+        || result.runtimeName !== activeCloudBinding?.runtimeName;
+      if (!requiresRestart) await initializeModelFromEnvironment();
+      return {...result, requiresRestart, reason: requiresRestart
+        ? '配置已加密保存，请重启应用完成连接。'
+        : '配置已加密保存，Runtime 已连接；云端可用性以实际任务结果为准。'};
+    } finally {publish();}
   }
   if (name === 'agentarts.revoke') {
     if (sender !== admin || !competitionMode || runtimeApplication?.activeTaskCount || liveVoice?.hasActive()
       || runtimeStartup.snapshot().state === 'starting') throw Error('请在任务、通话及启动结束后从设置撤销 AgentArts');
-    const result = agentArtsConfig.revoke();
     cloudRequestFailureNotice = '';
-    publish();
-    return {...result, reason: '已清除保存在本机的 AgentArts 凭据与绑定配置。'};
+    try {
+      const result = agentArtsConfig.revoke();
+      return {...result, reason: '已清除保存在本机的 AgentArts 凭据与绑定配置。'};
+    } finally {publish();}
   }
   if (['todo.authorize','todo.revoke','todo.configureNotifications','todo.dismiss','todo.create','todo.update'].includes(name)) {
     if ((sender !== admin && sender !== workspace && sender !== panel) || !competitionMode || syntheticMvp || !todoHost) throw Error('请从正式应用待办设置操作');

@@ -26,6 +26,20 @@
 
 ## 2. 状态定义与冻结门槛
 
+### DEV-WORKFLOWS 开发增量（2026-10-03）
+
+产品负责人已明确启动 PR #276 分配给 zemeng 的 MOD-33/34/36/38 Local Profile 增量。
+公开 `@personal-agent/github`、`@personal-agent/coding-tools` 的开发修复与受控 Git 工厂、
+`@personal-agent/cognition` 的 Review/Issue 工厂以及 `@personal-agent/runtime/dev-workflows`
+新组合入口。精确输入输出以各包公开 exports 为单一来源，状态 **provisional / 待真实宿主闭环验证**；
+不新增 wire operation，不更改 Competition 默认组合或冻结矩阵。
+
+所有 GitHub/工作区/Git 工具经既有 Runtime / Policy / ToolGateway，缺宿主注册或配置返回
+不支持；未知写入等待原执行核实，模型不能生成授权或验证回执。Windows Foundation 验证构建和
+类型，Fake 测试覆盖受控工具路径；真实 GitHub 写入读回和普通 Windows 主机上的完整修复闭环仍未验收，
+因此保持 provisional。模块与文件所有权、集中验证交接见
+[本轮交接](../modules/DEV-WORKFLOWS-HANDOFF-20261003.md)。
+
 ### MOD-30-WORKFLOW-INPUT-01 开发增量
 
 `AgentArtsRuntimeConfig` 和可信 Runtime 工厂新增可选 `workflowGoalInput`，将适配器构造的

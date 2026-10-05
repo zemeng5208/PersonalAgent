@@ -111,12 +111,12 @@
 | MOD-30 | M1.5 第一优先 | in_progress | `zemeng` / PR #49、#72（Workflow 输入）、#80（载荷边界）均已进入 main（2026-09-30 台账核对），工具提案/审批/continuation 离线链可用；真实 MCP/Skill 与目标系统读回未完成 |
 | MOD-31 | M1.5/M3 | in_progress | `zemeng` / PR #58 已合并固定合成评估 runner；真实多 Agent 角色、重复运行指标和平台评估未完成 |
 | MOD-32 | M1.5/M5 第一优先 | in_progress | `zemeng` / 手动验收脚手架和失败诊断已有记录；真实发布、健康读回、trace、成本、回滚和端到端成功证据未提供 |
-| MOD-33 | M6 产品化（登记） | todo | `zemeng` / GitHub 集成连接器底座（actions.run.list/log.read、issue、pr 端口），DEV-WORKFLOWS 前置包；仅登记未开工，见 [DEV-WORKFLOWS 规划](modules/DEV-WORKFLOWS-PLAN-20261002.md) |
-| MOD-34 | M6 产品化（登记） | todo | `zemeng` / CI 构建失败自动修复（日志→归因→补丁→本地验证→审批 PR），评审者 Potatos498；仅登记未开工 |
-| MOD-35 | M6 产品化 | review | `Potatos498` / MOD-35-TEST-LOCATE-01 已实现：`locateTestFailures` 确定性解析 spec/TAP→仓库帧+snippet+规则置信度，离线 6 测+真实验收（临时失败测试定位到精确行列）通过，[登记与验收记录](modules/MOD-35-TEST-LOCATE-01.md)；待 zemeng 评审 |
-| MOD-36 | M6 产品化（登记） | todo | `zemeng` / Code Review 自动预审（PR diff→结构化意见→审批回贴），评审者 Potatos498；仅登记未开工 |
+| MOD-33 | M6 产品化 | review | `zemeng` / #277 已有 13 个 GitHub 工具；本轮补充 Review 写入的 base 核对，Node 24 定向验证通过；真实 gh/账号写入及非作者评审待验，见 [接续记录](modules/DEV-WORKFLOWS-CONTINUATION-20261005.md) |
+| MOD-34 | M6 产品化 | review | `zemeng` / #277 修复链已组合 Runtime/Desktop 回归与 MOD-35；较大 CI 预算不再阻止宿主启动；开发工作流 66/66，真实 Windows helper、模型与 Actions 修复读回待验 |
+| MOD-35 | M6 产品化 | review | `Potatos498` / #279 的确定性定位器与 zemeng #282 的源码边界、真实 TAP 修正已组合；定向 9/9，完整 coding-tools 55 通过、11 个 Windows 跳过；待非作者评审与 main 集成，见 [登记与验收记录](modules/MOD-35-TEST-LOCATE-01.md) |
+| MOD-36 | M6 产品化 | review | `zemeng` / #277 修复 base 在审批期间改变却发表旧报告的问题，真实 Runtime 审批配合合成 gh transport 验证无 POST；模型与真实评论闭环、非作者评审待验 |
 | MOD-37 | M6 产品化（登记） | todo | `goo122` / API 文档自动维护（exports/接口目录↔docs 漂移比对→文档补丁 PR），评审者 zemeng；仅登记未开工 |
-| MOD-38 | M6 产品化（登记） | todo | `zemeng` / Issue 自动分类+修复 PR（分类认知+复用 MOD-34 修复链），评审者 Potatos498；仅登记未开工 |
+| MOD-38 | M6 产品化 | review | `zemeng` / #277 分类、指纹、审批标签与修复接线已通过本轮 Node 24 定向验证；目标校正为 Local 增量，真实模型/标签/修复 PR 及非作者评审待验 |
 
 
 DEV-WORKFLOWS 真实验收：MOD-36 已闭环、MOD-34 推进至补丁应用层（4 个真实缺陷已修复进 #277），证据与结论见 [真实验收记录](modules/DEV-WORKFLOWS-REAL-ACCEPTANCE-20261005.md)（2026-10-05）。

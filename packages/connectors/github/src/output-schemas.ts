@@ -1,0 +1,20 @@
+import type { ToolDescriptor } from '@personal-agent/contracts';
+import type { GitHubOperation } from './provider.js';
+const s = {type: 'string', maxLength: 65536};
+const n = {type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER};
+const nullable = {type: ['integer', 'null'], minimum: 1};
+const obj = (properties: Record<string, unknown>, required = Object.keys(properties)) => ({type: 'object', properties, required, additionalProperties: false});
+const issue = obj({number: n, title: s, body: s, state: s, labels: {type: 'array', maxItems: 100, items: s}, url: s, updatedAt: s});
+const run = obj({id: n, name: s, status: s, conclusion: {type: ['string', 'null']}, headSha: s, url: s, createdAt: s});
+const job = obj({id: n, runId: n, name: s, status: s, conclusion: {type: ['string', 'null']}, url: s});
+const page = (items: Record<string, unknown>) => obj({items: {type: 'array', maxItems: 100, items}, page: n, nextPage: nullable, hasMore: {type: 'boolean'}});
+const text = obj({text: {...s, maxLength: 65536}, offset: {type: 'integer', minimum: 0}, nextOffset: {type: ['integer', 'null'], minimum: 0}, truncated: {type: 'boolean'}});
+const write = obj({state: {enum: ['confirmed', 'unknown']}, externalId: s, url: s, evidenceRefs: {type: 'array', items: s}}, ['state', 'evidenceRefs']);
+const outputs: Record<GitHubOperation, Record<string, unknown>> = {
+  'repo.get': obj({fullName: s, defaultBranch: s, private: {type: 'boolean'}, url: s}),
+  'actions.run.list': page(run), 'actions.job.list': page(job), 'actions.log.read': text,
+  'issue.get': issue, 'issue.list': page(issue), 'issue.label': write, 'issue.comment': write,
+  'pr.get': obj({number: n, title: s, body: s, state: s, base: s, baseSha: s, head: s, headSha: s, url: s, draft: {type: 'boolean'}}),
+  'pr.diff': text, 'pr.create': write, 'pr.comment': write, 'pr.review.comment': write,
+};
+export const outputSchema = (op: GitHubOperation): ToolDescriptor['outputSchema'] => outputs[op];

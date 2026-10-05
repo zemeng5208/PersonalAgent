@@ -4,7 +4,14 @@
   "private": true,
   "type": "module",
   "exports": {".": {"types": "./dist/index.d.ts", "import": "./dist/index.js"}},
-  "dependencies": {"@personal-agent/goals": "0.1.0-alpha.1"},
+  "dependencies": {
+    "@personal-agent/goals": "0.1.0-alpha.1",
+    "@personal-agent/contracts": "0.1.0-alpha.1",
+    "@personal-agent/agents": "0.1.0-alpha.1",
+    "@personal-agent/models": "0.1.0-alpha.1",
+    "@personal-agent/github": "0.1.0-alpha.1",
+    "@personal-agent/coding-tools": "0.1.0-alpha.1"
+  },
   "scripts": {
     "demo": "npm run build && node examples/meeting-replay.mjs",
     "evaluate": "npm run build && node examples/impact-evaluation.mjs",

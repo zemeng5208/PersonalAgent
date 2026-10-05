@@ -40,6 +40,55 @@ async function workspaceBindingFixture(t) {
 }
 const allowWorkspaceRead=host=>host.authorize({cloudExportAllowed:true,writeAllowed:false,commandAllowed:false});
 
+test('native selections cannot persist late results after their workspace host closes',async t=>{
+  for(const [method,selector] of [['select','selectDirectory'],['selectNode','selectNodeExecutable'],
+    ['selectCheckFile','selectCheckFile'],['selectNpmCli','selectNpmCli']]) {
+    await t.test(method,async t=>{
+      const {root,node,configuration,open}=await workspaceBindingFixture(t);
+      const choices={select:path.join(path.dirname(root),'other-workspace'),
+        selectNode:path.join(path.dirname(root),'node-b',path.basename(node)),
+        selectCheckFile:path.join(root,'synthetic.js'),selectNpmCli:path.join(path.dirname(root),'npm-cli.js')};
+      await writeFile(choices.selectCheckFile,'const synthetic = true;\n');
+      await writeFile(choices.selectNpmCli,'// synthetic npm fixture\n');
+      let settle,calls=0;
+      const host=open({[selector]:()=>{calls++;return new Promise(done=>{settle=done;});}});
+      const before=await readFile(configuration,'utf8');
+      const pending=host[method]();host.close();
+      const rejected=assert.rejects(pending,/选择已失效|宿主已关闭/);
+      settle(choices[method]);await rejected;
+      assert.equal(await readFile(configuration,'utf8'),before,'the closed host must not replace persisted selections');
+      await assert.rejects(host[method](),/宿主已关闭/);
+      assert.equal(calls,1,'closed hosts cannot reopen native selectors');
+    });
+  }
+});
+
+test('revocation invalidates an outstanding native choice before it can overwrite settings',async t=>{
+  const {configuration,open}=await workspaceBindingFixture(t);
+  let settle;
+  const host=open({selectDirectory:()=>new Promise(done=>{settle=done;})});
+  allowWorkspaceRead(host);
+  const before=await readFile(configuration,'utf8');
+  const pending=host.select();host.revoke();
+  const rejected=assert.rejects(pending,/选择已失效/);
+  settle(path.join(path.dirname(configuration),'..','other-workspace'));await rejected;
+  assert.equal(await readFile(configuration,'utf8'),before);
+  assert.equal(host.snapshot().cloudExportAllowed,false);
+});
+
+test('an older native choice cannot overwrite a newer confirmed selection',async t=>{
+  const {root,configuration,open}=await workspaceBindingFixture(t);
+  const choices=[];
+  const host=open({selectDirectory:()=>new Promise(done=>{choices.push(done);})});
+  const older=host.select(),newer=host.select();
+  choices[1](path.join(path.dirname(root),'other-workspace'));await newer;
+  const confirmed=await readFile(configuration,'utf8');
+  const rejected=assert.rejects(older,/选择已失效/);
+  choices[0](root);await rejected;
+  assert.equal(await readFile(configuration,'utf8'),confirmed);
+  assert.equal(host.snapshot().displayName,'other-workspace');
+});
+
 test('trusted workspace binding requires session consent and invalidates old generations', async t=> {
   const {root,node,configuration,open}=await workspaceBindingFixture(t);
   const host=open();
@@ -75,12 +124,92 @@ test('trusted workspace binding rejects changed selections until reassembly', as
   const original=host.readWorkspaceBinding();
   await host.selectNode();
   assert.equal(host.readWorkspaceBinding(),undefined);assert.equal(host.isWorkspaceBindingCurrent(original),false);
-  allowWorkspaceRead(host);assert.equal(host.readWorkspaceBinding(),undefined);
+  assert.throws(()=>allowWorkspaceRead(host),/重启/);assert.equal(host.readWorkspaceBinding(),undefined);
   host.close();host=open();allowWorkspaceRead(host);
   const rebound=host.readWorkspaceBinding();assert.ok(rebound);
   await host.select();
   assert.equal(host.readWorkspaceBinding(),undefined);assert.equal(host.isWorkspaceBindingCurrent(rebound),false);
   assert.throws(()=>allowWorkspaceRead(host),/重启/);
+});
+
+test('changed command selections require reassembly instead of authorizing startup inputs',async t=>{
+  for(const method of ['selectNode','selectCheckFile','selectNpmCli']) {
+    await t.test(method,async t=>{
+      const {root,node,configuration,open}=await workspaceBindingFixture(t);
+      const first=path.join(root,'first.js'),second=path.join(root,'second.js');
+      const firstNpm=path.join(path.dirname(node),'node_modules','npm','bin','npm-cli.js');
+      const secondNpm=path.join(path.dirname(root),'npm-b','npm-cli.js');
+      const helper=path.join(path.dirname(root),'WindowsJobProcessHost.exe');
+      await Promise.all([mkdir(path.dirname(firstNpm),{recursive:true}),mkdir(path.dirname(secondNpm))]);
+      await Promise.all([first,second,firstNpm,secondNpm,helper].map(file=>writeFile(file,'// synthetic metadata only\n')));
+      const record=JSON.parse(await readFile(configuration,'utf8'));
+      record.encryptedCheckFile=Buffer.from('first.js').toString('base64');
+      record.encryptedNpmCli=Buffer.from(firstNpm).toString('base64');
+      await writeFile(configuration,JSON.stringify(record));
+      let selection;
+      let executionCount=0;
+      let executedBinding;
+      const factory=options=>({
+        tool:{descriptor:{name:'workspace.run_allowed_command',version:'1.0.0',sideEffect:'local_write',
+          requiredScopes:['workspace:execute']},execute:async({recipeId})=>{
+            executionCount++;
+            executedBinding={node:options.nodeExecutable,file:options.checkFiles[0].path,npm:options.npmCliPath};
+            return {recipeId,exitCode:0};
+          }},
+        recipes:[{id:'node-check',executable:options.nodeExecutable,args:['--check',options.checkFiles[0].path]},
+          ...(options.allowProjectScripts?[{id:'npm-build',executable:helper,args:['--cwd',root,'--exe',options.nodeExecutable,
+            '--',options.npmCliPath,'run','build']}]:[])],
+        diagnostics:{projectScriptsExposed:options.allowProjectScripts},
+      });
+      const selectors={selectNode:'selectNodeExecutable',selectCheckFile:'selectCheckFile',selectNpmCli:'selectNpmCli'};
+      const options={jobHelperExecutable:helper,createCommandRecipeTool:factory,
+        [selectors[method]]:async()=>selection};
+      let host=open(options);
+      const checkpoints=new Map();
+      const application={runtime:{loadCheckpoint:(id,key)=>checkpoints.get(`${id}:${key}`),
+        saveCheckpoint:(id,key,value)=>checkpoints.set(`${id}:${key}`,value)}};
+      host.bindApplication(application);
+      const permission={cloudExportAllowed:true,writeAllowed:false,commandAllowed:true,projectCodeAllowed:true};
+      host.authorize(permission);
+      const request={taskId:'before-selection',signal:new AbortController().signal};
+      const available=name=>host.competitionToolAvailability.find(tool=>tool.toolName===name).available(request);
+      assert.equal(available('workspace.node_check'),true);
+      await host[method](); // Cancel leaves the existing authorization untouched.
+      assert.equal(host.snapshot().cloudExportAllowed,true);
+      selection={selectNode:node,selectCheckFile:first,selectNpmCli:firstNpm}[method];
+      await host[method]();
+      assert.equal(host.snapshot().authorizationAvailable,true);
+      host.authorize(permission);
+      assert.equal(available('workspace.node_check'),false,'renewing consent never revives an old task binding');
+      request.taskId='after-unchanged-selection';
+      assert.equal(available('workspace.node_check'),true);
+      selection={selectNode:path.join(path.dirname(root),'node-b',path.basename(node)),
+        selectCheckFile:second,selectNpmCli:secondNpm}[method];
+      await host[method]();
+      assert.equal(host.snapshot().authorizationAvailable,false);
+      assert.equal(host.snapshot().cloudExportAllowed,false);
+      assert.equal(host.snapshot().projectScriptsAvailable,false);
+      assert.match(host.snapshot().reason,/重启/);
+      assert.throws(()=>host.authorize(permission),/重启/);
+      assert.equal(available('workspace.node_check'),false);
+      assert.equal(available('workspace.npm_build'),false);
+      await assert.rejects(host.tools.find(tool=>tool.descriptor.name==='workspace.node_check').execute({},request),/许可已撤销|绑定已改变/);
+      assert.equal(executionCount,0,'stale command closures must not execute');
+      host.close();host=open(options);host.bindApplication(application);
+      host.authorize({...permission,projectCodeAllowed:method!=='selectNode'});
+      assert.equal(host.snapshot().authorizationAvailable,true);
+      assert.equal(host.snapshot().nodeCheckAvailable,true);
+      if(method==='selectCheckFile') assert.equal(host.snapshot().checkFileName,'second.js');
+      assert.equal(available('workspace.node_check'),false,'reassembly keeps previous task bindings invalid');
+      request.taskId='after-reassembly';
+      assert.equal(available('workspace.node_check'),true);
+      await host.tools.find(tool=>tool.descriptor.name==='workspace.node_check').execute({},request);
+      assert.equal(executionCount,1);
+      assert.equal(executedBinding.node,method==='selectNode'?selection:node);
+      assert.equal(executedBinding.file,method==='selectCheckFile'?'second.js':'first.js');
+      assert.equal(executedBinding.npm,method==='selectNode'?undefined:method==='selectNpmCli'?secondNpm:firstNpm);
+    });
+  }
 });
 
 test('trusted workspace binding rejects root or Node replacement at the same path', async t=> {
