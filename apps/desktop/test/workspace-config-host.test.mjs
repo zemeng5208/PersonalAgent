@@ -40,6 +40,55 @@ async function workspaceBindingFixture(t) {
 }
 const allowWorkspaceRead=host=>host.authorize({cloudExportAllowed:true,writeAllowed:false,commandAllowed:false});
 
+test('native selections cannot persist late results after their workspace host closes',async t=>{
+  for(const [method,selector] of [['select','selectDirectory'],['selectNode','selectNodeExecutable'],
+    ['selectCheckFile','selectCheckFile'],['selectNpmCli','selectNpmCli']]) {
+    await t.test(method,async t=>{
+      const {root,node,configuration,open}=await workspaceBindingFixture(t);
+      const choices={select:path.join(path.dirname(root),'other-workspace'),
+        selectNode:path.join(path.dirname(root),'node-b',path.basename(node)),
+        selectCheckFile:path.join(root,'synthetic.js'),selectNpmCli:path.join(path.dirname(root),'npm-cli.js')};
+      await writeFile(choices.selectCheckFile,'const synthetic = true;\n');
+      await writeFile(choices.selectNpmCli,'// synthetic npm fixture\n');
+      let settle,calls=0;
+      const host=open({[selector]:()=>{calls++;return new Promise(done=>{settle=done;});}});
+      const before=await readFile(configuration,'utf8');
+      const pending=host[method]();host.close();
+      const rejected=assert.rejects(pending,/选择已失效|宿主已关闭/);
+      settle(choices[method]);await rejected;
+      assert.equal(await readFile(configuration,'utf8'),before,'the closed host must not replace persisted selections');
+      await assert.rejects(host[method](),/宿主已关闭/);
+      assert.equal(calls,1,'closed hosts cannot reopen native selectors');
+    });
+  }
+});
+
+test('revocation invalidates an outstanding native choice before it can overwrite settings',async t=>{
+  const {configuration,open}=await workspaceBindingFixture(t);
+  let settle;
+  const host=open({selectDirectory:()=>new Promise(done=>{settle=done;})});
+  allowWorkspaceRead(host);
+  const before=await readFile(configuration,'utf8');
+  const pending=host.select();host.revoke();
+  const rejected=assert.rejects(pending,/选择已失效/);
+  settle(path.join(path.dirname(configuration),'..','other-workspace'));await rejected;
+  assert.equal(await readFile(configuration,'utf8'),before);
+  assert.equal(host.snapshot().cloudExportAllowed,false);
+});
+
+test('an older native choice cannot overwrite a newer confirmed selection',async t=>{
+  const {root,configuration,open}=await workspaceBindingFixture(t);
+  const choices=[];
+  const host=open({selectDirectory:()=>new Promise(done=>{choices.push(done);})});
+  const older=host.select(),newer=host.select();
+  choices[1](path.join(path.dirname(root),'other-workspace'));await newer;
+  const confirmed=await readFile(configuration,'utf8');
+  const rejected=assert.rejects(older,/选择已失效/);
+  choices[0](root);await rejected;
+  assert.equal(await readFile(configuration,'utf8'),confirmed);
+  assert.equal(host.snapshot().displayName,'other-workspace');
+});
+
 test('trusted workspace binding requires session consent and invalidates old generations', async t=> {
   const {root,node,configuration,open}=await workspaceBindingFixture(t);
   const host=open();

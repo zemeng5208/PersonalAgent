@@ -454,6 +454,13 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
     mkdirSync(userData,{recursive:true});
     writeFileSync(file+'.tmp',JSON.stringify(record),'utf8');renameSync(file+'.tmp',file);
   }
+  const beginSelection=()=>{
+    if(!active) throw Error('工作区宿主已关闭');
+    return generation;
+  };
+  const checkSelection=startedGeneration=>{
+    if(!active || startedGeneration!==generation) throw Error('工作区选择已失效，请重新选择');
+  };
   const patchReconciliation = {
     get bindingId() { return applyHost?.patchReconciliation?.bindingId; },
     reconcile(input) {
@@ -468,7 +475,9 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
     get patchReconciliation() { return applyHost ? patchReconciliation : undefined; },
     bindApplication(value){if(application && application!==value) revoke();application=value;},
     async select() {
+      const startedGeneration=beginSelection();
       const selected=await selectDirectory();
+      checkSelection(startedGeneration);
       if (!selected) return snapshot();
       const root=directory(selected);
       let node;
@@ -479,22 +488,25 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
       commandFailure='';projectFailure='';return snapshot();
     },
     async selectNode() {
+      const startedGeneration=beginSelection();
       if(!savedRoot || typeof selectNodeExecutable!=='function') throw Error('请先选择工作区并使用本机 Node 选择器');
-      const selected=await selectNodeExecutable();if(!selected) return snapshot();
+      const selected=await selectNodeExecutable();checkSelection(startedGeneration);if(!selected) return snapshot();
       const node=fixedNode(selected,savedRoot);
       const npmCli=derivedNpmCli(node,savedRoot);
       persist(savedRoot,node,savedCheckFile,npmCli);revoke();savedNode=node;savedNpmCli=npmCli;
       commandFailure='';projectFailure='';return snapshot();
     },
     async selectCheckFile() {
+      const startedGeneration=beginSelection();
       if(!savedRoot || typeof selectCheckFile!=='function') throw Error('请先选择工作区并使用本机文件选择器');
-      const selected=await selectCheckFile(savedRoot);if(!selected) return snapshot();
+      const selected=await selectCheckFile(savedRoot);checkSelection(startedGeneration);if(!selected) return snapshot();
       const relative=checkFile(selected,savedRoot);
       persist(savedRoot,savedNode,relative,savedNpmCli);revoke();savedCheckFile=relative;commandFailure='';return snapshot();
     },
     async selectNpmCli() {
+      const startedGeneration=beginSelection();
       if(!savedRoot || !savedNode || typeof selectNpmCli!=='function') throw Error('请先选择工作区与 Node');
-      const selected=await selectNpmCli();if(!selected) return snapshot();
+      const selected=await selectNpmCli();checkSelection(startedGeneration);if(!selected) return snapshot();
       const npmCli=fixedNpmCli(selected,savedRoot);
       persist(savedRoot,savedNode,savedCheckFile,npmCli);revoke();savedNpmCli=npmCli;
       projectFailure='';return snapshot();

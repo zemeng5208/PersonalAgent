@@ -50,3 +50,11 @@ GitHub 插件评审、发布和邮件发送是开发执行证据，不计作产�
 ## MOD-33 注入 Provider 的期限与取消
 
 等待 P8 CI 时继续本人 MOD-33，范围已沿 #277 登记。公开 GitHubService 原先仅入口检查 context，随后直接等待 Provider；对忽略 signal 的注入 Provider，取消后迟到的读取/写入结果仍可确认，或永久等待。两个新增回归在原代码均 Missing expected rejection。现在复用既有 withGitHubContext 包装 Provider：读取超时/取消明确失败；进入写 Provider 后的超时/取消保守 unknown，工具入口转 RESULT_UNKNOWN，不接受迟到 confirmed、不自动重试；入口已取消/过期仍零调用。不把信号中止当成外部操作已停止，无新接口、权限、依赖、wire 或迁移。另用受控 Date/timer 验证永久等待 Provider 到期限必结束，写保留 unknown。README 同步可选 base SHA、当前用户验证授权和包装语义；无真实 GitHub 调用。Node 24.15.0/npm 11.12.1 模块 build/typecheck 和测试 13/13 通过，完整组合检查运行中，终态回写原 PR。
+
+包含该 Provider 修复的 tree `58228388cbc26e641cec158a2bd597c17ae4ff3f`，本机完整 `npm run check` 退出 0：31 workspace 1644 通过、0 失败、45 门控跳过；Runtime 308/308、Desktop 346 通过/6 跳过、GitHub 13/13，根 integration 17/17，架构/契约/生成与全类型检查通过。日志 `/tmp/personalagent-review/p8-mod33-full-check.log`。后续新增选择器行为另做受影响验证，不将此旧 tree 的全套结果直接算作新 tree 的结果。
+
+## P6/P8 原生选择器的迟到结果
+
+继续按用户邮件推进自己的 MOD/细节，沿 #277 登记 `workspace-config-host` 及原测试文件。旧 host 在原生工作区/Node/检查文件/npm 选择器等待期间即使已 close 或 revoke，仍会落盘迟到结果；较旧的选择也能覆盖新选择。原代码四类关闭和撤销回归共 6 个计数均失败于 Missing expected rejection。现在入口拒绝已关闭宿主，等待返回后重新核对 active 与原 generation；关闭、许可撤销或另一项已接受设置变更均使旧选择失效，不落盘、不重新授权、不重开选择器。正常取消和有效选择行为保留，无新 API、IPC、存储格式或目录。
+
+Node 24.15.0：宿主语法检查通过；workspace-config-host、workspace-command-config、coding-and-windows-acceptance 定向 39/39，含四类迟到选择、关闭后零重新打开、撤销失效、较旧选择不覆盖新确认及现有绑定/导出/命令路径。选择器和安全存储为明确合成端口，持久配置使用真实临时文件，Windows/设备/系统安全存储未据此验收。新 head Foundation 与已登记非作者审核分别回写原 PR，不自批准或合并。
