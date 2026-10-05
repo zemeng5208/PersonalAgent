@@ -68,3 +68,7 @@ Desktop coding host 和 workspace config 补全既有公开 patch 工厂的可�
 当前 Linux Desktop 完整测试 356 通过、0 失败、8 Windows 门控跳过，架构 3/3；浏览器真实 Admin 挂载使用合成宿主，Chromium151/Playwright 在桌面及窄屏核对撤销后状态和删除失败原因，无控制台错误。Electron 原生运行组件和 Windows 设备不在此环境，未声称原生或云验收。
 
 发布前发现协作者已将 #283 合入 #277 分支（cb51372）；接续以该远端 head 为父提交，保留其 Runtime 初始化清理及作者历史。本代理没有批准或合并。用户邮件确认真实验收可由其他协作者承担，当前执行继续源码交付，不把缺少设备视为全部工作停止条件。
+
+## Windows fixture 定位的受载超时
+
+24dcd034 PR CI 的第一次 npm ci 无诊断退出已重跑；第二次在新 helper 回归进入安全断言前，夹具额外 where.exe 子进程5秒超时，stdout 已有 PowerShell 路径。相同head push全套check通过。将此测试定位改为直接扫描受信 PATH 的现存 pwsh.exe，避免无业务意义的额外子进程期限；找不到明确断言失败，仍不跳过真实 Windows 测试。生产 executable/超时不改，canonical/字节一致/根外/变更失效/重启接线与许可断言全部保留。新精确head Foundation另验，不用旧head绿替代。
