@@ -13,7 +13,8 @@ const safeStorage = {isEncryptionAvailable:()=>true,encryptString:value=>Buffer.
   decryptString:value=>Buffer.from(value).reverse().toString()};
 function runtime() {
   const records = new Map();
-  return {runtime:{loadCheckpoint:(id,key)=>records.get(id+key),saveCheckpoint:(id,key,value)=>records.set(id+key,value)}};
+  return {runtime:{loadCheckpoint:(id,key)=>records.get(id+key),saveCheckpoint:(id,key,value)=>records.set(id+key,value)},
+    createHostStateStore:()=>({get:key=>records.get(key),set:(key,value)=>records.set(key,value),delete:key=>records.delete(key)})};
 }
 const request = id => ({taskId:id,signal:new AbortController().signal,deadline:new Date(Date.now()+30_000).toISOString(),scopes:['feeds:read']});
 const xml = '<?xml version="1.0"?><rss version="2.0"><channel><title>Engineering updates</title><link>https://example.com/</link>'
@@ -30,7 +31,7 @@ test('configured feeds reuse connector parsing and pagination with session-bound
   assert.doesNotMatch(JSON.stringify(configured),/example\.com|synthetic-secret/);
   assert.doesNotMatch(readFileSync(path.join(userData,'feeds-config.json'),'utf8'),/synthetic-secret/);
   host.close();
-  host = createDesktopFeedsHost({userData,safeStorage,provider}); host.prepare(); host.bindApplication(runtime());
+  host = createDesktopFeedsHost({userData,safeStorage,provider}); host.prepare(); host.bindApplication(runtime(),'synthetic-user');
   try {
     const context = request('feed-task');
     const binding = host.competitionToolAvailability.find(item=>item.toolName==='feeds.collect');

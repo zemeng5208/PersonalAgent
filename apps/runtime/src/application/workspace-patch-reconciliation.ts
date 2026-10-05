@@ -199,6 +199,11 @@ export class WorkspacePatchReconciliationAdapter {
       if (result.state === 'in_progress') {
         return {taskId, runId, result, task: this.runtime.getTask(taskId), evidence: this.runtime.readEvidence(taskId)};
       }
+      if (result.state === 'reconciled' && result.outcome === 'unknown') {
+        // An unknown poll is an observation, not an outcome: Runtime persists nothing and
+        // the task keeps waiting for a later verified host readback.
+        return {taskId, runId, result, task: this.runtime.getTask(taskId), evidence: this.runtime.readEvidence(taskId)};
+      }
       const nextTask = this.runtime.reconcileToolExecution(taskId, runId, result.outcome, result);
       const persistedRecord = this.runtime.readToolExecutions(taskId).find(item => item.evidenceId === runId);
       const persisted = persistedRecord && savedResult(this.runtime, taskId, runId, intent, persistedRecord);

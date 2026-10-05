@@ -73,11 +73,15 @@ test('cancelled reminders do not fire; missed skip stays skipped; other schedule
 test('notification pause persists and queues until expiry without losing due reminders',async t=>{
   const f=await fixture(t);
   f.host.configureNotifications({pauseUntilUtc:'2026-09-27T10:03:00.000Z'});
+  assert.equal(f.host.snapshot().notificationStatus.pausedUntil,'2026-09-27T10:03:00.000Z');
+  const status=await f.tool('notifications.status',{});
+  assert.equal(status.page.confirmed.result.pausedUntil,'2026-09-27T10:03:00.000Z');
   await f.tool('todo.create',{title:'Held',remindUtc:'2026-09-27T10:01:00.000Z'});
   f.advance(65_000);await f.host.tick(true);assert.equal(f.host.snapshot().notifications.length,0);
   assert.equal(f.host.snapshot().notificationStatus.pending,1);
   await f.restart();f.advance(120_000);await f.host.tick(true);
   assert.equal(f.host.snapshot().notifications.length,1);
+  assert.equal(f.host.snapshot().notificationStatus.pausedUntil,null);
 });
 
 test('direct product entry todo.create and todo.update persist to storage and read back in snapshot', async t => {
