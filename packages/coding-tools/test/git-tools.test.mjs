@@ -4,6 +4,10 @@ import {mkdtempSync, rmSync, mkdirSync, writeFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import childProcess from 'node:child_process';
+import {syncBuiltinESMExports} from 'node:module';
+import {EventEmitter} from 'node:events';
+import {PassThrough} from 'node:stream';
 import {createGitTools, registerGitTools, readGitWorkspaceFingerprint} from '../dist/dev-workflows/git-tools.js';
 
 function fixture() {
@@ -50,8 +54,9 @@ test('Partial registration rolls back previously acquired registrations',()=>{
   } finally {f.dispose();}
 });
 
-function repositoryFixture() {
+function repositoryFixture(rootName) {
   const f=fixture();
+  if (rootName !== undefined) {f.options.rootPath = join(f.options.rootPath, rootName); mkdirSync(f.options.rootPath);}
   const git=args=>execFileSync('git',args,{cwd:f.options.rootPath,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
   git(['init','-b',f.options.sourceBranch]);
   mkdirSync(join(f.options.rootPath,'src'));
@@ -152,4 +157,76 @@ test('Git bounded host read retains trusted verification and normal local commit
     assert.equal(f.git(['show','HEAD:src/main.ts']),'export const value = 2;');
     assert.equal(f.git(['status','--porcelain']),'');
   } finally {f.dispose();}
+});
+
+test('Git preserves literal whitespace in a canonical working-tree root', async () => {
+  const f = repositoryFixture('中文工作区 ');
+  try {
+    const tools = createGitTools(f.options);
+    const context = {taskId: 'synthetic-root-read', runId: 'synthetic-root-read', authorizationRef: 'synthetic-root-read',
+      scopes: ['workspace:git:read'], signal: new AbortController().signal, deadline: new Date(Date.now() + 60_000).toISOString()};
+    const result = await tools.head.execute({repository: f.options.repository}, context);
+    assert.equal(result.headSha, f.headSha); assert.equal(result.workspaceClean, true);
+    assert.equal(f.git(['status', '--porcelain']), '');
+  } finally {f.dispose();}
+});
+
+function stdoutFixture(t, {invalidUtf8 = false, oversized = false} = {}) {
+  const f = fixture(), rootPath = join(f.options.rootPath, '中文工作区');
+  mkdirSync(join(rootPath, 'src'), {recursive: true});
+  writeFileSync(join(rootPath, 'src/中文.ts'), 'export const value = 1;\n');
+  const calls = []; let kills = 0;
+  t.after(() => {t.mock.restoreAll(); syncBuiltinESMExports(); f.dispose();});
+  t.mock.method(childProcess, 'spawn', (executable, args, options) => {
+    assert.equal(executable, 'git'); assert.equal(options.cwd, rootPath);
+    const command = args[8]; calls.push(command);
+    const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+    let closed = false;
+    child.kill = () => {
+      kills++; if (!closed) {closed = true; queueMicrotask(() => child.emit('close', null));}
+      return true;
+    };
+    child.stdin = {end() {queueMicrotask(() => {
+      let text;
+      if (args.includes('--show-toplevel')) text = rootPath + '\n';
+      else if (command === 'symbolic-ref') text = 'agent/fix\n';
+      else if (args.includes('get-url')) text = f.options.remoteUrl + '\n';
+      else if (command === 'rev-parse') text = 'a'.repeat(40) + '\n';
+      else if (command === 'status') text = ' M src/中文.ts\0';
+      else assert.fail('unexpected synthetic read command');
+      const bytes = oversized ? Buffer.alloc(1024 * 1024 + 1, 97)
+        : invalidUtf8 ? Buffer.concat([Buffer.from(text), Buffer.from([0xff])]) : Buffer.from(text);
+      // A flowing stream delivers each write separately, including split UTF-8 code points.
+      if (invalidUtf8 || oversized) child.stdout.write(bytes);
+      else for (const byte of bytes) child.stdout.write(Buffer.from([byte]));
+      child.stdout.end(); child.stderr.end();
+      if (!closed) {closed = true; child.emit('close', 0);}
+    });}};
+    return child;
+  });
+  syncBuiltinESMExports();
+  const tools = createGitTools({...f.options, rootPath, allowedPaths: ['src/中文.ts']});
+  const context = {taskId: 'synthetic-read', runId: 'synthetic-read', authorizationRef: 'synthetic-read',
+    scopes: ['workspace:git:read'], signal: new AbortController().signal, deadline: new Date(Date.now() + 60_000).toISOString()};
+  return {tools, context, calls, get kills() {return kills;}};
+}
+
+test('Git output retains UTF-8 paths across arbitrary stdout chunk boundaries', async t => {
+  const f = stdoutFixture(t);
+  const result = await f.tools.head.execute({repository: 'owner/repo'}, f.context);
+  assert.equal(result.headSha, 'a'.repeat(40)); assert.equal(result.clean, true); assert.equal(result.workspaceClean, false);
+  assert.match(result.fingerprint, /^[a-f0-9]{64}$/u);
+  assert.deepEqual(f.calls, ['rev-parse', 'symbolic-ref', 'remote', 'rev-parse', 'status']); assert.equal(f.kills, 0);
+});
+
+test('Git rejects malformed stdout UTF-8 with a fixed read failure before any write', async t => {
+  const f = stdoutFixture(t, {invalidUtf8: true});
+  await assert.rejects(f.tools.head.execute({repository: 'owner/repo'}, f.context), error => error.code === 'EXTERNAL_FAILURE');
+  assert.deepEqual(f.calls, ['rev-parse']); assert.equal(f.kills, 0);
+});
+
+test('Git UTF-8 buffering retains its byte ceiling and interrupts oversized output', async t => {
+  const f = stdoutFixture(t, {oversized: true});
+  await assert.rejects(f.tools.head.execute({repository: 'owner/repo'}, f.context), error => error.code === 'RESULT_UNKNOWN');
+  assert.deepEqual(f.calls, ['rev-parse']); assert.equal(f.kills, 1);
 });

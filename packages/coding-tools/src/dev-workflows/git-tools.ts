@@ -100,11 +100,11 @@ export function createGitTools(options: GitToolsOptions): {head: RegisteredTool;
       const env: NodeJS.ProcessEnv = {PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, HOME: process.env.HOME,
         GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', ...extra};
       const child = spawn('git', ['-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false','-c','credential.interactive=false','-c','credential.helper=',...args], {cwd: root, env, shell: false, windowsHide: true, stdio: ['pipe','pipe','pipe']});
-      let output = ''; let size = 0; let interrupted = false;
+      const output: Buffer[] = []; let size = 0; let interrupted = false;
       const stop = () => {interrupted = true; child.kill('SIGKILL');};
       const timer = setTimeout(stop, Math.min(60_000, Date.parse(c.deadline) - now()));
       c.signal.addEventListener('abort', stop, {once:true});
-      child.stdout.on('data', (b: Buffer) => {size += b.length; if(size > 1024*1024) stop(); else output += b.toString('utf8');});
+      child.stdout.on('data', (b: Buffer) => {size += b.length; if(size > 1024*1024) stop(); else output.push(Buffer.from(b));});
       // Drain stderr without returning possible remote credentials or private paths.
       child.stderr.on('data', () => {});
       child.on('error', () => {clearTimeout(timer); c.signal.removeEventListener('abort',stop); reject(new ProtocolError('EXTERNAL_FAILURE','Git process unavailable'));});
@@ -112,7 +112,13 @@ export function createGitTools(options: GitToolsOptions): {head: RegisteredTool;
         clearTimeout(timer); c.signal.removeEventListener('abort',stop);
         if (interrupted) reject(new ProtocolError('RESULT_UNKNOWN','Git result unknown; reconcile before retry'));
         else if(code !== 0) reject(new ProtocolError(args[0]==='push' || args[0]==='update-ref' ? 'RESULT_UNKNOWN':'EXTERNAL_FAILURE','Git rejected the bounded operation; reconcile any started write before retry'));
-        else done(output);
+        else {
+          // Pipe chunks can split a filename's UTF-8 code point. Decode complete
+          // bounded bytes once; never guess a path from replacement characters.
+          try {done(new TextDecoder('utf-8', {fatal:true, ignoreBOM:true}).decode(Buffer.concat(output)));}
+          catch {reject(new ProtocolError(args[0]==='push' || args[0]==='update-ref' ? 'RESULT_UNKNOWN':'EXTERNAL_FAILURE',
+            'Git output encoding invalid; reconcile any started write before retry'));}
+        }
       });
       child.stdin.end(input);
     });
@@ -130,7 +136,7 @@ export function createGitTools(options: GitToolsOptions): {head: RegisteredTool;
     return files;
   };
   const state = async (c: ToolContext, scope: string) => {
-    const reportedRoot=(await git(['rev-parse','--show-toplevel'],c,scope)).trim();
+    const reportedRoot=(await git(['rev-parse','--show-toplevel'],c,scope)).replace(/\r?\n$/u,'');
     if (!sameCanonicalPath(realpathSync.native(reportedRoot),root)) fail('Git root binding changed');
     if ((await git(['symbolic-ref','--short','HEAD'],c,scope)).trim() !== options.sourceBranch) fail('Git branch binding changed');
     if ((await git(['remote','get-url',options.remoteName],c,scope)).trim() !== options.remoteUrl) fail('Git remote binding changed');

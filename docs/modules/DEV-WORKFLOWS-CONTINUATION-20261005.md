@@ -371,3 +371,28 @@ MOD34运行/Job每页30最多4页、日志offset有界续读及共享UTF8预算�
 MOD36中文Git转义路径及报告/发表进度保留、MOD38原委派与缓存代际恢复说明同步。
 模块维持review/provisional；Fake/CI不升级真实权限/设备/云验收，Local链不强制AgentArts。
 仅校对source和相对链接、git diff --check；无source变更，不重复构建或测试。
+
+上述5份说明沿原 Draft290 交付 `734e2fd`，其生产源码与前一 `2eda73d` 一致。
+`2eda73d` 两次 Foundation 首次成功的完整 Windows 日志均已实际读取：
+PR run37366157900/job111951731083、push37366150093/job111951705739，
+各31workspace2026通过/0失败/16跳过，.NET8 HostFixture实际构建运行约25.4s/57.7s。
+这覆盖该源码的受控 Windows CI；不等于真人UIA、真实账号Checks或原未知任务核实。
+docs-only `734e2fd` 和下列新源码的 CI 另核对准确head，不拿该证据冒充新head门禁。
+
+### MOD34 Git 路径与 stdout 字节保留
+
+同一 PR290 的4路径登记 #212 `6002024053` / `6002153136`，仅 git-tools 实现、
+其测试、MOD-34-GIT-TOOLS-01 与本清单。旧实现分块解码导致合法中文 root 被替换字符
+破坏；真实临时 Git 仓库 `中文工作区 ` 的末尾空格也被 `.trim()` 丢失并产生 ENOENT。
+合成stdout另复现非法 UTF-8 被接受。原失败证据保留，不修改断言隐藏错误。
+
+stdout 维持原1 MiB字节上限，正常退出后一次严格UTF-8解码且保留BOM；非法编码
+固定失败，push/update-ref仍保守unknown，超限仍中断并RESULT_UNKNOWN。
+root只移除单个LF/CRLF输出终止符，保留合法目录空格。无公共端口/版本/授权/index-CAS
+或依赖变化，没有使用真实凭据/远程账号写入，没有盲目重试。
+
+固定Node24.15/npm11.12 coding-tools build/typecheck及完整模块测试实际exit0，
+187通过/0失败/15平台门控跳过，Git19/19；真实临时Git仓库+逐字节合成stdout各按
+证据性质区分。另实际Node子进程显式合成Git输出在中文UTF-8中点分块，旧实现ENOENT，
+修复后公共head返回确认结果。按AGENTS模块内部改动门槛执行受影响模块检查，
+未将上一完整check或上一Windows结果冒充此增量的完整检查；新head Windows另读回。
