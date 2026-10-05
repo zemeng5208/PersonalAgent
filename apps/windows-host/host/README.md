@@ -77,10 +77,17 @@ Host 只返回短期随机 `targetRef`，不返回或记录标题、正文、HWN
 
 2026-10-05 新增的 HostFixture 回归调用生产共用的 lease/readiness helper，用受控 UTC
 时钟和合成元数据 predicate 覆盖查询中跨越请求/目标期限、等于期限、入口已过期零查询、
-有效/无效/抛错目标及不续期。当前 Linux 会话没有 .NET SDK，官方 SDK metadata 下载
-被 HTTP 403 拒绝，未编译或运行这些 C# 回归；当前验证层级仅为源码审查和
-`git diff --check`。待 Windows owner 执行原 HostFixture 的定向 build/run；Node Foundation
-检查不能代替该项，也不能代替真实 Pipe、UIA、用户接管或设备验收。
+有效/无效/抛错目标及不续期。Desktop 的 `test/windows-host-fixture.test.mjs` 将该现有
+C# fixture 接入原 Node test glob：Windows 必须找到稳定 .NET 8 SDK，以独立临时
+`--artifacts-path` 构建所有项目引用，再发现真实 runtimeconfig 旁的 DLL 并运行，检查
+原完成 marker；SDK 缺失、构建/fixture 错误、超时或缺 marker 均失败，不因环境缺项跳过。
+临时 SDK 配置、CLI 目录和构建产物只属于该测试，结束后清理；不在源码目录生成 bin/obj。
+
+当前 Linux 会话没有 .NET SDK，官方 SDK metadata 下载被 HTTP 403 拒绝，未编译或
+运行 C# 回归；Node 包装测试在 Linux 明确按平台跳过，源码审查与 `git diff --check`
+不代替编译。后续 Windows Foundation 的 Desktop 测试将实际构建/运行该受控 fixture，
+结果须按对应提交的日志另行记录；不能预记成功，也不能代替真实 Pipe、UIA、用户接管
+或设备验收。Windows owner 仍可单独运行原 HostFixture 完成定向验证。
 
 `execute` 帧中的 `authorizationRef` 不构成授权；正式调用方必须先在 Runtime 的
 Policy/ToolGateway 中完成任务、工具、参数摘要、目标与期限的授权消费。Host 只接受

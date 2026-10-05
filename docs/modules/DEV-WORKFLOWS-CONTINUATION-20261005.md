@@ -216,8 +216,8 @@ MOD38 中文/混合标签四类夹具通过只证明契约，不是未给阈值�
 architecture 3/3、contracts 4/4、生成一致性、全 workspace build/typecheck 通过。
 MOD34 CI 53、MOD36 Review 21、MOD38 Issue 38、Runtime DEV-WORKFLOWS 28 的定向检查
 与独立源码/SQLite复核覆盖上述新边界。原初次完整检查因发现 UTF16 页尾缺陷被主动中止，
-未计通过；修复冻结17个文件后才运行这次最终检查。随后 MOD16 的 C# 增量不在 npm
-检查范围内，需单独 .NET HostFixture 证据，不使用 Foundation Node 绿灯代替。
+未计通过；修复冻结17个文件后才运行这次最终检查。`f7e0c4c` 阶段 MOD16 的 C# 增量不在
+npm 检查范围内，需单独 .NET HostFixture 证据，不使用该阶段 Foundation Node 绿灯代替。
 
 旧 MOD16 的独立源码核对还发现 Host 的慢 UIA/元数据查询后缺少期限复核，可能返回已过期
 `observed` 或 `ready=true`。四个 Host 文件在 #212 登记后继续实现：观察/解析用同一生产
@@ -227,3 +227,12 @@ lease helper 在查询前后复核，ready 用生产 helper 在解析后核对�
 helper 回归，但本 Linux 无 .NET，官方 SDK metadata 经现有代理 CONNECT 403，未绕过；
 只完成独立源码审查及 diff 检查，C# build/run 明确待验证。已在 #212 向原 Windows owner
 goo122/Potatos498 交精确 HostFixture build/run 命令；该 fixture 不等于真实 UIA 设备验收。
+
+继续核对发现可独立提供验证入口：现有 Desktop `node --test test/*.test.mjs` 会发现
+Windows 专用测试。已在 #212 登记新 `windows-host-fixture.test.mjs`，不用修改他人负责的
+根 workflow/package/lock，即可在后续 Windows Foundation 构建并执行原 HostFixture。
+测试发现并固定已安装的稳定 .NET8 SDK，所有项目引用用独立临时 artifacts/CLI 目录，
+运行实际 runtimeconfig 旁的 DLL 并核对原完成标记；Windows 缺 SDK、编译/fixture 失败、
+超时或缺标记都会失败，不以环境原因跳过。Linux 定向运行明确1项平台跳过，语法、diff和
+独立只读评审通过；Windows 实编译/运行结果须按新 head 日志另记，尚不预记成功。
+临时产物仅清理该测试所有目录，不在源码生成 bin/obj；此受控验证仍不等于真实 UIA。
