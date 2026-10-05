@@ -48,6 +48,21 @@ test('diff pagination is redacted and bound to both revisions', async () => {
   const changed = provider([fixtures.pull, {exitCode: 0, stdout: 'diff', stderr: ''}, {...fixtures.pull, head: {...fixtures.pull.head, sha: 'c'.repeat(40)}}]);
   await assert.rejects(changed.value.execute('pr.diff', {repo, number: 9, expectedHeadSha: fixtures.pull.head.sha, expectedBaseSha: fixtures.pull.base.sha}, context()), error => error.code === 'REVISION_CONFLICT');
 });
+test('PR creation confirms only when the returned head matches the reviewed SHA', async () => {
+  const input = {repo, title: 'Fix build', body: 'Verified patch', head: 'fix/build', base: 'main', expectedHeadSha: fixtures.pull.head.sha, draft: true};
+  const confirmed = provider([{object: {sha: input.expectedHeadSha}}, {...fixtures.pull, number: 10, html_url: 'https://github.com/example/repository/pull/10'}]);
+  assert.deepEqual(await confirmed.value.execute('pr.create', input, context()), {
+    state: 'confirmed', externalId: '10', url: 'https://github.com/example/repository/pull/10', evidenceRefs: []
+  });
+  const changed = provider([
+    {object: {sha: input.expectedHeadSha}},
+    {...fixtures.pull, number: 11, head: {...fixtures.pull.head, sha: 'c'.repeat(40)}, html_url: 'https://github.com/example/repository/pull/11'}
+  ]);
+  assert.deepEqual(await changed.value.execute('pr.create', input, context()), {
+    state: 'unknown', externalId: '11', url: 'https://github.com/example/repository/pull/11', evidenceRefs: []
+  });
+  assert.equal(changed.calls.length, 2);
+});
 test('failed job log validates run ownership and caps text', async () => {
   const p = provider([fixtures.jobs.jobs[0], {exitCode: 0, stdout: `token=${token}\nerror`, stderr: ''}]);
   const log = await p.value.execute('actions.log.read', {repo, runId: 31, jobId: 41, maxChars: 5}, context());
