@@ -25,7 +25,7 @@ export interface GitHubInputs {
   'pr.diff': NumberInput & { expectedHeadSha: string; expectedBaseSha: string; offset?: number; maxChars?: number };
   'pr.create': RepositoryInput & { title: string; body: string; head: string; base: string; expectedHeadSha: string; draft?: boolean };
   'pr.comment': NumberInput & { body: string };
-  'pr.review.comment': NumberInput & { body: string; commitId: string; path: string; line: number; side?: 'LEFT' | 'RIGHT' };
+  'pr.review.comment': NumberInput & { body: string; commitId: string; expectedBaseSha?: string; path: string; line: number; side?: 'LEFT' | 'RIGHT' };
 }
 export interface GitHubOutputs {
   'repo.get': GitHubRepository;

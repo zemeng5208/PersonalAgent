@@ -1,6 +1,6 @@
 import {spawn} from 'node:child_process';
 import {createHash, randomUUID} from 'node:crypto';
-import {closeSync, fsyncSync, openSync, realpathSync, statSync, writeSync} from 'node:fs';
+import {closeSync, fsyncSync, lstatSync, openSync, readFileSync, realpathSync, statSync, writeSync} from 'node:fs';
 import {unlink} from 'node:fs/promises';
 import {isAbsolute, relative, resolve, sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -37,6 +37,8 @@ export interface WorkspacePatchApplyHostOptions {
   recoveryRootPath: string;
   /** Absolute path to the trusted Windows PowerShell executable. */
   powerShellPath: string;
+  /** Optional absolute path to a host-installed, byte-identical bundled helper outside workspace and recovery roots. */
+  helperScriptPath?: string;
 }
 
 interface ApplyOptions extends WorkspacePatchApplyHostOptions {
@@ -251,13 +253,32 @@ export function createWorkspacePatchApplyToolFromPreview(options: ApplyOptions):
   const root = realpathSync.native(options.rootPath);
   const recoveryRoot = realpathSync.native(options.recoveryRootPath);
   const powerShell = realpathSync.native(options.powerShellPath);
-  const script = realpathSync.native(helperPath);
+  const scriptPath = options.helperScriptPath ?? helperPath;
+  if (typeof scriptPath !== 'string' || !isAbsolute(scriptPath)) {
+    throw new ProtocolError('INVALID_ARGUMENT', 'Patch helper path must be an absolute trusted location');
+  }
+  const script = realpathSync.native(scriptPath);
   if (!statSync(root).isDirectory() || !statSync(recoveryRoot).isDirectory()
     || !statSync(powerShell).isFile() || !statSync(script).isFile()
     || atOrWithin(root, recoveryRoot) || atOrWithin(recoveryRoot, root)
-    || atOrWithin(root, powerShell) || atOrWithin(root, script)) {
+    || atOrWithin(root, powerShell) || atOrWithin(root, script) || atOrWithin(recoveryRoot, script)) {
     throw new ProtocolError('INVALID_ARGUMENT', 'Patch apply host paths must be distinct trusted locations');
   }
+  // Explicit relocation may use only the reviewed bundled helper, never arbitrary host/model script contents.
+  const bundledScript = readFileSync(helperPath);
+  const scriptDigest = digest(bundledScript);
+  const checkScript = (): void => {
+    try {
+      const info = lstatSync(scriptPath);
+      if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size !== bundledScript.length
+        || realpathSync.native(scriptPath) !== script || digest(readFileSync(script)) !== scriptDigest) {
+        throw new Error('changed helper');
+      }
+    } catch {
+      throw new ProtocolError('INVALID_ARGUMENT', 'Patch helper must remain the trusted bundled script');
+    }
+  };
+  checkScript();
   const descriptor: ToolDescriptor = {
     name: WORKSPACE_PATCH_APPLY_TOOL_NAME,
     version: WORKSPACE_PATCH_APPLY_TOOL_VERSION,
@@ -287,6 +308,7 @@ export function createWorkspacePatchApplyToolFromPreview(options: ApplyOptions):
     descriptor,
     execute: async (input: unknown, context: ToolContext): Promise<WorkspacePatchApplyResult> => {
       check(context, options.now);
+      checkScript();
       const preview = await options.preview.execute(input, context) as WorkspacePatchPreviewResult;
       check(context, options.now);
       await checkedSource(root, preview.path);
@@ -305,6 +327,7 @@ export function createWorkspacePatchApplyToolFromPreview(options: ApplyOptions):
       if (!preview.changed) return result;
       const recoveryId = `${digest(Buffer.from(`${context.taskId}\n${context.runId}`)).slice(0, 32)}-${randomUUID()}.bak`;
       const sourcePath = resolve(root, ...preview.path.split('/'));
+      checkScript();
       // One durable marker per source, not per attempt: an unknown prior helper
       // blocks a second apply until a trusted reconciler confirms its process exited.
       const response = await invokeHelper(powerShell, script, {

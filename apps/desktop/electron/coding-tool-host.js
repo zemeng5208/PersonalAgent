@@ -71,7 +71,7 @@ export function listPendingCodingHelpers(recoveryRootPath) {
 /** Bind only trusted main-process paths and factory. inspectAcl is for isolated host tests.
  * Policy and ToolGateway still own every execution decision and result state. */
 export function createDesktopCodingToolHost({workspaceRoot, authorizedWorkspaceRoot,
-  recoveryRootPath, powerShellPath, createWorkspacePatchApplyTool,
+  recoveryRootPath, powerShellPath, helperScriptPath, createWorkspacePatchApplyTool,
   reconcileWorkspacePatchApply,
   inspectAcl = verifyWindowsRecoveryAcl}) {
   if (process.platform !== 'win32') throw Error('Coding patch host requires Windows');
@@ -80,9 +80,11 @@ export function createDesktopCodingToolHost({workspaceRoot, authorizedWorkspaceR
   if (root !== authorized) throw Error('Workspace root is outside the fixed Desktop authorization');
   const recovery = canonicalDirectory(recoveryRootPath, 'Recovery root');
   const powerShell = canonicalFile(powerShellPath, 'PowerShell 7 executable');
+  const helper = helperScriptPath===undefined?undefined:canonicalFile(helperScriptPath,'Patch helper script');
   if (path.basename(powerShell).toLowerCase() !== 'pwsh.exe') throw Error('PowerShell 7 executable is required');
   if (atOrWithin(root, recovery) || atOrWithin(recovery, root)
-    || atOrWithin(root, powerShell) || atOrWithin(recovery, powerShell)) {
+    || atOrWithin(root, powerShell) || atOrWithin(recovery, powerShell)
+    || (helper && (atOrWithin(root,helper) || atOrWithin(recovery,helper)))) {
     throw Error('Coding host paths must be separate from the workspace and recovery root');
   }
   inspectAcl(recovery, powerShell);
@@ -90,13 +92,14 @@ export function createDesktopCodingToolHost({workspaceRoot, authorizedWorkspaceR
     {source: workspaceRoot, canonical: root, directory: true, id: identity(root)},
     {source: recoveryRootPath, canonical: recovery, directory: true, id: identity(recovery)},
     {source: powerShellPath, canonical: powerShell, directory: false, id: identity(powerShell, true)},
+    ...(helper?[{source:helperScriptPath,canonical:helper,directory:false,id:identity(helper,true)}]:[]),
   ];
   const bindingId = createHash('sha256').update(JSON.stringify(pinned.map(entry => [entry.canonical,
     Object.entries(entry.id).map(([key, value]) => [key, String(value)])]))).digest('hex');
   const pendingHelpers = listPendingCodingHelpers(recovery);
   if (typeof createWorkspacePatchApplyTool !== 'function') throw Error('Public patch apply factory is unavailable');
   const implementation = createWorkspacePatchApplyTool({rootPath: root, recoveryRootPath: recovery,
-    powerShellPath: powerShell});
+    powerShellPath: powerShell,...(helper?{helperScriptPath:helper}:{})});
   if (implementation?.descriptor?.name !== 'workspace.apply_text_patch'
     || implementation.descriptor.version !== '1.0.0'
     || implementation.descriptor.sideEffect !== 'local_write'

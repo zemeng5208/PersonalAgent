@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {ProtocolError} from '@personal-agent/contracts';
-import {GhCliProvider, FakeGitHubProvider, register} from '../dist/index.js';
+import {GhCliProvider, FakeGitHubProvider, GitHubService, register} from '../dist/index.js';
 const fixtures = JSON.parse(await readFile(new URL('./fixtures/github.json', import.meta.url), 'utf8'));
 const repo = 'example/repository';
 const token = 'ghp_fakecredential01234567890';
@@ -74,6 +74,60 @@ test('cancellation and expired deadline fail before credentials or process', asy
   await assert.rejects(p.value.execute('repo.get', {repo}, {...context(), signal: controller.signal}), error => error.code === 'CANCELLED');
   await assert.rejects(p.value.execute('repo.get', {repo}, {...context(), deadline: '2000-01-01T00:00:00Z'}), error => error.code === 'TIMEOUT');
   assert.equal(p.calls.length, 0);
+});
+test('service rejects a late read from a provider that ignores cancellation', async () => {
+  let resolve,signal;
+  const service=new GitHubService({verification:'mock',execute:(_op,_input,bounded)=>{
+    signal=bounded.signal;return new Promise(done=>{resolve=done;});
+  }});
+  const controller=new AbortController();
+  const pending=service.execute('issue.get',{repo,number:8},{...context(),signal:controller.signal});
+  const cancelled=assert.rejects(pending,error=>error.code==='CANCELLED');
+  controller.abort();resolve(fixtures.issue);
+  await cancelled;assert.equal(signal.aborted,true);
+});
+test('service bounds non-cooperating providers by deadline without claiming a write was stopped', async t => {
+  t.mock.timers.enable({apis:['Date','setTimeout'],now:Date.parse('2026-10-05T00:00:00Z')});
+  const signals=[];
+  const service=new GitHubService({verification:'mock',execute:(_op,_input,bounded)=>{
+    signals.push(bounded.signal);return new Promise(()=>{});
+  }});
+  const read=service.execute('issue.get',{repo,number:8},context());
+  const expired=assert.rejects(read,error=>error.code==='TIMEOUT');
+  t.mock.timers.tick(5000);await expired;
+  assert.equal(signals[0].aborted,true);
+  const write=service.execute('issue.comment',{repo,number:8,body:'synthetic note'},context());
+  t.mock.timers.tick(5000);
+  assert.deepEqual(await write,{state:'unknown',evidenceRefs:[]});
+  assert.equal(signals[1].aborted,true);
+  assert.equal(signals.length,2);
+});
+test('registered service keeps cancelled provider writes unknown and does not retry', async () => {
+  let resolve,signal,calls=0;
+  const tools=new Map();
+  const dispose=register({register(tool){tools.set(tool.descriptor.name,tool);return ()=>tools.delete(tool.descriptor.name);}},
+    {provider:{verification:'mock',execute:(_op,_input,bounded)=>{
+      calls++;signal=bounded.signal;return new Promise(done=>{resolve=done;});
+    }}});
+  try {
+    const controller=new AbortController();
+    const pending=tools.get('github.issue.comment').execute({repo,number:8,body:'synthetic note'},
+      {...context(),signal:controller.signal,taskId:'synthetic-task',runId:'synthetic-run',authorizationRef:'synthetic-grant',scopes:['github:write']});
+    const unknown=assert.rejects(pending,error=>error.code==='RESULT_UNKNOWN');
+    controller.abort();resolve({state:'confirmed',externalId:'synthetic',evidenceRefs:[]});
+    await unknown;assert.equal(calls,1);assert.equal(signal.aborted,true);
+    await assert.rejects(tools.get('github.issue.comment').execute({repo,number:8,body:'synthetic note'},
+      {...context(),signal:controller.signal,taskId:'synthetic-task',runId:'synthetic-run',authorizationRef:'synthetic-grant',scopes:['github:write']}),error=>error.code==='CANCELLED');
+    assert.equal(calls,1,'pre-cancelled calls do not invoke the provider');
+  } finally {dispose();}
+});
+test('review publication rejects a changed base before dispatching POST', async () => {
+  const p = provider([{...fixtures.pull, base: {...fixtures.pull.base, sha: 'c'.repeat(40)}}]);
+  await assert.rejects(p.value.execute('pr.review.comment', {repo, number: 9, body: 'note',
+    commitId: fixtures.pull.head.sha, expectedBaseSha: fixtures.pull.base.sha, path: 'src/index.ts', line: 1}, context()),
+  error => error.code === 'REVISION_CONFLICT');
+  assert.equal(p.calls.length, 1);
+  assert.equal(p.calls[0].args[p.calls[0].args.indexOf('--method') + 1], 'GET');
 });
 test('register has read/write descriptors, strict scopes and idempotent disposal', async () => {
   const tools = new Map(); let removed = 0;

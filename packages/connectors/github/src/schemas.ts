@@ -21,7 +21,7 @@ const fields: Record<GitHubOperation, Record<string, unknown>> = {
   'pr.get': {number: positive}, 'pr.diff': {number: positive, expectedHeadSha: sha, expectedBaseSha: sha, ...textPage},
   'pr.create': {title: {...body, maxLength: 256}, body, head: branch, base: branch, expectedHeadSha: sha, draft: {type: 'boolean'}},
   'pr.comment': {number: positive, body},
-  'pr.review.comment': {number: positive, body, commitId: sha, path: {type: 'string', minLength: 1, maxLength: 1024}, line: positive, side: {enum: ['LEFT', 'RIGHT']}},
+  'pr.review.comment': {number: positive, body, commitId: sha, expectedBaseSha: sha, path: {type: 'string', minLength: 1, maxLength: 1024}, line: positive, side: {enum: ['LEFT', 'RIGHT']}},
 };
 const required: Partial<Record<GitHubOperation, string[]>> = {
   'actions.job.list': ['runId'], 'actions.log.read': ['runId', 'jobId'],

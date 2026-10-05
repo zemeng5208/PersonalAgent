@@ -52,6 +52,26 @@ npm run check:architecture
 
 ## 继续与恢复
 
+### 本次真实验收反馈与 helper 接线（2026-10-03）
+
+Potatos498 的 `7999446a0fd4da2adda3e8ab8d25c2d3b7151719` 保留 MOD-36 整体 JSON
+围栏兼容、有效意见筛选与 changed-lines 提示。本轮增加 kind/side 的原生字符串校验，拒绝
+被 String 强转伪装成合法枚举的 JSON 数组；补充围栏、混合保留/去重、空报告不可发表场景源码，
+并同步 MOD-36 的 Local 授权、只读验收报告与未验证边界。新增场景未运行。
+
+PR 评论 `5968380670` 报告 MOD-34 仓库根包含默认 helper 导致注册失败。本轮不解除可写
+workspace 与受信脚本的隔离；受信宿主预先在 workspace/recovery 之外的独立已限权目录安装
+本版本 `packages/coding-tools/scripts/locked-apply.ps1` 的字节一致副本，显式设置
+`workspace.patch.helperScriptPath`。公开 apply factory 转交可选绝对路径，核对单硬链接常规
+文件、canonical 隔离及摘要，执行前复核；无配置保持既有安全拒绝，不自动复制/安装或执行
+未知脚本。宿主 Windows ACL、跨模块兼容（goo122）和最新 head 的实际闭环（Potatos498）仍待验。
+
+本轮执行端仅运行 `node --check` 及 whitespace 静态核对，未运行 build/typecheck/tests、
+PowerShell、模型或真实 GitHub 验收，也未手动触发 Actions。旧 head 的 Foundation PR run
+`37116763675` / job `111184973242` 已完成并失败：全仓检查进入测试后，Desktop 14 个失败计数、
+Runtime 6 个失败计数；现有 DEV-WORKFLOWS 样例（包括跨轮 confirmed 文件提交）在该外部日志中
+通过。它们不替代本轮新增场景，范围外存量失败不在本轮接管。
+
 ### Foundation 构建顺序修复（2026-10-03）
 
 PR #277 的 `68ec4184` 在 Foundation run `37099110353` / job `111134969136`

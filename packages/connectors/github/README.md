@@ -55,7 +55,7 @@ CLI stdout+stderr 总上限 1 MiB；超过明确失败，不将部分 diff/log �
 失败日志先验证 job.run_id，再通过 `gh run view --job --log-failed` 读文本。
 不把临时签名下载 URL 或 zip 日志作为输出。
 
-pr.diff 每页读前及读后核对两端 SHA；review.comment 写前核对 commitId；pr.create
+pr.diff 每页读前及读后核对两端 SHA；review.comment 写前核对 commitId 及可选 expectedBaseSha（MOD-36 总是提供）；pr.create
 写前核对 head branch SHA。issue.label 为追加标签，写前核对 expectedUpdatedAt，
 消费者仍应对完整 issue 做指纹比较。GitHub 写接口没有这里所需的原子 SHA/时间戳
 条件更新，预读与写入之间仍有竞态；消费者必须保守处理、必要时读回人工核实。
@@ -68,6 +68,10 @@ registered tool 将该结果转为 `ProtocolError('RESULT_UNKNOWN')`，使 Gatew
 不重试、不伪造成功；已确认响应返回 confirmed，此处不宣称人工/外部验收 verified。
 消费者 unknown 后进入 reconciliation，不能以新 run 重发。未派发的过期/取消明确
 抛 TIMEOUT/CANCELLED。所有错误只返回标准错误码与固定摘要，原始 stderr 不回显。
+公开 GitHubService 对每个注入 Provider 也执行同一期限/取消包装：忽略信号的
+Provider 不得拖住调用或以迟到结果确认。入口已过期/取消时零 Provider 调用；
+进入写 Provider 后取消/超时保守返回 unknown（服务无法证明未派发），工具入口
+再转 RESULT_UNKNOWN，不自动重试。signal 中止不等于外部副作用已停止。
 脱敏覆盖受限注入 token、常见 GitHub token、Authorization、密码/密钥键值；不是
 DLP 保证，issue/log/diff 仍是不可信内容，不能作为权限或模型指令来源。
 
@@ -77,8 +81,7 @@ connect 只登记宿主配置 session，不访问账号或声称 ready；health 
 disconnect/dispose 释放 provider 与进程，register 初始化部分失败回滚已注册工具。
 
 Fake 必须显式注入 operation fixture；缺项拒绝，不伪造成功。测试夹具不含真实 token。
-当前用户明确要求不运行构建/测试/安装/真实服务；只做静态阅读、语法检查与 diff 检查。
-集中验收时在整合后的 workspace 依赖准备完成后运行：
+原交付阶段只做静态检查；2026-10-05 用户已授权接续实现与必要验证，离线模块/Runtime/组合门禁已有回执，见 #277 接续说明。依赖准备完成后使用仓库固定 Node/npm 版本运行：
 
 ```sh
 npm run build --workspace=@personal-agent/github

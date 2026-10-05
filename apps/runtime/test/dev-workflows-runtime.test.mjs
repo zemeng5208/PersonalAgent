@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {test} from 'node:test';
 import {FakeModelProvider} from '@personal-agent/models';
+import {GhCliProvider} from '@personal-agent/github';
 import {createDevWorkflowsRuntime} from '../dist/dev-workflows-runtime.js';
 
 const issue = {number: 7, title: 'Improve docs', body: 'Please improve docs', state: 'open', labels: [],
@@ -22,11 +23,11 @@ function model() {
     capabilities: {text: true, streaming: false, toolCalling: false, structuredOutput: false, vision: false},
   });
 }
-async function fixture(run) {
+async function fixture(run, options = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'dev-workflows-'));
   const count = {calls: 0};
   const host = createDevWorkflowsRuntime({path: path.join(directory, 'runtime.sqlite'), model: model(),
-    tools: [readTool(count)], maxSteps: 16, maxTokens: 1024});
+    tools: [readTool(count)], maxSteps: 16, maxTokens: 1024, ...options});
   try { await run(host, count); }
   finally { await host.close(); await rm(directory, {recursive: true, force: true}); }
 }
@@ -79,4 +80,93 @@ test('unknown tasks cannot be reopened without original confirmed Evidence', asy
     assert.throws(() => host.resumeConfirmed(task.taskId, {runId: 'invented', toolName: 'github.issue.get',
       toolVersion: '0.1.0-alpha.1', arguments: {repo: 'example/project', number: 7}}), /confirmed receipt/);
   });
+});
+
+test('a larger CI budget does not prevent other workflows from starting', async () => {
+  await fixture(async (host, count) => {
+    const task = host.submit(submission());
+    assert.equal((await host.start(task.taskId)).state, 'waiting_approval');
+    const approval = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0];
+    host.runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
+    assert.equal((await host.resume(task.taskId)).state, 'succeeded');
+    assert.equal(host.readResult(task.taskId).state, 'classified');
+    assert.equal(count.calls, 1);
+  }, {maxTokens: 64_000});
+});
+
+test('failed workflow construction disposes registered GitHub providers and closes SQLite', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'dev-init-rollback-'));
+  const database = path.join(directory, 'runtime.sqlite');
+  let disposed = 0;
+  const github = {verification: 'mock', async execute() {throw Error('unused');}, dispose() {disposed++;}};
+  try {
+    assert.throws(() => createDevWorkflowsRuntime({path: database, model: model(), github,
+      maxSteps: 16, maxTokens: 1024, issueTriage: {minConfidence: 2}}), /INVALID_TRIAGE_OPTIONS/);
+    assert.equal(disposed, 1);
+    // Windows rejects deleting a SQLite file if a leaked connection still owns it.
+    await rm(database);
+    const host = createDevWorkflowsRuntime({path: database, model: model(), tools: [readTool({calls: 0})],
+      maxSteps: 16, maxTokens: 1024});
+    await host.close();
+  } finally {await rm(directory, {recursive: true, force: true});}
+});
+
+test('provider disposal failure does not hide the original workflow construction error', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'dev-dispose-error-'));
+  const database = path.join(directory, 'runtime.sqlite');
+  let disposed = 0;
+  const github = {verification: 'mock', async execute() {throw Error('unused');},
+    dispose() {disposed++; throw Error('dispose interrupted');}};
+  try {
+    assert.throws(() => createDevWorkflowsRuntime({path: database, model: model(), github,
+      maxSteps: 16, maxTokens: 1024, issueTriage: {minConfidence: 2}}), /INVALID_TRIAGE_OPTIONS/);
+    assert.equal(disposed, 1);
+    await rm(database);
+  } finally {await rm(directory, {recursive: true, force: true});}
+});
+
+test('PR base drift during approval cannot publish a cached pre-review', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'dev-review-base-'));
+  const headSha = 'a'.repeat(40), baseSha = 'b'.repeat(40);
+  let currentBase = baseSha, writes = 0;
+  const diff = 'diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new\n';
+  // Exercise the production gh adapter with a synthetic transport; no network/account writes.
+  const github = new GhCliProvider({repositories: ['example/project'], readToken: async () => 'synthetic-token',
+    runner: {async run(command) {
+      const method = command.args[command.args.indexOf('--method') + 1];
+      if (method === 'POST') {
+        writes++;
+        return {exitCode: 0, stdout: JSON.stringify({id: 10,
+          html_url: 'https://github.com/example/project/pull/7#discussion_r10'}), stderr: ''};
+      }
+      if (command.args.includes('Accept: application/vnd.github.diff')) return {exitCode: 0, stdout: diff, stderr: ''};
+      return {exitCode: 0, stdout: JSON.stringify({number: 7, title: 'Change', body: '', state: 'open', draft: false,
+        base: {ref: 'main', sha: currentBase}, head: {ref: 'feature', sha: headSha},
+        html_url: 'https://github.com/example/project/pull/7'}), stderr: ''};
+    }}});
+  const model = new FakeModelProvider([{kind: 'final', text: JSON.stringify({findings: [
+    {kind: 'question', ruleId: 'rule', path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'Explain this change'},
+  ]})}]);
+  const host = createDevWorkflowsRuntime({path: path.join(directory, 'runtime.sqlite'), model, github,
+    isUserPresent: () => true, maxSteps: 20, maxTokens: 1024});
+  try {
+    const task = host.submit({request: {kind: 'code_review', publish: true, input: {repo: 'example/project', number: 7,
+      rules: [{id: 'rule', text: 'Explain meaningful changes'}]}}, conversationId: 'review-base',
+      idempotencyKey: 'one-review', deadline: new Date(Date.now() + 60_000).toISOString()});
+    let snapshot = await host.start(task.taskId), reachedWriteApproval = false;
+    for (let i = 0; snapshot.state === 'waiting_approval' && i < 12; i++) {
+      const approval = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0];
+      assert.ok(approval);
+      if (approval.action === 'github.pr.review.comment') {currentBase = 'c'.repeat(40); reachedWriteApproval = true;}
+      host.runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
+      snapshot = await host.resume(task.taskId);
+      if (reachedWriteApproval) break;
+    }
+    assert.equal(reachedWriteApproval, true);
+    assert.equal(writes, 0);
+    assert.equal(snapshot.state, 'waiting_reconciliation');
+    const record = host.runtime.readToolExecutions(task.taskId).find(record => record.toolName === 'github.pr.review.comment');
+    assert.equal(record.state, 'unknown');
+    assert.equal(record.errorCode, 'RESULT_UNKNOWN');
+  } finally {await host.close(); await rm(directory, {recursive: true, force: true});}
 });

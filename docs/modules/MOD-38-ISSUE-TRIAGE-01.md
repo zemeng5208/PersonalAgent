@@ -1,6 +1,6 @@
 # MOD-38：Issue 分类与受控修复 PR
 
-负责人 zemeng；目标 `huawei_ict_agentarts`；状态 `review`（待 Potatos498 集中验收与非作者评审）。
+负责人 zemeng；目标为已授权的 `local` DEV-WORKFLOWS 增量；状态 `review`（待真实集中验收与非作者评审）。不计入 `huawei_ict_agentarts` 比赛验收。
 基线 `3d4d917`；工作树 `.worktrees/dev-issue`；分支 `codex/dev-issue`。
 
 ## 行为与依赖

@@ -34,6 +34,8 @@
 | MOD-37 | API 文档自动维护 | goo122 | zemeng | MOD-33、check:generated/architecture 产物 |
 | MOD-38 | Issue 自动分类+修复 PR | zemeng | Potatos498 | MOD-33、MOD-34 |
 
+2026-10-05 用户要求按 #277 与旧 MOD 继续实现、评审和必要验证，覆盖此前本轮执行端只做静态核对的限制。zemeng 仍串行负责既有 DEV-WORKFLOWS 集成槽；新旧任务与实际验证见 [接续记录](modules/DEV-WORKFLOWS-CONTINUATION-20261005.md)。MOD-35 已由 Potatos498 交 #279，zemeng 评审及返修；MOD-37 保留 goo122 分工，不接管其目录。
+
 写入类操作（commit/push/PR/review comment/标签写回）一律审批制并遵守 ADR-0003；GitHub 凭据走 SecretStore 声明式白名单，复用 gh CLI 已验证协议层。真实验收以本仓库自身为目标（真实 Actions 失败修复、真实 PR 预审）。
 
 ### 单一写入与交接规则
