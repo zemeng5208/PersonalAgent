@@ -434,3 +434,8 @@ realpathSync.native固定与生产相同canonical根，Windows实际repo用合�
 Linux保留原尾空格case；不跳过中文/超限/非法编码、不放宽cwd/HEAD/调用序列断言。
 生产Git源码本轮无新改动，修正后本机coding完整187/0/15、独立只读复核无实质问题。
 该失败与之前成功head分别记录，当前包准确head Windows结果另读回，不能预记通过。
+
+本人组合说明顶部“公开入口计划/静态交付待集中验收/集中整合exports后”已按实际
+apps/runtime package export和上述SQLite/模块检查校正，不改公开接口或默认Competition。
+状态仍review/provisional，协作者真实只读报告与账号写入/原Windows整链分别标注。
+仅事实/相对链接/diff检查，无source变化、无重复build/test；不修改根配置或共享ROADMAP。

@@ -1,12 +1,12 @@
 # DEV-WORKFLOWS-INTEGRATION-01
 
-状态：`review`（静态交付待集中验收）。负责人：zemeng；验收：Potatos498。
+状态：`review`（生产组合、模块/SQLite受控检查已交；真实账号、原设备整链及非作者集成待验）。负责人：zemeng；真实集中验收：Potatos498。
 
 ## 范围和入口
 
 用户本轮明确授权新增可选 `local` 开发工作流。该增量不替换 Competition Profile，不改现有 RuntimeApplication 或 Desktop 默认路径。
 
-公开入口计划为 `@personal-agent/runtime/dev-workflows`，导出 `createDevWorkflowsRuntime`、`DevWorkflowsRuntimeOptions`、`DevWorkflowRequest`。公开 exports、依赖和锁文件由根集成负责人维护。模块接口仍为 provisional；未开展真实 GitHub、Git push、模型或 Windows 命令验收。
+公开入口已由 `apps/runtime/package.json` 的 `./dev-workflows` export 提供，为 `@personal-agent/runtime/dev-workflows`，导出 `createDevWorkflowsRuntime`、`DevWorkflowsRuntimeOptions`、`DevWorkflowRequest`。公开 exports、依赖和锁文件继续由根集成负责人维护；本可选工厂不会自动装配到默认 Competition/Desktop 路径。模块接口仍为 provisional，源码及受控测试不等于真实账号写入、原 Windows unknown 恢复或比赛验收；真实只读验收的协作者报告与完整写入整链缺项见续接清单。
 
 工厂装配既有 TaskRuntime、Policy、ToolGateway、ModelGateway，并消费 MOD-33 GitHub、MOD-34 CI 修复、MOD-36 PR 审查和 MOD-38 Issue 分诊的公开包入口。无第二套任务数据库或状态机。
 
@@ -101,7 +101,7 @@ GET 失败，原任务保持 unknown，重启后提示保留，独立审批只�
 独立复核14/14；缓存同名hint剥离、cancelRequested隐藏均保留失败回归，具体提交/Windows
 门禁与剩余真实验收以同目录续接清单及当前PR精确head为准，整体模块仍review/provisional。
 
-Potatos498 集中整合全部模块和 exports 后执行仓库实际脚本：
+生产组合与 exports 已交，必要检查按对应改动执行仓库实际脚本，避免无变化重复测试：
 
 ```sh
 npm run check
