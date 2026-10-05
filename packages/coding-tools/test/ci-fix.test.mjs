@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
+import {getEventListeners} from 'node:events';
+import {setImmediate} from 'node:timers/promises';
 import {runCiFix, createCiFixWorkflow} from '../dist/dev-workflows/ci-fix.js';
 
 const headSha = 'a'.repeat(40), fixedSha = 'b'.repeat(40), fileSha = 'c'.repeat(64);
@@ -27,7 +29,10 @@ function fixture() {
   };
   let modelCalls = 0;
   const model = {deployment: {}, async complete(request) {modelCalls++; assert.equal(request.tools.length,0); return {response:{kind:'final',text:JSON.stringify({diagnosis:'Fix failing assertion',patches:[{path:'src/a.ts',expectedSha256:fileSha,edits:[{oldText:'bad',newText:'good'}]}]})},usage:{promptTokens:10,completionTokens:10,totalTokens:20}};}};
-  const tools = {list:()=>names.map(name=>({name,version:'1.0.0'})), async invoke(input) {calls.push(input);return {state:'confirmed',result:structuredClone(responses[input.toolName]),evidenceRefs:[input.runId]};}};
+  const localWrites=new Set(['workspace.apply_text_patch','workspace.run_allowed_command','workspace.git.commit']);
+  const externalWrites=new Set(['workspace.git.push','github.pr.create','github.pr.comment','github.issue.comment']);
+  const tools = {list:()=>names.map(name=>({name,version:'1.0.0',
+    sideEffect:localWrites.has(name)?'local_write':externalWrites.has(name)?'external_write':'read'})), async invoke(input) {calls.push(input);return {state:'confirmed',result:structuredClone(responses[input.toolName]),evidenceRefs:[input.runId]};}};
   const options = {repository:'owner/repo',runId:'42',model,tools,gitTools,sourcePaths:['src/a.ts'],headBranch:'ci-fix',baseBranch:'main',verifyRecipeId:'test',maxSteps:32,maxTokens:4096,authorizationRefFor:()=> 'runtime-approved'};
   return {context,options,calls,responses,checkpoints,modelCalls:()=>modelCalls};
 }
@@ -189,6 +194,87 @@ test('changed request cannot reuse persisted journal',async()=>{
 test('cancelled context never invokes a tool',async()=>{
   const f=fixture(), controller=new AbortController(); controller.abort(); f.context.signal=controller.signal;
   await assert.rejects(runCiFix(f.context,f.options),/cancelled/); assert.equal(f.calls.length,0);
+  assert.equal(f.modelCalls(),0); assert.equal(f.checkpoints.size,0);
+});
+async function mustSettle(promise) {
+  let timer;
+  try {return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('operation did not settle')),100);})]);}
+  finally {clearTimeout(timer);}
+}
+test('permanently waiting model and read ports cannot hold a cancelled CI factory',async t=>{
+  for(const phase of ['model','read']) await t.test(phase,async()=>{
+    const f=fixture(), controller=new AbortController(), started=Promise.withResolvers();
+    f.context.signal=controller.signal;
+    let portSignal;
+    if(phase==='model') f.options.model.complete=async request=>{portSignal=request.signal;started.resolve();return new Promise(()=>{});};
+    else f.options.tools.invoke=async input=>{f.calls.push(input);portSignal=input.signal;started.resolve();return new Promise(()=>{});};
+    const run=runCiFix(f.context,f.options); await started.promise; controller.abort();
+    await assert.rejects(mustSettle(run),error=>error.code==='CANCELLED');
+    assert.equal(portSignal.aborted,true); assert.equal(getEventListeners(controller.signal,'abort').length,0);
+    assert.ok(!f.calls.some(c=>c.toolName==='workspace.apply_text_patch'));
+  });
+});
+test('CI model and read deadlines expire even when their ports ignore signals',async t=>{
+  for(const phase of ['model','read']) await t.test(phase,async t=>{
+    t.mock.timers.enable({apis:['Date','setTimeout'],now:Date.parse('2026-10-05T00:00:00Z')});
+    const f=fixture(), started=Promise.withResolvers(); f.context.deadline=new Date(Date.now()+5000).toISOString();
+    if(phase==='model') f.options.model.complete=async()=>{started.resolve();return new Promise(()=>{});};
+    else f.options.tools.invoke=async input=>{f.calls.push(input);started.resolve();return new Promise(()=>{});};
+    let error;
+    const run=runCiFix(f.context,f.options).catch(value=>{error=value;});
+    await started.promise; t.mock.timers.tick(5000); await setImmediate();
+    assert.equal(error?.code,'TIMEOUT'); await run;
+    assert.equal(getEventListeners(f.context.signal,'abort').length,0);
+    assert.ok(!f.calls.some(c=>c.toolName==='workspace.apply_text_patch'));
+  });
+});
+test('CI deadline uses the supplied clock and re-arms timers beyond the platform delay limit',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const f=fixture(), started=Promise.withResolvers(), maxDelay=2_147_483_647;
+  let clock=0, error;
+  f.options.now=()=>clock; f.context.deadline=new Date(maxDelay+5000).toISOString();
+  f.options.tools.invoke=async input=>{f.calls.push(input);started.resolve();return new Promise(()=>{});};
+  const run=runCiFix(f.context,f.options).catch(value=>{error=value;}); await started.promise;
+  clock=maxDelay; t.mock.timers.tick(maxDelay); await setImmediate(); assert.equal(error,undefined);
+  clock+=5000; t.mock.timers.tick(5000); await setImmediate();
+  assert.equal(error?.code,'TIMEOUT'); await run; assert.equal(f.calls.length,1);
+});
+test('a model result arriving past the supplied deadline cannot settle its checkpoint',async()=>{
+  const f=fixture(), complete=f.options.model.complete;
+  let clock=0, portSignal;
+  f.options.now=()=>clock; f.context.deadline=new Date(5000).toISOString();
+  f.options.model.complete=async request=>{portSignal=request.signal;clock=5000;return complete(request);};
+  await assert.rejects(runCiFix(f.context,f.options),error=>error.code==='TIMEOUT');
+  const saved=f.context.loadCheckpoint('ci-fix-v1');
+  assert.equal(portSignal.aborted,true); assert.equal(saved.inflight,'model-0');
+  assert.equal(saved.results['model-0'],undefined); assert.equal(saved.tokens,f.options.maxTokens);
+  assert.ok(!f.calls.some(c=>c.toolName==='workspace.apply_text_patch'));
+});
+test('cancelled patch ports retain their original unknown run and reject late confirmed results',async t=>{
+  for(const metadata of ['local_write','unknown']) await t.test(metadata,async()=>{
+    const f=fixture(), controller=new AbortController(), started=Promise.withResolvers(), response=Promise.withResolvers();
+    f.context.signal=controller.signal;
+    if(metadata==='unknown') {
+      const list=f.options.tools.list;
+      f.options.tools.list=()=>list().map(tool=>{if(tool.name==='workspace.apply_text_patch') delete tool.sideEffect;return tool;});
+    }
+    const invoke=f.options.tools.invoke;
+    f.options.tools.invoke=async input=>{
+      if(input.toolName!=='workspace.apply_text_patch') return invoke(input);
+      f.calls.push(input); started.resolve(input); return response.promise;
+    };
+    const run=runCiFix(f.context,f.options), patch=await started.promise; controller.abort();
+    assert.equal((await mustSettle(run)).status,'waiting_reconciliation');
+    const saved=f.context.loadCheckpoint('ci-fix-v1');
+    assert.equal(saved.inflight,'patch-0-0'); assert.equal(saved.results['patch-0-0'],undefined);
+    response.resolve({state:'confirmed',result:f.responses['workspace.apply_text_patch'],evidenceRefs:[patch.runId]});
+    await setImmediate(); assert.deepEqual(f.context.loadCheckpoint('ci-fix-v1'),saved);
+    f.context.signal=new AbortController().signal;
+    for(let index=0;index<2;index++) assert.equal((await runCiFix(f.context,f.options)).status,'waiting_reconciliation');
+    assert.equal(f.calls.filter(c=>c.toolName==='workspace.apply_text_patch').length,1);
+    assert.equal(f.calls.filter(c=>c.toolName==='workspace.run_allowed_command').length,0);
+    assert.equal(getEventListeners(controller.signal,'abort').length,0);
+  });
 });
 test('step budget persists and blocks effects',async()=>{
   const f=fixture(); f.options.maxSteps=2;

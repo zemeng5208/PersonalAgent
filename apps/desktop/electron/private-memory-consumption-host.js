@@ -73,7 +73,7 @@ export function createPrivateMemoryConsumptionHost({profile, privateMemory, read
       if (!selected) return {state: 'not_selected', goal};
       if (typeof assertCopyManagement !== 'function') throw Error('私人派生副本清除未接通，消费保持禁用');
       const readiness = assertCopyManagement();
-      if (readiness !== undefined) {
+      if (readiness && typeof readiness.then === 'function') {
         void Promise.resolve(readiness).catch(() => undefined);
         throw Error('私人副本清单检查必须同步完成');
       }

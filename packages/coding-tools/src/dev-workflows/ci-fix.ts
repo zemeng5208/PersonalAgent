@@ -53,6 +53,46 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
     if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'CI repair cancelled');
     if ((options.now ?? Date.now)() >= Date.parse(context.deadline) || !Number.isFinite(Date.parse(context.deadline))) throw new ProtocolError('TIMEOUT', 'CI repair deadline exceeded');
   };
+  // Operation-local waiting boundary for public ports that ignore cancellation.
+  // Aborting this wait does not prove an external operation stopped.
+  async function bounded<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    check();
+    const controller = new AbortController(), deadline = Date.parse(context.deadline);
+    const now = options.now ?? Date.now;
+    let timedOut = false, timer: ReturnType<typeof setTimeout> | undefined;
+    let interrupt = () => {};
+    const abort = () => controller.abort();
+    const interruptedError = () => new ProtocolError(timedOut ? 'TIMEOUT' : 'CANCELLED',
+      timedOut ? 'CI repair deadline exceeded' : 'CI repair cancelled');
+    const expire = () => {
+      const remaining = deadline - now();
+      if (remaining <= 0) {timedOut = true; controller.abort();}
+      else timer = setTimeout(expire, Math.min(remaining, 2_147_483_647));
+    };
+    try {
+      const interrupted = new Promise<never>((_resolve, reject) => {
+        interrupt = () => reject(interruptedError());
+        controller.signal.addEventListener('abort', interrupt, {once: true});
+        context.signal.addEventListener('abort', abort, {once: true});
+        if (context.signal.aborted) abort();
+        expire();
+      });
+      const operation = Promise.resolve().then(() => {
+        check();
+        if (controller.signal.aborted) throw interruptedError();
+        return work(controller.signal);
+      });
+      const result = await Promise.race([interrupted, operation]);
+      if (context.signal.aborted) abort();
+      if (!controller.signal.aborted && now() >= deadline) {timedOut = true; controller.abort();}
+      if (controller.signal.aborted) throw interruptedError();
+      return result;
+    } finally {
+      clearTimeout(timer);
+      context.signal.removeEventListener('abort', abort);
+      controller.signal.removeEventListener('abort', interrupt);
+    }
+  }
   async function step(id: string, action: () => Promise<unknown>): Promise<unknown> {
     check();
     if (Object.hasOwn(j.results, id)) return structuredClone(j.results[id]);
@@ -72,7 +112,23 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
       if (!authorizationRef) { delete j.inflight; j.pending = id; save(); throw new Pause('waiting_approval', 'Runtime authorization required'); }
       const descriptor = tools.list().find(d => d.name === name);
       if (!descriptor) throw new Pause('unsupported', 'Registered tool disappeared');
-      const r = await tools.invoke({toolName: name, toolVersion: descriptor.version, arguments: args, taskId: context.taskId, runId, authorizationRef, deadline: context.deadline, signal: context.signal});
+      let entered = false;
+      let r;
+      try {
+        r = await bounded(signal => {
+          entered = true;
+          return tools.invoke({toolName: name, toolVersion: descriptor.version, arguments: args,
+            taskId: context.taskId, runId, authorizationRef, deadline: context.deadline, signal});
+        });
+        check();
+      } catch (error) {
+        // Only explicit read metadata proves there is no external write to recover.
+        // Preserve the original in-flight identity and never consume a late result.
+        if (entered && descriptor.sideEffect !== 'read') {
+          throw new Pause('waiting_reconciliation', 'Started tool operation was interrupted; original Runtime reconciliation required');
+        }
+        throw error;
+      }
       j.evidence.push(...r.evidenceRefs);
       if (r.state !== 'confirmed') { if (r.state === 'pending') { delete j.inflight; j.pending = id; } save(); throw new Pause(r.state === 'pending' ? 'waiting_approval' : 'waiting_reconciliation', 'Runtime operation has no confirmed result'); }
       if (object(r.result) && r.result.state === 'unknown') { save(); throw new Pause('waiting_reconciliation', 'External service write outcome is unknown'); }
@@ -140,7 +196,9 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
         // Reserve before dispatch: a restart cannot recover an unaccounted model call.
         const reservedFrom = j.tokens;
         j.tokens = options.maxTokens; save();
-        const r = await model.complete({messages: [{role: 'system', content: system}, {role: 'user', content}], tools: [], maxOutputTokens: remaining, deadline: context.deadline, signal: context.signal});
+        const r = await bounded(signal => model.complete({messages: [{role: 'system', content: system}, {role: 'user', content}],
+          tools: [], maxOutputTokens: remaining, deadline: context.deadline, signal}));
+        check();
         if (r.response.kind !== 'final') invalid();
         // Settle on actual usage so bounded retries keep a real shared budget.
         const total = r.usage?.totalTokens ?? 0;

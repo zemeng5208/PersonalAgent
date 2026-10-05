@@ -101,6 +101,8 @@ Browser 插件不可用，使用已安装 Playwright/Chromium 实际挂载 Admin
 
 ## 继续核对后的兼容与配置修正（2026-10-05 11:45 UTC）
 
+用户本人项目邮件明确允许 GPT-6.1 Sol 代理在既有归属内并行；两个代理分别修改互不重叠的本人文件，父代理串行提交/发布原 #277。没有接管 Runtime 核心或另建 PR。
+
 - MOD34 旧格式 checkpoint 的 `inflight=precommit-head-N` 也须继承为稳定身份。此前只兼容 pending/cached，原 run 已确认仍可能换身份卡在核实。新增旧格式回归验证未确认时零额外调用，确认后只重放原 HEAD 回执，单次 patch/model/commit；CI 工作流21/21。
 - 恢复适配器立即克隆端口观察及 acknowledgement，避免复用对象在第二次调用时把持久 not_applied 改写为返回 applied。ack 前回读持久观察、原执行及 core 回执，观察缺失/错配不清 marker；共享对象篡改明确冲突且无成功 receipt，持久原结果与重启恢复保留。三项新增回归，Runtime 组合16/16；applied 正向恢复仍等待 goo122 核心接口。注入端口若自行在 ack 中删除 marker，适配器不能撤销外部删除，不能声称可复原。
 - P6 同目录重选 Node、检查文件或 npm 后，持久设置必须与本次启动已装配的全部输入一致才可授权/执行/导出；否则明确提示重启、禁用项目脚本。真实临时配置加合成 recipe 验证三种变更、取消/相同设置、旧 task 不复活以及重启后实际使用新输入；host+command 配置41/41。
@@ -108,4 +110,17 @@ Browser 插件不可用，使用已安装 Playwright/Chromium 实际挂载 Admin
 
 前一精确提交 `12c0c464` 的 Windows Foundation PR `37302787065` / push `37302778590` 均完成 success，两份日志各确认31 workspace1705通过、0失败、16门控跳过，Desktop366、Runtime315、coding-tools90、GitHub14，根 integration17、架构3、契约4通过，dev/protocol/runtime demo通过。该结果只覆盖前一提交；上述后续增量以新 head 的 Foundation 和登记非作者评审为准。针对性测试不是真实 Windows 普通用户设备、Electron/安全存储或 AgentArts/GLM/账号整链验收。
 
+原子中间补丁确认由协作者 LGW 在 e509388f 交付、86d6569f 更新文档，沿现有分支保留作者实现；本次仅消费该核心提交，不自行改写 index.ts。仍需 Potato 原 task/run 的 Windows helper 首因及真实整链读回、当前 head 的非作者审核；整体 Goal 保持 in_progress。已查重并更新已有项目邮件自动化为用户接受的每小时检查，执行中读取本人新回复，真正停止通知后当前执行留守五分钟；平台启用回执不等于未来触发或原对话自动恢复已验证。
+
+### MOD34 公开工厂有界等待与最新协作者交付
+
+规划最后核对又确认一项独立源码缺项：直接消费公开 runCiFix/createCiFixWorkflow 的注入 ModelPort/ToolPort 时，调用前后 check 不能使永久 pending 端口在取消/期限时结束。新增回归先复现原实现取消后仍等待；不把此问题描述为生产 Runtime 缺少 ModelGateway/TaskRuntime 保护。
+
+现以操作局部等待约束公开端口，贯穿同一 deadline、取消及 options.now，长 timer 按平台上界重设并清理监听器。模型及明确 read 中断为 CANCELLED/TIMEOUT；已进入非 read/未知 metadata 端口后中断保留原 inflight、等待 Runtime 核实，不以中止等待证明外部操作停止。迟到 confirmed/模型 usage 不落成功 checkpoint，重复恢复零重发。未扩展公共 Schema/依赖/核心文件；CI32 + Runtime16 共48/48。
+
+协作者新 main `31ffba6f` 已合入 #285 MOD09 消费与 #286 真实验收记录，接续保留作者内容、不接管返修或批准/合并。#286 的 MOD36 “闭环”明确限于真实 GitHub/GLM 的只读预审：两次46.8s/48.0s、8项真实变更行 finding，未 publish、零写入。COMMENT 发布、MOD38 标签、MOD34 patch 后完整验证/提交/PR/回链不能据此计通过。#286 原验收脚本未共享，本 Linux 不冒充独立执行 Windows/helper/GLM；作者核实入口/诊断交付后仍需持有原环境的 Potato 接续原任务。
+
+前一 `fec8d4cf` push `37305051263` 已完整 success，31 workspace1727通过、0失败、16跳过；PR `37305057947` 首次 npm ci 无诊断 exit1、未执行检查，相同head push安装成功后仅重试失败作业一次，第二次安装成功，终态另读。该证据不能覆盖本次公开工厂与新 main 组合。
 Runtime applied recovery now uses the core reconciliation transaction to persist the confirmed result while preserving the waiting workflow. The original Windows helper root cause and real end-to-end readback remain unverified.
+
+消费核心与新 main 后，组合 build/typecheck 通过；CI32+Runtime16 共48/48，applied 在真实 SQLite 中确认原 run/cache，跨重启继续原审批至验证/提交/推送/PR/回链，apply与commit各一次（模型、工具与账号操作仍为合成端口）。新 main 的根 integration19/19，通过实际 Admin 双尺寸重新检查工作区与 AgentArts 设置，零 console 错误。前一 fec8d4cf PR第二次亦完成 success，与push两份日志共用的精确head31workspace1727通过/0失败/16跳过；原首次安装失败保留，新组合 Foundation另验。
