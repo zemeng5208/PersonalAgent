@@ -9,7 +9,7 @@ function endpoint(value) {
 }
 function validateBinding(value) {
   const gatewayUrl=endpoint(value.gatewayUrl);
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(value.runtimeName)) throw Error('请填写运行时实例名称');
+  if (typeof value.runtimeName!=='string' || !/^[A-Za-z0-9_-]{1,64}$/.test(value.runtimeName)) throw Error('请填写运行时实例名称');
   return {gatewayUrl,runtimeName:value.runtimeName};
 }
 function validate(value) {

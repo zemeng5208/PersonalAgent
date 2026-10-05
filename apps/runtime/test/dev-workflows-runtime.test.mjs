@@ -219,8 +219,15 @@ async function patchFixture(t, {confirmApply = false} = {}) {
         beforeSha256: intent.expected.beforeSha256, afterSha256: intent.expected.afterSha256};
       if (calls.outcome === 'in_progress') return {...result, state: 'in_progress', pid: 123};
       if (input.retainMarker !== true) calls.marker = false;
-      return {...result, state: 'reconciled', outcome: calls.outcome,
+      const observed = {...result, state: 'reconciled', outcome: calls.outcome,
         currentSha256: calls.outcome === 'applied' ? result.afterSha256 : calls.outcome === 'not_applied' ? result.beforeSha256 : 'f'.repeat(64)};
+      if (!calls.reuseReadback) return observed;
+      calls.sharedReadback ??= {};
+      Object.assign(calls.sharedReadback, observed);
+      if (input.retainMarker !== true && calls.mutateAcknowledgement) {
+        calls.sharedReadback.outcome = 'applied'; calls.sharedReadback.currentSha256 = result.afterSha256;
+      }
+      return calls.sharedReadback;
     }},
   });
   host = create();
@@ -289,6 +296,50 @@ test('not-applied readback persists the original failed run before acknowledging
   assert.equal(f.calls.marker, false); assert.equal(f.calls.apply, 1);
   assert.equal(f.host.runtime.readToolExecutions(f.taskId).find(item => item.evidenceId === f.runId).reconciliationOutcome, 'not_applied');
   await f.restart(); await f.host.reconcileWorkspacePatchTask(f.taskId, f.runId);
+  assert.equal(f.calls.apply, 1);
+});
+
+test('a reused readback object cannot rewrite the persisted outcome or return an applied receipt', async t => {
+  const f = await patchFixture(t);
+  f.calls.outcome = 'not_applied'; f.calls.reuseReadback = true; f.calls.mutateAcknowledgement = true;
+  await assert.rejects(f.host.reconcileWorkspacePatchTask(f.taskId, f.runId), /marker changed before acknowledgement/);
+  const saved = f.host.runtime.loadCheckpoint(f.taskId, `dev-patch-readback:${f.runId}`);
+  assert.equal(saved.outcome, 'not_applied'); assert.equal(saved.currentSha256, saved.beforeSha256);
+  assert.equal(f.calls.sharedReadback.outcome, 'applied');
+  const core = f.host.runtime.loadCheckpoint(f.taskId, `tool-reconciliation-${f.runId}`);
+  assert.deepEqual(core.result, saved);
+  assert.equal(f.host.runtime.getTask(f.taskId).state, 'failed');
+  assert.equal(f.host.runtime.readToolExecutions(f.taskId).find(item => item.evidenceId === f.runId).reconciliationOutcome, 'not_applied');
+  // A port acknowledgement can remove its own marker; the original bound facts
+  // must survive that removal and a restart without adopting its later mutation.
+  await f.restart();
+  const observed = await f.host.reconcileWorkspacePatchTask(f.taskId, f.runId);
+  assert.deepEqual(observed.result, saved); assert.equal(observed.receipt, undefined);
+  assert.equal(f.calls.apply, 1);
+});
+
+test('missing persisted patch observation prevents marker acknowledgement', async t => {
+  const f = await patchFixture(t); f.calls.outcome = 'not_applied';
+  const save = f.host.runtime.saveCheckpoint.bind(f.host.runtime);
+  f.host.runtime.saveCheckpoint = (taskId, key, value) => {
+    if (key !== `dev-patch-readback:${f.runId}`) save(taskId, key, value);
+  };
+  await assert.rejects(f.host.reconcileWorkspacePatchTask(f.taskId, f.runId), /persistence could not be read back/);
+  assert.equal(f.calls.marker, true); assert.equal(f.calls.polls.length, 1);
+  assert.equal(f.host.runtime.loadCheckpoint(f.taskId, `dev-patch-readback:${f.runId}`), undefined);
+  assert.equal(f.calls.apply, 1);
+});
+
+test('a mismatched persisted core receipt prevents marker acknowledgement', async t => {
+  const f = await patchFixture(t); f.calls.outcome = 'not_applied';
+  const reconcile = f.host.runtime.reconcileToolExecution.bind(f.host.runtime);
+  f.host.runtime.reconcileToolExecution = (taskId, runId, outcome, result) => {
+    const task = reconcile(taskId, runId, outcome, result);
+    f.host.runtime.saveCheckpoint(taskId, `tool-reconciliation-${runId}`, {result: {...result, path: 'another.js'}});
+    return task;
+  };
+  await assert.rejects(f.host.reconcileWorkspacePatchTask(f.taskId, f.runId), /persistence could not be read back/);
+  assert.equal(f.calls.marker, true); assert.equal(f.calls.polls.length, 1);
   assert.equal(f.calls.apply, 1);
 });
 

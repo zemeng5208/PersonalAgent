@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {existsSync,mkdirSync,mkdtempSync,readFileSync,renameSync,rmSync} from 'node:fs';
+import {existsSync,mkdirSync,mkdtempSync,readFileSync,renameSync,rmSync,writeFileSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createAgentArtsConfig} from '../electron/agentarts-config.js';
@@ -8,6 +8,60 @@ import {agentArtsModelSnapshot} from '../electron/agentarts-model-state.js';
 import {createDeferredRuntimeStartup} from '../electron/runtime-startup.js';
 import {createAgentArtsRuntimeApplication} from '@personal-agent/runtime/application';
 import {Client} from '@personal-agent/client';
+
+const invalidRuntimeNames=[
+  ['missing',{}],['undefined',{runtimeName:undefined}],['null',{runtimeName:null}],
+  ['number',{runtimeName:17}],['array',{runtimeName:['synthetic-runtime']}],['object',{runtimeName:{}}],
+];
+
+test('AgentArts runtime name must be a string before encryption or persistence',async t=>{
+  for(const [name,invalid] of invalidRuntimeNames) {
+    await t.test(name,t=>{
+      const userData=mkdtempSync(path.join(os.tmpdir(),'pa-cloud-invalid-name-'));
+      t.after(()=>rmSync(userData,{recursive:true,force:true}));
+      let encryptionCalls=0;
+      const config=createAgentArtsConfig({userData,environment:{},safeStorage:{
+        isEncryptionAvailable:()=>true,encryptString:value=>{encryptionCalls++;return Buffer.from(value);},
+        decryptString:value=>value.toString(),
+      }});
+      assert.throws(()=>config.configure({gatewayUrl:'https://example.huaweicloud-agentarts.com',
+        authorization:'Bearer synthetic-only',...invalid}),/运行时实例名称/);
+      assert.equal(encryptionCalls,0,'invalid destinations never reach credential encryption');
+      for(const file of ['agentarts-config.json','agentarts-config.json.tmp']) {
+        assert.equal(existsSync(path.join(userData,file)),false,'invalid destinations never create persisted configuration');
+      }
+      assert.equal(config.snapshot().configured,false);
+      assert.equal(config.snapshot().runtimeReady,false);
+    });
+  }
+});
+
+test('AgentArts stored non-string runtime name remains unavailable without rewriting the file',async t=>{
+  for(const [name,invalid] of invalidRuntimeNames) {
+    await t.test(name,t=>{
+      const userData=mkdtempSync(path.join(os.tmpdir(),'pa-cloud-invalid-stored-name-'));
+      t.after(()=>rmSync(userData,{recursive:true,force:true}));
+      const file=path.join(userData,'agentarts-config.json');
+      const record=JSON.stringify({version:1,encrypted:Buffer.from(JSON.stringify({
+        gatewayUrl:'https://example.huaweicloud-agentarts.com',authorization:'Bearer synthetic-only',...invalid,
+      })).toString('base64')});
+      writeFileSync(file,record);
+      let encryptionCalls=0;
+      const config=createAgentArtsConfig({userData,environment:{},safeStorage:{
+        isEncryptionAvailable:()=>true,decryptString:value=>value.toString(),
+        encryptString:value=>{encryptionCalls++;return Buffer.from(value);},
+      }});
+      assert.equal(config.snapshot().configured,false);
+      assert.equal(config.snapshot().runtimeReady,false);
+      assert.equal(config.runtimeBinding(),undefined);
+      assert.throws(()=>config.binding());
+      assert.throws(()=>config.readAuthorization({gatewayUrl:'https://example.huaweicloud-agentarts.com',runtimeName:'synthetic-runtime'}));
+      assert.doesNotMatch(JSON.stringify(config.snapshot()),/synthetic-only|Bearer/);
+      assert.equal(encryptionCalls,0);
+      assert.equal(readFileSync(file,'utf8'),record,'reading an invalid record never repairs or overwrites it');
+    });
+  }
+});
 
 test('AgentArts revoke reports a failed disk deletion and can be retried after repair',()=>{
   const userData=mkdtempSync(path.join(os.tmpdir(),'pa-cloud-revoke-'));

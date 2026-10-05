@@ -117,7 +117,9 @@ export class DevWorkflowPatchRecovery {
       if (!(saved && record.reconciliationOutcome && record.reconciliationOutcome !== 'unknown')) {
         if (this.runtime.getTask(taskId).state !== 'waiting_reconciliation'
           || !['unknown','started'].includes(record.state)) conflict('Original patch is not waiting for recovery');
-        const result = await this.port.reconcile({...input, retainMarker: true});
+        // An injected adapter may reuse a mutable result object on its next call.
+        // Keep the original observation independent of that adapter's storage.
+        const result = structuredClone(await this.port.reconcile({...input, retainMarker: true}));
         validate(result);
         if (result.state !== 'reconciled' || result.outcome === 'unknown') {
           return {task: this.runtime.getTask(taskId), runId, result};
@@ -144,14 +146,21 @@ export class DevWorkflowPatchRecovery {
           conflict('Persisted patch outcome does not match the original candidate');
         }
       }
+      const persistedObservation = this.runtime.loadCheckpoint(taskId, observationKey(runId)) as WorkspacePatchReconciliationResult | undefined;
       const persisted = this.runtime.readToolExecutions(taskId).find(item => item.evidenceId === runId);
       const persistedCache = this.runtime.loadCheckpoint(taskId, `tool-result-${runId}`) as {result?: unknown} | undefined;
-      if (saved.state !== 'reconciled' || persisted?.reconciliationOutcome !== saved.outcome
+      const persistedReconciliation = this.runtime.loadCheckpoint(taskId, `tool-reconciliation-${runId}`) as {result?: unknown} | undefined;
+      if (!persistedObservation || persistedObservation.state !== 'reconciled'
+        || !isDeepStrictEqual(persistedObservation, saved)
+        || saved.state !== 'reconciled' || persisted?.reconciliationOutcome !== saved.outcome
         || (saved.outcome === 'applied' && (persisted.state !== 'confirmed'
-          || !isDeepStrictEqual(persistedCache?.result, intent.expected)))) {
+          || !isDeepStrictEqual(persistedCache?.result, intent.expected)))
+        || (saved.outcome === 'not_applied' && (persisted.state !== 'failed'
+          || !isDeepStrictEqual(persistedReconciliation?.result, saved)))) {
         throw new ProtocolError('RESULT_UNKNOWN', 'Patch outcome persistence could not be read back; marker retained');
       }
-      const acknowledged = await this.port.reconcile(input);
+      saved = persistedObservation;
+      const acknowledged = structuredClone(await this.port.reconcile(input));
       validate(acknowledged, true);
       if (acknowledged.state !== 'clear' && !isDeepStrictEqual(acknowledged, saved)) conflict('Patch marker changed before acknowledgement');
       return {task: this.runtime.getTask(taskId), runId, result: saved,

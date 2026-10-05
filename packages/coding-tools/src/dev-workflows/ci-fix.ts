@@ -170,7 +170,8 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
     // Retain this read's identity across approval pauses. The commit tool itself
     // rechecks live HEAD and the verified workspace immediately before dispatch.
     if (!Object.hasOwn(j.results, 'commit') && j.inflight !== 'commit') {
-      j.precommitHeadStep ??= j.pending?.startsWith('precommit-head-') ? j.pending
+      j.precommitHeadStep ??= j.inflight?.startsWith('precommit-head-') ? j.inflight
+        : j.pending?.startsWith('precommit-head-') ? j.pending
         : Object.keys(j.results).find(id => id.startsWith('precommit-head-')) ?? `precommit-head-${j.attempt ?? 0}`;
       save();
       const current = await invoke(j.precommitHeadStep, gitTools.head, {repository: options.repository});

@@ -143,6 +143,45 @@ test('head drift after verification blocks commit',async()=>{
   f.options.tools.invoke=async input=>{if(input.toolName==='workspace.git.head'&&++reads>1) return {state:'confirmed',result:{headSha:fixedSha,clean:false},evidenceRefs:[]};return original(input);};
   assert.equal((await runCiFix(f.context,f.options)).status,'stale'); assert.ok(!f.calls.some(c=>c.toolName==='workspace.git.commit'));
 });
+test('legacy in-flight precommit head resumes only its original confirmed receipt',async()=>{
+  const f=fixture(), original=f.options.tools.invoke;
+  f.options.tools.invoke=async input=>{
+    if(input.toolName==='workspace.git.head' && input.runId.includes(':precommit-head-')) {
+      f.calls.push(input); return {state:'unknown',evidenceRefs:[]};
+    }
+    return original(input);
+  };
+  assert.equal((await runCiFix(f.context,f.options)).status,'waiting_reconciliation');
+  // Upgrade a journal written before the stable precommitHeadStep field existed.
+  const legacy=f.context.loadCheckpoint('ci-fix-v1');
+  delete legacy.precommitHeadStep;
+  legacy.inflight=`precommit-head-${legacy.steps}`;
+  f.context.saveCheckpoint('ci-fix-v1',legacy);
+  const runId=`${f.context.taskId}:ci-fix:${legacy.identity}:${legacy.inflight}`;
+  const headCall=f.calls.find(c=>c.runId.includes(':precommit-head-'));
+  headCall.runId=runId;
+  const count=f.calls.length, replayChecks=[];
+  let confirmed=false, cachedReplays=0;
+  f.options.confirmedReplayReady=id=>{replayChecks.push(id);return confirmed && id===runId;};
+  f.options.tools.invoke=async input=>{
+    if(input.runId===runId) {
+      assert.ok(confirmed); cachedReplays++;
+      assert.deepEqual(input.arguments,headCall.arguments);
+      return {state:'confirmed',result:structuredClone(f.responses['workspace.git.head']),evidenceRefs:[runId]};
+    }
+    return original(input);
+  };
+  assert.equal((await runCiFix(f.context,f.options)).status,'waiting_reconciliation');
+  assert.equal(f.calls.length,count); assert.equal(cachedReplays,0);
+  assert.equal(f.context.loadCheckpoint('ci-fix-v1').inflight,legacy.inflight);
+  confirmed=true;
+  assert.equal((await runCiFix(f.context,f.options)).status,'succeeded');
+  assert.deepEqual(replayChecks,[runId,runId]); assert.equal(cachedReplays,1);
+  assert.equal(f.calls.filter(c=>c.toolName==='workspace.git.head').length,2);
+  assert.equal(f.calls.filter(c=>c.toolName==='workspace.git.commit').length,1);
+  assert.equal(f.calls.filter(c=>c.toolName==='workspace.apply_text_patch').length,1);
+  assert.equal(f.modelCalls(),1);
+});
 test('changed request cannot reuse persisted journal',async()=>{
   const f=fixture(); await runCiFix(f.context,f.options); f.options.runId='43';
   await assert.rejects(runCiFix(f.context,f.options),/Invalid CI/);
