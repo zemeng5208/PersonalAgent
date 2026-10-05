@@ -112,6 +112,31 @@ Browser 插件不可用，使用已安装 Playwright/Chromium 实际挂载 Admin
 
 原子中间补丁确认由协作者 LGW 在 e509388f 交付、86d6569f 更新文档，沿现有分支保留作者实现；本次仅消费该核心提交，不自行改写 index.ts。仍需 Potato 原 task/run 的 Windows helper 首因及真实整链读回、当前 head 的非作者审核；整体 Goal 保持 in_progress。已查重并更新已有项目邮件自动化为用户接受的每小时检查，执行中读取本人新回复，真正停止通知后当前执行留守五分钟；平台启用回执不等于未来触发或原对话自动恢复已验证。
 
+### 现有 #288 并行续接：MOD33 结算与 MOD29 字节快照
+
+用户明确授权多个 GPT-6.1 Sol 代理在本人已登记范围并行，不等待评审才开发；
+root 串行核对与交付，继续原 codex/dev-workflows-integration / #288，不另建任务或PR，
+不自行 APPROVE 或合并，不接管 MOD37、Runtime core、P1/P2/P5/P7 的在途源文件。
+外部原任务/真实环境验收不阻止其他独立源工作，也不以合成测试记通过。
+
+MOD33 公开 Provider 的旧 Promise.race 在同步取消后立即 resolved 时仍接受成功结果，
+同步推进时钟越过期限也仍成功。新增回归先复现，再加入结算后原 context/中断检查；
+成功或拒绝结算两条路径都优先校验中断，避免同步取消后再抛错泄漏原异常作为执行结果；
+没有中断的原错误对象保持原样。读取拒绝 CANCELLED/TIMEOUT，已经进入写 Provider 保持 unknown，注册工具为 RESULT_UNKNOWN，
+不重发、不推定远端停止。操作同步抛错也给两个 race 分支安装处理器，清理监听器/定时器；
+长期限在平台 timer 上界重设，不在上界就提前报超时。
+GitHub build 通过；作者初验使用 Node24.19.0，root 用项目固定 Node24.15.0 实跑首版19/19，
+独立复核发现拒绝路径遗漏后，最终作者用 Node24.15.0 重新 build 及25/25测试通过，
+二者分开记录。没有真实 GitHub 账号写入或集中验收。
+
+MOD29 公开 AsyncIterable/reader 响应允许 transport 复用 Uint8Array，旧适配器保存原引用，
+两块 SSE 的 A/B 被后续写入覆盖成 BB。现在 aggregate byte 限额检查后复制当前字节，
+保留已接收快照、既有协议与响应释放路径；两种公开 transport 回归先失败再返回 AB，
+成功 reader release 一次、零 cancel。Coordination build/typecheck 和112/112测试通过。
+这限定注入 transport seam，未证明默认原生 fetch 复用缓冲或真实 AgentArts 云缺陷。
+真实 deployment/API/trace/评估以及 Windows unknown→verify→commit→push→PR→回链、
+MOD36 COMMENT、MOD38 标签仍按原持有环境 owner 接续，不能据此完成整个 MOD/Goal。
+
 ### MOD34 公开工厂有界等待与最新协作者交付
 
 规划最后核对又确认一项独立源码缺项：直接消费公开 runCiFix/createCiFixWorkflow 的注入 ModelPort/ToolPort 时，调用前后 check 不能使永久 pending 端口在取消/期限时结束。新增回归先复现原实现取消后仍等待；不把此问题描述为生产 Runtime 缺少 ModelGateway/TaskRuntime 保护。

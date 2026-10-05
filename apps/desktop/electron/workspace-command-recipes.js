@@ -30,9 +30,9 @@
  *      is injected, with all token/key/secret variables strictly blocked.
  * 6. Runtime Pinning & Immutability:
  *    - createWorkspaceCommandRecipeTool captures pinned canonical paths, sizes, mtimes, and hashes of
- *      nodeExecutable, jobHelperExecutable, npmCliPath, package.json, and workspace directory.
- *    - available() and execute() verify pins dynamically on every call; any mutation or replacement fails closed
- *      and requires re-assembly.
+ *      nodeExecutable, jobHelperExecutable, npmCliPath, and package.json, plus workspace directory identity.
+ *    - available() and execute() verify pins and ordinary in-workspace syntax-check targets on every call.
+ *      Changed bindings require re-assembly; ordinary syntax-check file edits remain allowed.
  * 7. Caller must explicitly pass createWorkspaceCommandTool factory; missing/invalid factory fails closed.
  */
 
@@ -265,6 +265,13 @@ export function validateCheckFile(workspaceRoot, fileEntry) {
   if (fromRoot === '' || fromRoot.startsWith('..') || path.isAbsolute(fromRoot)) {
     throw Error('Check file must be inside the workspace root');
   }
+  let component = workspaceRoot;
+  for (const segment of fromRoot.split(path.sep)) {
+    component = path.join(component, segment);
+    if (lstatSync(component).isSymbolicLink()) {
+      throw Error(`Check file path must not contain symbolic links: ${relFile}`);
+    }
+  }
   if (!existsSync(resolved)) {
     throw Error(`Check file does not exist: ${relFile}`);
   }
@@ -471,12 +478,12 @@ function verifyFilePin(pin) {
 function captureDirectoryPin(canonicalDir) {
   const lstat = lstatSync(canonicalDir);
   if (lstat.isSymbolicLink()) throw Error(`Pinned directory cannot be a link: ${canonicalDir}`);
-  const stat = statSync(canonicalDir);
+  const stat = statSync(canonicalDir, {bigint: true});
   return {
     canonicalPath: canonicalDir,
     ino: stat.ino,
     dev: stat.dev,
-    mtimeMs: stat.mtimeMs,
+    birthtimeNs: stat.birthtimeNs,
   };
 }
 
@@ -487,8 +494,9 @@ function verifyDirectoryPin(pin) {
     if (lstat.isSymbolicLink()) return false;
     const canonical = realpathSync.native(pin.canonicalPath);
     if (canonical !== pin.canonicalPath) return false;
-    const stat = statSync(canonical);
-    return stat.isDirectory();
+    const stat = statSync(canonical, {bigint: true});
+    return stat.isDirectory() && stat.ino === pin.ino && stat.dev === pin.dev
+      && stat.birthtimeNs === pin.birthtimeNs;
   } catch {
     return false;
   }
@@ -560,6 +568,7 @@ export function createWorkspaceCommandRecipeTool(options = {}) {
 
   // Pin immutable identities of executables and configuration
   const pinnedWorkspace = captureDirectoryPin(workspaceRoot);
+  const pinnedCheckFiles = [...diagnostics.checkFiles];
   const pinnedNode = captureFilePin(diagnostics.nodeExecutable, false);
   const pinnedJobHelper = diagnostics.jobHelperExecutable
     ? captureFilePin(diagnostics.jobHelperExecutable, true)
@@ -573,6 +582,9 @@ export function createWorkspaceCommandRecipeTool(options = {}) {
 
   function isPinnedStateValid() {
     if (!verifyDirectoryPin(pinnedWorkspace)) return false;
+    try {
+      if (pinnedCheckFiles.some(file => validateCheckFile(workspaceRoot, file) !== file)) return false;
+    } catch {return false;}
     if (!verifyFilePin(pinnedNode)) return false;
     if (diagnostics.projectScriptsExposed) {
       if (!pinnedJobHelper || !verifyFilePin(pinnedJobHelper)) return false;

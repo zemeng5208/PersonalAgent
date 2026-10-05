@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, rmSync, realpathSync} from 'node:fs';
+import {existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, rmSync, realpathSync, renameSync} from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import {
@@ -15,6 +15,63 @@ import {buildNativeHelper, resolveRepoRoot} from '../../../packages/coding-tools
 function createTempDir(prefix) {
   return mkdtempSync(path.join(os.tmpdir(), prefix));
 }
+
+test('registered command recipes reject workspace replacement but allow ordinary file edits', async t => {
+  const parent = createTempDir('pa-cmd-root-replacement-');
+  t.after(() => rmSync(parent, {recursive: true, force: true}));
+  const root = path.join(parent, 'workspace');
+  mkdirSync(root);
+  writeFileSync(path.join(root, 'index.js'), '1;');
+  let executions = 0;
+  const recipe = createWorkspaceCommandRecipeTool({workspaceRoot: root, nodeExecutable: process.execPath,
+    checkFiles: ['index.js'], createWorkspaceCommandTool: () => ({descriptor: {},
+      execute: async () => {executions++; return {exitCode: 0};}})});
+  writeFileSync(path.join(root, 'index.js'), '2;');
+  writeFileSync(path.join(root, 'new-file.js'), '3;');
+  assert.equal(recipe.available(), true);
+  await recipe.execute({recipeId: 'node-check'}, {});
+  assert.equal(executions, 1);
+  renameSync(root, path.join(parent, 'original'));
+  mkdirSync(root);
+  writeFileSync(path.join(root, 'index.js'), '2;');
+  assert.equal(recipe.available(), false);
+  await assert.rejects(recipe.execute({recipeId: 'node-check'}, {}), /mutated/);
+  assert.equal(executions, 1, 'replacement never reaches the command factory');
+});
+
+test('registered syntax-check targets are revalidated before command delegation', async t => {
+  for (const mutation of ['direct-link', 'ancestor-link', 'missing', 'directory']) {
+    await t.test(mutation, async t => {
+      const parent = createTempDir('pa-cmd-check-replacement-');
+      t.after(() => rmSync(parent, {recursive: true, force: true}));
+      const root = path.join(parent, 'workspace'), external = path.join(parent, 'external');
+      mkdirSync(root); mkdirSync(external); mkdirSync(path.join(root, 'src'));
+      const target = path.join(root, 'src', 'index.js');
+      writeFileSync(target, '1;'); writeFileSync(path.join(external, 'index.js'), '2;');
+      let executions = 0;
+      const recipe = createWorkspaceCommandRecipeTool({workspaceRoot: root, nodeExecutable: process.execPath,
+        checkFiles: ['src/index.js'], createWorkspaceCommandTool: () => ({descriptor: {},
+          execute: async () => {executions++; return {exitCode: 0};}})});
+      assert.equal(recipe.available(), true);
+      rmSync(mutation === 'ancestor-link' ? path.join(root, 'src') : target, {recursive: true});
+      if (mutation.endsWith('link')) {
+        try {
+          symlinkSync(mutation === 'ancestor-link' ? external : path.join(external, 'index.js'),
+            mutation === 'ancestor-link' ? path.join(root, 'src') : target,
+            mutation === 'ancestor-link' ? 'junction' : 'file');
+        } catch (error) {
+          if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) {
+            t.skip(`Host cannot create this link: ${error.code}`); return;
+          }
+          throw error;
+        }
+      } else if (mutation === 'directory') mkdirSync(target);
+      assert.equal(recipe.available(), false);
+      await assert.rejects(recipe.execute({recipeId: 'node-check'}, {}), /mutated/);
+      assert.equal(executions, 0, 'unsafe target never reaches the command factory');
+    });
+  }
+});
 
 test('sanitizeRecipeId enforces lowercase alphanumeric pattern matching command.ts', () => {
   assert.equal(sanitizeRecipeId('node-check', 'index.js'), 'node-check-index.js');
