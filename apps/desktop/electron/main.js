@@ -1886,6 +1886,11 @@ async function initializeProductServices() {
   }
 }
 
+function repoRootForLocate() {
+  try { return realpathSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')); }
+  catch { return process.cwd(); }
+}
+
 async function action(event, name, payload) {
   const sender = [orb, panel, admin, workspace].find(win => win && !win.isDestroyed() && win.webContents === event.sender);
   if (!sender || event.senderFrame !== sender.webContents.mainFrame) throw Error('Untrusted sender');
@@ -1906,6 +1911,18 @@ async function action(event, name, payload) {
   if (name === 'notepad.reconcile') {
     if (sender !== admin || !notepadHost || notepadClosing) throw Error('请从可信后台核实原始记事本任务');
     return notepadHost.recover(payload);
+  }
+  if (name === 'task.locate') {
+    // MOD-35：对失败任务的错误输出做确定性定位（纯解析，无模型、无副作用）。
+    if (sender !== panel && sender !== admin && sender !== workspace) throw Error('Untrusted sender for task.locate');
+    const text = typeof payload?.text === 'string' ? payload.text : '';
+    if (!text.trim() || text.length > 2 * 1024 * 1024) throw Error('无可定位的错误输出');
+    const {locateTestFailures} = await import('@personal-agent/coding-tools');
+    const report = locateTestFailures(text, {root: repoRootForLocate(), contextLines: 2});
+    return {failures: report.failures.map(f => ({name: f.name, error: f.error, timedOut: f.timedOut,
+      frames: f.frames.map(fr => ({file: fr.file, line: fr.line, column: fr.column, confidence: fr.confidence,
+        snippet: fr.snippet === undefined ? null : fr.snippet}))})),
+      totalFailures: report.totalFailures};
   }
   if (name === 'admin.open') { openAdmin(payload?.page); return; }
   if (name === 'workspace.open' && sender === panel) { openWorkspace(); return; }
