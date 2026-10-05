@@ -28,6 +28,13 @@
 - `recoverOriginalRun({taskId, runId, argumentsDigest}, {deadline, signal})` 是 host-only 端口。验证原 `host-tool-intent`、完整参数 digest、Policy 允许且实际执行的 ToolRecord、原 Windows attempt 与 target；读取前后重验绑定、状态与期限。仅调用原 adapter 的 `recover(taskId, runId)`，不调用 execute，不签新授权。
 - `recover` 需要注入正式 Runtime reconciliation callback。没有该 callback 时 `recoveryAvailable:false`，按钮禁用。Runtime 应负责 HostResult Schema 验证、独立读回 Evidence、原 record 核实与终态；`in_progress` / `not_found` / 结果未知不能 immutable-pin unknown。
 
+2026-10-05 P6 状态反馈补充：可信 reconciliation 返回 `not_applied` / `host_result`，
+且原 Runtime 任务已失败或取消时，显示已核实未写入与该终态。`already_terminal`
+仅表示任务已结束，不能作为原生未写入证明；没有匹配的 confirmed 结果/Evidence
+时说明写入仍未确认。只有仍待核实的原任务继续显示“保留待核实”。所有恢复分支
+只读原执行，不调用 execute、不签新授权。Node 24.15.0 的宿主测试15/15通过，
+包括11种确认/失败/取消/终态和未核实组合；真实Windows UIA恢复仍待集中验收。
+
 ## 公开参考资料原生许可
 
 `public-reference-consent.js` 管理内存中的精确原 task/proposal/path/config/fullargs 许可。`requestPreflight` 经原生窗口确认 PUBLIC 来源与目的，不要求未发生的执行 SHA；真正 Gateway 读取完成后，`requestExact` 通过 P6 的 strict confirmed getter 获取原 run/SHA/字节数，再原生确认该内容出机。同步 `readPreflight` / `readAuthorization` 只读该许可，并重新核配置、真实任务、取消、期限、参数与原确认结果；不签工具执行授权、不造 Execution/Evidence、不读文件或向 Renderer 返回正文。

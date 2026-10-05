@@ -100,3 +100,56 @@ test('cancel before local gesture leaves no frozen write or native execution',as
   assert.equal(sent.some(frame=>frame.kind==='observe'||frame.kind==='execute'),false);
   assert.equal(app.runtime.readToolExecutions(first.taskId).length,0);
 });
+
+test('Desktop original Notepad recovery reports terminal readback separately from unresolved results',async t=>{
+  const cases=[
+    {name:'confirmed',state:'succeeded',recovery:'confirmed',confirmed:{result:{state:'verified'},evidenceRefs:['synthetic-evidence']},
+      expected:/原始执行已核实，原生读回/},
+    {name:'not applied failed',state:'failed',recovery:'not_applied',expected:/已核实.*未写入.*失败/},
+    {name:'not applied cancelled',state:'cancelled',recovery:'not_applied',expected:/已核实.*未写入.*取消/},
+    {name:'failed without verified outcome',state:'failed',recovery:'waiting',expected:/任务已失败.*写入结果未获确认/},
+    {name:'cancelled without verified outcome',state:'cancelled',recovery:'waiting',expected:/任务已取消.*写入结果未获确认/},
+    {name:'already failed without native readback',state:'failed',recovery:'not_applied',reason:'already_terminal',
+      expected:/任务已失败.*写入结果未获确认/},
+    {name:'already cancelled without native readback',state:'cancelled',recovery:'not_applied',reason:'already_terminal',
+      expected:/任务已取消.*写入结果未获确认/},
+    {name:'terminal without matching evidence',state:'succeeded',recovery:'confirmed',expected:/任务已结束.*写入结果未获确认/},
+    {name:'still unknown',state:'waiting_reconciliation',recovery:'waiting',expected:/仍未获确认.*保留待核实/},
+    {name:'not applied claim without terminal readback',state:'waiting_reconciliation',recovery:'not_applied',
+      expected:/仍未获确认.*保留待核实/},
+    {name:'confirmed claim without terminal readback',state:'waiting_reconciliation',recovery:'confirmed',
+      confirmed:{result:{state:'verified'},evidenceRefs:['synthetic-evidence']},expected:/仍未获确认.*保留待核实/},
+  ];
+  for(const scenario of cases) {
+    await t.test(scenario.name,async t=>{
+      const taskId='synthetic-original-task';let state='waiting_reconciliation',recoveries=0,writes=0,approvals=0;
+      const host=createDesktopNotepadHost({
+        createAdapter:()=>({tool:{execute:async()=>{writes++;}},close:async()=>{}}),createAttempts:()=>({}),
+        respond:async()=>{approvals++;},reconcileTask:async id=>{
+          assert.equal(id,taskId);recoveries++;state=scenario.state;
+          return {state:scenario.recovery,reason:scenario.reason??'host_result'};
+        },
+      });
+      t.after(()=>host.close());
+      host.bind({runtime:{listTasks:()=>({items:state==='waiting_reconciliation'?[{taskId,state}]:[]})},
+        readHostToolTask:id=>{
+          assert.equal(id,taskId);
+          return {toolName:'computer.notepad.replace_text',toolVersion:'1.0.0',task:{taskId,state},
+            ...(state===scenario.state && scenario.confirmed?{confirmed:scenario.confirmed}:{})};
+        }});
+      assert.equal(host.snapshot().pendingTasks.length,1);
+      const readback=await host.recover({taskId});
+      assert.equal(readback.state,scenario.state);
+      assert.match(readback.reason,scenario.expected);
+      const waiting=scenario.state==='waiting_reconciliation';
+      assert.equal(readback.pendingTasks.length,waiting?1:0);
+      if(!waiting) assert.doesNotMatch(readback.reason,/保留待核实/);
+      if(scenario.name!=='confirmed') {
+        assert.doesNotMatch(readback.reason,/写入已完成|原生读回及执行证据已保存/);
+        assert.deepEqual(readback.evidenceRefs,[]);
+      }
+      assert.equal(recoveries,1);assert.equal(writes,0);assert.equal(approvals,0);
+      assert.equal(readback.busy,false);assert.equal(readback.recovering,false);
+    });
+  }
+});
