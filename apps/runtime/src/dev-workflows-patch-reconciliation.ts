@@ -24,10 +24,6 @@ export interface DevWorkflowPatchReadback {
   /** Feed only this bound receipt to resumeConfirmed; it never grants another apply. */
   receipt?: Parameters<TaskRuntime['prepareConfirmedReplay']>[1];
 }
-type ContinuationRuntime = TaskRuntime & {
-  reconcileToolExecutionForContinuation?: (taskId: string, runId: string, outcome: 'applied',
-    result: WorkspacePatchApplyResult) => TaskSnapshot;
-};
 function conflict(message: string): never {throw new ProtocolError('REVISION_CONFLICT', message);}
 
 /** Same Runtime records and trusted host marker; no new task store or write retry. */
@@ -125,12 +121,8 @@ export class DevWorkflowPatchRecovery {
           return {task: this.runtime.getTask(taskId), runId, result};
         }
         if (result.outcome === 'applied') {
-          const core = this.runtime as ContinuationRuntime;
-          if (typeof core.reconcileToolExecutionForContinuation !== 'function') {
-            throw new ProtocolError('UNSUPPORTED_CAPABILITY', 'Runtime continuation reconciliation is not available; original marker retained');
-          }
           this.runtime.saveCheckpoint(taskId, observationKey(runId), result);
-          core.reconcileToolExecutionForContinuation(taskId, runId, 'applied', intent.expected);
+          this.runtime.reconcileToolExecution(taskId, runId, 'applied', intent.expected, [], {deferTaskCompletion: true});
           if (this.runtime.getTask(taskId).state !== 'waiting_reconciliation') {
             throw new ProtocolError('RESULT_UNKNOWN', 'Runtime did not preserve the workflow continuation; marker retained');
           }

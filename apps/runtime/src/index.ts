@@ -972,11 +972,15 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
    * creates a second run or changes the authorization/idempotency identity.
    */
   reconcileToolExecution(taskId: string, evidenceId: string,
-    outcome: ToolExecutionReconciliationOutcome, result?: unknown, readbackEvidenceRefs:readonly string[]=[]): TaskSnapshot {
+    outcome: ToolExecutionReconciliationOutcome, result?: unknown, readbackEvidenceRefs:readonly string[]=[],
+    options: {deferTaskCompletion?: boolean} = {}): TaskSnapshot {
     requireText(taskId, 'taskId');
     requireText(evidenceId, 'evidenceId');
     if (!['applied', 'not_applied', 'unknown'].includes(outcome)) {
       throw new RuntimeError('INVALID_ARGUMENT', 'Invalid tool reconciliation outcome');
+    }
+    if (options.deferTaskCompletion && outcome !== 'applied') {
+      throw new RuntimeError('INVALID_ARGUMENT', 'Only an applied tool result can resume its worker');
     }
     let encodedResult: string | undefined;
     try { encodedResult = result === undefined ? undefined : JSON.stringify(result); }
@@ -1040,6 +1044,13 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
       this.db.prepare('UPDATE tool_execution_records SET record_json = ? WHERE evidence_id = ? AND task_id = ?')
         .run(JSON.stringify(nextRecord), evidenceId, taskId);
       if (outcome === 'applied') {
+        if (options.deferTaskCompletion && !task.cancelRequested) {
+          return this.updateTask(taskId, 'waiting_reconciliation', {
+            resultSummary: record.toolName + ' reconciliation confirmed; workflow continuation is pending',
+            error: null,
+            evidenceRefs: reconciledEvidenceRefs,
+          }, false);
+        }
         this.updateTask(taskId, 'verifying', {
           resultSummary: record.toolName + ' reconciliation confirmed the original execution',
           error: null,

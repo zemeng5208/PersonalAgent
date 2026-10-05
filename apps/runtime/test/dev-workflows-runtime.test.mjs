@@ -280,13 +280,33 @@ test('each Runtime approval resumes the same precommit head read and reaches the
   assert.equal(f.calls.apply, 1); assert.equal(f.host.readResult(f.taskId).status, 'succeeded');
 });
 
-test('applied workflow recovery fails closed without the core continuation API instead of declaring success', async t => {
+test('applied workflow recovery persists the original result and resumes after restart', async t => {
   const f = await patchFixture(t); f.calls.outcome = 'applied';
-  f.host.runtime.reconcileToolExecutionForContinuation = undefined;
-  await assert.rejects(f.host.reconcileWorkspacePatchTask(f.taskId, f.runId), /continuation reconciliation is not available/);
-  assert.equal(f.calls.marker, true); assert.equal(f.calls.apply, 1);
-  assert.equal(f.host.runtime.getTask(f.taskId).state, 'waiting_reconciliation');
-  assert.equal(f.host.runtime.loadCheckpoint(f.taskId, `tool-result-${f.runId}`), undefined);
+  const recovered = await f.host.reconcileWorkspacePatchTask(f.taskId, f.runId);
+  assert.equal(recovered.task.state, 'waiting_reconciliation');
+  assert.equal(recovered.result.outcome, 'applied');
+  assert.ok(recovered.receipt);
+  assert.equal(f.calls.marker, false);
+  assert.equal(f.calls.apply, 1);
+  const record = f.host.runtime.readToolExecutions(f.taskId).find(item => item.evidenceId === f.runId);
+  assert.equal(record.state, 'confirmed');
+  assert.equal(record.reconciliationOutcome, 'applied');
+  assert.ok(f.host.runtime.loadCheckpoint(f.taskId, `tool-result-${f.runId}`));
+
+  await f.restart();
+  const replay = await f.host.reconcileWorkspacePatchTask(f.taskId, f.runId);
+  assert.ok(replay.receipt);
+  let snapshot = await f.host.resumeConfirmed(f.taskId, replay.receipt);
+  for (let index = 0; snapshot.state === 'waiting_approval' && index < 32; index++) {
+    const approval = f.host.runtime.listApprovals({taskId: f.taskId, state: 'pending'}).items[0];
+    assert.ok(approval);
+    f.host.runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
+    snapshot = await f.host.resume(f.taskId);
+  }
+  assert.equal(snapshot.state, 'succeeded');
+  assert.equal(f.host.readResult(f.taskId).status, 'succeeded');
+  assert.equal(f.calls.apply, 1);
+  assert.equal(f.host.runtime.readToolExecutions(f.taskId).filter(item => item.toolName === 'workspace.git.commit').length, 1);
 });
 
 test('not-applied readback persists the original failed run before acknowledging its marker', async t => {

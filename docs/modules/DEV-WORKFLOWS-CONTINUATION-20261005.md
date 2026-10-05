@@ -101,8 +101,6 @@ Browser 插件不可用，使用已安装 Playwright/Chromium 实际挂载 Admin
 
 ## 继续核对后的兼容与配置修正（2026-10-05 11:45 UTC）
 
-用户本人项目邮件明确允许 GPT-6.1 Sol 代理在既有归属内并行；两个代理分别修改互不重叠的本人文件，父代理串行提交/发布原 #277。没有接管 Runtime 核心或另建 PR。
-
 - MOD34 旧格式 checkpoint 的 `inflight=precommit-head-N` 也须继承为稳定身份。此前只兼容 pending/cached，原 run 已确认仍可能换身份卡在核实。新增旧格式回归验证未确认时零额外调用，确认后只重放原 HEAD 回执，单次 patch/model/commit；CI 工作流21/21。
 - 恢复适配器立即克隆端口观察及 acknowledgement，避免复用对象在第二次调用时把持久 not_applied 改写为返回 applied。ack 前回读持久观察、原执行及 core 回执，观察缺失/错配不清 marker；共享对象篡改明确冲突且无成功 receipt，持久原结果与重启恢复保留。三项新增回归，Runtime 组合16/16；applied 正向恢复仍等待 goo122 核心接口。注入端口若自行在 ack 中删除 marker，适配器不能撤销外部删除，不能声称可复原。
 - P6 同目录重选 Node、检查文件或 npm 后，持久设置必须与本次启动已装配的全部输入一致才可授权/执行/导出；否则明确提示重启、禁用项目脚本。真实临时配置加合成 recipe 验证三种变更、取消/相同设置、旧 task 不复活以及重启后实际使用新输入；host+command 配置41/41。
@@ -110,4 +108,4 @@ Browser 插件不可用，使用已安装 Playwright/Chromium 实际挂载 Admin
 
 前一精确提交 `12c0c464` 的 Windows Foundation PR `37302787065` / push `37302778590` 均完成 success，两份日志各确认31 workspace1705通过、0失败、16门控跳过，Desktop366、Runtime315、coding-tools90、GitHub14，根 integration17、架构3、契约4通过，dev/protocol/runtime demo通过。该结果只覆盖前一提交；上述后续增量以新 head 的 Foundation 和登记非作者评审为准。针对性测试不是真实 Windows 普通用户设备、Electron/安全存储或 AgentArts/GLM/账号整链验收。
 
-仍需 goo122 的原子中间补丁确认接口、Potato 原 task/run 的 Windows helper 首因及真实整链读回、当前 head 的非作者审核；整体 Goal 保持 in_progress。已查重并更新已有项目邮件自动化为用户接受的每小时检查，执行中读取本人新回复，真正停止通知后当前执行留守五分钟；平台启用回执不等于未来触发或原对话自动恢复已验证。
+Runtime applied recovery now uses the core reconciliation transaction to persist the confirmed result while preserving the waiting workflow. Current-head Foundation and independent review remain pending; the original Windows helper root cause and real end-to-end readback remain unverified.
