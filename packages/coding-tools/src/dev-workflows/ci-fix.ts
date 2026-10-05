@@ -148,7 +148,14 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
         return proposal(r.response.text);
       }) as CiFixProposal;
       const local = proposal(JSON.stringify(proposed));
-      if (local.patches.some(p => !sources.some(s => s.path === p.path && s.sha256 === p.expectedSha256))) invalid();
+      // Real models copy long hashes unreliably; the durable anchors are exact oldText
+      // plus the apply tool's own before-sha check. Correct the stated hash from the
+      // just-read source snapshot instead of rejecting a usable repair.
+      if (local.patches.some(p => !sources.some(s => s.path === p.path))) invalid();
+      for (const patch of local.patches) {
+        const source = sources.find(s => s.path === patch.path);
+        if (source && source.sha256 !== patch.expectedSha256) patch.expectedSha256 = source.sha256;
+      }
       for (const [i, patch] of local.patches.entries()) {
         const applied = await invoke(`patch-${attempt}-${i}`, 'workspace.apply_text_patch', patch);
         if (!object(applied) || applied.path !== patch.path || applied.beforeSha256 !== patch.expectedSha256 || applied.applied !== true || applied.changed !== true || typeof applied.afterSha256 !== 'string' || !digest.test(applied.afterSha256)) invalid();
