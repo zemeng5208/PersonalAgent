@@ -26,11 +26,12 @@ function fixture(overrides = {}) {
     if (overrides.repairIssue) return overrides.repairIssue(ctx, request);
     return {state: 'succeeded', resultSummary: 'PR delegated', evidenceRefs: ['repair-evidence']};
   }};
-  const workflow = createIssueTriageWorkflow({model, tools, repair, authorizationRefFor: overrides.authorizationRefFor ?? (() => 'host-scope'),
+  const options = {model, tools, repair, authorizationRefFor: overrides.authorizationRefFor ?? (() => 'host-scope'),
     confirmedReplayReady: overrides.confirmedReplayReady,
     confirmedRepairReplayReady: overrides.confirmedRepairReplayReady,
-    maxSteps: overrides.maxSteps ?? 8, maxTokens: overrides.maxTokens ?? 2048});
-  return {context, workflow, calls, modelCalls, repairs, checkpoints};
+    maxSteps: overrides.maxSteps ?? 8, maxTokens: overrides.maxTokens ?? 2048};
+  const workflow = createIssueTriageWorkflow(options);
+  return {context, workflow, calls, modelCalls, repairs, checkpoints, options};
 }
 const request = {repo: 'example/project', number: 7};
 
@@ -607,4 +608,53 @@ test('post-receipt pending GET retains read approval and never reconsumes label 
   const result = await f.workflow.triageIssue(f.context, write);
   assert.equal(result.reason, 'label_confirmed'); assert.ok(result.evidenceRefs.includes('receipt'));
   assert.equal(writes, 2);
+});
+
+test('factory retains ports and validated budgets when caller reuses configuration during a read',async()=>{
+  let release,entered;const reached=new Promise(resolve=>entered=resolve),wait=new Promise(resolve=>release=resolve);
+  const f=fixture({invoke:async call=>{entered();await wait;return {state:'confirmed',result:call.toolName==='github.issue.label'?{state:'confirmed'}:original,evidenceRefs:['original-port']};}});
+  const requestWithRepair={...request,writeLabel:true,repairBug:true,repairGoal:'Fix authorized file'};
+  const running=f.workflow.triageIssue(f.context,requestWithRepair);await reached;
+  let newCalls=0;
+  f.options.model={complete:async()=>{newCalls++;throw Error('new model');}};
+  f.options.tools={list:()=>[],invoke:async()=>{newCalls++;throw Error('new tools');}};
+  f.options.repair={repairIssue:async()=>{newCalls++;throw Error('new repair');}};
+  f.options.maxSteps=1;f.options.maxTokens=1;
+  release();const result=await running;
+  assert.equal(result.state,'repair_requested');assert.equal(result.classification.kind,'bug');
+  assert.equal(newCalls,0);assert.equal(f.modelCalls.length,1);assert.equal(f.repairs.length,1);
+  assert.ok([...f.checkpoints.values()].filter(v=>v.maxSteps!==undefined).every(v=>v.maxSteps===8));
+  const next=createIssueTriageWorkflow(f.options);
+  assert.equal((await next.triageIssue({...f.context,taskId:'new-factory'},request)).state,'manual_review');
+});
+test('captured tool port keeps authorization and capability revocation live across reads',async()=>{
+  for(const revoke of ['authorization','capability']) {
+    let release,entered;const reached=new Promise(resolve=>entered=resolve),wait=new Promise(resolve=>release=resolve);
+    const f=fixture({invoke:async()=>{entered();await wait;return {state:'confirmed',result:original,evidenceRefs:[]};}});
+    const running=f.workflow.triageIssue(f.context,{...request,writeLabel:true});await reached;
+    if(revoke==='authorization')f.options.authorizationRefFor=name=>name==='github.issue.label'?undefined:'scope';
+    else f.options.tools.list=()=>[{name:'github.issue.get',version:'1.0.0'}];
+    release();const result=await running;
+    assert.equal(result.state,revoke==='authorization'?'waiting_approval':'manual_review');
+    assert.equal(f.calls.filter(c=>c.toolName==='github.issue.label').length,0);
+  }
+});
+test('confirmed replay hook properties remain live after factory creation',async()=>{
+  let writes=0;
+  const f=fixture({invoke:async call=>call.toolName==='github.issue.label'
+    ? (++writes===1?{state:'unknown',evidenceRefs:[]}:{state:'confirmed',result:{state:'confirmed'},evidenceRefs:['receipt']})
+    : {state:'confirmed',result:original,evidenceRefs:[]}});
+  const write={...request,writeLabel:true};
+  assert.equal((await f.workflow.triageIssue(f.context,write)).state,'waiting_reconciliation');
+  f.options.confirmedReplayReady=()=>true;
+  assert.equal((await f.workflow.triageIssue(f.context,write)).reason,'label_confirmed');assert.equal(writes,2);
+  let attempts=0;
+  const repair=fixture({repairIssue:async()=>++attempts===1
+    ? {state:'waiting_reconciliation',resultSummary:'unknown repair',evidenceRefs:[]}
+    : {state:'succeeded',resultSummary:'confirmed repair',evidenceRefs:['repair-receipt']}});
+  const requestRepair={...request,repairBug:true,repairGoal:'Fix authorized file'};
+  assert.equal((await repair.workflow.triageIssue(repair.context,requestRepair)).state,'waiting_reconciliation');
+  repair.options.confirmedRepairReplayReady=()=>true;
+  assert.equal((await repair.workflow.triageIssue(repair.context,requestRepair)).state,'repair_requested');
+  assert.equal(attempts,2);
 });

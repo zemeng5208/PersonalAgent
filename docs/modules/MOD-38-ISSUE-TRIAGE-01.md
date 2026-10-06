@@ -1,13 +1,18 @@
 # MOD-38：Issue 分类与受控修复 PR
 
 负责人 zemeng；目标为已授权的 `local` DEV-WORKFLOWS 增量；状态 `review`（待真实集中验收与非作者评审）。不计入 `huawei_ict_agentarts` 比赛验收。
-初始基线 `3d4d917`、工作树 `.worktrees/dev-issue`、分支 `codex/dev-issue`；当前沿已有
-PR #290续接，精确提交与验收入口见下方统一记录。
+初始基线 `3d4d917`、工作树 `.worktrees/dev-issue`、分支 `codex/dev-issue`；历史交付沿
+PR #290集成；当前沿既有 PR #297 续接，精确提交与验收入口见下方统一记录。
 
 ## 行为与依赖
 
 `createIssueTriageWorkflow` 接收公开 `@personal-agent/models` 的 `ModelPort`、
 `@personal-agent/agents` 的 `AgentToolPort` / `AgentWorkerContext`，不反向依赖 apps。
+factory 捕获本实例 Model/Tool/IssueRepair 端口引用和已验证的 maxSteps/maxTokens，
+等待期间为后续实例更新复用 options 不改变当前分类、标签或修复链。新 factory
+可以使用新配置；原端口的 list/invoke/complete/repairIssue 方法仍实时，
+authorizationRefFor/confirmedReplayReady/confirmedRepairReplayReady 继续读取原
+options 的实时属性。配置与端口绑定不冻结权限、不把缺能力替换为另一提供者。
 `listIssues` 经 MOD-33 `github.issue.list` 保留 page/nextPage/hasMore，
 `triageIssue` 经 `github.issue.get` 读取完整快照，仅接受 bug/feature/docs/question，
 confidence 必须为有限 0..1，证据为能在原始标题/正文中找到的精确摘录。
@@ -103,11 +108,22 @@ Node 24.15.0 的 cognition build/typecheck、完整测试 213/213 通过；受�
 Fake行为测试位于 `packages/cognition/test/issue-triage.test.mjs`：
 四类、置信度/字段/证据校验、凭据拦截、指纹变化、审批与未知结果、幂等恢复、
 bug修复回链、预算、取消/deadline和分页；后续补齐原修复委派绑定与重读缓存代际恢复。
-当前source `2eda73d` 固定Node24.15完整check exit0，cognition201、Runtime347、
+历史source `2eda73d` 固定Node24.15完整check exit0，cognition201、Runtime347、
 根集成19通过，全部31workspace1990/0/50平台跳过。原内容/已confirmed标签与原修复预算
 在后续暂停/重启时保留，未将同一Issue改写为新的模型任务。
 这些为明确Fake/SQLite受控证据，非真实标签或修复PR验收；当前精确head门禁及交接见
 [统一续接清单](DEV-WORKFLOWS-CONTINUATION-20261005.md)，状态仍review/provisional。
+
+2026-10-06 #212 `6019995540` 新 factory 绑定增量：公开 before1/1失败，普通 caller
+在首 Issue get 等待期间为新实例更新 model/tools，旧实例后续改用新模型/工具并
+生成另一分类/标签。明确 Fake 端口，不是实际账号/Gateway 跨权限写入证据。
+修后同公开脚本1/1通过，Node24.15 cognition build/typecheck及完整219/219、零跳过。
+独立最终公开6/6通过，覆盖GET/分类await端口与预算更新、旧实例原绑定/新实例新
+配置、原repairIssue与授权方法实时、能力撤销及两个确认回执钩子的属性替换。
+标签审批重读和原run恢复规则不变；原失败日志与准确hash归档。独立准备期一个命名
+before的日志实际已是新dist的3通过，仅作为准备记录，不虚计为旧失败。
+本增量只动本人实现/测试与模块/续接说明，沿#297发布；新提交完整Windows门禁另
+读取，源就绪不等于真实验收或非作者评审完成。
 
 Potatos498 在集成公共导出/依赖与 MOD-33/34/Runtime 装配后集中执行：
 

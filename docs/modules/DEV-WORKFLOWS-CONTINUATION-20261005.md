@@ -742,3 +742,19 @@ factory捕获原Model/Tool端口引用，原port.list/invoke/complete仍实时�
 无公共接口或Runtime装配变化，不重复未变的组合全检；新提交Windows完整门禁另
 实际核对，仍不自行批准或合并。MOD38相邻factory绑定另登记独立两文件，串行模块
 构建，保持原独立写入槽，不等待本PR审核再推进。
+
+MOD36上述端口绑定已发布 `30156074337341fe364a1683abfc4bd50ba2f94c` /
+tree `03c495aaf4ae0add22e5a079f44da622ebf64ca8`，API树=受检树，当时22diff文件。
+
+MOD38 factory同类绑定（#212 `6019995540`）沿本工作包继续：request/labels/threshold
+原已捕获，只固定Model/Tools/Repair端口及已验证maxSteps/maxTokens。普通caller首GET
+await后更新复用options，旧码会混用新分类端口；有效公开before1/1失败，同脚本修后
+1/1通过。端口对象不deepclone，原方法与list能力继续实时，authorizationRefFor/
+confirmedReplayReady/confirmedRepairReplayReady仍原options实时属性，新factory可用
+新配置；不改标签审批/读取run/预算恢复逻辑、DTO/wire或Runtime装配。
+正式Node24.15 cognition build/typecheck与完整219/219、零跳过，独立公开6/6通过，
+源hash `efe132a54fbfbeb75290892b224f4cdcf57d672b2c9eb82a2358347109245b2a`。
+准备期一个误命名before的日志已用新dist并3通过，明确不作为旧失败证据；有效旧失败
+另单独归档。全部Fake标签/修复，不冒真实账号写回；独立审无finding。仅本人实现/
+测试与MOD38/本续接说明，沿现有#297交付，最新提交Windows准确门禁另读回。
+整体Goal、原现场恢复和非作者评审仍未完成，持续核对新PR、反馈和明确自有可推进项。
