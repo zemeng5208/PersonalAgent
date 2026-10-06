@@ -57,6 +57,15 @@ MOD38 默认 Runtime 桥还传递可信 `repairGoal` 与 `pullRequestBody`：前
 
 ## 恢复与预算
 
+单次 `runCiFix` 调用在首个 await 前捕获执行配置：仓库/run/源 SHA、分支、验证
+recipe、步骤/token/日志/尝试上限及已批准上下文，复制 sourcePaths 数组与
+Issue/Git 工具名/sourceRunBacklink 子对象。普通调用方在等待期间修改复用 options，
+不能让同一 task/identity 的后续参数偏离原配置。factory 不在创建时永久冻结配置，
+不同任务的新调用可以使用新配置；旧 journal 的 identity 校验和序列化保持不变。
+ModelPort/工具端口仍是原引用，Runtime `authorizationRefFor`、
+`confirmedReplayReady` 与 `now` 继续读取实时钩子，撤销、回执可消费性和期限不会被
+配置快照冻结。快照不替代工具权限检查或现场执行回执。
+
 Runtime checkpoint `ci-fix-v1` 保存参数 identity、调用计数、token 保守预留、confirmed receipts、evidence 与 in-flight 标识。工具 runId 稳定绑定 task/identity/step。每次 dispatch 前持久化；异常、取消、超时保留 in-flight，默认恢复不重试。pending 审批恢复复用相同 runId 与参数。unknown 仅当宿主 `confirmedReplayReady(runId)` 明确表示 Runtime 已完成真实读回且可消费缓存确认结果时，才允许调用既有 Runtime adapter 重放；不得用该函数授权重新执行未知写入。模型未知响应不自动重做。
 
 上述 goal/正文有值时参与同一 identity；变化不得消费旧运行。未配置两字段的 legacy CI
@@ -88,9 +97,18 @@ PowerShell受控用例，包括外部helper实际apply、位置/硬链接拒绝�
 `packages/coding-tools/test/ci-fix.test.mjs` Fake行为场景覆盖完整消费链、执行顺序、确认verify失败拒绝commit、缺能力、模型shell拒绝、unknown不重发、pending同run恢复、HEAD/identity变化、取消、预算、issue-only与指纹漂移。初稿仅静态交付，后续授权已执行构建/受控回归；不能把Fake验证称为真实Git提交或账号闭环。
 
 Potatos498在 `656bd874` 的旧59/59报告保留为历史证据，不替代后续分轮修复和当前source。
-当前source `2eda73d` 固定Node24.15完整check实际exit0，coding-tools183/15平台跳过，
+历史source `2eda73d` 固定Node24.15完整check实际exit0，coding-tools183/15平台跳过，
 Runtime347、根integration19通过；CI83+发现30的受控定向验证已通过，包含上述恢复回归。
 完整31workspace1990/0/50及最新Windows head见
 [统一续接清单](DEV-WORKFLOWS-CONTINUATION-20261005.md)，模块仍review/provisional。
+
+上述 `2eda73d` 为历史组合证据。2026-10-06 新增单次输入快照（#212 `6019776595`）
+公开 before 1/1 失败：首个读取等待期间普通 caller 改 repository，后续参数改用新
+仓库而 identity 保持原值；明确 Fake 工具成功不代表真实 Gateway 放行跨仓库写入。
+修后同复现 1/1 通过，正式 Node24.15 构建/类型通过、coding-tools 227/0/15 Linux
+平台跳过。独立公开探针 10/10：读取/模型/验证等待期间标量和嵌套配置更新仍用原绑定，
+实时 hook 属性替换生效、旧 journal 拒绝新配置、新任务接受新配置、非法关联零派发
+拒绝及 legacy identity 一致。原失败与最终日志均保留；沿 #297 交付，精确发布头的
+Windows 门禁另读回，不把之前已通过的提交当作本增量验证。
 
 真实验收由Potatos498在原受信场景接续，精确脚本以当前package.json为准；需要获授权的GitHub仓库/分支/账号、MOD33 adapter、真实受权ModelPort、Windows patch host、受限验证recipe及Runtime verification snapshot。Local链不强制依赖AgentArts；AgentArts兼容与比赛云验收另按对应profile执行。Fake通过不替代上述真实验收。

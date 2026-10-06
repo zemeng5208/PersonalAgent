@@ -135,6 +135,13 @@ PID 的起始时间并与 marker 比对。未提供检查器或 PowerShell 路�
 
 真实目标系统读回、Evidence 与最终回答仍须在 Runtime/Desktop 联合链路验收；本地工具测试不构成 Competition Golden Path 的完成证据。
 
+已授权的 Local Profile 开发自动化另提供 `runCiFix` / `createCiFixWorkflow`，详见
+[MOD-34](../../docs/modules/MOD-34-CI-FIX-01.md)。每次调用在首个异步派发前捕获执行配置，
+复制源路径数组及 Issue、Git 工具名、源运行关联的子对象；调用方随后更新复用配置不会
+改变本次仓库、分支、验证 recipe 或预算。新任务可使用新配置，旧 checkpoint 仍按原
+identity 拒绝输入变更。Runtime 授权、确认回执就绪与时钟钩子保持实时，模型和工具
+端口保留原引用；配置快照不签发权限、不重试未知写入，也不证明真实修复闭环已验收。
+
 ## 定向验证
 
 测试只创建系统临时目录中的合成文件，不读取真实用户项目内容：

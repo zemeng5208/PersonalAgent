@@ -631,3 +631,59 @@ test('hash normalization never grants an unread model path',async()=>{
  const f=fixture(),complete=f.options.model.complete;f.options.model.complete=async request=>{const r=await complete(request);const p=JSON.parse(r.response.text);p.patches[0].path='src/unread.ts';r.response.text=JSON.stringify(p);return r;};
  await assert.rejects(runCiFix(f.context,f.options),/Invalid CI/);assert.equal(f.calls.filter(c=>c.toolName==='workspace.apply_text_patch').length,0);
 });
+
+test('one public workflow run snapshots scalar and nested execution inputs across an awaited read', async()=>{
+  const f=fixture();let release,entered;
+  const reached=new Promise(resolve=>entered=resolve),wait=new Promise(resolve=>release=resolve);
+  const invoke=f.options.tools.invoke;
+  f.options.tools.invoke=async input=>{if(input.toolName==='github.actions.run.list'){entered();await wait;}return invoke(input);};
+  const workflow=createCiFixWorkflow(f.options),running=workflow.run(f.context);
+  await reached;
+  f.options.repository='owner/next-repo';f.options.runId='99';f.options.headBranch='next-branch';f.options.baseBranch='other-base';
+  f.options.verifyRecipeId='other-recipe';f.options.maxSteps=1;f.options.maxTokens=1;
+  f.options.sourcePaths.push('src/next.ts');f.options.gitTools.commit='workspace.other.commit';
+  release();assert.equal((await running).status,'succeeded');
+  assert.ok(f.calls.filter(call=>call.arguments.repo).every(call=>call.arguments.repo==='owner/repo'));
+  assert.ok(f.calls.filter(call=>call.arguments.repository).every(call=>call.arguments.repository==='owner/repo'));
+  assert.deepEqual(f.calls.filter(call=>call.toolName==='workspace.read_text').map(call=>call.arguments.path),['src/a.ts']);
+  assert.equal(f.calls.find(call=>call.toolName==='workspace.run_allowed_command').arguments.recipeId,'test');
+  const pr=f.calls.find(call=>call.toolName==='github.pr.create');assert.equal(pr.arguments.head,'ci-fix');assert.equal(pr.arguments.base,'main');
+  assert.ok(f.calls.some(call=>call.toolName==='workspace.git.commit'));
+  f.options.gitTools.commit='workspace.git.commit'; // Keep adapters available so changed identity reaches the journal guard.
+  await assert.rejects(workflow.run(f.context),error=>error.code==='INVALID_ARGUMENT');
+});
+test('issue source binding is snapshotted while its original read is outstanding',async()=>{
+  const f=fixture(),issue=f.responses['github.issue.get'];delete f.options.runId;f.options.expectedHeadSha=headSha;
+  f.options.issue={number:issue.number,url:issue.url,repository:'owner/repo',fingerprint:createHash('sha256').update(JSON.stringify(
+    [issue.number,issue.title,issue.body,issue.state,[...issue.labels].sort(),issue.url,issue.updatedAt])).digest('hex')};
+  let release,entered;const reached=new Promise(resolve=>entered=resolve),wait=new Promise(resolve=>release=resolve);
+  const invoke=f.options.tools.invoke;f.options.tools.invoke=async input=>{if(input.toolName==='github.issue.get'){entered();await wait;}return invoke(input);};
+  const running=runCiFix(f.context,f.options);await reached;
+  Object.assign(f.options.issue,{number:99,url:'https://github.test/issues/99',fingerprint:'changed',repository:'owner/other'});
+  release();assert.equal((await running).status,'succeeded');
+  const backlink=f.calls.find(call=>call.toolName==='github.issue.comment');assert.equal(backlink.arguments.number,4);
+  assert.match(backlink.arguments.body,/Issue fingerprint: [a-f0-9]{64}/);
+});
+test('same workflow factory accepts updated configuration for a distinct task without mutating the original journal',async()=>{
+  const f=fixture(),workflow=createCiFixWorkflow(f.options);
+  assert.equal((await workflow.run(f.context)).status,'succeeded');const original=f.context.loadCheckpoint('ci-fix-v1');
+  f.options.headBranch='second-branch';
+  const checkpoints=new Map(),context={...f.context,taskId:'distinct-task',loadCheckpoint:key=>checkpoints.get(key),saveCheckpoint:(key,value)=>checkpoints.set(key,structuredClone(value))};
+  assert.equal((await workflow.run(context)).status,'succeeded');
+  assert.equal(f.calls.filter(call=>call.toolName==='github.pr.create').at(-1).arguments.head,'second-branch');
+  assert.deepEqual(f.context.loadCheckpoint('ci-fix-v1'),original);
+  await assert.rejects(workflow.run(f.context),error=>error.code==='INVALID_ARGUMENT');
+});
+test('authorization and clock hooks remain live across awaited execution inputs',async()=>{
+  for(const hook of ['authorization','clock']) {
+    const f=fixture();let release,entered;const reached=new Promise(resolve=>entered=resolve),wait=new Promise(resolve=>release=resolve);
+    const invoke=f.options.tools.invoke;f.options.tools.invoke=async input=>{if(input.toolName==='github.actions.run.list'){entered();await wait;}return invoke(input);};
+    const running=runCiFix(f.context,f.options);await reached;
+    if(hook==='authorization')f.options.authorizationRefFor=()=>undefined;
+    else f.options.now=()=>Date.parse('2100-01-01T00:00:00Z');
+    release();
+    if(hook==='authorization')assert.equal((await running).status,'waiting_approval');
+    else await assert.rejects(running,error=>error.code==='TIMEOUT');
+    assert.equal(f.calls.length,1);
+  }
+});

@@ -698,3 +698,30 @@ Electron/Windows选择器；无页面错误、溢出或遮罩，独立目标2/2�
 用户当前截止仍为 2026-10-07 北京时间 20:00；不使用旧邮件 22:00 或翌晨 08:00 截止。
 整体 Goal 与原现场验收仍 in_progress，原负责人及恢复入口维持前述分工；邮件阶段
 进度不代表停止，真实结束前仍需发送结果与剩余事项。
+
+### 2026-10-06：#297 精确 Windows 门禁与 MOD34 单次输入绑定
+
+`f0d07e342d60708ad0d50645ad35afc7e689d19a` 的 push run37487356557 / job112350752905
+与 PR run37487364346 / job112350782527 均 completed/success。分别完整读回327286/
+327994字符原始日志，全部34组测试汇总已核对：31workspace2104/0/16 Windows平台
+跳过、根integration22/22、架构3/3，check/dev/demo:protocol/demo:runtime实际通过。
+其中coding-tools234/0/4、cognition213、Desktop448/0/1、Runtime351。前一026头的
+37486658564/37486665561也双绿，独立完整日志31workspace2102/0/16，保留为历史证据。
+这些不是原设备现场或calendar历史错误分类已修的证明。
+
+继续明确自有MOD34的输入绑定缺口，#212 `6019776595` 登记唯一两文件写入者。
+公开 `createCiFixWorkflow` before1/1失败：普通调用方在首读等待期间改复用options的
+repository，后续工具args偏离原仓库但identity仍相同。Fake成功不冒充真实账号写入，
+真实Gateway可能拒绝；没有靠修改权限或重试解决。每次run捕获执行配置，复制原
+sourcePaths/Issue/Git工具名/源运行关联；Model/工具端口仍原引用，实时Runtime授权、
+confirmedReplayReady/时钟保持。不同task的新run可采新配置，原journal变更仍拒绝。
+
+正式Node24.15 module build/typecheck通过、coding-tools227/0/15 Linux平台跳过；
+原before脚本after1/1通过、独立公开10/10通过。覆盖GET/model/verify三处await配置
+突变、原身份/参数、新任务更新、旧journal拒绝、live hook属性替换、非法backlink零
+派发及legacy序列化一致。独立审阅无finding，源hash
+`bed82070788f7dd8f0ee1552944dafa335ce5253437ee9a494b941c1f4da786b`。
+只改本人ci-fix实现/测试、README、MOD34与本续接说明；沿既有开放#297发布。
+无公共DTO、wire、迁移或Runtime装配改动，不重新运行已通过且未变的组合全检；
+新增提交的Windows完整门禁另核实。非作者审核、原Windows/账号/AgentArts场景仍按
+原owner接续，整体Goal继续in_progress，不等待审核才推进独立工作。

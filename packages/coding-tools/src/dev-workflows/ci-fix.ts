@@ -71,6 +71,13 @@ class Pause extends Error { constructor(readonly status: CiFixOutcome['status'],
 
 /** Bounded repair attempts, no shell supplied by a model and no blind write retries. */
 export async function runCiFix(context: AgentWorkerContext, options: CiFixOptions): Promise<CiFixOutcome> {
+  const liveOptions = options;
+  // One invocation owns its execution inputs; factories may receive updated inputs on the next run.
+  options = {...options,
+    sourcePaths: Array.isArray(options.sourcePaths) ? [...options.sourcePaths] : options.sourcePaths,
+    ...(object(options.issue) ? {issue: {...options.issue}} : {}),
+    ...(object(options.gitTools) ? {gitTools: {...options.gitTools}} : {}),
+    ...(object(options.sourceRunBacklink) ? {sourceRunBacklink: {...options.sourceRunBacklink}} : {})};
   const repairGoal = options.repairGoal, pullRequestBody = options.pullRequestBody;
   for (const [value, max] of [[repairGoal, 8000], [pullRequestBody, 16000]] as const) {
     if (value !== undefined && (typeof value !== 'string' || !value.trim() || value.length > max)) invalid();
@@ -80,7 +87,7 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
   const attempts = options.maxAttempts ?? 2;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256 * 1024) invalid();
   if (!Number.isSafeInteger(attempts) || attempts < 1 || attempts > 4) invalid();
-  const sourceRunBacklink = options.sourceRunBacklink === undefined ? undefined : structuredClone(options.sourceRunBacklink);
+  const sourceRunBacklink = options.sourceRunBacklink;
   if (sourceRunBacklink !== undefined && (!object(sourceRunBacklink)
     || Object.keys(sourceRunBacklink).some(k => !['toolName', 'runAttempt'].includes(k)) || !options.runId
     || typeof sourceRunBacklink.toolName !== 'string' || !/^[a-z][a-z0-9._-]{0,127}$/u.test(sourceRunBacklink.toolName)
@@ -104,14 +111,14 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
   const save = () => context.saveCheckpoint(key, structuredClone(j));
   const check = () => {
     if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'CI repair cancelled');
-    if ((options.now ?? Date.now)() >= Date.parse(context.deadline) || !Number.isFinite(Date.parse(context.deadline))) throw new ProtocolError('TIMEOUT', 'CI repair deadline exceeded');
+    if ((liveOptions.now ?? Date.now)() >= Date.parse(context.deadline) || !Number.isFinite(Date.parse(context.deadline))) throw new ProtocolError('TIMEOUT', 'CI repair deadline exceeded');
   };
   // Operation-local waiting boundary for public ports that ignore cancellation.
   // Aborting this wait does not prove an external operation stopped.
   async function bounded<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> {
     check();
     const controller = new AbortController(), deadline = Date.parse(context.deadline);
-    const now = options.now ?? Date.now;
+    const now = liveOptions.now ?? Date.now;
     let timedOut = false, timer: ReturnType<typeof setTimeout> | undefined;
     let interrupt = () => {};
     const abort = () => controller.abort();
@@ -159,9 +166,9 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
   }
   async function invoke(id: string, name: string, args: Record<string, unknown>): Promise<unknown> {
     const runId = `${context.taskId}:ci-fix:${identity}:${id}`;
-    if (j.inflight === id && options.confirmedReplayReady?.(runId)) { delete j.inflight; j.pending = id; save(); }
+    if (j.inflight === id && liveOptions.confirmedReplayReady?.(runId)) { delete j.inflight; j.pending = id; save(); }
     return step(id, async () => {
-      const authorizationRef = options.authorizationRefFor(name, context);
+      const authorizationRef = liveOptions.authorizationRefFor(name, context);
       if (!authorizationRef) { delete j.inflight; j.pending = id; save(); throw new Pause('waiting_approval', 'Runtime authorization required'); }
       const descriptor = tools.list().find(d => d.name === name);
       if (!descriptor) throw new Pause('unsupported', 'Registered tool disappeared');
