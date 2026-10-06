@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {existsSync, statSync} from 'node:fs';
-import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import test from 'node:test';
@@ -43,6 +43,41 @@ const context = (overrides = {}) => ({
   signal: new AbortController().signal,
   deadline: new Date(Date.now() + 10_000).toISOString(),
   ...overrides,
+});
+
+test('changed command workspace bindings reject before starting the fixed process', async t => {
+  for (const replacement of ['link', 'directory', 'missing', 'file']) await t.test(replacement, async t => {
+    const root = await fixture(t);
+    const marker = join(root, '..', 'started.txt');
+    const other = join(root, '..', 'other');
+    await mkdir(other);
+    const tool = createWorkspaceCommandTool({rootPath: root, recipes: [{id: 'check-root',
+      executable: process.execPath, args: ['-e', 'require("node:fs").writeFileSync(process.argv[1], "started")', marker]}]});
+    await rename(root, join(root, '..', 'original'));
+    if (replacement === 'link') await symlink(other, root, process.platform === 'win32' ? 'junction' : 'dir');
+    if (replacement === 'directory') await mkdir(root);
+    if (replacement === 'file') await writeFile(root, 'not a directory');
+    await assert.rejects(tool.execute({recipeId: 'check-root'}, context()), error =>
+      error.code === 'SCOPE_DENIED' && error.message === 'Workspace command root binding changed');
+    assert.equal(existsSync(marker), false, 'a changed root cannot start the process');
+    await assert.rejects(tool.execute({recipeId: 'check-root'}, context({scopes: []})),
+      error => error.code === 'SCOPE_DENIED' && error.message === 'Workspace command scope is required');
+    const controller = new AbortController(); controller.abort();
+    await assert.rejects(tool.execute({recipeId: 'check-root'}, context({signal: controller.signal})), {code: 'CANCELLED'});
+    await assert.rejects(tool.execute({recipeId: 'check-root'}, context({deadline: new Date(0).toISOString()})), {code: 'TIMEOUT'});
+  });
+});
+
+test('a canonical command root permits initial aliases and ordinary directory edits', async t => {
+  const root = await fixture(t);
+  const alias = join(root, '..', 'alias');
+  await symlink(root, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const tool = createWorkspaceCommandTool({rootPath: alias, recipes: [{id: 'check-root',
+    executable: process.execPath, args: ['-e', 'process.stdout.write(require("node:fs").readFileSync("content.txt", "utf8"))']} ]});
+  await writeFile(join(root, 'content.txt'), 'current content');
+  assert.deepEqual(await tool.execute({recipeId: 'check-root'}, context()), {
+    recipeId: 'check-root', exitCode: 0, stdout: 'current content', stderr: '',
+  });
 });
 
 test('host-fixed recipe uses the bound cwd and cannot be replaced by tool input or later config mutation', async t => {

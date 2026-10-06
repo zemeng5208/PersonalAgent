@@ -96,6 +96,7 @@ PID 的起始时间并与 marker 比对。未提供检查器或 PowerShell 路�
 - `createWorkspaceCommandTool(options)` 创建 `workspace.run_allowed_command@1.0.0`；`registerWorkspaceCommand(host, options)` 显式注册并返回 disposer。`rootPath`、非空 `recipes` 及其中每个绝对可执行文件路径和完整 argv 均来自可信宿主；可执行文件不能位于可写工作区内。工具输入仅有 `{recipeId}`，严格枚举并拒绝额外字段。宿主配置在注册时复制，不受后续数组修改影响。
 - scope 为 `workspace:execute`，descriptor 是 `local_write`、不可幂等/不可自动恢复；已有 Policy/ToolGateway 必须对精确参数审批并消费授权。当前 `requiresPresence:false` 仅因 Runtime 未提供独立在场字段，绝不代替审批。
 - 用 Node 内置 `spawn` 的 `shell:false`、固定 canonical 工作目录、默认空环境（或由受信宿主注入并经过模式/敏感词校验的受控 `env`）及隐藏窗口执行；不引入 execa 或另一套调度器。运行期限默认 30 秒、至多 120 秒；合并 stdout/stderr 原始字节预算默认 64 KiB、至多 256 KiB。超限、截止或取消会请求终止直接子进程；无法在 2 秒内确认退出时返回未知结果。输出必须完整有效 UTF-8，不截断成功结果。
+- 注册时绑定 canonical 根目录及其设备/目录身份；每次启动前同步复核路径仍解析到该目录、目录身份未变化。根被换为链接、另一个普通目录、文件或已移除时，公开工具拒绝 `SCOPE_DENIED`，不启动命令，也不自动重绑新目录。正常修改工作区内容不会使授权根失效；注册时提供的链接只解析到当时的 canonical 目标。检查仍不能消除复核与 OS 启动之间的路径竞态，不构成 OS 沙箱。
 - 输出 `{recipeId,exitCode,stdout,stderr}` 只证明该直接进程的退出码与收集到的文本；非零码是失败的验证命令，不代表产物已读回、Artifact 已保存或副作用可重试。`ToolGateway` 对 `local_write` 异常统一返回 `RESULT_UNKNOWN`，调用方必须对账。
 - `rootPath` 只是 cwd，不是进程文件系统边界。固定可信命令仍以宿主 OS 账号权限访问文件。在 Windows 上，直接执行 Node/npm 并在超时/取消时调用 `child.kill('SIGKILL')` 仅能终止直接进程，npm 脚本派生的子进程树会成为孤儿进程；为此在 `packages/coding-tools/native/` 下提供了 `WindowsJobProcessHost` 原生助手（基于 .NET 8 与 Win32 Job Object）：
   - 通过 `CreateJobObjectW` 与 `SetInformationJobObject` 设置 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (0x2000)`，严禁 breakaway；
