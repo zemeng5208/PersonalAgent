@@ -7,6 +7,29 @@ import {GhCliProvider, githubRepairCheckName} from '@personal-agent/github';
 import {runCiFix, createCiFixWorkflow} from '@personal-agent/coding-tools';
 
 const headSha = 'a'.repeat(40), fixedSha = 'b'.repeat(40), fileSha = 'c'.repeat(64);
+test('old CI factory resumes pending identity through original ports while new factory uses replacements',async()=>{
+  const f=fixture();let oldCalls=0,newCalls=0,newModel=0;
+  const invoke=f.options.tools.invoke,complete=f.options.model.complete;
+  const oldTools={list:f.options.tools.list,invoke:async input=>{oldCalls++;if(oldCalls===1){f.calls.push(input);return {state:'pending',evidenceRefs:[]};}return invoke(input);}};
+  f.options.tools=oldTools;const old=createCiFixWorkflow(f.options);
+  assert.equal((await old.run(f.context)).status,'waiting_approval');const original=f.calls[0];
+  f.options.tools={list:oldTools.list,invoke:async input=>{newCalls++;return invoke(input);}};
+  f.options.model={complete:async input=>{newModel++;return complete(input);}};
+  const next=createCiFixWorkflow(f.options);
+  assert.equal((await old.run(f.context)).status,'succeeded');
+  assert.equal(f.calls[1].runId,original.runId);assert.deepEqual(f.calls[1].arguments,original.arguments);
+  assert.equal(newCalls,0);assert.equal(newModel,0);
+  const checkpoints=new Map(),context={...f.context,taskId:'new-ports-task',loadCheckpoint:key=>checkpoints.get(key),saveCheckpoint:(key,value)=>checkpoints.set(key,structuredClone(value))};
+  assert.equal((await next.run(context)).status,'succeeded');assert.ok(newCalls>0);assert.equal(newModel,1);
+});
+test('CI factory bound port methods remain live and capability withdrawal blocks dispatch',async()=>{
+  const f=fixture(),workflow=createCiFixWorkflow(f.options);
+  const tools=f.options.tools,model=f.options.model,invoke=tools.invoke,complete=model.complete;let methods=0;
+  tools.invoke=async input=>{methods++;return invoke(input);};model.complete=async input=>{methods++;return complete(input);};
+  assert.equal((await workflow.run(f.context)).status,'succeeded');assert.ok(methods>1);
+  tools.list=()=>[];const count=f.calls.length;
+  assert.equal((await workflow.run(f.context)).status,'unsupported');assert.equal(f.calls.length,count);
+});
 function fixture() {
   const checkpoints = new Map(), calls = [];
   const context = {taskId: 'ci-task', deadline: '2099-01-01T00:00:00Z', signal: new AbortController().signal,

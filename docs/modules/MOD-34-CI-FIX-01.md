@@ -64,9 +64,11 @@ MOD38 默认 Runtime 桥还传递可信 `repairGoal` 与 `pullRequestBody`：前
 单次 `runCiFix` 调用在首个 await 前捕获执行配置：仓库/run/源 SHA、分支、验证
 recipe、步骤/token/日志/尝试上限及已批准上下文，复制 sourcePaths 数组与
 Issue/Git 工具名/sourceRunBacklink 子对象。普通调用方在等待期间修改复用 options，
-不能让同一 task/identity 的后续参数偏离原配置。factory 不在创建时永久冻结配置，
-不同任务的新调用可以使用新配置；旧 journal 的 identity 校验和序列化保持不变。
-ModelPort/工具端口仍是原引用，Runtime `authorizationRefFor`、
+不能让同一 task/identity 的后续参数偏离原配置。factory 不在创建时永久冻结执行
+配置，不同任务的新调用可以使用新配置；旧 journal 的 identity 校验和序列化保持
+不变。factory 创建时固定 ModelPort/工具对象，旧 pending/unknown 恢复不会因宿主
+复用 options 创建另一实例而切换 Runtime adapter。新 factory 可绑定新端口；直接
+`runCiFix(context, options)` 每次调用选取端口。原端口的方法和能力仍实时，Runtime `authorizationRefFor`、
 `confirmedReplayReady` 与 `now` 继续读取实时钩子，撤销、回执可消费性和期限不会被
 配置快照冻结。快照不替代工具权限检查或现场执行回执。
 
@@ -122,5 +124,17 @@ Linux平台跳过；独立公开4/4通过，覆盖原端口/新factory、原方�
 及 unknown 的原run/参数/steps1和实时授权/确认钩子。所有工具明确 Fake READ，
 无真实账号写入；误命名before的准备日志实际新dist3通过，不计旧失败。
 最小源码仅3行引用绑定变化，不改上述恢复与时钟语义；沿现有#297继续交付。
+
+factory 跨恢复的端口绑定另按 #212 `6022269030` 修复。旧公开复现1/1失败：原
+读取 pending 后，宿主复用 options 创建新 factory，旧 factory 恢复原 run 却使用新
+tools/model。独立纯 Fake READ 的 pending/unknown 两例旧2失败→同探针新2通过，
+保持原 run/参数、确认未就绪时暂停、就绪后仅经原 adapter 消费。私有执行入口固定
+factory 端口，公开两参数 `runCiFix` 保持每次调用选端口；不冻结原权限与时钟钩子。
+同公开复现after1/1通过；正式新增回归旧1失败/1通过，固定Node24.15的build/typecheck
+及coding-tools232/0/15 Linux平台跳过通过。独立追加边界4/4涵盖直接调用新端口、
+原方法更新、授权撤销/恢复、时钟更新和能力撤销。追加探针首轮把既有unsupported
+返回误断为异常，纠正断言后通过；保留原日志，不计作产品或旧实现失败。
+仅本人CI修复源码/测试和配套说明，沿#297交付；未知写核实、Runtime授权、配置
+identity/序列化和步骤预算未改变，真实自动修复链仍按原owner验收。
 
 真实验收由Potatos498在原受信场景接续，精确脚本以当前package.json为准；需要获授权的GitHub仓库/分支/账号、MOD33 adapter、真实受权ModelPort、Windows patch host、受限验证recipe及Runtime verification snapshot。Local链不强制依赖AgentArts；AgentArts兼容与比赛云验收另按对应profile执行。Fake通过不替代上述真实验收。

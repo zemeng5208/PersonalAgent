@@ -71,6 +71,10 @@ class Pause extends Error { constructor(readonly status: CiFixOutcome['status'],
 
 /** Bounded repair attempts, no shell supplied by a model and no blind write retries. */
 export async function runCiFix(context: AgentWorkerContext, options: CiFixOptions): Promise<CiFixOutcome> {
+  return runCiFixWithPorts(context, options, {model: options.model, tools: options.tools});
+}
+async function runCiFixWithPorts(context: AgentWorkerContext, options: CiFixOptions,
+  ports: {model: CiFixOptions['model']; tools: CiFixOptions['tools']}): Promise<CiFixOutcome> {
   const liveOptions = options;
   // One invocation owns its execution inputs; factories may receive updated inputs on the next run.
   options = {...options,
@@ -78,6 +82,8 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
     ...(object(options.issue) ? {issue: {...options.issue}} : {}),
     ...(object(options.gitTools) ? {gitTools: {...options.gitTools}} : {}),
     ...(object(options.sourceRunBacklink) ? {sourceRunBacklink: {...options.sourceRunBacklink}} : {})};
+  if (ports.model === undefined) delete options.model; else options.model = ports.model;
+  if (ports.tools === undefined) delete options.tools; else options.tools = ports.tools;
   const repairGoal = options.repairGoal, pullRequestBody = options.pullRequestBody;
   for (const [value, max] of [[repairGoal, 8000], [pullRequestBody, 16000]] as const) {
     if (value !== undefined && (typeof value !== 'string' || !value.trim() || value.length > max)) invalid();
@@ -388,5 +394,6 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
 }
 
 export function createCiFixWorkflow(options: CiFixOptions): CiFixWorkflowPort {
-  return {run: context => runCiFix(context, options)};
+  const ports = {model: options.model, tools: options.tools};
+  return {run: context => runCiFixWithPorts(context, options, ports)};
 }
