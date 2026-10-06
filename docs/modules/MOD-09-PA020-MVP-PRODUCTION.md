@@ -52,6 +52,23 @@
   `cloud-business.test.mjs:88`：deadline 预期 `TIMEOUT`，实际 `EXTERNAL_FAILURE`；同一用例本机复跑通过。
   该目录不在本 PR diff 中，保留失败记录，不据复跑通过宣称远程门禁通过；后续提交须重新核对 CI。
 
+### 同日继续：删除提交后的取消异常恢复
+
+- 新用例准确复现：私人来源删除已提交，取消某个派生任务抛错，清理整批中断，
+  不能返回该副本的 pending 状态或继续处理其他目标副本。
+- `private-memory-erasure-host.js` 将释放、取消和精确副本清理纳入原失败收集边界。
+  取消失败保留该 taskId 为 pending，继续处理同事实的其他副本；恢复只使用原删除标记。
+  已有精确 `taskId/factId/bindingDigest/purged` 收据的副本跳过释放、取消和清理，
+  失配收据仍不能当作完成。不改 Runtime 取消受理语义，不重放工具或云调用。
+- 合成源库及替身取消端口复验覆盖部分清理、重启恢复、重复恢复零取消和无关副本保留；
+  连同实际 Runtime 父子副本、生产管理/消费门禁定向 13/13 通过。
+  无 Schema、公共 operation、数据库迁移、依赖或权限变化。
+- Desktop 类型检查与完整模块测试通过：445 项，443 通过、0 失败、2 跳过；
+  隔离 Electron 合成生命周期再次通过，fetch 陷阱计数零。沿用前述 SDK/TEMP 条件，
+  原生逐条确认及真实云端验收仍未完成。
+- `ce95539` 当前 head 两项 Foundation（run `37447588019`、`37447583221`）成功，
+  暂无非作者评审。该证据仅覆盖此取消异常补修之前的提交；新提交须重新验证 CI 和评审。
+
 ## 2026-10-05 主线确认与实际 MCP 学习验收
 
 目标为 `huawei_ict_agentarts`，工作树 `.worktrees/main-ci-foundation-validation`，

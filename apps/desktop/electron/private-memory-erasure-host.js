@@ -54,9 +54,6 @@ export function createPrivateMemoryErasureHost({privateMemory, consumptionHost, 
     const pending = [];
     for (const copy of inventory().filter(item => item.factId === factId)) {
       active(scope);
-      consumptionHost.releaseTask(copy.taskId);
-      // requestCancel is only acceptance. The shared redactor must wait for safe Runtime state.
-      cancelTask(copy.taskId);
       const expected = {taskId: copy.taskId, factId, bindingDigest: copy.bindingDigest, state: 'purged'};
       const matches = () => {
         const receipt = readCopyErasureReceipt(copy.taskId);
@@ -64,7 +61,12 @@ export function createPrivateMemoryErasureHost({privateMemory, consumptionHost, 
           && Object.keys(expected).every(key => receipt[key] === expected[key]);
       };
       try {
-        if (!matches()) await eraseTaskCopies({...copy, ...scope});
+        if (!matches()) {
+          consumptionHost.releaseTask(copy.taskId);
+          // Cancellation is only acceptance; a failure leaves this committed erasure pending.
+          cancelTask(copy.taskId);
+          await eraseTaskCopies({...copy, ...scope});
+        }
         active(scope);
         if (!matches()) pending.push(copy.taskId);
       } catch { pending.push(copy.taskId); }
