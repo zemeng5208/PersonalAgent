@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdirSync,mkdtempSync,readFileSync,writeFileSync} from 'node:fs';
+import {mkdirSync,mkdtempSync,readFileSync,rmSync,writeFileSync} from 'node:fs';
 import path from 'node:path';
 import * as coding from '@personal-agent/coding-tools';
 import {createWorkspaceCommandRecipeTool} from '../electron/workspace-command-recipes.js';
@@ -113,4 +113,75 @@ test('project scripts need a trusted helper, factory receipt and separate sessio
       .project({...request,result:output}),{recipeId:'npm-build',exitCode:0,passed:true});
     host.revoke();assert.equal(binding.available(request),false);
   } finally {host.close();}
+});
+
+test('current recipe readiness gates Node/project status, consent and Competition operations',async t=>{
+  const root=mkdtempSync(new URL('readiness-',cache));
+  const userData=mkdtempSync(new URL('readiness-data-',cache));
+  t.after(()=>{rmSync(root,{recursive:true,force:true});rmSync(userData,{recursive:true,force:true});});
+  const source=path.join(root,'syntax.js');writeFileSync(source,'const ready = true;\n');
+  const npmCli=path.join(userData,'npm-cli.js');writeFileSync(npmCli,'// fixture npm\n');
+  const helper=path.join(userData,'WindowsJobProcessHost.exe');writeFileSync(helper,'fixture helper');
+  const node=path.join(userData,process.platform==='win32'?'node.exe':'node');writeFileSync(node,'fixture node');
+  const packageFile=path.join(root,'package.json');
+  const packageContent=JSON.stringify({scripts:{build:'echo synthetic',test:'echo synthetic'}});
+  writeFileSync(packageFile,packageContent);mkdirSync(path.join(root,'node_modules'));
+  const options={userData,safeStorage,selectDirectory:async()=>root,
+    selectNodeExecutable:async()=>node,selectCheckFile:async()=>source,
+    selectNpmCli:async()=>npmCli,jobHelperExecutable:helper};
+  let host=createWorkspaceConfigHost(options);
+  await host.select();await host.selectNode();await host.selectCheckFile();await host.selectNpmCli();host.close();
+  let executions=0,readinessOverride;
+  host=createWorkspaceConfigHost({...options,createCommandRecipeTool:options=>{
+    const recipe=createWorkspaceCommandRecipeTool({...options,createWorkspaceCommandTool:input=>({
+      ...coding.createWorkspaceCommandTool(input),execute:async({recipeId})=>{
+        executions++;return {recipeId,exitCode:0,stdout:'',stderr:''};
+      },
+    })});
+    return {...recipe,available:()=>readinessOverride?readinessOverride():recipe.available()};
+  }});
+  t.after(()=>host.close());
+  const checkpoints=new Map();host.bindApplication({runtime:{
+    loadCheckpoint:(id,key)=>checkpoints.get(`${id}:${key}`),
+    saveCheckpoint:(id,key,value)=>checkpoints.set(`${id}:${key}`,value)}});
+  const consent={cloudExportAllowed:true,writeAllowed:false,commandAllowed:true,projectCodeAllowed:true};
+  host.authorize(consent);
+  const request={taskId:'ready-task',signal:new AbortController().signal};
+  const names=['workspace.node_check','workspace.npm_build','workspace.npm_test'];
+  for(const name of names) assert.equal(host.competitionToolAvailability.find(item=>item.toolName===name)
+    .available(request),true);
+  for(const read of [()=>false,()=>undefined,()=>'true',()=>{throw Error('private diagnostic');}]) {
+    readinessOverride=read;
+    assert.equal(host.snapshot().nodeCheckAvailable,false);
+    assert.equal(host.snapshot().projectScriptsAvailable,false);
+    assert.throws(()=>host.authorize(consent),/尚未准备好/);
+    assert.doesNotMatch(JSON.stringify(host.snapshot()),/private diagnostic/);
+  }
+  readinessOverride=undefined;
+  assert.equal(host.snapshot().nodeCheckAvailable,true);
+  for(const [file,content] of [[packageFile,packageContent],[npmCli,'// fixture npm\n'],
+    [helper,'fixture helper'],[source,'const ready = true;\n'],[node,'fixture node']]) {
+    if(file===source) rmSync(file);else writeFileSync(file,`${content} changed`);
+    assert.equal(host.snapshot().nodeCheckAvailable,false);
+    assert.equal(host.snapshot().projectScriptsAvailable,false);
+    assert.equal(host.snapshot().commandAvailable,
+      host.tools.some(tool=>tool.descriptor.name==='workspace.git_diff_check'));
+    assert.equal(host.snapshot().readAvailable,true,'command changes preserve read permission');
+    assert.match(host.snapshot().commandReason,/重新装配/);
+    assert.match(host.snapshot().projectReason,/重新装配/);
+    assert.throws(()=>host.authorize(consent),/尚未准备好/);
+    for(const name of names) {
+      const binding=host.competitionToolAvailability.find(item=>item.toolName===name);
+      const exported=host.competitionToolExports.find(item=>item.toolName===name);
+      assert.equal(binding.available(request),false);
+      assert.equal(exported.accepts(request),false);
+      await assert.rejects(host.tools.find(item=>item.descriptor.name===name).execute({},request),/许可已撤销|绑定已改变/);
+      assert.throws(()=>exported.project({...request,result:{recipeId:name==='workspace.node_check'?'node-check':'npm-build',exitCode:0}}),/consent changed/);
+    }
+    assert.equal(executions,0);
+    if(file===node) break; // Metadata pin cannot be restored by rewriting a binary.
+    writeFileSync(file,content);
+    assert.equal(host.snapshot().nodeCheckAvailable,true);
+    assert.equal(host.snapshot().projectScriptsAvailable,true);
+  }
 });

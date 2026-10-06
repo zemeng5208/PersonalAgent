@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {existsSync,mkdirSync,mkdtempSync,readFileSync,renameSync,rmSync} from 'node:fs';
+import {existsSync,mkdirSync,mkdtempSync,readFileSync,renameSync,rmSync,writeFileSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createAgentArtsConfig} from '../electron/agentarts-config.js';
@@ -8,6 +8,60 @@ import {agentArtsModelSnapshot} from '../electron/agentarts-model-state.js';
 import {createDeferredRuntimeStartup} from '../electron/runtime-startup.js';
 import {createAgentArtsRuntimeApplication} from '@personal-agent/runtime/application';
 import {Client} from '@personal-agent/client';
+
+const invalidRuntimeNames=[
+  ['missing',{}],['undefined',{runtimeName:undefined}],['null',{runtimeName:null}],
+  ['number',{runtimeName:17}],['array',{runtimeName:['synthetic-runtime']}],['object',{runtimeName:{}}],
+];
+
+test('AgentArts runtime name must be a string before encryption or persistence',async t=>{
+  for(const [name,invalid] of invalidRuntimeNames) {
+    await t.test(name,t=>{
+      const userData=mkdtempSync(path.join(os.tmpdir(),'pa-cloud-invalid-name-'));
+      t.after(()=>rmSync(userData,{recursive:true,force:true}));
+      let encryptionCalls=0;
+      const config=createAgentArtsConfig({userData,environment:{},safeStorage:{
+        isEncryptionAvailable:()=>true,encryptString:value=>{encryptionCalls++;return Buffer.from(value);},
+        decryptString:value=>value.toString(),
+      }});
+      assert.throws(()=>config.configure({gatewayUrl:'https://example.huaweicloud-agentarts.com',
+        authorization:'Bearer synthetic-only',...invalid}),/运行时实例名称/);
+      assert.equal(encryptionCalls,0,'invalid destinations never reach credential encryption');
+      for(const file of ['agentarts-config.json','agentarts-config.json.tmp']) {
+        assert.equal(existsSync(path.join(userData,file)),false,'invalid destinations never create persisted configuration');
+      }
+      assert.equal(config.snapshot().configured,false);
+      assert.equal(config.snapshot().runtimeReady,false);
+    });
+  }
+});
+
+test('AgentArts stored non-string runtime name remains unavailable without rewriting the file',async t=>{
+  for(const [name,invalid] of invalidRuntimeNames) {
+    await t.test(name,t=>{
+      const userData=mkdtempSync(path.join(os.tmpdir(),'pa-cloud-invalid-stored-name-'));
+      t.after(()=>rmSync(userData,{recursive:true,force:true}));
+      const file=path.join(userData,'agentarts-config.json');
+      const record=JSON.stringify({version:1,encrypted:Buffer.from(JSON.stringify({
+        gatewayUrl:'https://example.huaweicloud-agentarts.com',authorization:'Bearer synthetic-only',...invalid,
+      })).toString('base64')});
+      writeFileSync(file,record);
+      let encryptionCalls=0;
+      const config=createAgentArtsConfig({userData,environment:{},safeStorage:{
+        isEncryptionAvailable:()=>true,decryptString:value=>value.toString(),
+        encryptString:value=>{encryptionCalls++;return Buffer.from(value);},
+      }});
+      assert.equal(config.snapshot().configured,false);
+      assert.equal(config.snapshot().runtimeReady,false);
+      assert.equal(config.runtimeBinding(),undefined);
+      assert.throws(()=>config.binding());
+      assert.throws(()=>config.readAuthorization({gatewayUrl:'https://example.huaweicloud-agentarts.com',runtimeName:'synthetic-runtime'}));
+      assert.doesNotMatch(JSON.stringify(config.snapshot()),/synthetic-only|Bearer/);
+      assert.equal(encryptionCalls,0);
+      assert.equal(readFileSync(file,'utf8'),record,'reading an invalid record never repairs or overwrites it');
+    });
+  }
+});
 
 test('AgentArts revoke reports a failed disk deletion and can be retried after repair',()=>{
   const userData=mkdtempSync(path.join(os.tmpdir(),'pa-cloud-revoke-'));
@@ -62,6 +116,52 @@ test('AgentArts credential persists through host storage without snapshot disclo
   assert.equal(revoked.configured, false);
   assert.equal(existsSync(path.join(userData,'agentarts-config.json')), false);
   assert.throws(()=>config.binding());
+});
+
+test('AgentArts blank credential reuse compares canonical destinations and preserves rejects',t=>{
+  const userData=mkdtempSync(path.join(os.tmpdir(),'pa-cloud-canonical-binding-'));
+  t.after(()=>rmSync(userData,{recursive:true,force:true}));
+  let encryptionCalls=0;
+  const options={userData,environment:{},safeStorage:{isEncryptionAvailable:()=>true,
+    encryptString:value=>{encryptionCalls++;return Buffer.from(value).reverse();},
+    decryptString:value=>Buffer.from(value).reverse().toString()}};
+  let config=createAgentArtsConfig(options);
+  const initial={gatewayUrl:'https://example.huaweicloud-agentarts.com',runtimeName:'same-runtime',
+    authorization:'Bearer synthetic-only'};
+  config.configure(initial);
+  const binding=config.binding();
+  for(const gatewayUrl of ['https://example.huaweicloud-agentarts.com/',
+    'https://EXAMPLE.HUAWEICLOUD-AGENTARTS.COM',
+    'https://example.huaweicloud-agentarts.com:443/']) {
+    const result=config.configure({gatewayUrl,runtimeName:initial.runtimeName,authorization:''});
+    assert.equal(result.configured,true);
+    assert.deepEqual(config.binding(),binding);
+    assert.equal(result.gatewayUrl,initial.gatewayUrl);
+    assert.equal(config.readAuthorization(binding),initial.authorization);
+    assert.doesNotMatch(JSON.stringify(result),/synthetic-only|Bearer/);
+    config=createAgentArtsConfig(options);
+    assert.equal(config.readAuthorization(binding),initial.authorization,'canonical updates survive restart');
+  }
+  const file=path.join(userData,'agentarts-config.json'),record=readFileSync(file,'utf8');
+  const previousCalls=encryptionCalls;
+  for(const invalid of [
+    {gatewayUrl:'https://different.huaweicloud-agentarts.com/'},{runtimeName:'different-runtime'},
+    {runtimeName:initial.runtimeName.toUpperCase()},
+    {gatewayUrl:'https://example.huaweicloud-agentarts.com:444/'},
+    {gatewayUrl:'https://example.huaweicloud-agentarts.com/api'},
+    {gatewayUrl:'https://example.huaweicloud-agentarts.com/?secret=1'},
+    {gatewayUrl:'https://example.huaweicloud-agentarts.com/#fragment'},
+    {gatewayUrl:'https://user:pass@example.huaweicloud-agentarts.com/'},
+    {gatewayUrl:'http://example.huaweicloud-agentarts.com/'},
+    {gatewayUrl:'https://example.huaweicloud-agentarts.com.untrusted.example/'},
+    ...[null,false,0,[],{}].map(authorization=>({authorization})),
+  ]) {
+    assert.throws(()=>config.configure({...initial,authorization:'',...invalid}));
+    assert.equal(encryptionCalls,previousCalls,'rejected updates never encrypt or persist');
+    assert.equal(readFileSync(file,'utf8'),record);
+    assert.equal(config.readAuthorization(binding),initial.authorization);
+  }
+  assert.throws(()=>config.readAuthorization({...binding,gatewayUrl:`${binding.gatewayUrl}/`}),/已改变/);
 });
 
 test('known AgentArts destination permits Runtime and Live construction without inventing or overwriting a credential',async()=>{

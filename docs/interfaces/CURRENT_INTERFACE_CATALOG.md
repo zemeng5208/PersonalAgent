@@ -31,12 +31,13 @@
 产品负责人已明确启动 PR #276 分配给 zemeng 的 MOD-33/34/36/38 Local Profile 增量。
 公开 `@personal-agent/github`、`@personal-agent/coding-tools` 的开发修复与受控 Git 工厂、
 `@personal-agent/cognition` 的 Review/Issue 工厂以及 `@personal-agent/runtime/dev-workflows`
-新组合入口。精确输入输出以各包公开 exports 为单一来源，状态 **provisional / 待集中验证**；
+新组合入口。精确输入输出以各包公开 exports 为单一来源，状态 **provisional / 待真实宿主闭环验证**；
 不新增 wire operation，不更改 Competition 默认组合或冻结矩阵。
 
 所有 GitHub/工作区/Git 工具经既有 Runtime / Policy / ToolGateway，缺宿主注册或配置返回
-不支持；未知写入等待原执行核实，模型不能生成授权或验证回执。当前仅有源码与静态检查，
-尚无类型检查、运行测试或真实目标闭环证据。模块与文件所有权、集中验证交接见
+不支持；未知写入等待原执行核实，模型不能生成授权或验证回执。Windows Foundation 验证构建和
+类型，Fake 测试覆盖受控工具路径；真实 GitHub 写入读回和普通 Windows 主机上的完整修复闭环仍未验收，
+因此保持 provisional。模块与文件所有权、集中验证交接见
 [本轮交接](../modules/DEV-WORKFLOWS-HANDOFF-20261003.md)。
 
 ### MOD-30-WORKFLOW-INPUT-01 开发增量
@@ -228,19 +229,29 @@ MOD-09I 新增 `@personal-agent/learning` 的受信 SQLite 宿主：描述性候
 
 MOD-09J 在受信宿主增加单条私人 Vault 引文的确认写入桥接，以及 Memory 迁移 5 的首次事实
 创建回执。拒绝确认不写入；确认后只写 `private`、`user_confirmed` 事实，更正仍走精确头版本。
-接口保持 `provisional`：尚无生产可用的私人确认写入、身份/授权装配或私人数据出机控制；真实 Vault 的
-只读检索不等于已确认持久写入。
+接口保持 `provisional`：正式 Competition 装配已有逐条原生确认、精确事实版本、逐任务许可与
+最终发送检查；真实用户确认持久写入、生产身份及真实私人数据出机仍未完成验收。
+真实 Vault 的只读检索不等于已确认持久写入。
 
 MOD-09K 为 Desktop Competition 管理后台增加本机会话 Vault 选择和只读搜索；
-原生确认及独立私人 Memory SQLite 写入只在隔离合成夹具验收中开启。真实 Vault
-写入在完整删除保障前保持禁用。此本机管理入口为 `provisional`，并非 Runtime
-wire capability；私人事实不进入当前仅公开敏感级别的 Goal 投影或 AgentArts 请求。
-真实 Vault 已验证只读搜索和拒绝确认；真实用户确认的持久写入、生产身份与完整删除未验收。
+原生确认及独立私人 Memory SQLite 写入由实际副本清单和删除准备状态控制；
+清单未知、未接通副本或维护失败时拒绝写入。此本机管理入口为 `provisional`，并非 Runtime
+wire capability；私人事实不进入当前仅公开敏感级别的 Goal 投影。AgentArts 消费另需精确任务、
+事实版本和原生出机许可，保存本身不授予发送权限。真实 Vault 已验证只读检索、引文读回与
+版本匹配；真实用户确认持久写入、原生完整生命周期及真实云消费仍未验收。
 
 MOD-09L 为独立 Desktop 私人库增加分页列出已保存当前事实和原生逐条确认删除。
 受信宿主按当前 revision 清除全部历史与受影响快照，WAL 截断后读回；合成数据验证旧
 版本、旧快照不可读且无关事实保留。该入口不接入 Runtime 公共事实或 Vault 原文件删除；
-真实写入继续禁用，应用管理备份和公共事实跨库删除仍待全链路验收。
+私人写入仍受实际副本及删除准备门禁限制；关联 Runtime 副本通过原绑定、精确清除收据及
+pending 重启恢复接线。#284 的同步门禁修复及实际 Runtime/Memory SQLite 父/子副本删除、无关事实
+保留与恢复不重复发送的合成回归已通过 #285 非作者评审进入 main；真人全链路仍未验收。
+私人 Memory 源库尚无生产 backup/restore 调用路径；外部独立副本与已发送正文不在本机清除保证内。
+
+后续本地验收包 `memory-learning-mcp.test.mjs` 使用实际官方 filesystem stdio、Client 与 SQLite
+Runtime 审批验证固定 Skill 学习、版本回滚、重启及流程删除；原生启用/删除回调为显式 Fake。
+内部学习错误通过现有任务快照 Schema 校验后记录；契约未登记的码映射为 `EXTERNAL_FAILURE`，
+不扩展公共错误码、权限或接口冻结范围，真实私人来源及云端验收仍未完成。
 
 MOD-09M 在 Memory 受信 SQLite 宿主增加已提交删除回执的重启维护：若目标行仍存则拒绝，
 否则重试 WAL 截断。Desktop 私人控制器在首次读取及提交后失败的后续操作前执行该检查。

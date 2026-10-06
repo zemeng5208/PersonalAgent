@@ -31,6 +31,7 @@ export function mountWorkspaceControls(root, invoke) {
   let busy = false;
   let consentDirty = false;
   let feedback = '';
+  let unconfirmed = false;
 
   function updateButtons() {
     const configured = state.configured === true;
@@ -41,17 +42,17 @@ export function mountWorkspaceControls(root, invoke) {
     field('cloud').disabled = busy || !configured;
     field('write').disabled = busy || !configured;
     field('command').disabled = busy || !configured;
-    field('project-code').disabled = busy || !configured || state.projectScriptsAvailable !== true;
-    field('authorize').disabled = busy || !configured || !field('cloud').checked;
+    field('project-code').disabled = busy || !configured || state.projectScriptsAvailable !== true || !field('command').checked;
+    field('authorize').disabled = busy || !configured || state.authorizationAvailable !== true || !field('cloud').checked;
     field('revoke').disabled = busy || (!configured && state.cloudExportAllowed !== true);
   }
 
   function render(snapshot = {}, {keepFeedback = false} = {}) {
-    if (!keepFeedback) feedback = '';
+    if (!keepFeedback && !busy && !unconfirmed) feedback = '';
     const next = snapshot?.coding ?? {};
     const previousName = state.displayName;
     const previouslyAllowed = state.cloudExportAllowed === true;
-    state = next && typeof next === 'object' ? next : {};
+    state = next && typeof next === 'object' && !Array.isArray(next) ? next : {};
     const configured = state.configured === true;
     const displayName = configured && typeof state.displayName === 'string' && state.displayName.trim()
       ? state.displayName : configured ? '已选择工作区' : '未选择工作区';
@@ -67,7 +68,7 @@ export function mountWorkspaceControls(root, invoke) {
       ? `npm 文件：${state.npmCliConfigured === true ? '已确定' : '未找到，可手动选择'} · 项目构建/测试：${projectReady ? '可授权' : '暂不可用'}${typeof state.projectReason === 'string' && state.projectReason ? ` · ${state.projectReason}` : ''}`
       : '选择工作区后才会检查项目构建和测试是否可用。';
     field('project-label').textContent = projectReady
-      ? '单独允许本会话执行项目构建/测试'
+      ? '单独允许本会话执行项目构建/测试（先勾选受限命令）'
       : '允许执行项目构建/测试（尚未准备好）';
     if (!projectReady) field('project-code').checked = false;
     if (!configured || previousName !== state.displayName || (previouslyAllowed && state.cloudExportAllowed !== true)) {
@@ -76,8 +77,12 @@ export function mountWorkspaceControls(root, invoke) {
       field('project-code').checked = false;
       consentDirty = false;
     }
-    if (!consentDirty) field('cloud').checked = configured && state.cloudExportAllowed === true;
-    if (!consentDirty) field('project-code').checked = projectReady && state.projectCodeAllowed === true;
+    if (!consentDirty) {
+      field('cloud').checked = configured && state.cloudExportAllowed === true;
+      field('write').checked = configured && state.writeAllowed === true;
+      field('command').checked = configured && state.commandAllowed === true;
+      field('project-code').checked = projectReady && field('command').checked && state.projectCodeAllowed === true;
+    }
     field('status').textContent = feedback || (typeof state.reason === 'string' ? state.reason : '')
       || (configured ? '请按需选择授权范围；设置状态以宿主读回为准。' : '请先由本机宿主选择工作区。');
     updateButtons();
@@ -86,34 +91,48 @@ export function mountWorkspaceControls(root, invoke) {
   async function run(action, payload) {
     if (busy) return;
     busy = true;
-    feedback = '';
+    unconfirmed = false;
+    feedback = '正在等待本机宿主读回…';
+    section.setAttribute('aria-busy', 'true');
+    field('status').textContent = feedback;
     updateButtons();
     try {
       const result = payload === undefined ? await invoke(action) : await invoke(action, payload);
-      if (result && typeof result === 'object' && result.coding) {
+      if (result && typeof result === 'object' && result.coding && typeof result.coding === 'object'
+        && !Array.isArray(result.coding) && typeof result.coding.configured === 'boolean') {
+        feedback = '';
         consentDirty = false;
         render(result);
       } else {
-        feedback = '请求已返回，等待本机宿主状态读回。';
+        unconfirmed = true;
+        feedback = '操作结果未获确认，请检查本机工作区状态后再操作。';
         render({coding: state}, {keepFeedback: true});
       }
     } catch {
+      unconfirmed = true;
       feedback = '工作区操作未完成，可重试或查看本机状态。';
       render({coding: state}, {keepFeedback: true});
     } finally {
       busy = false;
+      section.setAttribute('aria-busy', 'false');
       updateButtons();
     }
   }
 
   field('cloud').addEventListener('change', () => { consentDirty = true; updateButtons(); });
+  field('write').addEventListener('change', () => { consentDirty = true; updateButtons(); });
+  field('command').addEventListener('change', () => {
+    consentDirty = true;
+    if (!field('command').checked) field('project-code').checked = false;
+    updateButtons();
+  });
   field('project-code').addEventListener('change', () => { consentDirty = true; updateButtons(); });
   field('select').addEventListener('click', () => run('coding.select'));
   field('select-node').addEventListener('click', () => run('coding.selectNode'));
   field('select-file').addEventListener('click', () => run('coding.selectCheckFile'));
   field('select-npm').addEventListener('click', () => run('coding.selectNpmCli'));
   field('authorize').addEventListener('click', () => {
-    if (!field('cloud').checked || state.configured !== true) return;
+    if (!field('cloud').checked || state.configured !== true || state.authorizationAvailable !== true) return;
     run('coding.authorize', {
       cloudExportAllowed: true,
       writeAllowed: field('write').checked,

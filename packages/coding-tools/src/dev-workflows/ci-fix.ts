@@ -1,12 +1,52 @@
 import {createHash} from 'node:crypto';
 import {ProtocolError} from '@personal-agent/contracts';
 import type {AgentWorkerContext} from '@personal-agent/agents';
+import {githubRepairCheckName} from '@personal-agent/github';
+import type {GitHubRepairIdentity, GitHubRepairReceipt} from '@personal-agent/github';
 import type {CiFixOptions, CiFixOutcome, CiFixProposal, CiFixWorkflowPort} from './ci-fix-types.js';
 
 const sha = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
 const digest = /^[a-f0-9]{64}$/u;
 const object = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 function invalid(): never { throw new ProtocolError('INVALID_ARGUMENT', 'Invalid CI repair proposal or receipt'); }
+function sourceLinkReceipt(value: unknown, identity: GitHubRepairIdentity): GitHubRepairReceipt {
+  const checkUrl = object(value) ? `https://github.com/${identity.repo}/runs/${value.checkRunId}` : '';
+  if (!object(value) || value.state !== 'confirmed' || Object.entries(identity).some(([k, v]) => value[k] !== v)
+    || !Number.isSafeInteger(value.checkRunId) || Number(value.checkRunId) < 1 || value.externalId !== String(value.checkRunId)
+    || (value.url !== checkUrl && value.url !== `${checkUrl}?check_suite_focus=true`)
+    || value.name !== githubRepairCheckName(identity) || value.detailsUrl !== `https://github.com/${identity.repo}/pull/${identity.repairPrNumber}`
+    || value.status !== 'completed' || value.conclusion !== 'neutral'
+    || !Array.isArray(value.evidenceRefs) || !value.evidenceRefs.every(ref => typeof ref === 'string')) invalid();
+  return {...identity, checkRunId: value.checkRunId as number, externalId: value.externalId as string, url: value.url as string,
+    name: value.name as string, detailsUrl: value.detailsUrl as string, status: 'completed', conclusion: 'neutral', evidenceRefs: [...value.evidenceRefs]};
+}
+// The first-page keys and arguments remain compatible with existing checkpoints.
+// Old receipts without cursor metadata are terminal; partial metadata is invalid.
+function nextPage(value: Record<string, unknown>, page: number): number | null {
+  if (!['page', 'nextPage', 'hasMore'].some(k => Object.hasOwn(value, k))) return null;
+  if (value.page !== page || typeof value.hasMore !== 'boolean'
+    || (value.hasMore ? !Number.isSafeInteger(value.nextPage) || Number(value.nextPage) !== page + 1 || Number(value.nextPage) > 10000 : value.nextPage !== null)) invalid();
+  return value.nextPage as number | null;
+}
+function nextOffset(value: Record<string, unknown>, offset: number): number | null {
+  if (!['offset', 'nextOffset'].some(k => Object.hasOwn(value, k))) return null;
+  if (value.offset !== offset || (value.truncated
+    ? !Number.isSafeInteger(value.nextOffset) || value.nextOffset !== offset + (value.text as string).length || Number(value.nextOffset) <= offset
+    : value.nextOffset !== null)) invalid();
+  return value.nextOffset as number | null;
+}
+function utf8Prefix(text: string, maxBytes: number): string {
+  // With Unicode mode this range matches only unpaired surrogate code units.
+  if (/[\uD800-\uDFFF]/u.test(text)) invalid();
+  if (Buffer.byteLength(text) <= maxBytes) return text;
+  let bytes = 0, chars = 0;
+  for (const char of text) {
+    const size = Buffer.byteLength(char);
+    if (bytes + size > maxBytes) break;
+    bytes += size; chars += char.length;
+  }
+  return text.slice(0, chars);
+}
 /** GLM/Pangu-family models wrap JSON in markdown fences; the fence is transport framing, not content. */
 function stripModelJsonFence(text: string): string {
   const trimmed = text.trim();
@@ -26,7 +66,7 @@ function proposal(text: string): CiFixProposal {
   }
   return v as unknown as CiFixProposal;
 }
-interface Journal { identity: string; steps: number; tokens: number; results: Record<string, unknown>; inflight?: string; pending?: string; evidence: string[]; attempt?: number; notes?: string[] }
+interface Journal { identity: string; steps: number; tokens: number; results: Record<string, unknown>; inflight?: string; pending?: string; evidence: string[]; attempt?: number; notes?: string[]; precommitHeadStep?: string }
 class Pause extends Error { constructor(readonly status: CiFixOutcome['status'], message: string) { super(message); } }
 
 /** Bounded repair attempts, no shell supplied by a model and no blind write retries. */
@@ -36,6 +76,11 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
   const attempts = options.maxAttempts ?? 2;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256 * 1024) invalid();
   if (!Number.isSafeInteger(attempts) || attempts < 1 || attempts > 4) invalid();
+  const sourceRunBacklink = options.sourceRunBacklink === undefined ? undefined : structuredClone(options.sourceRunBacklink);
+  if (sourceRunBacklink !== undefined && (!object(sourceRunBacklink)
+    || Object.keys(sourceRunBacklink).some(k => !['toolName', 'runAttempt'].includes(k)) || !options.runId
+    || typeof sourceRunBacklink.toolName !== 'string' || !/^[a-z][a-z0-9._-]{0,127}$/u.test(sourceRunBacklink.toolName)
+    || !Number.isSafeInteger(sourceRunBacklink.runAttempt) || sourceRunBacklink.runAttempt < 1)) invalid();
   if (!options.model || !options.tools || !options.gitTools) return {status: 'unsupported', reason: 'Model, Runtime tools or Git write adapter unavailable', evidenceRefs: []};
   const {model, tools, gitTools} = options;
   if (!options.headBranch || !options.baseBranch || (!options.runId && (!options.issue || !options.expectedHeadSha || !sha.test(options.expectedHeadSha)))) invalid();
@@ -43,7 +88,11 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
   if (!Array.isArray(options.sourcePaths) || options.sourcePaths.length < 1 || options.sourcePaths.length > 8) invalid();
   const required = [...(options.runId ? ['github.actions.run.list', 'github.actions.job.list', 'github.actions.log.read'] : ['github.issue.get']), ...(options.issue ? ['github.issue.comment'] : []), 'workspace.read_text', 'workspace.apply_text_patch', 'workspace.run_allowed_command', ...Object.values(gitTools)];
   if (required.some(name => !tools.list().some(d => d.name === name))) return {status: 'unsupported', reason: 'Required registered tool unavailable', evidenceRefs: []};
-  const identity = createHash('sha256').update(JSON.stringify({repository: options.repository, runId: options.runId, expectedHeadSha: options.expectedHeadSha, verify: options.verifyRecipeId, gitTools, sourcePaths: options.sourcePaths, issue: options.issue, head: options.headBranch, base: options.baseBranch, maxSteps: options.maxSteps, maxTokens: options.maxTokens, limit, attempts})).digest('hex');
+  if (sourceRunBacklink && !tools.list().some(d => d.name === sourceRunBacklink.toolName && d.sideEffect === 'external_write')) {
+    return {status: 'unsupported', reason: 'Configured source-run association write adapter unavailable', evidenceRefs: []};
+  }
+  // Undefined is omitted: pre-opt-in checkpoints retain their original identity bytes.
+  const identity = createHash('sha256').update(JSON.stringify({repository: options.repository, runId: options.runId, expectedHeadSha: options.expectedHeadSha, verify: options.verifyRecipeId, gitTools, sourcePaths: options.sourcePaths, issue: options.issue, head: options.headBranch, base: options.baseBranch, maxSteps: options.maxSteps, maxTokens: options.maxTokens, limit, attempts, sourceRunBacklink})).digest('hex');
   const key = 'ci-fix-v1';
   const saved = context.loadCheckpoint(key) as Journal | undefined;
   if (saved && saved.identity !== identity) invalid();
@@ -53,6 +102,46 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
     if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'CI repair cancelled');
     if ((options.now ?? Date.now)() >= Date.parse(context.deadline) || !Number.isFinite(Date.parse(context.deadline))) throw new ProtocolError('TIMEOUT', 'CI repair deadline exceeded');
   };
+  // Operation-local waiting boundary for public ports that ignore cancellation.
+  // Aborting this wait does not prove an external operation stopped.
+  async function bounded<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    check();
+    const controller = new AbortController(), deadline = Date.parse(context.deadline);
+    const now = options.now ?? Date.now;
+    let timedOut = false, timer: ReturnType<typeof setTimeout> | undefined;
+    let interrupt = () => {};
+    const abort = () => controller.abort();
+    const interruptedError = () => new ProtocolError(timedOut ? 'TIMEOUT' : 'CANCELLED',
+      timedOut ? 'CI repair deadline exceeded' : 'CI repair cancelled');
+    const expire = () => {
+      const remaining = deadline - now();
+      if (remaining <= 0) {timedOut = true; controller.abort();}
+      else timer = setTimeout(expire, Math.min(remaining, 2_147_483_647));
+    };
+    try {
+      const interrupted = new Promise<never>((_resolve, reject) => {
+        interrupt = () => reject(interruptedError());
+        controller.signal.addEventListener('abort', interrupt, {once: true});
+        context.signal.addEventListener('abort', abort, {once: true});
+        if (context.signal.aborted) abort();
+        expire();
+      });
+      const operation = Promise.resolve().then(() => {
+        check();
+        if (controller.signal.aborted) throw interruptedError();
+        return work(controller.signal);
+      });
+      const result = await Promise.race([interrupted, operation]);
+      if (context.signal.aborted) abort();
+      if (!controller.signal.aborted && now() >= deadline) {timedOut = true; controller.abort();}
+      if (controller.signal.aborted) throw interruptedError();
+      return result;
+    } finally {
+      clearTimeout(timer);
+      context.signal.removeEventListener('abort', abort);
+      controller.signal.removeEventListener('abort', interrupt);
+    }
+  }
   async function step(id: string, action: () => Promise<unknown>): Promise<unknown> {
     check();
     if (Object.hasOwn(j.results, id)) return structuredClone(j.results[id]);
@@ -72,7 +161,23 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
       if (!authorizationRef) { delete j.inflight; j.pending = id; save(); throw new Pause('waiting_approval', 'Runtime authorization required'); }
       const descriptor = tools.list().find(d => d.name === name);
       if (!descriptor) throw new Pause('unsupported', 'Registered tool disappeared');
-      const r = await tools.invoke({toolName: name, toolVersion: descriptor.version, arguments: args, taskId: context.taskId, runId, authorizationRef, deadline: context.deadline, signal: context.signal});
+      let entered = false;
+      let r;
+      try {
+        r = await bounded(signal => {
+          entered = true;
+          return tools.invoke({toolName: name, toolVersion: descriptor.version, arguments: args,
+            taskId: context.taskId, runId, authorizationRef, deadline: context.deadline, signal});
+        });
+        check();
+      } catch (error) {
+        // Only explicit read metadata proves there is no external write to recover.
+        // Preserve the original in-flight identity and never consume a late result.
+        if (entered && descriptor.sideEffect !== 'read') {
+          throw new Pause('waiting_reconciliation', 'Started tool operation was interrupted; original Runtime reconciliation required');
+        }
+        throw error;
+      }
       j.evidence.push(...r.evidenceRefs);
       if (r.state !== 'confirmed') { if (r.state === 'pending') { delete j.inflight; j.pending = id; } save(); throw new Pause(r.state === 'pending' ? 'waiting_approval' : 'waiting_reconciliation', 'Runtime operation has no confirmed result'); }
       if (object(r.result) && r.result.state === 'unknown') { save(); throw new Pause('waiting_reconciliation', 'External service write outcome is unknown'); }
@@ -82,24 +187,62 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
   try {
     let read: {run: Record<string, unknown>; logs: string; truncated: boolean};
     if (options.runId) {
-    const runs = await invoke('runs', 'github.actions.run.list', {repo: options.repository, page: 1, perPage: 30, status: 'failure'});
-    if (!object(runs) || !Array.isArray(runs.items)) invalid();
-    const run = runs.items.find(r => object(r) && String(r.id) === options.runId);
-    if (!object(run)) throw new Pause('unsupported', 'Failed run not found within bounded page');
+    let run: Record<string, unknown> | undefined;
+    for (let page = 1; page <= 4;) {
+      const runs = await invoke(page === 1 ? 'runs' : `runs-page-${page}`, 'github.actions.run.list', {repo: options.repository, page, perPage: 30, status: 'failure'});
+      if (!object(runs) || !Array.isArray(runs.items) || runs.items.length > 30) invalid();
+      const next = nextPage(runs, page);
+      const selected = runs.items.find(r => object(r) && String(r.id) === options.runId);
+      if (object(selected)) { run = selected; break; }
+      if (next === null) break;
+      page = next;
+    }
+    if (!run) throw new Pause('unsupported', 'Failed run not found within bounded pages');
     if (run.conclusion !== 'failure' || typeof run.headSha !== 'string' || !sha.test(run.headSha) || typeof run.url !== 'string' || !run.url.startsWith('https://')) invalid();
-    const jobs = await invoke('jobs', 'github.actions.job.list', {repo: options.repository, runId: Number(options.runId), page: 1, perPage: 30});
-    if (!object(jobs) || !Array.isArray(jobs.items)) invalid();
-    const failedJobs = jobs.items.filter(v => object(v) && v.conclusion === 'failure').slice(0, 8);
+    const failedJobs: Record<string, unknown>[] = [];
+    const jobIds = new Set<number>();
+    let truncated = false;
+    for (let page = 1; page <= 4;) {
+      const jobs = await invoke(page === 1 ? 'jobs' : `jobs-page-${page}`, 'github.actions.job.list', {repo: options.repository, runId: Number(options.runId), page, perPage: 30});
+      if (!object(jobs) || !Array.isArray(jobs.items) || jobs.items.length > 30) invalid();
+      const next = nextPage(jobs, page);
+      for (const job of jobs.items) {
+        if (!object(job) || job.conclusion !== 'failure') continue;
+        if (typeof job.id !== 'number' || !Number.isSafeInteger(job.id) || job.id < 1
+          || (job.runId !== undefined && job.runId !== Number(options.runId))) invalid();
+        if (jobIds.has(job.id)) continue;
+        jobIds.add(job.id);
+        if (failedJobs.length < 8) failedJobs.push(job);
+        else truncated = true;
+      }
+      if (next === null) break;
+      if (page === 4 || failedJobs.length === 8) { truncated = true; break; }
+      page = next;
+    }
     if (!failedJobs.length) throw new Pause('unsupported', 'No bounded failed job logs available');
     let logs = '';
-    let truncated = false;
     for (const [i, job] of failedJobs.entries()) {
-      if (!object(job) || typeof job.id !== 'number' || !Number.isSafeInteger(job.id) || job.id < 1) invalid();
-      const remaining = limit - Buffer.byteLength(logs);
-      if (remaining < 4) { truncated = true; break; }
-      const log = await invoke(`log-${i}`, 'github.actions.log.read', {repo: options.repository, runId: Number(options.runId), jobId: job.id, offset: 0, maxChars: Math.floor(remaining / 2)});
-      if (!object(log) || typeof log.text !== 'string' || typeof log.truncated !== 'boolean' || Buffer.byteLength(log.text) > remaining) invalid();
-      logs += log.text; truncated ||= log.truncated;
+      let offset = 0;
+      for (let page = 0; page < 8; page++) {
+        const remaining = limit - Buffer.byteLength(logs);
+        if (remaining < 4) { truncated = true; break; }
+        const maxChars = Math.min(65536, Math.floor(remaining / 2));
+        const log = await invoke(offset === 0 ? `log-${i}` : `log-${i}-offset-${offset}`, 'github.actions.log.read', {repo: options.repository, runId: Number(options.runId), jobId: job.id, offset, maxChars});
+        if (!object(log) || typeof log.text !== 'string' || log.text.length > maxChars || typeof log.truncated !== 'boolean') invalid();
+        const next = nextOffset(log, offset);
+        // Provider cursors count UTF-16 characters; the workflow budget counts bytes.
+        // Retain complete code points and stop rather than advancing past omitted text.
+        const last = log.text.charCodeAt(log.text.length - 1);
+        // GhCliProvider slices UTF-16: a truncated page may end halfway through
+        // an emoji. Drop that fragment and stop without advancing its cursor.
+        const complete = log.truncated && last >= 0xD800 && last <= 0xDBFF ? log.text.slice(0, -1) : log.text;
+        const accepted = utf8Prefix(complete, remaining);
+        logs += accepted;
+        if (accepted.length !== log.text.length) { truncated = true; break; }
+        if (next === null) { truncated ||= log.truncated; break; }
+        if (page === 7) { truncated = true; break; }
+        offset = next;
+      }
     }
     read = {run, logs, truncated};
     } else {
@@ -140,7 +283,9 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
         // Reserve before dispatch: a restart cannot recover an unaccounted model call.
         const reservedFrom = j.tokens;
         j.tokens = options.maxTokens; save();
-        const r = await model.complete({messages: [{role: 'system', content: system}, {role: 'user', content}], tools: [], maxOutputTokens: remaining, deadline: context.deadline, signal: context.signal});
+        const r = await bounded(signal => model.complete({messages: [{role: 'system', content: system}, {role: 'user', content}],
+          tools: [], maxOutputTokens: remaining, deadline: context.deadline, signal}));
+        check();
         if (r.response.kind !== 'final') invalid();
         // Settle on actual usage so bounded retries keep a real shared budget.
         const total = r.usage?.totalTokens ?? 0;
@@ -167,9 +312,14 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
       if (attempt + 1 >= attempts) throw new Pause('verification_failed', 'Actual verification command failed after bounded attempts');
       j.notes = [...(j.notes ?? []), note].slice(-4); j.attempt = attempt + 1; save();
     }
-    // Never replay a cached head read before a fresh commit dispatch.
+    // Retain this read's identity across approval pauses. The commit tool itself
+    // rechecks live HEAD and the verified workspace immediately before dispatch.
     if (!Object.hasOwn(j.results, 'commit') && j.inflight !== 'commit') {
-      const current = await invoke(`precommit-head-${j.steps}`, gitTools.head, {repository: options.repository});
+      j.precommitHeadStep ??= j.inflight?.startsWith('precommit-head-') ? j.inflight
+        : j.pending?.startsWith('precommit-head-') ? j.pending
+        : Object.keys(j.results).find(id => id.startsWith('precommit-head-')) ?? `precommit-head-${j.attempt ?? 0}`;
+      save();
+      const current = await invoke(j.precommitHeadStep, gitTools.head, {repository: options.repository});
       if (!object(current) || current.headSha !== headSha) throw new Pause('stale', 'HEAD changed after verification');
     }
     // Reconstruct from confirmed receipts so earlier rounds survive approval/restart.
@@ -195,12 +345,28 @@ export async function runCiFix(context: AgentWorkerContext, options: CiFixOption
       const issueLink = await invoke('issue-backlink', 'github.issue.comment', {repo: options.repository, number: options.issue.number, body: `Verified repair proposal: ${pr.url}\nCommit: ${commit.headSha}\nIssue fingerprint: ${options.issue.fingerprint}`});
       if (!object(issueLink) || issueLink.state !== 'confirmed') invalid();
     }
-    return {status: 'succeeded', reason: 'Verified repair committed, approved PR created with original run backlink', pullRequestUrl: pr.url, verificationRunId: verifyRunId, evidenceRefs: [...j.evidence]};
+    let sourceRunLink: GitHubRepairReceipt | undefined;
+    if (sourceRunBacklink) {
+      const repairPrNumber = Number(pr.externalId);
+      if (!Number.isSafeInteger(repairPrNumber) || pr.url !== `https://github.com/${options.repository}/pull/${repairPrNumber}`) invalid();
+      const sourceIdentity: GitHubRepairIdentity = {repo: options.repository, runId: Number(options.runId),
+        expectedRunAttempt: sourceRunBacklink.runAttempt, sourceSha: headSha, repairPrNumber, repairHeadSha: commit.headSha,
+        workflowExecutionId: createHash('sha256').update(`${context.taskId}:ci-fix:${identity}:source-backlink`).digest('hex')};
+      const associated = await invoke('source-backlink', sourceRunBacklink.toolName, {...sourceIdentity});
+      sourceRunLink = sourceLinkReceipt(associated, sourceIdentity);
+    }
+    return {status: 'succeeded', reason: sourceRunLink
+      ? 'Verified repair committed; draft PR references the source, and a new neutral source check links the repair PR'
+      : `Verified repair committed; draft PR references the original ${options.runId ? 'CI run' : 'issue'}`,
+      pullRequestUrl: pr.url, verificationRunId: verifyRunId, ...(sourceRunLink ? {sourceRunLink} : {}), evidenceRefs: [...j.evidence]};
   } catch (e) {
     if (e instanceof Pause) {
       const verifiedAttempts = Object.keys(j.results).filter(k => /^verify-\d+$/u.test(k)).map(k => Number(k.slice(7)));
+      const cachedPr = j.results.pr;
       return {status: e.status, reason: e.message, ...(verifiedAttempts.length
-        ? {verificationRunId: `${context.taskId}:ci-fix:${identity}:verify-${Math.max(...verifiedAttempts)}`} : {}), evidenceRefs: [...j.evidence]};
+        ? {verificationRunId: `${context.taskId}:ci-fix:${identity}:verify-${Math.max(...verifiedAttempts)}`} : {}),
+        ...(object(cachedPr) && cachedPr.state === 'confirmed' && typeof cachedPr.url === 'string' && cachedPr.url.startsWith('https://')
+          ? {pullRequestUrl: cachedPr.url} : {}), evidenceRefs: [...j.evidence]};
     }
     throw e;
   }

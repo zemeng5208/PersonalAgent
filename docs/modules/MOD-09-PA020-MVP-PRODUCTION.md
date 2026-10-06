@@ -1,5 +1,116 @@
 # PA020 私人记忆与流程学习生产桥
 
+## 2026-10-05 主线确认与实际 MCP 学习验收
+
+目标为 `huawei_ict_agentarts`，工作树 `.worktrees/main-ci-foundation-validation`，
+分支 `codex/mod09-learning-mcp-acceptance-20261005`，基线为
+`origin/main@53e627480dd455a06151263a8d1e1e60464d82e4`。
+
+后续 PR #289 的首提交 `e16470e907ab373686a6b181fc8d62afeea68b66` 两项远程 Foundation 成功，
+已请求 Potatos498 非作者评审；本节父子分派增量改变 head，必须以新 head 的 CI/评审为准。
+
+- #285 已由 Potatos498 对 `e3a5881cb6e1388243e994dc008ad337c6be3471` 批准，
+  两项 Foundation CI 成功，合并提交 `74acc37ed9c040c750cdfd4ad1ac4374dac962cc` 已在当前 main 祖先链中。
+  #284 的同步消费门禁修复及实际 Runtime 父/子副本测试已进入主线。
+- 新增 `tests/integration/memory-learning-mcp.test.mjs`：实际启动锁定的官方 filesystem stdio 服务，
+  使用公开合成 Markdown、正式 Competition Runtime Application、Client、SQLite Policy/Runtime 与 Learning。
+  通过原 `authorization.respond` 逐任务审批，不直接签发测试授权；检查实际读取正文、摘要哈希、
+  confirmed 执行记录和 Evidence。启用及删除确认回调为显式 Fake，不属于真人原生交互证据。
+- 验收首次复现：已排队版本 2 在回滚到版本 1 后获批，绑定门禁阻止读取，
+  但内部 `NOT_VALIDATED` 被直接当成公共任务错误码，失败快照 Schema 校验拒绝，任务遗留在 `running`。
+  修复 Runtime 失败路径：先用现有公共快照契约验证错误，内部未知码映射为 `EXTERNAL_FAILURE`，
+  保留现有公共错误码及失败消息；不新增公共错误码、Schema、迁移、依赖或执行权限。
+- 定向 12/12 通过：未经验证不得启用、拒绝启用不激活、执行仍需新审批、回滚后旧任务零读取且
+  持久化 `failed`/失败事件、重启读回原激活版本并再次审批、删除全部流程版本并取消排队任务、
+  保留无关流程和原文件。实际 MCP 读取四次，云凭据读取及云调用为零。
+- 原生工具本轮初始化仍报 `trusted Node process exited unexpectedly`；重置后
+  Windows sandbox 再次报 `helper_unknown_error: setup refresh had errors`，没有新的原生窗口操作。
+
+真实用户逐条确认、Electron 原生生命周期、完整 parent→child 许可与真实 AgentArts 消费仍待验收。
+本工作包保留 goo122 在途验证范围；MOD-09 保持 `in_progress`，接口仍为 provisional。
+下文保留候选与历史分支的时间点记录，不代表当前 PR 合并状态。
+
+本轮 `npm ci`、build、Windows helper Release 构建与定向 12/12 通过。
+完整 `npm run check` 的架构、契约夹具、生成类型、类型检查与 Runtime 323/323 通过；
+汇总 1766 项，1741 通过、1 失败、24 跳过。失败为未修改的主线
+`apps/desktop/test/coding-tool-host.test.mjs:72`：仓库根工作区的 patch 工具装配断言失败，单独复跑一致。
+该测试、Desktop workspace/coding host 及 coding-tools 与 main 基线零差异，调用路径不经过本次 Runtime 失败处理。
+本机 PowerShell 7.6.5 实际存在，但 `where.exe` 输出按 UTF-8 解码所得路径不存在、含替换字符，
+按 GBK 解码所得路径存在，导致 workspace host 无法找到 PowerShell；仅调整验证 shell 代码页未解决。
+此问题属于 Desktop 受信程序发现的本机兼容性，按 P8/P6 文件归属交接，不在本记忆包改写。
+check 因失败未启动根集成，已单独运行 `npm run test:integration`，20/20 通过；不宣称完整 Foundation 全绿。
+`npm run dev`、`npm run demo:protocol`、`npm run demo:runtime` 通过，演示明确为 mock。
+
+### 实际父子分派与私人许可边界
+
+`private-memory-runtime-copies.test.mjs` 后续增加两个用例，使用正式 AgentArts Runtime Application、
+真实 SQLite Policy 审批与 `createDesktopSubagentDispatchTool` / 默认 Competition 子工作者：
+
+- 私人事实已按父任务确认时，Fake 云返回有效子任务提案。Runtime 写入私人派生拒绝标记，
+  在原审批、工具执行和子任务创建前拒绝；协调边界对外固定脱敏为 `EXTERNAL_FAILURE`，
+  不公开内部私人原因。删除父任务绑定副本后精确 `purged` 收据可读，且不重发提案。
+- 公开父任务等待原审批，审批前没有子任务；通过 Client 的 `authorization.respond` 后由实际工具
+  创建并运行子任务，原执行记录为 confirmed/allow。父子任务没有私人消费绑定，
+  三次 Fake HTTP 请求不包含已保存的任何私人事实摘要；删除无关私人事实后公开任务及原父子关系保留。
+
+新增父子用例与原副本/学习用例合计 5/5，通过全部根集成 22/22。
+确认回调及 HTTP 是显式 Fake，资料仍为合成；不是原生审批、真实 AgentArts 或真实私人发送证据。
+现有生产行为禁止私人派生提案直接分派子任务，父许可也不会自动成为子许可；
+需要另行公共任务及其对应授权，不扩大本次实现或真实验收的权限。
+
+## 2026-10-05 主线集成候选（已通过 #285 集成）
+
+目标为 `huawei_ict_agentarts`，工作树 `.worktrees/main-ci-foundation-validation`，
+分支 `codex/mod09-main-acceptance-20261005`。基线为 `origin/main@7b7f30906ddf375526edecf9fb601cce7927a91d`。
+
+- #280 已合入 main；Potatos498 批准源头 `d484c8648af67af1e476cefe9ff140318945f4e5`。
+- #284 已获 Potatos498 对 `39e03e7f4019aa457681de64402d91d56c817eec` 的批准，
+  合并提交 `e19b22a9b96bbaef5577a1005f64088deaaa5009` 的目标仍为
+  `codex/main-ci-integration-recovery`。上述 main 基线未包含同步门禁修复和新增集成测试。
+- 本候选通过正常 merge 接续该精确来源，保留来源提交及 main 的其他模块改动；
+  生产增量仍只有私人消费 host 的同步就绪判定。接口、Schema、依赖和已发布迁移不变。
+- 接口目录与 ROADMAP 同步反映正式装配和副本门禁，保持 provisional / in_progress，
+  不把源 PR 合并或离线验证记为真实验收完成。
+- 原生交互复查首次报 `windows sandbox failed: helper_unknown_error: setup refresh had errors`，
+  重置后报 `trusted Node process exited unexpectedly; kernel reset, rerun your request`。
+  没有原生窗口输入、真实事实写入或云调用；真人逐条确认及真实消费仍待验收。
+
+本候选 `npm ci`、Windows helper Release 构建及完整 `npm run check` 通过：
+1638 项测试中 1618 通过、0 失败、20 跳过，跨模块集成 19/19；架构、契约、生成类型与类型检查通过。
+官方 filesystem stdio 和原 Runtime reference Skill 读取/恢复用例实际调用本地 MCP，
+内容为公开合成文件；不能据此宣称真实用户流程的原生启用/回退或云消费验收通过。
+`npm run dev`、`npm run demo:protocol`、`npm run demo:runtime` 全部通过，两个演示明确为 mock。
+实际 Node 24.15.0 / npm 11.12.1，测试显式使用真实 native helper 与缓存 .NET 8 运行时。
+本记录为候选验收时的状态；后续 #285 非作者评审及 main 合并已完成，见上文主线确认。
+
+## 2026-10-05 私人消费与实际 Runtime 副本复核（历史分支验收）
+
+目标为 `huawei_ict_agentarts`，工作树 `.worktrees/main-ci-foundation-validation`，
+分支 `codex/mod09-native-source-acceptance`。本轮延续 #280 当前生产代码，未合并远端 PR。
+
+- 修复生产私人消费门禁：`privateErasure.assertReady([])` 同步返回就绪对象，
+  消费 host 原先拒绝任何非 undefined 返回值，导致正式接线无法消费。现在只拒绝 Promise/thenable，
+  保持消费前及最终发送前的同步检查。未改变逐任务原生许可、公共 wire、迁移、依赖或 Local Profile。
+- 新增 `tests/integration/private-memory-runtime-copies.test.mjs`，使用实际 Client、
+  AgentArts Runtime Application、Runtime/Memory SQLite 与生产私人 host；
+  更正事实、逐任务消费、旧版本撤回拒绝、撤回后拒绝、父/子副本删除 pending、
+  重启按原 marker 恢复、精确 purged 收据和正文 redaction、源事实全部历史清除、无关事实/任务保留通过。
+  子任务继承的 copyOnly 元数据不构成消费许可，清除恢复不重复 HTTP 调用。
+- 新集成 2/2，已有私人消费与删除回归 6/6，合计 8/8。确认回调、HTTP 响应和子任务工作者
+  使用显式替身；子任务由可信夹具写入实际 Runtime，不构成完整工具分派或原生子任务许可验证。
+- 用户指定真实来源已通过生产只读适配器的有界检索、引文读回、版本匹配及原文件未变化检查；
+  未持久写入真实摘录或调用云服务。合成私人库生命周期和原生验收限制详见
+  `tests/manual/desktop/README.md`；真实来源路径及正文不进入公开记录。
+
+真实用户逐条确认、原生窗口完整生命周期及真实 AgentArts 消费仍待完成；MOD-09 保持 `in_progress`。
+本轮 `npm run check` 全部通过：架构、契约夹具、生成类型、类型检查与 workspace/integration 测试，
+合计 1629 项，1609 通过、0 失败、20 跳过；其中跨模块集成 19/19。
+Windows helper Release 构建通过并显式提供真实 helper 路径及缓存 .NET 8 运行时。
+`npm ci`、`npm run dev`、`npm run demo:protocol`、`npm run demo:runtime` 均通过；
+两个演示明确为 mock。本轮基础代码已接入 #280 精确头 `d484c8648af67af1e476cefe9ff140318945f4e5`，
+依赖合并前后代码树一致，增量保持独立 PR，尚未完成非作者评审或主线集成。
+下文是历史工作包证据，不表示最新 PR 状态。
+
 ## 2026-10-04 集成复核
 
 以 `origin/main@330be3862eb7ba9b50709ec8ac0c6292ff7829fd` 为依据：

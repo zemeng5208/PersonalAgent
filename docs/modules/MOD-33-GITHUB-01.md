@@ -1,10 +1,11 @@
 # MOD-33-GITHUB-01：GitHub 连接器源码增量
 
 - Profile：Local（DEV-WORKFLOWS-PLAN-20261002 #276 的明确范围）。
-- 状态：review；源码交付，未构建、未测试、未真实验收，不能标 done/frozen。
+- 状态：review / provisional；源码、构建和受控测试已交付，真实服务验收未完成，不标 done/frozen。
 - 负责人：zemeng；非作者评审：goo122。
 - 独占：packages/connectors/github/** 与本文件；其他模块只消费公开 package exports。
-- 基线：3d4d917；工作树 .worktrees/dev-github，分支 codex/dev-github。
+- 初始基线：3d4d917；初始工作树 .worktrees/dev-github、分支 codex/dev-github。
+  当前续接沿已有 PR #290；精确提交和证据见下方续接清单。
 - 依赖：contracts ToolHost/ToolDescriptor/ConnectorPort/ProtocolError；Runtime Policy、
   ToolGateway、Connector Host 凭据注入；不私设授权、任务库或模型入口。
 
@@ -14,7 +15,15 @@ register(host,{provider}) 真正注册 13 个工具并返回幂等 dispose。
 GhCliProvider 使用受限 token accessor、显式 repo 白名单及无 shell argv runner；
 生产 SpawnGhCommandRunner 不继承环境，支持字节上限、deadline、取消和释放。
 Fake 与 JSON/测试夹具覆盖分页、过滤 PR、404、限流、脱敏、job 归属、revision冲突、
-unknown 写入、取消、工具注册和 scope 防误调用；这些测试尚未运行。
+unknown 写入、取消、工具注册和 scope 防误调用；后续受控执行结果见下方。
+
+显式 `registerGitHubRepairLinks` 才增加 `actions.repair.link/get`，默认13工具不变。
+link绑定原失败run/attempt/sourceSHA、修复PR/head和原workflow执行hash，创建独立neutral
+CheckRun并读同一ID核对完整固定回执，不修改原CI、不提供success/status fallback。
+需要受信账号Checks(write)、exact参数新审批与实时presence；旧PR权限不推导新许可。
+POST进入后不确定结果保持unknown，已知partial ID只作为未核实候选；同步observeUnknown
+在合法unknown校验后观察克隆原输入/候选响应和原ToolContext，异常或异步误用不改变unknown。
+get仅核对明确已知原ID，不能自动确认另一task或授权重新写入；缺ID不查列表猜测。
 
 公共端口 GitHubPort.execute 是可信装配/测试边界，业务和模型只通过 ToolGateway。
 工具名、输入输出、安全边界与集中验收命令见
@@ -26,6 +35,11 @@ unknown 写入、取消、工具注册和 scope 防误调用；这些测试尚�
 commit/push、merge、自动关闭或模型归因。verified 等级与生产 host capability 公布仍需
 非作者评审、集中门禁和真实服务闭环，不能仅凭源码提升状态。
 
-用户要求禁止 npm install/build/unit/integration/真实服务，因此本次只做允许的静态
-检查。后续统一验收需覆盖跨模块 MOD-34/36/38 Gateway 读写闭环、一次性审批、
-参数绑定、取消/超时/unknown reconciliation 和有副作用请求禁止盲重试。
+初稿按当时用户限制仅静态交付；后续用户已授权持续实现与必要构建、受控测试。
+当前source提交 `2eda73d` 的固定Node24.15完整check实际exit0：GitHub96/96，
+跨模块Runtime347、根集成19及全build/typecheck/架构/契约/生成检查通过。
+原unknown候选恢复独立复核14/14；完整31workspace1990/0/50跳过。
+这是明确Fake/合成Gh/SQLite证据，不是实际Checks凭据或真实账号写入读回。
+当前Windows与剩余真实验收以
+[统一续接清单](DEV-WORKFLOWS-CONTINUATION-20261005.md)和PR精确head为准，
+不另复制进度表。真实MOD34/36/38 Gateway闭环仍由原可信场景持有者验收。

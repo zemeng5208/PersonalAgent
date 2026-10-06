@@ -6,6 +6,10 @@ const positive = { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER
 const body = { type: 'string', minLength: 1, maxLength: 65536 };
 const branch = { type: 'string', minLength: 1, maxLength: 255, pattern: '^[A-Za-z0-9][A-Za-z0-9_./-]*$' };
 const sha = { type: 'string', pattern: '^[a-fA-F0-9]{40}$' };
+const repairIdentity = {runId: positive, expectedRunAttempt: positive,
+  sourceSha: {type: 'string', pattern: '^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$'}, repairPrNumber: positive,
+  repairHeadSha: {type: 'string', pattern: '^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$'},
+  workflowExecutionId: {type: 'string', pattern: '^[a-f0-9]{64}$'}};
 const labels = { type: 'array', minItems: 1, maxItems: 20, uniqueItems: true, items: {type: 'string', minLength: 1, maxLength: 100, pattern: '^[^\\x00-\\x1f\\x7f]+$'} };
 const page = { page: {...positive, maximum: 10000}, perPage: {...positive, maximum: 100} };
 const textPage = { offset: {type: 'integer', minimum: 0, maximum: 1048576}, maxChars: {...positive, maximum: 65536} };
@@ -14,6 +18,8 @@ const fields: Record<GitHubOperation, Record<string, unknown>> = {
   'actions.run.list': {...page, status: {enum: ['queued', 'in_progress', 'completed', 'failure', 'success']}, branch},
   'actions.job.list': {...page, runId: positive},
   'actions.log.read': {...textPage, runId: positive, jobId: positive},
+  'actions.repair.link': repairIdentity,
+  'actions.repair.get': {...repairIdentity, checkRunId: positive},
   'issue.get': {number: positive},
   'issue.list': {...page, state: {enum: ['open', 'closed', 'all']}, labels},
   'issue.label': {number: positive, labels, expectedUpdatedAt: {type: 'string', format: 'date-time', maxLength: 40}},
@@ -25,6 +31,8 @@ const fields: Record<GitHubOperation, Record<string, unknown>> = {
 };
 const required: Partial<Record<GitHubOperation, string[]>> = {
   'actions.job.list': ['runId'], 'actions.log.read': ['runId', 'jobId'],
+  'actions.repair.link': Object.keys(repairIdentity),
+  'actions.repair.get': [...Object.keys(repairIdentity), 'checkRunId'],
   'issue.get': ['number'], 'issue.label': ['number', 'labels', 'expectedUpdatedAt'],
   'issue.comment': ['number', 'body'],
   'pr.get': ['number'], 'pr.diff': ['number', 'expectedHeadSha', 'expectedBaseSha'], 'pr.create': ['title', 'body', 'head', 'base', 'expectedHeadSha'],

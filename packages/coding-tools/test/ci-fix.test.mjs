@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
+import {getEventListeners} from 'node:events';
+import {setImmediate} from 'node:timers/promises';
+import {GhCliProvider, githubRepairCheckName} from '@personal-agent/github';
 import {runCiFix, createCiFixWorkflow} from '../dist/dev-workflows/ci-fix.js';
 
 const headSha = 'a'.repeat(40), fixedSha = 'b'.repeat(40), fileSha = 'c'.repeat(64);
@@ -27,7 +30,10 @@ function fixture() {
   };
   let modelCalls = 0;
   const model = {deployment: {}, async complete(request) {modelCalls++; assert.equal(request.tools.length,0); return {response:{kind:'final',text:JSON.stringify({diagnosis:'Fix failing assertion',patches:[{path:'src/a.ts',expectedSha256:fileSha,edits:[{oldText:'bad',newText:'good'}]}]})},usage:{promptTokens:10,completionTokens:10,totalTokens:20}};}};
-  const tools = {list:()=>names.map(name=>({name,version:'1.0.0'})), async invoke(input) {calls.push(input);return {state:'confirmed',result:structuredClone(responses[input.toolName]),evidenceRefs:[input.runId]};}};
+  const localWrites=new Set(['workspace.apply_text_patch','workspace.run_allowed_command','workspace.git.commit']);
+  const externalWrites=new Set(['workspace.git.push','github.pr.create','github.pr.comment','github.issue.comment']);
+  const tools = {list:()=>names.map(name=>({name,version:'1.0.0',
+    sideEffect:localWrites.has(name)?'local_write':externalWrites.has(name)?'external_write':'read'})), async invoke(input) {calls.push(input);return {state:'confirmed',result:structuredClone(responses[input.toolName]),evidenceRefs:[input.runId]};}};
   const options = {repository:'owner/repo',runId:'42',model,tools,gitTools,sourcePaths:['src/a.ts'],headBranch:'ci-fix',baseBranch:'main',verifyRecipeId:'test',maxSteps:32,maxTokens:4096,authorizationRefFor:()=> 'runtime-approved'};
   return {context,options,calls,responses,checkpoints,modelCalls:()=>modelCalls};
 }
@@ -42,6 +48,122 @@ test('actual verify precedes commit, push, approved PR and original run backlink
   assert.equal(f.calls.find(c=>c.toolName==='workspace.git.commit').arguments.verificationRunId,r.verificationRunId);
   const count=f.calls.length; await runCiFix(f.context,f.options); assert.equal(f.modelCalls(),1);
   assert.equal(f.calls.filter(c=>c.toolName==='workspace.git.commit').length,1); assert.equal(f.calls.length,count);
+});
+function sourceLinkFixture() {
+  const f=fixture(),list=f.options.tools.list,invoke=f.options.tools.invoke;
+  f.options.sourceRunBacklink={toolName:'github.actions.repair.link',runAttempt:3};
+  f.responses['github.pr.create'].url='https://github.com/owner/repo/pull/19';
+  f.options.tools.list=()=>[...list(),{name:'github.actions.repair.link',version:'1.0.0',sideEffect:'external_write'}];
+  f.sourceReceipt=args=>({state:'confirmed',...args,checkRunId:88,externalId:'88',url:'https://github.com/owner/repo/runs/88',
+    name:githubRepairCheckName(args),detailsUrl:'https://github.com/owner/repo/pull/19',status:'completed',conclusion:'neutral',evidenceRefs:['source-check']});
+  f.options.tools.invoke=async input=>{
+    if(input.toolName!=='github.actions.repair.link') return invoke(input);
+    f.calls.push(input);return {state:'confirmed',result:f.sourceReceipt(input.arguments),evidenceRefs:[input.runId]};
+  };
+  return f;
+}
+test('optional source association binds the original attempt and execution to a new neutral check',async()=>{
+  const f=sourceLinkFixture(),result=await runCiFix(f.context,f.options);
+  assert.equal(result.status,'succeeded');assert.ok(result.sourceRunLink);
+  const source=f.calls.find(c=>c.toolName==='github.actions.repair.link');
+  assert.deepEqual(source.arguments,{repo:'owner/repo',runId:42,expectedRunAttempt:3,sourceSha:headSha,repairPrNumber:19,
+    repairHeadSha:fixedSha,workflowExecutionId:createHash('sha256').update(source.runId).digest('hex')});
+  assert.ok(f.calls.findIndex(c=>c.toolName==='github.pr.comment')<f.calls.indexOf(source));
+  assert.equal(result.sourceRunLink.checkRunId,88);assert.equal(result.sourceRunLink.conclusion,'neutral');
+  assert.match(result.reason,/neutral/i);assert.ok(!f.calls.some(c=>c.toolName==='github.actions.repair.get'));
+  const count=f.calls.length;await runCiFix(f.context,f.options);assert.equal(f.calls.length,count);
+});
+test('a source association preserves the official Check focus URL without broadening its query scope',async()=>{
+  const f=sourceLinkFixture(),receipt=f.sourceReceipt;f.sourceReceipt=args=>({...receipt(args),url:'https://github.com/owner/repo/runs/88?check_suite_focus=true'});
+  const result=await runCiFix(f.context,f.options);assert.equal(result.sourceRunLink.url,'https://github.com/owner/repo/runs/88?check_suite_focus=true');
+});
+test('unconfigured repairs preserve their legacy identity and report only a PR reference to the source',async()=>{
+  const f=fixture();await runCiFix(f.context,f.options);
+  const o=f.options,identity=createHash('sha256').update(JSON.stringify({repository:o.repository,runId:o.runId,
+    expectedHeadSha:o.expectedHeadSha,verify:o.verifyRecipeId,gitTools:o.gitTools,sourcePaths:o.sourcePaths,issue:o.issue,
+    head:o.headBranch,base:o.baseBranch,maxSteps:o.maxSteps,maxTokens:o.maxTokens,limit:64*1024,attempts:2})).digest('hex');
+  assert.equal(f.context.loadCheckpoint('ci-fix-v1').identity,identity);
+  const result=await runCiFix(f.context,f.options);assert.equal(result.sourceRunLink,undefined);
+  assert.match(result.reason,/references/i);assert.doesNotMatch(result.reason,/original run backlink/i);
+});
+test('missing source association adapter fails preflight without repair effects',async()=>{
+  const f=fixture();f.options.sourceRunBacklink={toolName:'github.actions.repair.link',runAttempt:3};
+  assert.equal((await runCiFix(f.context,f.options)).status,'unsupported');assert.equal(f.calls.length,0);assert.equal(f.modelCalls(),0);
+});
+test('an issue-only repair cannot opt into a source-run association',async()=>{
+  const f=sourceLinkFixture(),issue=f.responses['github.issue.get'];delete f.options.runId;f.options.expectedHeadSha=headSha;
+  f.options.issue={number:4,url:issue.url,repository:'owner/repo',fingerprint:createHash('sha256').update(JSON.stringify(
+    [issue.number,issue.title,issue.body,issue.state,[...issue.labels].sort(),issue.url,issue.updatedAt])).digest('hex')};
+  await assert.rejects(runCiFix(f.context,f.options),e=>e.code==='INVALID_ARGUMENT');assert.equal(f.calls.length,0);
+});
+test('source association approvals resume the original step after PR creation without another repair',async()=>{
+  const f=sourceLinkFixture(),invoke=f.options.tools.invoke;let pending=true;
+  f.options.tools.invoke=async input=>{
+    if(input.toolName==='github.actions.repair.link'&&pending){f.calls.push(input);return {state:'pending',evidenceRefs:[]};}
+    return invoke(input);
+  };
+  const paused=await runCiFix(f.context,f.options);assert.equal(paused.status,'waiting_approval');
+  assert.equal(paused.pullRequestUrl,'https://github.com/owner/repo/pull/19');assert.equal(paused.sourceRunLink,undefined);
+  pending=false;assert.equal((await runCiFix(f.context,f.options)).status,'succeeded');
+  const sources=f.calls.filter(c=>c.toolName==='github.actions.repair.link');assert.equal(sources.length,2);
+  assert.equal(sources[0].runId,sources[1].runId);assert.deepEqual(sources[0].arguments,sources[1].arguments);
+  assert.equal(f.modelCalls(),1);for(const name of ['workspace.apply_text_patch','workspace.git.commit','github.pr.create']) assert.equal(f.calls.filter(c=>c.toolName===name).length,1);
+  f.options.sourceRunBacklink.runAttempt=4;await assert.rejects(runCiFix(f.context,f.options),e=>e.code==='INVALID_ARGUMENT');
+});
+test('an unknown source association waits for original Runtime confirmation and never posts again',async()=>{
+  const f=sourceLinkFixture(),invoke=f.options.tools.invoke;let unknown=true;
+  f.options.tools.invoke=async input=>{
+    if(input.toolName==='github.actions.repair.link'&&unknown){f.calls.push(input);return {state:'confirmed',result:{state:'unknown',checkRunId:88,externalId:'88',url:'https://github.com/owner/repo/runs/88',evidenceRefs:[]},evidenceRefs:[]};}
+    return invoke(input);
+  };
+  const first=await runCiFix(f.context,f.options);assert.equal(first.status,'waiting_reconciliation');assert.equal(first.sourceRunLink,undefined);
+  const original=f.calls.find(c=>c.toolName==='github.actions.repair.link'),count=f.calls.length;
+  for(let i=0;i<2;i++) assert.equal((await runCiFix(f.context,f.options)).status,'waiting_reconciliation');assert.equal(f.calls.length,count);
+  f.options.confirmedReplayReady=id=>id===original.runId;unknown=false;
+  assert.equal((await runCiFix(f.context,f.options)).status,'succeeded');
+  const replay=f.calls.filter(c=>c.toolName==='github.actions.repair.link')[1];assert.equal(replay.runId,original.runId);assert.deepEqual(replay.arguments,original.arguments);
+  assert.equal(f.calls.filter(c=>c.toolName==='github.pr.create').length,1);
+});
+test('interrupted source association retains its original unknown identity and ignores a late confirmed receipt',async()=>{
+  const f=sourceLinkFixture(),invoke=f.options.tools.invoke,controller=new AbortController(),started=Promise.withResolvers(),response=Promise.withResolvers();
+  f.context.signal=controller.signal;
+  f.options.tools.invoke=async input=>{
+    if(input.toolName!=='github.actions.repair.link') return invoke(input);
+    f.calls.push(input);started.resolve(input);return response.promise;
+  };
+  const pending=runCiFix(f.context,f.options),source=await started.promise;controller.abort();
+  assert.equal((await mustSettle(pending)).status,'waiting_reconciliation');
+  const saved=f.context.loadCheckpoint('ci-fix-v1');assert.equal(saved.inflight,'source-backlink');assert.equal(saved.results['source-backlink'],undefined);
+  response.resolve({state:'confirmed',result:f.sourceReceipt(source.arguments),evidenceRefs:[source.runId]});
+  await setImmediate();assert.deepEqual(f.context.loadCheckpoint('ci-fix-v1'),saved);
+  f.context.signal=new AbortController().signal;
+  assert.equal((await runCiFix(f.context,f.options)).status,'waiting_reconciliation');
+  assert.equal(f.calls.filter(c=>c.toolName==='github.actions.repair.link').length,1);
+  assert.equal(f.calls.filter(c=>c.toolName==='workspace.git.commit').length,1);
+});
+test('invalid trusted attempt bindings are rejected before repair reads or writes',async()=>{
+  for(const runAttempt of [0,1.5,Number.MAX_SAFE_INTEGER+1]) {
+    const f=sourceLinkFixture();f.options.sourceRunBacklink.runAttempt=runAttempt;
+    await assert.rejects(runCiFix(f.context,f.options),e=>e.code==='INVALID_ARGUMENT');assert.equal(f.calls.length,0);assert.equal(f.modelCalls(),0);
+  }
+});
+test('source association cannot exceed the persisted original repair step budget',async()=>{
+  const f=sourceLinkFixture();f.options.maxSteps=13;
+  assert.equal((await runCiFix(f.context,f.options)).status,'unsupported');
+  assert.equal(f.calls.filter(c=>c.toolName==='github.pr.create').length,1);assert.ok(!f.calls.some(c=>c.toolName==='github.actions.repair.link'));
+});
+test('confirmed source association requires the complete exact identity and neutral check receipt',async t=>{
+  const changes=[r=>{delete r.workflowExecutionId;},r=>{r.workflowExecutionId='a'.repeat(64);},r=>{r.repo='other/repo';},
+    r=>{r.runId=43;},r=>{r.expectedRunAttempt=4;},r=>{r.sourceSha=fixedSha;},r=>{r.repairPrNumber=20;},r=>{r.repairHeadSha=headSha;},
+    r=>{r.checkRunId=0;},r=>{r.externalId='89';},r=>{r.url='https://github.com/other/repo/runs/88';},
+    r=>{r.url='https://github.com/owner/repo/runs/89';},r=>{r.url='https://github.com/owner/repo/runs/88?other=true';},
+    r=>{r.url='https://github.com/owner/repo/runs/88?check_suite_focus=true#fragment';},
+    r=>{r.detailsUrl='https://github.com/owner/repo/pull/20';},r=>{r.status='in_progress';},r=>{r.conclusion='success';},
+    r=>{r.name='';},r=>{delete r.evidenceRefs;}];
+  for(const [i,change] of changes.entries()) await t.test(String(i),async()=>{
+    const f=sourceLinkFixture(),receipt=f.sourceReceipt;f.sourceReceipt=args=>{const r=receipt(args);change(r);return r;};
+    await assert.rejects(runCiFix(f.context,f.options),e=>e.code==='INVALID_ARGUMENT');
+  });
 });
 test('failed actual verification retries once then never commits',async()=>{
   const f=fixture(); f.responses['workspace.run_allowed_command'].exitCode=1;
@@ -143,6 +265,45 @@ test('head drift after verification blocks commit',async()=>{
   f.options.tools.invoke=async input=>{if(input.toolName==='workspace.git.head'&&++reads>1) return {state:'confirmed',result:{headSha:fixedSha,clean:false},evidenceRefs:[]};return original(input);};
   assert.equal((await runCiFix(f.context,f.options)).status,'stale'); assert.ok(!f.calls.some(c=>c.toolName==='workspace.git.commit'));
 });
+test('legacy in-flight precommit head resumes only its original confirmed receipt',async()=>{
+  const f=fixture(), original=f.options.tools.invoke;
+  f.options.tools.invoke=async input=>{
+    if(input.toolName==='workspace.git.head' && input.runId.includes(':precommit-head-')) {
+      f.calls.push(input); return {state:'unknown',evidenceRefs:[]};
+    }
+    return original(input);
+  };
+  assert.equal((await runCiFix(f.context,f.options)).status,'waiting_reconciliation');
+  // Upgrade a journal written before the stable precommitHeadStep field existed.
+  const legacy=f.context.loadCheckpoint('ci-fix-v1');
+  delete legacy.precommitHeadStep;
+  legacy.inflight=`precommit-head-${legacy.steps}`;
+  f.context.saveCheckpoint('ci-fix-v1',legacy);
+  const runId=`${f.context.taskId}:ci-fix:${legacy.identity}:${legacy.inflight}`;
+  const headCall=f.calls.find(c=>c.runId.includes(':precommit-head-'));
+  headCall.runId=runId;
+  const count=f.calls.length, replayChecks=[];
+  let confirmed=false, cachedReplays=0;
+  f.options.confirmedReplayReady=id=>{replayChecks.push(id);return confirmed && id===runId;};
+  f.options.tools.invoke=async input=>{
+    if(input.runId===runId) {
+      assert.ok(confirmed); cachedReplays++;
+      assert.deepEqual(input.arguments,headCall.arguments);
+      return {state:'confirmed',result:structuredClone(f.responses['workspace.git.head']),evidenceRefs:[runId]};
+    }
+    return original(input);
+  };
+  assert.equal((await runCiFix(f.context,f.options)).status,'waiting_reconciliation');
+  assert.equal(f.calls.length,count); assert.equal(cachedReplays,0);
+  assert.equal(f.context.loadCheckpoint('ci-fix-v1').inflight,legacy.inflight);
+  confirmed=true;
+  assert.equal((await runCiFix(f.context,f.options)).status,'succeeded');
+  assert.deepEqual(replayChecks,[runId,runId]); assert.equal(cachedReplays,1);
+  assert.equal(f.calls.filter(c=>c.toolName==='workspace.git.head').length,2);
+  assert.equal(f.calls.filter(c=>c.toolName==='workspace.git.commit').length,1);
+  assert.equal(f.calls.filter(c=>c.toolName==='workspace.apply_text_patch').length,1);
+  assert.equal(f.modelCalls(),1);
+});
 test('changed request cannot reuse persisted journal',async()=>{
   const f=fixture(); await runCiFix(f.context,f.options); f.options.runId='43';
   await assert.rejects(runCiFix(f.context,f.options),/Invalid CI/);
@@ -150,6 +311,87 @@ test('changed request cannot reuse persisted journal',async()=>{
 test('cancelled context never invokes a tool',async()=>{
   const f=fixture(), controller=new AbortController(); controller.abort(); f.context.signal=controller.signal;
   await assert.rejects(runCiFix(f.context,f.options),/cancelled/); assert.equal(f.calls.length,0);
+  assert.equal(f.modelCalls(),0); assert.equal(f.checkpoints.size,0);
+});
+async function mustSettle(promise) {
+  let timer;
+  try {return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('operation did not settle')),100);})]);}
+  finally {clearTimeout(timer);}
+}
+test('permanently waiting model and read ports cannot hold a cancelled CI factory',async t=>{
+  for(const phase of ['model','read']) await t.test(phase,async()=>{
+    const f=fixture(), controller=new AbortController(), started=Promise.withResolvers();
+    f.context.signal=controller.signal;
+    let portSignal;
+    if(phase==='model') f.options.model.complete=async request=>{portSignal=request.signal;started.resolve();return new Promise(()=>{});};
+    else f.options.tools.invoke=async input=>{f.calls.push(input);portSignal=input.signal;started.resolve();return new Promise(()=>{});};
+    const run=runCiFix(f.context,f.options); await started.promise; controller.abort();
+    await assert.rejects(mustSettle(run),error=>error.code==='CANCELLED');
+    assert.equal(portSignal.aborted,true); assert.equal(getEventListeners(controller.signal,'abort').length,0);
+    assert.ok(!f.calls.some(c=>c.toolName==='workspace.apply_text_patch'));
+  });
+});
+test('CI model and read deadlines expire even when their ports ignore signals',async t=>{
+  for(const phase of ['model','read']) await t.test(phase,async t=>{
+    t.mock.timers.enable({apis:['Date','setTimeout'],now:Date.parse('2026-10-05T00:00:00Z')});
+    const f=fixture(), started=Promise.withResolvers(); f.context.deadline=new Date(Date.now()+5000).toISOString();
+    if(phase==='model') f.options.model.complete=async()=>{started.resolve();return new Promise(()=>{});};
+    else f.options.tools.invoke=async input=>{f.calls.push(input);started.resolve();return new Promise(()=>{});};
+    let error;
+    const run=runCiFix(f.context,f.options).catch(value=>{error=value;});
+    await started.promise; t.mock.timers.tick(5000); await setImmediate();
+    assert.equal(error?.code,'TIMEOUT'); await run;
+    assert.equal(getEventListeners(f.context.signal,'abort').length,0);
+    assert.ok(!f.calls.some(c=>c.toolName==='workspace.apply_text_patch'));
+  });
+});
+test('CI deadline uses the supplied clock and re-arms timers beyond the platform delay limit',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const f=fixture(), started=Promise.withResolvers(), maxDelay=2_147_483_647;
+  let clock=0, error;
+  f.options.now=()=>clock; f.context.deadline=new Date(maxDelay+5000).toISOString();
+  f.options.tools.invoke=async input=>{f.calls.push(input);started.resolve();return new Promise(()=>{});};
+  const run=runCiFix(f.context,f.options).catch(value=>{error=value;}); await started.promise;
+  clock=maxDelay; t.mock.timers.tick(maxDelay); await setImmediate(); assert.equal(error,undefined);
+  clock+=5000; t.mock.timers.tick(5000); await setImmediate();
+  assert.equal(error?.code,'TIMEOUT'); await run; assert.equal(f.calls.length,1);
+});
+test('a model result arriving past the supplied deadline cannot settle its checkpoint',async()=>{
+  const f=fixture(), complete=f.options.model.complete;
+  let clock=0, portSignal;
+  f.options.now=()=>clock; f.context.deadline=new Date(5000).toISOString();
+  f.options.model.complete=async request=>{portSignal=request.signal;clock=5000;return complete(request);};
+  await assert.rejects(runCiFix(f.context,f.options),error=>error.code==='TIMEOUT');
+  const saved=f.context.loadCheckpoint('ci-fix-v1');
+  assert.equal(portSignal.aborted,true); assert.equal(saved.inflight,'model-0');
+  assert.equal(saved.results['model-0'],undefined); assert.equal(saved.tokens,f.options.maxTokens);
+  assert.ok(!f.calls.some(c=>c.toolName==='workspace.apply_text_patch'));
+});
+test('cancelled patch ports retain their original unknown run and reject late confirmed results',async t=>{
+  for(const metadata of ['local_write','unknown']) await t.test(metadata,async()=>{
+    const f=fixture(), controller=new AbortController(), started=Promise.withResolvers(), response=Promise.withResolvers();
+    f.context.signal=controller.signal;
+    if(metadata==='unknown') {
+      const list=f.options.tools.list;
+      f.options.tools.list=()=>list().map(tool=>{if(tool.name==='workspace.apply_text_patch') delete tool.sideEffect;return tool;});
+    }
+    const invoke=f.options.tools.invoke;
+    f.options.tools.invoke=async input=>{
+      if(input.toolName!=='workspace.apply_text_patch') return invoke(input);
+      f.calls.push(input); started.resolve(input); return response.promise;
+    };
+    const run=runCiFix(f.context,f.options), patch=await started.promise; controller.abort();
+    assert.equal((await mustSettle(run)).status,'waiting_reconciliation');
+    const saved=f.context.loadCheckpoint('ci-fix-v1');
+    assert.equal(saved.inflight,'patch-0-0'); assert.equal(saved.results['patch-0-0'],undefined);
+    response.resolve({state:'confirmed',result:f.responses['workspace.apply_text_patch'],evidenceRefs:[patch.runId]});
+    await setImmediate(); assert.deepEqual(f.context.loadCheckpoint('ci-fix-v1'),saved);
+    f.context.signal=new AbortController().signal;
+    for(let index=0;index<2;index++) assert.equal((await runCiFix(f.context,f.options)).status,'waiting_reconciliation');
+    assert.equal(f.calls.filter(c=>c.toolName==='workspace.apply_text_patch').length,1);
+    assert.equal(f.calls.filter(c=>c.toolName==='workspace.run_allowed_command').length,0);
+    assert.equal(getEventListeners(controller.signal,'abort').length,0);
+  });
 });
 test('step budget persists and blocks effects',async()=>{
   const f=fixture(); f.options.maxSteps=2;
@@ -188,6 +430,143 @@ test('real Actions queries remain bounded and never infer a missing target run',
  const missing=fixture();missing.responses['github.actions.run.list'].items=[];
  assert.equal((await runCiFix(missing.context,missing.options)).status,'unsupported');
  assert.equal(missing.modelCalls(),0);assert.equal(missing.calls.length,1);
+});
+
+test('CI repair finds a selected run and failed job beyond the first pages',async()=>{
+ const f=fixture(),invoke=f.options.tools.invoke;
+ f.options.tools.invoke=async input=>{
+  if(input.toolName==='github.actions.run.list'||input.toolName==='github.actions.job.list') {
+   f.calls.push(input);const page=input.arguments.page;
+   return {state:'confirmed',result:{items:page===1?[]:structuredClone(f.responses[input.toolName].items),page,nextPage:page===1?2:null,hasMore:page===1},evidenceRefs:[input.runId]};
+  }
+  return invoke(input);
+ };
+ assert.equal((await runCiFix(f.context,f.options)).status,'succeeded');
+ for(const name of ['github.actions.run.list','github.actions.job.list']) assert.deepEqual(f.calls.filter(c=>c.toolName===name).map(c=>c.arguments.page),[1,2]);
+ assert.equal(f.modelCalls(),1);assert.equal(f.calls.filter(c=>c.toolName==='workspace.git.commit').length,1);
+});
+test('log pagination reaches failure evidence and resumes the same approved cursor',async()=>{
+ const f=fixture(),invoke=f.options.tools.invoke,complete=f.options.model.complete;let pending=true;
+ f.options.tools.invoke=async input=>{
+  if(input.toolName==='github.actions.log.read') {
+   f.calls.push(input);const offset=input.arguments.offset;
+   if(offset===6&&pending) return {state:'pending',evidenceRefs:[]};
+   return {state:'confirmed',result:offset===0?{text:'setup\n',offset:0,nextOffset:6,truncated:true}:{text:'test failed',offset:6,nextOffset:null,truncated:false},evidenceRefs:[input.runId]};
+  }
+  return invoke(input);
+ };
+ f.options.model.complete=async request=>{const input=JSON.parse(request.messages[1].content);assert.equal(input.read.logs,'setup\ntest failed');assert.equal(input.read.truncated,false);return complete(request);};
+ assert.equal((await runCiFix(f.context,f.options)).status,'waiting_approval');assert.equal(f.modelCalls(),0);
+ pending=false;assert.equal((await runCiFix(f.context,f.options)).status,'succeeded');
+ const logs=f.calls.filter(c=>c.toolName==='github.actions.log.read');
+ assert.deepEqual(logs.map(c=>c.arguments.offset),[0,6,6]);assert.equal(logs[1].runId,logs[2].runId);assert.deepEqual(logs[1].arguments,logs[2].arguments);
+ const count=f.calls.length;assert.equal((await runCiFix(f.context,f.options)).status,'succeeded');assert.equal(f.calls.length,count);
+ assert.equal(f.modelCalls(),1);assert.equal(f.calls.filter(c=>c.toolName==='workspace.apply_text_patch').length,1);
+});
+test('malformed or non-progressing CI cursors never reach model or writes',async t=>{
+ for(const phase of ['runs','jobs','log']) await t.test(phase,async()=>{
+  const f=fixture();
+  if(phase==='runs') f.responses['github.actions.run.list']={items:[],page:1,nextPage:1,hasMore:true};
+  if(phase==='jobs') f.responses['github.actions.job.list']={items:[],page:2,nextPage:null,hasMore:false};
+  if(phase==='log') f.responses['github.actions.log.read']={text:'setup',offset:0,nextOffset:0,truncated:true};
+  await assert.rejects(runCiFix(f.context,f.options),error=>error.code==='INVALID_ARGUMENT');
+  assert.equal(f.modelCalls(),0);assert.ok(!f.calls.some(c=>c.toolName==='workspace.apply_text_patch'));
+ });
+});
+test('CI pagination honors the persisted step budget and fixed page bound',async t=>{
+ for(const maxSteps of [2,100]) await t.test(String(maxSteps),async()=>{
+  const f=fixture();f.options.maxSteps=maxSteps;
+  f.options.tools.invoke=async input=>{f.calls.push(input);const page=input.arguments.page;return {state:'confirmed',result:{items:[],page,nextPage:page+1,hasMore:true},evidenceRefs:[input.runId]};};
+  assert.equal((await runCiFix(f.context,f.options)).status,'unsupported');
+  assert.equal(f.calls.length,maxSteps===2?2:4);assert.equal(f.modelCalls(),0);
+  const count=f.calls.length;assert.equal((await runCiFix(f.context,f.options)).status,'unsupported');assert.equal(f.calls.length,count);
+ });
+});
+test('CI logs stop at the byte ceiling and report omitted pages as truncated',async()=>{
+ const f=fixture(),invoke=f.options.tools.invoke;f.options.maxLogBytes=10;
+ f.options.tools.invoke=async input=>{
+  if(input.toolName==='github.actions.log.read') {f.calls.push(input);const offset=input.arguments.offset;return {state:'confirmed',result:{text:offset===0?'setup':'er',offset,nextOffset:offset===0?5:7,truncated:true},evidenceRefs:[input.runId]};}
+  return invoke(input);
+ };
+ f.options.model.complete=async request=>{const input=JSON.parse(request.messages[1].content);assert.equal(input.read.logs,'setuper');assert.equal(input.read.truncated,true);return {response:{kind:'final',text:'{"diagnosis":"stop","patches":[]}'}};};
+ await assert.rejects(runCiFix(f.context,f.options),error=>error.code==='INVALID_ARGUMENT');
+ assert.deepEqual(f.calls.filter(c=>c.toolName==='github.actions.log.read').map(c=>c.arguments.offset),[0,5]);
+ assert.ok(!f.calls.some(c=>c.toolName==='workspace.apply_text_patch'));
+});
+test('an endless progressing log is capped before model dispatch and reports truncation',async()=>{
+ const f=fixture(),invoke=f.options.tools.invoke,complete=f.options.model.complete;
+ f.options.tools.invoke=async input=>{
+  if(input.toolName==='github.actions.log.read') {f.calls.push(input);const offset=input.arguments.offset;return {state:'confirmed',result:{text:'x',offset,nextOffset:offset+1,truncated:true},evidenceRefs:[input.runId]};}
+  return invoke(input);
+ };
+ f.options.model.complete=async request=>{const input=JSON.parse(request.messages[1].content);assert.equal(input.read.logs,'x'.repeat(8));assert.equal(input.read.truncated,true);return complete(request);};
+ assert.equal((await runCiFix(f.context,f.options)).status,'succeeded');
+ assert.deepEqual(f.calls.filter(c=>c.toolName==='github.actions.log.read').map(c=>c.arguments.offset),[0,1,2,3,4,5,6,7]);
+});
+test('the largest supported CI log budget still uses the registered per-call character bound',async()=>{
+ const f=fixture(),invoke=f.options.tools.invoke;f.options.maxLogBytes=256*1024;
+ f.options.tools.invoke=async input=>{
+  if(input.toolName==='github.actions.log.read') assert.ok(input.arguments.maxChars<=65536);
+  return invoke(input);
+ };
+ assert.equal((await runCiFix(f.context,f.options)).status,'succeeded');
+});
+test('a job receipt bound to a different run cannot become CI evidence',async()=>{
+ const f=fixture();f.responses['github.actions.job.list'].items[0].runId=43;
+ await assert.rejects(runCiFix(f.context,f.options),error=>error.code==='INVALID_ARGUMENT');
+ assert.equal(f.modelCalls(),0);assert.ok(!f.calls.some(c=>c.toolName==='github.actions.log.read'));
+});
+test('valid multibyte log pages preserve a complete UTF-8 prefix at the byte ceiling',async t=>{
+ for(const text of ['故障故障','😀故障']) await t.test(text,async()=>{
+  const f=fixture(),invoke=f.options.tools.invoke,complete=f.options.model.complete;f.options.maxLogBytes=8;
+  f.options.tools.invoke=async input=>{
+   if(input.toolName==='github.actions.log.read') {f.calls.push(input);return {state:'confirmed',result:{text,offset:0,nextOffset:null,truncated:false},evidenceRefs:[input.runId]};}
+   return invoke(input);
+  };
+  // Keep the page within the public character count while exceeding its UTF-8 budget.
+  f.options.model.complete=async request=>{
+   const read=JSON.parse(request.messages[1].content).read;
+   assert.equal(read.logs,text.startsWith('故')?'故障':'😀故');assert.ok(Buffer.byteLength(read.logs)<=8);assert.equal(read.truncated,true);
+   assert.ok(!read.logs.includes('\ufffd'));return complete(request);
+  };
+  assert.equal((await runCiFix(f.context,f.options)).status,'succeeded');
+  assert.equal(f.calls.filter(c=>c.toolName==='github.actions.log.read').length,1);
+ });
+});
+function providerLogFixture(text) {
+ const f=fixture(),invoke=f.options.tools.invoke,commands=[],pages=[];
+ const provider=new GhCliProvider({repositories:[f.options.repository],readToken:async()=> 'synthetic-token',
+  runner:{async run(command) {
+   commands.push(command.args);
+   return {exitCode:0,stdout:command.args[0]==='api'?JSON.stringify({id:7,run_id:42}):text,stderr:''};
+  }}});
+ f.options.tools.invoke=async input=>{
+  if(input.toolName!=='github.actions.log.read') return invoke(input);
+  f.calls.push(input);
+  const result=await provider.execute('actions.log.read',input.arguments,input);pages.push(result);
+  return {state:'confirmed',result,evidenceRefs:[input.runId]};
+ };
+ return {f,commands,pages};
+}
+test('actual GitHub UTF-16 log slicing never forwards a page-ending half emoji',async()=>{
+ const {f,commands,pages}=providerLogFixture('aaa😀Z'),complete=f.options.model.complete;
+ f.options.maxLogBytes=8;
+ f.options.model.complete=async request=>{
+  const read=JSON.parse(request.messages[1].content).read;
+  assert.equal(read.logs,'aaa');assert.equal(read.truncated,true);assert.equal(read.logs.isWellFormed(),true);
+  return complete(request);
+ };
+ assert.equal((await runCiFix(f.context,f.options)).status,'succeeded');
+ assert.deepEqual(pages,[{text:'aaa\ud83d',offset:0,nextOffset:4,truncated:true}]);
+ assert.equal(commands.length,2);assert.equal(f.calls.filter(c=>c.toolName==='github.actions.log.read').length,1);
+});
+test('original log text containing isolated surrogate code units is rejected',async t=>{
+ for(const text of ['a\ud83d','a\ud83db','a\ude00']) await t.test(JSON.stringify(text),async()=>{
+  const {f,pages}=providerLogFixture(text);
+  await assert.rejects(runCiFix(f.context,f.options),error=>error.code==='INVALID_ARGUMENT');
+  assert.equal(pages[0].truncated,false);assert.equal(f.modelCalls(),0);
+  assert.ok(!f.calls.some(c=>c.toolName==='workspace.apply_text_patch'));
+ });
 });
 
 test('model hash errors use the trusted read hash in the approved patch request',async()=>{

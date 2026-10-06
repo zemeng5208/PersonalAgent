@@ -41,3 +41,66 @@ node tests/manual/desktop/p8-approved-runtime-consumption.mjs
 
 尚未验证：正式 Electron 新版本加载/完整 UI，真实 AgentArts 编排、真实 Goal 更新及 revision/Evidence，
 F9/记事本、麦克风、真实凭据加密、崩溃恢复。本片没有远端合并、应用重启或真实云发送。
+## 私人记忆本机验收
+
+此增量验收使用 `huawei_ict_agentarts` 的真实 Electron 管理后台、本机来源和隔离的
+`PA_USER_DATA_DIR`，不使用 `--fake-runtime`、`--fake-model` 或原生对话框替身。
+本地持久化验收不需要云端 Authorization；宿主需要一个有效的目标地址和运行时名称才能装配，
+若以明确的验收占位目标启动，必须保持无凭据，不提交云任务，也不将占位配置记为真实连通。
+
+1. 打开“记忆”，在系统文件夹对话框中选择用户指定的 Vault。确认搜索可用、写入门禁就绪。
+2. 用户选择一条最小摘录、填写摘要，点击“检查并确认”。先取消一次，确认已保存列表没有新增。
+3. 用户再次检查原文和摘要，亲自在原生对话框确认。记录事实引用和版本，不公开原文、路径或摘要。
+4. 关闭此验收实例并用同一隔离 userData 重启；不重新选择 Vault，查看已保存记忆，确认事实仍在。
+5. 重新选择同一来源，逐条确认更正；核对新版本和旧版本基线，取消更正应保留原头。
+6. 撤回此事实，核对后续消费拒绝；未获得逐任务许可时，不启动真实模型或云端消费。
+7. 在原生对话框确认删除此验收事实的全部版本；读回删除收据，重启后目标事实和历史仍不存在，
+   其他事实和 Vault 原文件保持原状。应用管理副本存在时还须核对相关精确收据和恢复状态。
+
+仅打开窗口、选择来源、合成测试通过或列表暂时为空不构成全部验收通过。持久保存、更正、
+撤回、删除和任务消费分别记录实际证据；真实 AgentArts 发送须另取用户对应授权及原生出机许可。
+
+### 2026-10-05 本机增量记录
+
+- 生产 filesystem 只读适配器读取用户指定真实 Vault：有界检索一条引文、精确读回、内容版本校验
+  及源文件未变化检查通过。没有持久事实写入或云调用；不公开来源路径、正文或摘要。
+- 独立合成 Vault 与 SQLite 的串联验收通过：取消零写入、重启读回且来源选择不持久化、
+  更正 revision 2、拒绝旧版本撤回、撤回后拒绝消费、删除全部目标历史、删除标记读回、
+  保留无关事实；最终测试事实为零。此路径覆盖未绑定任务副本的私人库，确认回调为显式测试替身。
+- 原生 Windows 工具初始化报 `windows sandbox failed: helper_unknown_error: setup refresh had errors`，
+  重置后仍不能启动。此前窗口打开不代表原生保存、更正、撤回和删除确认已通过。
+- `tests/integration/private-memory-runtime-copies.test.mjs` 通过实际 Client、AgentArts Runtime Application、
+  Runtime/Memory SQLite 与生产私人消费/删除 host：同步就绪对象允许消费，异步清单检查在确认和发送前拒绝；
+  更正后的事实按任务确认，旧版本撤回拒绝，撤回后消费拒绝，父任务及实际 SQLite 子任务副本删除待处理、
+  重启按原 marker/收据恢复并读回清除、全部事实历史为空、无关事实/任务保留，恢复不重复发送。
+  两项新集成与已有消费/删除六项回归合计 8/8。确认回调、HTTP 和子任务工作者均为显式替身；
+  子任务由可信测试夹具写入实际 Runtime，不表示完整工具分派、原生子任务许可或真实云编排验收通过。
+- 私人真实持久确认和真实 AgentArts 消费仍待验收；MOD-09 保持 `in_progress`。
+- 主线集成候选复查原生工具：首次 Windows sandbox 初始化失败，重置后
+  `trusted Node process exited unexpectedly; kernel reset, rerun your request`；未取得新的窗口操作证据。
+
+### 实际本地 MCP 学习集成验收
+
+构建当前工作树依赖后执行：
+
+```powershell
+node --test tests/integration/memory-learning-mcp.test.mjs
+```
+
+实际官方 filesystem stdio、Competition Runtime Application、Client、SQLite 审批和 Learning
+在独立 `.cache/memory-learning-mcp/` 夹具运行：候选验证、拒绝启用、逐任务读取审批、
+版本回滚后旧任务零读取并记录失败、重启、删除全部流程版本与取消排队任务、保留无关流程和源文件。
+测试结束释放本次进程和数据库，仅清除本次新建夹具。使用公开合成资料，云凭据读取/云调用为零；
+原生启用/删除确认是显式替身，不能代替上文真人逐条确认、原生窗口或真实云消费验收。
+
+### 父子分派的私人许可拒绝验收
+
+```powershell
+node --test tests/integration/private-memory-runtime-copies.test.mjs
+```
+
+除原副本删除/恢复用例，还验证私人派生云提案零审批、零工具执行、零子任务，以及公开任务
+通过原 SQLite 审批实际分派默认 Competition 子工作者。公开父子没有私人消费绑定，
+删除无关私人事实保留任务及父子关系。资料、原生确认回调和 HTTP 为显式合成/Fake；
+本机 Runtime/Policy/子任务分派使用生产实现。父任务许可不授予子任务，
+生产路径仍拒绝私人派生提案直接分派；本记录不表示已完成真实云或真人子任务许可验收。

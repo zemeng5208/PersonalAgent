@@ -9,7 +9,7 @@ function endpoint(value) {
 }
 function validateBinding(value) {
   const gatewayUrl=endpoint(value.gatewayUrl);
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(value.runtimeName)) throw Error('请填写运行时实例名称');
+  if (typeof value.runtimeName!=='string' || !/^[A-Za-z0-9_-]{1,64}$/.test(value.runtimeName)) throw Error('请填写运行时实例名称');
   return {gatewayUrl,runtimeName:value.runtimeName};
 }
 function validate(value) {
@@ -48,8 +48,11 @@ export function createAgentArtsConfig({userData,safeStorage,environment=process.
     configure(input) {
       if (!input || Object.keys(input).some(key=>!['gatewayUrl','runtimeName','authorization'].includes(key))) throw Error('AgentArts 配置格式无效');
       // A credential may be retained only for the same exact destination.
-      const authorization=input.authorization || (input.gatewayUrl===saved?.gatewayUrl && input.runtimeName===saved?.runtimeName ? saved.authorization : '');
-      const value=validate({...input,authorization});
+      const binding=validateBinding(input);
+      const authorization=input.authorization===undefined || input.authorization===''
+        ? (binding.gatewayUrl===saved?.gatewayUrl && binding.runtimeName===saved?.runtimeName ? saved.authorization : '')
+        : input.authorization;
+      const value=validate({...binding,authorization});
       if (!safeStorage.isEncryptionAvailable()) throw Error('本机安全存储不可用，未保存');
       const encrypted=safeStorage.encryptString(JSON.stringify(value)).toString('base64');
       mkdirSync(userData,{recursive:true});

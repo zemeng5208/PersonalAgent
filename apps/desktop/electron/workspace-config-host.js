@@ -6,6 +6,7 @@ import path from 'node:path';
 import {PROTOCOL_VERSION, ProtocolError, validateToolValue} from '@personal-agent/contracts';
 import * as coding from '@personal-agent/coding-tools';
 import {createDesktopCodingToolHost} from './coding-tool-host.js';
+import {findWindowsExecutable} from './windows-executable-discovery.js';
 
 function directory(value) {
   if (typeof value !== 'string' || !path.isAbsolute(value) || value.startsWith('\\\\')
@@ -57,16 +58,11 @@ function checkFile(value, root) {
   }
   return relative.split(path.sep).join('/');
 }
-function executable(name) {
-  try {
-    const where = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'where.exe');
-    const found = execFileSync(where, [name], {encoding:'utf8',windowsHide:true,timeout:3000})
-      .trim().split(/\r?\n/)[0];
-    return realpathSync.native(found);
-  } catch {return undefined;}
+function recoveryPath(userData,root) {
+  return path.join(userData,'coding-recovery',createHash('sha256').update(root).digest('hex'));
 }
 function recoveryDirectory(userData, root, powerShell) {
-  const target = path.join(userData, 'coding-recovery', createHash('sha256').update(root).digest('hex'));
+  const target = recoveryPath(userData,root);
   if (!existsSync(target)) {
     mkdirSync(target, {recursive:true});
     const script = String.raw`$ErrorActionPreference='Stop'
@@ -93,9 +89,10 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
   projectScriptEnvSource,createCommandRecipeTool,createWorkspaceReferenceExport,
   readWorkspaceExportPreflight,readWorkspaceExportAuthorization}) {
   const file = path.join(userData,'coding-workspace.json');
-  let savedRoot,savedNode,savedCheckFile,savedNpmCli,boundRoot,boundNode,boundProjectHelper,rootIdentity,nodeIdentity,application,active=true,consent,applyHost,failure='',commandFailure='',projectFailure='';
+  let savedRoot,savedNode,savedCheckFile,savedNpmCli,boundRoot,boundNode,boundCheckFile,boundNpmCli,boundProjectHelper,rootIdentity,nodeIdentity,application,active=true,consent,applyHost,failure='',commandFailure='',projectFailure='';
   let generation=randomUUID();
   const implementations=[];
+  const commandReadiness=new Map();
   const inflight=new Set();
   const workspaceExportProposals=new Map();
   const confirmedWorkspaceReads=new Map();
@@ -128,14 +125,16 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
   } catch {failure='工作区加密配置不可用，请重新选择目录';}
   if (savedRoot) {
     try {
-      boundRoot=savedRoot; rootIdentity=statSync(boundRoot,{bigint:true});
+      boundRoot=savedRoot;boundCheckFile=savedCheckFile;boundNpmCli=savedNpmCli;
+      rootIdentity=statSync(boundRoot,{bigint:true});
       try {
         if(savedNode) {boundNode=fixedNode(savedNode,boundRoot);nodeIdentity=statSync(boundNode,{bigint:true});}
       } catch {boundNode=undefined;nodeIdentity=undefined;}
       const options={rootPath:boundRoot};
       implementations.push(coding.createWorkspaceReadTool(options), coding.createWorkspaceListTool({rootPath:boundRoot}),
         coding.createWorkspacePatchPreviewTool(options),coding.createWorkspacePatchStageTool(options));
-      const pwsh=executable('pwsh.exe');
+      const discovery={excludedDirectories:[boundRoot,recoveryPath(userData,boundRoot)]};
+      const pwsh=findWindowsExecutable('pwsh.exe',discovery);
       if (pwsh) {
         try {
           applyHost=createDesktopCodingToolHost({workspaceRoot:boundRoot,authorizedWorkspaceRoot:boundRoot,
@@ -146,7 +145,7 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
           implementations.push(...applyHost.tools);
         } catch {failure='读取和候选生成可用；安全应用补丁所需的目录或 PowerShell 检查未通过';}
       } else failure='读取和候选生成可用；安全应用补丁需要 PowerShell 7';
-      const git=executable('git.exe');
+      const git=findWindowsExecutable('git.exe',discovery);
       if (git) {
         const command=coding.createWorkspaceCommandTool({rootPath:boundRoot,recipes:[{id:'git-diff-check',
           executable:git,args:['--no-pager','-c','core.fsmonitor=false','diff','--no-ext-diff','--no-textconv','--check']}],
@@ -210,6 +209,11 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
           }
           if(projectRequested && !commandImplementations.some(item=>item.descriptor.name.startsWith('workspace.npm_'))
             && !projectFailure) projectFailure='工作区构建或测试命令暂不可用';
+          if(typeof recipe.available==='function') {
+            for(const command of commandImplementations) {
+              commandReadiness.set(command.descriptor.name,()=>recipe.available());
+            }
+          }
           implementations.push(...commandImplementations);
         } catch {commandFailure='Node 检查装配失败；读取和其他已配置能力仍可用';}
       } else if (savedNode && (savedCheckFile || projectRequested)) commandFailure='命令实现尚未接入；读取和其他已配置能力仍可用';
@@ -221,10 +225,14 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
       && directory(boundRoot)===boundRoot && now.dev===rootIdentity.dev && now.ino===rootIdentity.ino
       && now.birthtimeNs===rootIdentity.birthtimeNs;} catch {return false;}
   };
+  // Tools retain their startup inputs; persisted selections cannot authorize
+  // those tools until every selected command input has been reassembled.
+  const selectionsCurrent=()=>savedRoot===boundRoot && savedNode===boundNode
+    && savedCheckFile===boundCheckFile && savedNpmCli===boundNpmCli;
   // Trusted main-process configuration only. A getter cannot grant read or
   // execute permission, and this record must not enter Renderer/cloud output.
   const readWorkspaceBinding=() => {
-    if(!active || consent?.cloudExportAllowed!==true || !identityCurrent()
+    if(!active || consent?.cloudExportAllowed!==true || !selectionsCurrent() || !identityCurrent()
       || !boundNode || savedNode!==boundNode || !nodeIdentity) return undefined;
     try {
       if(fixedNode(boundNode,boundRoot)!==boundNode) return undefined;
@@ -249,13 +257,18 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
     } catch {return false;}
   };
   const isProject=tool=>['workspace.npm_build','workspace.npm_test'].includes(tool.descriptor.name);
+  const commandReady=tool=> {
+    const read=commandReadiness.get(tool.descriptor.name);
+    try {return !read || read()===true;} catch {return false;}
+  };
   const projectIdentityCurrent=()=> {
     try {return savedNode && fixedNode(savedNode,boundRoot)===savedNode
       && savedNpmCli && fixedNpmCli(savedNpmCli,boundRoot)===savedNpmCli
       && boundProjectHelper && outsideFile(boundProjectHelper,boundRoot,'项目命令')===boundProjectHelper;}
     catch {return false;}
   };
-  const enabled=tool => active && consent?.cloudExportAllowed===true && identityCurrent()
+  const enabled=tool => active && consent?.cloudExportAllowed===true && selectionsCurrent() && identityCurrent()
+    && commandReady(tool)
     && (tool.descriptor.sideEffect==='read' || (isProject(tool)
       ? consent.commandAllowed===true && consent.projectCodeAllowed===true && projectIdentityCurrent()
       : ['workspace.git_diff_check','workspace.node_check'].includes(tool.descriptor.name)
@@ -428,15 +441,22 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
     nodeConfigured:Boolean(savedNode),checkFileConfigured:Boolean(savedCheckFile),npmCliConfigured:Boolean(savedNpmCli),
     checkFileName:savedCheckFile?path.basename(savedCheckFile):'',
     nodeCheckAvailable:tools.some(tool=>tool.descriptor.name==='workspace.node_check' && enabled(tool)),
-    projectScriptsAvailable:tools.some(isProject) && projectIdentityCurrent()===true,
+    projectScriptsAvailable:active && selectionsCurrent() && identityCurrent()
+      && tools.some(tool=>isProject(tool) && commandReady(tool)) && projectIdentityCurrent()===true,
     projectCommands:tools.filter(isProject).map(tool=>tool.descriptor.name==='workspace.npm_build'?'build':'test'),
     projectCodeAllowed:consent?.projectCodeAllowed===true,
-    commandReason:commandFailure,projectReason:projectFailure,
+    commandReason:commandFailure || (tools.some(tool=>tool.descriptor.name==='workspace.node_check'
+      && !commandReady(tool))?'命令文件或配置已变化，请重启应用重新装配':''),
+    projectReason:projectFailure || (tools.some(tool=>isProject(tool) && !commandReady(tool))
+      ?'项目命令文件或配置已变化，请重启应用重新装配':''),
     readAvailable:tools.some(tool=>tool.descriptor.name==='workspace.read_text') && enabled(tools[0]),
     writeAvailable:tools.some(tool=>tool.descriptor.name==='workspace.apply_text_patch' && enabled(tool)),
     commandAvailable:tools.some(tool=>['workspace.git_diff_check','workspace.node_check'].includes(tool.descriptor.name) && enabled(tool)),
     cloudExportAllowed:consent?.cloudExportAllowed===true,
-    reason:savedRoot!==boundRoot?'目录已保存，请重启应用完成工具装配后授权':failure || (consent
+    authorizationAvailable:active && selectionsCurrent() && identityCurrent() && tools.length>0,
+    writeAllowed:consent?.writeAllowed===true,
+    commandAllowed:consent?.commandAllowed===true,
+    reason:!selectionsCurrent()?'工作区设置已保存，请重启应用完成工具装配后授权':failure || (consent
       ? '当前工作区已授权；受限命令仍经过 Policy，项目脚本另需明确许可'
       : savedRoot?'请为本次应用会话授权工作区；重启后需要重新授权':'请选择编程工作区')});
   const revoke=() => {
@@ -517,10 +537,10 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
         || typeof input.commandAllowed!=='boolean'
         || (input.projectCodeAllowed!==undefined && typeof input.projectCodeAllowed!=='boolean')
         || Object.keys(input).some(k=>!['cloudExportAllowed','writeAllowed','commandAllowed','projectCodeAllowed'].includes(k))) throw Error('请确认工作区权限');
+      if (!active || !selectionsCurrent() || !identityCurrent() || !tools.length) throw Error('请先选择目录并重启完成装配');
       if(input.projectCodeAllowed===true && (!input.commandAllowed || !snapshot().projectScriptsAvailable)) {
         throw Error('项目构建和测试尚未准备好，不能授权执行');
       }
-      if (!identityCurrent() || !tools.length) throw Error('请先选择目录并重启完成装配');
       revoke();consent={...input};return snapshot();
     },
     revoke,

@@ -972,11 +972,15 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
    * creates a second run or changes the authorization/idempotency identity.
    */
   reconcileToolExecution(taskId: string, evidenceId: string,
-    outcome: ToolExecutionReconciliationOutcome, result?: unknown, readbackEvidenceRefs:readonly string[]=[]): TaskSnapshot {
+    outcome: ToolExecutionReconciliationOutcome, result?: unknown, readbackEvidenceRefs:readonly string[]=[],
+    options: {deferTaskCompletion?: boolean} = {}): TaskSnapshot {
     requireText(taskId, 'taskId');
     requireText(evidenceId, 'evidenceId');
     if (!['applied', 'not_applied', 'unknown'].includes(outcome)) {
       throw new RuntimeError('INVALID_ARGUMENT', 'Invalid tool reconciliation outcome');
+    }
+    if (options.deferTaskCompletion && outcome !== 'applied') {
+      throw new RuntimeError('INVALID_ARGUMENT', 'Only an applied tool result can resume its worker');
     }
     let encodedResult: string | undefined;
     try { encodedResult = result === undefined ? undefined : JSON.stringify(result); }
@@ -1040,6 +1044,13 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
       this.db.prepare('UPDATE tool_execution_records SET record_json = ? WHERE evidence_id = ? AND task_id = ?')
         .run(JSON.stringify(nextRecord), evidenceId, taskId);
       if (outcome === 'applied') {
+        if (options.deferTaskCompletion && !task.cancelRequested) {
+          return this.updateTask(taskId, 'waiting_reconciliation', {
+            resultSummary: record.toolName + ' reconciliation confirmed; workflow continuation is pending',
+            error: null,
+            evidenceRefs: reconciledEvidenceRefs,
+          }, false);
+        }
         this.updateTask(taskId, 'verifying', {
           resultSummary: record.toolName + ' reconciliation confirmed the original execution',
           error: null,
@@ -1298,12 +1309,17 @@ export class TaskRuntime implements TaskPort, EventPort, SchedulerPort {
         });
       }
       if (controller.signal.aborted && current.state === 'cancelling') return this.confirmCancellation(taskId);
+      const failure: TaskError = {
+        code: error instanceof RuntimeError || error instanceof ProtocolError ? error.code as TaskError['code'] : 'EXTERNAL_FAILURE',
+        message: error instanceof Error && error.message ? error.message : 'Task worker failed',
+        retryable: false
+      };
+      // Module errors may use internal codes absent from the public task contract.
+      // Validate before transitioning so a rejected error code cannot strand the task.
+      try { validateContract('snapshot', {...current, error: failure}); }
+      catch { failure.code = 'EXTERNAL_FAILURE'; }
       return this.transitionTask(taskId, 'failed', {
-        error: {
-          code: error instanceof RuntimeError || error instanceof ProtocolError ? error.code as TaskError['code'] : 'EXTERNAL_FAILURE',
-          message: error instanceof Error ? error.message : 'Task worker failed',
-          retryable: false
-        }
+        error: failure
       });
     } finally {
       if (timer) clearTimeout(timer);

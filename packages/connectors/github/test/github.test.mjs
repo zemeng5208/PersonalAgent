@@ -101,6 +101,72 @@ test('service rejects a late read from a provider that ignores cancellation', as
   controller.abort();resolve(fixtures.issue);
   await cancelled;assert.equal(signal.aborted,true);
 });
+test('synchronous provider cancellation cannot confirm reads or registered writes', async t => {
+  for (const write of [false,true]) await t.test(write?'write':'read',async()=>{
+    const controller=new AbortController(),tools=new Map();let calls=0,signal;
+    const dispose=register({register(tool){tools.set(tool.descriptor.name,tool);return ()=>tools.delete(tool.descriptor.name);}},
+      {provider:{verification:'mock',execute:(_op,_input,bounded)=>{
+        calls++;signal=bounded.signal;controller.abort();
+        return Promise.resolve(write?{state:'confirmed',externalId:'synthetic',evidenceRefs:[]}:
+          {number:8,title:'Synthetic issue',body:'Synthetic body',state:'open',labels:[],
+            url:'https://github.com/example/repository/issues/8',updatedAt:fixtures.issue.updated_at});
+      }}});
+    try {
+      const tool=tools.get(write?'github.issue.comment':'github.issue.get');
+      await assert.rejects(tool.execute(write?{repo,number:8,body:'synthetic note'}:{repo,number:8},
+        {...context(),signal:controller.signal,taskId:'synthetic-task',runId:'synthetic-run',
+          authorizationRef:'synthetic-grant',scopes:[write?'github:write':'github:read']}),
+        error=>error.code===(write?'RESULT_UNKNOWN':'CANCELLED'));
+      assert.equal(calls,1);assert.equal(signal.aborted,true);
+    } finally {dispose();}
+  });
+});
+test('provider completion after a synchronous deadline crossing is never confirmed', async t => {
+  t.mock.timers.enable({apis:['Date','setTimeout'],now:Date.parse('2026-10-05T00:00:00Z')});
+  for (const write of [false,true]) {
+    let calls=0,signal;
+    const service=new GitHubService({verification:'mock',execute:(_op,_input,bounded)=>{
+      calls++;signal=bounded.signal;t.mock.timers.setTime(Date.now()+5001);
+      return Promise.resolve(write?{state:'confirmed',externalId:'synthetic',evidenceRefs:[]}:fixtures.issue);
+    }});
+    try {
+      const pending=service.execute(write?'issue.comment':'issue.get',write?{repo,number:8,body:'synthetic note'}:{repo,number:8},context());
+      if(write) assert.deepEqual(await pending,{state:'unknown',evidenceRefs:[]});
+      else await assert.rejects(pending,error=>error.code==='TIMEOUT');
+      assert.equal(calls,1);assert.equal(signal.aborted,true);
+    } finally {service.dispose();}
+  }
+});
+test('synchronous provider throws retain cancellation and deadline semantics for reads and writes', async t => {
+  t.mock.timers.enable({apis:['Date','setTimeout'],now:Date.parse('2026-10-05T00:00:00Z')});
+  for (const interrupt of ['cancel','deadline']) for (const write of [false,true]) await t.test(`${interrupt}-${write?'write':'read'}`,async()=>{
+    const controller=new AbortController();let calls=0,signal;
+    const service=new GitHubService({verification:'mock',execute:(_op,_input,bounded)=>{
+      calls++;signal=bounded.signal;
+      if(interrupt==='cancel') controller.abort();else t.mock.timers.setTime(Date.now()+5001);
+      throw new Error('synthetic provider failure');
+    }});
+    try {
+      const pending=service.execute(write?'issue.comment':'issue.get',write?{repo,number:8,body:'synthetic note'}:{repo,number:8},
+        {...context(),signal:controller.signal});
+      if(write) assert.deepEqual(await pending,{state:'unknown',evidenceRefs:[]});
+      else await assert.rejects(pending,error=>error.code===(interrupt==='cancel'?'CANCELLED':'TIMEOUT'));
+      assert.equal(calls,1);assert.equal(signal.aborted,true);
+    } finally {service.dispose();}
+  });
+});
+test('a synchronous provider error without interruption preserves its original identity',async()=>{
+  const failure=new Error('synthetic provider failure');
+  for(const write of [false,true]) {
+    let calls=0;
+    const service=new GitHubService({verification:'mock',execute:()=>{calls++;throw failure;}});
+    try {
+      await assert.rejects(service.execute(write?'issue.comment':'issue.get',write?{repo,number:8,body:'synthetic note'}:{repo,number:8},context()),
+        error=>error===failure);
+      assert.equal(calls,1);
+    } finally {service.dispose();}
+  }
+});
 test('service bounds non-cooperating providers by deadline without claiming a write was stopped', async t => {
   t.mock.timers.enable({apis:['Date','setTimeout'],now:Date.parse('2026-10-05T00:00:00Z')});
   const signals=[];
@@ -116,6 +182,21 @@ test('service bounds non-cooperating providers by deadline without claiming a wr
   assert.deepEqual(await write,{state:'unknown',evidenceRefs:[]});
   assert.equal(signals[1].aborted,true);
   assert.equal(signals.length,2);
+});
+test('a deadline beyond the timer limit stays active until its actual expiry', async t => {
+  t.mock.timers.enable({apis:['Date','setTimeout'],now:Date.parse('2026-10-05T00:00:00Z')});
+  const maximumDelay=2147483647;let signal,outcome;
+  const service=new GitHubService({verification:'mock',execute:(_op,_input,bounded)=>{
+    signal=bounded.signal;return new Promise(()=>{});
+  }});
+  try {
+    const pending=service.execute('issue.get',{repo,number:8},{signal:new AbortController().signal,
+      deadline:new Date(Date.now()+maximumDelay+5000).toISOString()}).catch(error=>{outcome=error.code;});
+    t.mock.timers.tick(maximumDelay);await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(outcome,undefined);assert.equal(signal.aborted,false);
+    t.mock.timers.tick(5000);await pending;
+    assert.equal(outcome,'TIMEOUT');assert.equal(signal.aborted,true);
+  } finally {service.dispose();}
 });
 test('registered service keeps cancelled provider writes unknown and does not retry', async () => {
   let resolve,signal,calls=0;

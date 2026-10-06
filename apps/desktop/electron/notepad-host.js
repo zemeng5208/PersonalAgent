@@ -98,14 +98,23 @@ export function createDesktopNotepadHost({createAdapter, createAttempts, transpo
       || !pendingTasks().some(task=>task.taskId === payload.taskId)) throw Error('请选择原始待核实任务');
     recovering=true;update({reason:'正在读取原始执行状态；不会再次写入记事本。'});
     try {
-      await reconcileTask(payload.taskId);
+      const reconciliation=await reconcileTask(payload.taskId);
       const read=application.readHostToolTask(payload.taskId);
       const verified=read.task.state === 'succeeded' && read.confirmed?.result?.state === 'verified'
         && read.confirmed.evidenceRefs.length > 0;
+      const terminal=['succeeded','failed','cancelled'].includes(read.task.state);
+      const taskOutcome=read.task.state==='failed'?'失败':read.task.state==='cancelled'?'取消':'结束';
+      let reason='原始结果仍未获确认；保留待核实状态，不会重复写入。';
+      if(verified) reason='原始执行已核实，原生读回及执行证据已保存。文件尚未保存。';
+      else if(terminal) {
+        // already_terminal is a task status, not native evidence that no write occurred.
+        const notApplied=reconciliation?.state==='not_applied' && reconciliation.reason==='host_result'
+          && ['failed','cancelled'].includes(read.task.state);
+        reason=notApplied ? `原始执行已核实为未写入，任务已${taskOutcome}；不会重复写入。`
+          : `原始任务已${taskOutcome}，写入结果未获确认；请检查任务记录与记事本实际内容，不会重复写入。`;
+      }
       update({taskId:payload.taskId,state:read.task.state,busy:false,
-        evidenceRefs:verified ? read.confirmed.evidenceRefs : [],reason:verified
-          ? '原始执行已核实，原生读回及执行证据已保存。文件尚未保存。'
-          : '原始结果仍未获确认；保留待核实状态，不会重复写入。'});
+        evidenceRefs:verified ? read.confirmed.evidenceRefs : [],reason});
     } finally {recovering=false;onUpdate();}
     return snapshot();
   }

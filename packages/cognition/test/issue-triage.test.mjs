@@ -17,8 +17,9 @@ function fixture(overrides = {}) {
     }};
   const model = {complete: async request => {
     modelCalls.push(request);
-    return {response: {kind: 'final', text: JSON.stringify(overrides.answer ?? answer)},
-      usage: {totalTokens: 50}, deployment: {verification: 'mock'}};
+    if (overrides.modelComplete) return overrides.modelComplete(request);
+    return {response: {kind: 'final', text: overrides.modelText ?? JSON.stringify(overrides.answer ?? answer)},
+      usage: {totalTokens: overrides.totalTokens ?? 50}, deployment: {verification: 'mock'}};
   }};
   const repair = {repairIssue: async (ctx, request) => {
     repairs.push({ctx, request});
@@ -43,6 +44,47 @@ test('all four categories are model-driven and retain checked evidence', async (
   for (const kind of ['bug', 'feature', 'docs', 'question']) {
     const f = fixture({answer: {...answer, kind}});
     assert.equal((await f.workflow.triageIssue(f.context, request)).classification.kind, kind);
+  }
+});
+test('Chinese and mixed-label fixtures preserve exact evidence and the four-category contract', async () => {
+  const corpus = [
+    {kind: 'bug', title: '保存文件时崩溃 Crash on save', body: '点击保存后应用退出，steps: save file。', labels: ['待分类', 'windows']},
+    {kind: 'feature', title: '希望增加深色模式 Dark mode', body: '请增加新的主题选项。', labels: ['功能请求', 'enhancement']},
+    {kind: 'docs', title: '修正文档示例 README', body: '安装说明中的路径示例写错了。', labels: ['文档', 'documentation']},
+    {kind: 'question', title: '如何配置本地模型？ Configuration question', body: '已有配置项的用途是什么？', labels: ['使用咨询', 'question']},
+  ];
+  for (const item of corpus) {
+    const source = {...original, ...item}; delete source.kind;
+    const expected = {kind: item.kind, confidence: .95, evidence: [{field: 'title', quote: item.title}]};
+    const f = fixture({answer: expected, invoke: async () => ({state: 'confirmed', result: source, evidenceRefs: ['fixture-read']})});
+    const result = await f.workflow.triageIssue(f.context, request);
+    assert.equal(result.state, 'classified'); assert.equal(result.classification.kind, item.kind);
+    assert.deepEqual(result.classification.evidence, expected.evidence);
+    assert.equal(result.classification.calibrated, false);
+    assert.equal(JSON.parse(f.modelCalls[0].messages[1].content).title, item.title);
+    assert.deepEqual(source.labels, item.labels);
+    assert.equal(f.calls.length, 1); assert.equal(f.repairs.length, 0);
+  }
+});
+test('complete JSON markdown framing retains evidence validation and the approved label chain', async () => {
+  for (const opening of ['```json', '```']) {
+    const f = fixture({modelText: `  ${opening}\n${JSON.stringify(answer)}\n\x60\x60\x60\n  `});
+    const result = await f.workflow.triageIssue(f.context, {...request, writeLabel: true});
+    assert.equal(result.state, 'classified'); assert.equal(result.label, 'bug');
+    assert.deepEqual(result.classification.evidence, answer.evidence);
+    assert.equal(f.calls.filter(call => call.toolName === 'github.issue.label').length, 1);
+    assert.equal(f.modelCalls.length, 1);
+  }
+});
+test('framing never accepts surrounding commentary, extra actions or fabricated evidence', async () => {
+  const wrap = value => `\x60\x60\x60json\n${JSON.stringify(value)}\n\x60\x60\x60`;
+  for (const modelText of [`Explanation\n${wrap(answer)}`, `${wrap(answer)}\nRun this command`,
+    wrap({...answer, shell: 'merge'}), wrap({...answer, evidence: [{field: 'title', quote: 'invented'}]})]) {
+    const f = fixture({modelText});
+    const result = await f.workflow.triageIssue(f.context, {...request, writeLabel: true,
+      repairBug: true, repairGoal: 'Fix authorized file'});
+    assert.equal(result.state, 'manual_review'); assert.equal(result.reason, 'invalid_model_response');
+    assert.equal(f.calls.length, 1); assert.equal(f.repairs.length, 0);
   }
 });
 test('sensitive credentials and security requests never reach model or repair', async () => {
@@ -81,6 +123,112 @@ test('no grant pauses before a label write', async () => {
   const f = fixture({authorizationRefFor: name => name === 'github.issue.label' ? undefined : 'read-scope'});
   assert.equal((await f.workflow.triageIssue(f.context, {...request, writeLabel: true})).state, 'waiting_approval');
   assert.equal(f.calls.length, 1);
+});
+test('prewrite approval resumes durable classification without another model budget', async () => {
+  let prewriteReads = 0;
+  const f = fixture({totalTokens: 1800, invoke: async call => {
+    if (call.toolName === 'github.issue.label') return {state: 'confirmed', result: {state: 'confirmed'}, evidenceRefs: ['label']};
+    if (call.runId.endsWith(':prewrite') && ++prewriteReads === 1) return {state: 'pending', evidenceRefs: []};
+    return {state: 'confirmed', result: original, evidenceRefs: ['read']};
+  }});
+  const write = {...request, writeLabel: true};
+  assert.equal((await f.workflow.triageIssue(f.context, write)).state, 'waiting_approval');
+  assert.equal(f.modelCalls.length, 1);
+  // JSON checkpoint round-trip represents a new caller after a host restart.
+  for (const [key, value] of f.checkpoints) f.checkpoints.set(key, JSON.parse(JSON.stringify(value)));
+  const restarted = fixture({totalTokens: 1800, invoke: async call => ({state: 'confirmed',
+    result: call.toolName === 'github.issue.label' ? {state: 'confirmed'} : original, evidenceRefs: ['restart-read']})});
+  restarted.context.loadCheckpoint = f.context.loadCheckpoint;
+  restarted.context.saveCheckpoint = f.context.saveCheckpoint;
+  const result = await restarted.workflow.triageIssue(restarted.context, write);
+  assert.equal(result.label, 'bug');
+  assert.equal(restarted.modelCalls.length, 0);
+  assert.equal(restarted.calls.filter(call => call.toolName === 'github.issue.label').length, 1);
+});
+test('classification waiting for a grant is reused but changed issue facts block every effect', async () => {
+  let labelAllowed = false, changed = false;
+  const f = fixture({authorizationRefFor: name => name === 'github.issue.label' && !labelAllowed ? undefined : 'scope',
+    invoke: async call => ({state: 'confirmed', result: call.toolName === 'github.issue.label'
+      ? {state: 'confirmed'} : {...original, body: changed ? 'Issue changed after classification' : original.body}, evidenceRefs: []})});
+  const write = {...request, writeLabel: true};
+  for (let i = 0; i < 3; i++) assert.equal((await f.workflow.triageIssue(f.context, write)).state, 'waiting_approval');
+  assert.equal(f.modelCalls.length, 1);
+  labelAllowed = true; changed = true;
+  assert.equal((await f.workflow.triageIssue(f.context, write)).reason, 'issue_changed');
+  assert.equal(f.modelCalls.length, 1);
+  assert.equal(f.calls.filter(call => call.toolName === 'github.issue.label').length, 0);
+  assert.equal(f.repairs.length, 0);
+});
+test('interrupted model reservation persists and never blind resubmits the unknown call', async () => {
+  let release;
+  const f = fixture({modelComplete: () => new Promise(resolve => {release = resolve;})});
+  const controller = new AbortController(); f.context.signal = controller.signal;
+  const first = f.workflow.triageIssue(f.context, {...request, writeLabel: true});
+  for (let i = 0; !release && i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.ok(release); controller.abort();
+  assert.equal((await first).state, 'manual_review');
+  const restarted = new AbortController(); f.context.signal = restarted.signal;
+  release({response: {kind: 'final', text: JSON.stringify(answer)}, usage: {totalTokens: 50}});
+  await Promise.resolve(); await Promise.resolve();
+  const resumed = f.workflow.triageIssue(f.context, {...request, writeLabel: true});
+  try {
+    const result = await Promise.race([resumed, new Promise(resolve => setImmediate(() => resolve({reason: 'still-waiting'})))]);
+    assert.equal(result.reason, 'classification_result_unknown');
+    assert.equal(f.modelCalls.length, 1);
+    assert.equal(f.calls.filter(call => call.toolName === 'github.issue.label').length, 0);
+  } finally {restarted.abort(); await resumed;}
+});
+test('resumed classification rechecks prewrite facts at the same timestamp', async () => {
+  let resumed = false;
+  const f = fixture({invoke: async call => {
+    if (call.toolName === 'github.issue.label') return {state: 'confirmed', result: {state: 'confirmed'}, evidenceRefs: []};
+    if (call.runId.endsWith(':prewrite')) return resumed
+      ? {state: 'confirmed', result: {...original, body: 'New facts at the original timestamp'}, evidenceRefs: []}
+      : {state: 'pending', evidenceRefs: []};
+    return {state: 'confirmed', result: original, evidenceRefs: []};
+  }});
+  const write = {...request, writeLabel: true, repairBug: true, repairGoal: 'authorized repair'};
+  assert.equal((await f.workflow.triageIssue(f.context, write)).state, 'waiting_approval');
+  resumed = true;
+  assert.equal((await f.workflow.triageIssue(f.context, write)).reason, 'issue_changed');
+  assert.equal(f.modelCalls.length, 1);
+  assert.equal(f.calls.filter(call => call.toolName === 'github.issue.label').length, 0);
+  assert.equal(f.repairs.length, 0);
+});
+test('classification journal rejects corrupted evidence, budget or task binding without another model', async () => {
+  for (const mutate of [journal => {journal.classification.evidence[0].quote = 'invented';},
+    journal => {journal.tokens = -1;}, journal => {journal.maxTokens++;},
+    journal => {journal.taskId = 'other-task';}, journal => {journal.phase = 'invalid';}]) {
+    const f = fixture({authorizationRefFor: name => name === 'github.issue.label' ? undefined : 'scope'});
+    const write = {...request, writeLabel: true};
+    await f.workflow.triageIssue(f.context, write);
+    const [key, journal] = [...f.checkpoints].find(([key]) => key.endsWith(':classification-v1'));
+    mutate(journal); f.checkpoints.set(key, JSON.parse(JSON.stringify(journal)));
+    assert.equal((await f.workflow.triageIssue(f.context, write)).reason, 'invalid_classification_checkpoint');
+    assert.equal(f.modelCalls.length, 1);
+    assert.equal(f.calls.filter(call => call.toolName === 'github.issue.label').length, 0);
+  }
+});
+test('settled invalid model reply consumes its reservation and is not retried', async () => {
+  for (const override of [{modelText: 'not JSON'}, {totalTokens: 4096}]) {
+    const f = fixture(override); const write = {...request, writeLabel: true};
+    const first = await f.workflow.triageIssue(f.context, write);
+    assert.equal(first.state, 'manual_review');
+    assert.equal((await f.workflow.triageIssue(f.context, write)).reason, first.reason);
+    assert.equal(f.modelCalls.length, 1);
+    assert.equal(f.calls.filter(call => call.toolName === 'github.issue.label').length, 0);
+  }
+});
+test('a narrower restart budget cannot reuse the old classification reservation', async () => {
+  const f = fixture({authorizationRefFor: name => name === 'github.issue.label' ? undefined : 'scope'});
+  const write = {...request, writeLabel: true};
+  await f.workflow.triageIssue(f.context, write);
+  const restarted = fixture({maxTokens: 1024});
+  restarted.context.loadCheckpoint = f.context.loadCheckpoint;
+  restarted.context.saveCheckpoint = f.context.saveCheckpoint;
+  assert.equal((await restarted.workflow.triageIssue(restarted.context, write)).reason, 'invalid_classification_checkpoint');
+  assert.equal(restarted.modelCalls.length, 0);
+  assert.equal(restarted.calls.filter(call => call.toolName === 'github.issue.label').length, 0);
 });
 test('unknown label result is retained and never repeated', async () => {
   const f = fixture({invoke: async call => call.toolName === 'github.issue.label'
@@ -131,6 +279,185 @@ test('unknown MOD-34 repair stays paused until original checkpoint receipts are 
   assert.equal((await f.workflow.triageIssue(f.context, repair)).state, 'repair_requested');
   assert.equal(f.repairs[0].ctx.taskId, f.repairs[1].ctx.taskId);
   assert.deepEqual(f.repairs[0].request, f.repairs[1].request);
+});
+test('new factory after JSON restart retains the original repair binding when labels and timestamps change', async () => {
+  const repair = {...request, writeLabel: true, repairBug: true, repairGoal: 'host-authorized repair'};
+  let labelled = false;
+  const first = fixture({invoke: async call => {
+    if (call.toolName === 'github.issue.label') {labelled = true; return {state: 'confirmed', result: {state: 'confirmed'}, evidenceRefs: ['label']};}
+    return {state: 'confirmed', result: {...original, labels: labelled ? ['bug'] : [],
+      updatedAt: labelled ? '2026-10-01T01:00:00Z' : original.updatedAt}, evidenceRefs: ['read']};
+  }, repairIssue: async () => ({state: 'waiting_approval', resultSummary: 'original MOD34 approval pending', evidenceRefs: ['repair-pending']})});
+  assert.equal((await first.workflow.triageIssue(first.context, repair)).state, 'waiting_approval');
+  const persisted = new Map(JSON.parse(JSON.stringify([...first.checkpoints])));
+  const restarted = fixture({invoke: async () => ({state: 'confirmed', result: {...original, labels: ['bug', 'triaged'],
+    updatedAt: '2026-10-01T02:00:00Z'}, evidenceRefs: ['restart-read']})});
+  restarted.context.loadCheckpoint = key => persisted.get(key);
+  restarted.context.saveCheckpoint = (key, value) => persisted.set(key, JSON.parse(JSON.stringify(value)));
+  assert.equal((await restarted.workflow.triageIssue(restarted.context, repair)).state, 'repair_requested');
+  assert.deepEqual(restarted.repairs[0].request, first.repairs[0].request);
+  assert.equal(restarted.modelCalls.length, 0);
+  assert.equal(restarted.calls.filter(call => call.toolName === 'github.issue.label').length, 0);
+});
+test('unknown repair source survives restart and metadata changes without replay until host confirmation', async () => {
+  const repair = {...request, repairBug: true, repairGoal: 'host-authorized repair'};
+  const first = fixture({repairIssue: async () => ({state: 'waiting_reconciliation', resultSummary: 'original run unknown', evidenceRefs: []})});
+  await first.workflow.triageIssue(first.context, repair);
+  const persisted = new Map(JSON.parse(JSON.stringify([...first.checkpoints])));
+  let confirmed = false;
+  const restarted = fixture({confirmedRepairReplayReady: () => confirmed, invoke: async () => ({state: 'confirmed',
+    result: {...original, labels: ['triaged'], updatedAt: '2026-10-01T01:00:00Z'}, evidenceRefs: ['current-read']})});
+  restarted.context.loadCheckpoint = key => persisted.get(key);
+  restarted.context.saveCheckpoint = (key, value) => persisted.set(key, JSON.parse(JSON.stringify(value)));
+  assert.equal((await restarted.workflow.triageIssue(restarted.context, repair)).state, 'waiting_reconciliation');
+  assert.equal(restarted.calls.length, 0); assert.equal(restarted.repairs.length, 0);
+  confirmed = true;
+  assert.equal((await restarted.workflow.triageIssue(restarted.context, repair)).state, 'repair_requested');
+  assert.deepEqual(restarted.repairs[0].request, first.repairs[0].request);
+  assert.equal(restarted.modelCalls.length, 0);
+});
+test('repair recovery still rejects changed content, closed issues and sensitive facts before delegating', async () => {
+  for (const change of [{body: 'Changed crash description'}, {state: 'closed'}, {body: 'security vulnerability disclosure'}]) {
+    const f = fixture({repairIssue: async () => ({state: 'waiting_approval', resultSummary: 'pending repair', evidenceRefs: []})});
+    const repair = {...request, repairBug: true, repairGoal: 'authorized repair'};
+    await f.workflow.triageIssue(f.context, repair);
+    const restarted = fixture({invoke: async () => ({state: 'confirmed', result: {...original, ...change}, evidenceRefs: []})});
+    restarted.context.loadCheckpoint = f.context.loadCheckpoint; restarted.context.saveCheckpoint = f.context.saveCheckpoint;
+    assert.equal((await restarted.workflow.triageIssue(restarted.context, repair)).reason, 'issue_changed_before_repair');
+    assert.equal(restarted.repairs.length, 0); assert.equal(restarted.modelCalls.length, 0);
+  }
+});
+test('confirmed run-ID read caches cannot hide changed issue facts after a repair approval restart', async () => {
+  for (const change of [{body: 'Changed crash description'}, {state: 'closed'}, {body: 'security vulnerability disclosure'},
+    {labels: ['triaged'], updatedAt: '2026-10-01T01:00:00Z'}]) {
+    const cache = new Map(), dispatchedReads = [];
+    let current = original;
+    const invoke = async call => {
+      if (cache.has(call.runId)) return structuredClone(cache.get(call.runId));
+      dispatchedReads.push(call.runId);
+      const outcome = {state: 'confirmed', result: structuredClone(current), evidenceRefs: ['fresh-read']};
+      cache.set(call.runId, outcome); return structuredClone(outcome);
+    };
+    const first = fixture({invoke, repairIssue: async () => ({state: 'waiting_approval', resultSummary: 'repair approval pending', evidenceRefs: []})});
+    const repair = {...request, repairBug: true, repairGoal: 'authorized repair'};
+    await first.workflow.triageIssue(first.context, repair);
+    assert.equal(dispatchedReads.length, 3);
+    const persisted = new Map(JSON.parse(JSON.stringify([...first.checkpoints])));
+    current = {...original, ...change};
+    const restarted = fixture({invoke});
+    restarted.context.loadCheckpoint = key => persisted.get(key);
+    restarted.context.saveCheckpoint = (key, value) => persisted.set(key, JSON.parse(JSON.stringify(value)));
+    const result = await restarted.workflow.triageIssue(restarted.context, repair);
+    assert.equal(dispatchedReads.length, 4);
+    assert.ok(dispatchedReads[3].endsWith(':repair-read-1'));
+    if (change.labels) {
+      assert.equal(result.state, 'repair_requested');
+      assert.deepEqual(restarted.repairs[0].request, first.repairs[0].request);
+    } else {
+      assert.equal(result.reason, 'issue_changed_before_repair'); assert.equal(restarted.repairs.length, 0);
+    }
+    assert.equal(restarted.modelCalls.length, 0);
+  }
+});
+test('fresh repair read approvals retain one identity and one reserved step across repeated JSON recovery', async () => {
+  const cache = new Map(), pendingIds = [];
+  let approved = false, repairAttempts = 0;
+  const f = fixture({maxSteps: 7, invoke: async call => {
+    if (cache.has(call.runId)) return structuredClone(cache.get(call.runId));
+    if (call.runId.endsWith(':repair-read-1') && !approved) {pendingIds.push(call.runId); return {state: 'pending', evidenceRefs: []};}
+    const outcome = {state: 'confirmed', result: structuredClone(original), evidenceRefs: ['read']};
+    cache.set(call.runId, outcome); return structuredClone(outcome);
+  }, repairIssue: async () => ({state: ++repairAttempts === 1 ? 'waiting_approval' : 'succeeded', resultSummary: 'original repair', evidenceRefs: []})});
+  const repair = {...request, repairBug: true, repairGoal: 'authorized repair'};
+  await f.workflow.triageIssue(f.context, repair);
+  for (let i = 0; i < 3; i++) {
+    for (const [key, value] of f.checkpoints) f.checkpoints.set(key, JSON.parse(JSON.stringify(value)));
+    assert.equal((await f.workflow.triageIssue(f.context, repair)).state, 'waiting_approval');
+    const journal = [...f.checkpoints.values()].find(value => value.pendingRepair);
+    assert.equal(journal.steps, 6); assert.equal(journal.repairRead.generation, 1); assert.equal(journal.repairRead.reserved, true);
+  }
+  assert.equal(new Set(pendingIds).size, 1); assert.equal(repairAttempts, 1);
+  approved = true;
+  assert.equal((await f.workflow.triageIssue(f.context, repair)).state, 'repair_requested');
+  assert.equal(repairAttempts, 2); assert.deepEqual(f.repairs[0].request, f.repairs[1].request);
+});
+test('repair generations and fresh reads stop at the original persisted step budget', async () => {
+  const cache = new Map(), reads = [];
+  const f = fixture({maxSteps: 7, invoke: async call => {
+    if (cache.has(call.runId)) return structuredClone(cache.get(call.runId));
+    reads.push(call.runId);
+    const outcome = {state: 'confirmed', result: structuredClone(original), evidenceRefs: ['read']};
+    cache.set(call.runId, outcome); return structuredClone(outcome);
+  }, repairIssue: async () => ({state: 'waiting_approval', resultSummary: 'same pending repair', evidenceRefs: []})});
+  const repair = {...request, repairBug: true, repairGoal: 'authorized repair'};
+  await f.workflow.triageIssue(f.context, repair); await f.workflow.triageIssue(f.context, repair);
+  for (let i = 0; i < 4; i++) {
+    for (const [key, value] of f.checkpoints) f.checkpoints.set(key, JSON.parse(JSON.stringify(value)));
+    assert.equal((await f.workflow.triageIssue(f.context, repair)).reason, 'step_budget_exhausted');
+  }
+  assert.equal(f.repairs.length, 2); assert.equal(reads.length, 4);
+  const journal = [...f.checkpoints.values()].find(value => value.pendingRepair);
+  assert.equal(journal.steps, 7); assert.equal(journal.repairRead.generation, 2);
+});
+test('legacy repair checkpoints get a fresh read instead of their cached repair-read snapshot', async () => {
+  const cache = new Map(); let current = original;
+  const f = fixture({invoke: async call => {
+    if (cache.has(call.runId)) return structuredClone(cache.get(call.runId));
+    const outcome = {state: 'confirmed', result: structuredClone(current), evidenceRefs: ['read']};
+    cache.set(call.runId, outcome); return structuredClone(outcome);
+  }, repairIssue: async () => ({state: 'waiting_approval', resultSummary: 'original repair', evidenceRefs: []})});
+  const repair = {...request, repairBug: true, repairGoal: 'authorized repair'};
+  await f.workflow.triageIssue(f.context, repair);
+  const [key, journal] = [...f.checkpoints].find(([, value]) => value.pendingRepair);
+  delete journal.repairRead; delete journal.steps; delete journal.maxSteps;
+  f.checkpoints.set(key, JSON.parse(JSON.stringify(journal)));
+  current = {...original, state: 'closed'};
+  assert.equal((await f.workflow.triageIssue(f.context, repair)).reason, 'issue_changed_before_repair');
+  assert.ok(f.calls.at(-1).runId.endsWith(':repair-read-1')); assert.equal(f.repairs.length, 1);
+});
+test('damaged repair generation or budget cannot request a new read or delegate', async () => {
+  for (const mutate of [value => {value.repairRead.generation = -1;}, value => {value.repairRead.steps = 0;},
+    value => {value.repairRead.reserved = 'yes';}, value => {value.repairRead.maxSteps++;}, value => {value.steps++;}]) {
+    const f = fixture({repairIssue: async () => ({state: 'waiting_approval', resultSummary: 'original repair', evidenceRefs: []})});
+    const repair = {...request, repairBug: true, repairGoal: 'authorized repair'};
+    await f.workflow.triageIssue(f.context, repair);
+    const [key, journal] = [...f.checkpoints].find(([, value]) => value.pendingRepair);
+    mutate(journal); f.checkpoints.set(key, JSON.parse(JSON.stringify(journal)));
+    const calls = f.calls.length;
+    assert.equal((await f.workflow.triageIssue(f.context, repair)).state, 'manual_review');
+    assert.equal(f.calls.length, calls); assert.equal(f.repairs.length, 1);
+  }
+});
+test('legacy repair checkpoints resume identical metadata but never guess a changed MOD34 binding', async () => {
+  for (const changed of [false, true]) {
+    const f = fixture({repairIssue: async () => ({state: 'waiting_approval', resultSummary: 'pending repair', evidenceRefs: []})});
+    const repair = {...request, repairBug: true, repairGoal: 'authorized repair'};
+    await f.workflow.triageIssue(f.context, repair);
+    const [key, journal] = [...f.checkpoints].find(([key]) => !key.endsWith(':classification-v1'));
+    delete journal.pendingRepairSource;
+    f.checkpoints.set(key, JSON.parse(JSON.stringify(journal)));
+    const restarted = fixture({invoke: async () => ({state: 'confirmed', result: {...original,
+      labels: changed ? ['triaged'] : [], updatedAt: changed ? '2026-10-01T01:00:00Z' : original.updatedAt}, evidenceRefs: []})});
+    restarted.context.loadCheckpoint = f.context.loadCheckpoint; restarted.context.saveCheckpoint = f.context.saveCheckpoint;
+    const result = await restarted.workflow.triageIssue(restarted.context, repair);
+    assert.equal(result.state, changed ? 'manual_review' : 'repair_requested');
+    assert.equal(restarted.repairs.length, changed ? 0 : 1);
+    if (changed) assert.equal(result.reason, 'repair_checkpoint_source_missing');
+    else assert.deepEqual(restarted.repairs[0].request, f.repairs[0].request);
+  }
+});
+test('a corrupted persisted repair source cannot replace the original issue facts', async () => {
+  for (const mutate of [source => {source.body = 'Different original source';}, source => {source.labels.push('changed-binding');},
+    source => {source.updatedAt = '2026-10-01T01:00:00Z';}]) {
+    const f = fixture({repairIssue: async () => ({state: 'waiting_approval', resultSummary: 'pending repair', evidenceRefs: []})});
+    const repair = {...request, repairBug: true, repairGoal: 'authorized repair'};
+    await f.workflow.triageIssue(f.context, repair);
+    const [key, journal] = [...f.checkpoints].find(([key]) => !key.endsWith(':classification-v1'));
+    mutate(journal.pendingRepairSource);
+    f.checkpoints.set(key, JSON.parse(JSON.stringify(journal)));
+    assert.equal((await f.workflow.triageIssue(f.context, repair)).state, 'manual_review');
+    assert.equal(f.repairs.length, 1);
+  }
 });
 test('read pending and unknown remain Runtime pause states', async () => {
   for (const [state, expected] of [['pending', 'waiting_approval'], ['unknown', 'waiting_reconciliation']]) {

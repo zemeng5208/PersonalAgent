@@ -58,6 +58,39 @@ function port(fetchImpl, authorizationProvider = provider(), config = {}) {
   }, authorizationProvider, fetchImpl);
 }
 
+for (const transport of ['iterator', 'reader']) {
+  test(`${transport} response preserves chunks when transport reuses its byte buffer`, async () => {
+    const chunks = ['A', 'B'].map(text => new TextEncoder().encode(`data: ${JSON.stringify(message(text))}\n\n`));
+    assert.equal(chunks[0].byteLength, chunks[1].byteLength);
+    const buffer = new Uint8Array(chunks[0].byteLength);
+    let offset = 0;
+    let released = 0;
+    let cancelled = 0;
+    const reader = {
+      async read() {
+        if (offset === chunks.length) return {done: true};
+        buffer.set(chunks[offset++]);
+        return {done: false, value: buffer};
+      },
+      releaseLock() { released++; },
+      cancel() { cancelled++; },
+    };
+    const body = transport === 'reader' ? {getReader: () => reader} : {
+      async *[Symbol.asyncIterator]() {
+        for (const chunk of chunks) {
+          buffer.set(chunk);
+          yield buffer;
+        }
+      },
+    };
+    const cloud = port(async () => ({status: 200,
+      headers: {get: () => 'text/event-stream'}, body}));
+    assert.deepEqual(await cloud.invoke(request()), {kind: 'text', text: 'AB', verification: 'unverified'});
+    assert.equal(released, transport === 'reader' ? 1 : 0);
+    assert.equal(cancelled, 0);
+  });
+}
+
 async function rejectsCode(promise, code, forbidden = []) {
   await assert.rejects(promise, error => {
     assert.ok(error instanceof ProtocolError);
@@ -715,6 +748,135 @@ test('streaming body byte limit rejects before requesting another chunk', async 
   }));
   await rejectsCode(cloud.invoke(request()), 'EXTERNAL_FAILURE');
   assert.equal(reads, 1);
+});
+
+test('over-limit native response stream is cancelled before its lock is released', async () => {
+  let cancellations = 0;
+  const body = new ReadableStream({
+    start(controller) { controller.enqueue(new Uint8Array(1024 * 1024 + 1)); },
+    cancel(reason) { assert.equal(reason, undefined); cancellations += 1; },
+  });
+  const cloud = port(async () => new Response(body, {
+    headers: {'content-type': 'application/json'},
+  }));
+  await rejectsCode(cloud.invoke(request()), 'EXTERNAL_FAILURE');
+  assert.equal(cancellations, 1);
+  assert.equal(body.locked, false);
+});
+
+test('non-success native response closes without consuming private body or waiting for cleanup', async () => {
+  let reads = 0;
+  let cancellations = 0;
+  const body = new ReadableStream({
+    pull() { reads += 1; },
+    cancel() { cancellations += 1; return new Promise(() => {}); },
+  }, {highWaterMark: 0});
+  const cloud = port(async () => new Response(body, {status: 503}));
+  await assert.rejects(cloud.invoke(request()), error => {
+    assert.equal(error.code, 'EXTERNAL_FAILURE');
+    assert.equal(error.retryable, true);
+    assert.equal(error.message, 'AgentArts request returned a non-success HTTP status');
+    return true;
+  });
+  assert.equal(cancellations, 1);
+  assert.equal(reads, 0);
+  assert.equal(body.locked, false);
+});
+
+test('cancellation closes an uncooperative reader without replacing the original error', async () => {
+  const controller = new AbortController();
+  let entered;
+  const reading = new Promise(resolve => { entered = resolve; });
+  let cancellations = 0;
+  let releases = 0;
+  const cloud = port(async () => ({
+    status: 200,
+    headers: {get: () => 'application/json'},
+    body: {getReader: () => ({
+      read() { entered(); return new Promise(() => {}); },
+      cancel() { cancellations += 1; throw new Error('private cleanup detail'); },
+      releaseLock() { releases += 1; throw new Error('private release detail'); },
+    })},
+  }));
+  const result = cloud.invoke(request({signal: controller.signal}));
+  await reading;
+  controller.abort();
+  await rejectsCode(result, 'CANCELLED', ['private cleanup detail', 'private release detail']);
+  assert.equal(cancellations, 1);
+  assert.equal(releases, 1);
+});
+
+test('a transport response arriving after cancellation is discarded without resuming or retrying', async () => {
+  const controller = new AbortController();
+  let deliver;
+  let entered;
+  const fetching = new Promise(resolve => { entered = resolve; });
+  let requests = 0;
+  let cancellations = 0;
+  const body = new ReadableStream({
+    cancel() { cancellations += 1; },
+  }, {highWaterMark: 0});
+  const cloud = port(() => {
+    requests += 1;
+    entered();
+    return new Promise(resolve => { deliver = resolve; });
+  });
+  const result = cloud.invoke(request({signal: controller.signal}));
+  await fetching;
+  controller.abort();
+  await rejectsCode(result, 'CANCELLED');
+  assert.equal(cancellations, 0);
+  deliver(new Response(body, {headers: {'content-type': 'application/json'}}));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(cancellations, 1);
+  assert.equal(body.locked, false);
+  assert.equal(requests, 1);
+});
+
+test('a fully consumed native response is released without cancelling successful transport', async () => {
+  let cancellations = 0;
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(JSON.stringify(message('ok'))));
+      controller.close();
+    },
+    cancel() { cancellations += 1; },
+  });
+  const cloud = port(async () => new Response(body, {
+    headers: {'content-type': 'application/json'},
+  }));
+  assert.equal((await cloud.invoke(request())).text, 'ok');
+  assert.equal(body.locked, false);
+  assert.equal(cancellations, 0);
+});
+
+test('cancellation during fetch result handoff still closes the unread response once', async () => {
+  const controller = new AbortController();
+  let deliver;
+  let entered;
+  const fetching = new Promise(resolve => { entered = resolve; });
+  let requests = 0;
+  let reads = 0;
+  let cancellations = 0;
+  const body = new ReadableStream({
+    pull() { reads += 1; },
+    cancel() { cancellations += 1; },
+  }, {highWaterMark: 0});
+  const cloud = port(() => {
+    requests += 1;
+    entered();
+    return new Promise(resolve => { deliver = resolve; });
+  });
+  const result = cloud.invoke(request({signal: controller.signal}));
+  await fetching;
+  deliver(new Response(body, {headers: {'content-type': 'application/json'}}));
+  queueMicrotask(() => controller.abort());
+  await rejectsCode(result, 'CANCELLED');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(cancellations, 1);
+  assert.equal(body.locked, false);
+  assert.equal(reads, 0);
+  assert.equal(requests, 1);
 });
 
 test('invalid UTF-8 is rejected for raw body and text seams', async () => {

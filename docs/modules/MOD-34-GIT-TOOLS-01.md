@@ -12,12 +12,20 @@
 
 Host 固定 canonical root、repository、sourceBranch、remoteName、无凭据 HTTPS remote URL、路径 allowlist 与作者身份。模型无法传命令、shell、remote、branch、凭据或验证结果。进程使用 Node spawn 与固定 argv，限制输出和 deadline，清理 Git 环境注入变量，不返回 stderr。命令失败不声称写入未发生；取消、超时及输出溢出标记结果未知，必须外部核实后再决定操作。
 
+stdout 先收集不超过 1 MiB 的字节，在进程正常退出后严格按完整 UTF-8 解码，保留 BOM 字符；管道分块不能破坏中文路径。非法编码明确失败，push/update-ref 的结果仍保守未知；不会猜测替换字符对应的文件路径。工作树 root 只去掉 Git 的一个 LF/CRLF 输出终止符，保留目录名中的合法空格。超限仍中断进程并返回 RESULT_UNKNOWN。
+
 Commit 查询原 task/run 的 Runtime 已确认 `workspace.run_allowed_command` receipt，要求真实 exitCode=0、同 HEAD、全部 host allowlist 文件 SHA256 一致。Runtime 组合入口必须在验证命令执行前后读取相同快照，仅在两者一致且命令结果确认时记录 receipt。不能将模型 arguments 转成 receipt。快照 helper 只读，不签发授权。
 
 Commit 用临时独立 index 从旧 HEAD 建树，精确验证字节经 hash-object stdin 写入 blob，不执行 clean filter、不暂存全仓。入口拒绝已有 staged 变动；按 `git rev-parse --git-path index` 取得实际 worktree index 路径，取得 exclusive index.lock 后核实原 index 字节 SHA256、HEAD 和文件快照，写入新 index，锁期间以 update-ref old SHA CAS 更新固定分支，再原子 rename 安装新 index。不覆盖并发 Git index 写入；ref 已尝试更新后异常使用 RESULT_UNKNOWN，需读回 HEAD/index 核实。仅支持 bounded canonical 普通文件；不支持删除、symlink、submodule。只读 Git 子进程中断也保守返回 RESULT_UNKNOWN。
 
 Push 固定 SHA 到固定 remote 分支；读取远程 SHA 并确认其是新 HEAD 的祖先，再使用 expected-SHA lease 消除远程竞争，拒绝覆盖分叉历史。读到不可达远程对象时 fail closed，不做隐式 fetch。Push 独立外部写审批；无副作用盲目重试。
 
+最新受检源码be49b30及源码相同的docs90f02d0已完成准确90f02d0双Windows Foundation：
+各31workspace2035通过/0失败/16跳过，其中coding198/0/4，下面历史四个新增Git夹具失败
+均已修正并通过。PR首轮无runner/steps取消仍保留，仅一次基础设施重试成功；Linux实际
+TMPDIR别名探针旧夹具0/3、新3/3，本身不替代Windows日志。真实账号push、原任务未知
+恢复及真人UIA仍未计通过；详见统一续接清单的最终受检源码与非作者交接。
+
 Push 在 context 授权检查后调用 host `getCredentials(context)`，接收 `{token}`。host 可与 GitHub 工具复用同一个可信 secret adapter；不读取 ambient token，不调用全局 credential helper。缺凭据明确 UNAUTHORIZED。仅为固定 HTTPS URL 的 Git 子进程设置 http extraheader 环境配置；token 不进入 argv、模型参数、返回值或日志，并禁止 HTTP redirect。注册任一工具失败时回滚已取得的注册。
 
-本工作包遵照用户限制，未执行 build、测试、安装或真实服务。准备的集中验收命令：`npm run build -w @personal-agent/coding-tools`，随后 `node --test packages/coding-tools/test/git-tools.test.mjs`。另外需要真实临时 Git 仓库验收 index 字节保持、HEAD CAS 竞争、receipt 伪造/文件变动、远程 lease 竞争和写结果未知恢复；这些尚未验证。
+初稿交付时遵照当时限制，未执行 build、测试、安装或真实服务；这是历史记录。后续沿原 PR #290 持续验证，最新路径修复登记 #212 `6002024053` / `6002153136`：固定 Node24.15/npm11.12 的 coding-tools build/typecheck 和完整模块测试已通过，187通过、0失败、15平台门控跳过，其中 Git19/19。回归先复现旧实现跨块中文损坏、非法 UTF-8 被接受及真实临时 Git 仓库末尾空格丢失，再验证修复；合成 stdout 覆盖逐字节分块、非法编码、1 MiB 超限，实际子进程的合成 Git 输出另覆盖中文跨块。真实临时本地 Git 仓库也覆盖现有可信合成 receipt 的正常本地提交；不把这些计作真实账号 push、Windows 原任务恢复或竞争场景全面验收。`d3426af` 的 Windows PR Foundation 首轮因新增夹具失败4项：临时根8.3别名与生产canonical根比较不一致，以及Windows不支持末尾空格目录cwd。#212 `6002331612` 保留原失败并规范化夹具根，Windows使用合法中文内部空格目录，Linux仍覆盖真实末尾空格；原UTF-8/超限和严格cwd断言保留，修正后的完整coding-tools本机仍187/0/15，新head Windows另验。完整验收与限制续接见 [当前清单](DEV-WORKFLOWS-CONTINUATION-20261005.md)。index/HEAD CAS 并发、真实远程 lease 与写结果未知恢复仍需对应可信环境读回；模块维持 provisional。

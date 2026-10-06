@@ -66,3 +66,19 @@ Fake fetch 测试不代表真实服务已接通。真实 AgentArts 项目/runtim
 401/500 脱敏、授权 CR/LF 拒绝、1 MiB/16,000 字符边界、流式提前限流、严格 UTF-8、
 错误 JSON、冲突 index、空文本、受限 request ID 和 hash session id。真实 API、
 deployment、账号和云成本本次均未执行。
+
+## 2026-10-05 下一增量：失败响应流释放
+
+按本人邮件继续指令与 #212 文件登记，在已合入 #277 的 main `53e6274` 内容上
+补齐 HTTP 适配器生命周期。原实现对超限 reader 仅释放锁、对未读取的 HTTP 失败
+直接返回，忽略取消的 transport 迟到响应也未关闭；三个真实 `ReadableStream`/
+注入 reader 回归及一个迟到响应回归分别先证明旧清理调用为零。
+
+现在未完成读取的 reader 先尝试 cancel 再 release；未消费的失败响应以及取消/期限
+之后到达的响应只清理，不读取私有正文、不继续执行或自动重发。清理抛错、拒绝或
+永久等待不会覆盖原 CANCELLED/TIMEOUT/EXTERNAL_FAILURE，也不拖住原调用。
+完整成功流只释放锁，不额外取消。接口不授予新权限、不改变公共 wire/Schema、
+云配置或响应解析标准；不能据此声称远端工作已停止或真实云验收完成。
+
+Node 24.15.0 的 coordination build 与模块测试 110/110 通过（HTTP 适配器52项）。
+这是实际本地 Web Streams API 与显式注入 transport 的生命周期验证，没有云调用。
