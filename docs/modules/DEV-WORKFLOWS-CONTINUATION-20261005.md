@@ -775,3 +775,25 @@ unknown精确原run/args/steps1、实时授权与ready属性。源hash
 且无finding。准备误名before的新dist3pass明确不计旧失败，原有效失败另保留。
 仅本人发现实现/测试与MOD34/本续接说明，沿开放#297发布，不改公共协议或Runtime
 装配，原完整现场依然按owner接续。最新新头Windows完整门禁另读取，不借旧头绿灯。
+
+上述九项增量的准确 head `e109368779ba833f9d75b331766256701201338b` /
+tree `73bd2f9a44418523c160a9d4158db03ba3b5e37d` 两路 Windows 首次全检成功：
+push run37492638458/job112369024033、PR run37492644255/job112369046672，完整
+raw328961/329841字符均读取归档。31workspace2117/0/16平台跳过、根22/22、架构
+3/3，check/dev/两项demo均通过。#212原交付记录已更新同head及原验收owner；阶段
+邮件1a1120a846b4d144已核SENT/To，非停止通知，整体仍in_progress。
+
+继续本人MOD33真实失败日志读取（#212原记录 `6018777209`）：标准gh2.46.0原
+exit0/text0的根因已由官方parser与既有非空CRC完整ZIP证明。仅有合并job文件
+`0_check.txt`/`check/system.txt`，旧版逐step正则11steps零匹配后无声返回。
+按正常网络取得并核官方SHA256的隔离gh2.102.0后，原公开Provider/runner在固定
+Node24.15下真实actions.log.read成功：run37474438969/job112306058042/failure身份
+已核，正式Schema六页、连续offset、最终nextOffset:null，348224 UTF-16字符/
+356938 UTF-8字节，SHA256
+`334b89ed82dc50fd73546b104ce4d760e2ca1c526ada1f6c565e4696245a253d`。
+实际Calendar路径、TIMEOUT/EXTERNAL_FAILURE及测试失败标记存在，全GET、凭据
+只在内存，不输出/存储日志正文或签名URL，未改系统CLI/协议/连接器实现。本人仅
+补充MOD33包README、模块说明及本续接文档的可信CLI兼容前提和证据，沿#297交付。
+当前兼容版本不代表最早支持版本；原Calendar错误、账号写入、Windows与原可信
+Runtime闭环仍按原owner处理，不能将新读取证据升级为整体完成。截止仍为
+2026-10-07北京时间20:00，继续新PR/分工/认证邮件检查与新增独立工作。

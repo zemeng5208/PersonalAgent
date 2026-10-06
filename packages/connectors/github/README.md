@@ -1,7 +1,7 @@
 # GitHub 连接器（MOD-33）
 
 `@personal-agent/github` 是 DEV-WORKFLOWS 的 Local Profile 增量。接口为
-provisional，真实 GitHub、Windows CLI 和消费者闭环尚未验收；不纳入 Competition
+provisional，真实 GitHub 部分只读已验证；Windows CLI、账号写入和消费者闭环尚未验收；不纳入 Competition
 Profile 的完成证据。生产 provider 不自动回退 Fake。
 
 公开入口导出 `GitHubInputs`、`GitHubOutputs`、`GitHubOperation`、`GitHubPort`、
@@ -127,6 +127,20 @@ REST 分页不是快照，变化期间可能重复/遗漏，消费者按编号�
 CLI stdout+stderr 总上限 1 MiB；超过明确失败，不将部分 diff/log 冒充完整内容。
 失败日志先验证 job.run_id，再通过 `gh run view --job --log-failed` 读文本。
 不把临时签名下载 URL 或 zip 日志作为输出。
+
+可信宿主必须注入支持目标 Actions 日志归档布局的 CLI。当前真实只读验证使用官方
+`gh 2.102.0`；这不是最早支持版本的声明。已确认 `gh 2.46.0` 只匹配逐步骤日志，
+对仅含合并 job 文件 `0_check.txt` 和 `check/system.txt` 的归档会跳过全部步骤，
+使 `--log` 与 `--log-failed` 均成功退出但返回空文本。宿主验收需要检查原失败 job 的
+实际非空日志和完整分页，不能仅凭退出码确认读取成功；CLI 路径仍由可信组合注入。
+
+2026-10-06 的真实 `GhCliProvider + SpawnGhCommandRunner` 在固定 Node24.15、官方
+gh2.102.0 下读取授权仓库 `zemeng5208/PersonalAgent` 的失败 run `37474438969` /
+job `112306058042`：正式 Schema 六页通过，offset 连续，末页 `nextOffset:null`，
+全文 348224 UTF-16 字符 / 356938 UTF-8 字节，SHA256
+`334b89ed82dc50fd73546b104ce4d760e2ca1c526ada1f6c565e4696245a253d`。
+原 Calendar 测试路径及 TIMEOUT/EXTERNAL_FAILURE 失败标记实际存在；这是受限账号
+GET 读取证据，未修复该历史测试，也不覆盖真实写入、Windows 或 Runtime 完整闭环。
 
 pr.diff 每页读前及读后核对两端 SHA；review.comment 写前核对 commitId 及可选 expectedBaseSha（MOD-36 总是提供）；pr.create
 写前核对 head branch SHA。issue.label 为追加标签，写前核对 expectedUpdatedAt，

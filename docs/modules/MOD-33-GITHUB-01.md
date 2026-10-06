@@ -1,11 +1,11 @@
 # MOD-33-GITHUB-01：GitHub 连接器源码增量
 
 - Profile：Local（DEV-WORKFLOWS-PLAN-20261002 #276 的明确范围）。
-- 状态：review / provisional；源码、构建和受控测试已交付，真实服务验收未完成，不标 done/frozen。
+- 状态：review / provisional；源码、构建和受控测试已交付，真实部分只读已验证；账号写入、Windows 与完整消费者验收未完成，不标 done/frozen。
 - 负责人：zemeng；非作者评审：goo122。
 - 独占：packages/connectors/github/** 与本文件；其他模块只消费公开 package exports。
 - 初始基线：3d4d917；初始工作树 .worktrees/dev-github、分支 codex/dev-github。
-  当前续接沿已有 PR #290；精确提交和证据见下方续接清单。
+  历史续接沿 PR #290，当前沿已有 PR #297；精确提交和证据见下方续接清单。
 - 依赖：contracts ToolHost/ToolDescriptor/ConnectorPort/ProtocolError；Runtime Policy、
   ToolGateway、Connector Host 凭据注入；不私设授权、任务库或模型入口。
 
@@ -36,10 +36,27 @@ commit/push、merge、自动关闭或模型归因。verified 等级与生产 hos
 非作者评审、集中门禁和真实服务闭环，不能仅凭源码提升状态。
 
 初稿按当时用户限制仅静态交付；后续用户已授权持续实现与必要构建、受控测试。
-当前source提交 `2eda73d` 的固定Node24.15完整check实际exit0：GitHub96/96，
+历史source提交 `2eda73d` 的固定Node24.15完整check实际exit0：GitHub96/96，
 跨模块Runtime347、根集成19及全build/typecheck/架构/契约/生成检查通过。
 原unknown候选恢复独立复核14/14；完整31workspace1990/0/50跳过。
 这是明确Fake/合成Gh/SQLite证据，不是实际Checks凭据或真实账号写入读回。
+
+2026-10-06 本人实际公开 Provider 已完成 repo.get、issue.get #212、pr.get #296
+三种读取，正式 Schema 与官方身份独立核对。真实失败 CI run `37474438969` / job
+`112306058042` 的 run/job 元数据及标准 CLI 的 11 个 step 匹配；旧 gh2.46.0 的
+空日志根因由官方 parser 与非空、CRC 完整的缓存归档证明：旧版仅匹配逐步骤文件，
+当前合并 job 文件布局零匹配，故 exit0/text0 不表示取得了失败日志。
+
+可信宿主注入官方 gh2.102.0 后，原 GhCliProvider/SpawnGhCommandRunner 实际
+actions.log.read 正式 Schema 六页通过，连续 offset，末页 nextOffset:null，全文
+348224 UTF-16 字符 / 356938 UTF-8 字节，SHA256
+`334b89ed82dc50fd73546b104ce4d760e2ca1c526ada1f6c565e4696245a253d`。
+固定 Node24.15、每页有效 deadline、全 GET；token 仅内存，未输出或保存凭据、
+签名 URL 或日志正文，未改系统 CLI，也未增加连接器 parser 或改变公共协议。
+gh2.102.0 是本次有证兼容版本，不声明最早支持版本。真实 Calendar 断言仍待原
+负责人修复；以上读取不提升 COMMENT/labels/Checks(write)、Windows 现场或原
+MOD34/36/38 可信 Runtime/账号闭环状态。
+
 当前Windows与剩余真实验收以
 [统一续接清单](DEV-WORKFLOWS-CONTINUATION-20261005.md)和PR精确head为准，
 不另复制进度表。真实MOD34/36/38 Gateway闭环仍由原可信场景持有者验收。
