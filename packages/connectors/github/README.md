@@ -24,6 +24,11 @@ const dispose = register(toolHost, {provider});
 环境。宿主显式提供所需 PATH/SystemRoot/TEMP 等可信值。仅支持 github.com。
 凭据通过 GH_TOKEN 环境传给 gh，命令参数、返回值和错误不含凭据。
 
+每个 GhCliProvider 在构造时绑定原 runner 对象，API、日志读取和 dispose 使用同一
+依赖。宿主复用 options 为新 Provider 更换 runner 时，旧实例不会转用或释放新
+实例的依赖。原 runner 的 run/dispose 方法仍实时，readToken 与仓库白名单保持
+原 options 检查语义，凭据更新和白名单撤销不会被配置快照冻结。
+
 stdout/stderr 共用原1 MiB字节上限，完整收集后分别严格UTF-8解码，保留合法BOM和
 跨chunk的中文字符。非法编码固定失败，不把替换字符作为issue/diff/写回执内容接受，
 错误不回显原始字节；取消、期限和超限错误优先。已派发写入的解码失败仍由Provider

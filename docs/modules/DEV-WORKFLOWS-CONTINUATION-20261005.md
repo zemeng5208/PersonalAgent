@@ -797,3 +797,31 @@ Node24.15下真实actions.log.read成功：run37474438969/job112306058042/failur
 当前兼容版本不代表最早支持版本；原Calendar错误、账号写入、Windows与原可信
 Runtime闭环仍按原owner处理，不能将新读取证据升级为整体完成。截止仍为
 2026-10-07北京时间20:00，继续新PR/分工/认证邮件检查与新增独立工作。
+
+上述MOD33文档已发布准确head `4afb8e0812438c17dfead2fddb156061e652726f` /
+tree `68e4e23ea01e521fd03006d0c9c4fdad4bf3db4a`，26diff文件；新头双Windows
+push37499240945/job112391665236、PR37499249363/job112391696773首次均成功。
+完整raw328965/329931字符均归档，34组汇总31workspace2117/0/16、root22/22、
+architecture3/3，check/dev/两项demo全部success。
+
+继续本人MOD33 runner生命周期绑定（#212 `6021583746`），唯一源码writer仅
+gh.ts/github.test.mjs。普通caller复用options创建新Provider，在原credential await
+期间替换runner会让旧请求换用新runner；旧dispose还会释放新依赖并遗漏原依赖。
+原公开before2/2失败，独立before2/2失败且新Provider被错误dispose后明确失败。
+构造捕获原runner引用，API/log/dispose三处一致使用原对象；原run/dispose方法与
+readToken/仓库白名单检查保持live，不冻结凭据或授权。公开after2/2、独立同probe
+after2/2及原dispose方法live断言通过。正式新增回归旧1失败/1通过，fixedNode24.15
+GitHub build/typecheck、完整105/105全部通过，无跳过。源码冻结SHA256
+`4f7969f6d5a8d5b85b8f412b8b011879ca0d42ccab3ee59c7db74c9538938938`，测试
+`67e9ae32fa47a4cce9cdcba65ec75fea44cbf67048487e860722d04f01eceaeb`，独立匹配。
+仅本人两源码及三配套文档，沿#297交付；无DTO/Runtime/根配置变化，全部before/
+after生命周期复现为明确Fake READ，无真实账号write。当前新增源门禁另按准确head
+读取，不借上阶段4af双绿，原真实写入/Windows/可信Runtime仍按owner验收，整体
+Goal继续in_progress，截止仍Oct7北京时间20:00。
+
+最新冻结runner实现另以官方gh2.102、Node24.15原公开Provider实际复验首日志页：
+正确原run/job/failure身份，正式Schema、offset0/nextOffset65536、65536字符/
+66086 UTF-8字节、UTF8 roundtrip通过，页SHA256
+`e24ca1e9e7fbfc6c1054dc47f9c7b7d9af43f2408b5d94268fc39fa04a644f71`。
+仅一个日志页及必要元数据GET，之前完整六页全文证据单独保留，不把首页未出现的
+Calendar标记误说消失，也不重复全量读取；无凭据/正文/签名URL落盘或账号write。

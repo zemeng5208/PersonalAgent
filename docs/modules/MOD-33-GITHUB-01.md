@@ -14,6 +14,12 @@
 register(host,{provider}) 真正注册 13 个工具并返回幂等 dispose。
 GhCliProvider 使用受限 token accessor、显式 repo 白名单及无 shell argv runner；
 生产 SpawnGhCommandRunner 不继承环境，支持字节上限、deadline、取消和释放。
+每个 Provider 构造时固定原 runner 引用，API、日志读取和释放均使用该依赖；
+宿主复用 options 创建新实例不会让旧请求换 runner 或错释放新实例。原 runner
+方法与 options 的凭据/白名单检查保持实时。公开合成复现旧2失败→新2通过，
+独立同探针旧2失败→新2通过；正式新增回归旧1失败/1通过，修后固定Node24.15
+GitHub模块 build/typecheck 和完整105/105通过。这是生命周期绑定证据，不冒充
+账号写入或原Windows现场验收。
 Fake 与 JSON/测试夹具覆盖分页、过滤 PR、404、限流、脱敏、job 归属、revision冲突、
 unknown 写入、取消、工具注册和 scope 防误调用；后续受控执行结果见下方。
 
