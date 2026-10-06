@@ -104,6 +104,7 @@ export function createIssueTriageWorkflow(options: IssueTriageOptions) {
     const base = (): Pick<IssueTriageResult, 'repo' | 'number' | 'evidenceRefs'> => ({repo: request.repo, number: request.number, evidenceRefs: [...new Set(evidenceRefs)]});
     let steps = 0;
     let repairReadGeneration = 0, repairReadReserved = false;
+    let labelReadGeneration = 0, labelReadPending = false;
     const spend = () => {if (++steps > options.maxSteps) throw new Error('STEP_BUDGET_EXHAUSTED');};
     const read = async (phase: string, spendStep = true): Promise<TriageIssue> => {
       if (spendStep) spend();
@@ -118,9 +119,9 @@ export function createIssueTriageWorkflow(options: IssueTriageOptions) {
     };
     let startedEffect = false;
     let result: IssueTriageResult | undefined;
-    const save = (value: IssueTriageResult, pending?: {issue: TriageIssue; label: string; unknown?: boolean},
+    const save = (value: IssueTriageResult, pending?: {issue: TriageIssue; label: string; unknown?: boolean; receiptConfirmed?: boolean},
       pendingRepair?: TriageIssue, repairUnknown = false, pendingRepairSource?: TriageIssue) => {
-      context.saveCheckpoint(key, {binding, steps, maxSteps: options.maxSteps, result: structuredClone(value), ...(pending ? {pending} : {}),
+      context.saveCheckpoint(key, {binding, steps, maxSteps: options.maxSteps, result: structuredClone(value), ...(pending ? {pending, labelReadGeneration, labelReadPending} : {}),
         ...(pendingRepair ? {pendingRepair, repairUnknown,
           repairRead: {generation: repairReadGeneration, steps, reserved: repairReadReserved, maxSteps: options.maxSteps}, ...(pendingRepairSource
           ? {pendingRepairSource, pendingRepairFingerprint: issueFingerprint(pendingRepairSource)} : {})} : {})}); result = value;
@@ -208,17 +209,60 @@ export function createIssueTriageWorkflow(options: IssueTriageOptions) {
           || issueFingerprint(issue) !== result.fingerprint || labels[result.classification.kind] !== saved.pending.label) throw new Error('INVALID_TRIAGE_CHECKPOINT');
         const label = saved.pending.label;
         const pending = {issue, label};
+        if (saved.labelReadGeneration !== undefined) {
+          if (!Number.isSafeInteger(saved.labelReadGeneration) || (saved.labelReadGeneration as number) < 0
+            || (saved.labelReadGeneration as number) > steps) throw new Error('INVALID_TRIAGE_CHECKPOINT');
+          labelReadGeneration = saved.labelReadGeneration as number;
+        }
+        if (saved.labelReadPending !== undefined && typeof saved.labelReadPending !== 'boolean') throw new Error('INVALID_TRIAGE_CHECKPOINT');
+        labelReadPending = saved.labelReadPending === true;
+        if (labelReadPending && labelReadGeneration === 0) throw new Error('INVALID_TRIAGE_CHECKPOINT');
         const runId = `${context.taskId}:${binding}:label`;
-        if (saved.pending.unknown === true && options.confirmedReplayReady?.(runId, context) !== true) return result;
+        const receiptConfirmed = saved.pending.receiptConfirmed === true;
+        const labelUnknown = saved.pending.unknown === true;
+        if (saved.pending.unknown === true && !receiptConfirmed && options.confirmedReplayReady?.(runId, context) !== true) return result;
         // This identical label execution was already charged when its approval was first requested.
         if (saved.steps === undefined) {steps = 4; if (steps > options.maxSteps) throw new Error('STEP_BUDGET_EXHAUSTED');}
-        save({...result, state: 'waiting_reconciliation', reason: 'label_result_unknown'}, {...pending, unknown: true});
-        startedEffect = true;
-        const written = await invoke(context, 'github.issue.label', {repo: request.repo, number: request.number,
-          labels: [label], expectedUpdatedAt: issue.updatedAt}, runId);
-        evidenceRefs.push(...written.evidenceRefs);
-        if (written.state === 'pending') {save({...result!, ...base(), state: 'waiting_approval', reason: 'label_approval_pending'}, pending); return result!;}
-        if (written.state !== 'confirmed' || !record(written.result) || written.result.state !== 'confirmed') return result!;
+        const fresh = async (confirmed: boolean): Promise<boolean> => {
+          if (!labelReadPending && steps >= options.maxSteps) {
+            save({...result!, ...base(), state: 'manual_review', reason: 'step_budget_exhausted'},
+              {...pending, unknown: labelUnknown || confirmed, receiptConfirmed: confirmed});
+            return false;
+          }
+          if (!labelReadPending) {spend(); labelReadGeneration++;}
+          // Reserve before invoking. Only known pending approval may reuse this identity.
+          labelReadPending = false;
+          save({...result!, ...base()}, {...pending, unknown: labelUnknown || confirmed, receiptConfirmed: confirmed});
+          let current: TriageIssue;
+          try {current = await read(`label-resume-read-${labelReadGeneration}`, false);}
+          catch (error) {
+            labelReadPending = error instanceof Error && error.message === 'ISSUE_READ_PENDING';
+            save({...result!, ...base()}, {...pending, unknown: labelUnknown || confirmed, receiptConfirmed: confirmed});
+            throw error;
+          }
+          save({...result!, ...base()}, {...pending, unknown: labelUnknown || confirmed, receiptConfirmed: confirmed});
+          const facts = (v: TriageIssue) => hash([v.number, v.title, v.body, v.state,
+            v.labels.filter(value => value !== label).sort(), v.url]);
+          if (sensitive(current) || (confirmed ? facts(current) !== facts(issue) : issueFingerprint(current) !== issueFingerprint(issue))) {
+            save({...result!, ...base(), state: 'manual_review', reason: 'issue_changed'});
+            return false;
+          }
+          return true;
+        };
+        if (saved.pending.unknown !== true && !await fresh(false)) return result!;
+        if (!receiptConfirmed) {
+          save({...result!, ...base(), state: 'waiting_reconciliation', reason: 'label_result_unknown'}, {...pending, unknown: true});
+          startedEffect = true;
+          const written = await invoke(context, 'github.issue.label', {repo: request.repo, number: request.number,
+            labels: [label], expectedUpdatedAt: issue.updatedAt}, runId);
+          evidenceRefs.push(...written.evidenceRefs);
+          if (written.state === 'pending') {save({...result!, ...base(), state: 'waiting_approval', reason: 'label_approval_pending'}, pending); return result!;}
+          if (written.state !== 'confirmed' || !record(written.result) || written.result.state !== 'confirmed') {
+            save({...result!, ...base()}, {...pending, unknown: true}); return result!;
+          }
+          save({...result!, ...base(), label}, {...pending, unknown: true, receiptConfirmed: true});
+        }
+        if (saved.pending.unknown === true && !await fresh(true)) return result!;
         save({...result!, ...base(), state: 'classified', reason: 'label_confirmed', label}, undefined,
           request.repairBug === true && result!.classification?.kind === 'bug' ? issue : undefined);
         return await delegate(issue, result!);

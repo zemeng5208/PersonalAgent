@@ -69,6 +69,44 @@ test('missing project command details do not change the existing authorization p
   assert.equal(calls.at(-1).input.projectCodeAllowed, false);
 });
 
+test('only explicit selector cancellation preserves permission drafts', async t => {
+  let result;
+  const coding = {configured:true,displayName:'project',authorizationAvailable:true,
+    projectScriptsAvailable:true,projectCommands:['build','test'],cloudExportAllowed:false};
+  const ui = harness(t, async () => result);
+  for (const action of ['select','select-node','select-file','select-npm']) {
+    ui.render(coding);ui.change('cloud',true);ui.change('write',true);
+    result={coding,codingSelectionCancelled:true};await ui.click(action);
+    assert.equal(ui.fields.cloud.checked,true);assert.equal(ui.fields.write.checked,true);
+    assert.match(ui.fields.status.textContent,/尚未生效/);
+  }
+  for (const flag of [undefined,false,'true']) {
+    ui.render(coding);ui.change('cloud',true);ui.change('write',true);
+    result={coding,codingSelectionCancelled:flag};await ui.click('select');
+    assert.equal(ui.fields.cloud.checked,false,'same-name successful or legacy receipts retain existing clearing');
+    assert.equal(ui.fields.write.checked,false);
+  }
+  for (const action of ['authorize','revoke']) {
+    ui.render(coding);ui.change('cloud',true);ui.change('write',true);
+    result={coding,codingSelectionCancelled:true};await ui.click(action);
+    assert.equal(ui.fields.cloud.checked,false,'a cancellation flag cannot change authorization receipt semantics');
+    assert.equal(ui.fields.write.checked,false);
+  }
+});
+
+test('selector cancellation cannot revive drafts cleared by host revocation or configuration loss', async t => {
+  let resolve;
+  const ui=harness(t,()=>new Promise(done=>{resolve=done;}));
+  for (const configured of [true,false]) {
+    ui.render({cloudExportAllowed:true,writeAllowed:true});ui.change('write',false);ui.change('command',true);
+    const pending=ui.click('select');
+    const coding={configured,displayName:'project',cloudExportAllowed:false,writeAllowed:false,commandAllowed:false};
+    ui.render(coding);resolve({coding,codingSelectionCancelled:true});await pending;
+    assert.equal(ui.fields.command.checked,false);assert.equal(ui.fields.cloud.checked,false);
+    assert.doesNotMatch(ui.fields.status.textContent,/尚未生效/);
+  }
+});
+
 test('host readback projects current consent while preserving deliberate unsaved changes', t => {
   const ui = harness(t);
   ui.render({cloudExportAllowed: true, writeAllowed: true, commandAllowed: true, projectCodeAllowed: true});

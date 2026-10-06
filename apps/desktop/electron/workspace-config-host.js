@@ -499,7 +499,7 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
       const startedGeneration=beginSelection();
       const selected=await selectDirectory();
       checkSelection(startedGeneration);
-      if (!selected) return snapshot();
+      if (!selected) return {...snapshot(),selectionCancelled:true};
       const root=directory(selected);
       let node;
       try {node=savedNode?fixedNode(savedNode,root):undefined;} catch {node=undefined;}
@@ -511,7 +511,7 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
     async selectNode() {
       const startedGeneration=beginSelection();
       if(!savedRoot || typeof selectNodeExecutable!=='function') throw Error('请先选择工作区并使用本机 Node 选择器');
-      const selected=await selectNodeExecutable();checkSelection(startedGeneration);if(!selected) return snapshot();
+      const selected=await selectNodeExecutable();checkSelection(startedGeneration);if(!selected) return {...snapshot(),selectionCancelled:true};
       const node=fixedNode(selected,savedRoot);
       const npmCli=derivedNpmCli(node,savedRoot);
       persist(savedRoot,node,savedCheckFile,npmCli);revoke();savedNode=node;savedNpmCli=npmCli;
@@ -520,14 +520,14 @@ export function createWorkspaceConfigHost({userData,safeStorage,selectDirectory,
     async selectCheckFile() {
       const startedGeneration=beginSelection();
       if(!savedRoot || typeof selectCheckFile!=='function') throw Error('请先选择工作区并使用本机文件选择器');
-      const selected=await selectCheckFile(savedRoot);checkSelection(startedGeneration);if(!selected) return snapshot();
+      const selected=await selectCheckFile(savedRoot);checkSelection(startedGeneration);if(!selected) return {...snapshot(),selectionCancelled:true};
       const relative=checkFile(selected,savedRoot);
       persist(savedRoot,savedNode,relative,savedNpmCli);revoke();savedCheckFile=relative;commandFailure='';return snapshot();
     },
     async selectNpmCli() {
       const startedGeneration=beginSelection();
       if(!savedRoot || !savedNode || typeof selectNpmCli!=='function') throw Error('请先选择工作区与 Node');
-      const selected=await selectNpmCli();checkSelection(startedGeneration);if(!selected) return snapshot();
+      const selected=await selectNpmCli();checkSelection(startedGeneration);if(!selected) return {...snapshot(),selectionCancelled:true};
       const npmCli=fixedNpmCli(selected,savedRoot);
       persist(savedRoot,savedNode,savedCheckFile,npmCli);revoke();savedNpmCli=npmCli;
       projectFailure='';return snapshot();

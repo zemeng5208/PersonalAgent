@@ -614,3 +614,71 @@ probe 通过。明确 Fake 模型/工具不冒充真实账号操作。
 跳过，Runtime 349、Desktop 431/11、根集成 22/22；架构、生成协议与类型检查均通过。
 代码与已合入 main 的对应源树一致，文档只校对事实及 diff。新独立接线 head 的 Windows
 CI、正式非作者评审与集成另记，整体及原真实验收仍未关闭。
+
+### 2026-10-06：默认桥已集成，继续恢复与前端细节
+
+#296 的准确 `0babfcc75d5e3f23fd0c33e187eca25b079e52ff` 已获 goo122 正式非作者批准
+`5430070658`，由 goo122 于 14:48:37 UTC 合入 main `111bb90ad94808b87424a7fa02041b44f42313b6`；
+本执行未 APPROVE 或 merge。两路首次 Windows Foundation 完整原始日志实际读取并归档：
+push 37479487409/job112323564604，323953 字符；PR 37479964577/job112325196887，324869 字符。
+各 31 workspace 2076/0/16，coding-tools 219/4 平台跳过、cognition 207、GH 103、
+windows-client 12、Desktop 443/1 平台跳过、Runtime 349；实际受控 .NET8 fixture
+25.84/25.18 秒，check/dev/两项 demo 与清理均成功，零重跑。
+
+MOD33 新严格 UTF-8 实现的公开生产 Provider 另完成真实只读 3/3：实际
+`GhCliProvider + SpawnGhCommandRunner(/usr/bin/gh)` 调用 repo.get、issue.get #212、
+pr.get #296，Schema 与官方身份独立匹配，中文标题完整。必要凭据只在 Node 内存，
+未打印或写入文件；全部 GET、外部写入零，不以 Fake 或 MCP 响应冒充 Provider。
+此项不关闭原 COMMENT/labels/Checks 写入、Windows 或 AgentArts 真实验收。
+
+等待审核期间继续发现并登记三项具体增量：MOD18 完成时未复核任务与最长执行期限
+（#212 `6018788042`），P8 取消系统选择器清掉既有权限草稿（`6018824541`），
+MOD38 标签审批恢复没有重新读取完整 Issue（`6018825022`）。两源码子包与 P8 四文件
+分别唯一 writer，root 仅私有 main coding 分支及本人说明、串行交付；不改公共 Schema、
+共享 Renderer/Admin、他人业务或 Runtime 核心。#296 已合入后的新独立增量沿原分支交付
+唯一后续 PR，按用户已有新 PR 授权执行，不复制旧任务。
+
+MOD18 固定真实 Node 子进程配合显式时钟钩子验证期限边界，取消加时钟异常的独立
+发现已修正，最终定向 9/9、coding-tools build/typecheck 与包测试 217/0/15 平台跳过。
+独立入口确认期限前非零退出保留、精确期限拒绝、初始/完成取消优先；副作用可能已发生，
+不能安全重试。该证据不冒称原 Windows 已发生竞态或具备 OS 沙箱。
+
+P8 四种选择器取消仅返回临时 `selectionCancelled:true`，普通快照/持久配置不加字段；
+既有 main 分支转发私有 `codingSelectionCancelled:true`，Renderer 限定四 selector 与
+明确布尔 true 保留已有未生效草稿。正常换选、授权/撤销、legacy 回执仍原清理；
+宿主撤销或配置失效保持优先，不自动授权，不以同名工作区猜测取消。定向 53/53、
+Desktop typecheck、源语法通过，完整包 434/0/11 Linux 平台跳过。真实 app 配合明确
+合成 IPC 与生产 Host 回执在 1280/480 屏幕通过，无页面错误或溢出；另实际 main
+分支提取加生产 Host 组合核对四取消、正常操作、权限与 invalidate/publish。
+后者是受控私有端口验证，不是原生 Electron/Windows 选择器或 DPI 验收。
+
+MOD38 同一 updatedAt 内正文变敏感的公开 before 已复现。新恢复检查的独立复核又
+发现 pending GET 换运行身份会反复请求审批，已按原契约修复：读取等待审批需
+保留原 runId 与已计预算，取消/未知或读回消费后才推进代际。未知标签先消费可信原
+confirmed receipt，保留事实与 Evidence，再重读内容决定能否继续修复，不能丢掉已发生
+写入或盲重发；随后转人工也保留已确认历史标签，不宣称远端当前标签。cognition
+build/typecheck 与完整测试 213/213；独立恢复缓存 2/2 及原 unknown/self-label 合法恢复
+probe 通过，原失败及首次 after 脚本末调用断言错误均单独保留。准确后续 head 的 CI
+与非作者审核在新交付记录补齐，不将 #296 的受检结果套用于本批源码。
+
+同轮新增 MOD18 对账配置快照（#212 `6019076651`），先在独立缓存副本复现 6 失败、
+修后 reconcile 16/16，再由 root 串行应用原两文件；正式 build/typecheck 与 coding-tools
+223/0/15 平台跳过，独立真实临时 marker 入口 1/1，保留原执行绑定与 marker 选择。
+这只证明公共 options 复用的异步问题，不宣称当前 Runtime literal 配置受影响。
+
+三项增量的首轮完整组合 check 确实失败，原始日志保留：Runtime 原事实重启测试在批准
+标签后未继续批准新增 fresh GET 就期待终态，实际 waiting_approval。root 单一消费者
+测试槽（#212 `6019190246`）补齐真实 TaskRuntime/SQLite/Policy 的显式 GET 审批及再次
+重启，保留最终成功、分类模型只一次、原事实标签一次/变化零次、每次批准读取只执行
+一次的强断言，增加标签审批期与恢复读取审批期同 timestamp 变更，定向 5/5。
+没有降低终态要求、绕过 Policy 或回退旧缓存；必要最终完整 check 另实际执行。
+
+MOD33 另实际只读失败 run/job 元数据可消费：公开 Provider/runner 识别历史失败
+37474438969 与 job112306058042，Schema、原 e8 源 SHA 及 npm check 失败步骤匹配。
+一次标准失败日志读取返回空文本，同 runner 的官方 `--log` 对照也为空，exit0/stderr0；
+未绕过重定向、替换 MCP 原始日志或编造 Provider 数据。该现场日志诊断仍未通过，
+尚无证据支持改变 `--log-failed` 解决；不因晚些 CI 成功关闭原 calendar 超时分类问题。
+
+用户当前截止仍为 2026-10-07 北京时间 20:00；不使用旧邮件 22:00 或翌晨 08:00 截止。
+整体 Goal 与原现场验收仍 in_progress，原负责人及恢复入口维持前述分工；邮件阶段
+进度不代表停止，真实结束前仍需发送结果与剩余事项。

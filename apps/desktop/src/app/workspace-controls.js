@@ -118,7 +118,9 @@ export function mountWorkspaceControls(root, invoke) {
       if (result && typeof result === 'object' && result.coding && typeof result.coding === 'object'
         && !Array.isArray(result.coding) && typeof result.coding.configured === 'boolean') {
         feedback = '';
-        consentDirty = false;
+        const cancelledSelection = ['coding.select','coding.selectNode','coding.selectCheckFile','coding.selectNpmCli'].includes(action)
+          && result.codingSelectionCancelled === true;
+        if (!cancelledSelection) consentDirty = false;
         render(result);
       } else {
         unconfirmed = true;

@@ -2011,13 +2011,15 @@ async function action(event, name, payload) {
     if ((sender !== admin && sender !== workspace) || !competitionMode || syntheticMvp || !codingWorkspace) throw Error('请从正式应用设置配置编程工作区');
     if (name !== 'coding.revoke' && runtimeApplication.activeTaskCount > 0) throw Error('请等待当前任务结束后更改工作区');
     await referenceHost?.invalidate();
-    if (name === 'coding.select') await codingWorkspace.select();
-    if (name === 'coding.selectNode') await codingWorkspace.selectNode();
-    if (name === 'coding.selectNpmCli') await codingWorkspace.selectNpmCli();
-    if (name === 'coding.selectCheckFile') await codingWorkspace.selectCheckFile();
+    let selectionResult;
+    if (name === 'coding.select') selectionResult = await codingWorkspace.select();
+    if (name === 'coding.selectNode') selectionResult = await codingWorkspace.selectNode();
+    if (name === 'coding.selectNpmCli') selectionResult = await codingWorkspace.selectNpmCli();
+    if (name === 'coding.selectCheckFile') selectionResult = await codingWorkspace.selectCheckFile();
     if (name === 'coding.authorize') codingWorkspace.authorize(payload);
     if (name === 'coding.revoke') codingWorkspace.revoke();
-    publish();return {coding:codingWorkspace.snapshot()};
+    publish();return {coding:codingWorkspace.snapshot(),
+      ...(selectionResult?.selectionCancelled === true ? {codingSelectionCancelled:true} : {})};
   }
   if (['reference.mcp','reference.skill','reference.run','reference.reconcile'].includes(name)) {
     if(sender!==admin || !competitionMode || syntheticMvp || !referenceHost) throw Error('请从正式应用的插件设置操作参考工具');

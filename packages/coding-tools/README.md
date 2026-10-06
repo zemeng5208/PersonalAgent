@@ -67,6 +67,8 @@ PID 的起始时间并与 marker 比对。未提供检查器或 PowerShell 路�
 独立授权的 apply；进程身份未知、记录损坏、源路径变化或对账竞态会保留标记并返回
 `RESULT_UNKNOWN`。该入口不会自动重试、回滚、删除备份或改变 ToolGateway 的错误映射。
 
+首次等待前复制本次 options；等待时复用或修改调用对象不能改变原执行绑定、进程 checker 或 `retainMarker`。保留标记后仍须宿主持久化可信回执再显式清除，不增加自动恢复或重试许可。
+
 ## 既有增量：授权后的文本补丁候选文件
 
 `createWorkspacePatchStageTool(options)` 提供显式注册的 `workspace.stage_text_patch@1.0.0`。可信宿主提供工作区根；现有 ToolGateway/Policy 按任务、工具、参数和 `workspace:read` + `workspace:write` 授权，本包不签发授权。输入沿用预览的规范路径、`expectedSha256` 和有界 `edits`。它拒绝链接、硬链接、目录逃逸、敏感文件和过期哈希，在可信根下排他创建 `.pa-stage-*.patch` 候选文件，读回摘要并复核原文件。返回的 `stagedPath` 是相对路径；原文件始终不打开写入、不重命名、不覆盖。`registerWorkspacePatchStage(host, options)` 沿用现有 ToolHost 生命周期，默认不在产品中注册。
@@ -94,6 +96,7 @@ PID 的起始时间并与 marker 比对。未提供检查器或 PowerShell 路�
 固定命令使用独立入口与 scope：
 
 - `createWorkspaceCommandTool(options)` 创建 `workspace.run_allowed_command@1.0.0`；`registerWorkspaceCommand(host, options)` 显式注册并返回 disposer。`rootPath`、非空 `recipes` 及其中每个绝对可执行文件路径和完整 argv 均来自可信宿主；可执行文件不能位于可写工作区内。工具输入仅有 `{recipeId}`，严格枚举并拒绝额外字段。宿主配置在注册时复制，不受后续数组修改影响。
+  执行开始时一次捕获宿主时钟，将任务 deadline 与最长执行时间合为本次期限；直接子进程结束、输出解码后再次检查取消与期限，延迟计时器不能使过期结果变为成功。时钟异常固定脱敏拒绝，取消保持优先；即使拒绝返回成功，命令也可能已产生副作用，仍不能自动重试。
 - scope 为 `workspace:execute`，descriptor 是 `local_write`、不可幂等/不可自动恢复；已有 Policy/ToolGateway 必须对精确参数审批并消费授权。当前 `requiresPresence:false` 仅因 Runtime 未提供独立在场字段，绝不代替审批。
 - 用 Node 内置 `spawn` 的 `shell:false`、固定 canonical 工作目录、默认空环境（或由受信宿主注入并经过模式/敏感词校验的受控 `env`）及隐藏窗口执行；不引入 execa 或另一套调度器。运行期限默认 30 秒、至多 120 秒；合并 stdout/stderr 原始字节预算默认 64 KiB、至多 256 KiB。超限、截止或取消会请求终止直接子进程；无法在 2 秒内确认退出时返回未知结果。输出必须完整有效 UTF-8，不截断成功结果。
 - 注册时绑定 canonical 根目录及其设备/目录身份；每次启动前同步复核路径仍解析到该目录、目录身份未变化。根被换为链接、另一个普通目录、文件或已移除时，公开工具拒绝 `SCOPE_DENIED`，不启动命令，也不自动重绑新目录。正常修改工作区内容不会使授权根失效；注册时提供的链接只解析到当时的 canonical 目标。检查仍不能消除复核与 OS 启动之间的路径竞态，不构成 OS 沙箱。

@@ -40,6 +40,25 @@ async function workspaceBindingFixture(t) {
 }
 const allowWorkspaceRead=host=>host.authorize({cloudExportAllowed:true,writeAllowed:false,commandAllowed:false});
 
+test('native selector cancellation receipts are explicit and never persist into snapshots or authorization',async t=>{
+  const {root,configuration,open}=await workspaceBindingFixture(t);
+  const host=open({selectDirectory:async()=>undefined,selectNodeExecutable:async()=>undefined,
+    selectCheckFile:async()=>undefined,selectNpmCli:async()=>undefined});
+  const before=await readFile(configuration,'utf8');
+  for(const method of ['select','selectNode','selectCheckFile','selectNpmCli']) {
+    const snapshot=host.snapshot(),result=await host[method]();
+    assert.deepEqual(result,{...snapshot,selectionCancelled:true});
+    assert.deepEqual(host.snapshot(),snapshot);
+    assert.equal(Object.hasOwn(host.snapshot(),'selectionCancelled'),false);
+    assert.equal(await readFile(configuration,'utf8'),before);
+  }
+  assert.equal(Object.hasOwn(host.authorize({cloudExportAllowed:true,writeAllowed:false,commandAllowed:false}),'selectionCancelled'),false);
+  assert.equal(Object.hasOwn(host.revoke(),'selectionCancelled'),false);
+  const selected=await open({selectDirectory:async()=>root}).select();
+  assert.equal(Object.hasOwn(selected,'selectionCancelled'),false);
+  assert.equal(Object.hasOwn(JSON.parse(await readFile(configuration,'utf8')),'selectionCancelled'),false);
+});
+
 test('native selections cannot persist late results after their workspace host closes',async t=>{
   for(const [method,selector] of [['select','selectDirectory'],['selectNode','selectNodeExecutable'],
     ['selectCheckFile','selectCheckFile'],['selectNpmCli','selectNpmCli']]) {
