@@ -117,14 +117,15 @@ test('independent control projection escapes text and has no private values or r
 });
 
 test('memory controls refresh exact references after confirmed changes but preserve cancelled actions', async () => {
-  for (const action of ['withdraw', 'delete']) for (const state of ['declined', action === 'withdraw' ? 'withdrawn' : 'deleted']) {
+  for (const action of ['withdraw', 'delete']) for (const state of ['declined', action === 'withdraw' ? 'withdrawn' : 'deleted',
+    ...(action === 'delete' ? ['pending'] : [])]) {
     let click;
     let refreshes = 0;
     const calls = [];
     const root = {innerHTML: '', contains: () => true, querySelector: () => ({value: ''}),
       addEventListener: (name, handler) => {click = handler;}};
     const controls = mountMemoryLearningControls(root, {status: {}, refs: [{id: 'exact-fact', revision: 2}],
-      invoke: async (name, payload) => {calls.push([name, payload]); return {state, revision: 3};},
+      invoke: async (name, payload) => {calls.push([name, payload]); return {state, revision: 3, phase: 'private_copy_erasure'};},
       onMemoryChanged: async () => {refreshes += 1; controls.update({refs: []});}});
     const button = {dataset: {[action === 'withdraw' ? 'mlWithdraw' : 'mlDelete']: '0'}, disabled: false};
     await click({target: {closest: () => button}});

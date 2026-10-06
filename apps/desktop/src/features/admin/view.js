@@ -449,9 +449,10 @@ export function mountAdmin(root, invoke, escape) {
       button.disabled = true;
       try {
         const result = await invoke('memory.delete', {ref: savedMemory.facts[Number(button.dataset.memoryDelete)].ref});
-        if (result.state === 'deleted') {
+        if (result.state === 'deleted' || result.state === 'pending') {
           const page = await invoke('memory.listSaved');
-          savedMemory = {...page, status: '已删除该记忆的全部版本并完成读回。'};
+          savedMemory = {...page, status: result.state === 'deleted' ? '已删除该记忆的全部版本并完成读回。'
+            : '来源已停止引用，关联任务副本仍待核实清除；删除尚未完成。'};
         } else savedMemory.status = '已取消，未删除记忆。';
         render(current);
       } catch (error) { root.querySelector('#error').textContent = error.message; button.disabled = false; }

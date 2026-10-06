@@ -33,6 +33,25 @@
 - 本增量通过独立 PR 交付；当前提交的远程 CI、非作者评审与合并仍为集成条件，
   不把本地通过记作主线交付或 MOD-09 完成。
 
+### 同日继续：删除待清除状态与 Electron 合成回归
+
+- 管理页此前把私人来源已删除、关联任务副本仍待清除的 `pending` 误报为“已取消”。
+  Renderer 合成响应准确复现该问题；现在刷新当前头，显示删除尚未完成，不保留已删除引用供任务选择。
+  独立控件对 `private_copy_erasure` 同样刷新；拒绝确认保持原引用。
+- 更新已有 `apps/desktop/test/private-memory-smoke.cjs`：旧回环网关不满足当前可信配置校验，
+  旧“所有私人写入禁用”和 fixture-root 开关也已不符合 main 的生产装配。现在以合法合成目标、
+  空云凭据和独立 userData 启动正式 Competition 装配，不配置真实账号、不提交云任务。
+- 实际隔离 Electron 回归通过：替身确认取消/保存、更正 v2、拒绝撤回、撤回 v3 后自动刷新、
+  无消费按钮、关闭重启且不重新选择 Vault、拒绝删除保留三版本、删除三版本、再次重启仍为空。
+  原夹具文件字节保留；验证进程 fetch 陷阱计数为零。待副本清除展示使用显式 Renderer fixture。
+- 原生 Computer Use 初始化及重置后重试仍报 `trusted Node process exited unexpectedly`，
+  没有原生窗口输入；上述自动化与替身对话不代替真实用户逐条确认或真实 AgentArts 验收。
+- 本补修 Desktop 类型检查与完整模块测试通过：444 项，442 通过、0 失败、2 跳过；
+  沿用上节的隔离 SDK/TEMP 验证条件。无公共接口、迁移或 Runtime 执行语义变更。
+- 首提交 `e829aef` 的远程 Foundation run `37446016736` 失败于未修改的 Calendar
+  `cloud-business.test.mjs:88`：deadline 预期 `TIMEOUT`，实际 `EXTERNAL_FAILURE`；同一用例本机复跑通过。
+  该目录不在本 PR diff 中，保留失败记录，不据复跑通过宣称远程门禁通过；后续提交须重新核对 CI。
+
 ## 2026-10-05 主线确认与实际 MCP 学习验收
 
 目标为 `huawei_ict_agentarts`，工作树 `.worktrees/main-ci-foundation-validation`，
