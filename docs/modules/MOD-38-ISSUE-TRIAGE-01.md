@@ -30,6 +30,25 @@ bug 修复使用宿主注入 `IssueRepairPort.repairIssue`，组合适配 MOD-34
 正文采用 `Related issue: <url>` 回链，不使用关闭关键词；不自动 close / merge。
 缺少 repair 端口或可信 repairGoal 明确转人工，不以 Fake 替代生产服务。
 
+2026-10-06 默认 Runtime 桥补齐这项委派：先捕获请求的 repository/Issue/指纹/goal/正文，
+再调用可信失败 run 选择器，将 goal 与正文传入 MOD34。`CiFixOptions` 的可选
+`repairGoal` / `pullRequestBody` 分别有界至 8000 / 16000 字符，入口捕获独立字符串，
+goal 进入模型 JSON 上下文并计入原 token 预算；正文追加到原诊断、source/Issue 回链与
+fingerprint 后，完整正文在 commit/push 之前核对 65536 字符上限。目标不授予新工具或
+权限，不改变源码白名单、审批、验证、CAS、draft PR 或禁自动关闭/合并的原语义。
+
+这两个字段有值时参与原 CI checkpoint 身份，变化不得复用旧工具运行或确认结果。
+无字段的 legacy CI 身份字节保持；已有旧 Issue 未知 checkpoint 不能在加入新上下文
+后自动迁移、清除或换 run 继续写入，身份不匹配时拒绝并保留原 journal，由原可信宿主
+按旧上下文核实和恢复。升级代码不证明外部旧写入已完成，也不自动重发。
+
+固定 Node 24.15.0 的旧公开入口回归 CI 三组全失败、默认 Runtime 桥一组失败；修后
+coding-tools 208/0/15 平台跳过及 build/typecheck、Runtime 定向 46/46 和最终入口捕获
+后的默认桥 1/1 通过。真实 TaskRuntime/SQLite 审批与重启、明确 Fake 模型/工具验证
+goal 传递、PR 完整回链、commit/PR/Issue backlink 各只一次；不冒充真实 GitHub 或云写入。
+超长合成 URL 边界夹具首轮先耗尽模型预算的失败已保留，给夹具足够预算后才验证正文
+越界在 commit/push/PR 前拒绝，生产预算没有放宽。组合 check 和准确 head CI 在 #295 续记。
+
 ## 恢复、预算与端口
 
 请求使用 `{repo,number,writeLabel?,repairBug?,repairGoal?}`；list 使用

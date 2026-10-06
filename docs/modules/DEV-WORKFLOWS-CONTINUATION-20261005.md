@@ -596,3 +596,21 @@ legacy 权限与唯一显式调用保留。CPU 另独立定向 4/4、五类回�
 calendar `cloud-business.test.mjs:88` 的超时分类期望 TIMEOUT、实际 EXTERNAL_FAILURE。
 完整原始日志已读，交 Potato 原模块负责人；本执行未改该模块，不绕过失败或声称双绿。
 该首 head 与新组合的检查各自记录，旧 green 不能关闭此历史问题。
+
+#295 的后续 `7abca084` 两路首次 Windows Foundation 完整日志分别 323334/324155 字符，
+各 31 workspace 2071/0/16；coding-tools 215/4 跳过、windows-client 12、Desktop 443/1
+跳过、Runtime 348，受控 .NET8 fixture 实际 41.65/27.62 秒。goo122 对准确 head 正式
+批准后合入 main `d332bec5`，本执行未 APPROVE 或 merge；它不覆盖下述新接线增量。
+
+继续按明确契约修补 MOD38 默认 Runtime 桥丢失 goal/PR 正文：入口捕获原请求字段，
+MOD34 有界转发 goal 至模型并追加正文至原回链后，字段纳入 checkpoint 身份。无字段
+legacy CI 身份保持；旧 Issue 未知 journal 加新上下文会拒绝且完整保留，不能自动迁移、
+清除或换 run 继续写入，由原可信宿主核实恢复。权限、源码白名单、预算及审批仍原样。
+旧 CI 三组与默认桥一组公开回归失败保留；修后 coding-tools 208/0/15、Runtime 目标
+46/46 与最终默认桥 SQLite 审批重启 1/1，独立 CI 5/5、Runtime 1/1 及旧 unknown 零派发
+probe 通过。明确 Fake 模型/工具不冒充真实账号操作。
+
+必要组合 `npm run check` 在 Node 24.15.0 上 exit0：31 workspace 2040/0/50 Linux平台
+跳过，Runtime 349、Desktop 431/11、根集成 22/22；架构、生成协议与类型检查均通过。
+代码与已合入 main 的对应源树一致，文档只校对事实及 diff。新独立接线 head 的 Windows
+CI、正式非作者评审与集成另记，整体及原真实验收仍未关闭。
