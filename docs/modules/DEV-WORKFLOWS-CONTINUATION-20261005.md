@@ -479,3 +479,88 @@ MOD37保留goo122实现归属，MOD19打包继续暂停，不因等待而接管�
 本次只是三份本人说明的证据与交接回填，源码/测试仍等于上述受检90f02d0/be49b30；
 校对日志、链接和diff，不重复build/typecheck/test。文档提交自身的Actions终态另读回，
 不把上述90f02d0终态宣称为不同head的结果。
+
+## 2026-10-06 主线集成与继续执行
+
+用户当前聊天恢复执行至北京时间2026-10-06 21:00，并明确允许多路GPT-6.1 Sol。
+本人13:12邮件进一步允许新独立增量建立后续PR，覆盖此前只能沿已合并PR交付的限制；
+13:31邮件要求继续寻找归属明确的工作。文件归属、不自行批准或合并、真实验收等级保持。
+
+### 已合入成果与原现场报告
+
+#289已于01:10 UTC合入；#290最终head `e4ef11d9437b388ea08282e0eb85cdcd6f09ae20`
+由Potatos498非作者评审 `5422708048` 后于01:17 UTC合入，merge commit
+`7cbff653e71ed708ca6eee23ef77aabc384a87b2`。本执行没有APPROVE或merge。
+随后main为 `1e5566d67e364fd6c056210eb50fc418ebc9c55c`；本隔离工作树非破坏合入
+main，保留所有作者与本地历史，没有reset/force或改写Runtime核心。
+
+#291（Potatos498，head `d911e561b8bcf1d9a1a3d327ce6e056fed44a952`）是明确不合并的
+Draft验收产物。公开失败run37400194940/job112065422685确为父提交0eb4fc8的类型错误；
+父子修复只将验收锚12345改成字符串，两路37400883784/37400892725均success。
+原现场报告patch、tsc与commit confirmed，随后push unknown，核实not_performed后人工
+push和建PR；公开CI不能证明自动push→PR→backlink confirmed，也不能补造旧task/run
+的intent/marker。脱敏审批、执行、核实回执及验收文档新旧结论冲突已沿原#291交原作者。
+
+共享ROADMAP的MOD16/17未启动、MOD18写/命令未交、MOD35待集成及MOD34仅到patch
+陈旧文字已在#212 `6009833031` 交唯一台账写入者；本清单不改共享台账或Potato验收文档，
+不将旧文字当新增源码任务。MOD37仍goo122实现、本执行评审，MOD19继续暂停。
+
+### P6/P8 权限草稿与当前生效状态
+
+本人两文件槽#212 `6009683212`：workspace-controls.js及对应测试。实际app DOM复现
+已授权写入时取消写勾选，仅形成草稿，但页面仍显示已授权且没有未生效说明。
+现在立即提示选择尚未生效，保留宿主当前能力和reason；等待及未确认反馈优先，明确
+成功读回后清草稿，再编辑重新提示。没有自动authorize/revoke，不改变宿主权限。
+
+交付原分支 `519b207f616959ab079debc25c6b8a0471427b6b` / tree
+`cb50647e4fda6e540ddf0ac01722864dc169beaa`，父main1e5566d；API树等于本地受检树。
+用户允许后建立唯一后续#293，两位正式非作者审核请求保留，未自行批准或合并。
+Node24.15新行为回归旧代码5通过/1失败、修后6/6；独立只读复核6/6，Desktop完整
+428通过/0失败/11平台跳过，typecheck、源码语法及diff检查通过，失败原始日志保留。
+Browser插件不可用，已有Playwright/Chromium151加载真实app/index与renderer、明确
+合成宿主桥，1280×900及480×900验证草稿、取消cloud、背景快照、等待、畸形回执、
+显式重试与再编辑，无console/page错误或横向溢出，不冒充原Electron/Windows或云验收。
+
+准确519b207的两路Windows Foundation均首次success、零重试，完整日志实际读取：
+
+| 事件 | run / job | 完整日志字符数 | 31 workspace测试 | 实际.NET8受控fixture |
+| --- | --- | --- | --- | --- |
+| push | 37416771757 / 112117009414 | 319155 | 2037通过、0失败、16跳过 | 26.09秒 |
+| PR | 37417487233 / 112119218065 | 320264 | 2037通过、0失败、16跳过 | 26.72秒 |
+
+两路check/dev/demo:protocol/demo:runtime及清理均success；Desktop440/0/1、Runtime348/0/0、
+coding198/0/4、cognition204/0/0，新增草稿回归实际执行。日志、JSON、截图与冻结哈希保留
+在忽略的review-evidence/20261006及临时review目录。后续不同head的CI另读回，不复用这些
+结果冒充新head。整体Goal仍in_progress；非作者审核、main集成和原场景验收分开记录。
+
+### 本人 MOD33/36 与 P8 进一步缺口修复
+
+按13:31本人邮件继续找工作，四路GPT-6.1 Sol先复现再分别登记唯一文件槽：
+#212 `6010070792`（MOD33/P8）、`6010080647` 与 `6010104749`（MOD36及本人说明）。
+root唯一负责文档和串行交付，未接管MOD35、MOD37、P5/P7、业务或共享根文件。
+
+- MOD33：实际Node子进程、明确合成GH transport的非法UTF8被旧runner静默替换，
+  公共issue读取接受损坏正文，写POST回执甚至仍confirmed。完整有界stdout/stderr现
+  严格UTF8解码、保留BOM与跨chunk字符；取消/期限/超限优先，错误固定且不回显raw。
+  Provider已派发写入继续unknown、只一次POST、不自动重发。只runner及新增模块测试，
+  README说明同步；原7项回归3通过/4失败保留，修后GitHub完整103/103、build/typecheck
+  通过。独立只读7/7及额外实际子进程不完整UTF8后TIMEOUT优先探针通过。
+- MOD36：真实Git rename的LEFT删除行之前锚到旧文件名，导致合法新路径意见丢弃；
+  现在两侧采用当前PR文件名，LEFT仍旧行号，纯删除回退旧路径。第一方Microsoft GitHub
+  扩展固定源码依据见模块说明，没有执行真实COMMENT。正式public exports旧回归2/2
+  失败保留；另实际Git中文加空格quoted头后合法单tab被拒绝，现仅剥一个分隔符后继续
+  原严格解析。旧错误rename与quoted单tab断言明确校正为真实格式；双tab、时间戳、
+  malformed quote、非法UTF8/NUL/traversal防线保留。最终cognition207/207、build/typecheck
+  通过，独立定向15/15及多rename/escaped tab/尾空格/纯删除探针通过。合成GhCliProvider
+  验证当前新路径、LEFT旧行号及缓存仅一个POST，不算真实账号写入。
+- P8：AgentArts输入Enter保存或按钮撤销，在busy禁用后失去原键盘焦点；settlement现
+  仅当前focus仍body、面板与原控件有效可见时恢复。等待期间用户移往外部或切页即使
+  返回也不抢焦点，不自动重试，不变凭据清理/授权/宿主或玻璃样式。原新回归7通过/1
+  失败、修后8/8，独立相关3/3；Desktop完整429通过/0失败/11平台跳过及typecheck通过。
+  真实app+明确合成桥Chromium151宽/窄屏各十次save/revoke成功/失败/畸形及焦点离开
+  操作均通过，无console/page错误、溢出或错误遮罩。首轮临时QA脚本selector错误已
+  单独保留、修正后最终浏览器命令exit0，不把脚本失败混作产品失败或最终通过。
+
+上述只是各受影响模块门禁，未重复无关整仓检查，也不替代原设备/账号/云验收。
+三份本人说明只校对事实、相对链接及diff；新组合沿既有#293发布，准确新head的
+Windows检查另读回，不能借用上一519b207的双绿。原始日志和冻结哈希保持可续接。

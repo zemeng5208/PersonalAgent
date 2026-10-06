@@ -16,9 +16,16 @@
 
 Git C-style带引号/转义路径已在后续增量提供有界解码与逐字节UTF8校验，中文路径可锚定
 真实变更行；拒绝非法编码、畸形转义、NUL或路径越界，不猜另一个文件。
-Git对含空格的未加引号路径头附加一个末尾tab分隔符；解析仅移除这个分隔符，
+Git对含空格路径头附加一个末尾tab分隔符；中文与空格同在时也会在合法quoted头后附加。
+解析仅移除单个这个分隔符，再执行原quoted/unquoted严格校验，
 保留文件名的首尾/中间空格。内嵌tab、多余tab、时间戳与畸形quoted头仍拒绝，
-rename/deletion的左右变更行按原路径精确锚定；不采用trim或以空格拆路径。
+不采用trim或以空格拆路径。重命名文件的两侧变更行都使用当前PR文件名作为评论path，
+LEFT保留旧行号、RIGHT使用新行号；只有纯删除文件才回退旧路径。前一版本错误地将
+rename的LEFT锚放在旧文件名、并拒绝quoted末尾合法tab；2026-10-06真实Git回归分别
+复现后修正，没有把丢弃合法finding或改变旧错误断言当作成功证据。
+GitHub第一方VSCode扩展的[固定源码](https://github.com/microsoft/vscode-pull-request-github/blob/e62a2ad08cc07791d0d13f471532b5032486b6f1/src/view/fileChangeModel.ts#L227)
+分别保存旧文件读取路径和当前PR文件身份，并[按当前path与LEFT/base映射评论](https://github.com/microsoft/vscode-pull-request-github/blob/e62a2ad08cc07791d0d13f471532b5032486b6f1/src/view/pullRequestCommentController.ts#L145)。
+这是第一方实现与真实本地Git格式依据；本轮没有实际账号COMMENT写入或声称平台422实测。
 只读可定位的合法Git文件名不一定能发表：超过GitHub现有限长、包含控制字符/反斜线/
 `..`/`@{`等禁止路径时publish返回unsupported且保留finding，不预留新的unknown评论写入。
 先前已有confirmed/unknown发表checkpoint及原执行绑定仍优先，不改变原未知结果或盲重试。

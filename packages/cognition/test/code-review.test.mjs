@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {validateToolValue} from '@personal-agent/contracts';
 import {GhCliProvider, register as registerGitHub} from '@personal-agent/github';
-import {createCodeReviewWorkflow, codeReviewChangedLines, codeReviewPublicationCheckpointKey} from '../dist/dev-workflows/code-review.js';
+import {createCodeReviewWorkflow, codeReviewChangedLines, codeReviewPublicationCheckpointKey} from '@personal-agent/cognition';
 
 const head = 'a'.repeat(40), base = 'b'.repeat(40);
 const diff = 'diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,2 +1,2 @@\n-old\n+new\n context\n';
@@ -51,9 +51,71 @@ function realQuotedDiff(names) {
     return git(['-c', 'core.quotePath=true', 'diff', '--no-ext-diff', '--no-textconv']);
   } finally {rmSync(root, {recursive: true, force: true});}
 }
+function realRenameDiff(previous = 'src/old file.ts', current = 'src/new file.ts', deleted = 'src/deleted.ts') {
+  const root = mkdtempSync(join(tmpdir(), 'code-review-rename-'));
+  try {
+    const config = join(root, '.fixture-git-config'); writeFileSync(config, '');
+    const git = args => execFileSync('git', args, {cwd: root, encoding: 'utf8', env: {...process.env, GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: '1'}});
+    git(['init', '--quiet']); mkdirSync(join(root, 'src'));
+    writeFileSync(join(root, previous), 'first\nsecond\nthird\nfourth\nfifth\n');
+    writeFileSync(join(root, deleted), 'deleted\n');
+    writeFileSync(join(root, 'src/other.ts'), 'before\n');
+    git(['add', '--', previous, deleted, 'src/other.ts']);
+    git(['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', '-m', 'fixture']);
+    git(['mv', '--', previous, current]);
+    writeFileSync(join(root, current), 'first\nchanged\nthird\nfourth\nfifth\n');
+    git(['rm', '--quiet', '--', deleted]); writeFileSync(join(root, 'src/other.ts'), 'after\n');
+    git(['add', '--', current, 'src/other.ts']);
+    const actual = git(['-c', 'core.quotePath=true', 'diff', '--cached', '--find-renames=50%', '--no-ext-diff', '--no-textconv']);
+    assert.match(actual, /similarity index (?:[5-9]\d|100)%\nrename from /);
+    return {actual, previous, current, deleted};
+  } finally {rmSync(root, {recursive: true, force: true});}
+}
+test('real Git multi-file rename anchors LEFT old line under the current filename and preserves pure deletion', () => {
+  for (const names of [[], ['src/旧文件.ts', 'src/新文件.ts'], ['src/旧 文件.ts', 'src/新 文件.ts', 'src/删除 文件.ts']]) {
+    const {actual, previous, current, deleted} = realRenameDiff(...names);
+    const lines = codeReviewChangedLines(actual);
+    assert.equal(lines.has(previous), false);
+    assert.deepEqual([...lines.get(current)], ['LEFT:2', 'RIGHT:2']);
+    assert.deepEqual([...lines.get(deleted)], ['LEFT:1']);
+    assert.deepEqual([...lines.get('src/other.ts')], ['LEFT:1', 'RIGHT:1']);
+    assert.equal(lines.size, 3);
+  }
+});
+test('registered synthetic Gh transport publishes rename LEFT at the current path once and drops the old path finding', async () => {
+  const {actual, previous, current} = realRenameDiff('src/旧 文件.ts', 'src/新 文件.ts', 'src/删除 文件.ts');
+  const commands = [], registered = new Map();
+  const pull = {number: 7, title: 'Rename', body: '', state: 'open', base: {ref: 'main', sha: base},
+    head: {ref: 'feature', sha: head}, html_url: 'https://github.com/owner/repo/pull/7', draft: false};
+  const provider = new GhCliProvider({repositories: ['owner/repo'], readToken: async () => 'synthetic-test-token', runner: {async run(command) {
+    commands.push(command);
+    return {exitCode: 0, stderr: '', stdout: command.args.includes('Accept: application/vnd.github.diff') ? actual
+      : JSON.stringify(command.args.includes('POST') ? {id: 1, html_url: 'https://github.com/owner/repo/pull/7#discussion_r1'} : pull)};
+  }}});
+  const dispose = registerGitHub({register(tool) {registered.set(tool.descriptor.name, tool); return () => registered.delete(tool.descriptor.name);}}, {provider});
+  const f = fixture();
+  const trusted = {scopes: ['github:read', 'github:write']};
+  const tools = {list: () => [...registered.values()].map(tool => tool.descriptor), invoke: async call => {
+    const tool = registered.get(call.toolName); validateToolValue(tool.descriptor.inputSchema, call.arguments);
+    return {state: 'confirmed', result: await tool.execute(call.arguments, {...trusted, ...call}), evidenceRefs: ['registered-gh-fixture']};
+  }};
+  const valid = {...finding, path: current, line: 2, side: 'LEFT'};
+  const workflow = createCodeReviewWorkflow({tools, model: {complete: async () => ({response: {kind: 'final',
+    text: JSON.stringify({findings: [valid, {...valid, path: previous}]})}})}});
+  try {
+    const prepared = await workflow.prepare({repo: 'owner/repo', number: 7, rules: [{id: 'safe', text: 'Reject unsafe changes'}]}, f.context, f.access);
+    assert.equal(prepared.state, 'prepared'); assert.deepEqual(prepared.report.findings, [valid]);
+    const access = {runId: 'publish-rename', authorizationRef: 'synthetic-grant'};
+    assert.equal((await workflow.publish(prepared.report, 0, f.context, access)).state, 'confirmed');
+    assert.equal((await workflow.publish(prepared.report, 0, f.context, access)).state, 'confirmed');
+    const posts = commands.filter(command => command.args.includes('POST')); assert.equal(posts.length, 1);
+    const body = JSON.parse(posts[0].stdin);
+    assert.equal(body.path, current); assert.equal(body.side, 'LEFT'); assert.equal(body.line, 2); assert.equal(body.commit_id, head);
+  } finally {dispose();}
+});
 test('parses default Git UTF-8 octal quoting and C-escaped filename characters', () => {
   // Windows cannot create the control-character/quote filenames, but uses the same Git diff format.
-  const names = ['src/中文.ts', 'src/ordinary.ts', ...(process.platform === 'win32' ? [] : ['src/quote".ts', 'src/back\\slash.ts', 'src/tab\tname.ts', 'src/new\nline.ts'])];
+  const names = ['src/中文.ts', 'src/中文 空格.ts', 'src/ordinary.ts', ...(process.platform === 'win32' ? [] : ['src/quote".ts', 'src/back\\slash.ts', 'src/tab\tname.ts', 'src/new\nline.ts'])];
   const actual = realQuotedDiff(names);
   assert.match(actual, /\\344\\270\\255/);
   const parsed = codeReviewChangedLines(actual);
@@ -73,17 +135,23 @@ test('actual Git diff paths with spaces retain the filename and strip only its t
   assert.equal(parsed.size, names.length);
   for (const name of names) assert.deepEqual([...parsed.get(name)], ['LEFT:1', 'RIGHT:1']);
 });
-test('Git space-path delimiters retain rename and deletion anchor sides', () => {
+test('Git space-path delimiters use the current rename path and retain deletion anchor sides', () => {
   const rename = 'diff --git a/old name.ts b/new name.ts\n--- a/old name.ts\t\n+++ b/new name.ts\t\n@@ -1 +1 @@\n-old\n+new\n';
-  assert.deepEqual([...codeReviewChangedLines(rename)], [['old name.ts', new Set(['LEFT:1'])], ['new name.ts', new Set(['RIGHT:1'])]]);
+  assert.deepEqual([...codeReviewChangedLines(rename)], [['new name.ts', new Set(['LEFT:1', 'RIGHT:1'])]]);
   const deletion = 'diff --git a/old name.ts b/old name.ts\n--- a/old name.ts\t\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n';
   assert.deepEqual([...codeReviewChangedLines(deletion)], [['old name.ts', new Set(['LEFT:1'])]]);
 });
 test('Git path delimiters do not accept embedded tabs, timestamps, malformed quoting or traversal', () => {
   for (const path of ['b/src/embedded\tname.ts', 'b/src/double.ts\t\t', 'b/src/a.ts\t2026-10-05 00:00:00',
-    '"b/src/a.ts"\t', 'b/../escape.ts\t', '/absolute.ts\t']) {
+    '"b/src/a.ts"\t\t', '"b/src/a.ts"\t2026-10-05 00:00:00', '"b/src/unclosed.ts\t',
+    '"b/src/raw\tname.ts"\t', '"b/src/\\000.ts"\t', '"b/../escape.ts"\t', 'b/../escape.ts\t', '/absolute.ts\t']) {
     assert.throws(() => codeReviewChangedLines(diff.replace('+++ b/src/a.ts', `+++ ${path}`)), /INVALID_ARGUMENT/);
   }
+});
+test('quoted headers accept exactly one trailing Git tab delimiter without trimming filename spaces', () => {
+  const quoted = diff.replace('--- a/src/a.ts', '--- "a/src/ with space.ts "\t')
+    .replace('+++ b/src/a.ts', '+++ "b/src/ with space.ts "\t');
+  assert.deepEqual([...codeReviewChangedLines(quoted)], [['src/ with space.ts ', new Set(['LEFT:1', 'RIGHT:1'])]]);
 });
 test('quoted paths reject invalid UTF-8, escapes, prefixes and traversal without accepting anchors', () => {
   for (const path of ['"b/src/\\377.ts"', '"b/src/\\303.ts"', '"b/src/\\400.ts"', '"b/src/\\q.ts"',
@@ -106,9 +174,9 @@ test('quoted paths do not relax diff pagination cursor validation', async () => 
     assert.equal(f.calls.some(call => call.toolName === 'github.pr.review.comment'), false);
   }
 });
-test('quoted rename and deletion anchors preserve original and current paths', () => {
+test('quoted rename anchors use the current path and pure deletions retain the original path', () => {
   const rename = 'diff --git "a/old\\tname.ts" "b/new\\tname.ts"\n--- "a/old\\tname.ts"\n+++ "b/new\\tname.ts"\n@@ -1 +1 @@\n-old\n+new\n';
-  assert.deepEqual([...codeReviewChangedLines(rename)], [['old\tname.ts', new Set(['LEFT:1'])], ['new\tname.ts', new Set(['RIGHT:1'])]]);
+  assert.deepEqual([...codeReviewChangedLines(rename)], [['new\tname.ts', new Set(['LEFT:1', 'RIGHT:1'])]]);
   const deletion = 'diff --git "a/old\\tname.ts" "b/old\\tname.ts"\n--- "a/old\\tname.ts"\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n';
   assert.deepEqual([...codeReviewChangedLines(deletion)], [['old\tname.ts', new Set(['LEFT:1'])]]);
 });
