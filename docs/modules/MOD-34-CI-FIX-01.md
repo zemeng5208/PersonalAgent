@@ -50,9 +50,19 @@ Git receipt 必须从 Runtime 获得；commit 参数中的 verificationRunId 仅
 
 issue fingerprint 与 MOD-38 一致：SHA256(JSON.stringify([number,title,body,state,sortedLabels,url,updatedAt]))；修复前重新读取并校验，变化返回 stale。PR 保留 issue URL/fingerprint，不使用自动关闭关键字。
 
+MOD38 默认 Runtime 桥还传递可信 `repairGoal` 与 `pullRequestBody`：前者最多 8000、
+后者最多 16000 字符，非空且在入口捕获为独立字符串。goal 作为有界模型 JSON 上下文
+计入原输入预算，不赋予权限；正文追加到原诊断、source/Issue 回链和 fingerprint 后。
+完整正文超过 65536 字符时在 commit/push 前拒绝，保留原审批与验证链。
+
 ## 恢复与预算
 
 Runtime checkpoint `ci-fix-v1` 保存参数 identity、调用计数、token 保守预留、confirmed receipts、evidence 与 in-flight 标识。工具 runId 稳定绑定 task/identity/step。每次 dispatch 前持久化；异常、取消、超时保留 in-flight，默认恢复不重试。pending 审批恢复复用相同 runId 与参数。unknown 仅当宿主 `confirmedReplayReady(runId)` 明确表示 Runtime 已完成真实读回且可消费缓存确认结果时，才允许调用既有 Runtime adapter 重放；不得用该函数授权重新执行未知写入。模型未知响应不自动重做。
+
+上述 goal/正文有值时参与同一 identity；变化不得消费旧运行。未配置两字段的 legacy CI
+身份字节不变。旧 Issue 未知 checkpoint 加入新上下文会拒绝，原 journal 不变、零新
+派发；不自动迁移、清除或换 run，由原可信宿主以旧上下文核实恢复。代码升级不证明
+旧外部副作用已经确认。
 
 `maxSteps` 含读取、模型、工具；tokens 在请求前保守预留全部剩余预算，确认响应后按合法 `usage.totalTokens` 结算，多轮共享预算。usage 缺失或非法时保留耗尽状态，恢复不能重置预算。每轮 source/model/patch/verify 标识绑定轮次，防止误用上一轮结果。取消信号与 deadline 贯穿全部调用。没有 shell 字段，模型不能选择 command recipe 或 Git/PR 参数。
 

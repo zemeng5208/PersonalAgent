@@ -5,7 +5,7 @@ import path from 'node:path';
 import {test} from 'node:test';
 import {FakeModelProvider} from '@personal-agent/models';
 import {GhCliProvider, FakeGitHubProvider, githubRepairCheckName} from '@personal-agent/github';
-import {createDevWorkflowsRuntime} from '../dist/dev-workflows-runtime.js';
+import {createDevWorkflowsRuntime} from '@personal-agent/runtime/dev-workflows';
 import {ProtocolError} from '@personal-agent/contracts';
 import {createWorkspaceReadTool, createWorkspacePatchPreviewTool} from '@personal-agent/coding-tools';
 
@@ -35,6 +35,59 @@ async function fixture(run, options = {}) {
 }
 const submission = () => ({request: {kind: 'issue_triage', input: {repo: 'example/project', number: 7}},
   conversationId: 'dev-tests', idempotencyKey: 'same-work', deadline: new Date(Date.now() + 60_000).toISOString()});
+
+test('default issue repair bridge retains trusted goal and PR body through SQLite approval restart', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'dev-issue-default-'));
+  const source = 'const value = 1;\n', digest = (await import('node:crypto')).createHash('sha256').update(source).digest('hex');
+  const original = {...issue, title: 'Crash on save', body: 'Saving crashes the app.'};
+  const head = 'a'.repeat(40), fixed = 'b'.repeat(40), prompts = [], writes = [];
+  const provider = new FakeModelProvider([{kind: 'final', text: JSON.stringify({kind: 'bug', confidence: .95,
+    evidence: [{field: 'title', quote: 'Crash on save'}]})}, {kind: 'final', text: JSON.stringify({diagnosis: 'Repair crash',
+    patches: [{path: 'app.js', expectedSha256: digest, edits: [{oldText: 'value = 1', newText: 'value = 2'}]}]})}]);
+  const complete = provider.complete.bind(provider); provider.complete = async input => {prompts.push(input); return complete(input);};
+  const values = {'github.issue.get': original, 'workspace.git.head': {headSha: head, workspaceClean: true, clean: true},
+    'workspace.read_text': {path: 'app.js', content: source, sha256: digest},
+    'workspace.apply_text_patch': {path: 'app.js', beforeSha256: digest, afterSha256: 'c'.repeat(64), applied: true, changed: true},
+    'workspace.run_allowed_command': {recipeId: 'check', exitCode: 0}, 'workspace.git.commit': {headSha: fixed, parentSha: head},
+    'workspace.git.push': {headSha: fixed, pushed: true},
+    'github.pr.create': {state: 'confirmed', externalId: '9', url: 'https://github.com/example/project/pull/9'},
+    'github.pr.comment': {state: 'confirmed'}, 'github.issue.comment': {state: 'confirmed'}};
+  const writeNames = new Set(['workspace.apply_text_patch', 'workspace.run_allowed_command', 'workspace.git.commit',
+    'workspace.git.push', 'github.pr.create', 'github.pr.comment', 'github.issue.comment']);
+  const tools = Object.entries(values).map(([name, value]) => ({descriptor: {name, version: '1.0.0',
+    inputSchema: {type: 'object'}, outputSchema: {type: 'object'}, requiredScopes: ['synthetic:fixture'],
+    sideEffect: writeNames.has(name) ? 'local_write' : 'read', requiresPresence: false,
+    idempotencySupport: true, recoverySupport: true}, async execute(input) {
+      if (writeNames.has(name)) writes.push({name, input: structuredClone(input)}); return structuredClone(value);
+    }}));
+  const open = () => createDevWorkflowsRuntime({path: path.join(directory, 'runtime.sqlite'), model: provider, tools,
+    maxSteps: 32, maxTokens: 64_000, ciFix: {expectedHeadSha: head, sourcePaths: ['app.js'], verifyRecipeId: 'check',
+      headBranch: 'repair', baseBranch: 'main', gitTools: {head: 'workspace.git.head', commit: 'workspace.git.commit',
+        push: 'workspace.git.push', pullRequest: 'github.pr.create', backlink: 'github.pr.comment'}}});
+  let host = open();
+  try {
+    const goal = 'Preserve data and fix the save crash';
+    const task = host.submit({request: {kind: 'issue_triage', input: {repo: 'example/project', number: 7, repairBug: true,
+      repairGoal: goal}}, conversationId: 'default-repair', idempotencyKey: 'one-repair', deadline: new Date(Date.now()+60_000).toISOString()});
+    let state = await host.start(task.taskId), restarted = false;
+    for (let i=0; i<32 && state.state === 'waiting_approval'; i++) {
+      let approval = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0]; assert.ok(approval);
+      if (approval.action === 'github.pr.create' && !restarted) {
+        const id = approval.approvalId; await host.close(); host = open(); restarted = true;
+        approval = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0]; assert.equal(approval.approvalId,id);
+      }
+      host.runtime.respondApproval(approval.approvalId,'allow_once',approval.revision); state = await host.resume(task.taskId);
+    }
+    assert.equal(restarted,true); assert.equal(state.state,'succeeded'); assert.equal(host.readResult(task.taskId).state,'repair_requested');
+    assert.equal(prompts.length,2); assert.equal(JSON.parse(prompts[1].messages[1].content).repairGoal,goal);
+    const prs = writes.filter(item=>item.name==='github.pr.create'); assert.equal(prs.length,1);
+    assert.match(prs[0].input.body,/Related issue: https:\/\/github.com\/example\/project\/issues\/7/);
+    assert.match(prs[0].input.body,/Automatic close and merge are disabled\./);
+    assert.match(prs[0].input.body,/Issue fingerprint: [a-f0-9]{64}/); assert.ok(prs[0].input.body.length<=65536);
+    assert.equal(writes.filter(item=>item.name==='workspace.git.commit').length,1);
+    assert.equal(writes.filter(item=>item.name==='github.issue.comment').length,1);
+  } finally {await host.close(); await rm(directory,{recursive:true,force:true});}
+});
 
 test('repair association tools require explicit opt-in and retain the original provider lifecycle', async () => {
   for (const enabled of [false, true]) {
