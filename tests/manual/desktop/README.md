@@ -78,3 +78,29 @@ F9/记事本、麦克风、真实凭据加密、崩溃恢复。本片没有远�
 - 私人真实持久确认和真实 AgentArts 消费仍待验收；MOD-09 保持 `in_progress`。
 - 主线集成候选复查原生工具：首次 Windows sandbox 初始化失败，重置后
   `trusted Node process exited unexpectedly; kernel reset, rerun your request`；未取得新的窗口操作证据。
+
+### 实际本地 MCP 学习集成验收
+
+构建当前工作树依赖后执行：
+
+```powershell
+node --test tests/integration/memory-learning-mcp.test.mjs
+```
+
+实际官方 filesystem stdio、Competition Runtime Application、Client、SQLite 审批和 Learning
+在独立 `.cache/memory-learning-mcp/` 夹具运行：候选验证、拒绝启用、逐任务读取审批、
+版本回滚后旧任务零读取并记录失败、重启、删除全部流程版本与取消排队任务、保留无关流程和源文件。
+测试结束释放本次进程和数据库，仅清除本次新建夹具。使用公开合成资料，云凭据读取/云调用为零；
+原生启用/删除确认是显式替身，不能代替上文真人逐条确认、原生窗口或真实云消费验收。
+
+### 父子分派的私人许可拒绝验收
+
+```powershell
+node --test tests/integration/private-memory-runtime-copies.test.mjs
+```
+
+除原副本删除/恢复用例，还验证私人派生云提案零审批、零工具执行、零子任务，以及公开任务
+通过原 SQLite 审批实际分派默认 Competition 子工作者。公开父子没有私人消费绑定，
+删除无关私人事实保留任务及父子关系。资料、原生确认回调和 HTTP 为显式合成/Fake；
+本机 Runtime/Policy/子任务分派使用生产实现。父任务许可不授予子任务，
+生产路径仍拒绝私人派生提案直接分派；本记录不表示已完成真实云或真人子任务许可验收。

@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
-import {join} from 'node:path';
+import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import test from 'node:test';
 import {Client} from '@personal-agent/client';
-import {createAgentArtsRuntimeApplication} from '@personal-agent/runtime/application';
+import {createAgentArtsRuntimeApplication, createDesktopSubagentDispatchTool,
+  SUBAGENT_DISPATCH_TOOL_NAME, SUBAGENT_DISPATCH_TOOL_VERSION} from '@personal-agent/runtime/application';
 import {openSqliteMemoryHost} from '@personal-agent/memory/sqlite';
 import {createPrivateMemoryController} from '../../apps/desktop/electron/private-memory.js';
 import {createPrivateMemoryConsumptionHost} from '../../apps/desktop/electron/private-memory-consumption-host.js';
@@ -20,7 +21,7 @@ async function terminal(app, taskId) {
   throw Error('Synthetic private task did not settle');
 }
 
-async function fixture(t, asynchronousGate = false) {
+async function fixture(t, asynchronousGate = false, delegation = false) {
   const parent = fileURLToPath(new URL('../../.cache/private-runtime-copies/', import.meta.url));
   await mkdir(parent, {recursive: true});
   const directory = await mkdtemp(join(parent, 'case-'));
@@ -34,8 +35,15 @@ async function fixture(t, asynchronousGate = false) {
   async function open() {
     memory = createPrivateMemoryController(database, async () => true, async () => true,
       {confirmWithdraw: async () => true, authorizeConsumption: async scope => {consents.push(scope.taskId); return true;}});
+    const dispatch = delegation ? createDesktopSubagentDispatchTool({getRuntime: () => app.runtime,
+      getTools: () => app.tools, runDefaultWorker: (subtask, worker, tools) => app.runDefaultSubagentWorker(subtask, worker, tools)}) : undefined;
     app = createAgentArtsRuntimeApplication({path: join(directory, 'runtime.sqlite'),
       gatewayUrl: 'https://private-memory.example.test', runtimeName: 'synthetic', invokeMode: 'published',
+      ...(delegation ? {responseMode: 'tool-proposal-json', tools: [dispatch], competitionToolExports: [{
+        toolName: SUBAGENT_DISPATCH_TOOL_NAME, toolVersion: SUBAGENT_DISPATCH_TOOL_VERSION,
+        exportPolicyVersion: 'synthetic-status-only-v1', accepts: ({arguments: args}) => args.subtasks?.length === 1,
+        project: ({result}) => ({total: result.total, succeeded: result.succeeded, failed: result.failed, cancelled: result.cancelled}),
+      }]} : {}),
       authorizationProvider: {read: async () => 'Bearer synthetic-only'},
       fetchImpl: async (_url, input) => {
         requests.push(JSON.parse(input.body));
@@ -44,7 +52,12 @@ async function fixture(t, asynchronousGate = false) {
           beforeReply = undefined;
           try {await callback();} catch (error) {callbackFailure = error;}
         }
-        return new Response(JSON.stringify({event: 'message', data: {text: 'Synthetic private-derived reply', index: 0}}),
+        const response = requests.length === 1 ? {kind: 'tool_proposal', proposalId: 'synthetic-delegation',
+          toolName: SUBAGENT_DISPATCH_TOOL_NAME, toolVersion: SUBAGENT_DISPATCH_TOOL_VERSION,
+          arguments: {subtasks: [{subtaskId: 'public-child', role: 'planner', goal: 'Review public synthetic material'}]}}
+          : {kind: 'text', text: 'Synthetic public dispatch reply'};
+        return new Response(JSON.stringify({event: 'message', data: {
+          text: delegation ? JSON.stringify(response) : 'Synthetic private-derived reply', index: 0}}),
           {status: 200, headers: {'content-type': 'application/json'}});
       },
       coordinationInput: {
@@ -71,14 +84,14 @@ async function fixture(t, asynchronousGate = false) {
   }
   const close = () => {consumption?.close(); memory?.close(); app?.close();};
   await open();
-  t.after(async () => {close(); await rm(directory, {recursive: true, force: true});});
+  t.after(async () => {close(); assert.equal(dirname(directory), resolve(parent)); await rm(directory, {recursive: true, force: true});});
   await memory.selectVault(vault);
   const sourceA = (await memory.search('Synthetic A')).hits[0].source;
   await memory.save(sourceA, 'Synthetic private A');
   await memory.save(sourceA, 'Synthetic corrected A');
   await memory.save((await memory.search('Synthetic B')).hits[0].source, 'Synthetic independent B');
   const facts = (await memory.listSaved()).facts;
-  return {database, requests, consents, replies, facts, get app() {return app;}, get erasure() {return erasure;},
+  return {database, requests, consents, replies, facts, get client() {return client;}, get app() {return app;}, get erasure() {return erasure;},
     get memory() {return memory;}, async restart() {close(); await open();},
     onNextRequest(callback) {beforeReply = callback;},
     allowPurge() {allowCopyPurge = true;},
@@ -161,4 +174,65 @@ test('an asynchronous private copy gate refuses before consent or cloud transpor
   assert.deepEqual(f.consents, []);
   assert.deepEqual(f.requests, []);
   assert.equal(f.app.readPrivateTaskBinding(task.taskId), undefined);
+});
+
+test('a private-derived cloud dispatch proposal cannot create a child or transfer consumption permission', async t => {
+  const f = await fixture(t, false, true);
+  const target = f.facts.find(fact => fact.summary === 'Synthetic corrected A');
+  const parent = await f.submit('private-proposal', target.ref);
+  assert.equal(parent.state, 'failed');
+  // The coordination boundary intentionally hides adapter/host error details.
+  assert.deepEqual(parent.error, {code: 'EXTERNAL_FAILURE', message: 'Coordination adapter failed', retryable: false});
+  assert.deepEqual(f.app.runtime.loadCheckpoint(parent.taskId, 'private-derived-output'), {withheld: true});
+  assert.equal(f.requests.length, 1);
+  assert.deepEqual(f.consents, [parent.taskId]);
+  assert.equal(f.app.readPrivateTaskBinding(parent.taskId).fact.ref.id, target.ref.id);
+  assert.equal(f.app.isHistoryWithheld(parent.taskId), true);
+  assert.deepEqual(f.app.runtime.readToolExecutions(parent.taskId), []);
+  assert.equal((await f.client.call('approval.list', {taskId: parent.taskId})).items.length, 0);
+  assert.equal(f.app.runtime.findTaskByIdempotencyKey(`subagent-dispatch-${parent.taskId}-public-child`), undefined);
+  assert.equal(f.app.runtime.listTasks({conversationId: `desktop-subtask:${parent.taskId}`, limit: 10}).items.length, 0);
+  assert.equal(f.replies.size, 0);
+  f.allowPurge();
+  assert.equal((await f.erasure.erase(target.ref)).state, 'deleted');
+  assert.equal(f.app.readCopyErasureReceipt(parent.taskId).state, 'purged');
+  assert.equal(f.requests.length, 1, 'erasure does not retry the refused proposal');
+});
+
+test('an approved public dispatch uses the actual default child worker without granting private memory', async t => {
+  const f = await fixture(t, false, true);
+  const parent = await f.client.call('task.submit', {goal: 'Delegate a public review', conversationId: 'public-dispatch'},
+    {idempotencyKey: 'public-dispatch', ...context()});
+  for (let attempt = 0; attempt < 2000; attempt++) {
+    if (f.app.runtime.getTask(parent.taskId).state === 'waiting_approval' && !f.app.activeTaskCount) break;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.equal(f.app.runtime.getTask(parent.taskId).state, 'waiting_approval');
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.app.runtime.findTaskByIdempotencyKey(`subagent-dispatch-${parent.taskId}-public-child`), undefined);
+  const approval = f.app.runtime.getApproval(`competition-tool-${parent.taskId}-1`);
+  await f.client.call('authorization.respond', {approvalId: approval.approvalId,
+    expectedRevision: approval.revision, decision: 'allow_once'});
+  assert.equal((await terminal(f.app, parent.taskId)).state, 'succeeded');
+  const child = f.app.runtime.findTaskByIdempotencyKey(`subagent-dispatch-${parent.taskId}-public-child`);
+  assert.equal(child.state, 'succeeded');
+  assert.equal(f.app.runtime.loadCheckpoint(child.taskId, 'subtask-parent').parentTaskId, parent.taskId);
+  assert.equal(f.app.runtime.loadCheckpoint(child.taskId, 'subtask-execution-binding').kind, 'competition');
+  const record = f.app.runtime.readToolExecutions(parent.taskId)[0];
+  assert.equal(record.toolName, SUBAGENT_DISPATCH_TOOL_NAME);
+  assert.equal(record.state, 'confirmed');
+  assert.equal(record.policyDecision, 'allow');
+  assert.equal(record.executionStarted, true);
+  assert.deepEqual(f.consents, []);
+  assert.equal(f.app.readPrivateTaskBinding(parent.taskId), undefined);
+  assert.equal(f.app.readPrivateTaskBinding(child.taskId), undefined);
+  assert.equal(f.app.listBindings().items.length, 0);
+  assert.equal(f.requests.length, 3);
+  for (const request of f.requests) for (const fact of f.facts) assert.equal(JSON.stringify(request).includes(fact.summary), false);
+  const target = f.facts.find(fact => fact.summary === 'Synthetic corrected A');
+  assert.equal((await f.erasure.erase(target.ref)).state, 'deleted');
+  assert.equal(f.app.runtime.getTask(child.taskId).state, 'succeeded');
+  assert.equal(f.app.readCopyErasureReceipt(child.taskId), undefined);
+  assert.equal(f.app.runtime.loadCheckpoint(child.taskId, 'subtask-parent').parentTaskId, parent.taskId);
+  assert.equal(f.requests.length, 3);
 });

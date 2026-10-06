@@ -231,6 +231,26 @@ test('runTask, progress and events form a complete truthful lifecycle', async ()
   }
 });
 
+test('internal worker error codes become valid failed tasks while public codes are preserved', async () => {
+  const f = fixture();
+  let runtime = f.open();
+  try {
+    for (const [code, expected] of [['NOT_VALIDATED', 'EXTERNAL_FAILURE'], ['SCOPE_DENIED', 'SCOPE_DENIED']]) {
+      const task = runtime.submitTask({...submission, idempotencyKey: `worker-error-${code}`});
+      const failed = await runtime.runTask(task.taskId, async () => {throw new ProtocolError(code, 'Workflow is no longer active');},
+        {deadline: '2026-09-06T02:01:00.000Z', sideEffect: 'read'});
+      assert.equal(failed.state, 'failed');
+      assert.deepEqual(failed.error, {code: expected, message: 'Workflow is no longer active', retryable: false});
+      assert.equal(runtime.readEvents().filter(event => event.taskId === task.taskId).at(-1).type, 'task.failed');
+      runtime.close();
+      runtime = f.open();
+      assert.deepEqual(runtime.getTask(task.taskId), failed);
+      await assert.rejects(runtime.runTask(task.taskId, async () => ({resultSummary: 'must not retry'}),
+        {deadline: '2026-09-06T02:01:00.000Z', sideEffect: 'read'}), {code: 'REVISION_CONFLICT'});
+    }
+  } finally {runtime.close();}
+});
+
 test('cancellation reaches the running worker before cancelled is emitted', async () => {
   const runtime = fixture().open();
   try {
