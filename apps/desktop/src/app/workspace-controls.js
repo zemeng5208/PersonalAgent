@@ -32,6 +32,8 @@ export function mountWorkspaceControls(root, invoke) {
   let consentDirty = false;
   let feedback = '';
   let unconfirmed = false;
+  let originatingFocus,restoreFocus=false;
+  const trackFocus=event=>{if(!section.contains(event.target) && event.target!==document.body) restoreFocus=false;};
 
   function projectCommandNames() {
     const commands = state.projectCommands;
@@ -107,6 +109,9 @@ export function mountWorkspaceControls(root, invoke) {
 
   async function run(action, payload) {
     if (busy) return;
+    originatingFocus=section.contains?.(document.activeElement)?document.activeElement:undefined;
+    restoreFocus=Boolean(originatingFocus);
+    document.addEventListener?.('focusin',trackFocus,true);
     busy = true;
     unconfirmed = false;
     feedback = '正在等待本机宿主读回…';
@@ -135,6 +140,11 @@ export function mountWorkspaceControls(root, invoke) {
       busy = false;
       section.setAttribute('aria-busy', 'false');
       updateButtons();
+      document.removeEventListener?.('focusin',trackFocus,true);
+      if(restoreFocus && document.activeElement===document.body && section.isConnected && !section.hidden
+        && section.getClientRects().length && originatingFocus?.isConnected && section.contains(originatingFocus)
+        && !originatingFocus.disabled) originatingFocus.focus();
+      originatingFocus=undefined;restoreFocus=false;
     }
   }
 
@@ -162,5 +172,5 @@ export function mountWorkspaceControls(root, invoke) {
   field('revoke').addEventListener('click', () => run('coding.revoke'));
 
   render();
-  return {render,show:visible=>{section.hidden=!visible;}};
+  return {render,show:visible=>{section.hidden=!visible;if(!visible) restoreFocus=false;}};
 }

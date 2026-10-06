@@ -10,14 +10,58 @@ function harness(t, invoke = async () => undefined) {
   const fields = Object.fromEntries(names.map(name => [name, {checked: false, disabled: false, textContent: '',
     listeners: new Map(), attributes: new Map(), addEventListener(event, handler) {this.listeners.set(event, handler);},
     setAttribute(key, value) {this.attributes.set(key, value);}}]));
-  const section = {setAttribute() {}, querySelector(selector) {return fields[/data-workspace="([^"]+)"/u.exec(selector)[1]];}};
-  globalThis.document = {createElement: () => section};
+  const body={},documentListeners=new Map();
+  const section = {isConnected:true,hidden:false,getClientRects(){return this.hidden?[]:[{}];},
+    contains:target=>Object.values(fields).includes(target),setAttribute() {}, querySelector(selector) {return fields[/data-workspace="([^"]+)"/u.exec(selector)[1]];}};
+  for (const field of Object.values(fields)) Object.assign(field,{isConnected:true,focus(){globalThis.document.activeElement=this;}});
+  globalThis.document = {body,activeElement:body,createElement: () => section,
+    addEventListener:(name,listener)=>documentListeners.set(name,listener),
+    removeEventListener:(name,listener)=>{if(documentListeners.get(name)===listener)documentListeners.delete(name);}};
   const controls = mountWorkspaceControls({append() {}}, invoke);
   const render = (coding = {}) => controls.render({coding: {configured: true, displayName: 'project',
     authorizationAvailable: true, projectScriptsAvailable: true, projectCommands: ['build','test'], ...coding}});
   const change = (name, checked) => {fields[name].checked = checked; fields[name].listeners.get('change')?.();};
-  return {fields, render, change, click: name => fields[name].listeners.get('click')()};
+  return {fields, render, change, controls,section,
+    blur:()=>{globalThis.document.activeElement=body;},
+    focusElsewhere:()=>{const target={};globalThis.document.activeElement=target;documentListeners.get('focusin')?.({target});},
+    click: name => fields[name].listeners.get('click')()};
 }
+
+test('workspace settled actions restore keyboard position only while origin remains valid and undisturbed', async t => {
+  let resolve,reject;const calls=[];
+  const ui=harness(t,action=>{calls.push(action);return new Promise((done,fail)=>{resolve=done;reject=fail;});});
+  const coding={configured:true,displayName:'project',authorizationAvailable:true,cloudExportAllowed:true};
+  for(const name of ['select','authorize','revoke'])for(const mode of ['success','failure','invalid']) {
+    ui.render(coding);ui.fields[name].focus();const pending=ui.click(name);ui.blur();
+    if(mode==='failure')reject(Error('synthetic-only'));else resolve(mode==='invalid'?{coding:[]}:{coding});
+    await pending;assert.equal(globalThis.document.activeElement,ui.fields[name]);
+  }
+  for(const departure of ['external-focus','external-then-body','hidden-and-return','removed-origin','removed-section']) {
+    ui.render(coding);ui.fields.select.focus();const pending=ui.click('select');ui.blur();
+    if(departure.startsWith('external')) {ui.focusElsewhere();if(departure==='external-then-body')ui.blur();}
+    if(departure==='hidden-and-return') {ui.controls.show(false);ui.controls.show(true);}
+    if(departure==='removed-origin')ui.fields.select.isConnected=false;
+    if(departure==='removed-section')ui.section.isConnected=false;
+    const expected=globalThis.document.activeElement;
+    resolve({coding});
+    await pending;
+    assert.equal(globalThis.document.activeElement,expected);
+    ui.fields.select.isConnected=true;ui.section.isConnected=true;
+  }
+  ui.render(coding);ui.fields.authorize.focus();const revoking=ui.click('authorize');ui.blur();
+  resolve({coding:{...coding,cloudExportAllowed:false,authorizationAvailable:false}});await revoking;
+  assert.equal(globalThis.document.activeElement,globalThis.document.body,'a final disabled authorizer cannot regain focus');
+  assert.equal(calls.length,15,'focus changes must never invoke another operation');
+});
+
+test('workspace operations tolerate document harnesses without focus APIs', async t => {
+  const ui=harness(t,async()=>({coding:{configured:true,displayName:'project'}}));
+  delete globalThis.document.activeElement;
+  delete globalThis.document.addEventListener;
+  delete globalThis.document.removeEventListener;
+  ui.render();await ui.click('select');
+  assert.equal(ui.fields.select.disabled,false);
+});
 
 test('project execution consent requires separate command consent and clears when commands are deselected', t => {
   const ui = harness(t); ui.render();
