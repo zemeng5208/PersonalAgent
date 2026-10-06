@@ -725,3 +725,20 @@ confirmedReplayReady/时钟保持。不同task的新run可采新配置，原jour
 无公共DTO、wire、迁移或Runtime装配改动，不重新运行已通过且未变的组合全检；
 新增提交的Windows完整门禁另核实。非作者审核、原Windows/账号/AgentArts场景仍按
 原owner接续，整体Goal继续in_progress，不等待审核才推进独立工作。
+
+MOD34上述配置绑定已沿#297普通FF发布 `31d67ecbcb13d5f0df60c3a90dcd211c4e0dad98` /
+tree `87b16dbab045c379724b59072557cdfe526518df`，当时19diff文件，API树=受检树。
+push37489939901/PR37489948010启动，不能用f0双绿代替该增量终态。
+
+继续MOD36 factory端口绑定（#212 `6019894581`），仅本人code-review实现/测试及模块
+与续接说明。原公开before在first-head await期间caller换复用options使原workflow改用
+另一model/tools；prepare后换tools还忽略原port已撤销的评论能力，独立before2/2失败。
+factory捕获原Model/Tool端口引用，原port.list/invoke/complete仍实时，context/access/
+授权/confirmedReplayReady与原checkpoint行为不变，新factory可以使用新端口。
+正式原回归2失败/1通过，修后Node24.15 cognition build/typecheck和模块216/216、零
+跳过，独立同probe2/2通过，原评论能力撤销unsupported、Fakewrite零次。明确全部
+合成评论，不冒充实际GitHub写入；源hash
+`1a8e2caf0780901106b3095b1fde6a768afc67333f45b6428e0131bbba857017`。
+无公共接口或Runtime装配变化，不重复未变的组合全检；新提交Windows完整门禁另
+实际核对，仍不自行批准或合并。MOD38相邻factory绑定另登记独立两文件，串行模块
+构建，保持原独立写入槽，不等待本PR审核再推进。

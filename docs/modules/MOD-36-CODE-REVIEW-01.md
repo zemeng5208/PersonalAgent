@@ -4,6 +4,12 @@
 - Profile：2026-10-03 产品负责人授权的 Local DEV-WORKFLOWS 增量，不替代 Huawei ICT AgentArts Competition Profile 或计入比赛验收；实现为公开 ModelPort / Runtime-backed AgentToolPort 的消费流程，不新增模型、GitHub授权或工具注册体系。
 - 工厂：`createCodeReviewWorkflow({model,tools,maxDiffChars?,maxPages?,maxFindings?,maxTokens?})`；公开类型位于 `packages/cognition/src/dev-workflows/code-review-types.ts`，根组合负责公共导出、依赖与 Runtime 装配。
 
+工厂捕获本实例的 ModelPort 与 Runtime-backed AgentToolPort 引用；调用方为后续实例
+替换复用 options 的端口，不能使原 prepare/publish 中途切到另一提供者。新 factory
+可使用新端口，原端口的 `list`、`invoke`、`complete` 方法仍实时调用，不缓存工具
+可用性或权限。context/access 的授权、用户在场、取消、期限与确认回执钩子保持原
+检查语义；捕获端口不代表真实能力冻结或授权。
+
 `prepare({repo,number,rules}, AgentWorkerContext, {runId,authorizationRef})` 经 `github.pr.get` 读取精确 base/head，经带 expectedHeadSha / expectedBaseSha 的 `github.pr.diff` 完整分页，再读 PR 确认未漂移。相同 head/base 可复用 Runtime checkpoint 中的完整 diff，提交变化则重新分页；缓存不免除发表前复核。可信规则必须由宿主提供；PR 标题、正文、diff 与从完整 diff 生成的 changed-lines 提示仅置于模型 user 数据消息，不成为规则或权限。提示最多列出前 400 个变更文件；实际校验仍覆盖完整 diff，不把提示截断当作完整评审证明。
 
 模型输出可为裸 JSON，或整个输出由一个 `json`/无语言标签的三反引号围栏包裹；仅剥离该运输层围栏，再严格 JSON/schema 校验，不从解释文字中抽取 JSON。每条 finding 包含 blocking/suggestion/question、已声明 ruleId、path、line、side、body。未知字段（包括 confidence）、未声明规则、非法类别/字段类型仍使整体准备失败；格式有效但未锚定实际变更行的意见被丢弃，精确重复条目仅保留第一条，其余有效意见按原顺序保留。空报告仅表示没有保留意见，不表示批准或无缺陷；没有合法 findingIndex 时不能发表。删改路径按 unified diff 左右侧定位，带引号的Git转义路径按下述规则解码。
@@ -34,6 +40,15 @@ prepared report、当前index/总数/已confirmed索引及累计Evidence，发�
 审批/SQLite重启消费原确认缓存，不重模型或已发表评论；未知评论仍由原执行核实。
 
 ## 集中验收
+
+2026-10-06 #212 `6019894581` 增量保留公开 before：首 head 读取等待期间普通 caller
+替换复用 model/tools，原 workflow 会调用新模型/工具；prepare 后换 tools 还可绕过
+原端口已移除的评论能力。全部明确合成端口，不是实际账号写入或 Gateway 许可证明。
+新增正式回归原码2失败/1通过，修后 Node24.15 cognition build/typecheck 通过、完整
+216/216、零跳过。独立同公开 probe 原2/2失败→修后2/2通过：原实例端口保持、
+新实例可换端口、原工具撤销评论能力仍 unsupported/零 Fake 写入。原失败与最终日志
+均归档，源 hash `1a8e2caf0780901106b3095b1fde6a768afc67333f45b6428e0131bbba857017`。
+沿 #297 交付，精确新提交 Windows 门禁另读回；不改公共 DTO/wire 或上述审批恢复。
 
 初稿按当时用户限制仅静态交付；后续用户已授权持续实现与必要构建/受控测试。
 `packages/cognition/test/code-review.test.mjs`实际覆盖可信规则隔离、head/base绑定、完整分页、严格JSON、变更行校验、报告篡改、过时head、仅COMMENT、缺工具/授权、unknown不重复写、diff不完整拒绝，以及围栏兼容/外部文字拒绝、非法条目与重复过滤、空报告不可发表。
