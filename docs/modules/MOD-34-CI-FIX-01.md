@@ -31,6 +31,10 @@ UTF16码点或达到上限时停止并保留truncated，不把不完整内容称
 原审批/页号/一步预算跨SQLite重启保持。宿主明确选定后提交独立 `ci_fix`，不自动轮询
 或为整页建子任务。完整公开输入输出与组合规则见
 [Runtime消费说明](DEV-WORKFLOWS-INTEGRATION-01.md)。
+发现工厂捕获原 ToolPort 引用，descriptor 与后续 bounded 调用使用同一端口；
+普通 caller 启动读取后为新实例替换复用 options.tools，不改变旧实例。原端口的
+list/invoke 方法及原授权/confirmedReplayReady 属性仍实时，原 now 函数捕获、
+请求参数/identity/checkpoint/一步预算保持不变，新 factory 可用新端口。
 
 可信宿主可显式设置 `sourceRunBacklink={toolName,runAttempt}`，原PR/评论后追加原预算内
 稳定source-backlink步骤。未配置时旧checkpoint identity不变，仍只表示PR引用原来源。
@@ -110,5 +114,13 @@ Runtime347、根integration19通过；CI83+发现30的受控定向验证已通�
 实时 hook 属性替换生效、旧 journal 拒绝新配置、新任务接受新配置、非法关联零派发
 拒绝及 legacy identity 一致。原失败与最终日志均保留；沿 #297 交付，精确发布头的
 Windows 门禁另读回，不把之前已通过的提交当作本增量验证。
+
+CI discovery 后续 #212 `6020191190` 有效公开 before1/1失败：同步 descriptor 来自
+原端口，调用方启动后复用 options 更换同名/version 的端口，bounded 微任务却调新
+端口。修后同脚本1/1通过，Node24.15 coding-tools build/typecheck、模块230/0/15
+Linux平台跳过；独立公开4/4通过，覆盖原端口/新factory、原方法和能力撤销、pending
+及 unknown 的原run/参数/steps1和实时授权/确认钩子。所有工具明确 Fake READ，
+无真实账号写入；误命名before的准备日志实际新dist3通过，不计旧失败。
+最小源码仅3行引用绑定变化，不改上述恢复与时钟语义；沿现有#297继续交付。
 
 真实验收由Potatos498在原受信场景接续，精确脚本以当前package.json为准；需要获授权的GitHub仓库/分支/账号、MOD33 adapter、真实受权ModelPort、Windows patch host、受限验证recipe及Runtime verification snapshot。Local链不强制依赖AgentArts；AgentArts兼容与比赛云验收另按对应profile执行。Fake通过不替代上述真实验收。

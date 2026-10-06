@@ -758,3 +758,20 @@ confirmedReplayReady/confirmedRepairReplayReady仍原options实时属性，新fa
 另单独归档。全部Fake标签/修复，不冒真实账号写回；独立审无finding。仅本人实现/
 测试与MOD38/本续接说明，沿现有#297交付，最新提交Windows准确门禁另读回。
 整体Goal、原现场恢复和非作者评审仍未完成，持续核对新PR、反馈和明确自有可推进项。
+
+MOD38上述factory绑定已发布 `cf87b72aed5d755eccadd1681c4f09d4471a73a3` /
+tree `82c8f9c2ddbb391b68cfef64d08984282c5b5e22`，当时仍22diff文件；准确新头
+push37491346187/PR37491353087启动，阶段邮件1a111ed29d5ece7d已核SENT及To，非停止。
+
+继续本人MOD34 CI discovery端口绑定（#212 `6020191190`），有效公开before1/1失败：
+caller启动旧factory读取后为新factory更新同options.tools，原descriptor来自A而微任务
+invoke却用B（同合法工具版本/官方run Schema）。Fake只证明原实例端口切换，不是
+真实Gateway账号放行。factory捕获tools，仅3行绑定变化，原list/invoke方法、授权/
+confirmedReplayReady仍live，now/maxSteps/参数/identity/checkpoint保持不变。
+正式Node24.15 coding-tools build/typecheck和230/0/15 Linux平台跳过，同public脚本
+after1/1通过，独立公开4/4：旧实例A/新factoryB、能力移除及原方法替换、pending/
+unknown精确原run/args/steps1、实时授权与ready属性。源hash
+`fa1e3fd6d8f047c7062aea6124a063ae9a1de83b51278f6c1d014358f1dfdc69`，独立匹配
+且无finding。准备误名before的新dist3pass明确不计旧失败，原有效失败另保留。
+仅本人发现实现/测试与MOD34/本续接说明，沿开放#297发布，不改公共协议或Runtime
+装配，原完整现场依然按owner接续。最新新头Windows完整门禁另读取，不借旧头绿灯。
