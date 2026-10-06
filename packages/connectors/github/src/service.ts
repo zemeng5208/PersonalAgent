@@ -13,14 +13,50 @@ export function checkContext(context: GitHubReadContext): void {
 export async function withGitHubContext<T>(context: GitHubReadContext, operation: (context: GitHubReadContext) => Promise<T>): Promise<T> {
   checkContext(context);
   const controller = new AbortController();
+  const deadlineMs = Date.parse(context.deadline);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let abort: (() => void) | undefined;
+  let interruption: ProtocolError | undefined;
   const stopped = new Promise<never>((_resolve, reject) => {
-    abort = () => { controller.abort(); reject(new ProtocolError('CANCELLED', 'GitHub request cancelled')); };
+    const stop = (error: ProtocolError): void => {
+      interruption ??= error;
+      controller.abort();
+      reject(interruption);
+    };
+    abort = () => stop(new ProtocolError('CANCELLED', 'GitHub request cancelled'));
     context.signal.addEventListener('abort', abort, {once: true});
-    timer = setTimeout(() => { controller.abort(); reject(new ProtocolError('TIMEOUT', 'GitHub request deadline expired')); }, Math.min(2147483647, Date.parse(context.deadline) - Date.now()));
+    const expire = (): void => {
+      if (controller.signal.aborted) return;
+      const remaining = deadlineMs - Date.now();
+      if (remaining <= 0) stop(new ProtocolError('TIMEOUT', 'GitHub request deadline expired'));
+      else timer = setTimeout(expire, Math.min(2147483647, remaining));
+    };
+    if (context.signal.aborted) abort();
+    expire();
   });
-  try { return await Promise.race([operation({signal: controller.signal, deadline: context.deadline}), stopped]); }
+  try {
+    // Capture synchronous throws as a promise so both race branches always
+    // acquire handlers, including a provider that cancels and then throws.
+    const running = new Promise<T>((resolve, reject) => {
+      try {
+        checkContext(context);
+        if (interruption) throw interruption;
+        resolve(operation({signal: controller.signal, deadline: context.deadline}));
+      } catch (error) { reject(error); }
+    });
+    // A port may block the event loop or settle before an interrupt microtask.
+    // Either settlement must still respect interruption and the original lease.
+    const checkCompletion = (): void => {
+      if (interruption) throw interruption;
+      try { checkContext(context); }
+      catch (error) { controller.abort(); throw error; }
+    };
+    let result: T;
+    try { result = await Promise.race([running, stopped]); }
+    catch (error) { checkCompletion(); throw error; }
+    checkCompletion();
+    return result;
+  }
   finally { if (timer !== undefined) clearTimeout(timer); if (abort) context.signal.removeEventListener('abort', abort); }
 }
 export class GitHubService implements GitHubPort {

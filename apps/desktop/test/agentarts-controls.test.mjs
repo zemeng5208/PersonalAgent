@@ -18,7 +18,8 @@ function harness(t,invoke) {
   const controls=mountAgentArtsControls({append(){}},invoke);
   controls.render({gatewayUrl:'https://example.huaweicloud-agentarts.com',runtimeName:'synthetic-runtime'});
   return {controls,fields,submit,revoke,status,save:()=>form.listeners.get('submit')({preventDefault(){}}),
-    clear:()=>revoke.listeners.get('click')()};
+    clear:()=>revoke.listeners.get('click')(),
+    edit:(key,value)=>{fields[key].value=value;form.listeners.get('input')({target:fields[key]});}};
 }
 
 test('AgentArts settings serialize save/revoke and preserve the pending destination across snapshots',async t=>{
@@ -65,4 +66,94 @@ test('AgentArts settings require matching configuration readback before showing 
   }
   result={configured:true,reason:'synthetic revoked claim'};
   await ui.clear();assert.match(ui.status.textContent,/撤销结果未获确认/);
+});
+
+test('AgentArts settings refresh host status while keeping pending and unconfirmed actions explicit',async t=>{
+  let resolve,reject;
+  const ui=harness(t,()=>new Promise((done,fail)=>{resolve=done;reject=fail;}));
+  ui.controls.render({configured:false,reason:'synthetic not configured'});
+  assert.equal(ui.status.textContent,'synthetic not configured');
+  ui.controls.render({configured:true,reason:'synthetic host configured'});
+  assert.equal(ui.status.textContent,'synthetic host configured');
+  const pending=ui.save();
+  ui.controls.render({configured:false,reason:'synthetic interim host status'});
+  assert.match(ui.status.textContent,/正在保存/);
+  reject(Error('private diagnostic'));await pending;
+  ui.controls.render({configured:true,reason:'synthetic older success claim'});
+  assert.match(ui.status.textContent,/保存结果未获确认/);
+  assert.equal(ui.status.attributes.get('role'),'alert');
+  const retry=ui.save();resolve({configured:true,reason:'synthetic confirmed save'});await retry;
+  assert.equal(ui.status.textContent,'synthetic confirmed save');
+  assert.equal(ui.status.attributes.get('role'),'status');
+  ui.controls.render({configured:false,reason:'synthetic host revoked'});
+  assert.equal(ui.status.textContent,'synthetic host revoked','fresh host status supersedes completed success feedback');
+  const revoking=ui.clear();
+  ui.controls.render({configured:true,reason:'synthetic concurrent publication'});
+  assert.match(ui.status.textContent,/正在撤销/);
+  reject(Error('private diagnostic'));await revoking;
+  ui.controls.render({configured:false,reason:'synthetic apparent revocation'});
+  assert.match(ui.status.textContent,/撤销结果未获确认/);
+  assert.equal(ui.status.attributes.get('role'),'alert');
+});
+
+test('AgentArts settings distinguish unsaved edits from confirmed configuration across host snapshots',async t=>{
+  const calls=[];let resolve;
+  const ui=harness(t,(action,input)=>{calls.push({action,runtimeName:input?.runtimeName});return new Promise(done=>{resolve=done;});});
+  ui.controls.render({gatewayUrl:ui.fields.gatewayUrl.value,runtimeName:'saved-runtime',reason:'synthetic before save'});
+  const saving=ui.save();resolve({configured:true,reason:'synthetic confirmed save'});await saving;
+  ui.edit('runtimeName','new-unsaved-runtime');
+  assert.match(ui.status.textContent,/未保存/,'editing a confirmed destination must show unsaved feedback');
+  assert.match(ui.status.textContent,/当前已保存配置状态.*synthetic confirmed save/);
+  for(const reason of ['synthetic saved host','synthetic saved host','synthetic fresh host']) {
+    ui.controls.render({gatewayUrl:'https://old.huaweicloud-agentarts.com',runtimeName:'saved-runtime',reason});
+    assert.equal(ui.fields.runtimeName.value,'new-unsaved-runtime');
+    assert.match(ui.status.textContent,/未保存/);
+    assert.ok(ui.status.textContent.includes('当前已保存配置状态：'+reason),'fresh host reason remains explicitly scoped to saved configuration');
+  }
+  assert.equal(calls.length,1,'editing and host snapshots cannot save the draft');
+  const resaving=ui.save();assert.match(ui.status.textContent,/正在保存/);assert.doesNotMatch(ui.status.textContent,/未保存/);
+  resolve({configured:true,reason:'synthetic second confirmed save'});await resaving;
+  assert.equal(calls[1].runtimeName,'new-unsaved-runtime');
+  assert.equal(ui.status.textContent,'synthetic second confirmed save');
+  ui.controls.render({gatewayUrl:'https://new.huaweicloud-agentarts.com',runtimeName:'new-unsaved-runtime',reason:'synthetic new saved host'});
+  assert.equal(ui.fields.gatewayUrl.value,'https://new.huaweicloud-agentarts.com');
+  assert.equal(ui.status.textContent,'synthetic new saved host','confirmed save clears draft status');
+});
+
+test('AgentArts settings mark authorization-only edits unsaved and clear the draft after confirmed revocation',async t=>{
+  let resolve;
+  const ui=harness(t,()=>new Promise(done=>{resolve=done;}));
+  ui.controls.render({gatewayUrl:ui.fields.gatewayUrl.value,runtimeName:ui.fields.runtimeName.value,reason:'synthetic configured host'});
+  ui.edit('authorization','Bearer synthetic-private-draft');
+  assert.match(ui.status.textContent,/未保存/);
+  assert.doesNotMatch(ui.status.textContent,/synthetic-private-draft/);
+  ui.controls.render({gatewayUrl:'https://old.huaweicloud-agentarts.com',runtimeName:'old-runtime',reason:'synthetic fresh host'});
+  assert.equal(ui.fields.runtimeName.value,'synthetic-runtime');
+  assert.equal(ui.fields.authorization.value,'Bearer synthetic-private-draft');
+  assert.match(ui.status.textContent,/未保存.*当前已保存配置状态.*synthetic fresh host/);
+  const revoking=ui.clear();assert.equal(ui.fields.authorization.value,'');assert.match(ui.status.textContent,/正在撤销/);assert.doesNotMatch(ui.status.textContent,/未保存/);
+  resolve({configured:false,reason:'synthetic confirmed revocation'});await revoking;
+  assert.equal(ui.fields.runtimeName.value,'');assert.equal(ui.status.textContent,'synthetic confirmed revocation');
+  ui.controls.render({gatewayUrl:'',runtimeName:'',reason:'synthetic revoked host'});
+  assert.equal(ui.status.textContent,'synthetic revoked host','confirmed revocation clears draft status');
+});
+
+test('AgentArts settings keep unconfirmed errors above draft and host feedback until an explicit successful retry',async t=>{
+  let resolve,reject;
+  const ui=harness(t,()=>new Promise((done,fail)=>{resolve=done;reject=fail;}));
+  ui.edit('runtimeName','first-draft');
+  const saving=ui.save();reject(Error('synthetic-private-error'));await saving;
+  const failure=ui.status.textContent;
+  ui.edit('runtimeName','retry-draft');
+  ui.edit('authorization','Bearer synthetic-private-retry');
+  ui.controls.render({gatewayUrl:'https://old.huaweicloud-agentarts.com',runtimeName:'old-runtime',reason:'synthetic apparent success'});
+  assert.equal(ui.status.textContent,failure);assert.equal(ui.status.attributes.get('role'),'alert');
+  assert.equal(ui.fields.runtimeName.value,'retry-draft');
+  assert.doesNotMatch(ui.status.textContent,/synthetic-private/);
+  const retry=ui.save();assert.match(ui.status.textContent,/正在保存/);assert.equal(ui.fields.authorization.value,'');
+  resolve({configured:true,reason:'synthetic confirmed retry'});await retry;
+  assert.equal(ui.status.textContent,'synthetic confirmed retry');assert.equal(ui.status.attributes.get('role'),'status');
+  ui.controls.render({gatewayUrl:'https://new.huaweicloud-agentarts.com',runtimeName:'retry-draft',reason:'synthetic fresh confirmed host'});
+  assert.equal(ui.fields.gatewayUrl.value,'https://new.huaweicloud-agentarts.com');
+  assert.equal(ui.status.textContent,'synthetic fresh confirmed host');
 });

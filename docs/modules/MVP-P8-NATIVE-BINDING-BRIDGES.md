@@ -54,6 +54,36 @@ Node 24.15.0 定向 discovery/workspace-config/workspace-command 共65通过、0
 2 Windows 门控跳过；另两项合成 coding/Notepad 验收通过，原 coding-host 的
 6项 Windows 测试在 Linux 跳过。生产宿主语法和差异空白检查通过。
 
+## 2026-10-05 续接：公开工作区命令工厂与控件
+
+公开 recipe 工厂在每次 available/execute 前复核固定工作区的 bigint dev/ino/birthtime，
+原路径被另一目录替换即拒绝，不以目录 mtime 锁住正常源文件修改。
+此目录身份缺口限定公开工厂自身：正式 workspace-config-host 原有外层检查已经拒绝该替换。
+每次同时重新验证原 node-check 文件及祖先路径仍为工作区内普通、无链接的同一规范相对目标；
+缺失、目录替换和文件/祖先链接均零命令委派。检查文件内容不固定哈希，正常编辑后仍可检查。
+修复前临时目录加明确 Fake 工厂能复现目录替换及四类检查文件变更仍放行；
+这不是真实命令执行，也不能称为任意代码执行。Node 24.15.0 的受影响三文件测试
+54 通过、0 失败、1 Windows 原生门控跳过；Desktop typecheck、语法及差异检查通过。
+原 Windows 普通用户设备/现场命令验收仍待持有环境的协作者读回。
+
+本轮按钮优化仅调整登记的 app/surfaces.css 与 desktop-settings/settings.css 控件规则：
+普通按钮统一最小36px高度、9px圆角、13px字；授权主操作与撤销次操作区分，
+禁用/aria-disabled 状态不接受旧 hover/active 动画，键盘焦点保持可见；
+编码及窗口恢复按钮以8px真实间距换行。特殊窗口、悬浮球、图标与发送控件尺寸保留。
+AgentArts 按钮组移除被原页面 style-src self 拒绝的内联样式，使用外部 CSS；
+保存主操作、清除凭据危险次操作仅改变 presentation class，原事件、文案与权限不变。
+720px以下主工作区上下排列对话/连接器及详情：480px原对话宽226px变为478px，
+切换、刷新、详情关闭和各区独立滚动保留；1280px深浅主题几何保持原值。
+实际入口使用 Chromium151/Playwright（Browser plugin unavailable）与明确合成宿主，
+检查1280/480、深浅主题、等待互锁、焦点、保存/撤销读回及模型菜单；不是 Electron/云验收。
+18个稳定 panel/admin/workspace × dark/light × regular/thin/thick 的计算材质快照严格相等，
+包含背景、边框、blur/filter、阴影、容器圆角、clip/isolation和玻璃变量。
+新增响应布局/配置页面16组材质及控件身份前后也严格相等，浏览器无控制台错误。
+等待原主题过渡收敛后比较，未降低断言或修改材质。
+三页控件类型、顺序、文案、标签与SVG相同，body innerText只有flex排版换行差异。
+设计图生成的额外纹理、亮边及阴影有意不移植；原玻璃、系统字体与原SVG是权威。
+上述浏览器材质验证不等于原生 Windows 壁纸合成验收，整包状态继续 review/验收待续。
+
 ## 公开参考资料原生许可
 
 `public-reference-consent.js` 管理内存中的精确原 task/proposal/path/config/fullargs 许可。`requestPreflight` 经原生窗口确认 PUBLIC 来源与目的，不要求未发生的执行 SHA；真正 Gateway 读取完成后，`requestExact` 通过 P6 的 strict confirmed getter 获取原 run/SHA/字节数，再原生确认该内容出机。同步 `readPreflight` / `readAuthorization` 只读该许可，并重新核配置、真实任务、取消、期限、参数与原确认结果；不签工具执行授权、不造 Execution/Evidence、不读文件或向 Renderer 返回正文。

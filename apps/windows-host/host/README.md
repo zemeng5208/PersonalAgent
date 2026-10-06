@@ -69,6 +69,37 @@ Host 只返回短期随机 `targetRef`，不返回或记录标题、正文、HWN
 `ready=false, errorCode=TARGET_STALE`（包括目标引用失效），请求期限过期回 `ready=false, errorCode=TIMEOUT`。它不读取正文、
 不新建或续期目标、不激活窗口，也不消费授权。
 
+目标观察和解析在元数据/UIA 检查前后复核同一短期 lease；慢查询完成时已经过期的
+观察返回 `TIMEOUT`，解析不再返回失效目标。观察的三十秒上限仍从本次观察开始计时，
+不会因慢查询续期。`target_ready` 在目标解析之后再次核对请求 deadline 和原
+`expiresAt`：请求过期优先回 `TIMEOUT`，目标过期回 `TARGET_STALE`；保持原 targetRef
+及有效期，不授予权限或延长执行期限。
+
+观察和解析还在同一次 UIA 元数据检查前后复核原前台 HWND、窗口所属 PID；每次绑定
+`Process.SafeHandle` 后核对原启动时间、可信映像/包身份及进程存活，进程元数据查询后再核
+前台与 HWND owner。慢查询期间切走前台或身份失效，不再返回成功的观察/就绪回执；
+身份不可查询也拒绝。此检查不读取标题或正文，不激活窗口，也不更新目标有效期。
+Win32 与 UIA 没有原子身份快照，最后复核之后仍有极短竞态；执行层仍须保留原写前
+重绑定、前台和用户输入检查。本改动修复迟到回执，未证明发生过错误写入或实机复现。
+
+2026-10-05 新增的 HostFixture 回归调用生产共用的 lease/readiness helper，用受控 UTC
+时钟和合成元数据 predicate 覆盖查询中跨越请求/目标期限、等于期限、入口已过期零查询、
+有效/无效/抛错目标及不续期。身份回归在元数据 predicate 中改变身份状态，验证前台、
+HWND owner、进程启动/退出的合成失效、入口已失效零查询、前后各检查及查询后异常
+拒绝，并验证身份查询自身跨期限时不再进入 UIA 或返回目标；它调用生产共用 guard，
+不代表物理切换窗口或 PID/HWND 复用实机验收。
+Desktop 的 `test/windows-host-fixture.test.mjs` 将该现有
+C# fixture 接入原 Node test glob：Windows 必须找到稳定 .NET 8 SDK，以独立临时
+`--artifacts-path` 构建所有项目引用，再发现真实 runtimeconfig 旁的 DLL 并运行，检查
+原完成 marker；SDK 缺失、构建/fixture 错误、超时或缺 marker 均失败，不因环境缺项跳过。
+临时 SDK 配置、CLI 目录和构建产物只属于该测试，结束后清理；不在源码目录生成 bin/obj。
+
+当前 Linux 会话没有 .NET SDK，官方 SDK metadata 下载被 HTTP 403 拒绝，未编译或
+运行 C# 回归；Node 包装测试在 Linux 明确按平台跳过，源码审查与 `git diff --check`
+不代替编译。后续 Windows Foundation 的 Desktop 测试将实际构建/运行该受控 fixture，
+结果须按对应提交的日志另行记录；不能预记成功，也不能代替真实 Pipe、UIA、用户接管
+或设备验收。Windows owner 仍可单独运行原 HostFixture 完成定向验证。
+
 `execute` 帧中的 `authorizationRef` 不构成授权；正式调用方必须先在 Runtime 的
 Policy/ToolGateway 中完成任务、工具、参数摘要、目标与期限的授权消费。Host 只接受
 已绑定的可信 Pipe 对端，把同一 `taskId/runId/toolName/toolVersion/authorizationRef/

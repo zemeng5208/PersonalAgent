@@ -52,6 +52,47 @@ export function createGitTools(options: GitToolsOptions): {head: RegisteredTool;
     if (c.signal.aborted) throw new ProtocolError('CANCELLED', 'Git operation cancelled; reconcile any started write before retry');
     if (!Number.isFinite(Date.parse(c.deadline)) || Date.parse(c.deadline) <= now()) throw new ProtocolError('TIMEOUT', 'Git deadline expired; reconcile any started write before retry');
   };
+  // Host evidence/secret reads happen before the commit ref or remote push.
+  // Bound these public ports even when an injected host ignores its signal;
+  // ending our wait does not prove the host operation itself has stopped.
+  const hostRead = async <T>(c: ToolContext, scope: string, work: (bounded: ToolContext) => Promise<T>): Promise<T> => {
+    check(c,scope);
+    const controller=new AbortController();
+    const deadline=Date.parse(c.deadline);
+    let timedOut=false, timer: ReturnType<typeof setTimeout> | undefined;
+    let interrupt=()=>{};
+    const abort=()=>controller.abort();
+    const interruptedError=()=>new ProtocolError(timedOut?'TIMEOUT':'CANCELLED',timedOut?'Git host read deadline expired':'Git host read cancelled');
+    const expire=():void=>{
+      const remaining=deadline-now();
+      if(remaining<=0) {timedOut=true;controller.abort();}
+      else timer=setTimeout(expire,Math.min(remaining,2_147_483_647));
+    };
+    try {
+      const interrupted=new Promise<never>((_resolve,reject)=>{
+        interrupt=()=>reject(interruptedError());
+        controller.signal.addEventListener('abort',interrupt,{once:true});
+        c.signal.addEventListener('abort',abort,{once:true});
+        if(c.signal.aborted) abort();
+        expire();
+      });
+      const operation=Promise.resolve().then(()=>{
+        check(c,scope);
+        if(controller.signal.aborted) throw interruptedError();
+        return work({...c,signal:controller.signal});
+      });
+      const result=await Promise.race([interrupted,operation]);
+      // A synchronous callback can settle while aborting or exhausting the lease.
+      if(now()>=deadline) {timedOut=true;controller.abort();}
+      check(c,scope);
+      if(controller.signal.aborted) throw interruptedError();
+      return result;
+    } finally {
+      clearTimeout(timer);
+      c.signal.removeEventListener('abort',abort);
+      controller.signal.removeEventListener('abort',interrupt);
+    }
+  };
   const git = async (args: string[], c: ToolContext, scope: string, extra: Record<string,string> = {}, input?: string | Buffer): Promise<string> => {
     check(c, scope);
     return new Promise((done, reject) => {
@@ -59,11 +100,11 @@ export function createGitTools(options: GitToolsOptions): {head: RegisteredTool;
       const env: NodeJS.ProcessEnv = {PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, HOME: process.env.HOME,
         GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', ...extra};
       const child = spawn('git', ['-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false','-c','credential.interactive=false','-c','credential.helper=',...args], {cwd: root, env, shell: false, windowsHide: true, stdio: ['pipe','pipe','pipe']});
-      let output = ''; let size = 0; let interrupted = false;
+      const output: Buffer[] = []; let size = 0; let interrupted = false;
       const stop = () => {interrupted = true; child.kill('SIGKILL');};
       const timer = setTimeout(stop, Math.min(60_000, Date.parse(c.deadline) - now()));
       c.signal.addEventListener('abort', stop, {once:true});
-      child.stdout.on('data', (b: Buffer) => {size += b.length; if(size > 1024*1024) stop(); else output += b.toString('utf8');});
+      child.stdout.on('data', (b: Buffer) => {size += b.length; if(size > 1024*1024) stop(); else output.push(Buffer.from(b));});
       // Drain stderr without returning possible remote credentials or private paths.
       child.stderr.on('data', () => {});
       child.on('error', () => {clearTimeout(timer); c.signal.removeEventListener('abort',stop); reject(new ProtocolError('EXTERNAL_FAILURE','Git process unavailable'));});
@@ -71,7 +112,13 @@ export function createGitTools(options: GitToolsOptions): {head: RegisteredTool;
         clearTimeout(timer); c.signal.removeEventListener('abort',stop);
         if (interrupted) reject(new ProtocolError('RESULT_UNKNOWN','Git result unknown; reconcile before retry'));
         else if(code !== 0) reject(new ProtocolError(args[0]==='push' || args[0]==='update-ref' ? 'RESULT_UNKNOWN':'EXTERNAL_FAILURE','Git rejected the bounded operation; reconcile any started write before retry'));
-        else done(output);
+        else {
+          // Pipe chunks can split a filename's UTF-8 code point. Decode complete
+          // bounded bytes once; never guess a path from replacement characters.
+          try {done(new TextDecoder('utf-8', {fatal:true, ignoreBOM:true}).decode(Buffer.concat(output)));}
+          catch {reject(new ProtocolError(args[0]==='push' || args[0]==='update-ref' ? 'RESULT_UNKNOWN':'EXTERNAL_FAILURE',
+            'Git output encoding invalid; reconcile any started write before retry'));}
+        }
       });
       child.stdin.end(input);
     });
@@ -89,7 +136,7 @@ export function createGitTools(options: GitToolsOptions): {head: RegisteredTool;
     return files;
   };
   const state = async (c: ToolContext, scope: string) => {
-    const reportedRoot=(await git(['rev-parse','--show-toplevel'],c,scope)).trim();
+    const reportedRoot=(await git(['rev-parse','--show-toplevel'],c,scope)).replace(/\r?\n$/u,'');
     if (!sameCanonicalPath(realpathSync.native(reportedRoot),root)) fail('Git root binding changed');
     if ((await git(['symbolic-ref','--short','HEAD'],c,scope)).trim() !== options.sourceBranch) fail('Git branch binding changed');
     if ((await git(['remote','get-url',options.remoteName],c,scope)).trim() !== options.remoteUrl) fail('Git remote binding changed');
@@ -121,7 +168,7 @@ export function createGitTools(options: GitToolsOptions): {head: RegisteredTool;
       if(!indexStat.isFile() || indexStat.isSymbolicLink()) fail('Git index must be a canonical regular file');
       const originalIndex=await readFile(indexPath);
       const originalIndexHash=createHash('sha256').update(originalIndex).digest('hex');
-      const receipt=await options.readVerification(c,q.verificationRunId);
+      const receipt=await hostRead(c,GIT_COMMIT_SCOPE,bounded=>options.readVerification(bounded,q.verificationRunId));
       if(!receipt || receipt.taskId!==c.taskId || receipt.runId!==q.verificationRunId || receipt.toolName!=='workspace.run_allowed_command' || receipt.status!=='confirmed' || receipt.exitCode!==0 || receipt.headSha!==s.headSha || digest([...receipt.files].sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0))!==s.fingerprint) fail('Trusted successful command receipt does not match current files');
       const temp=await mkdtemp(join(tmpdir(),'personal-agent-git-'));
       try {
@@ -171,7 +218,7 @@ export function createGitTools(options: GitToolsOptions): {head: RegisteredTool;
     push:{descriptor:pd,execute:async(input,c)=>{validateToolValue(pd.inputSchema,input); const q=input as GitPushInput; return exclusive(async()=>{
       const s=await state(c,GIT_PUSH_SCOPE); if(s.headSha!==q.expectedHeadSha) fail('Git push HEAD changed');
       check(c,GIT_PUSH_SCOPE);
-      const credentials=await options.getCredentials?.(c);
+      const credentials=await hostRead(c,GIT_PUSH_SCOPE,bounded=>options.getCredentials?.(bounded) ?? Promise.resolve(undefined));
       check(c,GIT_PUSH_SCOPE);
       if(!credentials?.token || credentials.token.length>16384 || /[\x00-\x20\x7f]/u.test(credentials.token)) throw new ProtocolError('UNAUTHORIZED','Trusted Git push credentials are unavailable');
       // Exact host URL only. Secret lives in this child's environment, never

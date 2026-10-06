@@ -51,3 +51,52 @@ test('saved workspace awaiting trusted assembly cannot authorize or claim malfor
   ui.render(); ui.change('cloud', true); await ui.click('authorize');
   assert.equal(calls.length, 1); assert.match(ui.fields.status.textContent, /未获确认/);
 });
+
+test('workspace controls retain pending feedback across host snapshots and accept settled readback', async t => {
+  let resolve;
+  const ui = harness(t, () => new Promise(done => {resolve = done;}));
+  ui.render({reason: 'saved host state'});
+  const pending = ui.click('select');
+  assert.match(ui.fields.status.textContent, /等待本机宿主/);
+  ui.render({displayName: 'new host name', nodeConfigured: true, reason: 'background host state'});
+  assert.equal(ui.fields.name.textContent, '当前工作区：new host name', 'host fields still refresh while waiting');
+  assert.match(ui.fields['node-status'].textContent, /Node：已选择/);
+  assert.match(ui.fields.status.textContent, /等待本机宿主/);
+  assert.equal(ui.fields.select.disabled, true);
+  assert.equal(ui.fields.revoke.disabled, true);
+  resolve({coding: {configured: true, displayName: 'confirmed workspace', reason: 'confirmed selection'}});
+  await pending;
+  assert.equal(ui.fields.status.textContent, 'confirmed selection');
+  assert.equal(ui.fields.select.disabled, false);
+  ui.render({reason: 'fresh host state'});
+  assert.equal(ui.fields.status.textContent, 'fresh host state');
+});
+
+test('workspace controls preserve unconfirmed feedback until explicit successful retry', async t => {
+  let resolve, reject;
+  const ui = harness(t, () => new Promise((done, fail) => {resolve = done; reject = fail;}));
+  ui.render();
+  const failed = ui.click('select');
+  reject(Error('synthetic private host detail'));
+  await failed;
+  const failure = ui.fields.status.textContent;
+  assert.match(failure, /操作未完成/);
+  ui.render({displayName: 'updated host', reason: 'background success claim'});
+  assert.equal(ui.fields.name.textContent, '当前工作区：updated host');
+  assert.equal(ui.fields.status.textContent, failure);
+  assert.doesNotMatch(ui.fields.status.textContent, /private|background success/);
+  assert.equal(ui.fields.select.disabled, false);
+  const retry = ui.click('select');
+  assert.match(ui.fields.status.textContent, /等待本机宿主/);
+  resolve({coding: []});
+  await retry;
+  assert.match(ui.fields.status.textContent, /结果未获确认/);
+  ui.render({reason: 'another background success claim'});
+  assert.match(ui.fields.status.textContent, /结果未获确认/);
+  const confirmed = ui.click('select');
+  resolve({coding: {configured: true, displayName: 'confirmed', reason: 'confirmed retry'}});
+  await confirmed;
+  assert.equal(ui.fields.status.textContent, 'confirmed retry');
+  ui.render({reason: 'fresh host after retry'});
+  assert.equal(ui.fields.status.textContent, 'fresh host after retry');
+});

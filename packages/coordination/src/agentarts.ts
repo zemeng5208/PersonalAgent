@@ -405,7 +405,9 @@ function appendResponseChunk(chunks: Uint8Array[], value: Uint8Array, total: {va
   if (!(value instanceof Uint8Array)) external('AgentArts response body is malformed');
   total.value += value.byteLength;
   if (total.value > MAX_RESPONSE_BYTES) external('AgentArts response exceeds the byte limit');
-  chunks.push(value);
+  // A transport may reuse its buffer for the next read. Preserve received bytes
+  // before advancing it, after enforcing the aggregate allocation limit.
+  chunks.push(new Uint8Array(value));
 }
 
 function closeWithoutWaiting(operation: () => unknown): void {

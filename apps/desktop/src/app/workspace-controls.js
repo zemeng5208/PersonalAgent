@@ -31,6 +31,7 @@ export function mountWorkspaceControls(root, invoke) {
   let busy = false;
   let consentDirty = false;
   let feedback = '';
+  let unconfirmed = false;
 
   function updateButtons() {
     const configured = state.configured === true;
@@ -47,7 +48,7 @@ export function mountWorkspaceControls(root, invoke) {
   }
 
   function render(snapshot = {}, {keepFeedback = false} = {}) {
-    if (!keepFeedback) feedback = '';
+    if (!keepFeedback && !busy && !unconfirmed) feedback = '';
     const next = snapshot?.coding ?? {};
     const previousName = state.displayName;
     const previouslyAllowed = state.cloudExportAllowed === true;
@@ -90,6 +91,7 @@ export function mountWorkspaceControls(root, invoke) {
   async function run(action, payload) {
     if (busy) return;
     busy = true;
+    unconfirmed = false;
     feedback = '正在等待本机宿主读回…';
     section.setAttribute('aria-busy', 'true');
     field('status').textContent = feedback;
@@ -98,13 +100,16 @@ export function mountWorkspaceControls(root, invoke) {
       const result = payload === undefined ? await invoke(action) : await invoke(action, payload);
       if (result && typeof result === 'object' && result.coding && typeof result.coding === 'object'
         && !Array.isArray(result.coding) && typeof result.coding.configured === 'boolean') {
+        feedback = '';
         consentDirty = false;
         render(result);
       } else {
+        unconfirmed = true;
         feedback = '操作结果未获确认，请检查本机工作区状态后再操作。';
         render({coding: state}, {keepFeedback: true});
       }
     } catch {
+      unconfirmed = true;
       feedback = '工作区操作未完成，可重试或查看本机状态。';
       render({coding: state}, {keepFeedback: true});
     } finally {

@@ -58,15 +58,48 @@ function pullRequest(value: unknown, number: number): PullRequest {
     || pr.title.length > 8192 || pr.body.length > 100_000) invalid('invalid or closed pull request');
   return {headSha: sha(pr.headSha), baseSha: sha(pr.baseSha), title: pr.title as string, body: pr.body as string};
 }
+/** Git quotes path bytes using C escapes, including UTF-8 octets when core.quotePath is enabled. */
+function gitDiffPath(value: string): string {
+  if (!value.startsWith('"')) {
+    // Git appends one tab delimiter to unquoted headers containing spaces.
+    // It is not filename whitespace; embedded tabs/timestamps remain invalid.
+    const path = value.endsWith('\t') ? value.slice(0, -1) : value;
+    if (path.includes('\t')) invalid('unsupported diff path');
+    return path;
+  }
+  if (!value.endsWith('"')) return invalid('malformed quoted diff path');
+  const bytes: Buffer[] = [];
+  const escapes: Record<string, string> = {a: '\x07', b: '\b', t: '\t', n: '\n', v: '\v', f: '\f', r: '\r', '\\': '\\', '"': '"'};
+  const content = value.slice(1, -1);
+  for (let i = 0; i < content.length;) {
+    if (content[i] === '\\') {
+      const escaped = content[++i];
+      if (escaped !== undefined && Object.hasOwn(escapes, escaped)) {
+        bytes.push(Buffer.from(escapes[escaped]!)); i++;
+      } else {
+        const octal = content.slice(i, i + 3);
+        if (!/^[0-3][0-7]{2}$/.test(octal)) return invalid('malformed quoted diff path');
+        bytes.push(Buffer.from([Number.parseInt(octal, 8)])); i += 3;
+      }
+    } else {
+      const end = content.indexOf('\\', i);
+      const literal = content.slice(i, end < 0 ? content.length : end);
+      if (/["\x00-\x1f\x7f]/.test(literal)) return invalid('malformed quoted diff path');
+      bytes.push(Buffer.from(literal)); i += literal.length;
+    }
+  }
+  try {return new TextDecoder('utf-8', {fatal: true}).decode(Buffer.concat(bytes));}
+  catch {return invalid('invalid UTF-8 diff path');}
+}
 /** Only changed diff lines are eligible; context lines and metadata never become inline findings. */
 export function codeReviewChangedLines(diff: string): ReadonlyMap<string, ReadonlySet<string>> {
   const paths = new Map<string, Set<string>>();
   let leftPath: string | undefined; let rightPath: string | undefined;
   let left = 0; let right = 0; let leftRemaining = 0; let rightRemaining = 0; let hunk = false;
   const path = (line: string): string | undefined => {
-    const value = line.slice(4);
+    const value = gitDiffPath(line.slice(4));
     if (value === '/dev/null') return undefined;
-    if (!/^[ab]\//.test(value) || value.startsWith('"') || value.includes('\t')) return invalid('unsupported diff path');
+    if (!/^[ab]\//.test(value) || value.includes('\0')) return invalid('unsupported diff path');
     const result = value.slice(2);
     if (!result || result.startsWith('/') || result.split('/').some(part => part === '..' || part === '.')) return invalid('invalid diff path');
     return result;
@@ -215,6 +248,12 @@ export function createCodeReviewWorkflow(options: CodeReviewWorkflowOptions): Co
         if (outcome.state !== 'pending' && !(outcome.state === 'unknown' && access.confirmedReplayReady?.(`${access.runId}:comment-${findingIndex}`) === true)) {
           return structuredClone(record.outcome) as ToolInvocationResult;
         }
+      }
+      // Git can display these filenames, while the existing GitHub connector cannot publish them.
+      // Keep existing outcomes and the read-only finding, without reserving a new unknown write.
+      if (finding.path.length > 1024 || finding.path.includes('..') || finding.path.includes('@{')
+        || finding.path.startsWith('/') || finding.path.includes('\\') || /[\x00-\x1f\x7f]/.test(finding.path)) {
+        return {state: 'unsupported', reason: 'github_review_path_unsupported'};
       }
       const read = await invoke('github.pr.get', {repo: copy.repo, number: copy.number}, context, access, `publish-head-${findingIndex}`);
       if (read.state !== 'confirmed') return read;

@@ -713,5 +713,8 @@ export {createGitTools, registerGitTools, readGitWorkspaceFingerprint,
 export type {GitFileHash, GitVerificationReceipt, GitToolsOptions, GitHeadResult, GitCommitInput,
   GitCommitResult, GitPushInput, GitPushResult} from './dev-workflows/git-tools-types.js';
 export {runCiFix, createCiFixWorkflow} from './dev-workflows/ci-fix.js';
+export {createCiRunDiscoveryWorkflow} from './dev-workflows/ci-run-discovery.js';
+export type {CiDiscoveredRun, CiRunListRequest, CiRunListResult, CiRunDiscoveryOptions,
+  CiRunDiscoveryWorkflowPort} from './dev-workflows/ci-run-discovery.js';
 export type {ToolExecutionPort, CiFixProposal, CiFixGitTools, CiFixOptions,
   CiFixWorkflowPort, CiFixOutcome} from './dev-workflows/ci-fix-types.js';

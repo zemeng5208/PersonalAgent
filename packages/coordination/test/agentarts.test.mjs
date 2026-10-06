@@ -58,6 +58,39 @@ function port(fetchImpl, authorizationProvider = provider(), config = {}) {
   }, authorizationProvider, fetchImpl);
 }
 
+for (const transport of ['iterator', 'reader']) {
+  test(`${transport} response preserves chunks when transport reuses its byte buffer`, async () => {
+    const chunks = ['A', 'B'].map(text => new TextEncoder().encode(`data: ${JSON.stringify(message(text))}\n\n`));
+    assert.equal(chunks[0].byteLength, chunks[1].byteLength);
+    const buffer = new Uint8Array(chunks[0].byteLength);
+    let offset = 0;
+    let released = 0;
+    let cancelled = 0;
+    const reader = {
+      async read() {
+        if (offset === chunks.length) return {done: true};
+        buffer.set(chunks[offset++]);
+        return {done: false, value: buffer};
+      },
+      releaseLock() { released++; },
+      cancel() { cancelled++; },
+    };
+    const body = transport === 'reader' ? {getReader: () => reader} : {
+      async *[Symbol.asyncIterator]() {
+        for (const chunk of chunks) {
+          buffer.set(chunk);
+          yield buffer;
+        }
+      },
+    };
+    const cloud = port(async () => ({status: 200,
+      headers: {get: () => 'text/event-stream'}, body}));
+    assert.deepEqual(await cloud.invoke(request()), {kind: 'text', text: 'AB', verification: 'unverified'});
+    assert.equal(released, transport === 'reader' ? 1 : 0);
+    assert.equal(cancelled, 0);
+  });
+}
+
 async function rejectsCode(promise, code, forbidden = []) {
   await assert.rejects(promise, error => {
     assert.ok(error instanceof ProtocolError);
