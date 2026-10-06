@@ -110,7 +110,8 @@ function checkedRecipes(
 
 export function createWorkspaceCommandTool(options: WorkspaceCommandOptions): RegisteredTool {
   const root = realpathSync.native(options.rootPath);
-  if (!statSync(root).isDirectory()) throw new ProtocolError('INVALID_ARGUMENT', 'Workspace root must be a directory');
+  const rootIdentity = statSync(root, {bigint: true});
+  if (!rootIdentity.isDirectory()) throw new ProtocolError('INVALID_ARGUMENT', 'Workspace root must be a directory');
   const baseEnv = checkEnv(options.env, 'options.env');
   const recipes = checkedRecipes(root, options.recipes, baseEnv);
   const maxOutputBytes = bounded(options.maxOutputBytes, DEFAULT_MAX_OUTPUT_BYTES, MAX_OUTPUT_BYTES, 'maxOutputBytes');
@@ -162,6 +163,17 @@ export function createWorkspaceCommandTool(options: WorkspaceCommandOptions): Re
       // A recipe can still access anything its OS account can access: this is not isolation.
       return new Promise<WorkspaceCommandResult>((resolve, reject) => {
         let child: ReturnType<typeof spawn>;
+        // Recheck the bound canonical directory immediately before spawn, with
+        // no await. This detects replacement; it is not an atomic OS sandbox.
+        try {
+          const currentRoot = realpathSync.native(root);
+          const currentIdentity = statSync(root, {bigint: true});
+          if (currentRoot !== root || !currentIdentity.isDirectory()
+            || currentIdentity.dev !== rootIdentity.dev || currentIdentity.ino !== rootIdentity.ino) throw Error();
+        } catch {
+          reject(new ProtocolError('SCOPE_DENIED', 'Workspace command root binding changed'));
+          return;
+        }
         try {
           child = spawn(recipe.executable, recipe.args, {
             cwd: root,

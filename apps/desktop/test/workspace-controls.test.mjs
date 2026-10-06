@@ -14,7 +14,7 @@ function harness(t, invoke = async () => undefined) {
   globalThis.document = {createElement: () => section};
   const controls = mountWorkspaceControls({append() {}}, invoke);
   const render = (coding = {}) => controls.render({coding: {configured: true, displayName: 'project',
-    authorizationAvailable: true, projectScriptsAvailable: true, ...coding}});
+    authorizationAvailable: true, projectScriptsAvailable: true, projectCommands: ['build','test'], ...coding}});
   const change = (name, checked) => {fields[name].checked = checked; fields[name].listeners.get('change')?.();};
   return {fields, render, change, click: name => fields[name].listeners.get('click')()};
 }
@@ -28,6 +28,45 @@ test('project execution consent requires separate command consent and clears whe
   ui.change('project-code', true); ui.change('command', false);
   assert.equal(ui.fields['project-code'].disabled, true);
   assert.equal(ui.fields['project-code'].checked, false);
+});
+
+test('project consent describes only the validated registered command subset', t => {
+  const ui = harness(t); ui.change('command', true);
+  for (const [projectCommands, description] of [[['build'],'构建'],[['test'],'测试'],[['build','test'],'构建/测试']]) {
+    ui.render({projectCommands}); ui.change('command', true);
+    assert.match(ui.fields['project-status'].textContent, new RegExp(`项目${description}：可授权`));
+    assert.match(ui.fields['project-label'].textContent, new RegExp(`执行项目${description}（`));
+    assert.equal(ui.fields['project-code'].disabled, false);
+    if (projectCommands.length === 1) {
+      const absent = projectCommands[0] === 'build' ? '测试' : '构建';
+      assert.equal(ui.fields['project-label'].textContent.includes(absent), false);
+    }
+  }
+  for (const projectCommands of [[], undefined, ['build','build'], ['build','unknown'], ['build',,], 'build']) {
+    ui.change('project-code', true);
+    ui.render({projectCommands});
+    assert.doesNotMatch(ui.fields['project-status'].textContent, /可授权/);
+    assert.match(ui.fields['project-status'].textContent, /项目命令信息待读回/);
+    assert.match(ui.fields['project-label'].textContent, /执行项目命令/);
+    assert.equal(ui.fields['project-code'].disabled, false, 'the host availability boolean remains authoritative');
+    assert.equal(ui.fields['project-code'].checked, true, 'missing command details cannot erase deliberate consent drafts');
+  }
+  ui.render({projectCommands: ['build'], projectScriptsAvailable: false});
+  assert.equal(ui.fields['project-code'].disabled, true);
+  assert.doesNotMatch(ui.fields['project-status'].textContent, /可授权/);
+});
+
+test('missing project command details do not change the existing authorization payload', async t => {
+  const calls = [];
+  const ui = harness(t, async (action, input) => {calls.push({action,input}); return {coding:{configured:true}};});
+  for (const projectCommands of [undefined, [], ['build','unknown']]) {
+    ui.render({projectCommands}); ui.change('cloud', true); ui.change('command', true); ui.change('project-code', true);
+    await ui.click('authorize');
+    assert.equal(calls.at(-1).input.projectCodeAllowed, true);
+  }
+  ui.render({projectCommands:['build'],projectScriptsAvailable:false});
+  ui.change('cloud',true);ui.change('command',true);await ui.click('authorize');
+  assert.equal(calls.at(-1).input.projectCodeAllowed, false);
 });
 
 test('host readback projects current consent while preserving deliberate unsaved changes', t => {
