@@ -24,6 +24,12 @@ const dispose = register(toolHost, {provider});
 环境。宿主显式提供所需 PATH/SystemRoot/TEMP 等可信值。仅支持 github.com。
 凭据通过 GH_TOKEN 环境传给 gh，命令参数、返回值和错误不含凭据。
 
+stdout/stderr 共用原1 MiB字节上限，完整收集后分别严格UTF-8解码，保留合法BOM和
+跨chunk的中文字符。非法编码固定失败，不把替换字符作为issue/diff/写回执内容接受，
+错误不回显原始字节；取消、期限和超限错误优先。已派发写入的解码失败仍由Provider
+保持unknown，不能据此判定未执行或自动重发。实际子进程回归使用明确合成GH transport，
+不等于真实账号验收。
+
 工具版本为 `0.1.0-alpha.1`。全部输入拒绝未知字段；`repo` 必须在宿主白名单。
 所有操作需 `ToolContext.signal/deadline/authorizationRef/scopes`；读工具 scope 为
 `github:read`，写工具为 `github:write`，写工具声明 `external_write`、

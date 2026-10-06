@@ -60,10 +60,11 @@ function pullRequest(value: unknown, number: number): PullRequest {
 }
 /** Git quotes path bytes using C escapes, including UTF-8 octets when core.quotePath is enabled. */
 function gitDiffPath(value: string): string {
+  // Git can delimit both quoted and unquoted space-containing paths with one tab.
+  // Remove only that delimiter; extra tabs and timestamp suffixes remain invalid.
+  value = value.endsWith('\t') ? value.slice(0, -1) : value;
   if (!value.startsWith('"')) {
-    // Git appends one tab delimiter to unquoted headers containing spaces.
-    // It is not filename whitespace; embedded tabs/timestamps remain invalid.
-    const path = value.endsWith('\t') ? value.slice(0, -1) : value;
+    const path = value;
     if (path.includes('\t')) invalid('unsupported diff path');
     return path;
   }
@@ -125,7 +126,7 @@ export function codeReviewChangedLines(diff: string): ReadonlyMap<string, Readon
       if (line === '') continue;
       if (line.startsWith('\\ No newline')) continue;
       if (line.startsWith('+')) {if (rightRemaining < 1) invalid('malformed diff'); add(rightPath, 'RIGHT', right++); rightRemaining--;}
-      else if (line.startsWith('-')) {if (leftRemaining < 1) invalid('malformed diff'); add(leftPath, 'LEFT', left++); leftRemaining--;}
+      else if (line.startsWith('-')) {if (leftRemaining < 1) invalid('malformed diff'); add(rightPath ?? leftPath, 'LEFT', left++); leftRemaining--;}
       else if (line.startsWith(' ')) {if (leftRemaining < 1 || rightRemaining < 1) invalid('malformed diff'); left++; right++; leftRemaining--; rightRemaining--;}
       else invalid('malformed diff');
     }
