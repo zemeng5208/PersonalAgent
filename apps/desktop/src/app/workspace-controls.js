@@ -33,6 +33,14 @@ export function mountWorkspaceControls(root, invoke) {
   let feedback = '';
   let unconfirmed = false;
 
+  function projectCommandNames() {
+    const commands = state.projectCommands;
+    if (!Array.isArray(commands)
+      || !commands.length || [...commands].some(command => !['build','test'].includes(command))
+      || new Set(commands).size !== commands.length) return [];
+    return ['build','test'].filter(command => commands.includes(command));
+  }
+
   function updateStatus() {
     const hostReason = (typeof state.reason === 'string' ? state.reason : '')
       || (state.configured === true ? '请按需选择授权范围；设置状态以宿主读回为准。' : '请先由本机宿主选择工作区。');
@@ -72,12 +80,14 @@ export function mountWorkspaceControls(root, invoke) {
     field('node-status').textContent = configured
       ? `Node：${state.nodeConfigured === true ? '已选择' : '未选择'} · 检查文件：${state.checkFileConfigured === true && typeof state.checkFileName === 'string' ? state.checkFileName : '未选择'} · Node 语法检查：${state.nodeCheckAvailable === true ? '可用' : '不可用'}${typeof state.commandReason === 'string' && state.commandReason ? ` · ${state.commandReason}` : ''}`
       : '先选择工作区，再由本机宿主选择 Node 与工作区内 JS 文件。';
+    const projectCommands = projectCommandNames();
     const projectReady = configured && state.projectScriptsAvailable === true;
+    const projectDescription = projectCommands.map(command => command === 'build' ? '构建' : '测试').join('/');
     field('project-status').textContent = configured
-      ? `npm 文件：${state.npmCliConfigured === true ? '已确定' : '未找到，可手动选择'} · 项目构建/测试：${projectReady ? '可授权' : '暂不可用'}${typeof state.projectReason === 'string' && state.projectReason ? ` · ${state.projectReason}` : ''}`
+      ? `npm 文件：${state.npmCliConfigured === true ? '已确定' : '未找到，可手动选择'} · ${projectReady && !projectCommands.length ? '项目命令信息待读回' : `项目${projectDescription || '命令'}：${projectReady ? '可授权' : '暂不可用'}`}${typeof state.projectReason === 'string' && state.projectReason ? ` · ${state.projectReason}` : ''}`
       : '选择工作区后才会检查项目构建和测试是否可用。';
     field('project-label').textContent = projectReady
-      ? '单独允许本会话执行项目构建/测试（先勾选受限命令）'
+      ? `单独允许本会话执行项目${projectDescription || '命令'}（先勾选受限命令）`
       : '允许执行项目构建/测试（尚未准备好）';
     if (!projectReady) field('project-code').checked = false;
     if (!configured || previousName !== state.displayName || (previouslyAllowed && state.cloudExportAllowed !== true)) {
