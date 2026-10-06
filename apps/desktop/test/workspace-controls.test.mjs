@@ -100,3 +100,48 @@ test('workspace controls preserve unconfirmed feedback until explicit successful
   ui.render({reason: 'fresh host after retry'});
   assert.equal(ui.fields.status.textContent, 'fresh host after retry');
 });
+
+test('permission drafts explain unchanged host authority without invoking until explicit readback', async t => {
+  const calls = [];
+  let resolve;
+  const ui = harness(t, (action, input) => {
+    calls.push({action, input}); return new Promise(done => {resolve = done;});
+  });
+  const current = {cloudExportAllowed: true, writeAllowed: true, writeAvailable: true,
+    reason: '当前工作区已授权'};
+  ui.render(current);
+  ui.change('write', false);
+  assert.match(ui.fields.status.textContent, /权限选择尚未生效/);
+  assert.match(ui.fields.status.textContent, /当前工作区已授权/);
+  assert.match(ui.fields.capabilities.textContent, /写入：可用/);
+  assert.equal(calls.length, 0);
+  ui.render(current);
+  assert.equal(ui.fields.write.checked, false);
+  assert.match(ui.fields.status.textContent, /权限选择尚未生效/);
+  ui.change('cloud', false);
+  assert.equal(ui.fields.authorize.disabled, true);
+  assert.match(ui.fields.status.textContent, /撤销授权/);
+  assert.equal(calls.length, 0);
+  ui.change('cloud', true);
+  const pending = ui.click('authorize');
+  assert.match(ui.fields.status.textContent, /等待本机宿主/);
+  assert.doesNotMatch(ui.fields.status.textContent, /尚未生效/);
+  ui.render(current);
+  assert.match(ui.fields.status.textContent, /等待本机宿主/);
+  resolve({coding: []}); await pending;
+  ui.change('command', true); ui.render(current);
+  assert.match(ui.fields.status.textContent, /未获确认/);
+  assert.doesNotMatch(ui.fields.status.textContent, /尚未生效/);
+  const retry = ui.click('authorize');
+  resolve({coding: {configured: true, displayName: 'project', authorizationAvailable: true,
+    cloudExportAllowed: true, writeAllowed: false, commandAllowed: true, reason: '更新授权已确认'}});
+  await retry;
+  assert.equal(ui.fields.status.textContent, '更新授权已确认');
+  assert.equal(ui.fields.write.checked, false);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].input.writeAllowed, false);
+  ui.change('write', true);
+  assert.match(ui.fields.status.textContent, /权限选择尚未生效/);
+  assert.match(ui.fields.status.textContent, /更新授权已确认/);
+  assert.equal(calls.length, 2);
+});

@@ -33,6 +33,14 @@ export function mountWorkspaceControls(root, invoke) {
   let feedback = '';
   let unconfirmed = false;
 
+  function updateStatus() {
+    const hostReason = (typeof state.reason === 'string' ? state.reason : '')
+      || (state.configured === true ? '请按需选择授权范围；设置状态以宿主读回为准。' : '请先由本机宿主选择工作区。');
+    field('status').textContent = feedback || (consentDirty && !busy && !unconfirmed
+      ? `权限选择尚未生效。点击“授权所选权限”应用；要停止当前权限，请撤销授权。当前生效状态：${hostReason}`
+      : hostReason);
+  }
+
   function updateButtons() {
     const configured = state.configured === true;
     field('select').disabled = busy;
@@ -45,6 +53,7 @@ export function mountWorkspaceControls(root, invoke) {
     field('project-code').disabled = busy || !configured || state.projectScriptsAvailable !== true || !field('command').checked;
     field('authorize').disabled = busy || !configured || state.authorizationAvailable !== true || !field('cloud').checked;
     field('revoke').disabled = busy || (!configured && state.cloudExportAllowed !== true);
+    updateStatus();
   }
 
   function render(snapshot = {}, {keepFeedback = false} = {}) {
@@ -83,8 +92,6 @@ export function mountWorkspaceControls(root, invoke) {
       field('command').checked = configured && state.commandAllowed === true;
       field('project-code').checked = projectReady && field('command').checked && state.projectCodeAllowed === true;
     }
-    field('status').textContent = feedback || (typeof state.reason === 'string' ? state.reason : '')
-      || (configured ? '请按需选择授权范围；设置状态以宿主读回为准。' : '请先由本机宿主选择工作区。');
     updateButtons();
   }
 
