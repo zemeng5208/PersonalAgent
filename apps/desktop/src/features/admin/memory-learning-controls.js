@@ -39,7 +39,7 @@ export function memoryLearningControlsHtml({status = {}, refs = [], version = nu
 }
 
 /** P8 mounts this inside the trusted admin surface; invoke uses its sender-checked preload. */
-export function mountMemoryLearningControls(root, {invoke, status, refs = []}) {
+export function mountMemoryLearningControls(root, {invoke, status, refs = [], onMemoryChanged}) {
   const state = {status, refs: structuredClone(refs), version: null, active: null, taskId: '',
     runningTask: null, message: '', form: {}};
   const events = new AbortController();
@@ -78,6 +78,7 @@ export function mountMemoryLearningControls(root, {invoke, status, refs = []}) {
         result = await invoke(withdraw !== undefined ? 'memory.withdraw' : 'memory.delete', {ref});
         if (result.state === 'withdrawn') state.refs[index] = {...ref, revision: result.revision};
         if (result.state === 'deleted') state.refs.splice(index, 1);
+        if (result.state === 'withdrawn' || result.state === 'deleted') await onMemoryChanged?.();
       } else {
         const payload = {workflowId, revision};
         if (action === 'propose') Object.assign(payload, {summary, path,

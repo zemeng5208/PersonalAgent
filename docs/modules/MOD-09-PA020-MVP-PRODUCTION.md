@@ -1,5 +1,38 @@
 # PA020 私人记忆与流程学习生产桥
 
+## 2026-10-06 撤回后的管理入口补修
+
+目标 profile：`huawei_ict_agentarts`；goo122 延续在途 MOD-09 工作，状态 `in_progress`。
+基线 `e02865c`；隔离工作树 `.worktrees/mod09-withdrawn-memory-management`，
+分支 `codex/mod09-withdrawn-memory-management`。保留已有原生验收实例和共享工作区。
+
+- 失败复现：私人记忆更正为 v2、撤回为 v3 后，重启时管理列表只查询有效事实，
+  找不到撤回头，无法从列表选择全部历史删除。新增合成用例在修复前准确失败。
+- SQLite 新增 host-only `listUserFactHeads`，复用原快照/游标和水位，列出每条
+  `private/user_confirmed` 的当前头，包括撤回和过期；最新头不满足范围时不回退。
+  管理快照与 consumer query、其他 namespace 隔离，删除时失效相关快照。
+- Desktop 管理列表使用该端口，展示版本和撤回状态。撤回或删除确认成功后刷新列表，
+  任务选择只保留有效 active 引用；取消不刷新或改写引用。
+- 不新增 wire operation、Schema、迁移或依赖。`MemoryQueryPort` 的有效查询和任务消费授权不变，
+  接口仍为 provisional。真实原生逐条确认、真实来源持久生命周期和真实 AgentArts 消费尚未通过。
+- 验证：`npm ci`、根构建、native Release 构建通过；定向回归 35/35、Memory 工作区 44/44，
+  根集成 22/22。数据和确认回调均为显式合成，不构成原生确认或真实云端证据。
+  `npm run dev`、`demo:protocol`、`demo:runtime` 均通过；Runtime 演示 verification 为 mock。
+- `npm run check` 的架构、协议夹具、生成检查与全工作区类型检查通过；工作区测试共
+  2074 项，2047 通过、2 失败、25 跳过。失败代码均未修改：Desktop
+  `coding-tool-host.test.mjs:72` 在默认 TEMP 环境的装配断言失败。最初观察到 `where.exe`
+  输出解码后路径不匹配，但当前主线已经直接搜索 PATH，该观察不能作为本次装配失败的根因。
+  另 `windows-host-fixture.test.mjs:34`
+  要求稳定 .NET 8 SDK，本机只枚举到 SDK 10.0.302；已有 .NET 8 Runtime 不等于 SDK。
+  此为首次运行的失败记录，未修改这些门禁或顺带扩展 Windows 宿主范围。
+- 2026-10-06 环境复核：微软官方 SDK 8.0.425 zip 经官方 SHA-512 校验后解压到项目忽略缓存。
+  仅验证进程使用该 SDK，并把 TEMP/TMP 指向工作树外的项目缓存；原宿主装配门禁单独通过，
+  两项 Windows 门禁合计 7/7。默认 TEMP 兼容问题仍待 Windows 宿主负责人定位；本补修不声明解决它。
+- 隔离环境完整 `npm run check` 通过：工作区测试 2074 项，2049 通过、0 失败、25 跳过，
+  根集成 22/22；架构、协议夹具、生成检查和类型检查均通过。验证条件如上，不宣称默认 TEMP 兼容修复。
+- 本增量通过独立 PR 交付；当前提交的远程 CI、非作者评审与合并仍为集成条件，
+  不把本地通过记作主线交付或 MOD-09 完成。
+
 ## 2026-10-05 主线确认与实际 MCP 学习验收
 
 目标为 `huawei_ict_agentarts`，工作树 `.worktrees/main-ci-foundation-validation`，

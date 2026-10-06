@@ -50,6 +50,11 @@ provisional 进程内配置，不是 wire operation、完整多输入映射或�
 
 ### 事实变化消费开发增量
 
+2026-10-06 管理补修：SQLite host-only `listUserFactHeads` 通过现有受信私人管理入口
+列出当前 user-confirmed/private 头，包含撤回及过期记录，以便重启后仍能精确删除历史。
+复用已有有界快照分页，和消费查询 token 隔离；不扩展 `MemoryQueryPort` 或 wire capability，
+不授予消费/出机权限，无迁移。增量待非作者评审，状态仍为 provisional。
+
 PR #89～#91 已合入 provisional 的 `MemoryQueryPort`、`FactChangeFeedPort`、批次解析、
 Fake、SQLite 提供者与可恢复投影。它区分 query snapshot、feed 水位、消费 checkpoint
 和 graphRevision；读者不能任意 ack 序号。离线持久实现不证明真实事实来源或生产自动消费，
