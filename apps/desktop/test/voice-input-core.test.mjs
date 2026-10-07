@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {createDesktopVoiceInputCore} from '../electron/voice-input-core.js';
-import {VoiceSessionManager, createVoicePcmBuffer} from '@personal-agent/voice';
+import {VoiceSessionManager, createVoicePcmBuffer, createVoicePcmFrameSourcePort} from '@personal-agent/voice';
 
 function deferred() {
   let resolve, reject;
@@ -35,7 +35,7 @@ function fixture({recognizeError, speakError, autoPlay = false} = {}) {
       if (speakError) throw speakError;
       return {completed: true, interrupted: false};
     }
-    async stop() { calls.push('session-stop'); }
+    async stop() { calls.push('session-stop');return {sessionId: 'session-1', state: 'stopped', reason: 'user', stopped: true, resourcesReleased: true}; }
     async stopSpeaking() { calls.push('stop-speaking'); return {playbackStopped: true, resourcesReleased: true}; }
   }
   const input = createDesktopVoiceInputCore({source, microphoneHost, client: {call: () => {}},
@@ -219,4 +219,114 @@ test('automatic deadline reports an empty PCM buffer without invoking ASR', asyn
   });
   assert.equal(f.calls.some(call => Array.isArray(call) && call[0] === 'recognize'), false);
   assert.equal(JSON.stringify(f.input.snapshot()).includes('private empty buffer detail'), false);
+});
+
+function sharedFixture({recognitionPending = false, recognitionStopFailure = false, managerClosed,
+  mode = 'dictation', authorized = true, clockNow = Date.now} = {}) {
+  let sink, draft, request, recognitionStops = 0, grants = 0, revokes = 0;
+  const recognition = deferred();
+  class ClosingManager extends VoiceSessionManager {
+    async stop(...args) {
+      const receipt = await super.stop(...args);
+      await managerClosed?.promise;
+      return receipt;
+    }
+  }
+  const source = createVoicePcmFrameSourcePort({async start(value) {sink = value;return {async release() {}};}});
+  const input = createDesktopVoiceInputCore({source,
+    microphoneHost: {authorize() {grants++;}, snapshot: () => ({authorized, subscriberCount: 1}), async revoke() {revokes++;}},
+    client: {call: () => assert.fail('shared dictation cannot submit Runtime tasks')},
+    createConsumer: () => ({consume: () => assert.fail('shared dictation cannot consume through Runtime')}),
+    createBuffer: createVoicePcmBuffer, VoiceSessionManager: ClosingManager,
+    createSpeechPorts: () => ({
+      recognition: {recognize(value) {request = value;return {
+        result: recognitionPending ? recognition.promise : Promise.resolve({text: '下一条草稿', locale: 'zh-CN'}),
+        async stop() {recognitionStops++;if (recognitionStopFailure) throw Error('private stop details');},
+      };}},
+      output: {speak: () => assert.fail('shared dictation cannot speak')}, dispose: async () => {},
+    }), enabled: true, inputMode: mode, now: clockNow, onTranscript: value => {draft = value;},
+  });
+  return {input, recognition, feed: () => sink.onFrame(new Uint8Array(3200)),
+    get draft() {return draft;}, get request() {return request;},
+    get recognitionStops() {return recognitionStops;},get grants() {return grants;},get revokes() {return revokes;}};
+}
+
+test('shared dictation uses the existing lease, bounds ASR, and delivers only an editable draft', async () => {
+  const f = sharedFixture(), parent = new AbortController();
+  const deadline = new Date(Date.now() + 2000).toISOString();
+  await f.input.beginSharedCapture(9, {signal: parent.signal, deadline});
+  assert.equal(f.grants, 0);f.feed();
+  const result = await f.input.finishCapture(9);
+  assert.equal(f.request.deadline, deadline);assert.equal(result.text, '下一条草稿');
+  assert.deepEqual(f.draft, {senderId: 9, text: result.text});
+  assert.equal(f.revokes, 0);assert.equal(f.input.hasActive(), false);
+  await f.input.dispose();
+});
+
+test('lease revocation terminates in-flight ASR, prevents a late draft, and preserves unrelated cancellation scope', async () => {
+  const f = sharedFixture({recognitionPending: true}), parent = new AbortController();
+  await f.input.beginSharedCapture(9, {signal: parent.signal, deadline: new Date(Date.now() + 2000).toISOString()});
+  assert.deepEqual(await f.input.cancelSharedCapture(new AbortController().signal), {cancelled: false});
+  assert.equal(f.input.hasActive(), true);f.feed();
+  const finishing = f.input.finishCapture(9), rejected = assert.rejects(finishing, /取消/);
+  await new Promise(resolve => setImmediate(resolve));assert.ok(f.request);
+  parent.abort();await f.input.cancelSharedCapture(parent.signal);await rejected;
+  assert.ok(f.recognitionStops > 0);assert.equal(f.input.hasActive(), false);assert.equal(f.draft, undefined);
+  f.recognition.resolve({text: '迟到私有文本', locale: 'zh-CN'});
+  await new Promise(resolve => setImmediate(resolve));assert.equal(f.draft, undefined);
+  await f.input.dispose();
+});
+
+test('shared capture rejects expired or extended leases, missing authorization and conversation mode', async () => {
+  const parent = new AbortController();
+  const f = sharedFixture();
+  for (const deadline of ['invalid', new Date(Date.now() - 1).toISOString(), new Date(Date.now() + 700_000).toISOString()]) {
+    await assert.rejects(f.input.beginSharedCapture(9, {signal: parent.signal, deadline}), /租约无效/);
+  }
+  parent.abort();await assert.rejects(f.input.beginSharedCapture(9, {signal: parent.signal, deadline: new Date(Date.now() + 2000).toISOString()}), /租约无效/);
+  assert.equal(f.grants, 0);await f.input.dispose();
+  for (const options of [{authorized: false}, {mode: 'conversation'}]) {
+    const other = sharedFixture(options);
+    await assert.rejects(other.input.beginSharedCapture(9, {signal: new AbortController().signal,
+      deadline: new Date(Date.now() + 2000).toISOString()}), /租约无效/);
+    assert.equal(other.grants, 0);await other.input.dispose();
+  }
+});
+
+test('a terminal ASR state with a failed stop retains the lease release failure after active capture clears', async () => {
+  const f = sharedFixture({recognitionPending: true, recognitionStopFailure: true}), parent = new AbortController();
+  await f.input.beginSharedCapture(9, {signal: parent.signal, deadline: new Date(Date.now() + 2000).toISOString()});
+  f.feed();const finishing = f.input.finishCapture(9), rejected = assert.rejects(finishing, /释放未确认/);
+  await new Promise(resolve => setImmediate(resolve));parent.abort();
+  await assert.rejects(f.input.cancelSharedCapture(parent.signal), /释放未确认/);await rejected;
+  assert.equal(f.input.hasActive(), false);assert.equal(f.draft, undefined);
+  await assert.rejects(f.input.cancelSharedCapture(parent.signal), /释放未确认/);
+  await assert.rejects(f.input.beginSharedCapture(9, {signal: parent.signal,
+    deadline: new Date(Date.now() + 2000).toISOString()}), /释放未确认/);
+  assert.equal(JSON.stringify(f.input.snapshot()).includes('private'), false);
+  await f.input.dispose();
+});
+
+test('parent cancellation while the final session closed receipt is delayed prevents a late shared draft', async () => {
+  const closed = deferred(), f = sharedFixture({managerClosed: closed}), parent = new AbortController();
+  await f.input.beginSharedCapture(9, {signal: parent.signal, deadline: new Date(Date.now() + 2000).toISOString()});
+  f.feed();const finishing = f.input.finishCapture(9);
+  const rejected = assert.rejects(finishing, /取消/);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.input.snapshot().session.state, 'cancelled');assert.equal(f.draft, undefined);
+  parent.abort();closed.resolve();await rejected;
+  assert.equal(f.draft, undefined);assert.equal(f.input.hasActive(), false);
+  await f.input.dispose();
+});
+
+test('lease deadline reached during a delayed final closed receipt prevents a late shared draft', async () => {
+  let clock = Date.now();
+  const expiresAt = clock + 5000, closed = deferred(), parent = new AbortController();
+  const f = sharedFixture({managerClosed: closed, clockNow: () => clock});
+  await f.input.beginSharedCapture(9, {signal: parent.signal, deadline: new Date(expiresAt).toISOString()});
+  f.feed();const finishing = f.input.finishCapture(9), rejected = assert.rejects(finishing, /取消/);
+  await new Promise(resolve => setImmediate(resolve));assert.equal(f.draft, undefined);
+  clock = expiresAt;closed.resolve();await rejected;
+  assert.equal(parent.signal.aborted, false);assert.equal(f.draft, undefined);
+  await f.input.dispose();
 });

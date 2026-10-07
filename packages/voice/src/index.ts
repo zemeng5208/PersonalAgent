@@ -49,6 +49,7 @@ export {
 } from './unavailable.js';
 export {bindVoiceWake} from './wake-binding.js';
 export type {VoiceWakeBinding, VoiceWakeBindingOptions} from './wake-binding.js';
+export {WakeLifecycleController, createPcmKeywordWakeSignalSource} from '@personal-agent/voice-wake';
 export {
   RuntimeClientTranscriptConsumer,
   createRuntimeClientTranscriptConsumer,
