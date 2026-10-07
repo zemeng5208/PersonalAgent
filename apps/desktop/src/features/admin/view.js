@@ -83,6 +83,8 @@ export function mountAdmin(root, invoke, escape) {
   let approvalExpiryTimer;
   let current = {tasks: [], capabilities: [], health: [], approvals: []};
   const evidenceStates = new Map();
+  let evidenceClosed = false;
+  window.addEventListener('unload', () => { evidenceClosed = true; evidenceStates.clear(); }, {once: true});
   const revocations = new Map();
   let history = {items: [], nextBeforeRowId: undefined, loading: false, loaded: false, error: false};
   let memorySearch = {query: '', hits: [], truncated: false, status: ''};
@@ -285,6 +287,9 @@ export function mountAdmin(root, invoke, escape) {
 
   function render(data) {
     current = data;
+    for (const taskId of evidenceStates.keys()) {
+      if (!data.tasks.some(task => task.taskId === taskId)) evidenceStates.delete(taskId);
+    }
     const consumableMemoryRefs = savedMemory.facts.filter(fact => fact.state === 'active'
       && Date.parse(fact.validFrom) <= Date.now() && Date.now() < Date.parse(fact.validUntil)).map(fact => fact.ref);
     clearApprovalExpiryTimer();
@@ -578,21 +583,28 @@ export function mountAdmin(root, invoke, escape) {
   root.querySelector('#admin-close').addEventListener('click', () => invoke('admin.close').catch(error => { root.querySelector('#error').textContent = error.message; }));
   root.querySelector('#content').addEventListener('click', async event => {
     const button = event.target.closest('[data-evidence-task], [data-evidence-id], [data-evidence-more], [data-evidence-retry]');
-    if (!button) return;
+    if (!button || evidenceClosed || root.isConnected === false) return;
     const panel = button.closest('[data-evidence-panel]');
     const taskId = button.dataset.evidenceTask ?? panel?.dataset.evidencePanel;
-    if (!current.tasks.some(task => task.taskId === taskId)) return;
+    const task = current.tasks.find(task => task.taskId === taskId);
+    if (!task) return;
     if (button.dataset.evidenceId) {
       const state = evidenceStates.get(taskId);
       const evidenceId = button.dataset.evidenceId;
       if (state?.status !== 'loaded' || !state.items.some(item => item.evidenceId === evidenceId)) return;
-      evidenceStates.set(taskId, {...state, detail: undefined, detailStatus: 'loading'});
+      const pending = {...state, detail: undefined, detailStatus: 'loading'};
+      evidenceStates.set(taskId, pending);
+      const isCurrent = () => !evidenceClosed && root.isConnected !== false
+        && evidenceStates.get(taskId) === pending
+        && current.tasks.some(item => item.taskId === taskId && item.conversationId === task.conversationId);
       render(current);
       try {
         const detail = await invoke('evidence.get', {taskId, evidenceId});
+        if (!isCurrent()) return;
         if (detail?.evidenceId !== evidenceId) throw Error('Evidence identity mismatch');
         evidenceStates.set(taskId, {...state, detail, detailStatus: 'loaded'});
       } catch {
+        if (!isCurrent()) return;
         evidenceStates.set(taskId, {...state, detail: undefined, detailStatus: 'error'});
       }
     } else {

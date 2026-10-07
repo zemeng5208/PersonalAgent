@@ -20,7 +20,10 @@ async function harness(t, invoke) {
       else delete globalThis[key];
     }
   });
-  globalThis.window = {addEventListener() {}};
+  const windowListeners = new Map();
+  globalThis.window = {addEventListener(name, listener) {
+    const listeners = windowListeners.get(name) ?? [];listeners.push(listener);windowListeners.set(name, listeners);
+  }};
   globalThis.document = {createElement: element};
   globalThis.matchMedia = () => ({matches: false, addEventListener() {}});
   const {mountAdmin} = await import('../src/features/admin/view.js');
@@ -40,8 +43,57 @@ async function harness(t, invoke) {
   });
   const render = mountAdmin(root, invoke, escape);
   const base = {tasks: [], approvals: [], capabilities: [], health: [], connection: 'fixture'};
-  return {render, base, html: () => html, content: nodes.get('#content'), buttons: () => revokeButtons};
+  return {render, base, root, html: () => html, content: nodes.get('#content'), buttons: () => revokeButtons,
+    unload: () => {for (const listener of windowListeners.get('unload') ?? []) listener();}};
 }
+
+test('Evidence detail keeps the latest selection and its failure when older requests settle', async t => {
+  const requests = [];
+  const ui = await harness(t, async (action, payload) => {
+    if (action === 'evidence.list') return {items: [{evidenceId:'a'}, {evidenceId:'b'}]};
+    assert.equal(action, 'evidence.get');
+    return new Promise((resolve,reject) => requests.push({id:payload.evidenceId,resolve,reject}));
+  });
+  const data = {...ui.base, tasks:[{taskId:'task-1',conversationId:'desktop-panel',state:'waiting_reconciliation',
+    revision:2,evidenceRefs:['opaque']}],adminNavigation:{page:'tasks',revision:1}};
+  const click = (dataset, panelTaskId) => ui.content.listeners.get('click')({target:{closest:()=>({dataset,
+    closest:()=>panelTaskId ? {dataset:{evidencePanel:panelTaskId}} : null,hasAttribute:()=>false})}});
+  ui.render(data);await click({evidenceTask:'task-1'});
+  for (const latest of ['success','failure']) for (const earlier of ['success','failure']) {
+    const a=click({evidenceId:'a'},'task-1'),requestA=requests.at(-1);
+    const b=click({evidenceId:'b'},'task-1'),requestB=requests.at(-1);
+    if(latest==='success') requestB.resolve({evidenceId:'b',summary:'latest B',verification:'conditional'});
+    else requestB.reject(Error('private B failure'));
+    await b;const settled=ui.html();
+    if(latest==='success') assert.match(settled,/latest B/);else assert.match(settled,/详情读取失败/);
+    if(earlier==='success') requestA.resolve({evidenceId:'a',summary:'stale A'});
+    else requestA.reject(Error('private A failure'));
+    await a;assert.equal(ui.html(),settled,'late success/error cannot replace the last selected detail');
+    assert.doesNotMatch(ui.html(),/stale A|private [AB] failure/);
+  }
+  assert.equal(requests.length,8);
+});
+
+test('replaced Evidence list, removed task, detached card and unloaded admin reject old detail completion', async t => {
+  let finish;
+  const ui=await harness(t,async action=> action==='evidence.list'
+    ? {items:[{evidenceId:'a',summary:'fresh list'}]} : new Promise(resolve=>{finish=resolve;}));
+  const data={...ui.base,tasks:[{taskId:'task-1',conversationId:'desktop-panel',state:'waiting_reconciliation',
+    revision:2,evidenceRefs:['opaque']}],adminNavigation:{page:'tasks',revision:1}};
+  const click=(dataset,panelTaskId)=>ui.content.listeners.get('click')({target:{closest:()=>({dataset,
+    closest:()=>panelTaskId?{dataset:{evidencePanel:panelTaskId}}:null,hasAttribute:()=>false})}});
+  for(const departure of ['list','task','conversation','detached','unload']) {
+    ui.root.isConnected=true;ui.render(data);await click({evidenceTask:'task-1'});
+    const pending=click({evidenceId:'a'},'task-1');
+    if(departure==='list')await click({evidenceTask:'task-1'});
+    if(departure==='task'){ui.render({...data,tasks:[]});ui.render(data);}
+    if(departure==='conversation')ui.render({...data,tasks:[{...data.tasks[0],conversationId:'desktop-workspace'}]});
+    if(departure==='detached')ui.root.isConnected=false;
+    if(departure==='unload')ui.unload();
+    const expected=ui.html();finish({evidenceId:'a',summary:'stale removed detail'});await pending;
+    assert.equal(ui.html(),expected,departure);assert.doesNotMatch(ui.html(),/stale removed detail/);
+  }
+});
 
 test('task Evidence detail uses host-only metadata actions and never renders raw values', async t => {
   const calls = [];
