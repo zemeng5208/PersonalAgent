@@ -218,7 +218,11 @@ else {
 if(bridge){
   let receivedUpdate=false,closed=false;
   const unsubscribe=bridge.subscribe(data=>{if(closed)return;receivedUpdate=true;render(data);});
-  invoke('snapshot').then(data=>{if(!closed&&!receivedUpdate)render(data);}).catch(e=>{if(!closed&&!receivedUpdate)root.textContent=e.message;});
+  invoke('snapshot').then(data=>{if(!closed&&!receivedUpdate)render(data);}).catch(e=>{
+    if(closed||receivedUpdate)return;
+    if(mode==='panel')root.querySelector('#error').textContent=e.message;
+    else root.textContent=e.message;
+  });
   window.addEventListener('unload',()=>{closed=true;unsubscribe();orb?.dispose();});
 }
 else root.textContent='桌面桥未连接，请从 PersonalAgent 桌面应用启动。';
