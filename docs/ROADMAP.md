@@ -110,8 +110,8 @@
 | MOD-13 | M1 基础页面、M2 配置闭环 | in_progress | `zemeng` / PR #77 增加过期审批 fail-closed；设置/连接器生产 API、只读 AgentArts 配置状态和完整授权管理仍未完成 |
 | MOD-14 | M1 基础、M2 验收 | in_progress | `zemeng` / 会话生命周期、唤醒组合、Runtime 转写消费与合成语音可行性探针已由 PR #61/#70/#75/#79 进入 main（#184 补 Huawei SIS 桌面接线；2026-09-30 台账核对）；真实麦克风采集、ASR/TTS 与 Desktop 组合验收未完成 |
 | MOD-15 | M4 后扩展 | in_progress | `zemeng` / 有界授权唤醒生命周期已由 PR #70 进入 main（#65 被其覆盖后关闭；2026-09-30 台账核对）；真实唤醒算法、设备、误触和回声测试未完成 |
-| MOD-16 | M2 TraceGuard 所需只读端口、M4 电脑操作 | todo | `zemeng` 已确定，未启动 |
-| MOD-17 | M2 只读、M4 治理 | todo | `zemeng` 已确定，未启动 |
+| MOD-16 | 受限记事本执行与实机验收 | in_progress | `zemeng` / Host、Bridge、Runtime 导出与 Desktop 受信确认消费已实现；仅在 Windows 和固定 Host/Bridge 可用时装配受限记事本能力。历史实机证据仅到 `hello_ack`，完整 F9 确认、Policy 授权、UIA 写入及独立读回仍待现场验收，见 [模块记录](modules/MOD-16-WINDOWS-EXECUTION-01.md) |
+| MOD-17 | 只读系统观测与实机验收 | in_progress | `zemeng` / CPU、内存与 uptime 提供者、Runtime 工具注册和 Desktop 只读消费已实现；已有 Windows provider 直读证据，完整 Policy/ToolGateway、AgentArts 与 Desktop 实机闭环未验收，见 [模块记录](modules/MOD-17-COMPUTER-STATUS-01.md) |
 | MOD-18 | M4 | in_progress | `zemeng` / PR #83 已将受限 `workspace.list` 与 `workspace.read_text` 重建到 main；PR #84 已合入 Competition 审批消费链，证据仍仅为 provisional/mock；写入、命令和 Artifact 未交付 |
 | MOD-19 | M5 | todo | `zemeng` 已确定，未启动 |
 | MOD-20 | M2 本地提醒、M3 日历 | in_progress | `Potatos498` / PR #22 已合并（Fake 日历）；#216 合并 iCal 只读订阅源；MOD-20A 交付 CalDAV 只读提供商（ctag/etag 轮询＋time-range 查询＋TZID 换算，20/20 离线测试，见 2026-09-30 登记）；真实日历账号读回与授权写入仍未验收 |

@@ -16,6 +16,12 @@
 
 本包的描述函数仅是提供者元信息；`register(host)` 复用现有 `ToolHost` 契约并返回注销函数。生产工具发现须由可信 Runtime/ToolGateway 在实际注册时公布，未经注册仍应返回 `UNSUPPORTED_CAPABILITY`。需要 goo122 确认 Competition Profile 真实工具装配，可信宿主可采用现有公开入口，不规定使用 `register(host)` 或 `RuntimeApplicationOptions.tools` 数组；须保留 Policy/ToolGateway 对 `computer:system:read` 的检查、取消和 deadline。不改变公共 wire Schema、根装配、锁文件或接口目录。Desktop 负责人须在现有安全 Client/Preload/IPC 路径消费 Runtime 的结果，显示来源、时间、不支持项和失败，不由 Renderer 直读 `node:os`。AgentArts 真实工具提案与回传证据另行验收。
 
+## 当前源码装配核对（2026-10-07）
+
+在当前 `main@4b5ec61` 核对，公开系统观测工具工厂已由 Runtime 导出，Desktop 的公开连接器宿主和产品组合已有工具注册及 Runtime 消费入口。显式开启的主动认知宿主可消费只读观测与既有 P5 事件链；Renderer 不直接读取 `node:os`。上面的“装配交接”记录原始切片边界，不再表示实际工具注册和这些消费入口尚未实现。
+
+支持范围仍为 CPU、内存和 uptime 汇总；其他指标明确不可用。这条只读链不会自动把原始系统观测导出到 AgentArts，显式云分析须走既有独立许可。下面的 Windows provider 直读历史证据保留原 head 和证据等级；完整 Policy/ToolGateway 授权、真实 AgentArts 提案与回传、Desktop 展示的实机关联读回仍待对应云资源及 Windows 现场协作者完成，不能据源码装配将 MOD-17 或整个 MVP 标记完成。
+
 ## 实机验收（Windows 普通用户权限）
 
 1. 在 Node 24、Windows 普通用户会话，授权 `computer:system:read` 后通过受信 ToolHost 调用一次，记录脱敏的 `source`、UTC 时间区间、实际/请求采样窗口及输出 Schema 校验结果；敏感原始观测值不进入 PR。
