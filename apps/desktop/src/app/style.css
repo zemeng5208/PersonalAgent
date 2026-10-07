@@ -97,6 +97,8 @@ button,input,textarea {font:inherit} button {cursor:pointer} button:disabled {cu
 :root .approval-card{margin:12px 0;padding:12px;border:1px solid var(--border,#555);border-radius:12px;background:var(--surface,#25282d);font-size:13px;overflow-wrap:anywhere}
 :root .approval-card p{margin:6px 0}
 :root .approval-card .turn-action{padding:8px 14px;border:1px solid currentColor;border-radius:8px}
+.notepad-controls .notepad-text{display:block}
+.notepad-controls .notepad-text textarea{display:block;width:100%;box-sizing:border-box;margin-top:8px}
 .thinking-grid i[data-cell="0"]{--i:0}
 .thinking-grid i[data-cell="1"],.thinking-grid i[data-cell="3"]{--i:1}
 .thinking-grid i[data-cell="2"],.thinking-grid i[data-cell="4"],.thinking-grid i[data-cell="6"]{--i:2}
