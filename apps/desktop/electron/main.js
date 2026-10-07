@@ -2875,7 +2875,10 @@ app.whenReady().then(async () => {
     }
     if (liveVoice?.hasActive()) {
       event.preventDefault();
-      void liveVoice.stop().then(() => app.quit());
+      void liveVoice.stop().then(result => {
+        if (result.active) {runtimeError = result.reason || 'Live 音频资源释放未确认'; publish(); return;}
+        app.quit();
+      }).catch(() => {runtimeError = 'Live 音频资源释放未确认'; publish();});
       return;
     }
     if (voiceInput && !voiceDisposed) {
