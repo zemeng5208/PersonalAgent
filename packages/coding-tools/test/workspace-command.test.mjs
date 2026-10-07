@@ -45,6 +45,50 @@ const context = (overrides = {}) => ({
   ...overrides,
 });
 
+test('completed fixed commands reject elapsed execution leases and invalid clocks', async t => {
+  for (const scenario of ['deadline', 'duration', 'invalid clock', 'throwing clock']) await t.test(scenario, async t => {
+    const root = await fixture(t);
+    let clock = Date.now();
+    const startedAt = clock;
+    const tool = createWorkspaceCommandTool({rootPath: root, maxDurationMs: 1000,
+      now: () => {if (scenario === 'throwing clock' && clock !== startedAt) throw Error('private clock detail');return clock;},
+      recipes: [{id: 'complete', executable: process.execPath, args: ['-e', 'process.stdout.write("completed")']}]});
+    const pending = tool.execute({recipeId: 'complete'}, context({deadline: new Date(startedAt + (scenario === 'deadline' ? 500 : 10000)).toISOString()}));
+    clock = scenario === 'invalid clock' ? NaN : startedAt + (scenario === 'deadline' ? 500 : 1000);
+    await assert.rejects(pending, error => ['invalid clock', 'throwing clock'].includes(scenario)
+      ? error.code === 'EXTERNAL_FAILURE' && error.message === 'Workspace command clock unavailable'
+      : error.code === 'TIMEOUT' && error.message === 'Workspace command deadline expired');
+  });
+});
+
+test('completed fixed commands retain a successful result within the captured lease', async t => {
+  const root = await fixture(t);
+  let clock = Date.now();
+  const tool = createWorkspaceCommandTool({rootPath: root, now: () => clock, maxDurationMs: 1000,
+    recipes: [{id: 'complete', executable: process.execPath, args: ['-e', 'process.stdout.write("completed")']}]});
+  const pending = tool.execute({recipeId: 'complete'}, context({deadline: new Date(clock + 10000).toISOString()}));
+  clock += 500;
+  assert.deepEqual(await pending, {recipeId: 'complete', exitCode: 0, stdout: 'completed', stderr: ''});
+});
+
+test('a clock hook that cancels and throws preserves cancellation before start and after process close', async t => {
+  for (const phase of ['initial', 'completion']) await t.test(phase, async t => {
+    const root = await fixture(t);
+    const controller = new AbortController();
+    let reads = 0;
+    const tool = createWorkspaceCommandTool({rootPath: root, now: () => {
+      reads++;
+      if (reads === (phase === 'initial' ? 1 : 2)) {
+        controller.abort(); throw Error('private clock error');
+      }
+      return Date.now();
+    }, recipes: [{id: 'complete', executable: process.execPath, args: ['-e', 'process.exit(7)']}]});
+    await assert.rejects(tool.execute({recipeId: 'complete'}, context({signal: controller.signal})),
+      error => error.code === 'CANCELLED' && error.message === 'Workspace command was cancelled');
+    assert.equal(reads, phase === 'initial' ? 1 : 2);
+  });
+});
+
 test('changed command workspace bindings reject before starting the fixed process', async t => {
   for (const replacement of ['link', 'directory', 'missing', 'file']) await t.test(replacement, async t => {
     const root = await fixture(t);

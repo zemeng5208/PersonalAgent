@@ -117,6 +117,15 @@ export function createWorkspaceCommandTool(options: WorkspaceCommandOptions): Re
   const maxOutputBytes = bounded(options.maxOutputBytes, DEFAULT_MAX_OUTPUT_BYTES, MAX_OUTPUT_BYTES, 'maxOutputBytes');
   const maxDurationMs = bounded(options.maxDurationMs, DEFAULT_MAX_DURATION_MS, MAX_DURATION_MS, 'maxDurationMs');
   const now = options.now ?? Date.now;
+  const readClock = (): number => {
+    try {
+      const value = now();
+      if (!Number.isFinite(value)) throw Error();
+      return value;
+    } catch {
+      throw new ProtocolError('EXTERNAL_FAILURE', 'Workspace command clock unavailable');
+    }
+  };
   const descriptor: ToolDescriptor = {
     name: WORKSPACE_COMMAND_TOOL_NAME,
     version: WORKSPACE_COMMAND_TOOL_VERSION,
@@ -153,7 +162,15 @@ export function createWorkspaceCommandTool(options: WorkspaceCommandOptions): Re
       }
       if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Workspace command was cancelled');
       const deadline = Date.parse(context.deadline);
-      const remaining = Math.min(deadline - now(), maxDurationMs);
+      let startedAt: number;
+      try { startedAt = readClock(); }
+      catch (error) {
+        if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Workspace command was cancelled');
+        throw error;
+      }
+      if (context.signal.aborted) throw new ProtocolError('CANCELLED', 'Workspace command was cancelled');
+      const executionDeadline = Math.min(deadline, startedAt + maxDurationMs);
+      const remaining = executionDeadline - startedAt;
       if (!Number.isFinite(deadline) || remaining <= 0) {
         throw new ProtocolError('TIMEOUT', 'Workspace command deadline expired');
       }
@@ -231,9 +248,15 @@ export function createWorkspaceCommandTool(options: WorkspaceCommandOptions): Re
             const decoder = new TextDecoder('utf-8', {fatal: true});
             const out = decoder.decode(Buffer.concat(stdout));
             const err = decoder.decode(Buffer.concat(stderr));
+            // A delayed timer is not proof that this completed result is still
+            // within its original lease. Never return a late success or retry.
+            const completedAt = readClock();
+            if (context.signal.aborted) return finish(new ProtocolError('CANCELLED', 'Workspace command was cancelled'));
+            if (completedAt >= executionDeadline) return finish(new ProtocolError('TIMEOUT', 'Workspace command deadline expired'));
             finish(undefined, {recipeId, exitCode: code, stdout: out, stderr: err});
-          } catch {
-            finish(new ProtocolError('EXTERNAL_FAILURE', 'Workspace command output is not UTF-8 text'));
+          } catch (error) {
+            finish(stopReason ?? (context.signal.aborted ? new ProtocolError('CANCELLED', 'Workspace command was cancelled')
+              : error instanceof ProtocolError ? error : new ProtocolError('EXTERNAL_FAILURE', 'Workspace command output is not UTF-8 text')));
           }
         });
         context.signal.addEventListener('abort', onAbort, {once: true});

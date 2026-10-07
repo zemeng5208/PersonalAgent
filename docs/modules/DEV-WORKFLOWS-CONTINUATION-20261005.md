@@ -614,3 +614,236 @@ probe 通过。明确 Fake 模型/工具不冒充真实账号操作。
 跳过，Runtime 349、Desktop 431/11、根集成 22/22；架构、生成协议与类型检查均通过。
 代码与已合入 main 的对应源树一致，文档只校对事实及 diff。新独立接线 head 的 Windows
 CI、正式非作者评审与集成另记，整体及原真实验收仍未关闭。
+
+### 2026-10-06：默认桥已集成，继续恢复与前端细节
+
+#296 的准确 `0babfcc75d5e3f23fd0c33e187eca25b079e52ff` 已获 goo122 正式非作者批准
+`5430070658`，由 goo122 于 14:48:37 UTC 合入 main `111bb90ad94808b87424a7fa02041b44f42313b6`；
+本执行未 APPROVE 或 merge。两路首次 Windows Foundation 完整原始日志实际读取并归档：
+push 37479487409/job112323564604，323953 字符；PR 37479964577/job112325196887，324869 字符。
+各 31 workspace 2076/0/16，coding-tools 219/4 平台跳过、cognition 207、GH 103、
+windows-client 12、Desktop 443/1 平台跳过、Runtime 349；实际受控 .NET8 fixture
+25.84/25.18 秒，check/dev/两项 demo 与清理均成功，零重跑。
+
+MOD33 新严格 UTF-8 实现的公开生产 Provider 另完成真实只读 3/3：实际
+`GhCliProvider + SpawnGhCommandRunner(/usr/bin/gh)` 调用 repo.get、issue.get #212、
+pr.get #296，Schema 与官方身份独立匹配，中文标题完整。必要凭据只在 Node 内存，
+未打印或写入文件；全部 GET、外部写入零，不以 Fake 或 MCP 响应冒充 Provider。
+此项不关闭原 COMMENT/labels/Checks 写入、Windows 或 AgentArts 真实验收。
+
+等待审核期间继续发现并登记三项具体增量：MOD18 完成时未复核任务与最长执行期限
+（#212 `6018788042`），P8 取消系统选择器清掉既有权限草稿（`6018824541`），
+MOD38 标签审批恢复没有重新读取完整 Issue（`6018825022`）。两源码子包与 P8 四文件
+分别唯一 writer，root 仅私有 main coding 分支及本人说明、串行交付；不改公共 Schema、
+共享 Renderer/Admin、他人业务或 Runtime 核心。#296 已合入后的新独立增量沿原分支交付
+唯一后续 PR，按用户已有新 PR 授权执行，不复制旧任务。
+
+MOD18 固定真实 Node 子进程配合显式时钟钩子验证期限边界，取消加时钟异常的独立
+发现已修正，最终定向 9/9、coding-tools build/typecheck 与包测试 217/0/15 平台跳过。
+独立入口确认期限前非零退出保留、精确期限拒绝、初始/完成取消优先；副作用可能已发生，
+不能安全重试。该证据不冒称原 Windows 已发生竞态或具备 OS 沙箱。
+
+P8 四种选择器取消仅返回临时 `selectionCancelled:true`，普通快照/持久配置不加字段；
+既有 main 分支转发私有 `codingSelectionCancelled:true`，Renderer 限定四 selector 与
+明确布尔 true 保留已有未生效草稿。正常换选、授权/撤销、legacy 回执仍原清理；
+宿主撤销或配置失效保持优先，不自动授权，不以同名工作区猜测取消。定向 53/53、
+Desktop typecheck、源语法通过，完整包 434/0/11 Linux 平台跳过。真实 app 配合明确
+合成 IPC 与生产 Host 回执在 1280/480 屏幕通过，无页面错误或溢出；另实际 main
+分支提取加生产 Host 组合核对四取消、正常操作、权限与 invalidate/publish。
+后者是受控私有端口验证，不是原生 Electron/Windows 选择器或 DPI 验收。
+
+MOD38 同一 updatedAt 内正文变敏感的公开 before 已复现。新恢复检查的独立复核又
+发现 pending GET 换运行身份会反复请求审批，已按原契约修复：读取等待审批需
+保留原 runId 与已计预算，取消/未知或读回消费后才推进代际。未知标签先消费可信原
+confirmed receipt，保留事实与 Evidence，再重读内容决定能否继续修复，不能丢掉已发生
+写入或盲重发；随后转人工也保留已确认历史标签，不宣称远端当前标签。cognition
+build/typecheck 与完整测试 213/213；独立恢复缓存 2/2 及原 unknown/self-label 合法恢复
+probe 通过，原失败及首次 after 脚本末调用断言错误均单独保留。准确后续 head 的 CI
+与非作者审核在新交付记录补齐，不将 #296 的受检结果套用于本批源码。
+
+同轮新增 MOD18 对账配置快照（#212 `6019076651`），先在独立缓存副本复现 6 失败、
+修后 reconcile 16/16，再由 root 串行应用原两文件；正式 build/typecheck 与 coding-tools
+223/0/15 平台跳过，独立真实临时 marker 入口 1/1，保留原执行绑定与 marker 选择。
+这只证明公共 options 复用的异步问题，不宣称当前 Runtime literal 配置受影响。
+
+三项增量的首轮完整组合 check 确实失败，原始日志保留：Runtime 原事实重启测试在批准
+标签后未继续批准新增 fresh GET 就期待终态，实际 waiting_approval。root 单一消费者
+测试槽（#212 `6019190246`）补齐真实 TaskRuntime/SQLite/Policy 的显式 GET 审批及再次
+重启，保留最终成功、分类模型只一次、原事实标签一次/变化零次、每次批准读取只执行
+一次的强断言，增加标签审批期与恢复读取审批期同 timestamp 变更，定向 5/5。
+没有降低终态要求、绕过 Policy 或回退旧缓存；必要最终完整 check 另实际执行。
+
+MOD33 另实际只读失败 run/job 元数据可消费：公开 Provider/runner 识别历史失败
+37474438969 与 job112306058042，Schema、原 e8 源 SHA 及 npm check 失败步骤匹配。
+一次标准失败日志读取返回空文本，同 runner 的官方 `--log` 对照也为空，exit0/stderr0；
+未绕过重定向、替换 MCP 原始日志或编造 Provider 数据。该现场日志诊断仍未通过，
+尚无证据支持改变 `--log-failed` 解决；不因晚些 CI 成功关闭原 calendar 超时分类问题。
+
+上述四项沿唯一 #297 发布 `026412c9671b3d16a9528a0162075ce89df71bd7` / tree
+`dab9f3be26b7005393db78672928a3819bf19d3b`，16 个 diff 文件、API 树等于本地受检树。
+最终 Node24.15 完整 check exit0，31 workspace 2066/0/50 Linux 平台跳过、根22/22、
+架构3/3、生成协议与类型检查通过，203685 字符原始日志归档；Windows准确head另读回。
+
+继续 P8 工作区按钮键盘焦点（#212 `6019311625`）：原按钮经 Enter 启动后禁用，成功或
+失败结算均落到 BODY，不能继续原键盘位置。独立缓存先保留原码10通过/1失败，修后
+12/12，再由root串行应用原控件及测试；监听器在结算清理，只有原按钮仍连接、可见、
+启用且用户未外移/切页、焦点仍BODY时恢复。主动外移即使又回BODY、切页再回、
+移除DOM或宿主使原按钮禁用均不抢焦点，不自动invoke、授权或重试。
+actual app 1280/480各15场景通过，明确合成延迟宿主与仅本人模块route，不冒充原
+Electron/Windows选择器；无页面错误、溢出或遮罩，独立目标2/2及冻结哈希匹配。
+这是沿现有开放#297的后续两文件行为增量；正式 Node24.15 Desktop 完整436/0/11平台
+跳过、typecheck、控件/测试语法及diff检查均通过。无公共接口或跨模块装配变化，不重复
+上述026组合全检；准确新增head的Windows完整门禁另实际读回。
+
+用户当前截止仍为 2026-10-07 北京时间 20:00；不使用旧邮件 22:00 或翌晨 08:00 截止。
+整体 Goal 与原现场验收仍 in_progress，原负责人及恢复入口维持前述分工；邮件阶段
+进度不代表停止，真实结束前仍需发送结果与剩余事项。
+
+### 2026-10-06：#297 精确 Windows 门禁与 MOD34 单次输入绑定
+
+`f0d07e342d60708ad0d50645ad35afc7e689d19a` 的 push run37487356557 / job112350752905
+与 PR run37487364346 / job112350782527 均 completed/success。分别完整读回327286/
+327994字符原始日志，全部34组测试汇总已核对：31workspace2104/0/16 Windows平台
+跳过、根integration22/22、架构3/3，check/dev/demo:protocol/demo:runtime实际通过。
+其中coding-tools234/0/4、cognition213、Desktop448/0/1、Runtime351。前一026头的
+37486658564/37486665561也双绿，独立完整日志31workspace2102/0/16，保留为历史证据。
+这些不是原设备现场或calendar历史错误分类已修的证明。
+
+继续明确自有MOD34的输入绑定缺口，#212 `6019776595` 登记唯一两文件写入者。
+公开 `createCiFixWorkflow` before1/1失败：普通调用方在首读等待期间改复用options的
+repository，后续工具args偏离原仓库但identity仍相同。Fake成功不冒充真实账号写入，
+真实Gateway可能拒绝；没有靠修改权限或重试解决。每次run捕获执行配置，复制原
+sourcePaths/Issue/Git工具名/源运行关联；Model/工具端口仍原引用，实时Runtime授权、
+confirmedReplayReady/时钟保持。不同task的新run可采新配置，原journal变更仍拒绝。
+
+正式Node24.15 module build/typecheck通过、coding-tools227/0/15 Linux平台跳过；
+原before脚本after1/1通过、独立公开10/10通过。覆盖GET/model/verify三处await配置
+突变、原身份/参数、新任务更新、旧journal拒绝、live hook属性替换、非法backlink零
+派发及legacy序列化一致。独立审阅无finding，源hash
+`bed82070788f7dd8f0ee1552944dafa335ce5253437ee9a494b941c1f4da786b`。
+只改本人ci-fix实现/测试、README、MOD34与本续接说明；沿既有开放#297发布。
+无公共DTO、wire、迁移或Runtime装配改动，不重新运行已通过且未变的组合全检；
+新增提交的Windows完整门禁另核实。非作者审核、原Windows/账号/AgentArts场景仍按
+原owner接续，整体Goal继续in_progress，不等待审核才推进独立工作。
+
+MOD34上述配置绑定已沿#297普通FF发布 `31d67ecbcb13d5f0df60c3a90dcd211c4e0dad98` /
+tree `87b16dbab045c379724b59072557cdfe526518df`，当时19diff文件，API树=受检树。
+push37489939901/PR37489948010启动，不能用f0双绿代替该增量终态。
+
+继续MOD36 factory端口绑定（#212 `6019894581`），仅本人code-review实现/测试及模块
+与续接说明。原公开before在first-head await期间caller换复用options使原workflow改用
+另一model/tools；prepare后换tools还忽略原port已撤销的评论能力，独立before2/2失败。
+factory捕获原Model/Tool端口引用，原port.list/invoke/complete仍实时，context/access/
+授权/confirmedReplayReady与原checkpoint行为不变，新factory可以使用新端口。
+正式原回归2失败/1通过，修后Node24.15 cognition build/typecheck和模块216/216、零
+跳过，独立同probe2/2通过，原评论能力撤销unsupported、Fakewrite零次。明确全部
+合成评论，不冒充实际GitHub写入；源hash
+`1a8e2caf0780901106b3095b1fde6a768afc67333f45b6428e0131bbba857017`。
+无公共接口或Runtime装配变化，不重复未变的组合全检；新提交Windows完整门禁另
+实际核对，仍不自行批准或合并。MOD38相邻factory绑定另登记独立两文件，串行模块
+构建，保持原独立写入槽，不等待本PR审核再推进。
+
+MOD36上述端口绑定已发布 `30156074337341fe364a1683abfc4bd50ba2f94c` /
+tree `03c495aaf4ae0add22e5a079f44da622ebf64ca8`，API树=受检树，当时22diff文件。
+
+MOD38 factory同类绑定（#212 `6019995540`）沿本工作包继续：request/labels/threshold
+原已捕获，只固定Model/Tools/Repair端口及已验证maxSteps/maxTokens。普通caller首GET
+await后更新复用options，旧码会混用新分类端口；有效公开before1/1失败，同脚本修后
+1/1通过。端口对象不deepclone，原方法与list能力继续实时，authorizationRefFor/
+confirmedReplayReady/confirmedRepairReplayReady仍原options实时属性，新factory可用
+新配置；不改标签审批/读取run/预算恢复逻辑、DTO/wire或Runtime装配。
+正式Node24.15 cognition build/typecheck与完整219/219、零跳过，独立公开6/6通过，
+源hash `efe132a54fbfbeb75290892b224f4cdcf57d672b2c9eb82a2358347109245b2a`。
+准备期一个误命名before的日志已用新dist并3通过，明确不作为旧失败证据；有效旧失败
+另单独归档。全部Fake标签/修复，不冒真实账号写回；独立审无finding。仅本人实现/
+测试与MOD38/本续接说明，沿现有#297交付，最新提交Windows准确门禁另读回。
+整体Goal、原现场恢复和非作者评审仍未完成，持续核对新PR、反馈和明确自有可推进项。
+
+MOD38上述factory绑定已发布 `cf87b72aed5d755eccadd1681c4f09d4471a73a3` /
+tree `82c8f9c2ddbb391b68cfef64d08984282c5b5e22`，当时仍22diff文件；准确新头
+push37491346187/PR37491353087启动，阶段邮件1a111ed29d5ece7d已核SENT及To，非停止。
+
+继续本人MOD34 CI discovery端口绑定（#212 `6020191190`），有效公开before1/1失败：
+caller启动旧factory读取后为新factory更新同options.tools，原descriptor来自A而微任务
+invoke却用B（同合法工具版本/官方run Schema）。Fake只证明原实例端口切换，不是
+真实Gateway账号放行。factory捕获tools，仅3行绑定变化，原list/invoke方法、授权/
+confirmedReplayReady仍live，now/maxSteps/参数/identity/checkpoint保持不变。
+正式Node24.15 coding-tools build/typecheck和230/0/15 Linux平台跳过，同public脚本
+after1/1通过，独立公开4/4：旧实例A/新factoryB、能力移除及原方法替换、pending/
+unknown精确原run/args/steps1、实时授权与ready属性。源hash
+`fa1e3fd6d8f047c7062aea6124a063ae9a1de83b51278f6c1d014358f1dfdc69`，独立匹配
+且无finding。准备误名before的新dist3pass明确不计旧失败，原有效失败另保留。
+仅本人发现实现/测试与MOD34/本续接说明，沿开放#297发布，不改公共协议或Runtime
+装配，原完整现场依然按owner接续。最新新头Windows完整门禁另读取，不借旧头绿灯。
+
+上述九项增量的准确 head `e109368779ba833f9d75b331766256701201338b` /
+tree `73bd2f9a44418523c160a9d4158db03ba3b5e37d` 两路 Windows 首次全检成功：
+push run37492638458/job112369024033、PR run37492644255/job112369046672，完整
+raw328961/329841字符均读取归档。31workspace2117/0/16平台跳过、根22/22、架构
+3/3，check/dev/两项demo均通过。#212原交付记录已更新同head及原验收owner；阶段
+邮件1a1120a846b4d144已核SENT/To，非停止通知，整体仍in_progress。
+
+继续本人MOD33真实失败日志读取（#212原记录 `6018777209`）：标准gh2.46.0原
+exit0/text0的根因已由官方parser与既有非空CRC完整ZIP证明。仅有合并job文件
+`0_check.txt`/`check/system.txt`，旧版逐step正则11steps零匹配后无声返回。
+按正常网络取得并核官方SHA256的隔离gh2.102.0后，原公开Provider/runner在固定
+Node24.15下真实actions.log.read成功：run37474438969/job112306058042/failure身份
+已核，正式Schema六页、连续offset、最终nextOffset:null，348224 UTF-16字符/
+356938 UTF-8字节，SHA256
+`334b89ed82dc50fd73546b104ce4d760e2ca1c526ada1f6c565e4696245a253d`。
+实际Calendar路径、TIMEOUT/EXTERNAL_FAILURE及测试失败标记存在，全GET、凭据
+只在内存，不输出/存储日志正文或签名URL，未改系统CLI/协议/连接器实现。本人仅
+补充MOD33包README、模块说明及本续接文档的可信CLI兼容前提和证据，沿#297交付。
+当前兼容版本不代表最早支持版本；原Calendar错误、账号写入、Windows与原可信
+Runtime闭环仍按原owner处理，不能将新读取证据升级为整体完成。截止仍为
+2026-10-07北京时间20:00，继续新PR/分工/认证邮件检查与新增独立工作。
+
+上述MOD33文档已发布准确head `4afb8e0812438c17dfead2fddb156061e652726f` /
+tree `68e4e23ea01e521fd03006d0c9c4fdad4bf3db4a`，26diff文件；新头双Windows
+push37499240945/job112391665236、PR37499249363/job112391696773首次均成功。
+完整raw328965/329931字符均归档，34组汇总31workspace2117/0/16、root22/22、
+architecture3/3，check/dev/两项demo全部success。
+
+继续本人MOD33 runner生命周期绑定（#212 `6021583746`），唯一源码writer仅
+gh.ts/github.test.mjs。普通caller复用options创建新Provider，在原credential await
+期间替换runner会让旧请求换用新runner；旧dispose还会释放新依赖并遗漏原依赖。
+原公开before2/2失败，独立before2/2失败且新Provider被错误dispose后明确失败。
+构造捕获原runner引用，API/log/dispose三处一致使用原对象；原run/dispose方法与
+readToken/仓库白名单检查保持live，不冻结凭据或授权。公开after2/2、独立同probe
+after2/2及原dispose方法live断言通过。正式新增回归旧1失败/1通过，fixedNode24.15
+GitHub build/typecheck、完整105/105全部通过，无跳过。源码冻结SHA256
+`4f7969f6d5a8d5b85b8f412b8b011879ca0d42ccab3ee59c7db74c9538938938`，测试
+`67e9ae32fa47a4cce9cdcba65ec75fea44cbf67048487e860722d04f01eceaeb`，独立匹配。
+仅本人两源码及三配套文档，沿#297交付；无DTO/Runtime/根配置变化，全部before/
+after生命周期复现为明确Fake READ，无真实账号write。当前新增源门禁另按准确head
+读取，不借上阶段4af双绿，原真实写入/Windows/可信Runtime仍按owner验收，整体
+Goal继续in_progress，截止仍Oct7北京时间20:00。
+
+最新冻结runner实现另以官方gh2.102、Node24.15原公开Provider实际复验首日志页：
+正确原run/job/failure身份，正式Schema、offset0/nextOffset65536、65536字符/
+66086 UTF-8字节、UTF8 roundtrip通过，页SHA256
+`e24ca1e9e7fbfc6c1054dc47f9c7b7d9af43f2408b5d94268fc39fa04a644f71`。
+仅一个日志页及必要元数据GET，之前完整六页全文证据单独保留，不把首页未出现的
+Calendar标记误说消失，也不重复全量读取；无凭据/正文/签名URL落盘或账号write。
+
+上述第十项源码增量已发布准确head `6fe4a922813dcb565ac60393959ef4cf9caa13f4` /
+tree `541f4871e838cffa2cfab23760d545fca4cf5947`，28diff文件；双Windows首次attempt1
+push37503321460/job112405575122、PR37503328395/job112405602544均成功。完整原
+日志329222/329992字符已读回归档，34组汇总、31workspace2119/0/16平台skip/0cancel、
+root22/22、arch3/3、GitHub105/105，新增runner两回归实际执行；check/dev/两项demo
+全success。阶段邮件1a1125046fc5ec31已核SENT/To，非停止通知，整体仍in_progress。
+
+继续本人MOD34 factory原Model/Tools绑定（#212 `6022269030`）。旧公开before1/1
+失败：读取pending后复用options创建新factory，旧factory恢复原run却toolsB12次/
+modelB1次；独立纯Fake READ的pending/unknown旧2失败。factory构造固定两对象，
+私有执行入口保原liveOptions；直接公开runCiFix两参数仍每次选端口，各run配置可
+更新并按原snapshot/identity校验，原授权/confirmedReplayReady/now属性与原port方法/
+能力仍实时。新factory可用新端口，不把旧unknown改为新write。公开同probeafter1/1、
+独立同probeafter2/2、追加边界4/4；追加探针曾误断unsupported返回为异常，纠正后
+通过且原日志保留，不计产品缺陷或oldfail。新增正式回归旧1fail/1pass，Node24.15
+coding-tools build/typecheck、完整232/0/15 Linux平台skip均通过。冻结源码SHA256
+`933bf44ed1937321302f01b5b8c73a83f3558727a1483092c56cd0221c4eeb8a`、测试
+`a011e7ee7d3de17eeb72073fe05ae2593b83dc8faad380accfc420268a59321d`，独立匹配。
+只本人两源码及三配套说明，沿现有#297交付；新提交Windows准确门禁另读回，不借
+6fe双绿。真实原现场自动修复/账号写/Windows/AgentArts仍由原owner验收，整体
+Goal继续in_progress，持续新PR/分工/认证邮件核对至Oct7北京时间20:00。

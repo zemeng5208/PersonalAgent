@@ -392,7 +392,9 @@ test('a larger CI budget does not prevent other workflows from starting', async 
 });
 
 test('issue classification survives SQLite restart before prewrite approval without another model call', async t => {
-  for (const changed of [false, true]) await t.test(changed ? 'changed facts reject every label' : 'original facts label once', async () => {
+  for (const timing of ['unchanged', 'before_prewrite', 'during_label_approval', 'during_resume_read_approval']) {
+    const changed = timing !== 'unchanged';
+    await t.test(changed ? `changed facts at ${timing} reject every label` : 'original facts label once', async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'dev-triage-restart-'));
     let host, reads = 0, labels = 0, modelCalls = 0, current = structuredClone(issue);
     const provider = model(), complete = provider.complete.bind(provider);
@@ -419,28 +421,41 @@ test('issue classification survives SQLite restart before prewrite approval with
       assert.equal(modelCalls, 1); assert.equal(labels, 0);
       assert.equal(reads, 1);
       await host.close(); host = undefined;
-      if (changed) current = {...current, body: 'Changed after classification at the same timestamp'};
+      if (timing === 'before_prewrite') current = {...current, body: 'Changed after classification at the same timestamp'};
       host = open();
       assert.equal(host.runtime.getTask(task.taskId).state, 'waiting_approval');
       approval = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0];
       assert.equal(approval.action, 'github.issue.get');
       host.runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
       let snapshot = await host.resume(task.taskId);
-      if (!changed) {
+      if (timing !== 'before_prewrite') {
         assert.equal(snapshot.state, 'waiting_approval');
         approval = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0];
         assert.equal(approval.action, 'github.issue.label');
+        if (timing === 'during_label_approval') current = {...current, body: 'Changed during label approval at the same timestamp'};
+        host.runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
+        snapshot = await host.resume(task.taskId);
+        assert.equal(snapshot.state, 'waiting_approval');
+        assert.equal(labels, 0, 'label approval cannot bypass the fresh Issue read');
+        const readApproval = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0];
+        assert.equal(readApproval.action, 'github.issue.get');
+        await host.close(); host = undefined; host = open();
+        approval = host.runtime.listApprovals({taskId: task.taskId, state: 'pending'}).items[0];
+        assert.equal(approval.approvalId, readApproval.approvalId, 'the pending read retains its original approval after restart');
+        if (timing === 'during_resume_read_approval') current = {...current, body: 'Changed during resume read approval at the same timestamp'};
         host.runtime.respondApproval(approval.approvalId, 'allow_once', approval.revision);
         snapshot = await host.resume(task.taskId);
       }
       assert.equal(snapshot.taskId, task.taskId); assert.equal(snapshot.state, 'succeeded',
         JSON.stringify(host.runtime.readToolExecutions(task.taskId)));
       assert.equal(modelCalls, 1); assert.equal(labels, changed ? 0 : 1);
+      assert.equal(reads, timing === 'before_prewrite' ? 2 : 3, 'each approved read executes once');
       assert.equal(host.readResult(task.taskId).reason, changed ? 'issue_changed' : 'label_confirmed');
       assert.equal(host.runtime.readToolExecutions(task.taskId).filter(record => record.toolName === 'github.issue.label').length,
         changed ? 0 : 1);
     } finally {if (host) await host.close(); await rm(directory, {recursive: true, force: true});}
-  });
+    });
+  }
 });
 
 test('failed workflow construction disposes registered GitHub providers and closes SQLite', async () => {

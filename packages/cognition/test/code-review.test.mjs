@@ -39,6 +39,68 @@ function fixture(overrides = {}) {
   const prepare = () => workflow.prepare({repo: 'owner/repo', number: 7, rules: [{id: 'safe', text: 'Reject unsafe changes'}]}, context, access);
   return {workflow, tools, context, access, calls, modelCalls, checkpoints, prepare, changeHead: value => {currentHead = value;}, writeState: value => {writeState = value;}};
 }
+
+test('the public review factory retains its original ports when caller options are reused during prepare', async () => {
+  const original = fixture(), replacement = fixture();
+  let release, entered;
+  const started = new Promise(resolve => {entered = resolve;});
+  const waiting = new Promise(resolve => {release = resolve;});
+  const invoke = original.tools.invoke;
+  original.tools.invoke = async request => {
+    const result = await invoke(request);
+    if (request.runId.endsWith(':head-before')) {entered(); await waiting;}
+    return result;
+  };
+  let originalModels = 0, replacementModels = 0;
+  const model = {complete: async () => {originalModels++; return {response: {kind: 'final', text: JSON.stringify({findings: [finding]})}};}};
+  const nextModel = {complete: async () => {replacementModels++; return {response: {kind: 'final', text: JSON.stringify({findings: []})}};}};
+  const options = {model, tools: original.tools};
+  const workflow = createCodeReviewWorkflow(options);
+  const input = {repo: 'owner/repo', number: 7, rules: [{id: 'safe', text: 'Reject unsafe changes'}]};
+  const pending = workflow.prepare(input, original.context, original.access);
+  await started;
+  options.model = nextModel; options.tools = replacement.tools;
+  release();
+  const prepared = await pending;
+  assert.equal(prepared.state, 'prepared'); assert.deepEqual(prepared.report.findings, [finding]);
+  assert.equal(originalModels, 1); assert.equal(replacementModels, 0);
+  assert.equal(original.calls.length, 3); assert.equal(replacement.calls.length, 0);
+  assert.equal(options.model, nextModel); assert.equal(options.tools, replacement.tools, 'factory must not mutate caller options');
+  assert.equal((await createCodeReviewWorkflow(options).prepare(input, replacement.context, replacement.access)).state, 'prepared');
+  assert.equal(replacementModels, 1); assert.equal(replacement.calls.length, 3);
+});
+
+test('publishing a prepared report retains the original explicit Fake tool port after options replacement', async () => {
+  const original = fixture(), replacement = fixture();
+  const options = {tools: original.tools, model: {complete: async () => ({response: {kind: 'final', text: JSON.stringify({findings: [finding]})}})}};
+  const workflow = createCodeReviewWorkflow(options);
+  const prepared = await workflow.prepare({repo: 'owner/repo', number: 7, rules: [{id: 'safe', text: 'Reject unsafe changes'}]}, original.context, original.access);
+  options.tools = replacement.tools;
+  options.model = {complete: async () => {throw Error('publication must not call a model');}};
+  assert.equal((await workflow.publish(prepared.report, 0, original.context, {runId: 'publish-original', authorizationRef: 'synthetic-approved'})).state, 'confirmed');
+  assert.equal(original.calls.filter(call => call.toolName === 'github.pr.review.comment').length, 1);
+  assert.equal(replacement.calls.length, 0);
+});
+
+test('captured review ports still observe live tool availability and invocation hooks', async () => {
+  const f = fixture();
+  const list = f.tools.list;
+  f.tools.list = () => [];
+  assert.deepEqual(await f.prepare(), {state: 'unsupported', reason: 'github_read_unavailable'});
+  assert.equal(f.modelCalls.length, 0); assert.equal(f.calls.length, 0);
+  f.tools.list = list;
+  const prepared = await f.prepare(), reads = f.calls.length;
+  f.tools.list = () => list().filter(tool => tool.name !== 'github.pr.review.comment');
+  assert.deepEqual(await f.workflow.publish(prepared.report, 0, f.context, {runId: 'publish-live', authorizationRef: 'synthetic-approved'}),
+    {state: 'unsupported', reason: 'github_review_unavailable'});
+  assert.equal(f.calls.length, reads);
+  f.tools.list = list;
+  let liveCalls = 0;
+  const invoke = f.tools.invoke;
+  f.tools.invoke = async request => {liveCalls++; return invoke(request);};
+  assert.equal((await f.workflow.publish(prepared.report, 0, f.context, {runId: 'publish-live', authorizationRef: 'synthetic-approved'})).state, 'confirmed');
+  assert.equal(liveCalls, 2);
+});
 function realQuotedDiff(names) {
   const root = mkdtempSync(join(tmpdir(), 'code-review-paths-'));
   try {

@@ -304,6 +304,8 @@ export async function reconcileWorkspacePatchApply(
   options: WorkspacePatchReconcileOptions,
 ): Promise<WorkspacePatchReconciliationResult> {
   if (!options || typeof options !== 'object') invalid('Workspace patch reconciliation options are required');
+  // Keep the original execution binding, checker and retention policy across awaits.
+  options = {...options};
   const path = canonicalRelativePath(options?.relativePath);
   const root = canonicalRoot(options.rootPath, 'Workspace rootPath');
   const recoveryRoot = canonicalRoot(options.recoveryRootPath, 'Recovery rootPath');

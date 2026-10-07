@@ -87,6 +87,62 @@ test('a marker from another run, digest or original hash remains untouched', asy
   }
 });
 
+test('the original retain-marker request survives options reuse during an asynchronous process check', async t => {
+  const f = await fixture(t, 'after\n');
+  await marker(f.markerPath, {pid: 1234, beforeSha256: sha('before\n'), afterSha256: sha('after\n')});
+  let entered, release;
+  const checking = new Promise(resolve => {entered = resolve;});
+  const exit = new Promise(resolve => {release = resolve;});
+  const input = {...f, expectedRunId: runId, expectedArgumentsDigest: argumentsDigest,
+    expectedBeforeSha256: sha('before\n'), retainMarker: true,
+    isProcessAlive: () => {entered(); return exit;}};
+  const pending = reconcileWorkspacePatchApply(input);
+  await checking;
+  input.retainMarker = false;
+  release('exited');
+  const retained = await pending;
+  assert.equal(retained.state, 'reconciled');
+  assert.equal(retained.outcome, 'applied');
+  assert.equal(await readFile(f.markerPath, 'utf8').then(() => true), true);
+  const acknowledged = await reconcileWorkspacePatchApply({...input, isProcessAlive: () => 'exited'});
+  assert.deepEqual(acknowledged, retained);
+  await assert.rejects(readFile(f.markerPath), {code: 'ENOENT'});
+});
+
+test('options reuse cannot remove the original execution binding during marker reads', async t => {
+  for (const expected of [{expectedRunId: 'another-task:another-run'},
+    {expectedArgumentsDigest: 'd'.repeat(64)}, {expectedBeforeSha256: sha('other original\n')}]) {
+    await t.test(Object.keys(expected)[0], async t => {
+      const f = await fixture(t, 'after\n');
+      await marker(f.markerPath, {pid: 1234, beforeSha256: sha('before\n'), afterSha256: sha('after\n')});
+      let checks = 0;
+      const input = {...f, ...expected, isProcessAlive: () => {checks++; return 'exited';}};
+      const pending = reconcileWorkspacePatchApply(input);
+      const rejected = assert.rejects(pending, {code: 'RESULT_UNKNOWN'});
+      for (const key of Object.keys(expected)) input[key] = undefined;
+      await rejected;
+      assert.equal(checks, 0);
+      assert.equal(await readFile(f.markerPath, 'utf8').then(() => true), true);
+    });
+  }
+});
+
+test('the original process checker is captured before asynchronous marker reads', async t => {
+  const f = await fixture(t, 'after\n');
+  await marker(f.markerPath, {pid: 1234, beforeSha256: sha('before\n'), afterSha256: sha('after\n')});
+  let checks = 0, replacementChecks = 0;
+  const input = {...f, retainMarker: true, powerShellPath: 'original-unused-synthetic-path',
+    isProcessAlive: () => {checks++; return 'exited';}};
+  const pending = reconcileWorkspacePatchApply(input);
+  input.isProcessAlive = () => {replacementChecks++; return 'running';};
+  input.powerShellPath = 'replacement-unused-synthetic-path';
+  const result = await pending;
+  assert.equal(result.state, 'reconciled');
+  assert.equal(checks, 1);
+  assert.equal(replacementChecks, 0);
+  assert.equal(await readFile(f.markerPath, 'utf8').then(() => true), true);
+});
+
 test('dead helper with before hash is reconciled as not applied', async t => {
   const f = await fixture(t);
   await marker(f.markerPath, {pid: 1234, beforeSha256: sha('before\n'), afterSha256: sha('after\n')});
