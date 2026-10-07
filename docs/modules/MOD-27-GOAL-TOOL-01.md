@@ -111,3 +111,37 @@ HTML/renderer/CSS/CSP、Chromium native 日期输入/对话框与浏览器时区
 `goal-native-unknown-after.json` 及同名 `*-dom.mjs` 脚本/截图。
 bridge、受理和写入/读回仍为显式 Fake；此补充只将上文原 DOM 待执行项补为该层通过，
 不提升真实 Runtime/Policy、Electron IPC、Windows、云或个人数据现场验收状态。
+
+## 主动方案卡片与许可读回（2026-10-07）
+
+同 PR #302 的既有 Proactive 消费增量使用公开 GoalCognitionHost 的结构化状态。
+Host 在 apply 等待期间发布新快照、替换卡片后，完成回执现在更新当前卡片；
+已识别受理和未知结果跨空列表/重绘保留，迟到回复不能覆盖已核实快照。
+已公布的本地分析或出云许可关闭在发起前提示设置，重新开启后可继续；不把
+明确尚未发起的请求记为未知受理，不授予新权限。
+
+恢复已有 handoff 时，损坏的 repair binding 可合法返回 waiting_reconciliation
+而没有 taskId。此状态仍显示“处理结果待核实，请勿重复提交”并锁住操作，
+不能降为“尚未交给主智能体”。只依据结构化 state/status，不解析 executionStatus
+文字决定受理；未知状态仍沿原 Host/Runtime 核实，任意历史不清锁。
+
+设置保存等待期间的观察许可可能到期：成功返回后按最新已公布 snapshot 投影四个
+checkbox，不用旧 invoke receipt 覆盖撤销；失败则保留用户 dirty 草稿。公开
+ProactiveHost.tick 的八小时 lease 到期读回使 enabled/cloudAnalysis 均为 false，
+界面保持相同结果，未发第二次 configure 或自动延长许可。
+
+必要验证分批为首个卡片/许可增量 7/7、恢复 reconciliation 的新增 2 项与受影响
+mapper 2 项共 4/4、设置成功/失败新增 2/2；不能将这些相加当作一批完整检查。
+实际公开 Host 配合显式 Fake Runtime/IPC/时钟及真实表单 DOM，原 panel/admin
+HTML/CSS/CSP 和 native 浏览器前后读回均通过，console/pageerror 为零。
+私有记录在 `.worktrees/mod15-validation-20261007/.cache/proactive-apply-repaint-20261007/`，
+包括各固定 source blob、实际 exit 日志及 before/after JSON/截图；首轮测试空白
+断言失败保留。没有修改 Host、公共 wire/Schema 或迁移，也不代表真实 Runtime、
+云、Electron、Windows 或业务来源现场验收。
+
+随后对固定集成源码 `42ede95d0bf12f85bf0d363f88e245276ec20fb6`、tree
+`4fd88428d425a3207d91e4c396080a0ac51bc7ea` 运行受影响 Desktop 工作区 typecheck 与测试，
+两条命令实际 exit0；586 项中 575 通过、0 失败/取消、11 跳过。使用 Node24.15.0、
+两核亲和度，日志 `.cache/review-evidence/20261007/core-desktop122-check.log`。
+该检查覆盖本节三次增量和原 panel 审批到期刷新最终源码；其后至交付仅变更模块记录，
+没有将结果称为根完整 check、Windows/Electron 或跳过场景已通过。

@@ -213,7 +213,7 @@ Host；主进程相关路由从实际 main 源码提取执行，不等于运行 
 - 采集迟到：原生 Fake-device track 已分配但 getUserMedia 返回被显式延迟。公开 Host
   撤销后保持 busy/未确认，没有提前 ready 或新授权；返回放行后原 Renderer 结束
   track，尚未建立 context，Host 最终 verified/revoked。因启动未返回 attachment，
-  PCM ready 与 closed 均为 EXTERNAL_FAILURE；不能把 Host 的物理句柄读回描述为
+  PCM ready 与 closed 均为 EXTERNAL_FAILURE；不能把 Host 的 native 句柄读回描述为
   attachment 成功完成。
 - 采集关闭故障：track 实际 ended，但显式拒绝的 context.close 使 context 仍 running。
   Renderer/Host 保留 verified=false，PCM closed 拒绝；busy=false、订阅清零不能清除
@@ -246,3 +246,11 @@ Host；主进程相关路由从实际 main 源码提取执行，不等于运行 
 选择器匹配多个 textarea 的失败日志保留，修正 ARIA 定位后通过，未修改生产 Goal 控件。
 这些结果仍不完成真实 Windows 中文唤醒、SIS/Live API、物理设备、回声/噪声或账号验收；
 本模块继续 `review`，现场验收仍由原现场负责人执行。
+
+后续独立 ended/retry 场景固定源码 `877c034ff46c4c8bfc540cd2391a84e956eb75ad`：
+对 native Fake-device track 执行 stop 并显式派发 ended，是故障注入，不能称真实拔设备。
+原 capture/Host/Wake 消费 device_unavailable，track ended/context closed、Host verified
+后才允许原按钮显式 retry；待识别 signal 中止、迟到草稿丢弃、音频清零、Runtime 调用零。
+新代分配后旧 keyword 回调不启动新的听写；最终关闭读回两代均 ended/closed。
+独立进程 exit0、console/pageerror 为零，新增证据 `wake-native-device-ended-validation.md`
+及对应脚本、JSON、日志/截图。未重跑前述正常/unknown 场景，不提升物理拔插或现场验收。
