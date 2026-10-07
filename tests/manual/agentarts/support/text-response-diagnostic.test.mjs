@@ -75,6 +75,34 @@ test('fetch observation retains production acceptance/rejection and never reissu
   }
 });
 
+test('configured completion replay matches the actual text and proposal ports', async () => {
+  for (const responseMode of ['text', 'tool-proposal-json']) {
+    for (const terminated of [false, true]) {
+      const frames = [message(JSON.stringify({kind: 'text', text: 'private-mode-response'}))];
+      if (terminated) frames.push({event: 'task_end'}, {event: 'end'});
+      const body = frames.map(frame => 'data: '+JSON.stringify(frame)+'\n\n').join('');
+      let calls = 0;
+      const diagnostic = createTextDiagnosticFetch(async () => {
+        calls++;
+        return new Response(body, {headers: {'content-type': 'text/event-stream'}});
+      }, responseMode === 'tool-proposal-json');
+      const cloud = new AgentArtsCloudAgentPort({gatewayUrl: 'https://synthetic.example.test', runtimeName: 'synthetic', responseMode},
+        {read: async () => 'Bearer private-token'}, diagnostic.fetch);
+      const run = cloud.invoke({taskId: 'synthetic-mode-probe', revision: 1, goal: 'synthetic',
+        deadline: new Date(Date.now() + 5000).toISOString(), signal: new AbortController().signal});
+      const accepted = responseMode === 'text' || terminated;
+      if (accepted) assert.equal((await run).kind, 'text');
+      else await assert.rejects(run, {code: 'EXTERNAL_FAILURE'});
+      const report = diagnostic.snapshot();
+      assert.equal(calls, 1);
+      assert.equal(report.networkCalls, 1);
+      assert.equal(report.diagnostic.parserOutcome, accepted ? 'accepted' : 'rejected');
+      if (!accepted) assert.equal(report.diagnostic.rejection, 'workflow_order');
+      assert.equal(JSON.stringify(report).includes('private'), false);
+    }
+  }
+});
+
 test('transport details cannot appear in diagnostic reports', async () => {
   const diagnostic = createTextDiagnosticFetch(async () => { throw new Error('private transport details'); });
   await assert.rejects(diagnostic.fetch('https://example.test', {}));

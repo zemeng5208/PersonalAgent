@@ -36,7 +36,7 @@ function parserSnapshot() {
   const program = `const MAX_TEXT_CHARS = ${limit[1]};\n`
     + 'function external(message) { throw new Error(message); }\n'
     + source.slice(objectStart, objectEnd) + source.slice(start, end)
-    + '\nparseResponsePayload(payload, contentType).length;';
+    + '\nparseResponsePayload(payload, contentType, strictCompletion).length;';
   return {program, sha256: createHash('sha256').update(source).digest('hex')};
 }
 
@@ -92,7 +92,7 @@ function structuralSummary(payload, contentType) {
   return result;
 }
 
-export function inspectTextResponse(bytes, rawContentType) {
+export function inspectTextResponse(bytes, rawContentType, strictCompletion = false) {
   if (!(bytes instanceof Uint8Array) || bytes.byteLength > LIMIT) return {outcome: 'inspection_limit'};
   let payload;
   try { payload = new TextDecoder('utf-8', {fatal: true}).decode(bytes); }
@@ -106,7 +106,7 @@ export function inspectTextResponse(bytes, rawContentType) {
   report.parserSha256 = parser.sha256;
   report.structure = structuralSummary(payload, report.contentType);
   try {
-    report.resultCharacters = runInNewContext(parser.program, {payload, contentType}, {timeout: 1000});
+    report.resultCharacters = runInNewContext(parser.program, {payload, contentType, strictCompletion}, {timeout: 1000});
     report.parserOutcome = 'accepted';
   } catch (error) {
     report.parserOutcome = 'rejected';
@@ -116,8 +116,9 @@ export function inspectTextResponse(bytes, rawContentType) {
 }
 
 /** Pass to AgentArtsCloudAgentPort only in a manual diagnostic run. No logging,
- * disk writes, secret reads, retry, or raw response escapes through snapshot(). */
-export function createTextDiagnosticFetch(innerFetch) {
+ * disk writes, secret reads, retry, or raw response escapes through snapshot().
+ * Proposal/candidate callers pass true to match their port's SSE completion check. */
+export function createTextDiagnosticFetch(innerFetch, strictCompletion = false) {
   let report = {networkCalls: 0};
   return {
     snapshot: () => structuredClone(report),
@@ -159,7 +160,7 @@ export function createTextDiagnosticFetch(innerFetch) {
                         const bytes = new Uint8Array(size);
                         let offset = 0;
                         for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
-                        try { current.diagnostic = inspectTextResponse(bytes, contentType); }
+                        try { current.diagnostic = inspectTextResponse(bytes, contentType, strictCompletion); }
                         catch { current.diagnostic = {outcome: 'diagnostic_internal'}; }
                       }
                       chunks.length = 0;
