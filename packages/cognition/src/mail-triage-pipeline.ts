@@ -199,6 +199,8 @@ export class MailTriagePipeline {
    * Processes a batch of projected mail messages with backpressure and bounded chunking.
    */
   async processBatch(request: MailBatchTriageRequest): Promise<MailBatchTriageSummary> {
+    if (!request || !Array.isArray(request.messages)) throw new CognitionError('INVALID_ARGUMENT');
+    request = {...request, messages: request.messages.map(message => ({...message}))};
     const result = this.batchTail.then(() => this.processBatchSerial(request));
     this.batchTail = result.then(() => {}, () => {});
     return result;
@@ -323,7 +325,7 @@ export class MailTriagePipeline {
 
       const chunk = pendingMessages.slice(i, i + this.chunkSize);
       const triageRequest: LayaTriageRequest = {
-        messages: chunk,
+        messages: chunk.map(message => ({...message})),
         labels: {...this.labels},
         deadline: request.deadline,
         signal: request.signal,

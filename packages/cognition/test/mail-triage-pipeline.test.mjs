@@ -161,6 +161,69 @@ test('constructor and classifier label views cannot change the cache configurati
   assert.equal(inference.calls.length, 2);
 });
 
+test('queued batches bind submitted message content and identity before checkpoint loading', async () => {
+  let entered, release, saved;
+  const started = new Promise(resolve => {entered = resolve;});
+  const loading = new Promise(resolve => {release = resolve;});
+  const inference = createMockInference();
+  const pipeline = new MailTriagePipeline({inference, checkpoint: {async load() {
+    entered(); await loading; return {};
+  }, save: value => {saved = value;}}});
+  const message = {source: 'mail', messageId: 'submitted', sourceRevision: '1', text: 'URGENT meeting moved', highImpact: true};
+  const submitted = {...message};
+  const request = {messages: [message], signal: new AbortController().signal,
+    deadline: new Date(Date.now() + 60_000).toISOString()};
+  const pending = pipeline.processBatch(request);
+  await started;
+  message.messageId = 'replacement'; message.text = 'Routine update'; message.highImpact = false;
+  request.messages = [{...message}];
+  release();
+  const result = await pending;
+  assert.equal(result.results[0].messageId, submitted.messageId);
+  assert.equal(result.highImpactCount, 1);
+  assert.equal(inference.calls[0].state.events[0].observation, submitted.text);
+  assert.equal(Object.values(saved)[0].messageId, submitted.messageId);
+});
+
+test('queued batches retain the original cancellation signal and deadline after checkpoint awaits', async () => {
+  for (const mode of ['cancelled', 'deadline']) {
+    let entered, release, clock = Date.now(), saved;
+    const started = new Promise(resolve => {entered = resolve;});
+    const loading = new Promise(resolve => {release = resolve;});
+    const inference = createMockInference(), controller = new AbortController();
+    const pipeline = new MailTriagePipeline({inference, now: () => clock, checkpoint: {async load() {
+      entered(); await loading; return {};
+    }, save: value => {saved = value;}}});
+    const request = {messages: [{source: 'mail', messageId: 'lease', sourceRevision: '1', text: 'Work update'}],
+      signal: controller.signal, deadline: new Date(clock + 60_000).toISOString()};
+    const pending = pipeline.processBatch(request);
+    await started;
+    if (mode === 'cancelled') {controller.abort(); request.signal = new AbortController().signal;}
+    else {clock = Date.parse(request.deadline); request.deadline = new Date(clock + 60_000).toISOString();}
+    release();
+    const result = await pending;
+    assert.equal(result.results[0].reason, mode);
+    assert.equal(result.newlyClassifiedCount, 0);
+    assert.equal(inference.calls.length, 0);
+    assert.equal(saved, undefined);
+  }
+});
+
+test('classifier input mutation cannot redefine the private submitted message identity', async () => {
+  const service = new LayaTriageService(createMockInference());
+  let saves = 0;
+  const pipeline = new MailTriagePipeline({classifier: {classify: request => {
+    request.messages[0].messageId = 'forged'; request.messages[0].text = 'Replaced input';
+    return service.classify(request);
+  }}, checkpoint: {load: () => ({}), save: () => {saves++;}}});
+  const request = {messages: [{source: 'mail', messageId: 'original', sourceRevision: '1', text: 'Work update'}],
+    signal: new AbortController().signal, deadline: new Date(Date.now() + 60_000).toISOString()};
+  await assert.rejects(pipeline.processBatch(request), error => error.code === 'INVALID_ARGUMENT');
+  assert.equal(saves, 0);
+  assert.equal(request.messages[0].messageId, 'original');
+  assert.equal(request.messages[0].text, 'Work update');
+});
+
 test('batch deduplication preserves colon-containing identity tuples and still reuses exact duplicates', async () => {
   const inference=createMockInference(),pipeline=new MailTriagePipeline({inference});
   const distinct=[
