@@ -83,3 +83,56 @@ confirmed Evidence、精确输入与提交历史、当前目标版本的核实�
 本次仅校正接线记录，没有执行真实云 router、真实 Laya/AgentArts、Electron 或实际
 用户目标/会议链路。源码已装配不等于云候选兼容或现场验收通过；缺候选、许可或可信
 绑定仍保持 unavailable，保留原恢复语义与 MOD/MVP 未 done 的边界。
+
+### 默认 P5 会议链与可信来源交接（2026-10-07）
+
+沿 `main@4b5ec61` 的既有入口核对，公开资料主动认知链和 Calendar 会议链具有不同的
+来源绑定。默认 [main](../../apps/desktop/electron/main.js) 创建
+[P5 composition](../../apps/desktop/electron/cognition-p5-composition.js) 时只传入
+`calendarReadPort`，没有传入 `goalCognitionHost`、`readCommittedMeetingProjection`，
+也没有 `facts` 与 `readMeetingSourceRevision` 的组合。源读取已挂载不代表会议修复已挂载；
+无可信 binding 的消费继续保存 `requires_review`，不调用模型、不写 Graph。
+
+已有核心消费入口是
+[createCommittedMeetingProjectionReader](../../packages/cognition/src/reviewed-meeting.ts) 和
+[Goal host meetingReviewedRepairPort](../../apps/desktop/electron/goal-cognition-host.js)：
+读回真实来源版本、精确 Fact ref 与已完成投影后，复用原 Goal review、Runtime repair、
+Policy 和 CAS。没有另一个 Fact 来源、模型入口或执行宿主需要重建。
+
+| 既有入口 / 责任人 | 当前消费事实与下一依赖 |
+| --- | --- |
+| Calendar / Potato：[calendar-meeting-host](../../apps/desktop/electron/calendar-meeting-host.js) | `confirmedRead` 核对原 Runtime 任务、配置、UID、sequence 与 confirmed Evidence；`bindMeeting` 仅绑定已经存在的 Fact；`readBaseline/readCurrent` 仅在本次 `refreshMeeting` 的绑定范围内可用。缺 Calendar 来源版本到已提交 Fact 的可信读回。 |
+| Memory / Runtime / goo：[CompetitionFactHost](../../apps/runtime/src/application/competition-fact-host.ts) 与 [SQLite projection](../../apps/runtime/src/application/sqlite-fact-projection.ts) | 已有持久 Memory→Graph→completed impact。当前 CompetitionFactHost 的写入入口是公开 Vault 的 `recordPublicSource`，projection feed/query 固定 `public`；不能将私人 Calendar 伪装为公开资料以取得该路径。 |
+| 核心认知 / zemeng：committed reader 与 Goal host | 需要可信 `readSourceRevision(event, context)` 返回 `{source, sourceRevision, meetingFact: {id, revision}}`，以及同 namespace 的原始 `listImpactReceipts` completed projection；检查真实当前 Fact、摘要和投影链接后才复核。 |
+| 根 Desktop composition / zemeng | 可信来源读回交付后，复用原 Goal host 的会议端口，接入现有 P5 可选装配。当前 [proactive-host](../../apps/desktop/electron/proactive-host.js) 未转发该会议端口；单独增加空转发不能完成来源链。 |
+
+来源顺序也须在 Calendar 业务消费端验证：现 `meetingRecord` 每次要求 Graph 当前 Fact
+仍为旧 baseline 的精确 revision、summary、sourceRef，且 reason 含对应
+`[sourceRevision: sequence]`。通用 Memory 投影的 reason 没有此 Calendar 标记；
+若直接先更新 Fact 再读取旧 baseline，会被当前版本核验拒绝。不得通过放宽核心可信读回、
+猜测 event 文本或给无 binding 分支返回 `KEEP` 掩盖该缺口。
+
+继续沿既有 #212 / [P1-A 日历交接](POTATOS-MVP-TASKS-20260930.md) §4
+和 [P8 Runtime 交接](MVP-P8-CLOUD-RUNTIME-HANDOFF.md)「仍需云 Runtime 实现」第 5 项的
+Calendar Fact/Goal 依赖项处理，不新增任务或 wire DTO。验收顺序如下：
+
+1. Potato 用同一可信配置下两个独立 succeeded/confirmed 单条读取任务证明 UID 相同、
+   sequence 增长和 UTC 时间确有改变；保留原 checkpoint/Evidence 与旧 baseline。
+   `NOT_FOUND`、取消和同版本读回分别处理；读取许可不自动授权私人正文出云。
+2. Potato 提供业务来源绑定，goo 核对原 Memory/projection 装配与敏感范围，读回本次
+   sourceRef/sequence 对应的精确已提交 Fact ref、当前摘要与 completed projection。
+   验证旧 baseline 与新 Fact 的消费顺序，不直接从 Renderer/event 文本断言投影已完成。
+3. zemeng 在原 composition 注入上述可信端口与原 Goal host，验证 P5 本次 review 的
+   Fact、sourceRevision、namespace 和 projection 一致；错 UID、错版本、pending projection、
+   配置撤销、取消/超时均不能启动修复或产生 Graph 写入。
+4. 用已有 Goal/Plan 对该 Fact 的真实依赖完成 KEEP 或复核；需要修复时仍经原 Runtime
+   Policy/审批、精确输入、CAS、confirmed Evidence 与历史读回。重启恢复未知结果不重发，
+   无关依赖不被改写；只读日历来源不因此获得外部日历写能力。
+
+本轮另用公开 P5 composition 配备显式合成 `reviewedRepair` binding 与实际 TaskRuntime
+SQLite 验证五个持久分支：无 binding、KEEP、pending review、缺可选 feedback、confirmed
+repair。省略已清空的 `retryableInference/selection/repairTaskId` 后满足既有 JSON 无损
+checkpoint 合同；重开后不重复 review/repair。confirmed 分支的可信 feedback 为明确
+合成端口，Graph CAS 与持久读回实际运行；没有真实 Runtime repair 任务、Policy/Evidence、
+Laya、Calendar 或云执行。本证据证明这些绑定消费与持久化分支，不证明默认 main 已接通
+Calendar Fact 链，也不改变真实现场验收未完成的状态。
