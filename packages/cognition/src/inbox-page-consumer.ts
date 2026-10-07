@@ -59,6 +59,7 @@ export function createInboxPageConsumer<Item, Summary>(options: {
     /** One page uses precisely the Runtime pipeline validation and atomic checkpoint. */
     processPage: (input: Parameters<typeof pipeline.processPage>[0]) => {
       validate(input);
+      input = {...input, items: Array.isArray(input.items) ? [...input.items] : input.items};
       if (running || lifecycle(input)) return Promise.reject(new CognitionError('NOT_APPLICABLE'));
       running = true;
       return withCognitionDeadline(input, context => pipeline.processPage({...input, ...context}), now)
