@@ -111,6 +111,7 @@ export class GhCliProvider implements GitHubProvider {
           const args = ['run', 'view', String(r.runId), '--repo', r.repo, '--job', String(r.jobId), '--log-failed'];
           const result = await withGitHubContext(context, bounded => this.runner.run({args, token, maxBytes: 1048576, context: bounded}));
           if (result.exitCode !== 0 || typeof result.stdout !== 'string' || typeof result.stderr !== 'string' || Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr) > 1048576) throw new ProtocolError('EXTERNAL_FAILURE', 'GitHub log read failed');
+          if (job.conclusion === 'failure' && !result.stdout.trim()) throw new ProtocolError('EXTERNAL_FAILURE', 'GitHub failed job log unavailable');
           return textPage(redactGitHubText(result.stdout, [token]), r);
         }
         case 'actions.repair.link': return executeGitHubRepairLink(input as GitHubInputs['actions.repair.link'], api, () => writeDispatched);

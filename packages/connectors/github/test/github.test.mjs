@@ -109,6 +109,22 @@ test('failed job log validates run ownership and caps text', async () => {
   await assert.rejects(wrong.value.execute('actions.log.read', {repo, runId: 31, jobId: 41}, context()), error => error.code === 'INVALID_ARGUMENT');
   assert.equal(wrong.calls.length, 1);
 });
+test('failed jobs reject empty successful CLI log responses without retrying', async t => {
+  for (const stdout of ['', ' \r\n\t']) await t.test(JSON.stringify(stdout), async () => {
+    const p = provider([{...fixtures.jobs.jobs[0], conclusion: 'failure'}, {exitCode: 0, stdout, stderr: ''}]);
+    await assert.rejects(p.value.execute('actions.log.read', {repo, runId: 31, jobId: 41}, context()),
+      error => error.code === 'EXTERNAL_FAILURE' && error.message === 'GitHub operation failed');
+    assert.equal(p.calls.length, 2);
+  });
+});
+test('jobs without failures retain empty failed logs and nonempty logs allow an empty terminal page', async () => {
+  const p = provider([{...fixtures.jobs.jobs[0], conclusion: 'success'}, {exitCode: 0, stdout: '', stderr: ''},
+    {...fixtures.jobs.jobs[0], conclusion: 'failure'}, {exitCode: 0, stdout: 'error', stderr: ''}]);
+  assert.deepEqual(await p.value.execute('actions.log.read', {repo, runId: 31, jobId: 41}, context()),
+    {text: '', offset: 0, nextOffset: null, truncated: false});
+  assert.deepEqual(await p.value.execute('actions.log.read', {repo, runId: 31, jobId: 41, offset: 5}, context()),
+    {text: '', offset: 5, nextOffset: null, truncated: false});
+});
 test('write transport failure is unknown and never retried', async () => {
   const p = provider([fixtures.pull, new ProtocolError('TIMEOUT', token)]);
   const result = await p.value.execute('pr.comment', {repo, number: 9, body: 'comment'}, context());
