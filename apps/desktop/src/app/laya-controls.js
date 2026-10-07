@@ -3,13 +3,15 @@ export function mountLayaControls(root, invoke) {
   element.className = 'sheet';
   element.innerHTML = '<h2>本地 Laya</h2><p>用于邮件分类和候选判断。手动启动后在本机处理，关闭即释放模型。</p><button class="btn" data-laya="start">启动本地模型</button> <button class="btn" data-laya="stop">停止并释放</button><p data-laya="status" role="status"></p>';
   root.querySelector('#error').before(element);
-  let state = {}, pendingAction, operation = 0, publication = 0, unconfirmed = false, feedback = '';
-  const startable = new Set(['stopped', 'unavailable', 'memory_insufficient', 'identity_changed', 'error']);
-  const stoppable = new Set(['ready', 'starting', 'stop_unconfirmed']);
+  let state = {}, pendingAction, operation = 0, publication = 0, unconfirmed = false, receiptLost = false, feedback = '';
+  const startable = new Set(['stopped', 'unavailable', 'memory_insufficient', 'error']);
+  const stoppable = new Set(['ready', 'starting', 'identity_changed', 'stop_unconfirmed']);
   const known = new Set([...startable, ...stoppable, 'stopping']);
   const field = name => element.querySelector(`[data-laya="${name}"]`);
   function paint() {
-    field('status').textContent = feedback || state.reason || '本地模型尚未装配';
+    field('status').textContent = feedback || (receiptLost
+      ? '操作回执未获确认；当前已读回状态：'+(state.reason || state.state)
+      : state.reason || '本地模型尚未装配');
     field('start').disabled = Boolean(pendingAction) || unconfirmed || !startable.has(state.state);
     field('stop').disabled = pendingAction === 'stop'
       || !(pendingAction === 'start' || unconfirmed || stoppable.has(state.state));
@@ -22,7 +24,7 @@ export function mountLayaControls(root, invoke) {
   async function run(action) {
     if (field(action).disabled) return;
     const current = ++operation;
-    pendingAction = action; feedback = ''; paint();
+    pendingAction = action; receiptLost = false; feedback = ''; paint();
     let confirmed = true;
     try {
       try { await invoke(`laya.${action}`); } catch { confirmed = false; }
@@ -34,8 +36,7 @@ export function mountLayaControls(root, invoke) {
       if (current !== operation) return;
       const latest = publication === observed ? readback?.laya : state;
       if (!latest || !known.has(latest.state)) throw Error();
-      state = latest; unconfirmed = false;
-      feedback = confirmed ? '' : '操作回执未获确认；当前已读回状态：'+(state.reason || state.state);
+      state = latest; unconfirmed = false; receiptLost = !confirmed; feedback = '';
     } catch {
       if (current === operation) {
         unconfirmed = true;

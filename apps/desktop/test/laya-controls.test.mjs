@@ -55,7 +55,8 @@ async function fixture(t, {reply = async (_action, value) => value, readback,
   controls.render(host.snapshot());
   t.after(async () => {child?.emit('exit', 0); await host.stop();});
   return {host, controls, nodes, calls, start: () => nodes.start.onclick(), stop: () => nodes.stop.onclick(),
-    exit: () => child.emit('exit', 0), launches: () => launches};
+    exit: () => child.emit('exit', 0), launches: () => launches,
+    changeArtifact: () => writeFile(path.join(model, 'config.json'), '{"synthetic":"changed after loading"}')};
 }
 
 test('a delayed start receipt cannot undo a newer completed stop', async t => {
@@ -150,6 +151,39 @@ test('a lost operation receipt uses current readback without claiming that the o
   assert.doesNotMatch(f.nodes.status.textContent, /private|操作未完成/);
   assert.equal(f.nodes.start.disabled, true);
   assert.equal(f.nodes.stop.disabled, false);
+  assert.equal(f.launches(), 1);
+});
+
+test('artifact identity changes require explicit stop before another start', async t => {
+  const f = await fixture(t);
+  await f.start();
+  await f.changeArtifact();
+  f.controls.render(f.host.snapshot());
+  assert.equal(f.host.snapshot().state, 'identity_changed');
+  assert.equal(f.nodes.start.disabled, true);
+  assert.equal(f.nodes.stop.disabled, false);
+  await f.start();
+  assert.equal(f.launches(), 1, 'changed artifacts do not trigger a restart');
+  await f.stop();
+  assert.equal(f.host.snapshot().state, 'stopped');
+  assert.equal(f.nodes.start.disabled, false);
+  await f.start();
+  assert.equal(f.host.snapshot().state, 'ready');
+  assert.equal(f.launches(), 2, 'restart occurs only after the explicit stop and start');
+  assert.deepEqual(f.calls, ['laya.start', 'snapshot', 'laya.stop', 'snapshot', 'laya.start', 'snapshot']);
+});
+
+test('lost receipt feedback follows the current host publication after its process exits', async t => {
+  const f = await fixture(t, {reply: async () => {throw new Error('private-lost-receipt-canary');}});
+  await f.start();
+  assert.equal(f.host.snapshot().state, 'ready');
+  assert.match(f.nodes.status.textContent, /回执未获确认.*当前已读回状态.*已连接/);
+  f.exit();
+  assert.equal(f.host.snapshot().state, 'error');
+  assert.match(f.nodes.status.textContent, /回执未获确认.*当前已读回状态.*进程已退出/);
+  assert.doesNotMatch(f.nodes.status.textContent, /已连接|private/);
+  assert.equal(f.nodes.start.disabled, false);
+  assert.equal(f.nodes.stop.disabled, true);
   assert.equal(f.launches(), 1);
 });
 
