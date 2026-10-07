@@ -293,3 +293,9 @@ Live inactive、聚合正常完成，尚未授权 Mic 或连接 Gateway。放行
 track ended、Host verified，Runtime 调用零。此新场景实际 exit0、console/pageerror 为零，
 证据 `live-native-resume-hide-validation.md` 及对应脚本、JSON、日志/截图。
 resume hold、IPC 和 BrowserWindow.hide 明确 Fake，不能据此认定真实 Electron 或物理设备验收通过。
+
+聚合修复与上述文档合入固定 `37c7f419a3d1c1cae0018c350162533256ddfb8a` /
+tree `ac79880812fbd7608a713cc90acfc1a225c56599` 后，受影响 Desktop typecheck 与
+工作区测试实际 exit0：587 项、576 通过、0 失败/取消、11 跳过，Node v24.15.0、
+两核执行，完成于 2026-10-07 20:12:29 UTC。日志 `core-desktop122-live-aggregate-check.log`；
+不据此宣称整个仓库、Windows CI 或真实场景已通过。
