@@ -161,7 +161,7 @@ else {
     proactiveControls.render(data.proactive);
     const notifs=Array.isArray(data.notifications)?data.notifications:[];
     if(notifs.length>0){
-      bellMenu.innerHTML=notifs.slice(0,5).map(n=>`<div class="notice" style="color:var(--fg);margin:6px 4px"><strong>${escape(n.summary)}</strong><br><small style="color:var(--muted)">${escape(new Date(n.occurredAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}))}</small></div>`).join('');
+      bellMenu.innerHTML=notifs.slice(0,5).map(n=>`<div class="notice bell-notice"><strong>${escape(n.summary)}</strong><br><small>${escape(new Date(n.occurredAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}))}</small></div>`).join('');
       bellBtn.title=`通知 (${notifs.length})`;bellBtn.setAttribute('aria-label',bellBtn.title);
     }else{
       bellMenu.innerHTML='<div class="notice">暂无新通知</div>';
