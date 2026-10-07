@@ -13,10 +13,26 @@ function fixture(t, invoke) {
   t.after(() => {if (original) Object.defineProperty(globalThis, 'document', original); else delete globalThis.document;});
   const fields = Object.fromEntries(['live-key', 'live-workspace', 'live-hotkey', 'live-consent', 'live-save', 'live-config-result', 'summary']
     .map(name => [name, {value: '', checked: false, textContent: ''}]));
-  fields['live-hotkey'].options = Array.from({length: 12}, (_, i) => ({value: `F${i + 1}`}));
+  // Model select value against the options actually mounted by the control.
+  // HTML option text is its value when no explicit value attribute is present.
+  let selectedIndex = -1;
+  fields['live-hotkey'].options = [];
+  Object.defineProperty(fields['live-hotkey'], 'value', {
+    get: () => fields['live-hotkey'].options[selectedIndex]?.value ?? '',
+    set: value => {selectedIndex = fields['live-hotkey'].options.findIndex(option => option.value === value);},
+  });
   const listeners = new Map();
   const settings = {open: false, querySelector: selector => fields[selector.replace(/^#/, '')],
     addEventListener: (type, listener) => listeners.set(type, listener)};
+  Object.defineProperty(settings, 'innerHTML', {set: markup => {
+    fields['live-hotkey'].options = [...markup.matchAll(/<option\b([^>]*)>([^<]*)<\/option>/g)].map(match => {
+      const explicit = match[1].match(/\bvalue="([^"]*)"/)?.[1];
+      return {textContent: match[2], disabled: /\bdisabled\b/.test(match[1]),
+        get value() {return explicit ?? this.textContent;}};
+    });
+    selectedIndex = [...markup.matchAll(/<option\b([^>]*)>/g)].findIndex(match => /\bselected\b/.test(match[1]));
+    if (selectedIndex === -1 && fields['live-hotkey'].options.length) selectedIndex = 0;
+  }});
   const status = {setAttribute() {}};
   let created = 0;
   globalThis.document = {createElement: () => created++ ? status : settings};
@@ -88,4 +104,28 @@ test('concurrent toggle clicks submit one action and settle cleanly after failur
   assert.equal(f.settings.open, true);
   assert.match(f.fields['live-config-result'].textContent, /synthetic connection error/);
   await f.controls.toggle(); assert.equal(calls, 2);
+});
+
+test('restored supported F13 and F24 remain selected in ordinary blank-key saves', async t => {
+  const calls = [];
+  const f = fixture(t, async (name, payload) => {calls.push({name, payload: {...payload}});});
+  for (const hotkey of ['F13', 'F24']) {
+    f.controls.render({configured: true, workspaceId: 'restored-workspace', hotkey});
+    assert.equal(f.fields['live-hotkey'].value, hotkey);
+    assert.equal(f.fields['live-key'].value, '');
+    await f.save();
+    assert.deepEqual(calls.at(-1), {name: 'live.configure', payload: {
+      workspaceId: 'restored-workspace', apiKey: '', hotkey, audioConsent: true,
+    }});
+    assert.equal(f.fields['live-save'].disabled, false);
+  }
+});
+
+test('default F8 remains selected and reserved F9 keeps its stable disabled value', t => {
+  const f = fixture(t, async () => {});
+  assert.equal(f.fields['live-hotkey'].value, 'F8');
+  const reserved = f.fields['live-hotkey'].options.find(option => option.value === 'F9');
+  assert.ok(reserved);
+  assert.equal(reserved.disabled, true);
+  assert.match(reserved.textContent, /记事本写入确认/);
 });
