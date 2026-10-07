@@ -53,7 +53,7 @@ else {
   expand.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6m0-6-7 7M10 20H4v-6m0 6 7-7"/></svg>';
   root.querySelector('#close').before(expand);
   expand.onclick=()=>invoke('workspace.open').catch(error=>{root.querySelector('#error').textContent=error.message;});
-  let current,pending=false,lastTaskSignature='';const likedTasks=new Set();
+  let current,pending=false,lastTaskSignature='',draftRevision=0;const likedTasks=new Set();
   const report=e=>root.querySelector('#error').textContent=typeof e==='string'?e:e.message;
   const form=root.querySelector('form'),input=root.querySelector('textarea'),thread=root.querySelector('.thread'),tasksNode=root.querySelector('#tasks');
   const liveControls=mountLiveVoiceControls(root,invoke);
@@ -125,13 +125,13 @@ else {
   document.addEventListener('click',e=>{if(!modelMenu.hidden&&!e.target.closest('.model-box'))closeModel();if(!bellMenu.hidden&&!e.target.closest('.bell-box'))closeBell();});
   slider.addEventListener('input',()=>{syncSlider();invoke('thinking.update',{depth:Number(slider.value),fast:fastBtn.getAttribute('aria-pressed')==='true'}).catch(report);});syncSlider();
   fastBtn.onclick=()=>{const on=fastBtn.getAttribute('aria-pressed')!=='true';fastBtn.setAttribute('aria-pressed',String(on));modelMenu.classList.toggle('fast',on);invoke('thinking.update',{depth:Number(slider.value),fast:on}).catch(report);};
-  input.addEventListener('input',e=>{setSendMode(Boolean(e.target.value.trim()));invoke('panel.pin',true).catch(report);});
+  input.addEventListener('input',e=>{draftRevision++;setSendMode(Boolean(e.target.value.trim()));invoke('panel.pin',true).catch(report);});
   input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();if(input.value.trim()&&!pending)form.requestSubmit();}});
   sendBtn.addEventListener('click',e=>{e.preventDefault();if(sendBtn.dataset.mode==='live'){
     void liveControls.toggle();
   }else if(!pending)form.requestSubmit();});
   document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(!modelMenu.hidden){closeModel();return;}if(!bellMenu.hidden){closeBell();return;}invoke('panel.hide').catch(report);});
-  form.onsubmit=async e=>{e.preventDefault();if(pending||!input.value.trim())return;pending=true;setSendMode(true);try{await invoke('task.submit',input.value);input.value='';requestAnimationFrame(()=>{thread.scrollTop=thread.scrollHeight;});root.querySelector('#error').textContent='';}catch(err){report(err);}finally{pending=false;setSendMode(Boolean(input.value.trim()));}};
+  form.onsubmit=async e=>{e.preventDefault();if(pending||!input.value.trim())return;const submittedRevision=draftRevision;pending=true;setSendMode(true);try{await invoke('task.submit',input.value);if(draftRevision===submittedRevision)input.value='';requestAnimationFrame(()=>{thread.scrollTop=thread.scrollHeight;});root.querySelector('#error').textContent='';}catch(err){report(err);}finally{pending=false;setSendMode(Boolean(input.value.trim()));}};
   const stopButton=root.querySelector('#stop');
   // Stopping playback never sends task.cancel to Runtime.
   stopButton.onclick=async()=>{window.speechSynthesis?.cancel();try{const result=await invoke('voice.stop');if(!result?.stopped)report(result?.reason??'语音供应商尚未连接');}catch(err){report(err);}};
