@@ -29,6 +29,40 @@ function fixture(mixed=false) {
   return {namespace,store,input,event,receipts};
 }
 
+test('pending reviewed meeting work retains constructor bindings and live original port hooks', async () => {
+  const f=fixture(),before=f.store.read(),clock=Date.now();
+  let release,entered;
+  const loading=new Promise(resolve=>{release=resolve;});
+  const started=new Promise(resolve=>{entered=resolve;});
+  let reads=0,saves=0,replacedCalls=0;
+  const store={read:revision=>f.store.read(revision)};
+  const receiptStore={loadReceipt:async query=>{
+    assert.equal(query.namespace,f.namespace);entered();await loading;
+    return f.receipts.loadReceipt(query);
+  },saveReceipt:record=>f.receipts.saveReceipt(record),listReceipts:filter=>f.receipts.listReceipts(filter)};
+  const options={store,receiptStore,namespace:f.namespace,now:()=>clock};
+  const consumer=new ReviewedMeetingFactConsumer(options);
+  const pending=consumer.processEvent(f.event);
+  await started;
+  options.namespace='unrelated-namespace';
+  options.store={read(){replacedCalls++;throw Error('replaced graph');}};
+  options.receiptStore={loadReceipt(){replacedCalls++;},saveReceipt(){replacedCalls++;}};
+  options.reviewedRepair={readCommittedProjection(){replacedCalls++;throw Error('replaced host');}};
+  options.now=()=>clock+120_000;
+  store.read=revision=>{reads++;return f.store.read(revision);};
+  receiptStore.saveReceipt=record=>{saves++;f.receipts.saveReceipt(record);};
+  release();
+  const receipt=await pending;
+  assert.equal(receipt.graphRevisionBefore,before.revision);
+  assert.equal(receipt.status,'requires_review');
+  assert.equal(reads,1);assert.equal(saves,1);assert.equal(replacedCalls,0);
+  const record=f.receipts.loadReceipt({namespace:f.namespace,source:f.event.source,eventId:f.event.eventId});
+  assert.equal(record.namespace,f.namespace);assert.equal(record.updatedAt,new Date(clock).toISOString());
+  assert.deepEqual((await consumer.getReceipt(f.event.eventId,f.event.source)),receipt);
+  assert.equal((await consumer.listReceipts()).length,1);
+  assert.deepEqual(f.store.read(),before);
+});
+
 test('mixed completed batch retains both links as proof but meeting selection and restart remain on one chain',async()=>{
   const f=fixture(true),before=f.store.read();let calls=0,applied=0;
   const completed={batchToken:f.input.projection.batchToken,report:analyzeImpact(before,at)};

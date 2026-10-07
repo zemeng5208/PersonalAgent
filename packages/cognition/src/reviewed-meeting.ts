@@ -124,6 +124,7 @@ export class ReviewedMeetingFactConsumer {
       || typeof options.receiptStore?.loadReceipt !== 'function' || typeof options.receiptStore.saveReceipt !== 'function') {
       throw new CognitionError('INVALID_ARGUMENT');
     }
+    this.options = {...options};
   }
   private now(): number {return (this.options.now ?? Date.now)();}
   private active(context: MeetingReviewContext): void {
