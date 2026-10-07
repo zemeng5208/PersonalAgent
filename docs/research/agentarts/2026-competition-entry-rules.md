@@ -45,3 +45,42 @@
 | iCAN 软件赛道：方案 PDF、演示 MP4、可运行入口 | 复用同一产品的可运行能力，另按 iCAN 口径组织说明 | 产品技术 PR 可作素材；截至本次核对，未见 PDF、MP4、稳定入口或提交成功回执 | 报名建议不晚于 **2026-09-29**；按通知正文在 **09-30 前**准备不超过 20 页的方案 PDF、不超过 5 分钟的 MP4，以及稳定链接或源代码，并以赛事系统读回确认提交；不把华为 AgentArts 部署当作 iCAN 提交完成 |
 
 华为队伍资格、报名状态及各阶段实际提交状态属于赛事系统事实，须由参赛人按对应页面读回；此表没有这些证据。主线的一次联合验收回执由各模块共同引用，仅在具体失败或新风险出现时补定向证据，不为材料重复运行整链。
+
+## AgentArts 官方能力与源码映射（2026-10-07）
+
+本节为 MOD-10 的公开资料核对，服务 MOD-29/30/32；不更新上面的历史验收结论。本次只读获取官方文档，未登录账号、创建资源、调用部署、执行评估或启动训练。以下链接在 **2026-10-07 UTC** 均实际返回 HTTP 200，且已提取对应 AgentArts 文档正文、标题和更新时间；产品页、成长地图和导航入口本身不充当 API 合同。官方页面更新于 2026-09-14 至 2026-09-30，能力是否在当前账号、区域和套餐可用仍需读回。
+
+源码核对基于本工作树 `0fffa2d`，真实实现是 [coordination 公共端口](../../../packages/coordination/src/index.ts)、[AgentArts adapter](../../../packages/coordination/src/agentarts.ts) 和 [Desktop 受信配置宿主](../../../apps/desktop/electron/agentarts-config.js)。模块分工中的 `packages/agentarts/src/foundation`、`workflows`、`observability` 是规划目录，本次核对时 `packages/agentarts` 尚不存在；不据此重复建设已存在的 adapter，也不把规划目录记为已交付。
+
+| 真实公开能力 | 当前源码 | 未验收 |
+| --- | --- | --- |
+| **MOD-29：项目、成员与资源。** [成员与空间管理][aa-members]说明服务开通、套餐席位和 IAM 成员许可；[基本概念][aa-concepts]区分 Agent、运行时和绑定版本的访问方式。该成员文档正文没有提供“项目创建 API”的合同，不能从标题推导端点 | `AgentArtsRuntimeConfig` 保存 `gatewayUrl`、`runtimeName` 和调用模式；`CloudAgentPort.invoke` 是调用端口，没有项目/Agent/部署的创建、查询或管理方法 | 当前账号所属区域、成员许可、实际应用 ID、运行实例及访问方式与部署版本的关系；不从本地配置补造这些引用 |
+| **MOD-29：Agent/Workflow 发布与部署。** [发布应用][aa-deploy-agent]明确提交版本保存不可变配置快照，部署创建可调用的运行实例；[发布工作流][aa-deploy-workflow]要求试运行后提交版本，未部署时 API 详情为空 | adapter 调用已存在的运行实例；配置 `runtimeReady` 只验证本地绑定格式，`configured` 只表示已保存配置；没有发布或健康探测实现 | 当前部署状态、实际访问入口、绑定版本及一次成功调用；9 月旧发布记录不能证明当前配置可用 |
+| **MOD-29/30：部署调用合同。** [单/多智能体 API][aa-agent-api]和[工作流 API][aa-workflow-api]均为 `POST /runtimes/{runtime_name}/invocations`；使用完整 `Authorization`，API Key 示例为 `Bearer {api_key}`，包含会话头，支持 `debug`/`published`。Agent 使用 `query`；Workflow 必填 `inputs`，其 key 来自开始节点变量，示例中的 `query` 不是固定保留变量 | adapter 使用同一路径，发送宿主提供的完整鉴权值、`x-hw-agentarts-session-id`、`X-Invoke-Mode`，默认 `published`；`workflowGoalInput` 显式映射一个开始节点变量，否则发送 `{query}` | 实际渠道管理/API 页面生成的域名、运行实例名称、入站认证方式、开始节点定义与当前调用必须一致；不猜域名、添加 `endpoint=Latest` 或自动切换协议 |
+| **MOD-29：入站身份与模型条件。** [认证鉴权][aa-auth]分别说明 API Key、AK/SK 和 OAuth，适用方式随接口而异；上述 Agent/Workflow 调用示例明确 **API 不支持平台赠送的免费模型 token**，需已接入可用模型，例如配置 API Key 的 MaaS 模型 | `AgentArtsAuthorizationProvider.read(signal)` 由受信宿主逐请求读取完整请求头；adapter 不签 AK/SK、不执行 OAuth 获取/刷新，也不创建 MaaS 模型或证明模型额度 | 当前认证方式、密钥状态、模型授权/余额和模型可调用性。运行实例入站 API Key 与模型服务 API Key 用途不同；不能把鉴权读取成功或控制台免费调试当成部署 API 成功 |
+| **MOD-30：平台响应与本地提案。** [InvokeRuntime][aa-invoke]说明流式调用，公开响应包含事件及 `data.text/index/node_id/node_type` 等字段。官方响应合同不定义 PersonalAgent 的 `tool_proposal`、`repair_candidate` 或 continuation 对象 | adapter 严格消费 JSON/SSE；`responseMode`、`initialRequestMode`、`repairCandidateVersion` 是显式应用协议开关。提案由本地解析校验，再交给 Runtime/Policy/ToolGateway；continuation 是另一次调用，代码明确不宣称云原生同 run 恢复 | 当前部署提示词/Workflow 是否实际输出约定对象、错误/终止事件与成功响应、批准后工具读回及后续请求；平台运行成功不能替代本地执行 Evidence |
+| **MOD-30：知识与 MCP。** [添加知识库][aa-knowledge]要求已创建/接入且启用的知识库；[添加 MCP][aa-mcp]说明预置和自定义服务及其费用/外部凭据条件。产品页的 Skill 能力叙述不提供本项目的 Skill 调用 DTO | 当前 `CloudAgentPort` 没有知识/MCP/Skill 管理接口；已发布流程可以在云端使用这些资产，但本地受限工具目录和提案协议不等于云 MCP 接入 | 当前部署引用的资产、来源/检索引用、实际 MCP/Skill 调用及费用；不得从平台能力存在推导本项目已绑定或扩大本地权限 |
+| **MOD-32：调用链与请求关联。** [调用链分析][aa-trace]提供 TraceID、会话、输入输出、Model Span token、元数据和日志；[Trace 详情 API][aa-trace-api]明确 `GET /v1/ops/observation/traces/{trace_id}`。Agent/Workflow API 将可自定义的 `X-Request-Id` 描述为用于日志追踪的调用链 ID | adapter 已发送 `X-Request-Id`；失败诊断包含固定 stage、请求 ID、HTTP 状态、终止事件及服务错误码。`CoordinationResult` 不含平台 trace、部署版本或 usage，adapter 没有查询 Trace API | 需要实际平台读回请求 ID 与 TraceID 的关系、版本元数据和模型跨度；官方说明请求头可追踪不补足历史未回显的精确 ID join，不能把本地 SSE、根 span 的 `draft` 或调用前 `Latest v8` 当作逐请求部署版本 |
+| **MOD-32：观测入口的身份。** [观测 API 示例][aa-observation-api]单独给出服务域名和 Trace 列表查询，说明 `agentarts::listOpsTrace` 与依赖的 APM 权限，建议限定存在实际调用的时间范围 | 当前 adapter 只访问配置的运行实例入口；没有观测管理客户端，也没有自动复用入站凭据调用观测 API | 观测授权、实际有数据的查询区间、当前账号的 API 读回；运行实例 Bearer 入站认证不能推导观测服务权限 |
+| **MOD-32：usage 与成本。** [套餐用量][aa-usage]提供套餐资源总量及今日/本周/本月消耗构成；[计费项][aa-price]区分套餐/CU 和关联服务，说明模型、LTS 日志、APM 调用链、AOM 指标及 DEW 凭据等可能另收费 | adapter 没有计费或套餐查询接口；失败诊断也不返回 token/cost。平台 Model Span token、本地时延与一次 HTTP 回执各自只代表对应观测值 | 当前套餐、模型账单、关联服务费用和时间范围对应的实际用量；token 不等于账单金额，免费套餐不等于全部关联资源免费 |
+| **MOD-32/31：平台评估。** [评估介绍][aa-evaluation]区分固定评测集的离线评估与基于 API Trace 的在线评估，明确控制台调试不触发在线任务；[创建评估任务 API][aa-evaluation-api]为 `POST /v1/ops/evaluation-tasks`，支持 `OFFLINE`/`ONLINE` 与评估器配置 | 当前 adapter 没有平台评测集/评估器/评估任务管理；[既有验收索引](../../../tests/manual/agentarts/README.md)的固定合成评分入口属于本地离线证据 | 实际评测集与评估器版本、任务 ID、原始分数/失败、同输入基线及 token/费用；本地评分不替代平台评估，不启动未授权模型优化或 Local 训练 |
+
+优先取证顺序：MOD-29 先读回当前资源、入站方式、模型条件和实际部署 API；MOD-30 在同一确定版本上验证受限提案 → 本地授权 → 目标系统读回；MOD-32 为该请求分别取得平台 Trace、版本关系、日志设置与成本，并再按固定评测集做效果对照。已有 [2026-09-30 共用调用入口记录](../../../tests/manual/agentarts/SAVED-CONFIG-CALL.md)明确真实调用返回 HTTP 403；本次公开文档取回没有恢复账号或更新该结果。历史成功探针的日期、合成范围和关联粒度继续按原收据引用。
+
+[aa-members]: https://support.huaweicloud.com/resources-members-agentarts/agentarts_15_0004.html
+[aa-concepts]: https://support.huaweicloud.com/productdesc-agentarts/agentarts_03_0010.html
+[aa-deploy-agent]: https://support.huaweicloud.com/lowcode-agentarts/agentarts_05_0031.html
+[aa-deploy-workflow]: https://support.huaweicloud.com/lowcode-agentarts/agentarts_05_0053.html
+[aa-agent-api]: https://support.huaweicloud.com/api-agentarts/agentarts_07_0046.html
+[aa-workflow-api]: https://support.huaweicloud.com/api-agentarts/agentarts_07_0047.html
+[aa-auth]: https://support.huaweicloud.com/api-agentarts/agentarts_07_0005.html
+[aa-invoke]: https://support.huaweicloud.com/api-agentarts/InvokeRuntime.html
+[aa-knowledge]: https://support.huaweicloud.com/lowcode-agentarts/agentarts_05_0025.html
+[aa-mcp]: https://support.huaweicloud.com/lowcode-agentarts/agentarts_05_0021.html
+[aa-trace]: https://support.huaweicloud.com/ops-agentarts/agentarts_14_0012.html
+[aa-trace-api]: https://support.huaweicloud.com/api-agentarts/ShowOpsTrace.html
+[aa-observation-api]: https://support.huaweicloud.com/api-agentarts/agentarts_07_0037.html
+[aa-usage]: https://support.huaweicloud.com/resources-members-agentarts/agentarts_15_0005.html
+[aa-price]: https://support.huaweicloud.com/price-agentarts/agentarts_08_0003.html
+[aa-evaluation]: https://support.huaweicloud.com/ops-agentarts/agentarts_14_0023.html
+[aa-evaluation-api]: https://support.huaweicloud.com/api-agentarts/CreateOpsEvaluationTask.html
