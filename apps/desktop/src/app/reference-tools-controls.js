@@ -1,6 +1,6 @@
 export function mountReferenceToolsControls(root,invoke) {
   const host=document.createElement('section');host.className='sheet reference-tools-settings';
-  host.innerHTML='<h2>工作区参考工具</h2><p class="muted">使用已许可的工作区读取参考文件。依照本会话读取许可执行；撤销许可会停止旧任务。</p><p data-reference-state></p><div class="setting-row"><button class="btn" data-reference="mcp">连接只读服务</button><button class="btn" data-reference="skill">启用参考摘要</button></div><label>参考文件的相对路径<input class="field" data-reference-path placeholder="docs/reference.md" autocomplete="off"></label><button class="btn" data-reference="run">生成参考摘要</button><p class="notice" role="status" data-reference-result></p>';
+  host.innerHTML='<h2>工作区参考工具</h2><p class="muted">使用已许可的工作区读取参考文件。依照本会话读取许可执行；撤销许可会停止旧任务。</p><p data-reference-state></p><div class="setting-row"><button class="btn" data-reference="mcp">连接只读服务</button><button class="btn" data-reference="skill">启用参考摘要</button></div><div class="settings-form"><label>参考文件的相对路径<input class="field" data-reference-path placeholder="docs/reference.md" autocomplete="off"></label></div><button class="btn" data-reference="run">生成参考摘要</button><p class="notice" role="status" data-reference-result></p>';
   root.append(host);let state;const pending=new Set();
   const result=host.querySelector('[data-reference-result]');
   const syncButtons=()=>{
