@@ -184,3 +184,17 @@ actual Host/Public Runtime 的 4096/5000 字符对照发现合法 5000 baseline 
 完成于 2026-10-07 20:31:50 UTC，日志 `core-desktop126-check.log`。
 这不覆盖 Windows CI：前 f584 的 push 在默认子任务候选恢复 1.0→1.0 分支失败，
 相同 head 的 PR CI success；原断言的本地定向 5/5 通过仍未解释 Windows 失败根因。
+
+## 影响原因的实际节点与状态（2026-10-07 续接）
+
+Goal/Plan 影响原因按公开 ImpactCause 的 `superseded`、`withdrawn`、`not_effective`
+显示依赖版本更新、撤回或当前不在有效期内；其他原因保留状态变化说明。
+此前统一写成“事实变更”会把 Goal 版本变化及只随时间过期的 Plan 原因误标为 Fact。
+仅修改 snapshot.trigger 的显示文字，未改变选择、版本校验、云许可或交接。
+
+固定 Host blob `d4401236dcecaec84a4bf1d2111f4a74cd875628` 的实际公开
+Goal/Fact/GoalCognitionHost、SQLite Runtime 与显式 Fake Laya 读回覆盖 Goal1→2
+及 Plan 过期：无新 Fact，graphRevision 仍为3、dispatch0。原 panel/CSP 文案读回
+实际 exit0，操作保持禁用、bridge0、console/pageerror 为零。语法及 diff 校验通过，
+此低风险文案没有新增或重复正式测试。私有证据为认知工作树下
+`goal-plan-cause-*`；首轮错误选择器超时也保留，不将该项提升为真实云或设备验收。

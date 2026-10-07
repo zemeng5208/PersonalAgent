@@ -40,3 +40,25 @@ Runtime 可以保持 cancelling，或者在外部结果不确定时保持 waitin
   仅生成本树 dist，无依赖安装、锁文件修改或共享数据库。验证环境 Node 26.3.0，
   仓库目标 Node 24.15.x 的验证以 CI 为准。
 - 未进行真实 AgentArts 或外部工具调用；不能据此声称云端取消成功。
+
+## 取消后的迟到状态读回（2026-10-07 续接）
+
+现有 PR #302 的 Desktop 消费增量保留同一 Task 的较新 revision。原 `task.get`
+已捕获 running/revision3、回执被显式延后时，原停止按钮通过公开 Runtime 接受取消，
+新读回及实际取消事件推进至 cancelled/revision5。此前释放旧 get 会把界面画回运行中，
+即使 SQLite 仍为 cancelled；现在 `refresh` 返回已有较新 Task，不重复发布旧投影。
+初次、新版及相同 revision 的读回继续沿原 set、退出提示清理和发布路径处理。
+没有修改 TaskRuntime、取消受理、审批、公共协议或 `applyEvent`。
+
+新回归与原取消测试共 7/7、Desktop typecheck、原完整 panel/CSP AFTER 均实际 exit0。
+原面板保持已取消、停止按钮消失、发送可用，等待期间新草稿保留；真实本地公开
+get/cancel/get 共三次调用、取消一次，console/pageerror 为零。
+源码固定 main blob `66127a66d2d1b0d7dc1eca3589133a3398588c76`，
+新测试 blob `b53ab4426ad0a86c432d519136d79d9c7719e9cd`。
+证据在 `.worktrees/mod15-host-20261007/.cache/review-evidence/20261007/`
+的 `panel-task-refresh-order-*`；环境恢复前未保留退出码的产物与各错误调用日志继续保留，
+续接仅使用有实际退出码的新证据。
+
+该验证使用实际 RuntimeApplication/Client/SQLite、合成可取消只读 worker 与原 panel；
+回执延后、IPC 和窗口宿主为显式 Fake。此处没有验证 EventCursor/pump 传输、
+真实 Electron/Windows 或云端取消，也不把定向检查称为根完整检查。
