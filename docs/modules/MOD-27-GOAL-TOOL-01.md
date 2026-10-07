@@ -362,3 +362,11 @@ goal-cognition-host.js最终blob fdeb8754369f09550854ca21f92aa46f166b0824；反�
 0b26860ffc6ad79b91e15a4eeb6616541e29cfe28ad34a0b8d6ca6fb05dc70a9；21项artifact，
 新AFTER报告复制的boundary/case元数据纠正记录与旧原件保留，实际observation/log未改。
 低风险文案不增镜像正式测试，syntax/diff通过，projection/CAS/permit/handlers保持。
+
+本批固定d654295c8c1cb73abdcf6f9b95030d371728f4e9/tree183beac055e440c3的完整
+npm run check于2026-10-07 23:16:02 UTC实际exit0：34组2476项2426通过、50跳过，
+失败/取消0；Desktop608/597通过11跳过、Runtime433/433、root integration22/22，全部
+build/type/generated/contracts/architecture门禁执行。Node24.15、实际4CPU、原断言期限
+不变；日志core-initial-planning137-full-check.log SHA256
+7444f126386ada32dfa0218774f6aa35325b1054bfc2c7c385a9164988ea3250。独立完整日志/
+34组和源码集成读回一致；不解释23ad旧超时，也不覆盖本批之后的控件/卡片恢复新源码。

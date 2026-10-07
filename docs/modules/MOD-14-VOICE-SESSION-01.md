@@ -329,6 +329,14 @@ Fake-device/ASR/IPC/Host许可仍明确Fake，不是OS对话框/物理设备/SIS
 manual-dictation-native-permission-consumer-*；首CDP描述符错误和旧错误文案断言exit1
 保留，最终完整资源/重试消费者才计通过。没有公共PCM或产品源码修改。
 
+原close发生在manual acquiring的新组合实际exit0：native Fake-device stream已取得但
+observer明确hold返回，原hide listener启动聚合停止；放行后实际context closed/track ended、
+Host verified/subscriber0/许可撤销一次，PCM取得有效handle使aggregate fulfilled。
+hold前track仍live/authorized busy，不能提前称已释放。ASR/dictation/Runtime调用0、草稿
+保留；不同于上文start拒绝无handle的closed保守合同。证据manual-dictation-acquiring-hide-
+consumer-*，child自身voice出口稳定、不借rootbuild；首无根据no-context断言exit1保留，
+最终允许原native分配竞态、确认全部实际资源释放后才通过，仍非真实窗口/设备验收。
+
 同一聚合修复的独立正常取消场景使用 child `ab7c5ef0979acc5f30870bfcc87c58c33ca1f180`：
 24 kHz native output.resume 已执行，但返回被显式 hold；原面板关闭后 context closed、
 Live inactive、聚合正常完成，尚未授权 Mic 或连接 Gateway。放行迟到 resume 不产生 ready 或新音源。
