@@ -175,7 +175,7 @@ export class MailTriagePipeline {
     if (!options || (!options.inference && !options.classifier)) throw new CognitionError('INVALID_ARGUMENT');
     this.triageService = options.classifier ?? new LayaTriageService(options.inference!, options);
     this.checkpointPort = options.checkpoint;
-    this.labels = options.labels ?? DEFAULT_MAIL_LABELS;
+    this.labels = {...(options.labels ?? DEFAULT_MAIL_LABELS)};
     this.chunkSize = Math.max(1, Math.min(options.chunkSize ?? 4, 16));
     this.minimum = options.minimumAnswerProbability ?? 0.7;
     this.margin = options.minimumMargin ?? 0.15;
@@ -324,7 +324,7 @@ export class MailTriagePipeline {
       const chunk = pendingMessages.slice(i, i + this.chunkSize);
       const triageRequest: LayaTriageRequest = {
         messages: chunk,
-        labels: this.labels,
+        labels: {...this.labels},
         deadline: request.deadline,
         signal: request.signal,
       };

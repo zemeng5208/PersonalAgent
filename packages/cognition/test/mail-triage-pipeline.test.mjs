@@ -4,6 +4,7 @@ import {
   MailTriagePipeline,
   DEFAULT_MAIL_LABELS,
   CognitionError,
+  LayaTriageService,
 } from '../dist/index.js';
 
 test('partial page cancellation retains the prior cursor and resumes completed chunks from checkpoint', async () => {
@@ -128,6 +129,37 @@ function createMockInference(options = {}) {
   };
   return inference;
 }
+
+test('constructor and classifier label views cannot change the cache configuration identity', async () => {
+  const original = {work: 'Work', personal: 'Personal'}, labels = {...original};
+  const inference = createMockInference(), service = new LayaTriageService(inference);
+  let saved = {}, retainedLabels;
+  const classifier = {classify: async request => {
+    retainedLabels = request.labels;
+    return service.classify(request);
+  }};
+  const checkpoint = {load: () => saved, save: value => {saved = value;}};
+  const pipeline = new MailTriagePipeline({classifier, labels, checkpoint});
+  delete labels.work;
+  labels.meeting = 'Meeting';
+  const request = {messages: [{source: 'mail', messageId: 'fixed-labels', sourceRevision: '1', text: 'Work update'}],
+    deadline: new Date(Date.now() + 60_000).toISOString(), signal: new AbortController().signal};
+  const first = await pipeline.processBatch(request);
+  assert.equal(first.results[0].label, 'work');
+  assert.deepEqual(first.results[0].receipt.candidateLabels, Object.keys(original));
+  delete retainedLabels.work;
+  retainedLabels.meeting = 'Meeting';
+  let liveCalls = 0;
+  classifier.classify = async next => {liveCalls++; return service.classify(next);};
+  const second = await pipeline.processBatch({...request, messages: [{...request.messages[0], messageId: 'next'}]});
+  assert.equal(second.results[0].label, 'work');
+  assert.deepEqual(second.results[0].receipt.candidateLabels, Object.keys(original));
+  assert.equal(liveCalls, 1);
+  const replay = await new MailTriagePipeline({inference, labels: original, checkpoint}).processBatch(request);
+  assert.equal(replay.cachedCount, 1);
+  assert.deepEqual(replay.results, first.results);
+  assert.equal(inference.calls.length, 2);
+});
 
 test('batch deduplication preserves colon-containing identity tuples and still reuses exact duplicates', async () => {
   const inference=createMockInference(),pipeline=new MailTriagePipeline({inference});
