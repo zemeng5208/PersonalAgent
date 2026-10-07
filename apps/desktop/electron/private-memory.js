@@ -96,8 +96,7 @@ export function createPrivateMemoryController(databasePath, confirm, confirmDele
     async listSaved({at, snapshot, cursor} = {}) {
       const queryAt = at ?? new Date().toISOString();
       if (!memory && !existsSync(databasePath)) return {facts: [], at: queryAt};
-      const page = await memoryHost().bind(namespace, {allowedSensitivities: ['private']})
-        .listCurrent({at: queryAt, limit: 20,
+      const page = await memoryHost().listUserFactHeads(namespace, {at: queryAt, limit: 20,
           ...(snapshot === undefined ? {} : {snapshot}),
           ...(cursor === undefined ? {} : {cursor}), ...context()});
       return {...page, at: queryAt};

@@ -266,6 +266,7 @@ export function mountAdmin(root, invoke, escape) {
       <button class="btn btn-sm" data-memory-save="${index}" ${data.privateMemory.writeEnabled ? '' : 'disabled'}>检查并确认</button></article>`).join('');
     const saved = savedMemory.facts.map((fact, index) => `<article class="sheet">
       <p>${escape(fact.summary)}</p><small>${escape(fact.sourceRef)}</small>
+      <p class="muted">版本 ${escape(fact.ref.revision)}${fact.state === 'withdrawn' ? ' · 已撤回，后续任务不可消费' : ''}</p>
       <button class="btn btn-sm" data-memory-delete="${index}">删除所有版本</button></article>`).join('');
     return `<section class="feature-page"><div class="settings-heading"><h2>私人记忆</h2>
       <p>只读检索本机 Vault；每条摘录或更正都需在原生对话框中确认。不会自动发送至云端。</p></div>
@@ -284,6 +285,8 @@ export function mountAdmin(root, invoke, escape) {
 
   function render(data) {
     current = data;
+    const consumableMemoryRefs = savedMemory.facts.filter(fact => fact.state === 'active'
+      && Date.parse(fact.validFrom) <= Date.now() && Date.now() < Date.parse(fact.validUntil)).map(fact => fact.ref);
     clearApprovalExpiryTimer();
     if (data.adminNavigation && data.adminNavigation.revision !== navigationRevision) {
       navigationRevision = data.adminNavigation.revision;
@@ -317,10 +320,15 @@ export function mountAdmin(root, invoke, escape) {
     if(section==='memory' && data.memoryLearning && !memoryLearningControls) {
       memoryLearningRoot=document.createElement('div');memoryLearningRoot.className='memory-learning-settings';
       root.querySelector('.main').append(memoryLearningRoot);
-      memoryLearningControls=mountMemoryLearningControls(memoryLearningRoot,{invoke,status:data.memoryLearning,refs:savedMemory.facts.map(f=>f.ref)});
+      memoryLearningControls=mountMemoryLearningControls(memoryLearningRoot,{invoke,status:data.memoryLearning,refs:consumableMemoryRefs,
+        onMemoryChanged:async()=>{
+          const page=await invoke('memory.listSaved');
+          savedMemory={...page,status:'已刷新当前版本，包含已撤回的记忆。'};
+          render(current);
+        }});
     }
     if(memoryLearningRoot) memoryLearningRoot.hidden=section!=='memory';
-    memoryLearningControls?.update({status:data.memoryLearning,refs:savedMemory.facts.map(f=>f.ref)});
+    memoryLearningControls?.update({status:data.memoryLearning,refs:consumableMemoryRefs});
     if (section==='worktrees' || section==='environment') codingControls ??= mountWorkspaceControls(root.querySelector('.main'),invoke);
     codingControls?.render(data);codingControls?.show(section==='worktrees' || section==='environment');
     if(section==='capabilities' && data.reference) referenceControls??=mountReferenceToolsControls(root.querySelector('.main'),invoke);
@@ -441,9 +449,10 @@ export function mountAdmin(root, invoke, escape) {
       button.disabled = true;
       try {
         const result = await invoke('memory.delete', {ref: savedMemory.facts[Number(button.dataset.memoryDelete)].ref});
-        if (result.state === 'deleted') {
+        if (result.state === 'deleted' || result.state === 'pending') {
           const page = await invoke('memory.listSaved');
-          savedMemory = {...page, status: '已删除该记忆的全部版本并完成读回。'};
+          savedMemory = {...page, status: result.state === 'deleted' ? '已删除该记忆的全部版本并完成读回。'
+            : '来源已停止引用，关联任务副本仍待核实清除；删除尚未完成。'};
         } else savedMemory.status = '已取消，未删除记忆。';
         render(current);
       } catch (error) { root.querySelector('#error').textContent = error.message; button.disabled = false; }
