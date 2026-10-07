@@ -148,6 +148,30 @@ test('batch deduplication preserves colon-containing identity tuples and still r
   assert.equal(inference.calls.length,1);
 });
 
+test('returned and checkpoint-held receipts cannot rewrite cached high-impact routing', async () => {
+  const inference=createMockInference({forceHighImpact:true});let saved={};
+  const checkpoint={load:()=>saved,save:value=>{saved=value;}};
+  const pipeline=new MailTriagePipeline({inference,checkpoint});
+  const request={messages:[{source:'mail',messageId:'meeting',sourceRevision:'r1',text:'URGENT meeting moved'}],
+    deadline:new Date(Date.now()+60_000).toISOString(),signal:new AbortController().signal};
+  const first=await pipeline.processBatch(request),expected=structuredClone(first.results[0]);
+  assert.equal(first.highImpactCount,1);
+  first.results[0].route='group';first.results[0].reason='classified';
+  first.results[0].receipt.candidateLabels[0]='forged-label';
+  first.results[0].scores.probabilities.work=0;
+  const replay=await pipeline.processBatch(request);
+  assert.equal(replay.highImpactCount,1);assert.equal(replay.cachedCount,1);assert.equal(replay.newlyClassifiedCount,0);
+  assert.deepEqual(replay.results,[expected]);assert.equal(replay.highImpactNotices.length,1);
+  assert.deepEqual(Object.values(saved),[expected]);
+  const restarted=new MailTriagePipeline({inference,checkpoint});
+  assert.deepEqual((await restarted.processBatch(request)).results,[expected]);
+  Object.values(saved)[0].route='group';Object.values(saved)[0].reason='classified';
+  replay.results[0].route='review';
+  const stillCached=await restarted.processBatch(request);
+  assert.equal(stillCached.highImpactCount,1);assert.equal(stillCached.cachedCount,1);
+  assert.deepEqual(stillCached.results,[expected]);assert.equal(inference.calls.length,1);
+});
+
 test('MailTriagePipeline processes messages in bounded chunks and deduplicates in-batch duplicates', async () => {
   const inference = createMockInference();
   const pipeline = new MailTriagePipeline({

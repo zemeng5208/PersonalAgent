@@ -221,7 +221,7 @@ export class MailTriagePipeline {
       if (persisted && typeof persisted === 'object') {
         for (const [key, val] of Object.entries(persisted)) {
           if (!val || typeof val !== 'object') throw new CognitionError('INVALID_ARGUMENT');
-          if (!transientReasons.has(val.reason)) this.cache.set(key, val);
+          if (!transientReasons.has(val.reason)) this.cache.set(key, structuredClone(val));
         }
       }
       this.checkpointLoaded = true;
@@ -255,7 +255,7 @@ export class MailTriagePipeline {
           || cached.sourceRevision !== msg.sourceRevision || cached.receipt?.contextDigest !== hash(msg.text)) {
           throw new CognitionError('INVALID_ARGUMENT');
         }
-        allResults.push(cached);
+        allResults.push(structuredClone(cached));
         cachedCount++;
       } else {
         pendingMessages.push(msg);
@@ -330,7 +330,7 @@ export class MailTriagePipeline {
       };
 
       const inferenceStart = this.now();
-      const chunkResults = await this.triageService.classify(triageRequest);
+      const chunkResults = structuredClone(await this.triageService.classify(triageRequest));
       if (!Array.isArray(chunkResults) || chunkResults.length !== chunk.length) {
         throw new CognitionError('INVALID_ARGUMENT');
       }
@@ -355,14 +355,14 @@ export class MailTriagePipeline {
           }
         }
         // If save fails, this.cache is preserved without partial unpersisted entries
-        await this.checkpointPort.save(snapshot);
+        await this.checkpointPort.save(structuredClone(snapshot));
       }
 
       // Safe to update cache now
       for (const res of chunkResults) {
         if (!transientReasons.has(res.reason)) {
           const key = this.makeKey(res.source, res.messageId, res.sourceRevision);
-          this.cache.set(key, res);
+          this.cache.set(key, structuredClone(res));
         }
         newlyClassified.push(res);
         allResults.push(res);
