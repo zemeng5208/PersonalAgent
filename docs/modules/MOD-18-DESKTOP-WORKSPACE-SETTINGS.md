@@ -46,3 +46,10 @@ root的主动expiry producer差异不参与此流程。私有工件位于 Deskto
 描述误写twice的保留文件/另份明确once纠正记录；没有将这些错误尝试记为最终通过。
 HTTP/凭据端口、IPC/windows/safeStorage为明确Fake；没有真实云调用、原生function
 calling、Electron/Windows加密或进程宿主、真实用户项目验收，不据此完成整个MOD-18。
+
+执行前撤销的独立对照同样实际 exit0：原输入框已发 initial Fake HTTP并公布合法
+node_check catalog，显式延后其合法提案回执；原控件撤销后放行，实际工具可用性复核
+拒绝首次执行，任务为 failed/UNSUPPORTED_CAPABILITY。原 panel显示失败与权威错误、
+发送可用且新草稿保留，console0；Node/执行记录/grant/续发均为0，initial HTTP1，
+再消费三轮事件没有重试。证据 `workspace-node-proposal-before-revoke-consumer-*`；
+权威错误仍为英文，此项不声称完成中文本地化，也不把前置拒绝写成已有操作待核实。

@@ -221,3 +221,12 @@ graph始终3；Laya/HTTP为明确Fake、时间注入，未运行 Goal.create 的
 认知私目录 `expiry-fairness-frozen.json` 保存私编译出口、baseline依赖、命令与实际退出
 回执，`public-goal-pending-expiry-*` 保存公开消费者前后；初次错误createGoal签名日志保留。
 根集成检查与真实模型/云/设备验收另记，不把旧599项结果借给新 producer。
+
+上述新 producer 与公开 progress 消费集成后，根 `npm run check` 固定
+`874e38ef7267fc22b71315e0d6810134a43767c4` / tree
+`10ee9a784ec399f395bdc6bfee4cb6ea2a07a830` 实际 exit0，
+完成于2026-10-07 21:24:31 UTC：34组2455项、2405通过、0失败/取消、50跳过，
+其中工作区2376通过、根integration22、architecture3、contract fixtures4。
+Desktop603项592通过/11跳过，Runtime419/419；Node24.15.0、两核，
+日志 `core-cognition-desktop130-full-check.log`。此后只追加自有研究/模块记录，
+没有改源码或测试，也不将跳过、Fake或Linux结果当作真实云/Windows验收。
