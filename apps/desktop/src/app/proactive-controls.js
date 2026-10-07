@@ -15,6 +15,7 @@ export function cognitionReviewFeedback(item = {}) {
   const verified = item.status === 'applied' && item.executionVerified === true && item.graphUpdateVerified === true;
   const state = item.status ?? item.state;
   const pendingReceipt = !item.taskId && state === 'pending';
+  const reconciliationReceipt = !item.taskId && state === 'waiting_reconciliation';
   const labels = {created:'处理任务已建立，等待规划',verifying:'正在核实处理结果',
     submitted:'处理任务已受理，目标更新尚未核实',pending:'等待主智能体处理',
     planning:'正在规划',running:'主智能体正在处理',waiting_approval:'处理任务等待授权',
@@ -25,10 +26,11 @@ export function cognitionReviewFeedback(item = {}) {
     submission_unknown:'提交结果待核实，请勿重复提交'};
   return {message: verified ? '执行与目标更新已核实'
     : pendingReceipt ? '编排受理结果待核实，请勿重复提交；目标更新尚未核实'
+    : reconciliationReceipt ? '处理结果待核实，请勿重复提交；目标更新尚未核实'
     : item.taskId ? labels[state] ?? '处理状态待核实，目标更新尚未核实'
     : ['unavailable','expired','submission_unknown'].includes(state) ? labels[state] : '方案已记录，尚未交给主智能体处理',
-    label: verified ? '更新已核实' : pendingReceipt ? '受理结果待核实' : item.taskId ? '已交给主智能体' : '交给主智能体处理',
-    locked: verified || pendingReceipt || Boolean(item.taskId) || state === 'submission_unknown'};
+    label: verified ? '更新已核实' : pendingReceipt || reconciliationReceipt ? '受理结果待核实' : item.taskId ? '已交给主智能体' : '交给主智能体处理',
+    locked: verified || pendingReceipt || reconciliationReceipt || Boolean(item.taskId) || state === 'submission_unknown'};
 }
 
 export function mountProactiveControls(container, invoke, {settings = false} = {}) {

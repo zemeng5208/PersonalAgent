@@ -37,6 +37,18 @@ test('pending Goal handoff without an accepted task ID stays unresolved and lock
   assert.equal(cognitionReviewFeedback({executionStatus:'编排受理结果待核实，尚未确认执行'}).locked,false);
 });
 
+test('Goal reconciliation without task identity stays locked based on structured state', () => {
+  for(const field of ['state','status']) {
+    for(const executionStatus of [undefined,'arbitrary prose']) {
+      const feedback=cognitionReviewFeedback({[field]:'waiting_reconciliation',executionStatus});
+      assert.equal(feedback.locked,true);assert.equal(feedback.label,'受理结果待核实');
+      assert.match(feedback.message,/处理结果待核实.*请勿重复提交/);
+      assert.doesNotMatch(feedback.message,/尚未交给|执行与目标更新已核实/);
+    }
+  }
+  assert.equal(cognitionReviewFeedback({executionStatus:'修复回执绑定待核实，不会重复提交'}).locked,false);
+});
+
 // Explicit Fake DOM with normal parent/descendant identity; innerHTML replaces actual test nodes.
 class Element {
   constructor(tag) {this.tag=tag;this.children=[];this.dataset={};this.attributes={};this.listeners={};this.disabled=false;this._text='';}
@@ -145,6 +157,37 @@ test('published permission denial avoids an actual Host preflight rejection and 
     await ui.click();assert.equal(calls,1);assert.equal(handoffs(),1);
     assert.equal(ui.button().disabled,false);assert.match(ui.status(),/当前无法交给/);
   }
+});
+
+test('actual Host recovered repair binding failure keeps its unidentified reconciliation card locked', async t => {
+  const {createDesktopGoalCognitionHost}=await import('../electron/goal-cognition-host.js');
+  const namespace='synthetic-recovered-reconciliation',option={id:'recheck',revision:1,action:'RECHECK',description:'Synthetic review'};
+  const review={taskId:reviewId,graphNamespace:namespace,graphRevision:1,bindingVersion:'desktop-goal-analysis-v1',
+    evaluatedAt:'2026-10-07T00:00:00.000Z',action:'RECHECK',affected:[],subjectGoal:{id:'synthetic-goal',revision:1},
+    options:[option],selectedOption:option,selection:{state:'selected',selected:{id:option.id,revision:1},eligibleForRuntime:true}};
+  const handoffTask={taskId:'synthetic-accepted',state:'succeeded',conversationId:`desktop-proactive-goals:${namespace}`};
+  const recovered={task:{taskId:reviewId,state:'succeeded',revision:3},review,handoff:{state:'submitted',task:handoffTask}};
+  let calls=0,handoffs=0;
+  const host=createDesktopGoalCognitionHost({namespace,
+    application:{runtime:{bindCoordinationStore:()=>({read:()=>({namespace,revision:1,history:[]})}),
+      saveCheckpoint(){},getTask:()=>handoffTask,
+      loadCheckpoint:(id,key)=>id==='synthetic-source'&&key==='desktop-goal-cognition-review'?reviewId
+        :id===reviewId&&key==='desktop-goal-cognition-repair-task-v1'?{version:0,taskId:'synthetic-corrupt-repair'}:undefined}},
+    goalHost:{listTasks:()=>[{taskId:'synthetic-source'}]},client:{call(){throw Error('Unexpected cloud dispatch');}},
+    facts:{},chooser:{},ready:()=>true,
+    createHost:()=>({readReview:()=>recovered,handoffReview(){handoffs++;throw Error('Unexpected repeated handoff');},close(){}})});
+  t.after(()=>host.close());
+  const snapshot=host.snapshot(),item=snapshot.reviews[0];
+  assert.equal(item.state,'waiting_reconciliation');assert.equal(item.taskId,undefined);
+  const ui=controls(t,()=>{calls++;return host.applyDecision(reviewId);});ui.render(snapshot.reviews,snapshot);
+  assert.equal(ui.button().disabled,true);assert.match(ui.status(),/处理结果待核实.*请勿重复提交/);
+  await ui.click();assert.equal(calls,0);assert.equal(handoffs,0);
+  host.configure({enabled:true,cloudAllowed:true});
+  ui.render(host.snapshot().reviews,host.snapshot());
+  assert.equal(ui.button().disabled,true);assert.doesNotMatch(ui.status(),/尚未交给|执行与目标更新已核实/);
+  ui.render([]);ui.render([localReview()]);
+  assert.equal(ui.button().disabled,true);await ui.click();assert.equal(calls,0);
+  ui.render([verified()]);assert.equal(ui.button().disabled,true);assert.match(ui.status(),/执行与目标更新已核实/);
 });
 
 test('proactive action keeps an identified accepted receipt when later snapshots have no task', async t => {
