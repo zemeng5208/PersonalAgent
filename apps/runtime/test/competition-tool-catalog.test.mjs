@@ -6,6 +6,7 @@ import {test} from 'node:test';
 import {Client} from '@personal-agent/client';
 import {ProtocolError} from '@personal-agent/contracts';
 import {parseCoordinationAvailableTools, MAX_AVAILABLE_TOOLS} from '@personal-agent/coordination';
+import {CLOUD_SKILL_TOOL_NAME, CLOUD_SKILL_TOOL_VERSION} from '@personal-agent/skills';
 import {createRuntimeApplication, createAgentArtsRuntimeApplication} from '../dist/application.js';
 
 const descriptor = {
@@ -226,6 +227,125 @@ test('catalog availability still obeys actual caller cancellation and task deadl
       assert.equal(app.runtime.loadCheckpoint(taskId, 'competition-tool-catalog'), undefined);
       assert.deepEqual(app.runtime.readToolExecutions(taskId), []);
     } finally { app.close(); }
+  });
+});
+
+const workerDescriptor = {name: CLOUD_SKILL_TOOL_NAME, version: CLOUD_SKILL_TOOL_VERSION,
+  inputSchema: {type: 'object', properties: {sourceRef: {type: 'string', enum: ['public-fixture']}},
+    required: ['sourceRef'], additionalProperties: false}};
+async function workerFixture(t, describe, respond = query => query.continuation
+  ? {kind: 'text', text: 'Healthy fixture completed'}
+  : {kind: 'tool_proposal', proposalId: 'healthy-1', toolName: descriptor.name,
+    toolVersion: descriptor.version, arguments: {path: 'secret-path'}}) {
+  const requests = [];
+  const diagnostics = [];
+  let executions = 0, dispatches = 0;
+  const app = createAgentArtsRuntimeApplication({path: ':memory:',
+    gatewayUrl: 'https://agentarts.example.test', runtimeName: 'worker-catalog',
+    responseMode: 'tool-proposal-json', initialRequestMode: 'goal-with-tools-json',
+    authorizationProvider: {read: async () => 'Bearer synthetic'},
+    onDiagnostic: receipt => {diagnostics.push(receipt);},
+    tools: [{descriptor, execute: async () => {executions++; return {value: 'synthetic'};}},
+      {descriptor: {...descriptor, name: 'mcp.workspace.read_text'}, execute: async () => {executions++; return {value: 'unexpected'};}}],
+    competitionToolExports: [toolExport],
+    competitionToolAvailability: [{toolName: descriptor.name, toolVersion: descriptor.version, available: () => true}],
+    cloudSkill: {cloudSkillCatalog: describe,
+      dispatchCloudSkillProposal: async () => {dispatches++; throw Error('unexpected worker dispatch');},
+      assertReceiptAllowed: () => {}},
+    fetchImpl: async (_url, init) => {
+      const query = JSON.parse(JSON.parse(init.body).query); requests.push(query);
+      return new Response(JSON.stringify({event: 'message', data: {text: JSON.stringify(respond(query)), index: 0}}),
+        {headers: {'content-type': 'application/json'}});
+    },
+  });
+  t.after(() => app.close());
+  const client = new Client(app); await client.connect();
+  return {app, client, requests, diagnostics, executions: () => executions, dispatches: () => dispatches};
+}
+
+test('native worker provider errors omit only that directory entry while healthy tools still execute', async t => {
+  for (const code of ['CANCELLED', 'TIMEOUT']) await t.test(code, async t => {
+    const f = await workerFixture(t, async input => {
+      input.signal = AbortSignal.abort(); input.deadline = new Date(0).toISOString();
+      throw new ProtocolError(code, 'private-worker-provider-canary');
+    });
+    const {taskId} = await f.client.call('task.submit', {goal: 'Discover healthy tool', conversationId: 'worker-error'},
+      {idempotencyKey: code});
+    const initial = await waitFor(f.app, taskId, ['waiting_approval', 'failed', 'cancelled']);
+    assert.equal(initial.state, 'waiting_approval');
+    assert.deepEqual(f.requests[0].availableTools.map(tool => tool.name), [descriptor.name]);
+    const approval = (await f.client.call('approval.list', {taskId})).items[0];
+    await f.client.call('authorization.respond', {approvalId: approval.approvalId, expectedRevision: approval.revision, decision: 'allow_once'});
+    const task = await waitFor(f.app, taskId, ['succeeded', 'failed', 'cancelled']);
+    assert.equal(task.state, 'succeeded'); assert.equal(f.executions(), 1); assert.equal(f.dispatches(), 0);
+    assert.equal(f.requests.length, 2); assert.deepEqual(f.requests[1].continuation.result, {value: 'synthetic'});
+    assert.doesNotMatch(JSON.stringify([initial, task]), /private-worker-provider-canary/);
+  });
+});
+
+test('worker directory revalidation failures are fixed denials before send or dispatch', async t => {
+  for (const phase of ['send', 'proposal']) await t.test(phase, async t => {
+    let reads = 0;
+    const f = await workerFixture(t, async () => {
+      if (++reads === (phase === 'send' ? 2 : 3)) throw new ProtocolError('TIMEOUT', 'private-worker-recheck-canary');
+      return workerDescriptor;
+    }, () => ({kind: 'tool_proposal', proposalId: 'worker-1', toolName: CLOUD_SKILL_TOOL_NAME,
+      toolVersion: CLOUD_SKILL_TOOL_VERSION, arguments: {sourceRef: 'public-fixture'}}));
+    const {taskId} = await f.client.call('task.submit', {goal: 'Verify published worker selection', conversationId: 'worker-check'},
+      {idempotencyKey: phase});
+    const task = await waitFor(f.app, taskId, ['failed', 'waiting_approval']);
+    assert.equal(task.state, 'failed');
+    assert.equal(task.error.code, phase === 'send' ? 'EXTERNAL_FAILURE' : 'UNAUTHORIZED');
+    if (phase === 'send') {
+      assert.equal(f.diagnostics[0].stage, 'catalog_guard'); assert.equal(f.diagnostics[0].code, 'UNAUTHORIZED');
+    }
+    assert.doesNotMatch(JSON.stringify(task), /private-worker-recheck-canary/);
+    assert.equal(f.requests.length, phase === 'send' ? 0 : 1);
+    assert.equal(f.executions(), 0); assert.equal(f.dispatches(), 0);
+    assert.deepEqual((await f.client.call('approval.list', {taskId})).items, []);
+    assert.deepEqual(f.app.runtime.readToolExecutions(taskId), []);
+  });
+});
+
+test('worker providers receive a private lease view at discovery and final catalog revalidation', async t => {
+  let reads = 0;
+  const f = await workerFixture(t, async input => {
+    reads++;
+    assert.deepEqual(Object.keys(input).sort(), ['deadline', 'revision', 'signal', 'taskId']);
+    input.taskId = 'replacement-worker-private-canary'; input.revision = 0;
+    input.signal = AbortSignal.abort(); input.deadline = new Date(0).toISOString();
+    return workerDescriptor;
+  }, () => ({kind: 'text', text: 'Public worker directory observed'}));
+  const {taskId} = await f.client.call('task.submit', {goal: 'Discover public worker', conversationId: 'worker-view'},
+    {idempotencyKey: 'private-view'});
+  const task = await waitFor(f.app, taskId, ['succeeded', 'failed']);
+  assert.equal(task.state, 'succeeded'); assert.equal(reads, 2); assert.equal(f.requests.length, 1);
+  assert.deepEqual(f.requests[0].availableTools.map(tool => tool.name), [descriptor.name, CLOUD_SKILL_TOOL_NAME]);
+  assert.doesNotMatch(JSON.stringify(task), /replacement-worker-private-canary/);
+  assert.equal(f.executions(), 0); assert.equal(f.dispatches(), 0);
+});
+
+test('worker discovery retains actual task cancellation and deadline after lease-view mutation', async t => {
+  for (const lifecycle of ['cancel', 'deadline']) await t.test(lifecycle, async t => {
+    let arrive, release;
+    const ready = new Promise(resolve => {arrive = resolve;});
+    const f = await workerFixture(t, input => {
+      input.signal = new AbortController().signal; input.deadline = new Date(Date.now() + 60_000).toISOString();
+      arrive(); return new Promise(resolve => {release = resolve;});
+    });
+    const {taskId} = await f.client.call('task.submit', {goal: 'Wait for public worker directory', conversationId: 'worker-life'},
+      {idempotencyKey: lifecycle, timeoutMs: lifecycle === 'deadline' ? 400 : 10_000});
+    await Promise.race([ready, waitFor(f.app, taskId, ['failed', 'cancelled'])]);
+    if (lifecycle === 'cancel') {
+      assert.equal(typeof release, 'function'); await f.client.call('task.cancel', {taskId});
+    }
+    const task = await waitFor(f.app, taskId, ['failed', 'cancelled']);
+    assert.equal(task.state, lifecycle === 'cancel' ? 'cancelled' : 'failed');
+    if (lifecycle === 'deadline') assert.equal(task.error.code, 'TIMEOUT');
+    release?.(workerDescriptor); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.app.runtime.getTask(taskId).state, task.state);
+    assert.equal(f.requests.length, 0); assert.equal(f.executions(), 0); assert.equal(f.dispatches(), 0);
+    assert.equal(f.app.runtime.loadCheckpoint(taskId, 'competition-tool-catalog'), undefined);
   });
 });
 
