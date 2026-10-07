@@ -215,5 +215,10 @@ else {
     setSendMode(Boolean(input.value.trim()));
     if(taskSignature!==lastTaskSignature){lastTaskSignature=taskSignature;updateRail();requestAnimationFrame(()=>{if(wasAtBottom)thread.scrollTop=thread.scrollHeight;});}};
 }
-if(bridge){const unsubscribe=bridge.subscribe(render);invoke('snapshot').then(render).catch(e=>{root.textContent=e.message;});window.addEventListener('unload',()=>{unsubscribe();orb?.dispose();});}
+if(bridge){
+  let receivedUpdate=false,closed=false;
+  const unsubscribe=bridge.subscribe(data=>{if(closed)return;receivedUpdate=true;render(data);});
+  invoke('snapshot').then(data=>{if(!closed&&!receivedUpdate)render(data);}).catch(e=>{if(!closed&&!receivedUpdate)root.textContent=e.message;});
+  window.addEventListener('unload',()=>{closed=true;unsubscribe();orb?.dispose();});
+}
 else root.textContent='桌面桥未连接，请从 PersonalAgent 桌面应用启动。';
