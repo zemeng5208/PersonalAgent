@@ -59,6 +59,39 @@ else {
   const form=root.querySelector('form'),input=root.querySelector('textarea'),thread=root.querySelector('.thread'),tasksNode=root.querySelector('#tasks');
   const liveControls=mountLiveVoiceControls(root,invoke);
   const proactiveControls=mountProactiveControls(root.querySelector('.thread'),invoke);
+  const wakeControls=document.createElement('div');
+  wakeControls.className='wake-controls';
+  wakeControls.innerHTML='<div class="wake-control-row"><span>唤醒词：你好小派</span><button type="button" id="wake-toggle" disabled aria-pressed="false">开启 10 分钟</button></div><p id="wake-state" role="status" aria-live="polite">唤醒未开启</p><p class="wake-hint">本次最多 10 分钟；关闭面板停止。唤醒后语音发送到华为 SIS 转文字，仅填草稿，需手动发送。</p>';
+  form.append(wakeControls);
+  const wakeButton=wakeControls.querySelector('#wake-toggle'),wakeStatus=wakeControls.querySelector('#wake-state');
+  let wakePending=false;
+  const wakeBlocksCapture=data=>['enabling','disabling','release_unconfirmed','disposed'].includes(data?.wake?.phase);
+  const renderWake=data=>{
+    const wake=data?.wake,phase=wake?.phase??'unavailable';
+    const listening=phase==='listening';
+    const labels={disabled:'唤醒已关闭',enabling:'正在准备唤醒检测与麦克风',listening:'正在聆听“你好小派”',
+      disabling:'正在关闭并核实音频释放',unavailable:'唤醒尚未就绪',release_unconfirmed:'音频释放未确认，无法重新开启',disposed:'唤醒已停止'};
+    wakeButton.textContent=listening?'关闭唤醒':phase==='unavailable'?'重试开启 10 分钟':'开启 10 分钟';
+    wakeButton.setAttribute('aria-pressed',String(listening));
+    wakeButton.disabled=wakePending || Boolean(data?.live?.active) || !data?.voice?.experimental
+      || !['disabled','unavailable','listening'].includes(phase)
+      || (!listening && !['unavailable','error','awaiting_speech'].includes(data?.voice?.status));
+    const expiry=listening&&Number.isFinite(wake?.expiresAtMs)
+      ? ` · 本次至 ${new Date(wake.expiresAtMs).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}`:'';
+    wakeStatus.textContent=(labels[phase]??'唤醒未开启')+expiry
+      + (['unavailable','release_unconfirmed'].includes(phase)&&wake?.reason?` · ${wake.reason}`:'');
+  };
+  wakeButton.onclick=async()=>{
+    if(wakePending||wakeButton.disabled)return;
+    const operation=current?.wake?.phase==='listening'?'voice.wake.disable':'voice.wake.enable';
+    wakePending=true;renderWake(current);
+    try{
+      await invoke(operation);
+      const data=await invoke('snapshot');
+      render(data);root.querySelector('#error').textContent='';
+    }catch(error){report(error);}
+    finally{wakePending=false;renderWake(current);}
+  };
   const removeDictation=bridge?.onDictation?.(result=>{
     if(typeof result?.text!=='string'||!result.text.trim())return;
     input.value=(input.value.trim()?input.value.trimEnd()+'\n':'')+result.text;
@@ -147,7 +180,7 @@ else {
     talkButton.disabled=true;
     try{await invoke(action);root.querySelector('#error').textContent='';}
     catch(err){report(err);}
-    finally{talkButton.disabled=Boolean(current?.live?.active)||!current?.voice?.experimental||!['unavailable','error','listening','awaiting_speech'].includes(current?.voice?.status);}
+    finally{talkButton.disabled=Boolean(current?.live?.active)||wakeBlocksCapture(current)||!current?.voice?.experimental||!['unavailable','error','listening','awaiting_speech'].includes(current?.voice?.status);}
   };
   root.querySelector('#tasks').onclick=async e=>{const b=e.target.closest('[data-action],[data-ui-action]');if(!b)return;const uiAction=b.dataset.uiAction;if(uiAction==='like'){const on=!likedTasks.has(b.dataset.id);if(on)likedTasks.add(b.dataset.id);else likedTasks.delete(b.dataset.id);b.classList.toggle('active',on);b.setAttribute('aria-pressed',String(on));return;}if(uiAction==='locate'){const block=b.closest('.locate-block');const resultNode=block?.querySelector('.locate-result');if(!resultNode)return;resultNode.hidden=false;resultNode.textContent='定位中…';try{const response=await invoke('task.locate',{text:b.dataset.locateText||''});const report=response&&typeof response==='object'&&'failures' in response?response:null;const failures=report&&Array.isArray(report.failures)?report.failures:[];if(!failures.length){resultNode.textContent='未能从错误输出定位到源码位置';}else{resultNode.innerHTML=failures.slice(0,3).map(f=>{const top=f.frames&&f.frames[0];const head=`<div class="locate-head">${escape(f.name)}${f.timedOut?'（超时）':''}</div>`;const frames=top?`<div class="locate-frame">${escape(top.file)}:${top.line}${top.column?':'+top.column:''}<span class="locate-conf">置信度 ${(top.confidence*100).toFixed(0)}%</span></div>${top.snippet?`<pre class="locate-snippet">${escape(top.snippet)}</pre>`:''}`:'';return head+frames;}).join('');}}catch(err){resultNode.textContent='定位失败：'+(err&&err.message?err.message:'未知错误');}return;}if(uiAction==='copy'||uiAction==='share'){const task=current?.tasks.find(item=>item.taskId===b.dataset.id);const message=current?.messages?.find(item=>item.id===b.dataset.messageId);const text=b.dataset.messageId?message?.text:resultText(task?.resultSummary,task?.resultMetadata);if(!text)return;try{if(uiAction==='share'&&navigator.share){await navigator.share({text});}else{await invoke('clipboard.writeText',text);b.title=uiAction==='copy'?'已复制':'已复制分享文本';b.setAttribute('aria-label',b.title);setTimeout(()=>{b.title=uiAction==='copy'?'复制':'分享';b.setAttribute('aria-label',`${b.title}回答`);},1600);}}catch(err){if(err?.name!=='AbortError')report(err);}return;}b.disabled=true;try{await invoke(b.dataset.action,b.dataset.id);}catch(err){report(err);}finally{b.disabled=false;}};
   const syncApprovalButtons=()=>{
@@ -166,6 +199,8 @@ else {
   });
   render=data=>{current=data;const task=currentTask(data.tasks);const connectionNode=root.querySelector('#connection');connectionNode.textContent=data.fakeModel?data.connection+' · Fake Model':data.connection;const liveStates={connecting:'正在连接',reconnecting:'正在续接',listening:'正在聆听',speaking:'正在回答',working:'正在处理任务',stopping:'正在关闭',error:'连接失败'};root.querySelector('#state').textContent=data.live?.active?(liveStates[data.live.status]??'Live 已开启'):task?stateNames[task.state]:'待机';
     liveControls.render(data.live);
+    renderWake(data);
+    if(!data.live?.active&&!task&&data.wake?.phase==='listening')root.querySelector('#state').textContent='唤醒聆听中';
     proactiveControls.render(data.proactive);
     const notifs=Array.isArray(data.notifications)?data.notifications:[];
     if(notifs.length>0){
@@ -209,7 +244,7 @@ else {
     const modelNotice=root.querySelector('#model-notice');if(modelNotice)modelNotice.textContent=data.thinking?.applied?data.thinking.reason:(modelReady?'思考设置已保存到桌面测试状态；Runtime 参数契约接入后才会影响任务。':`${data.model?.reason??'模型未完成真实连接测试'}；思考设置仍可调整，但不会用于真实任务。`);
     const voiceState=data.voice?.status;
     const voiceReady=Boolean(data.voice?.experimental);
-    talkButton.disabled=Boolean(data.live?.active)||!voiceReady||!['unavailable','error','listening','awaiting_speech'].includes(voiceState);
+    talkButton.disabled=Boolean(data.live?.active)||wakeBlocksCapture(data)||!voiceReady||!['unavailable','error','listening','awaiting_speech'].includes(voiceState);
     talkButton.title=voiceState==='listening'?'结束录音并填入文字':voiceReady?'语音转文字（不自动发送）':'语音转文字未连接';
     talkButton.setAttribute('aria-label',talkButton.title);
     const micStatus=voiceError || (voiceState==='listening'?'麦克风：正在采集，点击结束':voiceState==='acquiring'?'麦克风：等待设备就绪':voiceState==='recognizing'?'语音：正在转成文字':'');

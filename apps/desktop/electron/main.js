@@ -28,6 +28,7 @@ import {createDesktopSisConfigHost} from './huawei-sis-config.js';
 import {acquireHuaweiSisToken} from './huawei-iam-login.js';
 import {createLiveVoiceConfig} from './live-voice-config.js';
 import {createLiveVoiceHost} from './live-voice-host.js';
+import {createDesktopWakeVoiceHost} from './wake-voice-host.js';
 import {createDesktopProactiveHost} from './proactive-host.js';
 import {createP5SystemObservationSource} from './p5-system-observation-source.js';
 import {createP5DeviceReceiptStore} from './p5-device-receipt-store.js';
@@ -178,6 +179,11 @@ const runtimeStartup = createDeferredRuntimeStartup({
   initialize: initializeProductServices,
 });
 let liveVoice;
+let wakeVoice;
+let wakeQuitHandled = false;
+let wakeQuitUnknown = false;
+let wakeDisposal;
+let panelHiding;
 let liveShortcut = {key: 'F8', registered: false, reason: ''};
 let lastLiveShortcutAt = 0;
 let voiceInitializationFailure = null;
@@ -497,6 +503,10 @@ function snapshot(surface) {
     thinking: {...thinking,...(conversations?.preference(`desktop-${surface === 'workspace' ? 'workspace' : 'panel'}`,thinking) ?? {}),
       reason:'本对话的步骤预算在提交时固定；AgentArts 负责主编排，辅助任务使用当前对话的模型选择。原生思考能力以模型设置和实际参数回执为准。'},
     live: {...(liveVoice?.snapshot() ?? liveConfig?.snapshot()), shortcut: {...liveShortcut}},
+    wake: wakeQuitUnknown ? {...wakeVoice?.snapshot(),phase:'release_unconfirmed',verification:'unverified',
+      reason:'唤醒音频释放未确认；本进程不能重新启用'} : wakeVoice?.snapshot()
+      ?? {state:'disabled', phase:'unavailable', verification:'unverified',
+        reason:voiceInitializationFailure?.message ?? '请先连接华为 SIS 语音；唤醒尚未开启'},
     proactive: proactiveSnapshot(),
     p5: p5StatusSnapshot(),
     knowledgeWatch: knowledgeWatchHost?.snapshot() ?? null,
@@ -536,7 +546,17 @@ function windowFor(mode, bounds, options = {}) {
   win.setMenuBarVisibility(false);
   desktopHost.attach(win, mode);
   win.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
-  win.webContents.on('will-navigate', event => event.preventDefault());
+  win.webContents.on('will-navigate', event => {
+    event.preventDefault();
+    if (mode === 'panel') void stopPanelVoice().catch(reportPanelVoiceFailure);
+  });
+  if (mode === 'panel') {
+    win.webContents.on('did-start-navigation', (_event, _url, _inPlace, mainFrame) => {
+      if (mainFrame) void stopPanelVoice().catch(reportPanelVoiceFailure);
+    });
+    win.webContents.on('render-process-gone', () => {void stopPanelVoice().catch(reportPanelVoiceFailure);});
+    win.webContents.on('destroyed', () => {void stopPanelVoice().catch(reportPanelVoiceFailure);});
+  }
   let presented = false;
   const present = () => {
     if (presented || win.isDestroyed()) return;
@@ -620,6 +640,51 @@ function openAdmin(page) {
   admin.on('closed', () => { admin = undefined; });
 }
 
+async function stopWakeVoice(dispose = false) {
+  if (wakeQuitUnknown) throw Error('唤醒音频资源释放未确认');
+  if (!wakeVoice) return;
+  await (dispose ? wakeVoice.dispose() : wakeVoice.disable());
+  if (wakeVoice.hasActive()) throw Error('唤醒音频资源释放未确认');
+}
+
+async function disposeWakeForQuit() {
+  let timer;
+  try {
+    await Promise.race([stopWakeVoice(true), new Promise((_resolve, reject) => {
+      timer = setTimeout(() => reject(Error('唤醒音频释放未确认')), 5000);
+    })]);
+  } catch {wakeQuitUnknown = true; reportPanelVoiceFailure();}
+  finally {clearTimeout(timer);}
+  // This marks only the quit attempt as handled, never physical release verified.
+  wakeQuitHandled = true;
+  app.quit();
+}
+
+function reportPanelVoiceFailure() {
+  runtimeError = '语音资源释放未确认；请勿重新开启麦克风';
+  publish();
+}
+
+async function stopPanelVoice() {
+  const results = await Promise.allSettled([stopWakeVoice()]);
+  results.push(...await Promise.allSettled([
+    liveVoice?.stop(), sisPlaybackHost?.stop(), microphoneCaptureHost?.revoke(),
+  ]));
+  if (results.some(result => result.status === 'rejected')) throw Error('语音资源释放未确认');
+  publish();
+}
+
+function hidePanel() {
+  if (panelHiding) return panelHiding;
+  panelHiding = (async () => {
+    await stopWakeVoice();
+    pinned = false;
+    panel?.hide();
+    publish();
+  })().finally(() => {panelHiding = undefined;});
+  return panelHiding;
+}
+
 function createTray() {
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="13" fill="#090c10" stroke="#52c7bd" stroke-width="2"/><circle cx="16" cy="16" r="3" fill="#fff"/><circle cx="9" cy="11" r="1" fill="#fff"/><circle cx="23" cy="11" r="1" fill="#fff"/><circle cx="9" cy="21" r="1" fill="#fff"/><circle cx="23" cy="21" r="1" fill="#fff"/></svg>';
   try {
@@ -633,7 +698,7 @@ function createTray() {
       {label: '退出 PersonalAgent', click: () => app.quit()},
     ]));
     tray.on('click', () => {
-      if (panel?.isVisible()) { pinned = false; panel.hide(); publish(); }
+      if (panel?.isVisible()) { void hidePanel().catch(reportPanelVoiceFailure); }
       else { pinned = true; openPanel(true); publish(); }
     });
   } catch (error) {
@@ -766,9 +831,8 @@ async function testPangu() {
   }
 }
 
-function openWorkspace() {
-  pinned = false;
-  panel?.hide();
+async function openWorkspace() {
+  await hidePanel();
   if (workspace && !workspace.isDestroyed()) { workspace.show(); workspace.focus(); publish(); return; }
   const area = screen.getDisplayMatching(orb.getBounds()).workArea;
   const width = Math.min(1280, area.width - 32), height = Math.min(820, area.height - 32);
@@ -1910,7 +1974,7 @@ async function action(event, name, payload) {
       totalFailures: report.totalFailures};
   }
   if (name === 'admin.open') { openAdmin(payload?.page); return; }
-  if (name === 'workspace.open' && sender === panel) { openWorkspace(); return; }
+  if (name === 'workspace.open' && sender === panel) { await openWorkspace(); return; }
   if (name === 'workspace.close' && sender === workspace) { workspace.close(); return; }
   if (name === 'workspace.minimize' && sender === workspace) { workspace.minimize(); return; }
   if (name === 'workspace.maximize' && sender === workspace) { if(workspace.isMaximized()) workspace.unmaximize(); else workspace.maximize(); return; }
@@ -1919,10 +1983,11 @@ async function action(event, name, payload) {
     admin.close(); return;
   }
   if (name === 'panel.pin' && sender === panel) { pinned = Boolean(payload); publish(); return; }
-  if (name === 'panel.hide' && sender === panel) { pinned = false; panel.hide(); publish(); return; }
+  if (name === 'panel.hide' && sender === panel) { await hidePanel(); return; }
   if (name === 'orb.open' && sender === orb) { pinned = true; openPanel(true); publish(); return; }
   if (name === 'orb.dragStart' && sender === orb) {
-    dragging = true; panel.hide(); const point = screen.getCursorScreenPoint(); const bounds = orb.getBounds();
+    await hidePanel();
+    dragging = true; const point = screen.getCursorScreenPoint(); const bounds = orb.getBounds();
     dragOffset = {x: point.x - bounds.x, y: point.y - bounds.y}; return;
   }
   if (name === 'orb.dragEnd' && sender === orb) { dragging = false; desktopHost.snap(orb); away = Date.now() + 400; return; }
@@ -2235,16 +2300,30 @@ async function action(event, name, payload) {
     return voiceInput ? voiceInput.stopSpeaking(sender.webContents.id)
       : {available: false, stopped: false, reason: '语音供应商尚未连接'};
   }
+  if (name === 'voice.wake.enable' || name === 'voice.wake.disable') {
+    if (sender !== panel || !competitionMode || payload !== undefined) throw Error('唤醒只能从可信面板显式操作');
+    if (name === 'voice.wake.disable') {
+      await stopWakeVoice(); publish(); return snapshot('panel').wake;
+    }
+    if (!panel.isVisible() || panelHiding || voiceConfigurationPending || wakeQuitUnknown || !wakeVoice || !voiceInput) {
+      throw Error('请先显示面板并连接华为 SIS 语音');
+    }
+    pinned = true;
+    return wakeVoice.enable(sender.webContents.id);
+  }
   if (name === 'voice.configure' || name === 'voice.login') {
     if (sender !== panel || !competitionMode) throw Error('SIS 配置只能从 Competition 可信面板提交');
     if (voiceConfigurationPending) throw Error('语音配置正在更新，请稍候');
     if (!voiceInput && sisPlaybackHost) throw Error('旧语音播放资源释放未确认，无法重新装配');
-    if (voiceInput?.hasActive() || liveVoice?.hasActive()) throw Error('请先结束当前语音会话再更新 SIS 配置');
     voiceConfigurationPending = true;
     try {
+    await stopWakeVoice();
+    if (voiceInput?.hasActive() || liveVoice?.hasActive()) throw Error('请先结束当前语音会话再更新 SIS 配置');
     const configuration = name === 'voice.login' ? await acquireHuaweiSisToken(payload) : payload;
     // A voice capture may have started while the IAM request was in flight.
-    if (voiceInput?.hasActive()) throw Error('请先结束当前语音会话再更新 SIS 配置');
+    if (voiceInput?.hasActive() || liveVoice?.hasActive() || wakeVoice?.hasActive()) throw Error('请先结束当前语音会话再更新 SIS 配置');
+    await stopWakeVoice(true);
+    wakeVoice = undefined;
     sisConfigHost.configure(configuration ?? {});
     if (voiceInput) {
       try { await voiceInput.dispose(); }
@@ -2276,18 +2355,33 @@ async function action(event, name, payload) {
     if (voiceConfigurationPending) throw Error('语音配置正在更新，请稍候');
     if (liveVoice?.hasActive()) throw Error('请先关闭 Live 再使用语音转文字');
     const senderId = sender.webContents.id;
-    if (name === 'voice.record.start') return voiceInput.beginCapture(senderId);
+    if (name === 'voice.record.start') {
+      if (panelHiding || !panel.isVisible()) throw Error('请先显示面板');
+      if (wakeQuitUnknown) throw Error('唤醒音频资源释放未确认');
+      if (wakeVoice?.snapshot().phase === 'listening') return wakeVoice.beginCapture(senderId);
+      if (wakeVoice?.hasActive()) throw Error('唤醒正在切换或资源释放未确认，请先关闭唤醒');
+      return voiceInput.beginCapture(senderId);
+    }
     if (name === 'voice.record.finish') return voiceInput.finishCapture(senderId);
     if (name === 'voice.record.cancel') return voiceInput.cancelCapture(senderId);
-    if (name === 'voice.play') return voiceInput.playReply(senderId);
+    if (name === 'voice.play') {
+      await stopWakeVoice();
+      if (wakeVoice?.hasActive()) throw Error('请先关闭唤醒');
+      return voiceInput.playReply(senderId);
+    }
     throw Error('Unsupported voice action');
   }
   if (name === 'live.configure') {
     if (payload?.hotkey === 'F9') throw Error('F9 用于记事本本次写入确认，请为 Live 选择其他快捷键');
     if ((sender !== panel && sender !== admin) || !competitionMode) throw Error('Live 配置只能从可信面板或设置提交');
-    if (liveVoice?.hasActive() || voiceInput?.hasActive()) throw Error('请先结束语音再修改配置');
-    const result = liveConfig.configure(payload);
-    registerLiveShortcut(); publish(); return result;
+    if (voiceConfigurationPending) throw Error('语音配置正在更新，请稍候');
+    voiceConfigurationPending = true;
+    try {
+      await stopWakeVoice();
+      if (liveVoice?.hasActive() || voiceInput?.hasActive()) throw Error('请先结束语音再修改配置');
+      const result = liveConfig.configure(payload);
+      registerLiveShortcut(); publish(); return result;
+    } finally {voiceConfigurationPending = false;}
   }
   if (name === 'live.toggle') {
     if (sender !== panel || !competitionMode) throw Error('Live 只能从可信面板开启');
@@ -2297,12 +2391,14 @@ async function action(event, name, payload) {
     if (sender !== panel || !competitionMode) throw Error('麦克风只允许 Competition 可信面板启用');
     if (!client) throw Error('Runtime 未连接，麦克风采集尚不可用');
     if (!voicePcmSource) throw Error('Voice PCM 来源尚未接入');
+    if (voiceConfigurationPending || panelHiding || wakeQuitUnknown || wakeVoice?.hasActive() || liveVoice?.hasActive()) throw Error('请先结束唤醒或 Live 会话');
     const result = microphoneCaptureHost.authorize();
     publish();
     return result;
   }
   if (name === 'voice.capture.revoke') {
     if (sender !== panel) throw Error('麦克风只能从可信面板关闭');
+    await stopWakeVoice();
     await liveVoice?.stop();
     await microphoneCaptureHost.revoke();
     publish();
@@ -2502,6 +2598,7 @@ async function initializeSisVoice() {
   const playback = createDesktopSisPlaybackHost({getPanel: () => panel,
     onDiagnostic: phase => desktopHost.logVoicePlayback(phase)});
   let source;
+  let input;
   try {
     const speechPorts = {
       recognition: createHuaweiSisRecognitionPort(speechConfig),
@@ -2509,10 +2606,11 @@ async function initializeSisVoice() {
       dispose: () => playback.dispose(),
     };
     source = createVoicePcmFrameSourcePort(microphoneCaptureHost.binding);
-    voiceInput = createDesktopVoiceInput({source, microphoneHost: microphoneCaptureHost,
+    input = createDesktopVoiceInput({source, microphoneHost: microphoneCaptureHost,
       client, onUpdate: publish, enabled: true, inputMode: 'dictation', speechPorts,
       onTranscript: ({senderId, text}) => {
-        if (panel && !panel.isDestroyed() && panel.webContents.id === senderId) {
+        if (panel && !panel.isDestroyed() && panel.isVisible() && !panel.webContents.isDestroyed()
+          && panel.webContents.id === senderId) {
           panel.webContents.send('desktop:dictation-result', {text});
         }
       },
@@ -2520,11 +2618,19 @@ async function initializeSisVoice() {
         taskGoals.set(taskId, goal);
         conversations.add(taskId, 'panel', goal);
       }});
+    const wake = createDesktopWakeVoiceHost({getPanel: () => panel, microphoneHost: microphoneCaptureHost,
+      voiceInput:input, onUpdate: publish, isBusy: () => Boolean(liveVoice?.hasActive() || voiceConfigurationPending || panelHiding)});
+    voiceInput = input;
     voicePcmSource = source;
     sisPlaybackHost = playback;
+    wakeVoice = wake;
+    wakeQuitHandled = false;
+    wakeQuitUnknown = false;
+    wakeDisposal = undefined;
     voiceInitializationFailure = null;
   } catch (error) {
-    await source?.dispose?.();
+    if (input) await input.dispose();
+    else await source?.dispose?.();
     await playback.dispose();
     throw error;
   }
@@ -2533,7 +2639,9 @@ async function initializeSisVoice() {
 async function toggleLive() {
   if (!liveVoice) throw Error('Live 服务尚未装配');
   if (liveVoice.hasActive()) return liveVoice.stop();
-  if (voiceConfigurationPending || voiceInput?.hasActive()) throw Error('请先结束语音转文字或配置更新');
+  if (voiceConfigurationPending || panelHiding) throw Error('请先结束面板或语音配置更新');
+  await stopWakeVoice();
+  if (voiceConfigurationPending || panelHiding || voiceInput?.hasActive() || wakeVoice?.hasActive()) throw Error('请先结束语音转文字或配置更新');
   pinned = true; openPanel(true); publish();
   return liveVoice.start();
 }
@@ -2677,13 +2785,8 @@ app.whenReady().then(async () => {
     {frame: false, transparent: true, alwaysOnTop: true, skipTaskbar: true, resizable: false, hasShadow: false});
   panel = windowFor('panel', panelBounds(orb.getBounds(), area),
     {frame: false, transparent: true, alwaysOnTop: true, skipTaskbar: true, resizable: false, hasShadow: false, backgroundMaterial: 'none', roundedCorners: true});
-  panel.on('close', event => { if (!app.isQuitting) { event.preventDefault(); pinned = false; panel.hide(); publish(); } });
-  panel.on('hide', () => { void liveVoice?.stop(); void sisPlaybackHost?.stop().catch(() => {
-    runtimeError = '语音播放资源释放未确认'; publish();
-  }); void microphoneCaptureHost.revoke().catch(error => {
-    runtimeError = error instanceof Error ? error.message : '麦克风释放未确认';
-    publish();
-  }); publish(); });
+  panel.on('close', event => { if (!app.isQuitting) { event.preventDefault(); void hidePanel().catch(reportPanelVoiceFailure); } });
+  panel.on('hide', () => {void stopPanelVoice().catch(reportPanelVoiceFailure);});
   createTray();
   if (liveVoice) registerLiveShortcut();
   console.info('PersonalAgent startup',JSON.stringify({runtime:runtimeStartup.snapshot().state,
@@ -2720,11 +2823,16 @@ app.whenReady().then(async () => {
     const panelBoundsValue = panel.getBounds();
     const inside = panel.isVisible() && point.x >= panelBoundsValue.x && point.x <= panelBoundsValue.x + panelBoundsValue.width && point.y >= panelBoundsValue.y && point.y <= panelBoundsValue.y + panelBoundsValue.height;
     if ((near && desktopHost.settings.hover) || inside || pinned) { away = 0; if (near && desktopHost.settings.hover && !panel.isVisible()) openPanel(); }
-    else if (panel.isVisible()) { if (!away) away = Date.now(); else if (Date.now() - away > 520) { panel.hide(); away = 0; } }
+    else if (panel.isVisible()) { if (!away) away = Date.now(); else if (Date.now() - away > 520) { void hidePanel().catch(reportPanelVoiceFailure); away = 0; } }
   }, 80);
   app.on('before-quit', event => {
     if (runtimeStartup.snapshot().state === 'starting') {
       event.preventDefault(); runtimeError = 'Runtime 正在连接，请稍后退出'; publish(); return;
+    }
+    if (wakeVoice && !wakeQuitHandled) {
+      event.preventDefault();
+      wakeDisposal ??= disposeWakeForQuit();
+      return;
     }
     void stopP5DeviceTelemetry();
     if(referenceHost && !referenceClosed) {
