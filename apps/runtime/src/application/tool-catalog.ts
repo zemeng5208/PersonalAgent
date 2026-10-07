@@ -238,7 +238,7 @@ export class RuntimeCompetitionToolCatalog {
     const worker=this.workers.find(item=>item.toolName===input.toolName && item.toolVersion===input.toolVersion);
     if(worker) {
       const fresh=await this.readProvider(input,view=>worker.describe(view));
-      if(!entry || !fresh || saved?.deadline!==input.deadline
+      if(!entry || !fresh || fresh.name!==worker.toolName || fresh.version!==worker.toolVersion || saved?.deadline!==input.deadline
         || (input.firstCloudRequest && saved.revision!==revision)
         || !isDeepStrictEqual(safeSchema(fresh.inputSchema,0,new Set(worker.publicEnumPaths)),entry.inputSchema)) {
         throw new ProtocolError('UNAUTHORIZED','Worker selection is no longer available');
@@ -271,7 +271,8 @@ export class RuntimeCompetitionToolCatalog {
       const worker=this.workers.find(worker=>worker.toolName===item.name && worker.toolVersion===item.version);
       if(worker) {
         const fresh=await this.readProvider(input,view=>worker.describe(view));
-        if(!fresh || !isDeepStrictEqual(safeSchema(fresh.inputSchema,0,new Set(worker.publicEnumPaths)),item.inputSchema))throw new ProtocolError('UNAUTHORIZED','Worker became unavailable before send');
+        if(!fresh || fresh.name!==worker.toolName || fresh.version!==worker.toolVersion
+          || !isDeepStrictEqual(safeSchema(fresh.inputSchema,0,new Set(worker.publicEnumPaths)),item.inputSchema))throw new ProtocolError('UNAUTHORIZED','Worker became unavailable before send');
         continue;
       }
       const binding = this.availability.find(entry => entry.toolName === item.name && entry.toolVersion === item.version);

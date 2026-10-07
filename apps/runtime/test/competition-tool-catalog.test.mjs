@@ -307,6 +307,33 @@ test('worker directory revalidation failures are fixed denials before send or di
   });
 });
 
+test('fresh worker identity stays bound through final send and proposal revalidation', async t => {
+  for (const phase of ['send', 'proposal']) for (const field of ['name', 'version']) await t.test(`${phase}: ${field}`, async t => {
+    let reads = 0;
+    const f = await workerFixture(t, async () => {
+      const changed = ++reads >= (phase === 'send' ? 2 : 3);
+      return {...workerDescriptor, ...(changed ? {[field]: field === 'name' ? 'fixture.changed-worker' : '2.0.0'} : {})};
+    }, () => phase === 'send' ? {kind: 'text', text: 'Unexpected stale worker catalog accepted'}
+      : {kind: 'tool_proposal', proposalId: 'worker-identity', toolName: CLOUD_SKILL_TOOL_NAME,
+        toolVersion: CLOUD_SKILL_TOOL_VERSION, arguments: {sourceRef: 'public-fixture'}});
+    const {taskId} = await f.client.call('task.submit', {goal: 'Revalidate exact public worker identity', conversationId: 'worker-identity'},
+      {idempotencyKey: `${phase}-${field}`});
+    const task = await waitFor(f.app, taskId, ['failed', 'succeeded', 'waiting_approval', 'waiting_reconciliation']);
+    assert.equal(task.state, 'failed');
+    assert.equal(task.error.code, phase === 'send' ? 'EXTERNAL_FAILURE' : 'UNAUTHORIZED');
+    if (phase === 'send') {
+      assert.equal(f.diagnostics[0].stage, 'catalog_guard'); assert.equal(f.diagnostics[0].code, 'UNAUTHORIZED');
+    }
+    assert.equal(f.requests.length, phase === 'send' ? 0 : 1);
+    assert.equal(f.executions(), 0); assert.equal(f.dispatches(), 0);
+    assert.deepEqual((await f.client.call('approval.list', {taskId})).items, []);
+    assert.deepEqual(f.app.runtime.readToolExecutions(taskId), []);
+    const selected = f.app.runtime.loadCheckpoint(taskId, 'competition-tool-catalog').entries
+      .find(tool => tool.name === CLOUD_SKILL_TOOL_NAME);
+    assert.equal(selected.version, CLOUD_SKILL_TOOL_VERSION);
+  });
+});
+
 test('worker providers receive a private lease view at discovery and final catalog revalidation', async t => {
   let reads = 0;
   const f = await workerFixture(t, async input => {
