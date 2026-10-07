@@ -46,3 +46,37 @@ test('reference failures unlock available actions and detached late responses le
   assert.equal(ui.fields.run.disabled,true);assert.equal(ui.fields.result.textContent,'');
   await ui.click('run');assert.equal(calls.length,2);
 });
+
+test('reference Skill enables only after connection and late receipts keep stopped controls disabled',async t=>{
+  const calls=[];let resolve;
+  const ui=harness(t,(action,input)=>{calls.push({action,input});return new Promise(done=>{resolve=done;});});
+  const render=(connected,enabled)=>ui.controls.render({mcp:{connected,state:connected?'connected':'unavailable'},
+    skill:{health:{enabled,state:enabled?'ready':'disabled'}}});
+  assert.equal(ui.fields.skill.disabled,true,'an initial unavailable service cannot enable the Skill');
+  render(false,false);await ui.click('skill');assert.equal(calls.length,0);
+  render(true,false);assert.equal(ui.fields.skill.disabled,false);
+  const enabling=ui.click('skill');render(true,false);assert.equal(ui.fields.skill.disabled,true);
+  await ui.click('skill');assert.equal(calls.length,1,'pending snapshots cannot submit a second enable');
+  render(false,false);resolve({});await enabling;
+  assert.equal(ui.fields.skill.disabled,true,'a late enable receipt cannot revive a stopped service');
+  render(false,true);assert.equal(ui.fields.skill.disabled,false,'an enabled Skill can still be stopped after disconnection');
+  const disabling=ui.click('skill');render(false,false);resolve({});await disabling;
+  assert.equal(ui.fields.skill.disabled,true);
+  assert.deepEqual(calls,[{action:'reference.skill',input:{enabled:true}},
+    {action:'reference.skill',input:{enabled:false}}]);
+});
+
+test('reference Skill failures restore an available action but disconnected and detached actions stay disabled',async t=>{
+  const calls=[];let resolve,reject;
+  const ui=harness(t,action=>{calls.push(action);return new Promise((done,fail)=>{resolve=done;reject=fail;});});
+  const render=connected=>ui.controls.render({mcp:{connected,state:connected?'connected':'unavailable'},
+    skill:{health:{enabled:false,state:'disabled'}}});
+  render(true);const failing=ui.click('skill');reject(Error('synthetic-only'));await failing;
+  assert.equal(ui.fields.skill.disabled,false);assert.match(ui.fields.result.textContent,/操作未完成/);
+  const disconnected=ui.click('skill');render(false);reject(Error('synthetic-only'));await disconnected;
+  assert.equal(ui.fields.skill.disabled,true,'failure must respect a newer disconnected snapshot');
+  await ui.click('skill');assert.equal(calls.length,2);
+  render(true);const detached=ui.click('skill');ui.host.isConnected=false;resolve({});await detached;
+  assert.equal(ui.fields.skill.disabled,true);assert.equal(ui.fields.result.textContent,'');
+  await ui.click('skill');assert.equal(calls.length,3);
+});
