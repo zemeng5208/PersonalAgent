@@ -82,7 +82,7 @@
 | M0 设计基线 | PRD、架构、协作规范、工作包 | 文档检查通过；待决项登记 | 已建立并在 2026-09-09 同步分工、接口目录和 ADR |
 | M1 基础闭环 | 窗口、Runtime、盘古、工具、语音基础 | 真实请求到工具与验证链路；取消有效 | MOD-01/02/03 已集成；Core Runtime Profile 1 已冻结；真实模型工具链未完成 |
 | M1.5 Competition Profile | AgentArts 基础、Agent/Workflow、部署 API、可信工具 Golden Path、Demo/trace | AgentArts 构建/编排/部署可读回；一条真实工具闭环；不静默回退 Local | main 已有离线 Coordination、审批工具循环和固定合成评估；#72 的 Workflow 输入已进入 main，真实部署/API/trace 与工具读回未完成 |
-| M1.6 持续认知创新 | 版本化世界状态、Goal/Event、目标/事实/决策图谱、最小计划修复 | 事实变化产生可回放影响；AgentArts 只更新受影响计划；Evidence 闭环 | main 已有版本图、SQLite/Fake 原子 appendBatch 与显式修复预览/提交；事实查询/变化流、自动事实投影及真实 AgentArts/Evidence 闭环未完成 |
+| M1.6 持续认知创新 | 版本化世界状态、Goal/Event、目标/事实/决策图谱、最小计划修复 | 事实变化产生可回放影响；AgentArts 只更新受影响计划；Evidence 闭环 | main@4b5ec614 已有版本图、SQLite/Fake 原子 appendBatch、显式修复预览/提交及公开 Memory 查询/变化流和持久事实投影；默认私人 Calendar 来源绑定及真实 AgentArts/Evidence 闭环仍未完成 |
 | M2 首次可用 | Obsidian、提醒、研究天气、TraceGuard 只读、全部 P0 | 所有 P0 逐项验收，不只演示单场景 | 天气、待办/日历 Fake、研究源和部分只读工具已集成；完整 P0 与真实账号验收未完成 |
 | M3 信息管家 | 邮件、日历、订阅、通知、专业协作 | 真实连接器增量同步与授权写入验证 | 邮件、订阅、通知策略已集成；桌面通知消费、完整真实账号与授权写入验收未完成 |
 | M4 行动与扩展 | 电脑控制、编程、治理、流程学习、社交扩展 | 指定应用可控可验证；平台能力矩阵有证据 | 受限工作区列表/正文读取已由 PR #83 进入 main，仍为 provisional；Windows 操作、写入与治理闭环未进入 main |
@@ -109,7 +109,7 @@
 | MOD-12 | M1 | in_progress | `zemeng` / main@4b5ec614 已具文字交互、公开会话/任务恢复、取消、大工作区及 Live 发言持久化与每会话偏好；显式会话管理 API 未公布，真实 AgentArts 对话、工具回传及语音组合仍待端到端验收；当前开发 #302 尚未合并 |
 | MOD-13 | M1 基础页面、M2 配置闭环 | in_progress | `zemeng` / main@4b5ec614 已具过期审批 fail-closed、脱敏历史分页、受信宿主任务级撤销读回、AgentArts 加密配置/撤销与启动状态消费；生产 settings/connector wire API、跨任务持续授权与真实云验收仍未完成；当前开发 #302 尚未合并 |
 | MOD-14 | M1 基础、M2 验收 | in_progress | `zemeng` / #61/#70/#75/#79 已进入 main；main@4b5ec614 已装配 Huawei SIS 听写/WAV 播放、授权 PCM 与原生 Live（听写不自动发送，停止不取消任务）。本机入口不等于 voice.start/stop wire 已公布；真实 SIS、设备、网络续连及 Desktop/AgentArts 联合验收仍待取得回执；当前开发 #302 尚未合并 |
-| MOD-15 | M4 后扩展 | in_progress | `zemeng` / main@4b5ec614 已纳入 voice-wake 根 build/锁文件，有界生命周期、共享 PCM 限定词源和 bindVoiceWake 已有源码；Desktop 尚无可信授权/检测器/显式启用组合，中文引擎、命中、误触、回声及物理释放仍待 Windows 实测；当前开发 #302 尚未合并 |
+| MOD-15 | M4 后扩展 | in_progress | `zemeng` / main@4b5ec614 已有 voice-wake 根 build/锁文件、有界生命周期、共享 PCM 限定词源及 bindVoiceWake，尚无 Desktop 组合；[PR #302](https://github.com/zemeng5208/PersonalAgent/pull/302) 新增默认关闭、可信可见面板显式启用、最长 10 分钟的共享 PCM 唤醒/听写组合，关闭未确认时锁住本进程新捕获；尚未合并，中文引擎、命中、误触、回声及物理释放仍待 Windows 实测，见[生命周期记录](modules/MOD-15-WAKE-LIFECYCLE-01.md) |
 | MOD-16 | 受限记事本执行与实机验收 | in_progress | `zemeng` / Host、Bridge、Runtime 导出与 Desktop 受信确认消费已实现；仅在 Windows 和固定 Host/Bridge 可用时装配受限记事本能力。历史实机证据仅到 `hello_ack`，完整 F9 确认、Policy 授权、UIA 写入及独立读回仍待现场验收，见 [模块记录](modules/MOD-16-WINDOWS-EXECUTION-01.md) |
 | MOD-17 | 只读系统观测与实机验收 | in_progress | `zemeng` / CPU、内存与 uptime 提供者、Runtime 工具注册和 Desktop 只读消费已实现；已有 Windows provider 直读证据，完整 Policy/ToolGateway、AgentArts 与 Desktop 实机闭环未验收，见 [模块记录](modules/MOD-17-COMPUTER-STATUS-01.md) |
 | MOD-18 | M4 | in_progress | `zemeng` / main@4b5ec614 已有 WorkspaceConfigHost 条件注册受限读取/枚举、补丁预览/暂存/应用与固定命令及进程/任务绑定许可；“写入和命令未交付”为历史滞后。Artifact 服务、真实项目写入/命令、Windows 恢复与 AgentArts 联合验收未完成；当前开发 #302 尚未合并；[消费边界](modules/MOD-18-DESKTOP-WORKSPACE-SETTINGS.md) |
@@ -125,8 +125,8 @@
 | MOD-28 | M1.6 | in_progress | `zemeng` / main@4b5ec61 已有 KEEP/RECHECK/REVISE 回放、事实投影消费、Goal 创建/修订触发及经 Runtime/Policy/CAS 的受控修复；默认 P5 Calendar 尚缺可信来源版本→Fact ref→completed projection 绑定，真实 Laya/AgentArts 与 Evidence 现场闭环未验收，沿 [#212 既有交接](modules/MOD-28-REVIEWED-REPAIR-01.md#默认-p5-会议链与可信来源交接2026-10-07)继续 |
 | MOD-29 | M1.5 第一优先 | in_progress | `zemeng` / AgentArts Runtime 适配与配置入口已有 provisional 实现；真实项目、版本、部署、API 和 trace 读回仍无成功证据 |
 | MOD-30 | M1.5 第一优先 | in_progress | `zemeng` / PR #49、#72（Workflow 输入）、#80（载荷边界）均已进入 main（2026-09-30 台账核对），工具提案/审批/continuation 离线链可用；真实 MCP/Skill 与目标系统读回未完成 |
-| MOD-31 | M1.5/M3 | in_progress | `zemeng` / PR #58 的[固定合成 runner](../tests/manual/agentarts/support/fixed-synthetic-batch.mjs) 已进入 main；[PR #302](https://github.com/zemeng5208/PersonalAgent/pull/302) 新增显式双端口、1～3 对的配对 runner，尚未合并，只报告三标签分类与实际等待耗时；真实多 Agent 角色、平台重复运行指标及评估仍未完成 |
-| MOD-32 | M1.5/M5 第一优先 | in_progress | `zemeng` / 手动验收脚手架和失败诊断已有记录；真实发布、健康读回、trace、成本、回滚和端到端成功证据未提供 |
+| MOD-31 | M1.5/M3 | in_progress | `zemeng` / PR #58 的[固定合成分类 runner](../tests/manual/agentarts/support/fixed-synthetic-batch.mjs) 已进入 main；[PR #302](https://github.com/zemeng5208/PersonalAgent/pull/302) 新增三标签配对、固定最小修复及同集配对修复入口，显式端口、1～3 次有界重复，只报告限定评分和实际等待耗时，见[评估记录](modules/MOD-31-FIXED-EVALUATION-01.md)；尚未合并，真实角色协作、平台对照与效果评估仍未完成 |
+| MOD-32 | M1.5/M5 第一优先 | in_progress | `zemeng` / main 已有手动验收脚手架及历史发布/健康/条件关联 trace 记录；[PR #302](https://github.com/zemeng5208/PersonalAgent/pull/302) 新增显式只读 ShowOpsTrace helper 与脱敏消费验证，尚未合并，见[观测边界](modules/MOD-32-AGENTARTS-OBSERVABILITY.md)；实际 SDK 签名 Provider、账号权限读回、当批请求/部署版本精确关联、费用、回滚和端到端证据仍缺，离线 Fake 不算平台验收 |
 | MOD-33 | M6 产品化 | review | `goo122`（2026-10-07 接续；历史作者不变） / #277 与 #297 已合并；连接器生命周期修复及官方 gh 2.102 真实 Actions 分页日志读回见 [接续记录](modules/DEV-WORKFLOWS-CONTINUATION-20261005.md)；不将只读证据提升为全部账号写入验收 |
 | MOD-34 | M6 产品化 | review | `Potatos498`（2026-10-07 接续；历史作者不变） / #277/#290/#297 已合并；历史真实 GLM→审批→patch→tsc→commit 有回执，push unknown 后核实与 PR 创建为人工收尾（#291 不合并）；最新代码的完整自动写入及设备场景仍待对应验收 |
 | MOD-35 | M6 产品化 | review | `Potatos498` / #279 的确定性定位器与 zemeng #282 的源码边界、真实 TAP 修正已组合；定向 9/9，完整 coding-tools 55 通过、11 个 Windows 跳过；#279/#282 实现已进入 main，后续改动及真实消费分别验收，见 [登记与验收记录](modules/MOD-35-TEST-LOCATE-01.md) |
