@@ -185,6 +185,7 @@ node --test apps/desktop/test/wake-voice-host-integration.test.mjs
 
 1. 在已授权 Windows 目标机读回 Node/架构、已安装 zh-CN recognizer 和固定词表。
    打开可信面板，确认默认 off、未授权时零采集；缺引擎须 unavailable，不用 Fake 回退。
+   同时确认 SIS 配置有效且未过期（`snapshot().configured` 为真）、VoiceInput 已装配；缺失时保持 unavailable，不启用唤醒。
 2. 明确启用后记录有限 expiresAt、双 readiness 与单物理采集证据；触发固定词并取得
    同路听写草稿，确认不自动提交任务。记录 Wake/ASR 引用数，ASR 完成后 Wake 继续监听。
 3. 逐项验证原期限到期、授权撤销、隐藏、导航、设备断开、renderer 崩溃和退出；读回
