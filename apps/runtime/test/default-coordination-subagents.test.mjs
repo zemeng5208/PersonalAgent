@@ -7,7 +7,7 @@ import {getEventListeners} from 'node:events';
 import assert from 'node:assert/strict';
 import {Client} from '@personal-agent/client';
 import {FakeCoordinationPort} from '@personal-agent/coordination/testing';
-import {createAgentArtsRuntimeApplication,createRuntimeApplication,createDesktopSubagentDispatchTool,resumeRuntimeSubagentTask,SUBAGENT_DISPATCH_TOOL_NAME,SUBAGENT_DISPATCH_TOOL_VERSION} from '../dist/application.js';
+import {createAgentArtsRuntimeApplication,createRuntimeApplication,createDesktopSubagentDispatchTool,resumeRuntimeSubagentTask,readRuntimeSubagentSummary,SUBAGENT_DISPATCH_TOOL_NAME,SUBAGENT_DISPATCH_TOOL_VERSION} from '../dist/application.js';
 const read={name:'fixture.default-child-read',version:'1.0.0',sideEffect:'read',requiredScopes:['fixture:read'],
   requiresPresence:false,recoverySupport:true,idempotencySupport:true,inputSchema:{type:'object',required:['value'],properties:{value:{type:'string'}},additionalProperties:false},outputSchema:{type:'object'}};
 async function until(predicate){for(let n=0;n<200;n++){if(predicate())return;await new Promise(r=>setTimeout(r,5));}throw Error('state did not arrive');}
@@ -230,4 +230,51 @@ test('confirmed default-child replay retains parent cancellation without reexecu
       else assert.match(outcome.resultSummary,/Synthetic replay done/);
     }finally{release?.();app.close();}
   });
+});
+
+test('sequential Competition dispatch accepts prototype-like IDs and absent IDs remain pending',async t=>{
+ for(const secondId of ['two','constructor','__proto__','toString'])await t.test(secondId,async()=>{
+  let app;
+  const sends=[];
+  const definition=(id,index)=>({subtaskId:id,role:'researcher',goal:'synthetic child '+index});
+  const proposal=(id,index)=>({kind:'tool_proposal',proposalId:'dispatch-'+index,
+   toolName:SUBAGENT_DISPATCH_TOOL_NAME,toolVersion:SUBAGENT_DISPATCH_TOOL_VERSION,
+   arguments:{subtasks:[definition(id,index)]}});
+  const dispatch=createDesktopSubagentDispatchTool({getRuntime:()=>app.runtime,getTools:()=>app.tools,
+   runDefaultWorker:(subtask,worker,tools)=>app.runDefaultSubagentWorker(subtask,worker,tools)});
+  app=createAgentArtsRuntimeApplication({path:':memory:',gatewayUrl:'https://agentarts.example.test',
+   runtimeName:'special-id',responseMode:'tool-proposal-json',authorizationProvider:{read:async()=>'Bearer synthetic'},
+   tools:[dispatch],automaticTools:[{toolName:SUBAGENT_DISPATCH_TOOL_NAME,toolVersion:SUBAGENT_DISPATCH_TOOL_VERSION}],
+   competitionToolExports:[{toolName:SUBAGENT_DISPATCH_TOOL_NAME,toolVersion:SUBAGENT_DISPATCH_TOOL_VERSION,
+    exportPolicyVersion:'fixture-v1',accepts:()=>true,project:({result})=>({succeeded:result.succeeded})}],
+   fetchImpl:async(_url,init)=>{
+    const body=JSON.parse(init.body);let query;try{query=JSON.parse(body.query);}catch{query={goal:body.query};}
+    sends.push(query);
+    const result=query.continuation?.proposalId==='dispatch-1'?proposal(secondId,2)
+     :query.continuation?{kind:'text',text:'Both synthetic children done'}
+     :query.goal==='Delegate twice'?proposal('one',1):{kind:'text',text:'Synthetic child done'};
+    return new Response(JSON.stringify({event:'message',data:{text:JSON.stringify(result),index:0}}),
+     {headers:{'content-type':'application/json'}});
+   },
+  });
+  try{
+   const client=new Client(app);await client.connect();
+   const parent=await client.call('task.submit',{goal:'Delegate twice',conversationId:'special-id'},{idempotencyKey:'special-id'});
+   await until(()=>app.activeTaskCount===0&&['succeeded','failed'].includes(app.runtime.getTask(parent.taskId).state));
+   assert.equal(app.runtime.getTask(parent.taskId).state,'succeeded');
+   const records=app.runtime.loadCheckpoint(parent.taskId,'subtask-progress-records');
+   assert.deepEqual(Object.keys(records).sort(),['one',secondId].sort());
+   assert.ok(Object.hasOwn(records,secondId));
+   for(const id of ['one',secondId])assert.equal(app.runtime.findTaskByIdempotencyKey(`subagent-dispatch-${parent.taskId}-${id}`).state,'succeeded');
+   const executions=app.runtime.readToolExecutions(parent.taskId);
+   assert.equal(executions.length,2);assert.ok(executions.every(record=>record.state==='confirmed'));
+   assert.equal(sends.length,5);
+   const summary=readRuntimeSubagentSummary(app.runtime,parent.taskId,[definition('one',1),definition(secondId,2)]);
+   assert.equal(summary.succeeded,2);assert.ok(summary.subtasks.every(item=>item.state==='succeeded'));
+   const absent=readRuntimeSubagentSummary(app.runtime,parent.taskId,[definition('hasOwnProperty',3)]);
+   assert.equal(absent.subtasks.length,1);assert.equal(absent.subtasks[0].state,'pending');assert.equal(absent.succeeded,0);
+   assert.throws(()=>readRuntimeSubagentSummary(app.runtime,parent.taskId,[{...definition(secondId,2),goal:'changed'}]),{code:'REVISION_CONFLICT'});
+   assert.deepEqual(app.runtime.loadCheckpoint(parent.taskId,'subtask-progress-records'),records);
+  }finally{app.close();}
+ });
 });

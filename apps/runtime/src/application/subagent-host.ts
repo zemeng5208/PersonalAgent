@@ -277,7 +277,7 @@ export function readRuntimeSubagentSummary(runtime: TaskRuntime, parentTaskId: s
     catch {throw new ProtocolError('INVALID_ARGUMENT', 'Invalid subtask progress binding');}
   });
   const progress: SubtaskProgress[] = subtasks.map(subtask => {
-    const record = records?.[subtask.subtaskId];
+    const record = records && Object.hasOwn(records, subtask.subtaskId) ? records[subtask.subtaskId] : undefined;
     if (record && (record.parentTaskId !== parentTaskId || record.inputDigest !== computeSubtaskInputDigest(subtask))) {
       throw new ProtocolError('REVISION_CONFLICT', 'Subtask input changed from the persisted dispatch');
     }
@@ -339,7 +339,7 @@ export function createRuntimeSubagentDispatchTool(options: SubagentHostOptions):
       }
       seen.add(subtask.subtaskId.trim());
       const saved = runtime.loadCheckpoint(context.taskId, 'subtask-progress-records') as Record<string, SubtaskProgressRecord> | undefined;
-      const record = saved?.[subtask.subtaskId];
+      const record = saved && Object.hasOwn(saved, subtask.subtaskId) ? saved[subtask.subtaskId] : undefined;
       if (record && (record.parentTaskId !== context.taskId || record.inputDigest !== computeSubtaskInputDigest(subtask))) {
         throw new ProtocolError('REVISION_CONFLICT', 'Subtask input changed from the prior dispatch');
       }
