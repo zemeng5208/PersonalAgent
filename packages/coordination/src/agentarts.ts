@@ -13,6 +13,7 @@ const MAX_TIMER_DELAY = 2_147_483_647;
 const RUNTIME_NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 const SAFE_HEADER_VALUE_PATTERN = /^[A-Za-z0-9_-]+$/;
 const FORBIDDEN_HEADER_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+const ISO_DEADLINE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 
 /** The host owns the complete Authorization header value and supplies it per invocation. */
 export interface AgentArtsAuthorizationProvider {
@@ -171,8 +172,16 @@ function validateRequest(request: CoordinationRequest, responseMode: 'text' | 't
   deadlineMs: number; signal: AbortSignal; continuation?: CoordinationContinuation;
   availableTools?: readonly CoordinationAvailableTool[];
 } {
-  const input = asPlainObject(request);
-  if (!input) invalid('Invalid AgentArts coordination request');
+  let input: Record<string, unknown>;
+  try {
+    const source = asPlainObject(request);
+    if (!source) invalid('Invalid AgentArts coordination request');
+    input = {taskId: source.taskId, revision: source.revision, goal: source.goal,
+      deadline: source.deadline, signal: source.signal,
+      continuation: source.continuation, availableTools: source.availableTools};
+  } catch {
+    invalid('Invalid AgentArts coordination request');
+  }
   // A text-only invocation cannot silently discard a future tool result.
   let continuation: CoordinationContinuation | undefined;
   if (input.continuation !== undefined) {
@@ -205,19 +214,32 @@ function validateRequest(request: CoordinationRequest, responseMode: 'text' | 't
   if (goal.length > MAX_TEXT_CHARS) invalid('Coordination goal exceeds the text limit');
 
   const deadline = input.deadline;
-  if (typeof deadline !== 'string') invalid('Coordination deadline must be a date string');
+  if (typeof deadline !== 'string' || !ISO_DEADLINE.test(deadline)) {
+    invalid('Coordination deadline must be an ISO date string');
+  }
   const deadlineMs = Date.parse(deadline);
-  if (!Number.isFinite(deadlineMs)) invalid('Coordination deadline is invalid');
+  if (!Number.isFinite(deadlineMs)
+    || deadline.replace(/\.000Z$/, 'Z') !== new Date(deadlineMs).toISOString().replace(/\.000Z$/, 'Z')) {
+    invalid('Coordination deadline is invalid');
+  }
 
   const candidateSignal = input.signal;
-  if (candidateSignal === null || typeof candidateSignal !== 'object'
-    || typeof (candidateSignal as AbortSignal).addEventListener !== 'function'
-    || typeof (candidateSignal as AbortSignal).removeEventListener !== 'function'
-    || typeof (candidateSignal as AbortSignal).aborted !== 'boolean') {
+  let aborted: unknown;
+  try {
+    if (candidateSignal === null || typeof candidateSignal !== 'object'
+      || typeof (candidateSignal as AbortSignal).addEventListener !== 'function'
+      || typeof (candidateSignal as AbortSignal).removeEventListener !== 'function') {
+      invalid('Coordination signal is invalid');
+    }
+    aborted = (candidateSignal as AbortSignal).aborted;
+  } catch {
+    invalid('Coordination signal is invalid');
+  }
+  if (typeof aborted !== 'boolean') {
     invalid('Coordination signal is invalid');
   }
   const signal = candidateSignal as AbortSignal;
-  if (signal.aborted) throw abortError('cancelled');
+  if (aborted) throw abortError('cancelled');
   if (deadlineMs <= Date.now()) throw abortError('deadline');
   return {taskId, revision, goal, deadline, deadlineMs, signal,
     ...(continuation === undefined ? {} : {continuation}),
@@ -296,8 +318,13 @@ function makeCombinedSignal(parent: AbortSignal, deadlineMs: number): CombinedSi
     if (!controller.signal.aborted) controller.abort();
   };
   const onParentAbort = (): void => abort('cancelled');
-  parent.addEventListener('abort', onParentAbort, {once: true});
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const dispose = (): void => {
+    if (timer !== undefined) clearTimeout(timer);
+    try {
+      parent.removeEventListener('abort', onParentAbort);
+    } catch { /* Cleanup cannot replace a result or disclose host signal errors. */ }
+  };
   const scheduleDeadline = (): void => {
     if (controller.signal.aborted) return;
     const remaining = deadlineMs - Date.now();
@@ -307,17 +334,23 @@ function makeCombinedSignal(parent: AbortSignal, deadlineMs: number): CombinedSi
     }
     timer = setTimeout(scheduleDeadline, Math.min(MAX_TIMER_DELAY, remaining));
   };
-  if (parent.aborted) onParentAbort();
-  scheduleDeadline();
+  try {
+    parent.addEventListener('abort', onParentAbort, {once: true});
+    const aborted = parent.aborted;
+    if (typeof aborted !== 'boolean') invalid('Coordination signal is invalid');
+    if (aborted) onParentAbort();
+    scheduleDeadline();
+  } catch {
+    // A host signal can register the listener and then throw during setup.
+    dispose();
+    invalid('Coordination signal is invalid');
+  }
   return {
     signal: controller.signal,
     cause: () => abortCause,
     deadlineMs,
     abort,
-    dispose(): void {
-      if (timer !== undefined) clearTimeout(timer);
-      parent.removeEventListener('abort', onParentAbort);
-    },
+    dispose,
   };
 }
 

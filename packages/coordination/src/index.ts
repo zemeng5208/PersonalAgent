@@ -11,11 +11,13 @@ const continuationFields = ['proposalId', 'state', 'result'] as const;
 const availableToolFields = ['name', 'version', 'inputSchema'] as const;
 // Total UTF-8 JSON budget, including the continuation envelope. Not a wire limit.
 const MAX_CONTINUATION_JSON_BYTES = 1_048_576;
+// Preserve the existing UTF-16 JSON argument limit while bounding the copy itself.
+const MAX_PROPOSAL_JSON_CHARS = 65_536;
 // Shared by the trusted Runtime projection and cloud request parser. Leave room
 // for the user goal and request envelope within AgentArts' 32 KiB initial query.
 export const MAX_AVAILABLE_TOOLS = 64;
 export const MAX_AVAILABLE_TOOLS_JSON_BYTES = 24_576;
-interface JsonBudget { remaining: number; }
+interface JsonBudget { remaining: number; unit?: 'utf8' | 'utf16'; }
 
 function hasExactEnumerableKeys(value: object, fields: readonly string[]): boolean {
   try {
@@ -124,17 +126,18 @@ function invalidResult(): never {
   throw new ProtocolError('INVALID_ARGUMENT', 'Invalid coordination result');
 }
 
-function takeJsonBytes(budget: JsonBudget | undefined, bytes: number): void {
+function takeJsonUnits(budget: JsonBudget | undefined, units: number): void {
   if (budget === undefined) return;
-  if (bytes > budget.remaining) invalidResult();
-  budget.remaining -= bytes;
+  if (units > budget.remaining) invalidResult();
+  budget.remaining -= units;
 }
 
 function takeJsonString(budget: JsonBudget | undefined, value: string): void {
   if (budget === undefined) return;
   // Reject obviously oversized strings before allocating their escaped form.
   if (value.length + 2 > budget.remaining) invalidResult();
-  takeJsonBytes(budget, Buffer.byteLength(JSON.stringify(value), 'utf8'));
+  const serialized = JSON.stringify(value);
+  takeJsonUnits(budget, budget.unit === 'utf16' ? serialized.length : Buffer.byteLength(serialized, 'utf8'));
 }
 
 function cloneJsonValue(value: unknown, seen = new Set<object>(), depth = 0, budget?: JsonBudget): unknown {
@@ -142,7 +145,7 @@ function cloneJsonValue(value: unknown, seen = new Set<object>(), depth = 0, bud
   if (typeof value === 'string') { takeJsonString(budget, value); return value; }
   if (value === null || typeof value === 'boolean'
     || (typeof value === 'number' && Number.isFinite(value))) {
-    takeJsonBytes(budget, JSON.stringify(value).length);
+    takeJsonUnits(budget, JSON.stringify(value).length);
     return value;
   }
   if (typeof value !== 'object') invalidResult();
@@ -150,25 +153,21 @@ function cloneJsonValue(value: unknown, seen = new Set<object>(), depth = 0, bud
   seen.add(value);
   try {
     if (Array.isArray(value)) {
-      if (budget !== undefined) {
-        // Never invoke a provider-controlled map/getter or skip sparse entries.
-        const length = Object.getOwnPropertyDescriptor(value, 'length')?.value;
-        if (!Number.isSafeInteger(length) || length < 0 || length > 256) invalidResult();
-        const keys = Reflect.ownKeys(value);
-        if (keys.length !== length + 1 || !keys.includes('length')
-          || keys.some(key => key !== 'length' && (typeof key !== 'string'
-            || !/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= length))) invalidResult();
-        takeJsonBytes(budget, 2 + Math.max(0, length - 1));
-        const result: unknown[] = [];
-        for (let index = 0; index < length; index++) {
-          const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-          if (!descriptor?.enumerable || !('value' in descriptor)) invalidResult();
-          result.push(cloneJsonValue(descriptor.value, seen, depth + 1, budget));
-        }
-        return result;
+      // Never invoke a provider-controlled map/getter or skip sparse entries.
+      const length = Object.getOwnPropertyDescriptor(value, 'length')?.value;
+      if (!Number.isSafeInteger(length) || length < 0 || length > 256) invalidResult();
+      const keys = Reflect.ownKeys(value);
+      if (keys.length !== length + 1 || !keys.includes('length')
+        || keys.some(key => key !== 'length' && (typeof key !== 'string'
+          || !/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= length))) invalidResult();
+      takeJsonUnits(budget, 2 + Math.max(0, length - 1));
+      const result: unknown[] = [];
+      for (let index = 0; index < length; index++) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (!descriptor?.enumerable || !('value' in descriptor)) invalidResult();
+        result.push(cloneJsonValue(descriptor.value, seen, depth + 1, budget));
       }
-      if (value.length > 256) invalidResult();
-      return value.map(item => cloneJsonValue(item, seen, depth + 1));
+      return result;
     }
     let prototype: object | null;
     let descriptors: PropertyDescriptorMap;
@@ -181,13 +180,13 @@ function cloneJsonValue(value: unknown, seen = new Set<object>(), depth = 0, bud
     if (prototype !== Object.prototype && prototype !== null) invalidResult();
     const keys = Reflect.ownKeys(descriptors);
     if (keys.length > 128 || keys.some(key => typeof key !== 'string')) invalidResult();
-    takeJsonBytes(budget, 2 + Math.max(0, keys.length - 1));
+    takeJsonUnits(budget, 2 + Math.max(0, keys.length - 1));
     const result: Record<string, unknown> = {};
     for (const key of keys as string[]) {
       const descriptor = descriptors[key];
       if (!descriptor?.enumerable || !('value' in descriptor)) invalidResult();
       takeJsonString(budget, key);
-      takeJsonBytes(budget, 1); // Colon between the key and its value.
+      takeJsonUnits(budget, 1); // Colon between the key and its value.
       // JSON keys are data, including __proto__; assignment would invoke its
       // legacy setter on a normal object and silently change the argument shape.
       Object.defineProperty(result, key, {
@@ -210,6 +209,14 @@ function boundedIdentifier(value: unknown, maxLength: number): value is string {
 }
 
 export function parseCoordinationToolProposal(value: unknown): CoordinationToolProposalResult {
+  try {
+    return parseToolProposal(value);
+  } catch {
+    return invalidResult();
+  }
+}
+
+function parseToolProposal(value: unknown): CoordinationToolProposalResult {
   if (value === null || typeof value !== 'object' || Array.isArray(value)
     || !hasExactEnumerableKeys(value, proposalResultFields)) invalidResult();
   const proposal = value as Record<string, unknown>;
@@ -224,12 +231,13 @@ export function parseCoordinationToolProposal(value: unknown): CoordinationToolP
   } catch {
     return invalidResult();
   }
-  const argumentsClone = cloneJsonValue(argumentsValue);
+  const argumentsClone = cloneJsonValue(argumentsValue, new Set<object>(), 0,
+    {remaining: MAX_PROPOSAL_JSON_CHARS, unit: 'utf16'});
   if (kind !== 'tool_proposal' || !boundedIdentifier(proposalId, 128)
     || !boundedIdentifier(toolName, 128) || !boundedIdentifier(toolVersion, 64)
     || argumentsClone === null || typeof argumentsClone !== 'object' || Array.isArray(argumentsClone)
     || !['mock', 'unverified'].includes(verification as string)
-    || JSON.stringify(argumentsClone).length > 65_536) invalidResult();
+    || JSON.stringify(argumentsClone).length > MAX_PROPOSAL_JSON_CHARS) invalidResult();
   return {kind, proposalId, toolName, toolVersion,
     arguments: argumentsClone as Record<string, unknown>,
     verification: verification as CoordinationToolProposalResult['verification']};
@@ -289,7 +297,7 @@ function parseContinuation(value: unknown): CoordinationContinuation {
   if (!boundedIdentifier(proposalId, 128) || state !== 'confirmed') invalidResult();
   const budget: JsonBudget = {remaining: MAX_CONTINUATION_JSON_BYTES};
   // Count the exact envelope without serializing the untrusted result.
-  takeJsonBytes(budget, Buffer.byteLength(JSON.stringify({proposalId, state, result: null}), 'utf8') - 4);
+  takeJsonUnits(budget, Buffer.byteLength(JSON.stringify({proposalId, state, result: null}), 'utf8') - 4);
   return {proposalId, state, result: cloneJsonValue(result, new Set<object>(), 0, budget)};
 }
 

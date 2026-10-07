@@ -98,6 +98,13 @@ is best effort and does not await an uncooperative transport, replace the origin
 error, or trigger a retry. Successfully consumed readers are only released. These
 local lifecycle checks do not prove that remote cloud execution has stopped.
 
+Direct cloud-port calls use the same canonical UTC deadline forms as the coordinator
+(`...Z` with optional three-digit milliseconds); normalized impossible dates and
+other date formats fail before credentials or transport. Request/signal accessor
+and listener-setup failures return a fixed `INVALID_ARGUMENT`. Partially registered
+listeners are released where possible, and signal cleanup failures cannot replace
+a successful result or the original cancellation, deadline or provider error.
+
 When a response uses workflow events, each `workflow_start` must pair with a
 `workflow_end`; supplied workflow IDs/names must match. The adapter keeps the latest
 workflow answer and returns it only after the ordered `task_end` then `end` events.
@@ -154,3 +161,12 @@ Tool proposal and confirmed continuation JSON copies preserve own special keys s
 as `__proto__` as ordinary data properties. They do not change the copied object's
 prototype or silently drop fields before validation and authorization. Repeated
 parsing preserves the same JSON payload; schema and Policy checks still apply.
+
+Tool proposal arguments use a shared budget while copying, retaining the existing
+65,536 UTF-16 code-unit limit for their serialized JSON. This limit includes keys,
+escaped strings and container punctuation; it is separate from the UTF-8 continuation
+and tool-directory budgets. Dense JSON arrays are copied from own data properties;
+sparse arrays, accessors, custom methods and extra properties are rejected rather
+than running provider `map` implementations or silently changing argument data.
+Reflection failures return the fixed `INVALID_ARGUMENT` result. These in-process
+checks do not sandbox a provider, authorize a tool or establish cloud availability.
