@@ -508,6 +508,20 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
         const recordedGoal = (node: NodeVersion): boolean => recorded.has(node.revision === 1
           ? JSON.stringify(['goal_created', node.id, node.revision])
           : JSON.stringify(['goal', node.id, node.revision - 1, node.id, node.revision]));
+        const expiry = expiredPublicFactScope(snapshot, request.at);
+        const expiryTrigger = expiry.items.length ? {kind: 'expiry' as const, input: {
+          graphRevision: snapshot.revision, facts: expiry.facts,
+          consumers: expiry.items.map(item => item.node).sort((a, b) => refKey(a).localeCompare(refKey(b))),
+        }} : undefined;
+        const unrecordedExpiry = expiryTrigger && !runtime.findTaskByIdempotencyKey('proactive-cognition:'
+          + toolArgumentsDigest({graphNamespace, bindingVersion, trigger: {kind: 'expiry',
+            facts: expiryTrigger.input.facts, consumers: expiryTrigger.input.consumers}}));
+        let expiryReviewed = false;
+        const reviewExpiry = async (): Promise<void> => {
+          if (!expiryTrigger || expiryReviewed || reviews.length >= request.limit) return;
+          reviews.push(await review(expiryTrigger, request));
+          expiryReviewed = true;
+        };
         const goals = [...heads.values()].filter(node => node.kind === 'goal'
           && node.state === 'active' && isEffective(node, request.at))
           .sort((a, b) => Number(recordedGoal(a)) - Number(recordedGoal(b))
@@ -515,6 +529,10 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
             || a.graphRevision - b.graphRevision);
         for (const goal of goals) {
           open(); active(request);
+          // New local expiry work must not wait for an older Goal's cloud grant.
+          // Recorded expiry work keeps the original fallback, so an unavailable
+          // expiry handoff cannot in turn starve pending Goal recovery at limit 1.
+          if (recordedGoal(goal) && unrecordedExpiry) await reviewExpiry();
           if (reviews.length >= request.limit) break;
           const currentGoal = {id: goal.id, revision: goal.revision};
           let trigger: Trigger;
@@ -531,13 +549,7 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
           if (prior && !goalNeedsReview(prior)) continue;
           reviews.push(await review(trigger, request, recorded));
         }
-        if (reviews.length === 0) {
-          const scope = expiredPublicFactScope(snapshot, request.at);
-          if (scope.items.length) reviews.push(await review({kind: 'expiry', input: {
-            graphRevision: snapshot.revision, facts: scope.facts,
-            consumers: scope.items.map(item => item.node).sort((a, b) => refKey(a).localeCompare(refKey(b))),
-          }}, request));
-        }
+        if (reviews.length === 0) await reviewExpiry();
       }
       return {reviews, nextGraphRevision, atWatermark: consumed.batch.atWatermark, hasMoreReviews};
     },

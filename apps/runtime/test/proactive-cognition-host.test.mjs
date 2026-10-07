@@ -67,7 +67,8 @@ function open(paths, state) {
         state.prepareGate.arrive();
         await state.prepareGate.pending;
       }
-      if (state.prepareUnavailable) return undefined;
+      if (state.prepareUnavailable === true || (typeof state.prepareUnavailable === 'function'
+        && state.prepareUnavailable(review))) return undefined;
       if (state.expectMachineReview) {
         assert.equal(review.selectedOption, undefined);
         assert.equal(review.selection.state, 'review');
@@ -540,6 +541,82 @@ test('public Fact expiry without a new feed event creates one durable AgentArts 
     assert.equal(calls.layaCalls, 1, 'polling, restart and unrelated graph changes do not rerun Laya');
     assert.equal(calls.agentArtsCalls, 1);
     assert.equal(binding.application.runtime.bindCoordinationStore(graphNamespace).read().revision, 5);
+  } finally {
+    binding.close();
+    await rm(paths.directory, {recursive: true, force: true});
+  }
+});
+
+test('new public Fact expiry is analyzed before an older blocked Goal handoff without starving its recovery at limit one', async () => {
+  const paths = await workspace();
+  const calls = state({prepareUnavailable: true});
+  let binding = open(paths, calls);
+  const expiry = '2026-09-27T04:00:00.000Z';
+  try {
+    binding.facts.recordPublicSource({...source, sourceRevision: 'a'.repeat(64), line: 1,
+      summary: 'Public schedule with an explicit validity cutoff', observedAt: at,
+      validFrom: at, validUntil: expiry, expectedFactRevision: null}, context());
+    const baseline = await binding.host.consumeAndReview({...context(), at, limit: 1, afterGraphRevision: 0});
+    const store = binding.application.runtime.bindCoordinationStore(graphNamespace);
+    const fact = store.read().history[0];
+    const {kind: _kind, ...goal} = node('unplanned-goal', 'goal', [], 'Plan a public demonstration');
+    const created = createGoal(store, store.read().revision, goal);
+    store.append(store.read().revision, node('expiry-plan', 'plan', [ref(fact.id)]));
+    const graphRevision = store.read().revision;
+    const poll = () => binding.host.consumeAndReview({...context(), at: expiry, limit: 1,
+      afterGraphRevision: baseline.nextGraphRevision});
+
+    const first = await poll();
+    assert.equal(first.reviews.length, 1);
+    const initial = first.reviews[0];
+    assert.deepEqual(initial.review.subjectGoal, ref(created.goal.id));
+    assert.equal(initial.review.selectedOption.id, 'plan', 'fresh Goal planning remains first');
+    assert.equal(initial.handoff.state, 'unavailable');
+
+    const second = await poll();
+    assert.equal(second.reviews.length, 1);
+    const expired = second.reviews[0];
+    assert.equal(expired.review.subjectGoal, undefined);
+    assert.deepEqual(expired.review.affected.map(item => item.node.id), ['expiry-plan']);
+    assert.equal(expired.review.selectedOption.id, 'recheck');
+    assert.equal(expired.handoff.state, 'unavailable');
+    assert.equal(calls.layaCalls, 2, 'the new expiry is analyzed locally despite unavailable cloud preparation');
+    assert.equal(calls.agentArtsCalls, 0);
+
+    for (let i = 0; i < 2; i++) {
+      const blocked = await poll();
+      assert.equal(blocked.reviews.length, 1);
+      assert.equal(blocked.reviews[0].task.taskId, initial.task.taskId,
+        'an existing unavailable expiry must not repeatedly take the Goal recovery slot');
+      assert.equal(blocked.nextGraphRevision, baseline.nextGraphRevision);
+    }
+    binding.close(); binding = open(paths, calls);
+    const restarted = await poll();
+    assert.equal(restarted.reviews[0].task.taskId, initial.task.taskId);
+    assert.equal(calls.layaCalls, 2, 'restart retains both exact local decisions');
+
+    calls.selectedId = 'plan';
+    calls.prepareUnavailable = review => !review.subjectGoal;
+    const acceptedGoal = await poll();
+    assert.equal(acceptedGoal.reviews[0].task.taskId, initial.task.taskId);
+    assert.equal(acceptedGoal.reviews[0].handoff.state, 'submitted');
+    await waitFor(binding.application, acceptedGoal.reviews[0].handoff.task.taskId, 'succeeded');
+    const stillBlockedExpiry = await poll();
+    assert.equal(stillBlockedExpiry.reviews[0].task.taskId, expired.task.taskId);
+    assert.equal(stillBlockedExpiry.reviews[0].handoff.state, 'unavailable');
+    assert.equal(calls.agentArtsCalls, 1, 'Goal recovery does not grant the expiry permission');
+
+    calls.selectedId = 'recheck'; calls.prepareUnavailable = false;
+    const acceptedExpiry = await poll();
+    assert.equal(acceptedExpiry.reviews[0].task.taskId, expired.task.taskId);
+    assert.equal(acceptedExpiry.reviews[0].handoff.state, 'submitted');
+    await waitFor(binding.application, acceptedExpiry.reviews[0].handoff.task.taskId, 'succeeded');
+    const replay = await poll();
+    assert.equal(replay.reviews[0].handoff.task.taskId, acceptedExpiry.reviews[0].handoff.task.taskId);
+    assert.equal(replay.reviews.length, 1);
+    assert.equal(replay.nextGraphRevision, baseline.nextGraphRevision);
+    assert.equal(calls.layaCalls, 2); assert.equal(calls.agentArtsCalls, 2);
+    assert.equal(binding.application.runtime.bindCoordinationStore(graphNamespace).read().revision, graphRevision);
   } finally {
     binding.close();
     await rm(paths.directory, {recursive: true, force: true});
