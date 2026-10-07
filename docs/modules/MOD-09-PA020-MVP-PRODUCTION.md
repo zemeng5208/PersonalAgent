@@ -1,5 +1,95 @@
 # PA020 私人记忆与流程学习生产桥
 
+## 2026-10-06 收口验收矩阵
+
+目标 profile 为 `huawei_ict_agentarts`，负责人 goo122。远端 main 核对基线为
+`e02865c6c19a33b165a33537cc7c44c310d6cbdd`；共享根工作区保留，不作为本轮验证基线。
+本节区分当前集成状态与下面保留的历史验收记录，不将阶段测试累计成完成百分比。
+
+| 验收项 | 当前证据 | 剩余条件 |
+| --- | --- | --- |
+| 同步消费门禁、实际 Runtime 父子副本清除 | #285 已合并；实际 SQLite/Runtime 回归，云响应与确认回调为 Fake | 原生许可和真实云消费不能由该回归替代 |
+| 流程验证、启用、回退、重启与删除 | #289 已于 2026-10-06 合并，提交 `1ecab685960c364016364d171fdc00a704aeccb5`；实际官方 filesystem stdio、Client、SQLite Policy/Runtime，公开合成文件 | 真实用户流程与原生启用/回退另验 |
+| 撤回后管理、全版本删除及取消异常恢复 | #294 代码提交 `23400525078534da7dc6076ef0192ffa2ca1bc27` 双 Foundation 成功；定向 13/13、Desktop 443 通过/0 失败/2 跳过，合成 Electron 生命周期通过 | 尚无非作者评审，尚未合并；本节文档续作的新 head 另查 CI/评审 |
+| 真实来源持久生命周期 | 已经生产只读端口读回一条引文，来源版本及原文件字节一致；本次准备阶段无事实写入、无云调用 | 待用户逐条确认具体摘要后，在独立验收库完成保存、更正、重启、撤回、全版本删除及无关数据保留 |
+| Electron 原生交互 | 2026-10-06 初始化及重置复试均报 `windows sandbox failed: helper_unknown_error: setup refresh had errors`；未发生原生窗口输入 | 原生工具恢复后操作独立验收实例；聊天确认与替身对话不代替原生证据 |
+| 私人 parent→child 消费 | 当前私人派生提案在审批、工具执行和子任务创建前拒绝；父许可不传递给子任务 | 与 P8/认知负责人明确交付范围及逐任务许可；保持拒绝行为，不用副本删除测试冒充消费支持 |
+| 真实 AgentArts 消费 | 本工作包没有真实云调用证据 | 可用部署、明确任务目的地及独立出机/云调用授权；记录 deployment/version/trace、本地 Evidence 和读回 |
+
+执行顺序：#294 当前提交非作者评审 → 获得合并授权后集成 → 逐条确认的真实来源本地生命周期
+→ 原生交互验收 → 已约定范围的真实消费。评审、来源确认或原生工具等待期间，仍可校对脱敏验收记录；
+不得使用 Fake 自动确认私人内容、使用其他账号自评或因 CI 成功提前合并。
+MOD-09 保持 `in_progress`、接口保持 provisional，只有约定验收、非作者评审和集成都满足后再调整状态。
+
+## 2026-10-06 撤回后的管理入口补修
+
+目标 profile：`huawei_ict_agentarts`；goo122 延续在途 MOD-09 工作，状态 `in_progress`。
+基线 `e02865c`；隔离工作树 `.worktrees/mod09-withdrawn-memory-management`，
+分支 `codex/mod09-withdrawn-memory-management`。保留已有原生验收实例和共享工作区。
+
+- 失败复现：私人记忆更正为 v2、撤回为 v3 后，重启时管理列表只查询有效事实，
+  找不到撤回头，无法从列表选择全部历史删除。新增合成用例在修复前准确失败。
+- SQLite 新增 host-only `listUserFactHeads`，复用原快照/游标和水位，列出每条
+  `private/user_confirmed` 的当前头，包括撤回和过期；最新头不满足范围时不回退。
+  管理快照与 consumer query、其他 namespace 隔离，删除时失效相关快照。
+- Desktop 管理列表使用该端口，展示版本和撤回状态。撤回或删除确认成功后刷新列表，
+  任务选择只保留有效 active 引用；取消不刷新或改写引用。
+- 不新增 wire operation、Schema、迁移或依赖。`MemoryQueryPort` 的有效查询和任务消费授权不变，
+  接口仍为 provisional。真实原生逐条确认、真实来源持久生命周期和真实 AgentArts 消费尚未通过。
+- 验证：`npm ci`、根构建、native Release 构建通过；定向回归 35/35、Memory 工作区 44/44，
+  根集成 22/22。数据和确认回调均为显式合成，不构成原生确认或真实云端证据。
+  `npm run dev`、`demo:protocol`、`demo:runtime` 均通过；Runtime 演示 verification 为 mock。
+- `npm run check` 的架构、协议夹具、生成检查与全工作区类型检查通过；工作区测试共
+  2074 项，2047 通过、2 失败、25 跳过。失败代码均未修改：Desktop
+  `coding-tool-host.test.mjs:72` 在默认 TEMP 环境的装配断言失败。最初观察到 `where.exe`
+  输出解码后路径不匹配，但当前主线已经直接搜索 PATH，该观察不能作为本次装配失败的根因。
+  另 `windows-host-fixture.test.mjs:34`
+  要求稳定 .NET 8 SDK，本机只枚举到 SDK 10.0.302；已有 .NET 8 Runtime 不等于 SDK。
+  此为首次运行的失败记录，未修改这些门禁或顺带扩展 Windows 宿主范围。
+- 2026-10-06 环境复核：微软官方 SDK 8.0.425 zip 经官方 SHA-512 校验后解压到项目忽略缓存。
+  仅验证进程使用该 SDK，并把 TEMP/TMP 指向工作树外的项目缓存；原宿主装配门禁单独通过，
+  两项 Windows 门禁合计 7/7。默认 TEMP 兼容问题仍待 Windows 宿主负责人定位；本补修不声明解决它。
+- 隔离环境完整 `npm run check` 通过：工作区测试 2074 项，2049 通过、0 失败、25 跳过，
+  根集成 22/22；架构、协议夹具、生成检查和类型检查均通过。验证条件如上，不宣称默认 TEMP 兼容修复。
+- 本增量通过独立 PR 交付；当前提交的远程 CI、非作者评审与合并仍为集成条件，
+  不把本地通过记作主线交付或 MOD-09 完成。
+
+### 同日继续：删除待清除状态与 Electron 合成回归
+
+- 管理页此前把私人来源已删除、关联任务副本仍待清除的 `pending` 误报为“已取消”。
+  Renderer 合成响应准确复现该问题；现在刷新当前头，显示删除尚未完成，不保留已删除引用供任务选择。
+  独立控件对 `private_copy_erasure` 同样刷新；拒绝确认保持原引用。
+- 更新已有 `apps/desktop/test/private-memory-smoke.cjs`：旧回环网关不满足当前可信配置校验，
+  旧“所有私人写入禁用”和 fixture-root 开关也已不符合 main 的生产装配。现在以合法合成目标、
+  空云凭据和独立 userData 启动正式 Competition 装配，不配置真实账号、不提交云任务。
+- 实际隔离 Electron 回归通过：替身确认取消/保存、更正 v2、拒绝撤回、撤回 v3 后自动刷新、
+  无消费按钮、关闭重启且不重新选择 Vault、拒绝删除保留三版本、删除三版本、再次重启仍为空。
+  原夹具文件字节保留；验证进程 fetch 陷阱计数为零。待副本清除展示使用显式 Renderer fixture。
+- 原生 Computer Use 初始化及重置后重试仍报 `trusted Node process exited unexpectedly`，
+  没有原生窗口输入；上述自动化与替身对话不代替真实用户逐条确认或真实 AgentArts 验收。
+- 本补修 Desktop 类型检查与完整模块测试通过：444 项，442 通过、0 失败、2 跳过；
+  沿用上节的隔离 SDK/TEMP 验证条件。无公共接口、迁移或 Runtime 执行语义变更。
+- 首提交 `e829aef` 的远程 Foundation run `37446016736` 失败于未修改的 Calendar
+  `cloud-business.test.mjs:88`：deadline 预期 `TIMEOUT`，实际 `EXTERNAL_FAILURE`；同一用例本机复跑通过。
+  该目录不在本 PR diff 中，保留失败记录，不据复跑通过宣称远程门禁通过；后续提交须重新核对 CI。
+
+### 同日继续：删除提交后的取消异常恢复
+
+- 新用例准确复现：私人来源删除已提交，取消某个派生任务抛错，清理整批中断，
+  不能返回该副本的 pending 状态或继续处理其他目标副本。
+- `private-memory-erasure-host.js` 将释放、取消和精确副本清理纳入原失败收集边界。
+  取消失败保留该 taskId 为 pending，继续处理同事实的其他副本；恢复只使用原删除标记。
+  已有精确 `taskId/factId/bindingDigest/purged` 收据的副本跳过释放、取消和清理，
+  失配收据仍不能当作完成。不改 Runtime 取消受理语义，不重放工具或云调用。
+- 合成源库及替身取消端口复验覆盖部分清理、重启恢复、重复恢复零取消和无关副本保留；
+  连同实际 Runtime 父子副本、生产管理/消费门禁定向 13/13 通过。
+  无 Schema、公共 operation、数据库迁移、依赖或权限变化。
+- Desktop 类型检查与完整模块测试通过：445 项，443 通过、0 失败、2 跳过；
+  隔离 Electron 合成生命周期再次通过，fetch 陷阱计数零。沿用前述 SDK/TEMP 条件，
+  原生逐条确认及真实云端验收仍未完成。
+- 中间提交 `ce95539` 两项 Foundation（run `37447588019`、`37447583221`）成功，
+  暂无非作者评审。该证据仅覆盖此取消异常补修之前的提交；新提交须重新验证 CI 和评审。
+
 ## 2026-10-05 主线确认与实际 MCP 学习验收
 
 目标为 `huawei_ict_agentarts`，工作树 `.worktrees/main-ci-foundation-validation`，

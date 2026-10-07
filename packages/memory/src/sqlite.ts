@@ -365,17 +365,18 @@ export class SqliteMemoryHost {
       let affected = snapshot.mode === 'history' && filter.factId === factId;
       if (snapshot.mode === 'current') {
         const latest = this.db.prepare([
-          'SELECT sensitivity, state, source_ref, valid_from_ms, valid_until_ms',
+          "SELECT sensitivity, state, source_ref, valid_from_ms, valid_until_ms, json_extract(payload, '$.confirmation') AS confirmation",
           'FROM memory_facts WHERE namespace = ? AND fact_id = ? AND sequence <= ?',
           'ORDER BY revision DESC LIMIT 1',
         ].join(' ')).get(namespace, factId, rowNumber(snapshot, 'watermark')) as Row | undefined;
         const allowed = parseJson<FactSensitivity[]>(rowText(snapshot, 'scope_key'));
         const at = Date.parse(filter.at as string);
-        affected = latest !== undefined && (filter.factId === null || filter.factId === factId)
-          && (filter.sourceRef === null || filter.sourceRef === latest.source_ref)
-          && allowed.includes(latest.sensitivity as FactSensitivity)
-          && latest.state === 'active' && (latest.valid_from_ms as number) <= at
-          && at < (latest.valid_until_ms as number);
+        affected = latest !== undefined && allowed.includes(latest.sensitivity as FactSensitivity)
+          && (filter.privateAdminHeads === true ? latest.confirmation === 'user_confirmed'
+            : (filter.factId === null || filter.factId === factId)
+              && (filter.sourceRef === null || filter.sourceRef === latest.source_ref)
+              && latest.state === 'active' && (latest.valid_from_ms as number) <= at
+              && at < (latest.valid_until_ms as number));
       }
       if (affected) this.db.prepare('DELETE FROM memory_query_snapshots WHERE token = ?')
         .run(rowText(snapshot, 'token'));
@@ -518,6 +519,27 @@ export class SqliteMemoryHost {
     const saved = fact(parseJson(rowText(row, 'payload')));
     if (saved.sensitivity !== 'private' || saved.confirmation !== 'user_confirmed') return queryFail('SCOPE_DENIED');
     return structuredClone(saved);
+  }
+
+  /** Trusted private admin listing; inactive heads remain discoverable for physical deletion. */
+  async listUserFactHeads(namespaceValue: unknown,
+    raw: Omit<ListCurrentFactsRequest, 'factId' | 'sourceRef'>): Promise<FactPage> {
+    try {
+      const namespace = text(namespaceValue);
+      const record = exact(raw, ['at', 'limit', 'deadline', 'signal'], ['snapshot', 'cursor']);
+      const operation = context(record, queryFail);
+      const at = time(record.at);
+      const page = parsePage(record);
+      await Promise.resolve();
+      active(operation, queryFail);
+      const result = this.queryPage(namespace, scope({allowedSensitivities: ['private']}, false),
+        'current', JSON.stringify({at: at.text, privateAdminHeads: true}), page, {privateAdminHeads: true});
+      active(operation, queryFail);
+      return structuredClone(result);
+    } catch (error) {
+      if (error instanceof MemoryQueryError) throw error;
+      return queryFail();
+    }
   }
 
   /** Trusted private composition readiness; a previous feed binding is irreversible here. */
@@ -1315,7 +1337,8 @@ export class SqliteMemoryHost {
     mode: 'current' | 'history',
     filterKey: string,
     page: PageOptions,
-    criteria: {readonly at?: number; readonly factId?: string; readonly sourceRef?: string},
+    criteria: {readonly at?: number; readonly factId?: string; readonly sourceRef?: string;
+      readonly privateAdminHeads?: boolean},
   ): FactPage {
     let snapshot = page.snapshot;
     let watermark: number;
@@ -1358,13 +1381,16 @@ export class SqliteMemoryHost {
         'f.sequence <= ?',
         'NOT EXISTS (SELECT 1 FROM memory_erasure_intents e WHERE e.namespace = f.namespace AND e.fact_id = f.fact_id)',
         `f.sensitivity IN (${placeholders})`,
-        "f.state = 'active'",
-        'f.valid_from_ms <= ?',
-        '? < f.valid_until_ms',
       ];
       const parameters: (string | number)[] = [
-        namespace, watermark, ...allowed.values, criteria.at!, criteria.at!,
+        namespace, watermark, ...allowed.values,
       ];
+      if (criteria.privateAdminHeads) {
+        clauses.push("json_extract(f.payload, '$.confirmation') = 'user_confirmed'");
+      } else {
+        clauses.push("f.state = 'active'", 'f.valid_from_ms <= ?', '? < f.valid_until_ms');
+        parameters.push(criteria.at!, criteria.at!);
+      }
       if (criteria.factId !== undefined) { clauses.push('f.fact_id = ?'); parameters.push(criteria.factId); }
       if (criteria.sourceRef !== undefined) { clauses.push('f.source_ref = ?'); parameters.push(criteria.sourceRef); }
       rows = this.db.prepare(`SELECT f.payload FROM memory_facts f

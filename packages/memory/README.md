@@ -79,6 +79,14 @@ After the trusted caller confirms one private excerpt, this method appends its f
 altered operation IDs or existing fact IDs cannot overwrite a fact. Physical fact
 erasure removes the creation receipt. No Vault text is imported automatically.
 
+Host-only `listUserFactHeads(namespace, request)` lists the latest user-confirmed
+private heads, including withdrawn and expired records, so an admin can still find
+and physically delete them after restart. It reuses bounded opaque snapshot/cursor
+pagination; its tokens cannot be used with consumer queries or another namespace.
+It never falls back to an older private head. Erasure invalidates affected admin
+snapshots. `MemoryQueryPort.listCurrent` remains limited to effective active facts;
+the management listing does not grant task consumption or cloud permission.
+
 `withdrawPublicSource` records an append-only public tombstone with an expected Fact
 revision and an idempotent withdrawal ID. The caller must first verify source removal
 through its trusted source adapter and obtain authorization for that source; search

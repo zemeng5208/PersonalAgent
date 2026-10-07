@@ -6,7 +6,7 @@ import test from 'node:test';
 import {openSqliteMemoryHost} from '@personal-agent/memory/sqlite';
 import {createPrivateMemoryController} from '../electron/private-memory.js';
 import {createMemoryLearningHost} from '../electron/memory-learning-host.js';
-import {memoryLearningControlsHtml} from '../src/features/admin/memory-learning-controls.js';
+import {memoryLearningControlsHtml, mountMemoryLearningControls} from '../src/features/admin/memory-learning-controls.js';
 
 const context = () => ({deadline: new Date(Date.now() + 60_000).toISOString(), signal: new AbortController().signal});
 async function fixture(t, options = {}) {
@@ -57,13 +57,13 @@ test('withdrawal survives restart, never exposes old preference, and cloud requi
   assert.equal(JSON.stringify(consumed).includes(f.source.path), false);
   onConsent = async () => {await f.controller.withdraw(ref);};
   await assert.rejects(f.controller.consumeConfirmed(request), /版本已变化/);
-  assert.equal((await f.controller.listSaved()).facts.length, 0);
+  assert.deepEqual((await f.controller.listSaved()).facts.map(fact => fact.state), ['withdrawn']);
   const withdrawn = {id: ref.id, revision: 2};
   await assert.rejects(f.controller.consumeConfirmed({...request, refs: [withdrawn]}), /撤回/);
   f.controller.close();
   const restarted = createPrivateMemoryController(f.database, async () => false, async () => true);
   try {
-    assert.equal((await restarted.listSaved()).facts.length, 0);
+    assert.deepEqual((await restarted.listSaved()).facts.map(fact => fact.ref), [withdrawn]);
     assert.equal((await restarted.delete(withdrawn)).state, 'deleted');
   } finally {restarted.close();}
 });
@@ -114,4 +114,24 @@ test('independent control projection escapes text and has no private values or r
   assert.ok(html.includes('data-ml-action="activate" disabled'));
   assert.equal(html.includes('must-not-display'), false);
   assert.equal(html.includes('opaque-id'), false);
+});
+
+test('memory controls refresh exact references after confirmed changes but preserve cancelled actions', async () => {
+  for (const action of ['withdraw', 'delete']) for (const state of ['declined', action === 'withdraw' ? 'withdrawn' : 'deleted',
+    ...(action === 'delete' ? ['pending'] : [])]) {
+    let click;
+    let refreshes = 0;
+    const calls = [];
+    const root = {innerHTML: '', contains: () => true, querySelector: () => ({value: ''}),
+      addEventListener: (name, handler) => {click = handler;}};
+    const controls = mountMemoryLearningControls(root, {status: {}, refs: [{id: 'exact-fact', revision: 2}],
+      invoke: async (name, payload) => {calls.push([name, payload]); return {state, revision: 3, phase: 'private_copy_erasure'};},
+      onMemoryChanged: async () => {refreshes += 1; controls.update({refs: []});}});
+    const button = {dataset: {[action === 'withdraw' ? 'mlWithdraw' : 'mlDelete']: '0'}, disabled: false};
+    await click({target: {closest: () => button}});
+    assert.deepEqual(calls, [[`memory.${action}`, {ref: {id: 'exact-fact', revision: 2}}]]);
+    assert.equal(refreshes, state === 'declined' ? 0 : 1);
+    assert.equal(root.innerHTML.includes('data-ml-use="0"'), state === 'declined');
+    controls.dispose();
+  }
 });
