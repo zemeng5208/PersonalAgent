@@ -10,7 +10,7 @@ import {createGoalControl} from '../features/conversation/goal-view.js';
 import {mountDesktopShell} from '../ui/desktop-shell.js';
 import {mountLiveVoiceControls} from './live-voice-controls.js';
 import {mountProactiveControls} from './proactive-controls.js';
-import {approvalCards,approvalResponse} from '../features/conversation/approval-card.js';
+import {approvalCards,approvalResponse,nextApprovalExpiry} from '../features/conversation/approval-card.js';
 
 applyPreferences();
 mountDesktopShell();
@@ -55,6 +55,7 @@ else {
   expand.onclick=()=>invoke('workspace.open').catch(error=>{root.querySelector('#error').textContent=error.message;});
   let current,pending=false,lastTaskSignature='',draftRevision=0;const likedTasks=new Set();
   const approvalDecisions=new Map();
+  let approvalExpiryTimer;
   const report=e=>root.querySelector('#error').textContent=typeof e==='string'?e:e.message;
   const form=root.querySelector('form'),input=root.querySelector('textarea'),thread=root.querySelector('.thread'),tasksNode=root.querySelector('#tasks');
   const liveControls=mountLiveVoiceControls(root,invoke);
@@ -103,7 +104,7 @@ else {
     input.dispatchEvent(new Event('input',{bubbles:true}));
     input.focus();input.setSelectionRange(input.value.length,input.value.length);
   });
-  window.addEventListener('unload',()=>{wakeClosed=true;removeDictation?.();});
+  window.addEventListener('unload',()=>{wakeClosed=true;clearTimeout(approvalExpiryTimer);approvalExpiryTimer=undefined;removeDictation?.();});
   const sisSettings=document.createElement('details');
   sisSettings.className='sis-settings';
   sisSettings.innerHTML='<summary>华为云语音设置</summary><div class="sis-fields"><label>区域<select id="sis-region"><option value="cn-north-4">华北-北京四</option><option value="cn-east-3">华东-上海一</option></select></label><label>华为云账号名<input id="sis-domain" autocomplete="off" maxlength="128" placeholder="IAM 用户所属的账号名"></label><label>IAM 用户名<input id="sis-username" autocomplete="off" maxlength="128" value="personalagent-sis"></label><label>IAM 用户密码<input id="sis-password" type="password" autocomplete="off" maxlength="1024"></label><button type="button" id="sis-login">连接华为云语音</button><p class="notice">密码仅用于向华为 IAM 登录，不保存；项目令牌在本机加密保存。录音仅在你开启后发送到华为 SIS。</p><details><summary>已有 IAM Token：手动配置</summary><label>项目 ID<input id="sis-project" autocomplete="off" maxlength="128"></label><label>独立 IAM Token<input id="sis-token" type="password" autocomplete="off" maxlength="16384"></label><label>Token 到期时间（UTC，可选）<input id="sis-expiry" autocomplete="off" placeholder="YYYY-MM-DDTHH:mm:ssZ"></label><button type="button" id="sis-save">保存 SIS 配置</button></details><p class="notice" id="sis-reason"></p></div>';
@@ -193,6 +194,31 @@ else {
       item.approvalId===id && item.state==='pending' && current?.tasks.some(task=>task.taskId===item.taskId && task.state==='waiting_approval')))approvalDecisions.delete(id);
     for(const button of tasksNode.querySelectorAll('[data-approval-decision]'))button.disabled=approvalDecisions.has(button.dataset.approvalId);
   };
+  function refreshApprovalCards() {
+    if(wakeClosed||!current)return;
+    const now=Date.now();
+    for(const task of current.tasks) {
+      const article=tasksNode.querySelector(`[data-turn="${CSS.escape(task.taskId)}"]`);
+      if(!article)continue;
+      const markup=approvalCards(task,current.approvals,now);
+      if(article.approvalMarkup===markup)continue;
+      for(const card of article.querySelectorAll('.approval-card'))card.remove();
+      if(markup)article.insertAdjacentHTML('beforeend',markup);
+      article.approvalMarkup=markup;
+    }
+    syncApprovalButtons();
+  }
+  function scheduleApprovalExpiry() {
+    clearTimeout(approvalExpiryTimer);approvalExpiryTimer=undefined;
+    if(wakeClosed||!current)return;
+    const now=Date.now(),expiry=nextApprovalExpiry(current.tasks,current.approvals,now);
+    if(expiry===undefined)return;
+    approvalExpiryTimer=setTimeout(()=>{
+      approvalExpiryTimer=undefined;
+      if(wakeClosed)return;
+      refreshApprovalCards();scheduleApprovalExpiry();
+    },Math.min(Math.max(expiry-now+25,0),2_147_483_647));
+  }
   root.querySelector('#tasks').addEventListener('click',async event=>{
     const button=event.target.closest('[data-approval-decision]');if(!button||button.disabled)return;
     const id=button.dataset.approvalId;if(approvalDecisions.has(id))return;
@@ -260,11 +286,7 @@ else {
     const thinkingGrid='<span class="thinking-grid" aria-hidden="true">'+[0,1,2,3,4,5,6,7,8].map(index=>`<i data-cell="${index}"></i>`).join('')+'</span>';
     const wasAtBottom=thread.scrollHeight-thread.scrollTop-thread.clientHeight<90;
     if(taskSignature!==lastTaskSignature) tasksNode.innerHTML=conversationTimeline(data.tasks,data.messages).map(entry=>{if(entry.kind==='message'){const m=entry.value;const body=`<div class="${m.role==='user'?'user-message':'assistant-message'}">${escape(m.text)}</div><div class="response-actions"><button type="button" data-ui-action="copy" data-message-id="${escape(m.id)}" title="复制" aria-label="复制语音消息">${responseIcons.copy}</button></div>`;return `<article class="task turn" data-turn="live:${escape(m.id)}">${m.role==='assistant'?`<div class="assistant-turn">${body}</div>`:body}</article>`;}const t=entry.value;const terminal=isTerminal(t);const waiting=['waiting_approval','waiting_external','waiting_reconciliation','cancelling'].includes(t.state);const activeStep=Array.isArray(t.steps)&&t.steps.length?t.steps[t.steps.length-1]:null;const activity=waiting?stateNames[t.state]:activeStep?.label?activeStep.label:t.state==='verifying'?'整理回答':t.state==='running'?'执行中':'思考中';const answer=resultText(t.resultSummary,t.resultMetadata);const failure=t.error?.message;const answerActions=answer?`<div class="response-actions"><button type="button" data-ui-action="copy" data-id="${escape(t.taskId)}" title="复制" aria-label="复制回答">${responseIcons.copy}</button><button type="button" data-ui-action="share" data-id="${escape(t.taskId)}" title="分享" aria-label="分享回答">${responseIcons.share}</button><button type="button" data-ui-action="like" data-id="${escape(t.taskId)}" title="点赞" aria-label="点赞回答" aria-pressed="${likedTasks.has(t.taskId)}" class="${likedTasks.has(t.taskId)?'active':''}">${responseIcons.like}</button></div>`:'';return `<article class="task turn" data-turn="${escape(t.taskId)}">${t.userMessage?`<div class="user-message">${escape(t.userMessage)}</div>`:''}<div class="assistant-turn">${!terminal?`<div class="thinking-line">${thinkingGrid}<span>${escape(activity)}</span></div>`:answer?`<div class="assistant-message">${escape(answer)}</div>${answerActions}`:failure?`<div class="assistant-error">${escape(failure)}</div><div class="locate-block" data-locate-for="${escape(t.taskId)}"><button type="button" class="turn-action" data-ui-action="locate" data-locate-id="${escape(t.taskId)}" data-locate-text="${escape(failure)}" aria-label="定位失败原因">定位失败原因</button><div class="locate-result" hidden></div></div>`:''}</div>${!terminal?`<div class="turn-actions"><button class="turn-action" data-action="task.cancel" data-id="${escape(t.taskId)}" ${t.state==='cancelling'?'disabled':''}>停止</button>${data.fake?`<button class="turn-action" data-action="test.advance" data-id="${escape(t.taskId)}">推进联调</button>`:''}</div>`:''}</article>`;}).join('');
-    if(taskSignature!==lastTaskSignature) for(const task of data.tasks){
-      const article=tasksNode.querySelector(`[data-turn="${CSS.escape(task.taskId)}"]`);
-      article?.insertAdjacentHTML('beforeend',approvalCards(task,data.approvals));
-    }
-    syncApprovalButtons();setSendMode(Boolean(input.value.trim()));
+    refreshApprovalCards();scheduleApprovalExpiry();setSendMode(Boolean(input.value.trim()));
     if(taskSignature!==lastTaskSignature){lastTaskSignature=taskSignature;updateRail();requestAnimationFrame(()=>{if(wasAtBottom)thread.scrollTop=thread.scrollHeight;});}};
 }
 if(bridge){
