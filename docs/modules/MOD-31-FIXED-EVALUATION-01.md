@@ -67,6 +67,14 @@ node tests/manual/agentarts/support/fixed-synthetic-batch.mjs --deadline $evalua
 
 ## 排除项与已知限制
 
+### 有界配对分类增量（2026-10-07）
+
+`support/paired-synthetic-batch.mjs` 的 `runPairedSyntheticBatch({candidate, baseline}, {deadline, signal, repetitions})` 复用上述固定三案例 runner。两个 `CoordinationPort` 必须由调用者显式注入；默认一对，重复次数仅允许 1～3，同一绝对期限和取消信号贯穿全部调用。每轮串行运行两个批次，轮换先后顺序，不选服务、不读凭据、不创建部署或自动触发云调用。
+
+报告仅保存实际开始的批次、完整配对的三标签正确计数、配对正确率差及实际等待耗时。普通端口失败沿用原固定错误码；取消或到期停止，不重试，缺少完整配对时正确率为 `null`。严格单词评分保持原合同，不从结构化提案猜决策，不输出响应正文、角色、trace、token 或成本。合成端口回归只证明评估管线，少量重复不证明统计显著性、真实多 Agent 效果或云端可用性；真实对照仍须另核部署、模型设置、输入一致性和平台回执。
+
+新配对回归与原固定批次共 14 项通过；它们不属于根 `npm run check` 的自动发现范围，单独运行 `node --test --test-concurrency=1 tests/manual/agentarts/support/paired-synthetic-batch.test.mjs tests/manual/agentarts/support/fixed-synthetic-batch.test.mjs`。下列排除项保留原首片的范围；本增量仅补有界配对分类准备，不改变真实验收等级。
+
 实际执行：contracts/coordination 构建通过；上述定向测试 6/6 通过，包含提示词不泄露
 案例答案的检查；脚本语法与 `git diff --check` 通过。没有真实云端验收。
 
