@@ -43,6 +43,12 @@ prepared report、当前index/总数/已confirmed索引及累计Evidence，发�
 
 ## 集中验收
 
+2026-10-07 goo122 的真实 GitHub/Fake 模型/Runtime SQLite 读回发现：等待 head-after
+审批后复用完整 diff 缓存，会丢失其分页 Evidence 引用。缓存现在保存并恢复各页引用；
+旧缓存缺少或包含非法引用时经原公开读取端口刷新，不清库、不改既有报告或写入记录。
+新回归覆盖两页 diff、审批中断、JSON checkpoint 恢复和旧缓存兼容；真实读取加拒绝
+评论的证据与限制见 [恢复验收记录](MOD-36-EVIDENCE-CACHE-20261007.md)。
+
 2026-10-06 #212 `6019894581` 增量保留公开 before：首 head 读取等待期间普通 caller
 替换复用 model/tools，原 workflow 会调用新模型/工具；prepare 后换 tools 还可绕过
 原端口已移除的评论能力。全部明确合成端口，不是实际账号写入或 Gateway 许可证明。
