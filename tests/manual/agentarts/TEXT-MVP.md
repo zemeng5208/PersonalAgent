@@ -73,8 +73,16 @@ global/workflow index 冲突数。此重放不做网络请求、不改变生产�
 Runtime 或 Desktop 验收。片段来自受信本地构建文件，云响应始终只作为数据。
 若构建布局变化会显式 diagnostic_internal；未知错误不会输出原始消息。
 
-结构计数仅支持完整 JSON data 行；标准多行 SSE 标 not_fully_inspected，但仍由
-实际解析器重放。该标志不允许把部分统计推断成完整事件证据。输出只含白名单
+重放的 `strictCompletion` 默认 false，与 [文字探针](support/run-text-probe.mjs) 的
+默认 text 模式一致；[提案](support/run-proposal-probe.mjs)与[候选](support/run-candidate-probe.mjs)
+探针显式传 true，沿其 JSON 模式检查 SSE 完成顺序。`workflow_order` 也涵盖
+task_end 后正文、[DONE] 后事件的既有拒绝原因，不将它们记成诊断内部故障。
+
+文字诊断的结构计数支持 JSON 响应及完整 JSON data 行中的事件对象或数组；标准
+多行 SSE 标 not_fully_inspected，但仍由实际解析器重放。另一个
+[结构观察器](support/structural-fetch.mjs)不检查 SSE 事件数组的成员，其
+`indexedMessages.coverage` 标 partial，不能据零冲突计数声称全流无冲突。
+这些覆盖标志不允许把部分统计推断成完整事件证据。输出只含白名单
 类别和数字，不保存响应正文、工作流名称、Authorization 或请求 ID。报告保存在
 忽略的 `.cache/agentarts-text/`；人工复核后才选择性加入真实验收记录。
 
