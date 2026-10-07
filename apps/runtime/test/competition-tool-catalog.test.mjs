@@ -4,8 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import {test} from 'node:test';
 import {Client} from '@personal-agent/client';
+import {ProtocolError} from '@personal-agent/contracts';
 import {parseCoordinationAvailableTools, MAX_AVAILABLE_TOOLS} from '@personal-agent/coordination';
-import {createRuntimeApplication} from '../dist/application.js';
+import {createRuntimeApplication, createAgentArtsRuntimeApplication} from '../dist/application.js';
 
 const descriptor = {
   name: 'fixture.read', version: '1.0.0',
@@ -71,6 +72,97 @@ async function waitFor(app, taskId, states) {
   }
   throw new Error(`Task did not settle: ${states.join(',')}`);
 }
+
+test('provider lifecycle errors exclude only that tool and never enter task snapshots', async t => {
+  for (const [code, mutateInput] of [['CANCELLED', false], ['TIMEOUT', false],
+    ['CANCELLED', true], ['TIMEOUT', true]]) await t.test(`${code}, mutation=${mutateInput}`, async () => {
+    const healthy = {...descriptor, name: 'fixture.healthy'};
+    const bodies = [];
+    let unhealthyExecutions = 0;
+    let healthyExecutions = 0;
+    const app = createAgentArtsRuntimeApplication({path: ':memory:',
+      gatewayUrl: 'https://agentarts.example.test', runtimeName: 'synthetic',
+      responseMode: 'tool-proposal-json', initialRequestMode: 'goal-with-tools-json',
+      authorizationProvider: {read: async () => 'Bearer synthetic'},
+      tools: [
+        {descriptor, execute: async () => { unhealthyExecutions++; return {value: 'unexpected'}; }},
+        {descriptor: healthy, execute: async () => { healthyExecutions++; return {value: 'synthetic'}; }},
+      ],
+      competitionToolExports: [toolExport, {...toolExport, toolName: healthy.name}],
+      competitionToolAvailability: [
+        {toolName: descriptor.name, toolVersion: descriptor.version,
+          available: input => {
+            if (mutateInput && code === 'CANCELLED') input.signal = AbortSignal.abort();
+            if (mutateInput && code === 'TIMEOUT') input.deadline = new Date(0).toISOString();
+            throw new ProtocolError(code, 'private-provider-canary');
+          }},
+        {toolName: healthy.name, toolVersion: healthy.version, available: () => true},
+      ],
+      fetchImpl: async (_url, init) => {
+        bodies.push(JSON.parse(init.body));
+        const result = bodies.length === 1
+          ? {kind: 'tool_proposal', proposalId: 'healthy-proposal', toolName: healthy.name,
+            toolVersion: healthy.version, arguments: {path: 'secret-path'}}
+          : {kind: 'text', text: 'Synthetic healthy read confirmed'};
+        return new Response(JSON.stringify({event: 'message', data: {text: JSON.stringify(result)}}),
+          {headers: {'content-type': 'application/json'}});
+      },
+    });
+    try {
+      const client = new Client(app); await client.connect();
+      const {taskId} = await client.call('task.submit', {goal: 'Synthetic healthy read',
+        conversationId: 'catalog-provider-error'}, {idempotencyKey: code});
+      const waiting = await waitFor(app, taskId, ['waiting_approval', 'failed', 'cancelled']);
+      assert.equal(waiting.state, 'waiting_approval');
+      assert.doesNotMatch(JSON.stringify(waiting), /private-provider-canary/);
+      assert.equal(Date.parse(app.runtime.loadCheckpoint(taskId, 'application-deadline')) > Date.now(), true);
+      const initial = JSON.parse(bodies[0].query);
+      assert.deepEqual(initial.availableTools.map(item => item.name), [healthy.name]);
+      const approval = (await client.call('approval.list', {taskId})).items[0];
+      await client.call('authorization.respond', {approvalId: approval.approvalId,
+        expectedRevision: approval.revision, decision: 'allow_once'});
+      const task = await waitFor(app, taskId, ['succeeded', 'failed', 'cancelled']);
+      assert.equal(task.state, 'succeeded');
+      assert.doesNotMatch(JSON.stringify(task), /private-provider-canary/);
+      assert.equal(healthyExecutions, 1);
+      assert.equal(unhealthyExecutions, 0);
+      assert.equal(bodies.length, 2);
+      assert.deepEqual(JSON.parse(bodies[1].query).continuation.result, {value: 'synthetic'});
+    } finally { app.close(); }
+  });
+});
+
+test('catalog availability still obeys actual caller cancellation and task deadline', async t => {
+  for (const lifecycle of ['cancel', 'deadline']) await t.test(lifecycle, async () => {
+    let started;
+    const ready = new Promise(resolve => { started = resolve; });
+    let release;
+    let exchanges = 0;
+    const app = createRuntimeApplication({path: ':memory:', profile: 'huawei_ict_agentarts',
+      tools: [{descriptor, execute: async () => ({value: 'unexpected'})}],
+      competitionToolExports: [toolExport],
+      competitionToolAvailability: [{toolName: descriptor.name, toolVersion: descriptor.version,
+        available: () => { started(); return new Promise(resolve => { release = resolve; }); }}],
+      coordination: {execute: async () => { exchanges++; return {kind: 'text', text: 'unexpected', verification: 'mock'}; }},
+    });
+    try {
+      const client = new Client(app); await client.connect();
+      const {taskId} = await client.call('task.submit', {goal: 'Synthetic catalog lifecycle',
+        conversationId: 'catalog-lifecycle'}, {idempotencyKey: lifecycle,
+        timeoutMs: lifecycle === 'deadline' ? 250 : 10_000});
+      await ready;
+      if (lifecycle === 'cancel') await client.call('task.cancel', {taskId});
+      const task = await waitFor(app, taskId, ['failed', 'cancelled']);
+      assert.equal(task.state, lifecycle === 'cancel' ? 'cancelled' : 'failed');
+      if (lifecycle === 'deadline') assert.equal(task.error.code, 'TIMEOUT');
+      release(true);
+      await new Promise(resolve => setTimeout(resolve, 10));
+      assert.equal(exchanges, 0);
+      assert.equal(app.runtime.loadCheckpoint(taskId, 'competition-tool-catalog'), undefined);
+      assert.deepEqual(app.runtime.readToolExecutions(taskId), []);
+    } finally { app.close(); }
+  });
+});
 
 test('task catalog projects only public Schema fields and rechecks before export', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'personal-agent-catalog-'));

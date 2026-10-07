@@ -135,24 +135,37 @@ export class RuntimeCompetitionToolCatalog {
   }
 
   private async ready(binding: CompetitionToolAvailability, input: {taskId: string; revision: number; deadline: string; signal: AbortSignal}): Promise<boolean> {
-    if (input.signal.aborted) throw new ProtocolError('CANCELLED', 'Tool catalog selection cancelled');
-    const remaining = Date.parse(input.deadline) - Date.now();
+    const signal = input.signal;
+    const expiresAt = Date.parse(input.deadline);
+    if (signal.aborted) throw new ProtocolError('CANCELLED', 'Tool catalog selection cancelled');
+    const remaining = expiresAt - Date.now();
     if (!Number.isFinite(remaining) || remaining <= 0) throw new ProtocolError('TIMEOUT', 'Tool catalog selection expired');
     let timer: ReturnType<typeof setTimeout> | undefined;
     let onAbort = (): void => {};
     const interrupted = new Promise<never>((_, reject) => {
       onAbort = () => reject(new ProtocolError('CANCELLED', 'Tool catalog selection cancelled'));
-      input.signal.addEventListener('abort', onAbort, {once: true});
-      timer = setTimeout(() => reject(new ProtocolError('TIMEOUT', 'Tool catalog selection expired')), Math.min(remaining, 2_147_483_647));
+      signal.addEventListener('abort', onAbort, {once: true});
+      const scheduleDeadline = (): void => {
+        const delay = expiresAt - Date.now();
+        if (delay <= 0) {
+          reject(new ProtocolError('TIMEOUT', 'Tool catalog selection expired'));
+          return;
+        }
+        timer = setTimeout(scheduleDeadline, Math.min(delay, 2_147_483_647));
+      };
+      scheduleDeadline();
     });
     try {
       return await Promise.race([Promise.resolve().then(async () => await binding.available(input) === true), interrupted]);
-    } catch (error) {
-      if (error instanceof ProtocolError && ['CANCELLED', 'TIMEOUT'].includes(error.code)) throw error;
+    } catch {
+      // Availability providers do not own this task's cancellation or deadline.
+      // Their errors can contain private host details, including ProtocolErrors.
+      if (signal.aborted) throw new ProtocolError('CANCELLED', 'Tool catalog selection cancelled');
+      if (Date.now() >= expiresAt) throw new ProtocolError('TIMEOUT', 'Tool catalog selection expired');
       return false;
     } finally {
       if (timer) clearTimeout(timer);
-      input.signal.removeEventListener('abort', onAbort);
+      signal.removeEventListener('abort', onAbort);
     }
   }
 
