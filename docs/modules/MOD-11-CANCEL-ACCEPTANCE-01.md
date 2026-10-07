@@ -107,3 +107,31 @@ worker，发送与草稿正常，console/pageerror 为零。main blob
 `4a3a86513080d4566aa63630e37f3c0ed2357787`；私证据 `panel-task-progress-*`。
 get 失败及旧回执延后为明确 Fake，公共 Task/Step/events 为实际本地 Runtime 读回。
 未验证真实云 worker、完整 Electron/Windows 或物理桌面，不借上一599项覆盖新源码。
+
+## 原输入框的迟到提案取消与面板尺寸（2026-10-07 续接）
+
+独立原 composer 消费者使用真实本地 Runtime/Client/Policy 和实际 AgentArts HTTP
+adapter，明确 Fake HTTP 故意忽略 AbortSignal 并延后合法 Node 提案。原停止按钮一次
+公共 cancel 的回执为 accepted/cancelling；实际本地 adapter signal race 停止等待，
+Runtime 确认 cancelled 后才放回执。实际 discardUnreadResponse 的 native reader
+cancel1/read0，原 panel 保持已取消、新草稿及发送可用；Node、执行记录、grant、续发均0。
+这是本地停止与迟到输入丢弃，不是远端取消 ACK。corrected-observer 进程实际exit0；
+初次错误观察 body.cancel 的exit1及改为转发原getReader方法的纠正均保留，未放宽断言。
+私 workspace-node-proposal-cancel-consumer-*，main741f8f4及七个相关公开编译出口各次
+前后同字节，无源码修复或重复正式测试；native IPC/窗口/凭据/safeStorage 为明确Fake。
+
+另按 actual panelBounds 的420×640和小工作区320×480，在原panel/CSP分别完成独立
+公开 progress/stop消费和12行草稿/model菜单开关，两个进程实际exit0。每种尺寸八个
+控件及菜单在界内，document scrollWidth等于viewport，thread.bottom等于composer.top；
+320的thread约82px并内部滚动，不声称旧消息同时全显。两种尺寸的自动步骤和取消后
+截图均已核看，草稿完整、发送恢复、console/pageerror零。私 panel-bounds-consumer-*
+保留JSON/日志/截图，Browser插件不可用时使用现有Playwright/Chromium；不把1100尺寸
+功能证明当真实420几何，也不当Electron焦点、高DPI、多屏、Windows无障碍或物理验收。
+
+原 renderer 初始化另有独立消费者证据：先 subscribe 再 invoke首次snapshot，合法
+running3 首回执被明确Fake IPC延后；实际公共事件及原stop把Task推进到cancelled5、
+Cursor6后放回执，原receivedUpdate guard保留终态、草稿与发送，不恢复运行控件。
+同样时序的迟到初读错误被抑制；无任何订阅更新时相同初读错误准确显示，不能据此
+声称所有初始化错误被吞掉。三个原panel进程各实际exit0、console/pageerror零，四个
+公共编译出口各次前后稳定，renderer084eaf2未改。私panel-bootstrap-readback/failure-*
+保存真公共Runtime与Fake IPC边界及首helper语法错误尝试；不当真实Electron IPC验收。

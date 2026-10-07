@@ -53,3 +53,20 @@ node_check catalog，显式延后其合法提案回执；原控件撤销后放�
 发送可用且新草稿保留，console0；Node/执行记录/grant/续发均为0，initial HTTP1，
 再消费三轮事件没有重试。证据 `workspace-node-proposal-before-revoke-consumer-*`；
 权威错误仍为英文，此项不声称完成中文本地化，也不把前置拒绝写成已有操作待核实。
+
+原 composer 的两项独立拒绝消费者进一步核对合法 catalog 后的参数和目标变化，
+没有源码修改或重复正式测试。实际 node_check 输入Schema为空对象且
+additionalProperties:false；Fake 外部提案额外带 file/argv，真实公开校验在首次执行和
+grant前拒绝 INVALID_ARGUMENT，许可和节点可用性仍true。另一合法空参数提案在回执
+延后期间，仅把新私有cache固定目标替换为指向外部fixture的symlink；当前云/命令许可
+仍true，实际 WorkspaceConfigHost/recipe target复核不可用，放行后拒绝
+UNSUPPORTED_CAPABILITY。它限制canonical普通文件，不把源内容固定为不可修改；
+前述真实bad→good普通编辑仍允许。不触碰用户项目、Node安装、Windows junction或ACL。
+
+两项进程分别实际exit0，Node/执行记录/grant/续发/canary均0，源或外部fixture SHA保持；
+原panel保留新草稿并显示权威失败，console/pageerror零，后续公开事件消费无重试。
+私 workspace-node-proposal-expanded-args-consumer-* 与 target-pin-consumer-* 保存完整
+命令/JSON/日志/截图，七个相关公开编译出口每项前后相同。日志比保存JSON的旁观
+clientCalls各多一次末尾定时订阅，源于await writeFile前后活体数组序列化，原件保留，
+不据此声称所有旁观计数原子一致。实际Runtime/Policy/ToolGateway与明确Fake
+HTTP/JSON提案/凭据/IPC边界不变，均不替代真实云native function calling或设备验收。

@@ -228,5 +228,45 @@ graph始终3；Laya/HTTP为明确Fake、时间注入，未运行 Goal.create 的
 完成于2026-10-07 21:24:31 UTC：34组2455项、2405通过、0失败/取消、50跳过，
 其中工作区2376通过、根integration22、architecture3、contract fixtures4。
 Desktop603项592通过/11跳过，Runtime419/419；Node24.15.0、两核，
-日志 `core-cognition-desktop130-full-check.log`。此后只追加自有研究/模块记录，
-没有改源码或测试，也不将跳过、Fake或Linux结果当作真实云/Windows验收。
+日志 `core-cognition-desktop130-full-check.log`。其后至ebfb1a9交付只追加自有研究/模块
+记录，source/tests相同；此检查不覆盖下面续接新源，也不把跳过、Fake或Linux结果
+当作真实云/Windows验收。
+
+## 来源版本提示与已提交修订消费（2026-10-07 续接）
+
+来源版本变化现在由 Host 每次 snapshot 的一次公开 store.read().revision 读回逐卡显示。
+只有合法非负 safe integer 的 review.graphRevision 不同才标记 sourceOutdated；false
+不证明当前许可或目标有效性。在已有回执、KEEP及许可反馈之外，旧方案卡显示
+“来源版本已变化”并禁用提交，点击前再次
+核对；已受理、verified、pending、reconciliation 与保留的 unknown 回执优先，不因
+后续图变化被覆盖。此提示不持久保存成终态，不自动重新分析或重发，原 applyDecision
+的整图 CAS、版本拒绝与云许可保持不变。
+
+固定四文件 blob 为 Host d5d597bbfa5a3653a7e833edc47d7d5c9dc6b4dd、控件
+3424e89e7a22775b111a2a0fe2eca1eb2adfdae6、Host test
+bc8eaad4e7c90609e7633dff3d14aaa244c822f4、控件 test
+cdea490f1d90e282e5f806123834d662519f37e4。定向33/33实际exit0；实际公开 createGoal、
+Fact source record/drain/processImpacts 与 SQLite AFTER 为 graph2/infer1/dispatch0，
+仅旧 Goal 卡标记 true，当前 Fact KEEP 为 false，整体仍 reviewed。原 panel/CSP 通过
+明确 Fake IPC 消费该实际状态，禁用且 apply0，console/pageerror为零。私证据
+source-outdated-frozen.json 保留编译/出口映射及错误探针尝试；后续独立公开 restart
+在既有 nextTick 和 Fact backlog 后恢复同 reviewTaskId，不借初轮错误探针声称缺卡。
+此项不解决稳定 Goal review 的重新分析/继任合同，不放宽 CAS。
+
+另一个独立公开 producer 对照发现：合法 GoalCloudHost goals.revise 把 Goal 修订为
+withdrawn 后，旧 Plan 精确依赖可由公开 reviewGoalRevision 选为 RECHECK，但 idle
+发现过滤只接受 active/effective，因而漏掉该修订。同样合法的 future有效期修订也会
+漏掉依赖旧Goal的Plan。核心 producer 将 revision>1 已提交 head 交给既有 Goal revision
+review；首次 inactive 或 future Goal 创建
+仍不进入规划，无受影响 Plan 时 KEEP 不调用 Laya。有受影响 Plan 时只复核，不复活
+Goal 或修改 Plan，原 limit、Fact cursor、backlog、稳定身份、expiry、CAS 与许可不变。
+
+固定 producer 594c458e2aeab3ba7d0e5a588b59316d93db617a、专属 test
+9ba3d23025ab50c784b00b87a93dacbb161af9cc，私编译和26/26专属测试实际exit0，覆盖
+inactive/future creation、future/expired修订各有无Plan、KEEP/RECHECK、SQLite重启同id、
+恢复许可后单次handoff及图不变。公开命令与实际 GoalCloudHost 的撤回 BEFORE/AFTER
+独立保存；新有效期 producer 的 actual adapter future BEFORE/AFTER 同样从
+idle[0,0]→[1,0]、infer0→1，active/withdrawn 对照不变，图3/dispatch0。
+Plan/Laya 与 ToolGateway context 为明确合成/Fake，公共 Goal tools/SQLite 为真实本地
+出口，不是 Policy ledger或实云验收。validity-revision-frozen.json 固定新编译 producer，
+旧 withdrawal/source-outdated/expiry 私输出保留；根必要检查另记，不借固定874的2455项。
