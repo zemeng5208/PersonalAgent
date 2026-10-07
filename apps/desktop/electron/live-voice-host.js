@@ -288,6 +288,7 @@ export function createLiveVoiceHost({getPanel, config, microphoneHost, createSou
   return {snapshot, historyMessages, hasActive, start, stop, receive,
     flushHistory() {const result = flushHistory(); publish(); return result;},
     interrupt() {
+      if (releaseUnknown) throw Error(lastError);
       if (active?.session && !active.controller.signal.aborted && now() < Date.parse(active.deadline)) active.session.interrupt();
     },
     async dispose() {

@@ -12,19 +12,20 @@ import {createDesktopWakeVoiceHost} from '../electron/wake-voice-host.js';
 // Exercise the actual main-process consumers without booting Electron or real services.
 const source = await readFile(new URL('../electron/main.js', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('main.js', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-let recordRoute, wakeBusy;
+let recordRoute, stopRoute, wakeBusy;
 function visit(node) {
   if (ts.isIfStatement(node) && node.expression.getText(ast) === "name.startsWith('voice.record.') || name === 'voice.play'") recordRoute = node.getText(ast);
+  if (ts.isIfStatement(node) && node.expression.getText(ast) === "name === 'voice.stop'") stopRoute = node.getText(ast);
   if (ts.isCallExpression(node) && node.expression.getText(ast) === 'createDesktopWakeVoiceHost') {
     wakeBusy = node.arguments[0].properties.find(p => p.name?.getText(ast) === 'isBusy')?.initializer.getText(ast);
   }
   ts.forEachChild(node, visit);
 }
 visit(ast);
-assert.ok(recordRoute && wakeBusy);
+assert.ok(recordRoute && stopRoute && wakeBusy);
 
 function fixture({playbackReleaseFails = false} = {}) {
-  let live, microphoneHost, physicalStarts = 0, gatewayCloses = 0;
+  let live, microphoneHost, physicalStarts = 0, gatewayCloses = 0, interrupts = 0;
   const contents = {id:9, mainFrame:{}, isDestroyed:()=>false, send(channel, message) {
     const event = {sender:contents, senderFrame:contents.mainFrame};
     if (channel === 'desktop:live-command') {
@@ -43,7 +44,7 @@ function fixture({playbackReleaseFails = false} = {}) {
   microphoneHost = createMicrophoneCaptureHost({getPanel:()=>panel, permissionGate:{grant:()=>()=>{}}});
   live = createLiveVoiceHost({getPanel:()=>panel, config:{snapshot:()=>({configured:true}), current:()=>({})}, microphoneHost,
     createSource:()=>createVoicePcmFrameSourcePort(microphoneHost.binding),
-    createGateway:()=>({async connect(){return {sendAudio(){}, interrupt(){}, async close(){gatewayCloses++;}};}}),
+    createGateway:()=>({async connect(){return {sendAudio(){}, interrupt(){interrupts++;}, async close(){gatewayCloses++;}};}}),
     createConsumer:()=>({}), client:{}, readContext:()=>'', onTranscript(){}});
   const voice = createDesktopVoiceInput({source:createVoicePcmFrameSourcePort(microphoneHost.binding), microphoneHost,
     client:{}, enabled:true, inputMode:'dictation', speechPorts:{
@@ -52,6 +53,7 @@ function fixture({playbackReleaseFails = false} = {}) {
   const context = vm.createContext({liveVoice:live, panel, voiceInput:voice, voiceConfigurationPending:false,
     panelHiding:false, wakeQuitUnknown:false, wakeVoice:undefined, Boolean, Error});
   const route = vm.runInContext(`(async function(sender,name){${recordRoute}})`, context);
+  const stop = vm.runInContext(`(async function(sender,name){${stopRoute}})`, context);
   const isBusy = vm.runInContext(`(${wakeBusy})`, context);
   const wake = createDesktopWakeVoiceHost({getPanel:()=>panel, microphoneHost, voiceInput:voice, isBusy,
     createDetector:()=>({start(){
@@ -60,6 +62,7 @@ function fixture({playbackReleaseFails = false} = {}) {
       return {ready:Promise.resolve(), closed, accept(){}, async stop(){resolve();}};
     }, async dispose(){}})});
   return {live, voice, wake, microphoneHost, isBusy, record:()=>route(panel,'voice.record.start'),
+    requestStop:()=>stop(panel,'voice.stop'),get interrupts(){return interrupts;},
     get physicalStarts(){return physicalStarts;}, get gatewayCloses(){return gatewayCloses;}};
 }
 
@@ -100,5 +103,20 @@ test('confirmed Live release permits manual recording and Wake through the same 
     assert.equal((await f.wake.enable(9)).phase,'listening');
     await f.wake.disable();
     assert.equal(f.physicalStarts,3);
+  } finally {await f.wake.dispose(); await f.voice.dispose(); await f.live.dispose();}
+});
+
+test('Live interrupt remains available during a session but cannot claim stopped after unconfirmed release', async () => {
+  const f = fixture({playbackReleaseFails:true});
+  try {
+    await f.live.start();
+    assert.equal((await f.requestStop()).stopped,true);
+    assert.equal(f.interrupts,1);
+    assert.equal(f.live.snapshot().status,'listening');
+    await f.live.stop();
+    await assert.rejects(f.requestStop(),/释放未确认/);
+    assert.equal(f.interrupts,1,'failed release cannot issue a new interrupt on the closed session');
+    assert.equal(f.live.snapshot().status,'error');
+    assert.equal(f.physicalStarts,1);
   } finally {await f.wake.dispose(); await f.voice.dispose(); await f.live.dispose();}
 });
