@@ -910,6 +910,8 @@ async function initializeModelFromEnvironment() {
 
 async function refresh(taskId) {
   const task = await client.call('task.get', {taskId});
+  const current = tasks.get(taskId);
+  if (current?.taskId === task.taskId && current.revision > task.revision) return current;
   tasks.set(taskId, task);
   clearInactiveTaskExitWarning();
   publish();
