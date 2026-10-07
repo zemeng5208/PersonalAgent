@@ -21,7 +21,7 @@ $request = @{
   dataClass = 'synthetic'
   responseMode = 'text'
 }
-$request | ConvertTo-Json | Set-Content .cache/call-request.json -Encoding utf8
+[IO.File]::WriteAllText((Join-Path $PWD '.cache/call-request.json'), ($request | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
 node tests/manual/agentarts/support/run-saved-config-call.mjs .cache/call-request.json
 ```
 
