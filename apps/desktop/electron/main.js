@@ -1024,6 +1024,10 @@ async function pumpEvents() {
         if (result.items[0]) approvals.set(event.payload.approvalId, structuredClone(result.items[0]));
       }
     }
+    const progressTaskIds = new Set(accepted.filter(event => event.type === 'task.progress' && event.taskId).map(event => event.taskId));
+    const progressReadbacks = await Promise.allSettled([...progressTaskIds].map(taskId => refresh(taskId)));
+    const failedProgressReadback = progressReadbacks.find(result => result.status === 'rejected');
+    if (failedProgressReadback) throw failedProgressReadback.reason;
     if (accepted.length) publish();
   } catch (error) {
     runtimeError = error instanceof Error ? error.message : '事件流读取失败';
