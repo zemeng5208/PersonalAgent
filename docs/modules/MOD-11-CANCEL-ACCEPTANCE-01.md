@@ -80,3 +80,10 @@ console/pageerror 为零；没有手工伪造 cancelled 快照或运行工具/�
 生产组合当前提供同步 `RuntimeApplication.readEvents`；证据通过显式 Fake
 runtimeConnection 延后已捕获的合法批次，证明原消费者可保护快照合流，
 没有声称在真实进程内 Electron 或物理传输复现长时间延迟。
+
+上述两包与依赖原因文案集成后，受影响 Desktop 检查固定
+`4407f4c0c3c5c43bc6ffb73fceab9f04829b23f3` / tree
+`09f23bc10b8335d27dd0dbed622dfae228032a73`：typecheck 与全部工作区测试均实际 exit0，
+599 项中588通过、0失败/取消、11跳过；Node24.15.0、两核，
+完成于2026-10-07 21:05:23 UTC，日志 `core-desktop129-check.log`。
+后续纯记录变更不当新源码重跑；根完整、当前 Windows CI及物理验收另记。
