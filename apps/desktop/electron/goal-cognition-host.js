@@ -399,7 +399,7 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
     snapshot:()=>({enabled,cloudAllowed,status,reason,reviews:[...reviews.values()].map(value=>{
       const r = value.review;
       const trigger = r?.subjectGoal ? `新登记目标：${r.subjectGoal.id}` :
-        (Array.isArray(r?.affected) && r.affected.length > 0) ? r.affected.map(a => a.causes?.map(c => `事实 ${c.reference.id} 变更`).join(', ') || a.node?.summary || a.node?.id).filter(Boolean).join('；') :
+        (Array.isArray(r?.affected) && r.affected.length > 0) ? r.affected.map(a => a.causes?.map(c => `依赖 ${c.reference.id} ${c.reason === 'superseded' ? '版本已更新' : c.reason === 'withdrawn' ? '已撤回' : c.reason === 'not_effective' ? '当前不在有效期内' : '状态变化'}`).join(', ') || a.node?.summary || a.node?.id).filter(Boolean).join('；') :
         '事实或目标变更';
       const choice = r?.selectedOption ? `${r.selectedOption.id} · ${r.selectedOption.description}` :
         machineReview(r) ? 'Laya尚不确定，需主智能体复核 (RECHECK)' : (r?.action === 'KEEP' ? '保持现状 (KEEP)' : '本地建议方案');
