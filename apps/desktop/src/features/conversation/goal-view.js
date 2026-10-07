@@ -60,7 +60,7 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
 
   const newGoal = action('新建目标', resetDraft);
   const reload = action('刷新目标', () => void refreshGoals());
-  const close = action('关闭', () => dialog.close());
+  const close = action('关闭', () => { changeView(); dialog.close(); });
   dialog.append(title, status, source, list, taskHistory, taskStatus, taskActions,
     form, newGoal, reload, close);
 
@@ -70,6 +70,45 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
   let initialized = false;
   let available = false;
   let outcomeUnknown = false;
+  // A real accepted write survives changes to the visible draft and task selection.
+  let writeTask = null;
+  let viewVersion = 0;
+  let draftVersion = 0;
+  let taskVersion = 0;
+  let listVersion = 0;
+  let historyVersion = 0;
+  let selecting = false;
+  const cancellations = new Set();
+  const decisions = new Set();
+
+  // Bind every asynchronous UI result to the interaction that requested it.
+  const context = () => ({view: viewVersion, draft: draftVersion, task: taskVersion});
+  const current = scope => dialog.open && scope.view === viewVersion
+    && scope.draft === draftVersion && scope.task === taskVersion;
+  const writePending = () => selecting || outcomeUnknown || Boolean(writeTask && !isTerminal(writeTask))
+    || Boolean(activeTask && !isTerminal(activeTask));
+  const changeDraft = () => { draftVersion++; taskVersion++; selecting = false; };
+  const changeTask = () => { taskVersion++; selecting = false; };
+  const changeView = () => {
+    viewVersion++;
+    if (selecting) { selecting = false; save.disabled = writePending(); }
+  };
+  dialog.addEventListener('cancel', changeView);
+  dialog.addEventListener('close', () => { if (!dialog.open) changeView(); });
+  form.addEventListener('input', () => {
+    const pendingSelection = selecting;
+    changeDraft();
+    if (pendingSelection) save.disabled = writePending();
+  });
+
+  function decisionPending(task) {
+    return [...decisions].some(request => request.taskId === task?.taskId
+      && request.approvalId === task.approval?.approvalId && request.revision === task.approval?.revision);
+  }
+  function syncTaskActions() {
+    cancelTask.disabled = cancellations.has(activeTask?.taskId);
+    allow.disabled = deny.disabled = decisionPending(activeTask);
+  }
 
   function setStatus(kind, message) {
     status.dataset.state = kind;
@@ -98,9 +137,11 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
     }
   }
 
-  async function refreshGoals() {
+  async function refreshGoals(scope = context()) {
+    const request = ++listVersion;
     try {
       const result = await invoke('goal.list');
+      if (!current(scope) || request !== listVersion) return false;
       if (!Number.isSafeInteger(result?.graphRevision) || !Array.isArray(result.goals)) {
         throw Error('目标宿主未提供持久列表');
       }
@@ -110,15 +151,22 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
       if (!activeTask) setStatus('ready', '目标列表已从可信宿主读取。');
       return true;
     } catch (error) {
+      if (!current(scope) || request !== listVersion) return false;
       setAvailable(false, `持续目标尚未接通：${message(error)}`);
       return false;
     }
   }
 
   async function selectGoal(goalId) {
+    changeDraft();
+    selecting = true;
+    save.disabled = true;
+    const scope = context();
     try {
       const result = await invoke('goal.get', goalId);
-      if (!result?.goal || !Number.isSafeInteger(result.graphRevision)) throw Error('目标已不存在，请刷新列表');
+      if (!current(scope)) return;
+      if (result?.goal?.id !== goalId || !Number.isSafeInteger(result.graphRevision)) throw Error('目标已不存在，请刷新列表');
+      selecting = false;
       selected = result.goal;
       graphRevision = result.graphRevision;
       id.control.value = selected.id;
@@ -132,14 +180,18 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
       state.label.hidden = false;
       source.textContent = `来源：${selected.sourceRef}；目标版本 ${selected.revision}，图版本 ${graphRevision}。`;
       save.textContent = '保存修订';
-      save.disabled = outcomeUnknown || Boolean(activeTask && !isTerminal(activeTask));
+      save.disabled = writePending();
       setStatus('editing', `正在修订目标版本 ${selected.revision}。`);
     } catch (error) {
+      if (!current(scope)) return;
+      selecting = false;
+      save.disabled = writePending();
       setStatus('error', message(error));
     }
   }
 
   function resetDraft() {
+    changeDraft();
     selected = null;
     form.reset();
     id.control.readOnly = false;
@@ -151,7 +203,7 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
     state.label.hidden = true;
     source.textContent = '来源由可信宿主记录；保存前不会写入。';
     save.textContent = '保存目标';
-    save.disabled = outcomeUnknown || Boolean(activeTask && !isTerminal(activeTask));
+    save.disabled = writePending();
     setStatus('editing', '请填写原因和有效期，再明确保存。');
   }
 
@@ -163,34 +215,50 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
     }
   }
 
-  async function refreshTasks() {
+  async function refreshTasks(scope = context()) {
+    const request = ++historyVersion;
     try {
       const tasks = await invoke('goal.listTasks');
+      if (!current(scope) || request !== historyVersion) return;
       if (!Array.isArray(tasks)) throw Error('目标任务列表格式无效');
-      renderTaskHistory(tasks);
-      const pending = tasks.find(task => !isTerminal(task));
-      if (pending) await showTask(pending);
+      const knownTasks = writeTask && !tasks.some(task => task.taskId === writeTask.taskId)
+        ? [...tasks, writeTask] : tasks;
+      renderTaskHistory(knownTasks);
+      const pending = knownTasks.find(task => task.taskId === writeTask?.taskId && !isTerminal(task))
+        ?? knownTasks.find(task => !isTerminal(task));
+      if (pending) await showTask(pending, scope);
     } catch (error) {
+      if (!current(scope) || request !== historyVersion) return;
       taskStatus.textContent = `目标任务恢复状态暂不可用：${message(error)}`;
     }
   }
 
   async function refreshTask(taskId = activeTask?.taskId) {
     if (!taskId) return;
-    try { await showTask(await invoke('goal.readTask', taskId)); }
-    catch (error) { setStatus('error', `任务读回失败：${message(error)}。请勿重复提交。`); }
+    changeTask();
+    save.disabled = writePending();
+    const scope = context();
+    try {
+      const task = await invoke('goal.readTask', taskId);
+      if (!current(scope)) return;
+      if (task?.taskId !== taskId) throw Error('目标任务身份与请求不一致');
+      await showTask(task, scope);
+    }
+    catch (error) { if (current(scope)) setStatus('error', `任务读回失败：${message(error)}。请勿重复提交。`); }
   }
 
-  async function showTask(task, identified = false) {
+  async function showTask(task, scope = context()) {
+    if (!current(scope)) return;
     if (!task?.taskId || typeof task.state !== 'string') throw Error('目标任务读回格式无效');
-    if (identified) outcomeUnknown = false;
+    if (task.taskId === writeTask?.taskId) writeTask = task;
     activeTask = task;
     taskStatus.textContent = `目标任务：${stateNames[task.state] ?? task.state} · 任务版本 ${task.revision}`;
     taskActions.hidden = false;
     readTask.disabled = false;
+    syncTaskActions();
     cancelTask.hidden = isTerminal(task) || task.state === 'cancelling';
     allow.hidden = deny.hidden = !(task.state === 'waiting_approval' && task.approval?.state === 'pending');
-    save.disabled = outcomeUnknown || !isTerminal(task);
+    save.disabled = writePending();
 
     if (task.state === 'waiting_reconciliation') {
       setStatus('pending', '写入结果待核实，请勿重复提交。');
@@ -201,9 +269,10 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
     } else if (!isTerminal(task)) {
       setStatus('pending', `任务${stateNames[task.state] ?? task.state}，尚未保存成功。`);
     } else if (appliedGoalRef(task)) {
-      await verifyAppliedGoal(task);
+      await verifyAppliedGoal(task, scope);
     } else if (task.result?.kind === 'conflict') {
-      await refreshGoals();
+      await refreshGoals(scope);
+      if (!current(scope)) return;
       save.disabled = true;
       setStatus('error', `目标版本冲突，当前图版本 ${task.result.graphRevision}；草稿已保留，请核对后重试。`);
     } else if (task.result?.kind === 'rejected') {
@@ -214,25 +283,35 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
     }
   }
 
-  async function verifyAppliedGoal(task) {
+  async function verifyAppliedGoal(task, scope) {
     const ref = task.result.currentGoal;
     try {
       const readback = await invoke('goal.get', ref.id);
+      if (!current(scope)) return;
       if (!readback?.goal || readback.goal.id !== ref.id || readback.goal.revision !== ref.revision
         || readback.graphRevision < task.result.graphRevision) throw Error('目标版本与写入回执不一致');
       selected = readback.goal;
       graphRevision = readback.graphRevision;
       id.control.value = selected.id;
       id.control.readOnly = true;
+      summary.control.value = selected.summary;
+      reason.control.value = selected.reason;
+      validFrom.control.value = toLocalTime(selected.validFrom);
+      validUntil.control.value = toLocalTime(selected.validUntil);
       sensitivity.control.value = selected.sensitivity;
       state.control.value = selected.state;
       source.textContent = `来源：${selected.sourceRef}；目标版本 ${selected.revision}，图版本 ${graphRevision}。`;
       state.label.hidden = false;
       save.textContent = '保存修订';
-      if (!(await refreshGoals())) throw Error('目标列表读回不可用');
+      if (!(await refreshGoals(scope))) {
+        if (!current(scope)) return;
+        throw Error('目标列表读回不可用');
+      }
+      if (!current(scope)) return;
       const previous = task.result.previousGoal?.revision ?? '新建';
       setStatus('saved', `目标已确认并读回：版本 ${previous} → ${ref.revision}，图版本 ${task.result.graphRevision}。`);
     } catch (error) {
+      if (!current(scope)) return;
       save.disabled = true;
       setStatus('error', `任务已结束，但目标读回尚未验证：${message(error)}。请勿重复提交。`);
     }
@@ -240,40 +319,56 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
 
   async function cancelActiveTask() {
     if (!activeTask || isTerminal(activeTask)) return;
+    const taskId = activeTask.taskId;
+    if (cancellations.has(taskId)) return;
+    cancellations.add(taskId);
+    changeTask();
+    const scope = context();
     cancelTask.disabled = true;
     try {
-      const result = await invoke('goal.cancel', activeTask.taskId);
-      if (result?.task) await showTask(result.task);
+      const result = await invoke('goal.cancel', taskId);
+      if (!current(scope)) return;
+      if (result?.task && result.task.taskId !== taskId) throw Error('目标任务身份与取消请求不一致');
+      if (result?.task) await showTask(result.task, scope);
+      if (!current(scope)) return;
       if (result?.cancelAccepted && !isTerminal(result.task ?? activeTask)) {
         setStatus('pending', '取消已受理，等待 Runtime 终态；写入结果仍需核实。');
       }
-    } catch (error) { setStatus('error', `取消请求状态未知：${message(error)}。请刷新任务状态。`); }
-    finally { cancelTask.disabled = false; }
+    } catch (error) { if (current(scope)) setStatus('error', `取消请求状态未知：${message(error)}。请刷新任务状态。`); }
+    finally { cancellations.delete(taskId); syncTaskActions(); }
   }
 
   async function decide(decision) {
     const approval = activeTask?.approval;
     if (activeTask?.state !== 'waiting_approval' || approval?.state !== 'pending') return;
+    if (decisionPending(activeTask)) return;
+    const taskId = activeTask.taskId;
+    const request = {taskId, approvalId: approval.approvalId, revision: approval.revision};
+    decisions.add(request);
+    changeTask();
+    const scope = context();
     allow.disabled = deny.disabled = true;
     try {
       await invoke('authorization.respond', {approvalId: approval.approvalId,
-        decision, expectedRevision: approval.revision, taskId: activeTask.taskId});
+        decision, expectedRevision: approval.revision, taskId});
+      if (!current(scope)) return;
       setStatus('pending', decision === 'deny' ? '拒绝已提交，等待 Runtime 终态。' : '批准已提交，等待任务恢复。');
-      await refreshTask(activeTask.taskId);
-    } catch (error) { setStatus('error', `授权决定状态未知：${message(error)}。请刷新任务状态，勿重复决定。`); }
-    finally { allow.disabled = deny.disabled = false; }
+      await refreshTask(taskId);
+    } catch (error) { if (current(scope)) setStatus('error', `授权决定状态未知：${message(error)}。请刷新任务状态，勿重复决定。`); }
+    finally { decisions.delete(request); syncTaskActions(); }
   }
 
   button.onclick = async () => {
+    changeView();
     if (!initialized) { resetDraft(); initialized = true; }
     dialog.showModal();
-    if (await refreshGoals()) await refreshTasks();
+    const scope = context();
+    if (await refreshGoals(scope)) await refreshTasks(scope);
   };
   reload.onclick = () => void refreshGoals();
   form.onsubmit = async event => {
     event.preventDefault();
-    if (!available || outcomeUnknown || !Number.isSafeInteger(graphRevision)
-      || (activeTask && !isTerminal(activeTask))) return;
+    if (!available || writePending() || !Number.isSafeInteger(graphRevision)) return;
     const start = Date.parse(validFrom.control.value);
     const end = Date.parse(validUntil.control.value);
     if (!id.control.value.trim() || !summary.control.value.trim() || !reason.control.value.trim()
@@ -289,9 +384,22 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
       ...(selected ? {expectedGoalRevision: selected.revision} : {}), goal};
     save.disabled = true;
     outcomeUnknown = true;
+    changeTask();
+    const scope = context();
     setStatus('pending', '目标写入任务正在提交；受理不等于完成。');
-    try { await showTask(await invoke(selected ? 'goal.revise' : 'goal.create', payload), true); }
-    catch (error) { setStatus('error', `提交结果未知：${message(error)}。草稿已保留，请核对目标任务；勿重复提交。`); }
+    try {
+      const task = await invoke(selected ? 'goal.revise' : 'goal.create', payload);
+      if (!task?.taskId || typeof task.state !== 'string') throw Error('目标任务读回格式无效');
+      writeTask = task;
+      outcomeUnknown = false;
+      save.disabled = writePending();
+      if (current(scope)) await showTask(task, scope);
+      else if (dialog.open) {
+        taskHistory.append(action(`查看已受理目标任务：${stateNames[task.state] ?? task.state}`,
+          () => void refreshTask(task.taskId)));
+      }
+    }
+    catch (error) { if (current(scope)) setStatus('error', `提交结果未知：${message(error)}。草稿已保留，请核对目标任务；勿重复提交。`); }
   };
 
   taskActions.hidden = true;
