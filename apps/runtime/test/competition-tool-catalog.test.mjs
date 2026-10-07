@@ -150,13 +150,19 @@ test('catalog availability still obeys actual caller cancellation and task deadl
       const {taskId} = await client.call('task.submit', {goal: 'Synthetic catalog lifecycle',
         conversationId: 'catalog-lifecycle'}, {idempotencyKey: lifecycle,
         timeoutMs: lifecycle === 'deadline' ? 250 : 10_000});
-      await ready;
-      if (lifecycle === 'cancel') await client.call('task.cancel', {taskId});
+      // The original deadline may expire before the provider is called.
+      // Observe that real terminal state instead of waiting forever for startup.
+      await Promise.race([ready, waitFor(app, taskId, ['failed', 'cancelled'])]);
+      if (lifecycle === 'cancel') {
+        assert.equal(typeof release, 'function', 'Cancellation covers an already-running provider');
+        await client.call('task.cancel', {taskId});
+      }
       const task = await waitFor(app, taskId, ['failed', 'cancelled']);
       assert.equal(task.state, lifecycle === 'cancel' ? 'cancelled' : 'failed');
       if (lifecycle === 'deadline') assert.equal(task.error.code, 'TIMEOUT');
-      release(true);
+      release?.(true);
       await new Promise(resolve => setTimeout(resolve, 10));
+      assert.equal(app.runtime.getTask(taskId).state, task.state);
       assert.equal(exchanges, 0);
       assert.equal(app.runtime.loadCheckpoint(taskId, 'competition-tool-catalog'), undefined);
       assert.deepEqual(app.runtime.readToolExecutions(taskId), []);
