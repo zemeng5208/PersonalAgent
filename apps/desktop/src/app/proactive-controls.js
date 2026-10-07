@@ -209,8 +209,8 @@ export function mountProactiveControls(container, invoke, {settings = false} = {
           const feedback = reviewFeedback(r);
           return `
           <article class="task cognition-review-card" data-review-id="${escape(r.reviewTaskId || '')}">
-            <p class="cognition-trigger"><strong>触发原因：</strong>${escape(r.trigger || '事实或目标变更')}</p>
-            <p class="cognition-choice"><strong>Laya 方案：</strong>${escape(r.choice || '本地决策建议')}</p>
+            <p class="cognition-trigger assistant-message"><strong>触发原因：</strong>${escape(r.trigger || '事实或目标变更')}</p>
+            <p class="cognition-choice assistant-message"><strong>Laya 方案：</strong>${escape(r.choice || '本地决策建议')}</p>
             <p class="notice cognition-status"><strong>处理状态：</strong>${escape(feedback.message)}</p>
             <div class="cognition-actions">
               <button class="btn btn-sm" type="button" data-action="apply-cognition" data-review-id="${escape(r.reviewTaskId || '')}" ${feedback.locked || cognitionPending.has(r.reviewTaskId) ? 'disabled' : ''}>
