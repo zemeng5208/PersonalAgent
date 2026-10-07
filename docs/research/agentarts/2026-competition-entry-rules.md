@@ -84,3 +84,17 @@
 [aa-price]: https://support.huaweicloud.com/price-agentarts/agentarts_08_0003.html
 [aa-evaluation]: https://support.huaweicloud.com/ops-agentarts/agentarts_14_0023.html
 [aa-evaluation-api]: https://support.huaweicloud.com/api-agentarts/CreateOpsEvaluationTask.html
+
+## PA-022 参数优化的官方研究条件（2026-10-07）
+
+取证日期：**2026-10-07 UTC**。本节仅补充 MOD-10 的公开官方资料研究，未登录账号、创建训练任务、调用模型或执行评估与部署。华为云[优化介绍](https://support.huaweicloud.com/ops-agentarts/agentarts_14_0143.html)（页面更新 2026-09-14）分别介绍诊断、配置优化和模型训练；提示词、工具或 Skill 的配置调整不能据此记为参数训练。
+
+[模型优化概述](https://support.huaweicloud.com/ops-agentarts/agentarts_14_0094.html)（页面更新 2026-09-17）描述面向特定 Agent/Workflow 任务的强化学习优化，并限制优化对象：单 Agent 不能包含工作流，插件与 MCP 各不超过 5 个；从开始节点到被优化大模型节点的 Workflow 路径不能包含用户交互暂停节点，目标 LLM 节点不能位于循环内。这是窄任务的服务说明；不能据此推导通用模型能力提升或本项目的实际效果。优化仍需明确的数据质量、任务分布与奖励定义。
+
+当前西南区域账号的训练服务权限、可用基础模型（包括盘古）、价格与额度、授权训练数据、可重复效果评估及训练后实际部署均**未证实**。本次没有取得这些条件的账号读回，也没有训练或效果回执。PA-022 仍是 future research，不能推成当前训练已可用、已完成“自训练”或华为比赛的必要条件；参赛要求继续按上面的独立赛事来源核对。
+
+## 官方文档的区域与产品边界（2026-10-07）
+
+同日公开取证发现两套快速入门并存：[通用平台快速入门](https://support.huaweicloud.com/qs-agentarts/agentarts_04_0000.html)（更新 2026-09-23）介绍服务开通和 CU 订阅；[华北-北京四开发平台快速入门](https://support.huaweicloud.com/qs-agentarts0/agentarts_04_0000.html)（更新 2026-04-29）保留基础版/企业版及另一套资源限制。[产品动态](https://support.huaweicloud.com/wtsnew-agentarts/index.html)（更新 2026-09-24）另记平台升级与 Managed Agents。引用这些资料时须保留各自的区域、产品和日期，不将套餐、限制或新能力直接套用到当前西南账号与已有运行实例。
+
+上述公开页面不证明当前账号权益、模型授权、余额、运行实例绑定或部署状态；平台试用模型额度也不等于已部署 API 的模型授权。本次未取得赛事页面新的完整规则正文，不更新赛事截止日期或代金券结论。
