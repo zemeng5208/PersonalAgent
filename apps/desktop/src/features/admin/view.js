@@ -610,16 +610,22 @@ export function mountAdmin(root, invoke, escape) {
     } else {
       const beforeEvidenceId = button.hasAttribute('data-evidence-more')
         ? evidenceStates.get(taskId)?.nextBeforeEvidenceId : undefined;
-      evidenceStates.set(taskId, {status: 'loading'});
+      const pending = {status: 'loading'};
+      evidenceStates.set(taskId, pending);
+      const isCurrent = () => !evidenceClosed && root.isConnected !== false
+        && evidenceStates.get(taskId) === pending
+        && current.tasks.some(item => item.taskId === taskId && item.conversationId === task.conversationId);
       render(current);
       try {
         const page = await invoke('evidence.list', {taskId, limit: 10, ...(beforeEvidenceId ? {beforeEvidenceId} : {})});
+        if (!isCurrent()) return;
         if (!Array.isArray(page?.items) || page.items.some(item => typeof item?.evidenceId !== 'string')) {
           throw Error('Invalid Evidence page');
         }
         evidenceStates.set(taskId, {status: 'loaded', items: page.items,
           nextBeforeEvidenceId: page.nextBeforeEvidenceId});
       } catch {
+        if (!isCurrent()) return;
         evidenceStates.set(taskId, {status: 'error'});
       }
     }

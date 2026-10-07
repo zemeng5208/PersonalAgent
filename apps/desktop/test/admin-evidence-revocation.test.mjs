@@ -128,6 +128,55 @@ test('task Evidence detail uses host-only metadata actions and never renders raw
   assert.doesNotMatch(ui.html(), /secret-canary|opaque-ref/);
 });
 
+test('Evidence list ignores older page success/error after the latest refresh settles and preserves its cursor', async t => {
+  const requests=[];
+  const ui=await harness(t,(action,payload)=>{
+    assert.equal(action,'evidence.list');
+    return new Promise((resolve,reject)=>requests.push({payload,resolve,reject}));
+  });
+  const data={...ui.base,tasks:[{taskId:'task-1',conversationId:'desktop-panel',state:'waiting_reconciliation',
+    revision:2,evidenceRefs:['opaque']}],adminNavigation:{page:'tasks',revision:1}};
+  const click=(more=false)=>ui.content.listeners.get('click')({target:{closest:()=>({
+    dataset:more?{}:{evidenceTask:'task-1'},closest:()=>more?{dataset:{evidencePanel:'task-1'}}:null,
+    hasAttribute:name=>more && name==='data-evidence-more'})}});
+  ui.render(data);
+  for(const latest of ['success','failure']) for(const earlier of ['success','failure']) {
+    const seed=click(),seedRequest=requests.at(-1);seedRequest.resolve({items:[{evidenceId:'seed'}],nextBeforeEvidenceId:'seed-cursor'});await seed;
+    const a=click(true),requestA=requests.at(-1);assert.equal(requestA.payload.beforeEvidenceId,'seed-cursor');
+    const b=click(),requestB=requests.at(-1);assert.equal(Object.hasOwn(requestB.payload,'beforeEvidenceId'),false);
+    if(latest==='success')requestB.resolve({items:[{evidenceId:'latest',summary:'latest refresh'}],nextBeforeEvidenceId:'latest-cursor'});
+    else requestB.reject(Error('private latest list error'));
+    await b;const expected=ui.html();
+    if(latest==='success')assert.match(expected,/latest refresh/);else assert.match(expected,/执行元数据未读取/);
+    if(earlier==='success')requestA.resolve({items:[{evidenceId:'old',summary:'stale older page'}],nextBeforeEvidenceId:'old-cursor'});
+    else requestA.reject(Error('private older list error'));
+    await a;assert.equal(ui.html(),expected);assert.doesNotMatch(ui.html(),/stale older page|private.*list error/);
+    if(latest==='success') {
+      const more=click(true),request=requests.at(-1);assert.equal(request.payload.beforeEvidenceId,'latest-cursor');
+      request.resolve({items:[]});await more;
+    }
+  }
+  assert.equal(requests.length,14);
+});
+
+test('Evidence list completion cannot revive removed tasks, replaced conversations, detached cards or unload', async t => {
+  let settle;
+  const ui=await harness(t,()=>new Promise(resolve=>{settle=resolve;}));
+  const data={...ui.base,tasks:[{taskId:'task-1',conversationId:'desktop-panel',state:'waiting_reconciliation',
+    revision:2,evidenceRefs:['opaque']}],adminNavigation:{page:'tasks',revision:1}};
+  const click=()=>ui.content.listeners.get('click')({target:{closest:()=>({dataset:{evidenceTask:'task-1'},
+    closest:()=>null,hasAttribute:()=>false})}});
+  for(const departure of ['task','conversation','detached','unload']) {
+    ui.root.isConnected=true;ui.render(data);const pending=click();
+    if(departure==='task'){ui.render({...data,tasks:[]});ui.render(data);}
+    if(departure==='conversation')ui.render({...data,tasks:[{...data.tasks[0],conversationId:'desktop-workspace'}]});
+    if(departure==='detached')ui.root.isConnected=false;
+    if(departure==='unload')ui.unload();
+    const expected=ui.html();settle({items:[{evidenceId:'old',summary:'stale departing list'}]});await pending;
+    assert.equal(ui.html(),expected,departure);assert.doesNotMatch(ui.html(),/stale departing list/);
+  }
+});
+
 test('unavailable Evidence bridge leaves an explicit retry state without leaking host errors', async t => {
   const ui = await harness(t, async () => { throw Error('private-host-secret'); });
   ui.render({...ui.base, tasks: [{taskId: 'task-1', state: 'succeeded', revision: 2,
