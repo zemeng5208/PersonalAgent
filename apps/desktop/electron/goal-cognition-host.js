@@ -402,7 +402,7 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
         (Array.isArray(r?.affected) && r.affected.length > 0) ? r.affected.map(a => a.causes?.map(c => `事实 ${c.reference.id} 变更`).join(', ') || a.node?.summary || a.node?.id).filter(Boolean).join('；') :
         '事实或目标变更';
       const choice = r?.selectedOption ? `${r.selectedOption.id} · ${r.selectedOption.description}` :
-        machineReview(r) ? 'Laya 置信不足，转人工复核 (RECHECK)' : (r?.action === 'KEEP' ? '保持现状 (KEEP)' : '本地建议方案');
+        machineReview(r) ? 'Laya尚不确定，需主智能体复核 (RECHECK)' : (r?.action === 'KEEP' ? '保持现状 (KEEP)' : '本地建议方案');
       const feedback=execution(value);
       return {
         reviewTaskId: value.task.taskId,
