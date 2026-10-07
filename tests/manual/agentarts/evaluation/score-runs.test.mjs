@@ -122,3 +122,40 @@ test('event snapshots preserve valid JSON lists and the original 24-event bound'
   assert.equal(report.multiAgent.handoffs, 0);
   assert.throws(() => scoreAgentArtsRuns([{...input[0], events: [...repeated, 'impact:start']}]), TypeError);
 });
+
+test('record arrays are scored from their own JSON entries without executing custom iteration',()=>{
+ let calls=0;
+ const fabricated=[];fabricated[Symbol.iterator]=function*(){calls++;yield*records();};
+ const getter=records();Object.defineProperty(getter,'0',{enumerable:true,get(){calls++;return records()[0];}});
+ const extra=records();extra.private='private canary';
+ for(const input of [fabricated,getter,extra])assert.throws(()=>scoreAgentArtsRuns(input),{name:'TypeError',message:'Invalid AgentArts evaluation record'});
+ assert.equal(calls,0);
+});
+
+test('inherited record iteration cannot fabricate or erase real JSON observations',()=>{
+ let calls=0;
+ class HideObservations extends Array{*[Symbol.iterator](){calls++;}}
+ const hidden=Object.setPrototypeOf(records(),HideObservations.prototype);
+ const report=scoreAgentArtsRuns(hidden);
+ assert.equal(report.multiAgent.observed,9);assert.equal(report.comparisonReady,true);
+ class FabricateObservations extends Array{*[Symbol.iterator](){calls++;yield*records();}}
+ const empty=new FabricateObservations();
+ const zero=scoreAgentArtsRuns(empty);
+ assert.equal(zero.multiAgent.observed,0);assert.equal(zero.multiAgentEvidenceComplete,false);assert.equal(zero.comparisonReady,false);
+ assert.equal(calls,0);
+});
+
+
+test('record snapshot preserves the existing 1000-record bound and leaves caller data mutable',()=>{
+ const original=records()[0];
+ const input=Array.from({length:1000},(_,index)=>({...original,runIndex:index+1,traceId:`synthetic-bound-${index}`}));
+ const report=scoreAgentArtsRuns(input);
+ assert.equal(report.multiAgent.observed,1000);assert.equal(Object.isFrozen(input),false);
+ assert.deepEqual(scoreAgentArtsRuns(JSON.parse(JSON.stringify(input))),report);
+ let getters=0;
+ const oversized=[...input,{...original,runIndex:1000}];
+ Object.defineProperty(oversized,'0',{enumerable:true,get(){getters++;return original;}});
+ assert.throws(()=>scoreAgentArtsRuns(oversized),{name:'TypeError',message:'Invalid AgentArts evaluation record'});
+ assert.equal(getters,0);
+ assert.throws(()=>scoreAgentArtsRuns(Array(1)),TypeError);
+});

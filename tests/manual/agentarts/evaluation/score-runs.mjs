@@ -36,11 +36,11 @@ function isExactRecord(value) {
       && Object.getOwnPropertyDescriptor(value, key)?.value !== undefined);
 }
 
-function snapshotEvents(value) {
+function snapshotArray(value, maximumLength) {
   try {
     if (!Array.isArray(value)) invalid();
     const length = Object.getOwnPropertyDescriptor(value, 'length')?.value;
-    if (!Number.isSafeInteger(length) || length < 0 || length > 24) invalid();
+    if (!Number.isSafeInteger(length) || length < 0 || length > maximumLength) invalid();
     const keys = Reflect.ownKeys(value);
     if (keys.length !== length + 1 || !keys.includes('length')
       || keys.some(key => key !== 'length' && (typeof key !== 'string'
@@ -59,7 +59,7 @@ function snapshotEvents(value) {
 
 function validateRecord(item) {
   if (!isExactRecord(item)) invalid();
-  const events = snapshotEvents(item.events);
+  const events = snapshotArray(item.events, 24);
   if (!CASE_BY_ID.has(item.caseId)
     || !VARIANTS.includes(item.variant)
     || !Number.isInteger(item.runIndex)
@@ -134,9 +134,7 @@ function summarize(records, variant) {
  * The scorer cannot authenticate trace IDs or infer a decision from raw model text.
  */
 export function scoreAgentArtsRuns(records) {
-  if (!Array.isArray(records) || records.length > 1000) {
-    invalid();
-  }
+  records = snapshotArray(records, 1000);
   const seen = new Set();
   const traceIds = new Set();
   const snapshots = [];
