@@ -10,9 +10,11 @@
 
 请求头格式检查不验证签名有效性或账号权限；只有真实服务回执能证明该请求通过鉴权。未取得真实回执前，合成签名头只用于离线消费测试。
 
+以下示例在仓库根目录的 Node REPL（支持顶层 await）中使用，所需参数与受信签名回调须由调用者先准备；加载模块不等于发出请求。
+
 ```js
 // signObservationRequest 由明确获授权的宿主提供；这里不读取或示范存放密钥。
-const {readAgentArtsTrace} = await import('./support/read-platform-trace.mjs');
+const {readAgentArtsTrace} = await import('./tests/manual/agentarts/support/read-platform-trace.mjs');
 const summary = await readAgentArtsTrace({
   traceId, deadline, signal,
   authorize: signObservationRequest,
