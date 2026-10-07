@@ -273,6 +273,29 @@ Plan/Laya 与 ToolGateway context 为明确合成/Fake，公共 Goal tools/SQLit
 出口，不是 Policy ledger或实云验收。validity-revision-frozen.json 固定新编译 producer，
 旧 withdrawal/source-outdated/expiry 私输出保留；根必要检查另记，不借固定874的2455项。
 
+## 合并修订后仍未复核的Goal祖先依赖（2026-10-07 续接）
+
+实际公开GoalCloudHost消费者先建立Goal1与依赖它的Plan，再在首次idle前合法提交
+Goal2、Goal3。旧入口严格处理最新2→3，因而KEEP/affected空/infer0，完整影响分析却仍
+对Plan的Goal1旧pin报告RECHECK。保留原连续修订及repair函数逐字节行为，新增本地
+selectGoalAncestorImpact/reviewGoalAncestorImpact：精确graph/currentGoal head，只选旧pin
+小于current-1的superseded RECHECK，并剔除原入口已覆盖的整个item；mixed因果不重复。
+空差集不创建任务或调用Laya，新trigger身份绑定当前Goal与排序后的精确消费者refs，
+不同合法ref属性顺序归一化，旧choice/稳定key不变。limit1仍有界，未记录差集优先于
+旧pending handoff；同scope SQLite重开不重新选择，恢复许可handoff仍一次受理。
+
+EXACT5源码/出口/测试在ancestor-exact5 manifest固定，SHA
+1d22a6c9cca4b75cf5502f6513681f1bfc5a645199a1d3879623937291bc409d；
+两受影响测试文件36/36实际exit0，覆盖旧入口拒绝、混合范围、stalegraph/head、空范围、
+重放/新消费者身份、limit1与ref属性顺序。公开producer AFTER graph4保留原KEEP并新增
+祖先RECHECK，infer1/dispatch0、第二idle为空；单次修订graph3行为不变，不写Plan。
+既有Desktop投影消费实际新review：合成private Fact两个revision在本地参与cause但
+出云均省略，REVISE仅一个精确repairContext目标；FakeHTTP发送一次、graph6不变。
+Desktop源码和原整图CAS/permit/digest复核未改，祖先触发不伪装成Fact收据。
+ToolGateway context、Plan/背景、Laya与HTTP明确合成/Fake，Goal工具/SQLite为真实本地
+公开出口；不提升实云/Windows验收。首次规划前Goal已修订、Plan自身到期的另份只读
+证据仍为未接入范围，本次不放宽rev1首次规划或public Fact expiry契约。
+
 ## 原窄屏方案卡片与本地整仓检查（2026-10-07 续接）
 
 原320×480 panel消费实际已受理Host状态时，长Fact来源引用令thread横向scrollWidth

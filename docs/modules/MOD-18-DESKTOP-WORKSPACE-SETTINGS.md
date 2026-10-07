@@ -106,3 +106,12 @@ export-withheld；撤销清宿主许可并旋转generation，不逆转已消费�
 只读结果，迟到确认不成为新authorization或续发。证据workspace-reference-read-composer、
 final-guard和dialog-cancel-consumer-*，独立审查读回SQLite/原文件/截图。只读取消结论
 不能套到写入，PUBLIC验收不等于真实云、用户工作区或完整ArtifactPort验收。
+
+原插件设置的另一个独立消费者实际exit0：通过原连接按钮启动已有官方filesystem
+2026.8.31/SDK1.31.0的固定stdio服务，发现14个工具，仅暴露批准的mcp.workspace.read_text。
+原启用摘要/run按钮调用既有worker-level Skill，经真实Runtime/Policy读取同76B CRLF
+合成参考文件一次，confirmed、单次grant消费为0，原panel显示确定性摘录和本地SHA。
+这条native摘要不调用模型或云，HTTP/凭据读取均0，不等于云端选择Skill或PUBLIC出机。
+原stop按钮等待dispose后，服务unavailable、Skill disabled、run禁用且不重读；未独立观察
+PID/reap，不推广OS进程树验收。desktop-reference-ui-native-summary-consumer-*保存命令、
+JSON/日志/三张原admin/panel截图；四次helper失败留存，最终完整消费者才计通过。
