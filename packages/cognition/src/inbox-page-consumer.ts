@@ -84,13 +84,14 @@ export function createInboxPageConsumer<Item, Summary>(options: {
         while (hasMore && pagesProcessed < maxPages) {
           const stopped = lifecycle(context);
           if (stopped) {stoppedReason = stopped; break;}
-          const page = await withCognitionDeadline(context,
+          let page = await withCognitionDeadline(context,
             bounded => request.fetchPage({...context, ...bounded, cursor, limit: pageSize}), now);
           const afterFetch = lifecycle(context);
           if (afterFetch) {stoppedReason = afterFetch; break;}
           if (!page || !Array.isArray(page.items) || page.items.length > pageSize
             || !text(page.nextCursor) || typeof page.hasMore !== 'boolean'
             || (page.hasMore && page.nextCursor === cursor)) return invalid();
+          page = {...page, items: [...page.items]};
           const result = await withCognitionDeadline(context, bounded => pipeline.processPage({...context, ...bounded, cursor,
             items: page.items, nextCursor: page.nextCursor, hasMore: page.hasMore}), now);
           classified += result.classified; reused += result.reused;

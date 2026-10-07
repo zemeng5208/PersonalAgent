@@ -37,6 +37,35 @@ test('single-page submission binds scope, cursors and item membership before asy
   assert.deepEqual(f.calls[0].items, [item]);
   assert.equal(f.calls[0].items[0], item, 'Generic item values retain their original object identity');
 });
+test('retained source pages cannot replace acknowledged cursors, skip remaining pages or change item membership', async () => {
+  for (const mutation of ['hasMore', 'cursor', 'items']) {
+    const f = fixture(), fetched = [], acknowledged = [], item = {id: 'one'};
+    const page = {items: [item], nextCursor: '1:4', hasMore: true};
+    let entered, release;
+    const started = new Promise(resolve => {entered = resolve;});
+    const waiting = new Promise(resolve => {release = resolve;});
+    const originalProcess = f.pipeline.processPage;
+    f.pipeline.processPage = async input => {entered(); await waiting; return originalProcess(input);};
+    const pending = f.consumer.processStream({...context(), fetchPage: async ({cursor}) => {
+      fetched.push(cursor);
+      return cursor === undefined ? page : {items: [{id: 'two'}], nextCursor: '1:8', hasMore: false};
+    }, onPageCompleted: input => acknowledged.push(input.cursor)});
+    await started;
+    if (mutation === 'hasMore') page.hasMore = false;
+    else if (mutation === 'cursor') page.nextCursor = 'forged-cursor';
+    else page.items.push({id: 'added-after-return'});
+    release();
+    const result = await pending;
+    assert.equal(result.pagesProcessed, 2, mutation);
+    assert.equal(result.classified, 2, mutation);
+    assert.equal(result.cursor, '1:8', mutation);
+    assert.equal(result.stoppedReason, 'completed', mutation);
+    assert.deepEqual(fetched, [undefined, '1:4'], mutation);
+    assert.deepEqual(acknowledged, ['1:4', '1:8'], mutation);
+    assert.equal(f.calls[0].items.length, 1, mutation);
+    assert.equal(f.calls[0].items[0], item, 'Generic item values retain their original object identity');
+  }
+});
 test('page backpressure persists cursor before pause and new wrapper resumes that exact source cursor',async()=>{
   const f=fixture(),fetched=[];
   const fetchPage=async({cursor})=>{fetched.push(cursor);return cursor===undefined
