@@ -166,6 +166,13 @@ function asPlainObject(value: unknown): Record<string, unknown> | undefined {
   }
 }
 
+/** Only parser-owned JSON copies reach this helper; caller data remains mutable. */
+function freezeJsonSnapshot(value: unknown): void {
+  if (value === null || typeof value !== 'object') return;
+  for (const child of Object.values(value)) freezeJsonSnapshot(child);
+  Object.freeze(value);
+}
+
 function validateRequest(request: CoordinationRequest, responseMode: 'text' | 'tool-proposal-json',
   initialRequestMode: 'goal' | 'goal-with-tools-json'): {
   taskId: string; revision: number; goal: string; deadline: string;
@@ -187,6 +194,8 @@ function validateRequest(request: CoordinationRequest, responseMode: 'text' | 't
   if (input.continuation !== undefined) {
     if (responseMode === 'text') invalid('AgentArts text adapter does not support tool continuation');
     continuation = parseCoordinationContinuation(input.continuation);
+    // The final host guard must inspect exactly the serialized transport snapshot.
+    freezeJsonSnapshot(continuation);
   }
   if (input.availableTools !== undefined && continuation !== undefined) {
     invalid('AgentArts continuation cannot include an initial tool directory');

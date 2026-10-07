@@ -157,6 +157,12 @@ authorization; the original goal is not automatically sent again. Request-level
 deployment/version/trace and usage association need separate verified contracts. No
 wire Schema or storage migration changes.
 
+The adapter deeply freezes its private, validated continuation copy before building
+the request text. The final host guard reviews that same snapshot and cannot rewrite
+it after serialization. A throwing mutation is denied before transport; caller-owned
+continuation data stays mutable. This preserves JSON special keys and the existing
+continuation budget and grants no new export or tool permission.
+
 Tool proposal and confirmed continuation JSON copies preserve own special keys such
 as `__proto__` as ordinary data properties. They do not change the copied object's
 prototype or silently drop fields before validation and authorization. Repeated
