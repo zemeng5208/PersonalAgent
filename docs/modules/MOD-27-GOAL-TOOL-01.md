@@ -176,3 +176,11 @@ actual Host/Public Runtime 的 4096/5000 字符对照发现合法 5000 baseline 
 原 deterministic verifier 新增 direct Goal 边界、旧 Fact 4096/5000 及大 wrapper 拒绝对照，
 实际 exit0；独立 goal-with-tools 的 8192 字符、总请求 32 KiB、公开 adapter 总预算与
 候选输出限制保持原值。源修复不代表新版本已部署或所有 8192 长摘要可通过总预算。
+
+上述源码与 Evidence 详情/分页增量的受影响 Desktop 检查固定
+`cfbdce670283ef52914c2fc040af1e01dad9b2e2` / tree
+`0c9ef9db1784c41aede94088828283fb250e87ca`：typecheck 与工作区测试两条命令实际 exit0，
+594 项中 583 通过、0 失败/取消、11 跳过，Node24.15.0、两核，
+完成于 2026-10-07 20:31:50 UTC，日志 `core-desktop126-check.log`。
+这不覆盖 Windows CI：前 f584 的 push 在默认子任务候选恢复 1.0→1.0 分支失败，
+相同 head 的 PR CI success；原断言的本地定向 5/5 通过仍未解释 Windows 失败根因。
