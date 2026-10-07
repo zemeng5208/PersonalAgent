@@ -59,3 +59,22 @@ PR #37 CI 后续修正：2026-09-10 的 run 34430658413 在 npm ci 因缺少两�
 此共享文件例外由 goo122 随 PR 评审。上文原定锁登记交接项由此次修正提前完成，
 生产构建次序、公共端口与根装配仍待集成。未修改根 package、公共 contracts 或 Runtime。
 只按用户授权提交、推送和请求 PR 评审，不合并或标记 MOD done。
+
+## 当前源码能力与验收矩阵（2026-10-07）
+
+以下依据 `main@4b5ec61` 的公开入口与实际调用点核对，区分已合并实现与尚未完成的
+真实来源验收。上文 2026-09-10 的 unavailable、构建版本和验证数量保留历史含义，
+不能作为当前源码缺项的结论；本次仅校正文档，没有新增实现或真实服务验收。
+
+| 能力 / 现有消费入口 | 当前源码状态 | 仍需完成的边界 |
+| --- | --- | --- |
+| [Goal 图与命令](../../packages/goals/src/index.ts)、[受控工具](../../packages/goals/src/tool.ts)、[Desktop Goal host](../../apps/desktop/electron/goal-host-core.js) | 已有 Fact/Goal/Decision/Plan 精确版本依赖、历史查询与撤回、SQLite/Fake 原子 `appendBatch`；Goal 创建/修订通过既有 Runtime 工具及图/Goal revision 检查，不由 Renderer 直接写图。 | 版本恢复是追加图版本，不回滚外部副作用；真实个人数据授权、删除与恢复读回不能由离线图测试代替。 |
+| [SQLite fact projection](../../apps/runtime/src/application/sqlite-fact-projection.ts)、[CompetitionFactHost](../../apps/runtime/src/application/competition-fact-host.ts) | 已消费公开 `MemoryQueryPort` / `FactChangeFeedPort`、持久投影与确认读回，保留 consume/drain、completed impact 和恢复入口；当前 feed/query 固定 `allowedSensitivities: ['public']`，宿主写入来源是公开 Vault。 | 已有公开来源链不代表所有业务来源可用；不能将私人 Calendar 当公开 Vault 输入。真实来源修正、撤回、删除、权限撤销及重启的现场验收仍分别记录。 |
+| [Committed fact consumer](../../packages/cognition/src/committed-fact-consumer.ts)、[Goal cognition host](../../apps/desktop/electron/goal-cognition-host.js) | 已有 KEEP/RECHECK/REVISE 影响回放与精确 completed projection 消费；Goal host 对已确认的创建/修订调用 `reviewGoalCreated` / `reviewGoalRevision`。 | 只复核有依赖的节点；模型建议或投影完成不能单独证明修复已执行，无关依赖不得被改写。 |
+| [Runtime local repair](../../apps/runtime/src/application/local-repair.ts)、[Reviewed repair 接线记录](MOD-28-REVIEWED-REPAIR-01.md#当前源码接线核对2026-10-07) | 已有最小差异预览、可信 Goal 来源绑定及原 Runtime/Policy/原子 CAS/历史读回路径；main 已装配 P8 reviewed source resolver。 | 真实 Laya/AgentArts 候选、云执行、confirmed Evidence 与实际目标读回未由本次核验；未知写入不重发，不能用候选受理或 Fake 成功替代执行结果。 |
+| [默认 P5 Calendar 交接](MOD-28-REVIEWED-REPAIR-01.md#默认-p5-会议链与可信来源交接2026-10-07) | 核心 committed reader 与 Goal 会议 review/repair 端口已具备；main 的 P5 仅注入 `calendarReadPort`，缺可信 meeting binding，仍保存 `requires_review`。 | 沿 #212：Potato 提供可信 Calendar sourceRevision→精确 Fact ref 与旧/新 baseline 顺序，goo 核对原 Memory/projection 的敏感范围与 completed 读回，zemeng 随后复用既有 composition/Goal host 接线；不得新造 Fact 来源、空转发或把无 binding 改为 KEEP。 |
+
+现场验收继续使用上述既有模块记录与 #212 的步骤及负责人，MOD-27 保持 `review`、
+MOD-28 保持 `in_progress`。接口状态以[接口目录](../interfaces/CURRENT_INTERFACE_CATALOG.md)
+公布的子集为准；本次源码核对不冻结新接口，也不把合成绑定、实际 SQLite 持久读回或
+一轮根检查记为真实 Calendar、私人 Memory、云或 Evidence 整体通过。

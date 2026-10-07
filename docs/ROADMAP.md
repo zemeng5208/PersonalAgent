@@ -121,8 +121,8 @@
 | MOD-24 | M2 | review | `Potatos498` / PR #47 已合并为 `2117908a`；OpenAlex、Fake、缓存三态和三项来源披露已验证，长期真实服务稳定性仍为 conditional |
 | MOD-25 | M2 | done | `Potatos498` / PR #4、#12、#23 与 Runtime 装配 PR #9 已合并；GeoNames 增强下 26 个世界大城市简体查询 26/26 高置信，真实门控测试 66/66；2026-09-30 置信度收口：`PPLA2`–`PPLA5` 次级席位不再无条件判 `high`（新增 `minMinorSeatPopulation` 默认 100000，实测空档 14574↔211151），GeoNames 已证名可佐证任意人口档；`开罗+Cairo` 提示串用例随之修复；manifest 仍为 `conditional`，不等于长期生产稳定性验收 |
 | MOD-26 | M4 起逐平台验收 | todo | `Potatos498` 负责；当前未选定平台工作包，未因分工重置启动 |
-| MOD-27 | M1.6 | review | `zemeng` / main 已有版本图及 SQLite/Fake 原子 `appendBatch`；事实查询/变化流与自动事实投影的后续增量仍在堆叠分支，真实事实来源、确认消费和数据删除未完成 |
-| MOD-28 | M1.6 | in_progress | `zemeng` / main 已有离线影响分析、显式修复预览/提交和原子 CAS；自动事实投影、外部事实身份落地、真实 AgentArts 驱动和 Evidence 闭环未完成 |
+| MOD-27 | M1.6 | review | `zemeng` / main@4b5ec61 已有版本图、SQLite/Fake 原子 `appendBatch`、受控 Goal 工具及公开 Memory 查询/变化流的持久投影与确认消费；真实来源、私人数据授权及删除现场验收未完成，见[当前能力矩阵](modules/MOD-27-28-INTEGRATION-HANDOFF.md#当前源码能力与验收矩阵2026-10-07) |
+| MOD-28 | M1.6 | in_progress | `zemeng` / main@4b5ec61 已有 KEEP/RECHECK/REVISE 回放、事实投影消费、Goal 创建/修订触发及经 Runtime/Policy/CAS 的受控修复；默认 P5 Calendar 尚缺可信来源版本→Fact ref→completed projection 绑定，真实 Laya/AgentArts 与 Evidence 现场闭环未验收，沿 [#212 既有交接](modules/MOD-28-REVIEWED-REPAIR-01.md#默认-p5-会议链与可信来源交接2026-10-07)继续 |
 | MOD-29 | M1.5 第一优先 | in_progress | `zemeng` / AgentArts Runtime 适配与配置入口已有 provisional 实现；真实项目、版本、部署、API 和 trace 读回仍无成功证据 |
 | MOD-30 | M1.5 第一优先 | in_progress | `zemeng` / PR #49、#72（Workflow 输入）、#80（载荷边界）均已进入 main（2026-09-30 台账核对），工具提案/审批/continuation 离线链可用；真实 MCP/Skill 与目标系统读回未完成 |
 | MOD-31 | M1.5/M3 | in_progress | `zemeng` / PR #58 的[固定合成 runner](../tests/manual/agentarts/support/fixed-synthetic-batch.mjs) 已进入 main；[PR #302](https://github.com/zemeng5208/PersonalAgent/pull/302) 新增显式双端口、1～3 对的配对 runner，尚未合并，只报告三标签分类与实际等待耗时；真实多 Agent 角色、平台重复运行指标及评估仍未完成 |
