@@ -1,5 +1,7 @@
 # Windows Host: 记事本受限文本操作核心
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 此目录包含受限 Windows 类库和 `host/` 中的独立进程入口。Host 消费 [#168](https://github.com/zemeng5208/PersonalAgent/pull/168) 的 provisional `0.1.0` 内部 Schema。当前 main 已有公开 Runtime adapter、持久 attempt store 和 Desktop 的新记事本/F9 确认入口；Desktop 仅在 Windows 且固定 Host/Bridge Release 产物存在时注册本机工具，真实握手与 UIA 仍须另行验收。目标 Profile 为 `huawei_ict_agentarts`；本地执行不能由 AgentArts 的成功响应、Renderer 文本或单独的 `authorizationRef` 触发。正式入口与证据缺项见 [Desktop 记事本操作](../desktop/docs/notepad-operation.md)。
 
 `NotepadAction.ReplaceTextAsync` 的目标仅为前台、非提权、System32 经典记事本或包身份精确为 `Microsoft.WindowsNotepad_8wekyb3d8bbwe` 的 MSIX 记事本中**唯一可见、启用、可写且支持 UI Automation `ValuePattern`** 的可编辑控件（过滤规则可在唯一可见、启用、可写且支持 ValuePattern 的 Edit 控件存在时支持；候选遍历中遇元数据查询异常立即 fail closed，多有效候选、异常或无有效候选均明确拒绝。本机未实际观察现代 Notepad 的 UIA 树，不可声称常见控件形态、已验证现实兼容或完整结构过滤）。MSIX 还须恰好一个可识别且选中的 UIA 标签；无法识别即拒绝。可信调用方须在用户确认后传入窗口句柄、PID、进程启动时间和精确预期文本；最多替换 4096 个 UTF-16 code unit，且必须完全匹配当前文本。静态信号量串行化本进程所有输入；执行前核对窗口身份、前台和上次输入 tick，变更后再次读回目标控件。取消、窗口切换或用户输入导致让出控制；变更开始后的任何失败返回 `ResultUnknown`，不可盲目重试。返回内容不包含窗口标题、路径或文本。

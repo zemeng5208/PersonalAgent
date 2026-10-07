@@ -1,5 +1,7 @@
 # MOD-30-REPAIR-CANDIDATE-01：显式候选与本地批准提交
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：huawei_ict_agentarts；状态：in_progress / provisional。
 - 实现：zemeng 委派 Runtime 消费执行者；公共新增候选解析唯一 owner 为本工作包。
 - 非作者评审：需 goo122；未冻结、未合并，不以模型意见代替真实协作者批准。

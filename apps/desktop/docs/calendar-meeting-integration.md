@@ -1,5 +1,7 @@
 # P8 日历旧条目与会议事实绑定
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 Profile：`huawei_ict_agentarts`。共享装配由 P8 负责；P1 连接器和 P5 投影源保持各自所有权。接口为 `provisional`，没有新增 wire operation、Schema 或迁移。
 
 `calendar-meeting-host.js` 消费现有 Runtime HostTool 任务和 coordination graph。旧条目、配置绑定与 Evidence 引用保存在原 Runtime 数据库的 checkpoint，不新建日历基线或事实存储。

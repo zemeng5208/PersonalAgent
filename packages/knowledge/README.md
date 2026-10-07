@@ -1,5 +1,7 @@
 # @personal-agent/knowledge — provisional Vault ports
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 PA008 MVP 新增独立受控写端口与受信知识源配置，目标 profile 为 `huawei_ict_agentarts`。
 下面 MOD-08A～F 是历史分片证据；其中“无生产注册”的描述不能代表当前 main 的装配状态。
 当前 main 已有启动目录绑定的只读工具，本包将其替换接线交给 P8；设置与主对话必须消费同一个

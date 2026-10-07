@@ -1,5 +1,7 @@
 # `@personal-agent/voice-wake`
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 MOD-15 的 provisional 唤醒会话生命周期控制器，目标 Profile 为
 `huawei_ict_agentarts`。本包只消费可信宿主的录音授权结果和撤销信号，默认关闭，
 只有调用方显式 `enable({deadlineAtMs})` 后才订阅注入的 `WakeSignalSource`；调用方必须

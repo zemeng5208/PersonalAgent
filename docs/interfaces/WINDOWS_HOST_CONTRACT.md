@@ -1,5 +1,7 @@
 # Windows Host 内部通信契约（provisional）
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 此契约服务 `huawei_ict_agentarts` 的 Windows 工具接线，单一来源为
 `packages/contracts/schema/windows-host.json`，版本 `0.1.0`。TypeScript 消费者使用
 `@personal-agent/contracts/windows-host`；C# Host 消费同一 JSON Schema 和夹具，不能另定

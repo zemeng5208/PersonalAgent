@@ -1,5 +1,7 @@
 # GitHub 连接器（MOD-33）
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 `@personal-agent/github` 是 DEV-WORKFLOWS 的 Local Profile 增量。接口为
 provisional，真实 GitHub 部分只读已验证；Windows CLI、账号写入和消费者闭环尚未验收；不纳入 Competition
 Profile 的完成证据。生产 provider 不自动回退 Fake。

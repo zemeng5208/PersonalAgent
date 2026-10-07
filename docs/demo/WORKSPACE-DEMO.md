@@ -1,5 +1,7 @@
 # 现实演示：知识笔记、工作台任务、天气与订阅
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 Profile：`huawei_ict_agentarts`。本包基线：`3ed9751`，2026-09-30。
 负责人：zemeng 演示资料工作包；正式装配归 P8，非作者评审由主控安排。
 本包交付合成资料和操作旅程，不新增 Runtime、Renderer、连接器或正式配置。

@@ -1,5 +1,7 @@
 # DEV-WORKFLOWS-INTEGRATION-01
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 状态：`review`（生产组合、模块/SQLite受控检查已交；真实账号、原设备整链及非作者集成待验）。负责人：zemeng；真实集中验收：Potatos498。
 
 ## 范围和入口

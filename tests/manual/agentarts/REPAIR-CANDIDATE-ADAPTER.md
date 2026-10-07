@@ -1,5 +1,7 @@
 # 显式版本化候选：云适配消费
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 负责人 zemeng（A，MOD-04B/29/30/32）；目标 huawei_ict_agentarts；状态 review，
 真实验收未完成。公共类型和严格 parser 归 B，依赖提交 `6d3234315057292971959f3fbafac4bda12c486e`。
 字段定义与预算的唯一依据为 [MOD-30-REPAIR-CANDIDATE-01](../../../docs/modules/MOD-30-REPAIR-CANDIDATE-01.md)，

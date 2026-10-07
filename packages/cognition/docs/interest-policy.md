@@ -1,5 +1,7 @@
 # 兴趣推断与知识时效纯策略
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 Competition Profile 的宿主建议层；不创建数据库、定时器、网络连接或授权，不启动 Laya。
 `decideInterest()` 与 `decideKnowledgeFreshness()` 接受可信宿主整理的输入，返回可解释结果。
 

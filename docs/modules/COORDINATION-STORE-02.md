@@ -1,5 +1,7 @@
 # COORDINATION-STORE-02：原子显式图谱修复
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：huawei_ict_agentarts；MOD-27/28，PA-024/025。
 - 负责人：zemeng；非作者评审者：goo122；状态：review。
 - 2026-09-17 用户明确授权：缺失接口由当前开发者实现并提交评审，不等待原提供方先交付。

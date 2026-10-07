@@ -1,5 +1,7 @@
 # MOD-09E：公开演示资料到持久事实的离线来源首片
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`
 - 负责人：`goo122`；状态：`done`（仅本片离线验收；PR #118 已获批准并于 2026-09-25 合并）
 - 基线：`main@4efa7f6`；依赖已合并的 MOD-08E、MOD-09C/09D

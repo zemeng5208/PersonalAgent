@@ -1,5 +1,7 @@
 # MOD-31-LOCAL-EVALUATION-01：本地域影响评估基线
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`；负责人 zemeng；非作者评审者 goo122（待评审）。
 - 状态：review（本地交付完成，待非作者评审与集成）；基线 main `72cc76b`，不依赖 PR #49 或 #51。
 - 工作树：`.worktrees/zemeng-cognition-evaluation`。

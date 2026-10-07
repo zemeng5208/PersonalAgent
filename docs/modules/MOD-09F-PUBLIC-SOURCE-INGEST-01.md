@@ -1,5 +1,7 @@
 # MOD-09F：公开演示来源的可重试事实导入
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`；关联 PA-024、PA-025
 - 负责人：`goo122`；Memory → Goal 消费语义由 `zemeng` 非作者评审
 - 状态：`done`（仅本片公开来源离线验收；PR #126 已获批准并于 2026-09-25 合并）

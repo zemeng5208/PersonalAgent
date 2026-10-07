@@ -1,5 +1,7 @@
 # P8 公共 Runtime 接续交接
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 Profile：`huawei_ict_agentarts`。公共 Runtime 后续源码交 Work 云端唯一作者，本机 P8 保留 Desktop/native/configuration 装配。所有既有未知结果、数据库和用户配置保留。
 
 ## 当前源码

@@ -1,5 +1,7 @@
 # MOD-28-FACT-CHANGE-FEED-01：事实变化消费首片
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`；本次重建负责人 `goo122`；非作者评审者为 `zemeng` 或其他已登记协作者。
 - 分支 `codex/mod-09b-memory-ports-rebuild`，基于 `main@d78613a226b5d490f8f2dd47f3e5c8236a3d7ec2`；状态 `review`。
 - 本工作包拥有公开 feed 契约、输入验证器、同一 `FakeMemoryHost` 的消费状态机与本文。

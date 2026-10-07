@@ -1,5 +1,7 @@
 # P5 真实 Laya、目标与主动认知：桌面端装配与 P8 集成规格说明
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - **模块 ID**: P5 (`@personal-agent/cognition` & `apps/desktop/electron/cognition-p5-composition.js`)
 - **负责人**: `zemeng` (Gemini 代理开发与验收)
 - **目标 Profile**: `huawei_ict_agentarts`

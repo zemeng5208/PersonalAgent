@@ -1,5 +1,7 @@
 # MOD-33-GITHUB-01：GitHub 连接器源码增量
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：Local（DEV-WORKFLOWS-PLAN-20261002 #276 的明确范围）。
 - 状态：review / provisional；源码、构建和受控测试已交付，真实部分只读已验证；账号写入、Windows 与完整消费者验收未完成，不标 done/frozen。
 - 负责人：zemeng；非作者评审：goo122。

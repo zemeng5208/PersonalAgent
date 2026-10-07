@@ -1,5 +1,7 @@
 # ADR-0002：依赖方向与应用装配
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 适用范围：Huawei ICT AgentArts Competition Profile 与可选 Local Profile；AgentArts Adapter 仍遵守 `packages` 不反向依赖 `apps` 的规则。
 
 - 状态：accepted

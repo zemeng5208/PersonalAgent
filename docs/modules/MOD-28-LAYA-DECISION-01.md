@@ -1,5 +1,7 @@
 # MOD-28-LAYA-DECISION-01：本地主动介入判断首片
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`；关联 MOD-04B、MOD-28 / PA-025。
 - 负责人：zemeng 委派的 Laya 执行者；Git 身份 `zemeng5208`；状态：`review`，待非作者评审与集成。
 - 分支：`codex/zemeng/laya-decision-mvp`；基线 `main@c5c4ada`。

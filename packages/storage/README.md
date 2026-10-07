@@ -1,5 +1,7 @@
 # 工程与存储底座（MOD-01 / PA-004）
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 负责人 goo122；评审者 zemeng。MOD-01 已随 PR #1 完成评审和集成。该包提供可信宿主使用的 SQLite 连接与有序迁移，不实现任务状态机或公共 StoragePort。
 
 该底座由当前 [Huawei ICT AgentArts Competition Profile](../../docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md) 复用，继续承载本地私有状态、授权、Evidence 引用和迁移事实来源；AgentArts 不直接获得数据库访问。可选 Local Profile 不建立第二套数据库或迁移序列，当前也无新增 Local 存储工作。

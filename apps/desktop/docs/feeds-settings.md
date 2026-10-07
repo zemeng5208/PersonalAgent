@@ -1,5 +1,7 @@
 # Desktop 订阅接线
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - 工作包：MVP-DESKTOP-FEEDS；Profile：`huawei_ict_agentarts`；实现：zemeng；评审：goo122。
 - 只修改 Desktop 组合与设置。MOD-22 的采集、解析、脱敏、游标和分页保持 Potatos498 所有权，直接消费 `@personal-agent/feeds` 的公开 `register` 与 `HttpFeedProvider`，不另建采集器。
 

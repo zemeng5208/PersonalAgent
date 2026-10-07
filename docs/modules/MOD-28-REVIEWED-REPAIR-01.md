@@ -1,5 +1,7 @@
 # MOD-28：Goal review 来源的受控计划修复
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 目标 profile 为 `huawei_ict_agentarts`。本包补齐 P5 的已选结构化候选 → AgentArts 候选 → 现有 Runtime/Policy 工具 → 图版本/Evidence 读回。根已授权 P5 唯一修改 `local-repair.ts` 及专属测试；P8 仍唯一修改 Runtime Application 构造与 main。复用 `cognition.commit_repair`，不增加 repair registry、wire operation、任务库或执行循环。
 
 ## 接口与装配（provisional）

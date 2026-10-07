@@ -1,5 +1,7 @@
 # MOD-30／MOD-04B：普通非会议目标的最小合成协议包
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 Profile：`huawei_ict_agentarts`；负责人：zemeng。此包供 MOD-30 云工作流与
 MOD-04B 现有适配器／Runtime 消费端对齐。它是**待接线约定**，尚未改动
 `packages/coordination`、云实例或受信出机策略；不能据此宣称普通目标已可用。

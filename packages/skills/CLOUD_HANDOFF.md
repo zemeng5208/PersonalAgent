@@ -1,5 +1,7 @@
 # MCP/Skill PR269 本机续修交接
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 Profile `huawei_ict_agentarts`，PA-005/006/023/026/027。从云 `fe0666021cae04b3873393cca25b9b0b32713ec5` 普通合并到原本机树，保留 d94 历史、完整 worker selector 和恢复校验。仅修改 MCP/Skills、reference-tools-host 及专属 case/docs；原 Runtime CloudRuntime、P6 workspace-host、P8 main/native/rootlock 均未编辑。不新 PR，普通 FF 更新原 `codex/cloud-mvp-mcp-skills` / PR269。
 
 ## 最小两阶段端口

@@ -1,5 +1,7 @@
 # P5 纯 Goal：统一真实验收准备
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 此文件是准备记录，不是成功验收。目标 profile 为 `huawei_ict_agentarts`。#255 的 `44bc117` 接口保持不变；本增量仅添加手动场景消费者，不修改 shared main、Runtime、Policy 或 Laya 阈值。
 
 ## 当前已核对

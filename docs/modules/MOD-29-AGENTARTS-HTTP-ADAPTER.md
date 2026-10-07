@@ -1,5 +1,7 @@
 # MOD-29：AgentArts 文本 HTTP 适配器
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts` Competition Profile。
 - 负责人：`zemeng`；工作树：`.worktrees/zemeng-agentarts-http-adapter`。
 - 本增量基于已同步的 `origin/main`（PR #39 合并后的 `188f925`）；不提交、不推送，交由非作者评审后集成。

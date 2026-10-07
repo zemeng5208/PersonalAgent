@@ -1,5 +1,7 @@
 # 设计提案：语音优先、主动介入的本地决策 + AgentArts 协同架构
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 状态：Proposed / 仅供评审  
 日期：2026-09-23  
 范围：PersonalAgent 产品交互、主动介入、本地决策、AgentArts 协同与语音授权  

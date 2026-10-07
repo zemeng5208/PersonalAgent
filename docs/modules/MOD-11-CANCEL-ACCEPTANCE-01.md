@@ -1,5 +1,7 @@
 # MOD-11-CANCEL-ACCEPTANCE-01：取消受理与终态分离
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：huawei_ict_agentarts；MOD-11/12，PA-004；负责人 zemeng，待非作者评审 goo122。
 - 状态：review；基线 main `72cc76b`。等待非作者评审与集成，不代表模块整体完成。
 - 工作树：`.worktrees/zemeng-desktop-cancel-acceptance`。

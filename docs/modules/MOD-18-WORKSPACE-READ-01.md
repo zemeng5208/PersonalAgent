@@ -1,5 +1,7 @@
 # MOD-18-WORKSPACE-READ-01：可信工作区只读源码首片
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 目标 Profile：`huawei_ict_agentarts`
 
 模块 / 需求：MOD-18 / PA-017、PA-023、PA-026

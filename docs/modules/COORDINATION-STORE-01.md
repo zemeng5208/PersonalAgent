@@ -1,5 +1,7 @@
 # COORDINATION-STORE-01：图谱持久化首片
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：huawei_ict_agentarts；负责人 goo122；消费方与非作者评审者 zemeng（PR #38 已批准）。
 - 状态：done；基线 main `41ea79d`（PR #37）；PR #38 已由 `zemeng5208` 非作者批准，并于 2026-09-12 合并为 `87ee444`。
 - 范围：MOD-27 的 namespace-bound CoordinationStorePort、Fake、Runtime SQLite 适配及原子版本提交。

@@ -1,5 +1,7 @@
 # MOD-04B：Competition 文字协调消费实现
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - 负责人：zemeng；待非作者评审。状态：review（本地实现已验证，待评审与集成）。
 - Profile：huawei_ict_agentarts；实现基线：PR #38 / `87ee444`；已同步 PR #39 /
   `188f925`。

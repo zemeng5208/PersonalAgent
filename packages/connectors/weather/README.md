@@ -1,5 +1,7 @@
 # 天气连接器（MOD-25）
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 负责人 Potatos498（C）；评审者 `goo122` 或 `zemeng`。包版本 0.1.0-alpha.1。关联需求 [PA-010](../../../docs/PRD.md)。
 
 本包是当前 [Huawei ICT AgentArts Competition Profile](../../../docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md) Golden Path 的候选只读工具：只有完成 AgentArts 提案、本地 Policy/ToolGateway 调用、目标数据读回和 trace/Evidence 关联后，才算比赛链路证据。现有 Local/Fake 调用继续用于基线测试，但不计入比赛完成度，也不产生新的 Local 实施工作。

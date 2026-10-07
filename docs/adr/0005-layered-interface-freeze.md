@@ -1,10 +1,14 @@
 # ADR-0005：采用分层接口冻结与显式不可用状态
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 适用范围：Huawei ICT AgentArts Competition Profile 与可选 Local Profile；部署优先级不自动提升任何接口的冻结或可用状态。
 
 - 状态：accepted
 - 日期：2026-09-09
 - 决策者：产品负责人；协议维护：`goo122`；消费评审：`zemeng`
+
+2026-10-07 修订：按用户三人独立交付要求，同行评审为非阻塞建议；冻结仍以契约、实现和验证证据为准。本次不修改 wire 或已冻结接口语义。
 
 ## 背景
 
@@ -14,7 +18,7 @@
 
 接口状态采用 `frozen`、`provisional`、`unavailable`、`deprecated` 四级登记，唯一目录为 [当前接口目录](../interfaces/CURRENT_INTERFACE_CATALOG.md)。
 
-- 只冻结已经有单一来源、实现、Fake/失败测试、真实消费端、非作者评审和 CI 证据的子集。
+- 只冻结已经有单一来源、实现、Fake/失败测试、真实消费端、负责人自审和 CI 证据的子集。
 - 外部行为会改变接口语义时，冻结还要求真实目标系统闭环。
 - Schema 已声明但生产 Host 未公布的 operation 为 `unavailable`。
 - Fake、编译和配置存在不能把状态提升为生产可用。

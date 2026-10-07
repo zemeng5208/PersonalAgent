@@ -1,5 +1,7 @@
 # MOD-28-GOAL-REVISION-01：Goal 修订的局部影响与显式预览
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`；MOD-28 / PA-025；负责人 zemeng。
 - 文件锁：`packages/cognition/**` 与本文。依赖 MOD-27 公开版本图及 provisional 存储端口。
 - 状态：实现中；非作者评审、PR/CI 与生产接线以实际读回为准。

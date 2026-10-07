@@ -1,5 +1,7 @@
 # P5 消费入口与真实结果边界
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 目标 profile 为 `huawei_ict_agentarts`。组合是 `createCognitionP5Composition`，只消费主宿主提供的唯一 `localLaya.choose/classify`；start/stop 控制订阅与请求取消，不自行加载/停止权重。主写入、Runtime factory、云配置和 UI 接线由统一装配 writer 负责。
 
 | 消费者 | 来源与绑定 | 实际选择入口 | 授权与执行 | 持久读回与生命周期 |

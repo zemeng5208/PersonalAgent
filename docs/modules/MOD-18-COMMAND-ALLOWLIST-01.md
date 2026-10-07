@@ -1,5 +1,7 @@
 # MOD-18-COMMAND-ALLOWLIST-01
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`；负责人 `zemeng`；非作者评审 `goo122`；状态 `review`。
 - 基线：`origin/main@ec43a55`；拥有范围 `packages/coding-tools/**` 与本记录。PRD `PA-017` 要求指定工作区内可审查改动和必要验证，不授权改无关工作区或自动发布。
 

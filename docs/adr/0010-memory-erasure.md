@@ -1,5 +1,7 @@
 # ADR-0010：记忆物理删除与派生投影清理
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - 状态：proposed；在实现和对外公布删除能力前需非作者评审。
 - Profile：`huawei_ict_agentarts`；关联 PA-020、PA-024、MOD-09。
 - 产品选择：用户要求删除时，清除选定事实的历史版本及派生索引；逻辑撤回不能冒充删除。

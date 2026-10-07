@@ -1,5 +1,7 @@
 # ADR-0007：华为 ICT AgentArts Competition Profile 优先
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - 状态：accepted
 - 日期：2026-09-09
 - 决策者：产品负责人（用户）

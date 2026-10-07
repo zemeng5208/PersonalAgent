@@ -1,12 +1,14 @@
 # MOD-23：通知汇总策略
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 ## 基本信息
 
 - 关联需求：PA-015（P1 统一通知与订阅——安静时段、暂停和频率设置）
-- GitHub 负责人：`Potatos498`
-- 评审者：`goo122`（非作者）
+- 当前 GitHub 负责人：`Potatos498`（2026-10-07 三人独立交付重置）
+- 自审：模块负责人；可选同行评审：`goo122`，不作为交付前置
 - 独占目录：`packages/notifications/`
-- 当前状态：review（源码完成，待非作者评审；分支 `feat/mod-23-notifications`）
+- 历史工作包状态（原记录，不作为新 PR 审批门槛）：review（源码完成，待非作者评审；分支 `feat/mod-23-notifications`）
 
 ## 职责
 

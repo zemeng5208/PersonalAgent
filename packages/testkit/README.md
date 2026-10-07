@@ -1,5 +1,7 @@
 # Fake 联调包（MOD-02）
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 负责人 goo122；评审者 zemeng。包版本 0.1.0-alpha.1。所有演示内容均为 mock，无模型、外部账号或私人数据调用。
 
 Testkit 为接口形状和失败分支提供可重复替身，不决定生产可用性。Core Runtime Profile 1 的 Fake 已参与冻结验收；Model/Agent/Tool、设置、连接器和语音等 Fake 不会把对应能力提升为 `frozen`。精确状态见[当前接口目录](../../docs/interfaces/CURRENT_INTERFACE_CATALOG.md)。

@@ -1,5 +1,7 @@
 # 工具网关（MOD-05）
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 `@personal-agent/tool-gateway` 实现生产侧 `ToolHost` 注册和受控调用：
 
 它是当前 [Huawei ICT AgentArts Competition Profile](../../docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md) 唯一允许的本地工具执行入口：AgentArts 工具提案先由 Runtime/Policy 校验，再经本 Gateway 执行和读回。云端成功、Local/Fake 执行或绕过 Gateway 的调用都不能作为比赛工具闭环证据。

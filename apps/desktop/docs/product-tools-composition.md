@@ -1,5 +1,7 @@
 # MOD-11 Product tools composition
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 负责人 zemeng；目标 `huawei_ict_agentarts`。此文件记录独立装配模块，主入口接线和非作者评审由集成负责人执行。接口仍 provisional。
 
 `createProductToolsComposition` 仅消费包公开入口，不执行工具、不签发 scope、不创建第二个 Runtime。返回的 `tools`、`competitionToolAvailability`、`competitionToolExports` 分别并入同一个 RuntimeApplication 对应构造参数；应用关闭后调用 `close()`。包的 `register(host)` 通过临时收集器转为 Runtime 的工具数组，包 disposer 在关闭或装配失败时释放。

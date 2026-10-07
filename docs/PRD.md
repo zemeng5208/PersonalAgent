@@ -2,7 +2,7 @@
 
 版本：0.3 · 日期：2026-09-09 · 状态：只实施华为 ICT AgentArts Competition Profile，通用 Local Profile 可选留存
 
-产品负责人：用户 · 底座/协议/Runtime/模型/记忆：`goo122` · 核心认知/桌面执行/AgentArts：`zemeng` · 业务连接器：`Potatos498` · 具体分工见 [模块分工](MODULE_ASSIGNMENTS.md)
+产品负责人：用户 · 项目主要负责人：`zemeng` / `zemeng5208` · 底座/协议/Runtime/模型/记忆技术维护：`goo122` · 业务连接器与业务接线：`Potatos498`；三人独立交付，zemeng 继续负责核心与 AgentArts（2026-10-07 重置） · 具体分工见 [模块分工](MODULE_ASSIGNMENTS.md)
 
 ## 1. 产品目标与已确认方向
 

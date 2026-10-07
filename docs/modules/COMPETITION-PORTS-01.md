@@ -1,5 +1,7 @@
 # COMPETITION-PORTS-01：编排端口与 Runtime 注入首片
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`；关联 MOD-02/03/04B/29、PA-026。
 - 负责人：goo122（本次公共端口与集成）；消费评审：zemeng。状态：review（PR #36 已合并为 `5944061`，非作者消费评审证据仍待补齐）。
 - 基线：`bafb541`；工作树：`.worktrees/competition-coordination-ports`。

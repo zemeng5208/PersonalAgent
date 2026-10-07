@@ -2,7 +2,9 @@
 
 版本：1.3 · 日期：2026-09-27 · 基线提交：`9c40a0853b8db9e05e91c978e35d8e1a40788b39`
 
-协议负责人：`goo122` · 核心认知与 AgentArts 消费负责人：`zemeng` · 连接器消费负责人：`Potatos498`
+协议负责人：`goo122` · 核心认知与 AgentArts 消费负责人：`zemeng` · 连接器消费负责人：`Potatos498`（2026-10-07 三人独立交付重置）
+
+2026-10-07 协作规则修订：接口变更由实施者提供契约、兼容说明、自审和消费验证；不以指定协作者的 PR 批准为冻结或交付门槛。本文历史的非作者评审记录保留为事实，不再构成新工作的人员等待条件。
 
 ## 1. 目的
 
@@ -63,7 +65,7 @@ Fake、SQLite 提供者与可恢复投影。它区分 query snapshot、feed 水�
 
 | 状态 | 含义 | 消费者规则 |
 | --- | --- | --- |
-| `frozen` | 单一来源、实现、Fake/失败夹具、消费端验证、非作者评审和 CI 均有证据；外部行为会改变语义时还需真实目标验证 | 可以并行开发；同一主版本内只做向后兼容扩展 |
+| `frozen` | 单一来源、实现、Fake/失败夹具、消费端验证、负责人自审和 CI 均有证据；外部行为会改变语义时还需真实目标验证 | 可以并行开发；同一主版本内只做向后兼容扩展 |
 | `provisional` | 已有部分类型或实现，但仍缺消费验证、完整语义、真实关键路径或稳定注入边界 | 只用于受控开发；不得据此形成不可逆依赖 |
 | `unavailable` | 没有生产提供者、没有能力公布，或关键接口尚未定义 | UI 显示不可用；调用返回 `UNSUPPORTED_CAPABILITY`；不得静默回退 Fake |
 | `deprecated` | 已有替代接口并处于迁移期 | 只维持登记的兼容窗口，不新增消费者 |
@@ -221,7 +223,7 @@ main 已包含版本化 CoordinationStore、SQLite/Fake `AtomicCoordinationStore
 
 堆叠 PR #203 的 MOD-09G 增加受信宿主的删除发起、预检和恢复路径；`MemoryQueryErrorCode`
 增补 `STORAGE_UNAVAILABLE` 表示 WAL 截断未完成。无 wire operation/capability，
-Goal 稀疏 revision 仍需非作者语义评审，Memory/Goal/Runtime 均不因此冻结。
+Goal 稀疏 revision 仍需公开语义说明与消费契约验证，Memory/Goal/Runtime 均不因此冻结。
 
 MOD-09H 继续在可信 `SqliteMemoryHost` 增加 `reviseUserFact` 与迁移 4：用户确认的更正或
 撤回通过精确头版本和操作 ID 在同一事务写入事实、feed 事件及无正文回执；重试幂等，
@@ -270,7 +272,7 @@ P1 日历连接器与 P5 认知之间的投影消费契约固定为
 （`dedupeKey` 携带 `sequence` 即 sourceRevision）与单条读回；**取消必须走单条
 `getEventItem`**（列表路径过滤 cancelled）；`MeetingRescheduleEvent` 的生成是 P5 的投影职责。
 含对 Issue #212 答复的更正：CalDAV 记录的 `timeZone` 是事件原始 TZID（订阅源才是恒 UTC）。
-该契约为 `provisional`，升格冻结需 P1/P5 双侧非作者评审。
+该契约为 `provisional`，升格冻结需 P1/P5 双侧消费契约验证、兼容说明、自审及 CI 证据。
 
 ### MOD-22B-MAIL-P5-PAGINATION-01 登记契约（2026-09-30）
 
@@ -281,7 +283,7 @@ P1 邮件连接器与 P5 邮件分类之间的分页与身份映射契约固定�
 `contentRef` 信头投影（不含私人正文，4000 字符上限）。游标 `"{uidValidity}:{lastUid}"` 双向映射；
 epoch 轮换抛 `CURSOR_EXPIRED` 且消费侧必须从头重建，不复用旧断点；`send` 为外部副作用
 （unknown 先核对、同幂等键不盲重发）。2026-09-30 新授权码下 IMAP 只读读回复跑 23 项、22 过、1 跳过（SMTP 发送门控未开启）；
-SMTP 尚未用新凭据复验，`verification` 仍为 `conditional`。该契约为 `provisional`，升格冻结需 P1/P5 双侧非作者评审。
+SMTP 尚未用新凭据复验，`verification` 仍为 `conditional`。该契约为 `provisional`，升格冻结需 P1/P5 双侧消费契约验证、兼容说明、自审及 CI 证据。
 
 ### 6.3 桌面、语音、工具与通知增量（provisional）
 
@@ -350,7 +352,7 @@ PR #91 已经非作者评审、Foundation CI 通过并合并；采用未生效�
 进程命令行、文件或网络内容。PA-018 治理/恢复按用户修订排除。
 提供者、Fake 与实际本机读取验收按 [模块记录](../modules/MOD-16-SYSTEM-OBSERVATION-01.md) 分别登记；
 Competition 工具提案/Runtime Application/Desktop 装配仍未由此项交付，运行能力保持 unavailable。
-本包接口保持 provisional，非作者评审前不冻结。
+本包接口保持 provisional，须按更新后的冻结证据门槛验收；不以另一位协作者签字作为前置。
 
 截至 2026-09-27，**冻结范围仍只有 Core Runtime Profile 1 的消息、任务、会话与审批只读查询子集；不冻结整套协议、外部模型工具调用或 AgentArts 编排。** main 中已有 Competition 的离线 Coordination/审批工具循环、版本图、原子存储、显式修复预览/提交、受限工作区读取、公开演示知识检索，以及 provisional 的 SQLite 事实查询/变化流、可恢复投影和受信 Fact host 工厂；编码工具的补丁候选与独占 apply 也已合入 package，但尚未生产注册。生产事实自动消费、Runtime Memory capability、真实工作区写入与语音消费仍未完成验收。
 

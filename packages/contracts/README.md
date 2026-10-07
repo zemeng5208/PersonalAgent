@@ -1,5 +1,7 @@
 # 公共契约（MOD-02 / PA-004、PA-023）
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 包版本 0.1.0-alpha.1；wire 版本 1.0.0；负责人 goo122，消费端评审 zemeng。按接口分层登记：Core Runtime Profile 1 已冻结，整包及模型/工具/连接器/语音等其余形状仍为 `provisional` 或 `unavailable`。精确清单见[当前接口目录](../../docs/interfaces/CURRENT_INTERFACE_CATALOG.md)。
 
 该冻结子集是 [Huawei ICT AgentArts Competition Profile](../../docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md) 的共享可信底座；当前新增契约优先服务比赛所需的 Coordination、CloudAgent、ToolExecution 和 Evidence 消费边界。Local Model/Agent 契约仅在产品负责人以后明确启用 Local Profile 时扩展，不阻塞比赛主路径。

@@ -1,5 +1,7 @@
 # 华为 ICT 创新赛 AgentArts Competition Profile
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 版本：1.1 · 日期：2026-09-20 · 状态：架构基线已确认，离线 Competition 执行面为 `provisional`，真实云端运行仍为 `unavailable`
 
 ## 1. 参赛口径

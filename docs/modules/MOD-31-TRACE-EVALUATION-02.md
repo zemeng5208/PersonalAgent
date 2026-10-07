@@ -1,5 +1,7 @@
 # MOD-31：多 Agent 固定任务与 trace 对照评估
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`；负责人：zemeng；非作者评审：待安排。
 - 范围：`tests/manual/agentarts/evaluation/**` 与本文档。无公共接口、迁移、生产配置或云资源变更。
 - 依赖：MOD-29 已发布的 AgentArts 应用、MOD-30 工具边界，以及真实 trace/usage 的人工核验。

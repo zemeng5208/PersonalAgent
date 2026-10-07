@@ -1,5 +1,7 @@
 # Desktop Goal cloud tools
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 This Desktop adapter exposes the existing Goal commands to the `huawei_ict_agentarts` Competition Profile. It does not add a graph, task runner, or cloud fallback.
 
 `createDesktopGoalCloudHost({goalHost})` accepts the existing bound Goal host and returns `tools`, `competitionToolAvailability`, `competitionToolExports`, `snapshot()`, `bindApplication(application)`, `authorize({goalCloudConsent:true})`, `revoke()`, `assertCloudSend(request)`, and `close()`. Bind the Goal host to the Runtime application first, then bind this adapter. Register the adapter's four tools instead of registering the original write tools a second time. Add its availability and export bindings to the Competition catalog, and call `assertCloudSend` from the trusted `beforeCompetitionSend` hook. Renderer only invokes trusted Desktop authorization IPC; it never supplies a graph namespace or source reference.

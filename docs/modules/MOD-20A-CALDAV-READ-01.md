@@ -1,7 +1,9 @@
 # MOD-20A：CalDAV 只读提供商
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`；需求：PA-013（P1 业务连接器，演示链会议变更触发缺口）。
-- 负责人：`Potatos498`；非作者评审：`goo122`；基线：main@`9b13895`；状态：`in_progress`（真实验收未完成）。
+- 当前负责人：`Potatos498`（2026-10-07 重置）；自行验证与交付，可选同行评审：`goo122`；基线：main@`9b13895`；状态：`in_progress`（真实验收未完成）。
 - 登记见 ROADMAP 2026-09-30 条目；本文件为 §11 模块切片说明。
 
 ## 范围与验收

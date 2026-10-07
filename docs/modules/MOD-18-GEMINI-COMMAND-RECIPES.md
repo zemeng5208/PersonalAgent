@@ -1,5 +1,7 @@
 # MOD-18-GEMINI-COMMAND-RECIPES：可信桌面命令工具配方构造与安全边界
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - **目标 Profile**：`huawei_ict_agentarts`（比赛主路径，Local 保留为可选 baseline）。
 - **需求与任务**：MOD-18 / PA-017；负责人 `zemeng`（Gemini 3.8 Flash High 实现），非作者评审 `goo122`。
 - **基线提交**：`d9ecf2623c2aeff9deeb46bdca17c6e340087ab2`。

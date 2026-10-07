@@ -1,5 +1,7 @@
 # ADR-0006：核心认知依赖倒置与 AgentArts 本地信任边界
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 适用范围：通用 Local Profile 与华为 ICT AgentArts Competition Profile。Competition Profile 的优先级和 AgentArts 主编排职责由 [ADR-0007](0007-huawei-ict-agentarts-competition-profile.md)补充，本 ADR 的本地信任边界继续有效。
 
 - 状态：accepted（架构边界）；实现状态：unavailable

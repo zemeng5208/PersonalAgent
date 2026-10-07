@@ -1,5 +1,7 @@
 # Models
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 MOD-04A（负责人 `goo122`）的模型 Provider 和模型网关实现。`ModelGateway` 只接受显式配置的 Provider，并在请求前校验文本、工具调用和结构化输出能力；Provider 返回的 deployment、verification 和 usage 会随结果保留。当前公开形状为 `provisional`：后续需提供最小 `ModelPort`，让 MOD-04B 不依赖具体网关实现。精确状态见[当前接口目录](../../docs/interfaces/CURRENT_INTERFACE_CATALOG.md)。
 
 本包现在仅作为可选 Local Profile 和既有离线测试基线留存，当前不新增、不扩展，也不进入 [Huawei ICT AgentArts Competition Profile](../../docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md) 的比赛退出条件。比赛模型由 AgentArts 支持的 MaaS/模型配置承担；只有平台能力与调用路径真实读回后，才能声明本包可被比赛路径复用。
