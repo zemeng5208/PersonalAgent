@@ -203,6 +203,11 @@ function historicallyPlanned(snapshot: GraphSnapshot, goalId: string): boolean {
 }
 
 const refKey = (ref: NodeRef): string => JSON.stringify([ref.id, ref.revision]);
+// Ancestor identity is an exact ref multiset, independent of process locale.
+// Canonicalize stored intents too so the existing fallback retains legacy IDs.
+// Leave all earlier trigger identities and their ordering contracts unchanged.
+const ancestorRefs = (refs: readonly NodeRef[]): NodeRef[] => refs.map(ref => ({id: ref.id, revision: ref.revision}))
+  .sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : left.revision - right.revision);
 function expiredPublicFactScope(snapshot: GraphSnapshot, at: string): {facts: NodeRef[]; items: ImpactItem[]} {
   const current = new Map(snapshot.history.map(node => [node.id, node]));
   const expired = [...current.values()].filter(node => node.kind === 'fact' && node.state === 'active'
@@ -261,7 +266,7 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
       trigger.input.currentGoal.id, trigger.input.currentGoal.revision])
       : trigger.kind === 'goal_ancestor' ? JSON.stringify([trigger.kind,
         trigger.input.currentGoal.id, trigger.input.currentGoal.revision,
-        trigger.input.consumers.map(ref => [ref.id, ref.revision])]) : undefined;
+        ancestorRefs(trigger.input.consumers).map(ref => [ref.id, ref.revision])]) : undefined;
   const goalTasks = (context: MemoryReadContext, reviewedGoals?: Set<string>): Map<string, TaskSnapshot> => {
     const found = new Map<string, TaskSnapshot>();
     let beforeSequence: number | undefined;
@@ -461,8 +466,8 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
         : {items: expiredPublicFactScope(snapshot, request.at).items.filter(item =>
           trigger.input.consumers.some(ref => refKey(ref) === refKey(item.node)))};
     if (trigger.kind === 'goal_ancestor'
-      && JSON.stringify(scope.items.map(item => item.node).sort((a, b) => refKey(a).localeCompare(refKey(b))))
-        !== JSON.stringify(trigger.input.consumers)) {
+      && JSON.stringify(ancestorRefs(scope.items.map(item => item.node)))
+        !== JSON.stringify(ancestorRefs(trigger.input.consumers))) {
       throw new ProtocolError('REVISION_CONFLICT', 'Goal ancestor scope changed');
     }
     const subject = trigger.kind === 'goal_created'
@@ -643,7 +648,7 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
             {expectedGraphRevision: snapshot.revision, currentGoal}) : undefined;
           const ancestor: Trigger | undefined = ancestorScope?.items.length ? {kind: 'goal_ancestor', input: {
             expectedGraphRevision: snapshot.revision, currentGoal,
-            consumers: ancestorScope.items.map(item => item.node).sort((a, b) => refKey(a).localeCompare(refKey(b))),
+            consumers: ancestorRefs(ancestorScope.items.map(item => item.node)),
           }} : undefined;
           const previousAncestor = ancestor && recorded.get(goalIdentity(ancestor)!);
           // Newly uncovered local work precedes an older pending handoff at the same request bound.
@@ -694,7 +699,7 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
       if (!scope.items.length) return Promise.resolve(undefined);
       return review({kind: 'goal_ancestor', input: {
         expectedGraphRevision: scope.graphRevision, currentGoal: scope.currentGoal,
-        consumers: scope.items.map(item => item.node).sort((a, b) => refKey(a).localeCompare(refKey(b))),
+        consumers: ancestorRefs(scope.items.map(item => item.node)),
       }}, request);
     },
     readReview, handoffReview,

@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import {mkdir, mkdtemp, rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {execFileSync} from 'node:child_process';
 import {test} from 'node:test';
 import {Client} from '@personal-agent/client';
-import {LayaActionChoiceService} from '@personal-agent/cognition';
+import {LayaActionChoiceService, selectGoalAncestorImpact} from '@personal-agent/cognition';
 import {createGoal, reviseGoal} from '@personal-agent/goals/commands';
 import {toolArgumentsDigest} from '@personal-agent/tool-gateway';
 import {createRuntimeApplication} from '../dist/application.js';
@@ -1389,4 +1390,99 @@ test('trusted prior Fact-scope review counts as Goal review evidence without a D
     assert.equal(calls.layaCalls, inferred);
     assert.ok(store.read().history.every(version => !['decision', 'plan'].includes(version.kind)));
   } finally { binding.close(); await rm(paths.directory, {recursive: true, force: true}); }
+});
+
+test('ancestor consumer identity survives locale changes across actual Runtime SQLite reopen', async () => {
+  // Separate workers keep the real Intl collation change out of other tests.
+  // Explicit Collator injection is portable on Windows; the public producer
+  // probe separately verifies Linux process-default en-US -> sv-SE changes.
+  const worker = `
+    import {createRuntimeApplication,createProactiveCognitionHost} from ${JSON.stringify(new URL('../dist/application.js', import.meta.url).href)};
+    import {LayaActionChoiceService} from '@personal-agent/cognition';
+    import {join} from 'node:path';
+    const [directory,mode,locale]=process.argv.slice(1);
+    const collator=new Intl.Collator(locale);
+    String.prototype.localeCompare=function(other){return collator.compare(String(this),other);};
+    const namespace='synthetic-locale-reopen',at='2026-09-27T03:00:00.000Z';
+    const ctx=()=>({at,deadline:new Date(Date.now()+60000).toISOString(),signal:new AbortController().signal});
+    const application=createRuntimeApplication({path:join(directory,'runtime.sqlite'),profile:'huawei_ict_agentarts',
+      coordination:{execute:async()=>({kind:'text',text:'Synthetic unused',verification:'mock'})}});
+    const facts=application.createCompetitionFactHost({memoryPath:join(directory,'memory.sqlite'),
+      memoryNamespace:'synthetic-locale-empty',graphNamespace:namespace,consumerKey:'synthetic-locale-reopen'});
+    const store=application.runtime.bindCoordinationStore(namespace);
+    const node=(id,kind,dependencies)=>({id,kind,dependencies,summary:id,sourceRef:'synthetic/locale',
+      sensitivity:'public',state:'active',reason:'Synthetic fixture',validFrom:'2026-01-01T00:00:00.000Z',
+      validUntil:'2099-01-01T00:00:00.000Z'});
+    if(mode==='create') {
+      store.append(0,node('goal','goal',[]));
+      store.append(1,node('ä-plan','plan',[{id:'goal',revision:1}]));
+      store.append(2,node('z-plan','plan',[{id:'goal',revision:1}]));
+      store.append(3,node('goal','goal',[]));store.append(4,node('goal','goal',[]));
+    }
+    let inferences=0;
+    const chooser=new LayaActionChoiceService({infer:async payload=>{
+      inferences++;const ids=Object.keys(payload.questions.action.criteria),chosen=ids.at(-1);
+      return {answers:{action:{choice:chosen,probabilities:Object.fromEntries(ids.map(id=>
+        [id,id===chosen?0.98:0.02/(ids.length-1)])),answer_confidence:0.98,confidence:0.5}}};
+    }});
+    const host=createProactiveCognitionHost({application,facts,graphNamespace:namespace,bindingVersion:'test-locale-v1',chooser});
+    const rows=()=>application.runtime.listTasks({conversationId:'proactive-cognition:'+namespace,limit:100}).items
+      .filter(task=>application.runtime.loadCheckpoint(task.taskId,'proactive-cognition-intent-v1').trigger.kind==='goal_ancestor');
+    try {
+      let direct;
+      if(mode==='reopen') direct=await host.reviewGoalAncestorImpact({expectedGraphRevision:5,currentGoal:{id:'goal',revision:3}},ctx());
+      const batch=await host.consumeAndReview({...ctx(),limit:10,afterGraphRevision:0});
+      const ancestors=rows(),review=host.readReview(ancestors[0].taskId).review;
+      console.log(JSON.stringify({inferences,ancestorCount:ancestors.length,taskId:ancestors[0].taskId,
+        directTaskId:direct?.task.taskId,review,returned:batch.reviews.map(row=>row.task.taskId),graphRevision:store.read().revision}));
+    } finally {host.close();facts.close();application.close();}
+  `;
+  for (const [first, second] of [['en-US', 'sv-SE'], ['sv-SE', 'en-US']]) {
+    const paths = await workspace();
+    try {
+      const run = (mode, locale) => JSON.parse(execFileSync(process.execPath,
+        ['--input-type=module', '-e', worker, paths.directory, mode, locale],
+        {cwd: fileURLToPath(new URL('../../../', import.meta.url)), encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe']}).trim());
+      const initial = run('create', first), replay = run('reopen', second);
+      assert.equal(initial.inferences, 1); assert.equal(initial.ancestorCount, 1);
+      assert.equal(replay.inferences, 0, 'the same exact consumer set must reuse its original choice');
+      assert.equal(replay.ancestorCount, 1); assert.equal(replay.directTaskId, initial.taskId);
+      assert.equal(replay.taskId, initial.taskId); assert.deepEqual(replay.review, initial.review);
+      assert.deepEqual(replay.returned, []); assert.equal(replay.graphRevision, 5);
+    } finally {await rm(paths.directory, {recursive: true, force: true});}
+  }
+});
+
+test('an unchosen legacy ancestor intent retains its original task and exact scope after canonical ordering', async () => {
+  const paths = await workspace(), calls = state({handoff: false}), binding = open(paths, calls);
+  try {
+    const store = binding.application.runtime.bindCoordinationStore(graphNamespace);
+    const {kind: _kind, ...input} = node('locale-goal', 'goal', []);
+    createGoal(store, 0, input);
+    for (const id of ['ä-plan', 'z-plan']) store.append(store.read().revision,
+      node(id, 'plan', [ref(input.id)]));
+    reviseGoal(store, 3, 1, input); reviseGoal(store, 4, 2, input);
+    const scope = selectGoalAncestorImpact(store.read(), at,
+      {expectedGraphRevision: 5, currentGoal: ref(input.id, 3)});
+    // Trusted interrupted-host fixture: exact refs come from the public selector,
+    // using the older en-US ordering, before any chooser result exists.
+    const collator = new Intl.Collator('en-US');
+    const consumers = scope.items.map(item => ({id: item.node.id, revision: item.node.revision}))
+      .sort((left, right) => collator.compare(left.id, right.id));
+    const trigger = {kind: 'goal_ancestor', input: {expectedGraphRevision: 5,
+      currentGoal: scope.currentGoal, consumers}};
+    const intent = {version: 1, graphNamespace, bindingVersion: 'test-binding-v1', trigger, evaluatedAt: at};
+    const task = binding.application.runtime.submitTaskWithCheckpoint({goal: 'Synthetic interrupted ancestor choice',
+      conversationId: `proactive-cognition:${graphNamespace}`, idempotencyKey: 'proactive-cognition:' + toolArgumentsDigest({
+        graphNamespace, bindingVersion: intent.bindingVersion,
+        trigger: {kind: trigger.kind, currentGoal: scope.currentGoal, consumers}})}, 'proactive-cognition-intent-v1', intent);
+    assert.equal(task.state, 'created');
+    const chosen = await binding.host.reviewGoalAncestorImpact({expectedGraphRevision: 5, currentGoal: scope.currentGoal}, {...context(), at});
+    assert.equal(chosen.task.taskId, task.taskId); assert.equal(calls.layaCalls, 1);
+    assert.deepEqual(binding.application.runtime.loadCheckpoint(task.taskId, 'proactive-cognition-intent-v1'), intent);
+    const replay = await binding.host.reviewGoalAncestorImpact({expectedGraphRevision: 5, currentGoal: scope.currentGoal}, {...context(), at});
+    assert.equal(replay.task.taskId, task.taskId); assert.deepEqual(replay.review, chosen.review);
+    assert.equal(calls.layaCalls, 1); assert.equal(store.read().revision, 5);
+  } finally {binding.close(); await rm(paths.directory, {recursive: true, force: true});}
 });
