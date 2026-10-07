@@ -76,25 +76,29 @@ else {
   const sisLoginStatus=document.createElement('p');
   sisLoginStatus.className='notice';sisLoginStatus.setAttribute('role','status');
   sisSettings.querySelector('#sis-login').after(sisLoginStatus);
+  let sisPending=false;
+  const setSisPending=value=>{sisPending=value;for(const control of sisSettings.querySelectorAll('input,select,button'))control.disabled=value;};
   sisSettings.querySelector('#sis-login').onclick=async()=>{
-    const login=sisSettings.querySelector('#sis-login'),password=sisSettings.querySelector('#sis-password');
+    if(sisPending)return;
+    setSisPending(true);
+    const password=sisSettings.querySelector('#sis-password');
     const request={region:sisRegion.value,domainName:sisSettings.querySelector('#sis-domain').value.trim(),
       username:sisSettings.querySelector('#sis-username').value.trim(),password:password.value};
-    password.value='';login.disabled=true;sisLoginStatus.textContent='正在连接华为 IAM…';
+    password.value='';sisLoginStatus.textContent='正在连接华为 IAM…';
     try{const result=await invoke('voice.login',request);
       sisLoginStatus.textContent=result.connected?'已连接华为云语音，可以开始录音':'凭据已保存，等待任务引擎就绪';
       if(result.connected)sisSettings.open=false;}
     catch(err){sisLoginStatus.textContent=err instanceof Error?err.message:'连接失败，请重试';}
-    finally{request.password='';login.disabled=false;}
+    finally{request.password='';setSisPending(false);}
   };
   sisSettings.querySelector('#sis-save').onclick=async()=>{
-    const save=sisSettings.querySelector('#sis-save');
-    save.disabled=true;
+    if(sisPending)return;
+    setSisPending(true);
     try { const result=await invoke('voice.configure',{region:sisRegion.value,projectId:sisProject.value.trim(),
       iamToken:sisToken.value,tokenExpiresAt:sisExpiry.value.trim()});
       sisToken.value='';sisSettings.open=false;root.querySelector('#error').textContent=result.connected?'':'SIS 配置已保存；等待 Competition Runtime 接通后启用语音'; }
     catch(err){sisToken.value='';report(err);}
-    finally{save.disabled=false;}
+    finally{setSisPending(false);}
   };
   const goalControl=createGoalControl(invoke,()=>input.value);
   root.querySelector('.composer-bar .spacer').before(goalControl.button);
