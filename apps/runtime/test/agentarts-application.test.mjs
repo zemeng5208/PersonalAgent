@@ -330,3 +330,56 @@ test('factory rejects a catalog without explicit initial request mode', () => {
     competitionToolAvailability: [],
   }), /explicit initial request mode/);
 });
+
+test('factory retains raw adapter synchronous validation of the host send guard', async t => {
+  for (const mode of ['pending', 'resolved', 'rejected', 'sync', 'throw']) await t.test(mode, async () => {
+    let fetches = 0;
+    let guardCalls = 0;
+    let release;
+    const diagnostics = [];
+    const app = createAgentArtsRuntimeApplication({path: ':memory:',
+      gatewayUrl: 'https://agentarts.example.test', runtimeName: 'send-guard',
+      authorizationProvider: {read: async () => 'Bearer synthetic'},
+      onDiagnostic: receipt => diagnostics.push(receipt),
+      beforeCompetitionSend: request => {
+        guardCalls++;
+        assert.equal(Object.isFrozen(request), true);
+        if (mode === 'pending') return new Promise(resolve => {release = resolve;});
+        if (mode === 'resolved') return Promise.resolve();
+        if (mode === 'rejected') {
+          const rejected = Promise.reject(Error('private-guard-canary'));
+          // Keep the original factory reproduction from producing an unrelated
+          // process rejection; the guard result itself must still be rejected.
+          void rejected.catch(() => undefined);
+          return rejected;
+        }
+        if (mode === 'throw') throw Error('private-guard-canary');
+      },
+      fetchImpl: async () => {
+        fetches++;
+        return new Response(JSON.stringify(event('Synthetic guard result')), {
+          headers: {'content-type': 'application/json'},
+        });
+      },
+    });
+    try {
+      const client = new Client(app); await client.connect();
+      const {taskId} = await client.call('task.submit', {goal: 'Synthetic send guard', conversationId: 'send-guard'},
+        {idempotencyKey: mode});
+      const task = await terminal(app, taskId);
+      assert.equal(guardCalls, 1);
+      assert.equal(fetches, mode === 'sync' ? 1 : 0);
+      assert.equal(task.state, mode === 'sync' ? 'succeeded' : 'failed');
+      assert.deepEqual(app.runtime.readToolExecutions(taskId), []);
+      assert.doesNotMatch(JSON.stringify({task, diagnostics}), /private-guard-canary/);
+      if (mode === 'sync') assert.deepEqual(diagnostics, []);
+      else {
+        assert.equal(task.error.code, 'EXTERNAL_FAILURE');
+        assert.equal(task.error.message, 'Coordination adapter failed');
+        assert.equal(diagnostics.length, 1);
+        assert.equal(diagnostics[0].stage, 'export_guard');
+        assert.equal(diagnostics[0].code, 'UNAUTHORIZED');
+      }
+    } finally {release?.(); app.close();}
+  });
+});

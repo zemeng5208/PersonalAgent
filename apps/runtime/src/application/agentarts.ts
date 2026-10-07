@@ -75,7 +75,7 @@ export function createAgentArtsRuntimeApplication(
     fetchImpl,
     request => {
       application.assertCompetitionExportAllowed(request);
-      beforeCompetitionSend?.(request);
+      return beforeCompetitionSend?.(request);
     },
     request => {
       if (!request.availableTools) throw new ProtocolError('UNAUTHORIZED', 'Initial Competition tool catalog is missing');

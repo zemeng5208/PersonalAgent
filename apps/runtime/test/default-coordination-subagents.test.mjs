@@ -72,7 +72,7 @@ test('persistent default children retain the original AgentArts candidate protoc
             {toolName:read.name,toolVersion:read.version,exportPolicyVersion:'fixture-v1',
               accepts:()=>true,project:({result})=>result},
           ],
-          beforeCompetitionSend:request=>sends.push({taskId:request.taskId,continuation:request.continuation}),
+          beforeCompetitionSend:request=>{sends.push({taskId:request.taskId,continuation:request.continuation});},
           fetchImpl:async(_url,init)=>{
             const body=JSON.parse(init.body);
             let query;try {query=JSON.parse(body.query);}catch {query={goal:body.query};}
