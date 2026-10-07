@@ -62,3 +62,21 @@ get/cancel/get 共三次调用、取消一次，console/pageerror 为零。
 该验证使用实际 RuntimeApplication/Client/SQLite、合成可取消只读 worker 与原 panel；
 回执延后、IPC 和窗口宿主为显式 Fake。此处没有验证 EventCursor/pump 传输、
 真实 Electron/Windows 或云端取消，也不把定向检查称为根完整检查。
+
+随后独立核对原 `pumpEvents`、公开 EventCursor 与实际 Runtime 事件流：
+在较新 cancelled/revision5 的 get 已读回后，合法历史事件1–3仍可能包含 running/revision3。
+同 Task 更低 revision 现在仅跳过快照替换及退出提示清理，未提前退出整个 event；
+原 task.created 分派、通知、审批与取消审批清理继续执行。游标正常从0到3再到6，
+完整重复事件被原 EventCursor 拒绝，不重放或重新发布。
+
+新增实际 pump 测试与上一包 refresh/取消测试共10/10、typecheck均实际 exit0，
+覆盖低 revision、正常前进、相同 revision、重复事件及真实只读审批取消后的清理。
+原完整 panel/CSP AFTER 实际 exit0，仍已取消、stopfalse、发送可用、草稿保留，
+console/pageerror 为零；没有手工伪造 cancelled 快照或运行工具/签发 grant。
+固定 main blob `059d73be5e72acb78ea50c76a21f978c4b1f4db2`，
+新测试 blob `8ca985d39e69a23ae7ba06a9faac582463feebc0`，
+证据在同 Desktop 私有目录的 `panel-event-readback-order-*`。
+
+生产组合当前提供同步 `RuntimeApplication.readEvents`；证据通过显式 Fake
+runtimeConnection 延后已捕获的合法批次，证明原消费者可保护快照合流，
+没有声称在真实进程内 Electron 或物理传输复现长时间延迟。
