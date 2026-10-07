@@ -180,13 +180,16 @@ else {
   // Stopping playback never sends task.cancel to Runtime.
   stopButton.onclick=async()=>{window.speechSynthesis?.cancel();try{const result=await invoke('voice.stop');if(!result?.stopped)report(result?.reason??'语音供应商尚未连接');}catch(err){report(err);}};
   const talkButton=root.querySelector('#talk');
+  let talkFeedbackRevision=0;
   talkButton.onclick=async()=>{
+    if(wakeClosed)return;
+    const feedbackRevision=++talkFeedbackRevision;
     const state=current?.voice?.status;
     const action=state==='listening'?'voice.record.finish':'voice.record.start';
     talkButton.disabled=true;
-    try{await invoke(action);root.querySelector('#error').textContent='';}
-    catch(err){report(err);}
-    finally{talkButton.disabled=Boolean(current?.live?.active)||wakeBlocksCapture(current)||!current?.voice?.experimental||!['unavailable','error','listening','awaiting_speech'].includes(current?.voice?.status);}
+    try{await invoke(action);if(!wakeClosed&&feedbackRevision===talkFeedbackRevision&&current?.voice?.status!=='error')root.querySelector('#error').textContent='';}
+    catch(err){if(!wakeClosed&&feedbackRevision===talkFeedbackRevision)report(err);}
+    finally{if(!wakeClosed&&feedbackRevision===talkFeedbackRevision)talkButton.disabled=Boolean(current?.live?.active)||wakeBlocksCapture(current)||!current?.voice?.experimental||!['unavailable','error','listening','awaiting_speech'].includes(current?.voice?.status);}
   };
   root.querySelector('#tasks').onclick=async e=>{const b=e.target.closest('[data-action],[data-ui-action]');if(!b)return;const uiAction=b.dataset.uiAction;if(uiAction==='like'){const on=!likedTasks.has(b.dataset.id);if(on)likedTasks.add(b.dataset.id);else likedTasks.delete(b.dataset.id);b.classList.toggle('active',on);b.setAttribute('aria-pressed',String(on));return;}if(uiAction==='locate'){const block=b.closest('.locate-block');const resultNode=block?.querySelector('.locate-result');if(!resultNode)return;resultNode.hidden=false;resultNode.textContent='定位中…';try{const response=await invoke('task.locate',{text:b.dataset.locateText||''});const report=response&&typeof response==='object'&&'failures' in response?response:null;const failures=report&&Array.isArray(report.failures)?report.failures:[];if(!failures.length){resultNode.textContent='未能从错误输出定位到源码位置';}else{resultNode.innerHTML=failures.slice(0,3).map(f=>{const top=f.frames&&f.frames[0];const head=`<div class="locate-head">${escape(f.name)}${f.timedOut?'（超时）':''}</div>`;const frames=top?`<div class="locate-frame">${escape(top.file)}:${top.line}${top.column?':'+top.column:''}<span class="locate-conf">置信度 ${(top.confidence*100).toFixed(0)}%</span></div>${top.snippet?`<pre class="locate-snippet">${escape(top.snippet)}</pre>`:''}`:'';return head+frames;}).join('');}}catch(err){resultNode.textContent='定位失败：'+(err&&err.message?err.message:'未知错误');}return;}if(uiAction==='copy'||uiAction==='share'){const task=current?.tasks.find(item=>item.taskId===b.dataset.id);const message=current?.messages?.find(item=>item.id===b.dataset.messageId);const text=b.dataset.messageId?message?.text:resultText(task?.resultSummary,task?.resultMetadata);if(!text)return;try{if(uiAction==='share'&&navigator.share){await navigator.share({text});}else{await invoke('clipboard.writeText',text);b.title=uiAction==='copy'?'已复制':'已复制分享文本';b.setAttribute('aria-label',b.title);setTimeout(()=>{b.title=uiAction==='copy'?'复制':'分享';b.setAttribute('aria-label',`${b.title}回答`);},1600);}}catch(err){if(err?.name!=='AbortError')report(err);}return;}b.disabled=true;try{await invoke(b.dataset.action,b.dataset.id);}catch(err){report(err);}finally{b.disabled=false;}};
   const syncApprovalButtons=()=>{
