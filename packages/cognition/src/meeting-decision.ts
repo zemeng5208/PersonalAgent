@@ -106,7 +106,7 @@ export class InMemoryMeetingDecisionReceiptStore implements MeetingDecisionRecei
   private readonly records = new Map<string, MeetingReceiptRecord>();
 
   private makeKey(namespace: string, source: string, eventId: string): string {
-    return `${namespace}::${source}::${eventId}`;
+    return JSON.stringify([namespace, source, eventId]);
   }
 
   loadReceipt(query: string | MeetingReceiptQuery): MeetingReceiptRecord | undefined {
@@ -164,7 +164,7 @@ export class FileMeetingDecisionReceiptStore implements MeetingDecisionReceiptSt
   }
 
   private makeKey(namespace: string, source: string, eventId: string): string {
-    return hash(`${namespace}::${source}::${eventId}`);
+    return hash(JSON.stringify([namespace, source, eventId]));
   }
 
   private getFilePath(namespace: string, source: string, eventId: string): string {
@@ -173,11 +173,18 @@ export class FileMeetingDecisionReceiptStore implements MeetingDecisionReceiptSt
 
   loadReceipt(query: string | MeetingReceiptQuery): MeetingReceiptRecord | undefined {
     if (typeof query === 'object' && query.namespace && query.source) {
-      const file = this.getFilePath(query.namespace, query.source, query.eventId);
+      const current = this.getFilePath(query.namespace, query.source, query.eventId);
+      const legacy = path.join(this.storageDir,
+        `receipt-${hash(`${query.namespace}::${query.source}::${query.eventId}`)}.json`);
+      const file = existsSync(current) ? current : legacy;
       if (!existsSync(file)) return undefined;
       try {
         const raw = readFileSync(file, 'utf8');
-        return JSON.parse(raw) as MeetingReceiptRecord;
+        const record = JSON.parse(raw) as MeetingReceiptRecord;
+        // Old delimiter keys may alias another identity. Never expose that
+        // record, and leave all legacy files intact when saving new versions.
+        return record && record.namespace === query.namespace && record.source === query.source
+          && record.eventId === query.eventId ? record : undefined;
       } catch (err) {
         throw new Error(`Receipt file corrupt or unreadable (${file}): ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -189,6 +196,7 @@ export class FileMeetingDecisionReceiptStore implements MeetingDecisionReceiptSt
     } catch (err) {
       throw new Error(`Failed to read receipt storage directory (${this.storageDir}): ${err instanceof Error ? err.message : String(err)}`);
     }
+    let legacyMatch: MeetingReceiptRecord | undefined;
     for (const f of files) {
       const fullPath = path.join(this.storageDir, f);
       let record: MeetingReceiptRecord;
@@ -202,10 +210,11 @@ export class FileMeetingDecisionReceiptStore implements MeetingDecisionReceiptSt
           if (query.namespace && record.namespace !== query.namespace) continue;
           if (query.source && record.source !== query.source) continue;
         }
-        return record;
+        if (fullPath === this.getFilePath(record.namespace, record.source, record.eventId)) return record;
+        legacyMatch ??= record;
       }
     }
-    return undefined;
+    return legacyMatch;
   }
 
   saveReceipt(record: MeetingReceiptRecord): void {
@@ -222,19 +231,21 @@ export class FileMeetingDecisionReceiptStore implements MeetingDecisionReceiptSt
     } catch {
       return [];
     }
-    const results: MeetingReceiptRecord[] = [];
+    const records = new Map<string, MeetingReceiptRecord>();
     for (const f of files) {
       try {
         const fullPath = path.join(this.storageDir, f);
         const record = JSON.parse(readFileSync(fullPath, 'utf8')) as MeetingReceiptRecord;
         if (!record) continue;
-        if (filter?.namespace && record.namespace !== filter.namespace) continue;
-        if (filter?.source && record.source !== filter.source) continue;
-        if (filter?.status && record.status !== filter.status) continue;
-        results.push(record);
+        const key = JSON.stringify([record.namespace, record.source, record.eventId]);
+        const canonical = fullPath === this.getFilePath(record.namespace, record.source, record.eventId);
+        if (!records.has(key) || canonical) records.set(key, record);
       } catch {}
     }
-    return results;
+    return [...records.values()].filter(record =>
+      (!filter?.namespace || record.namespace === filter.namespace)
+      && (!filter?.source || record.source === filter.source)
+      && (!filter?.status || record.status === filter.status));
   }
 }
 

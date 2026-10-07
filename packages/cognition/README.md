@@ -13,6 +13,14 @@ Evidence plus graph readback before reporting applied. It never writes the graph
 from a policy callback. `createCommittedMeetingProjectionReader` binds existing
 Fact receipts to an authorized source revision readback.
 
+Meeting receipt stores bind the complete namespace/source/event ID tuple. New
+file receipts use tuple-hashed keys; legacy delimiter-hashed files are read only
+when all three stored fields match the query. Legacy files stay intact, while
+canonical records take precedence in queries and deduplicated receipt lists.
+Older builds still read legacy hashes and can see stale states after an upgrade;
+retaining those files does not make downgrade automatic. Back up before upgrading
+and use the existing rollback procedure to restore the matching receipt history.
+
 `createInboxPageConsumer` adds bounded page backpressure and pause/resume to the
 existing Runtime InboxTriagePipeline. Cursor, fingerprint, receipt cache and
 private storage remain with that pipeline. `measureTriageClassifier` measures

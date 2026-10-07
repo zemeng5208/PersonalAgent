@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
+import {mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
@@ -457,6 +458,68 @@ test('MeetingRescheduleCoordinator: defer_and_verify defers without mutating sto
   const receipt = await coordinator.processEvent(event);
   assert.equal(receipt.status, 'deferred');
   assert.equal(store.read().revision, 5);
+});
+
+const syntheticReceiptRecord = (namespace, source, eventId = 'synthetic-event') => ({
+  namespace, source, eventId, sourceRevision: 'rev-1', inputDigest: 'synthetic-digest', status: 'proposal',
+  receipt: {eventId, source, sourceRevision: 'rev-1', meetingFactId: 'meeting-1',
+    selectedCandidateId: 'cand-adjust-schedule', actionId: 'adjust_schedule', status: 'proposal',
+    confidence: 0.9, reason: 'synthetic', graphRevisionBefore: 1, graphRevisionAfter: 1,
+    evaluatedAt: '2026-09-29T10:00:00.000Z'}, updatedAt: '2026-09-29T10:00:00.000Z',
+});
+
+test('meeting receipt stores keep delimiter-containing identities distinct', () => {
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'receipt-delimiter-test-'));
+  try {
+    for (const store of [new InMemoryMeetingDecisionReceiptStore(),
+      new FileMeetingDecisionReceiptStore({storageDir: tmpDir})]) {
+      const first = syntheticReceiptRecord('synthetic::group', 'calendar');
+      const second = syntheticReceiptRecord('synthetic', 'group::calendar');
+      store.saveReceipt(first);
+      assert.equal(store.loadReceipt(second), undefined);
+      store.saveReceipt(second);
+      assert.deepEqual(store.loadReceipt(first), first);
+      assert.deepEqual(store.loadReceipt(second), second);
+      assert.equal(store.listReceipts().length, 2);
+      const third = syntheticReceiptRecord('event-boundary', 'calendar::group', 'event-2');
+      const fourth = syntheticReceiptRecord('event-boundary', 'calendar', 'group::event-2');
+      store.saveReceipt(third);
+      assert.equal(store.loadReceipt(fourth), undefined);
+      store.saveReceipt(fourth);
+      assert.deepEqual(store.loadReceipt(third), third);
+      assert.deepEqual(store.loadReceipt(fourth), fourth);
+      assert.equal(store.listReceipts().length, 4);
+    }
+    const restarted = new FileMeetingDecisionReceiptStore({storageDir: tmpDir});
+    assert.equal(restarted.listReceipts().length, 4);
+  } finally { rmSync(tmpDir, {recursive: true, force: true}); }
+});
+
+test('legacy meeting files require exact identity and remain intact when upgraded', () => {
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'receipt-legacy-test-'));
+  try {
+    const original = syntheticReceiptRecord('synthetic::group', 'calendar');
+    const collision = syntheticReceiptRecord('synthetic', 'group::calendar');
+    const legacyKey = createHash('sha256').update(`${original.namespace}::${original.source}::${original.eventId}`).digest('hex');
+    const legacyPath = path.join(tmpDir, `receipt-${legacyKey}.json`);
+    const legacyBytes = JSON.stringify(original);
+    writeFileSync(legacyPath, legacyBytes, 'utf8');
+    const store = new FileMeetingDecisionReceiptStore({storageDir: tmpDir});
+    assert.deepEqual(store.loadReceipt(original), original);
+    assert.equal(store.loadReceipt(collision), undefined);
+    store.saveReceipt(collision);
+    assert.deepEqual(store.loadReceipt(original), original);
+    const updated = {...original, status: 'applied', receipt: {...original.receipt, status: 'applied'}};
+    store.saveReceipt(updated);
+    const restarted = new FileMeetingDecisionReceiptStore({storageDir: tmpDir});
+    assert.deepEqual(restarted.loadReceipt(original), updated);
+    assert.deepEqual(restarted.loadReceipt(collision), collision);
+    assert.deepEqual(restarted.loadReceipt({eventId: original.eventId, namespace: original.namespace}), updated);
+    assert.deepEqual(restarted.listReceipts({namespace: original.namespace}), [updated]);
+    assert.deepEqual(restarted.listReceipts({namespace: original.namespace, status: 'proposal'}), []);
+    assert.equal(restarted.listReceipts().length, 2);
+    assert.equal(readFileSync(legacyPath, 'utf8'), legacyBytes);
+  } finally { rmSync(tmpDir, {recursive: true, force: true}); }
 });
 
 test('FileMeetingDecisionReceiptStore: persists atomically and isolates by namespace, source, eventId', () => {
