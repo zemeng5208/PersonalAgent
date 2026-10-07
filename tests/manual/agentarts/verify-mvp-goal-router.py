@@ -59,4 +59,21 @@ check(json.dumps(fact), 'complex')
 fact['continuation']['state'] = 'pending'
 check(json.dumps(fact), 'text')
 check(json.dumps(dict(goal='请运行node_check', availableTools=[dict(name='workspace.node_check', version='1.0.0', inputSchema=dict(type='object', properties={}, additionalProperties=False))])), 'review')
+
+# Exercise the actual public entry, including both JSON decode paths. Each input
+# stays within the existing byte budget; malformed input must remain a text refusal.
+for surrogate in ['\ud800', '\udfff']:
+    rejected = router.main({'query': 'synthetic ' + surrogate})
+    assert rejected['route'] == 'text'
+    assert json.loads(rejected['text_result']) == {'kind': 'text', 'text': '请求格式或长度无效，无法生成提案。'}
+
+deep_json = '[' * 12000 + '0' + ']' * 12000
+for prefix, message in [('', '请求不是受限 JSON，无法生成提案。'),
+                        (router.GOAL_PREFIX, 'RECHECK：主动目标数据格式无效，尚未执行。')]:
+    query = prefix + deep_json
+    assert len(query.encode('utf-8')) <= router.MAX_QUERY_BYTES
+    rejected = router.main({'query': query})
+    assert rejected['route'] == 'text'
+    assert json.loads(rejected['text_result']) == {'kind': 'text', 'text': message}
+
 print('Goal/Fact/receipt compatibility checks passed; no cloud calls or local tool execution.')
