@@ -98,3 +98,16 @@ Task、Policy 上下文、DOM 与 bridge 为显式 Fake。合成 summary-only �
 4. 真实现场另行核对原 taskId/commandId、Policy/审批、confirmed Evidence 与
    Goal/Graph 读回；若失回复仍缺请求关联，保留未知结果并沿原 Runtime 恢复，不能将
    上述 Fake 故障注入或独立 DOM 消费当作真实 IPC 恢复通过。没有使用 Calendar 或新 Fact 来源。
+
+后续独立原 DOM 消费（同日）：正式源码工件 `8712599f49bd9f1593d277408e2accfb72c4d77c`，
+Goal 控件 blob `32305afb25557b88b10b615cf1b690a6ef666930`，由 Desktop 线运行真实原 panel
+HTML/renderer/CSS/CSP、Chromium native 日期输入/对话框与浏览器时区。
+三个日期场景（UTC 未编辑、纽约回拨第二实例未编辑、明确修改开始时间）与一个未知受理
+历史场景共四个独立场景通过，console/pageerror 均为 0；后者在 375px 下状态可见，
+保留待核实文案、保存锁和一次提交。日期运行 head `1ff4631`，未知历史最终报告 head
+`19a0228`，控件 blob 相同；这些 head 的 Desktop src 与正式工件一致。
+私有工件位于 `.worktrees/mod15-host-20261007/.cache/review-evidence/20261007/`：
+`goal-native-time-unknown-validation.md`、`goal-native-time-after.json`、
+`goal-native-unknown-after.json` 及同名 `*-dom.mjs` 脚本/截图。
+bridge、受理和写入/读回仍为显式 Fake；此补充只将上文原 DOM 待执行项补为该层通过，
+不提升真实 Runtime/Policy、Electron IPC、Windows、云或个人数据现场验收状态。
