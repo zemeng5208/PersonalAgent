@@ -1,5 +1,7 @@
 # MOD-30：同一应用通用受限协议的云提示词候选
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 Profile：`huawei_ict_agentarts`；负责人：zemeng；状态：**已应用、已发布及部署；请求级实调待验收**。
 目标仅为现有 `PA-证据安全审查` 最终节点和现有多 Agent 控制器。
 旧版逐字文本、资源 ID 和画布引用见

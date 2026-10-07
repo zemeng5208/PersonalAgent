@@ -1,5 +1,7 @@
 # QQ 信头本地分类：main 装配
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 本片不读取任何真实账号。连接器仍由 Potato 维护；只消费公开 QQMailProvider/register，未新增邮件写工具或云端出口。
 
 本轮 main 与“设置 → 连接”已接入以下配置和操作；“记忆”页也提供 Laya 启停。只在明确点击“启动本地模型”后发现当前 checkout/Git common root 内已安装缓存并启动项目 batch-server；不下载、不复用未知 Python 进程、不自动加载权重。模型子进程不继承云服务凭据，停止会取消本地分类。可用内存不足 3 GiB 时显示未启动。邮箱派生分类单独以 safeStorage 加密保存，Renderer 仅见遮盖账号、各类别数量与待核对计数。

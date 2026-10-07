@@ -1,5 +1,7 @@
 # P8 正式消费者回执与窗口准备修复
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`；关联 Issue #212，P5/P6/P7 消费。
 - 负责人：zemeng P8 共享装配写入者；公共 Runtime 兼容评审：goo122；Windows 语义交叉核对：P6。
 - 基线：`16e2280`；状态：`review`。不代表整个 MVP、设备通知或真实窗口写入完成。

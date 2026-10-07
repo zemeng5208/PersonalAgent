@@ -1,5 +1,7 @@
 # MOD-27/28 本地消费者集成交接
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 日期：2026-09-10；profile：huawei_ict_agentarts；消费者负责人 zemeng。
 状态：原离线图谱工作包已在 PR #37 评审合并为 `41ea79d`，含根构建接线；不代表 MOD-27/28 整体验收完成。
 存储首片见 [COORDINATION-STORE-01](COORDINATION-STORE-01.md)，已在 PR #38 经消费方非作者评审并合并为 `87ee444`；接口仍待持久图消费者纵向验收后评估冻结。

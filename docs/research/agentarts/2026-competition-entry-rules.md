@@ -1,5 +1,7 @@
 # MOD-10：2026 年参赛规则与证据缺项
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 目标：`huawei_ict_agentarts` Competition Profile。负责人：`zemeng`。核对日期：2026-09-25；iCAN 日期歧义复核：2026-09-28。
 
 本页只记录会改变参赛准备的官方规则。产品能力和模块完成状态仍以实际代码、验收回执及 PR 为准。

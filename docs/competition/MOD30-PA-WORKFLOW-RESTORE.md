@@ -1,5 +1,7 @@
 # MOD-30：三 PA 工作流可复制恢复包
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 Profile：`huawei_ict_agentarts`；负责人：zemeng。2026-09-25 在华为云
 `cn-southwest-2` AgentArts 控制台只读抄录**更新前**的源工作流编辑器内容和
 控制器引用。本文件是恢复材料，不表示下列旧文本仍为当前云配置；本次更新

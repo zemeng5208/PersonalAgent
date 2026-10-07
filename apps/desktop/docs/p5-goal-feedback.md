@@ -1,5 +1,7 @@
 # P5 目标决策反馈修复（Competition Profile）
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 原 #237 反馈保护包独立于 #231。后续受控修复增量见 [MOD-28-REVIEWED-REPAIR-01](../../../docs/modules/MOD-28-REVIEWED-REPAIR-01.md)，仅真实执行与持久读回后提升核实状态。
 共享 main.js / Renderer / Admin 由 P8 唯一写入，Luna 仅处理 CSS，不新增 Local Profile。
 

@@ -1,5 +1,7 @@
 # Cloud MVP cognition 接回说明
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 Profile: `huawei_ict_agentarts`。工作包：`codex/cloud-mvp-cognition`。依赖源为 P8 `d2a23bea182a0a61104f601a6769d6ac16d7db5b`，PR target 为 `codex/zemeng/p8-mvp-final-integration`，由根统一合 main；不把 P8 shared 源码作为本 PR 新增实现。
 
 复用 `f4456f8a` 的 referenced deadline/cleanup（不重测）、`a1229770`→`e11ac12d` 的 host KV 消费、`45da2725` 的 exact meeting impact/crash confidence 修复、`ef7852ee` 的真实 selection dialogue/audit、`18d25ea7`＋`36b66639` 的公开 8-header/真实模型注入验收。新逻辑没有新数据库、anchor task、调度器或模型进程；Windows/native 设备通知 host 与 receiptstore `ab08ded` 未修改。

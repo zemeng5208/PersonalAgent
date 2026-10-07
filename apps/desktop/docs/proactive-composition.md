@@ -1,5 +1,7 @@
 # Desktop 主动认知装配增量
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 负责人 zemeng；MOD-11 消费 MOD-17、MOD-27/28，目标 profile 为 `huawei_ict_agentarts`。
 入口为 `electron/proactive-composition.js`。无新增包、Schema、数据库迁移或模型入口。
 

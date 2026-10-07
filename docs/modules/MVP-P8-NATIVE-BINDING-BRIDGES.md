@@ -1,5 +1,7 @@
 # P8 原生来源与恢复桥
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 目标 profile：`huawei_ict_agentarts`。本增量只修改 Desktop 可信宿主与管理员入口；Runtime portable 源码仍由 Runtime 工作包负责。
 
 ## 参考 Skill 历史 Evidence

@@ -1,5 +1,7 @@
 # MOD-18：未知补丁结果的持续核实
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 日期：2026-10-05。负责人：zemeng；状态：review。目标 Profile：`huawei_ict_agentarts`，同一适配器的 Local 消费保持兼容。
 
 ## 问题与范围

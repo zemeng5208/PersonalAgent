@@ -1,5 +1,7 @@
 # MOD-28-PERSISTENT-CONSUMER-01：持久图影响消费闭环
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - 日期：2026-09-12；Profile：huawei_ict_agentarts；MOD-28 / PA-025。
 - 负责人 zemeng；待非作者评审者 goo122；状态 review（本地验证通过，待评审与集成）。
 - 分支 `codex/zemeng/mod27-28-persistent-consumer`；实现基线 `87ee444`（PR #38），

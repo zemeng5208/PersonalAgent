@@ -1,5 +1,7 @@
 # MOD-18 P8：Runtime patch reconciliation 接线
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 本增量依赖 PR #217（`codex/zemeng/mod18-patch-reconcile`，head `1b9d352`）提供的
 `reconcileWorkspacePatchApply`。P8 不复制 patch helper、marker 或进程查询，也不改变公共
 wire schema；它把该 API 接到已有 `RuntimeApplication` host-task 恢复入口。

@@ -1,5 +1,7 @@
 # MOD-14-VOICE-PCM-BUFFER-01：有界 PCM 分块累积
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`；实现身份：`zemeng` / `zemeng5208`。
 - 用户是产品负责人和最终授权来源；来源主任务统一指挥；`goo122` 协调共享根与非作者评审。
 - 工作树：`.worktrees/voice-pcm-foundation`；分支：`codex/zemeng/voice-pcm-foundation`。

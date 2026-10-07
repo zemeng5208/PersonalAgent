@@ -1,5 +1,7 @@
 # MOD-16-GEMINI-NOTEPAD-UIA-READINESS：现代记事本 UIA 结构就绪复核与唯一可编辑候选定位
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - 目标 Profile：`huawei_ict_agentarts`（比赛主路径，Local 保留为可选 baseline）。
 - 需求与任务：MOD-16 / PA-016；负责人 `zemeng`，非作者评审 `goo122`。
 - 本工作包分支：`codex/gemini-notepad-uia-readiness`（基于 PR #188 head `888f8bc`，向 `codex/gemini-windows-execution` 发起堆叠 Draft PR）。

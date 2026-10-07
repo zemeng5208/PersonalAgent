@@ -1,5 +1,7 @@
 # 受信提醒来源与 Runtime 调度同步
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 Profile：huawei_ict_agentarts。此公共依赖为 MOD-20 / Desktop 的待办改期、完成和取消接线服务；业务待办仍由 Potatos498 的 productivity 实现。属于用户已授权的必要公共接口补齐，评审及集成由 goo122 协调。
 
 ## API 与调用顺序

@@ -1,5 +1,7 @@
 # 项目目录与模块开发规范
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 版本：1.2 · 日期：2026-09-09 · 状态：只实施 Competition Profile、Local Profile 可选留存的目录与依赖基线
 
 本文是 PersonalAgent 目录布局、包边界和新增模块结构的唯一规范。当前实现优先级以[华为 ICT AgentArts Competition Profile](competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)为准，需求范围以 [PRD](PRD.md) 为准，运行语义以 [公共开发协议](DEVELOPMENT_PROTOCOL.md) 为准，负责人以 [模块分工](MODULE_ASSIGNMENTS.md) 为准，跨模块接口可用性以 [当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md) 为准。
@@ -206,7 +208,7 @@ tests/fixtures/               无隐私共享夹具
 
 ## 11. 新模块开工门槛
 
-每个模块必须先登记：目标 profile、模块 ID、负责人、评审者、独占目录、依赖、公共输入输出、不在范围、Fake 验收和真实验收条件。当前新增模块只服务 Competition Profile；Local Profile 只有产品负责人以后明确启用才产生新增工作。随后按“接口状态登记 → 端口/Schema → Fake 和契约测试 → 实现 → 集成 → 真实条件验收 → 文档和 ROADMAP”推进。
+每个模块必须先登记：目标 profile、模块 ID、负责人、自审/可选同行评审、独占目录、依赖、公共输入输出、不在范围、Fake 验收和真实验收条件。当前新增模块只服务 Competition Profile；Local Profile 只有产品负责人以后明确启用才产生新增工作。随后按“接口状态登记 → 端口/Schema → Fake 和契约测试 → 实现 → 集成 → 真实条件验收 → 文档和 ROADMAP”推进。
 
 完成定义：
 
@@ -214,5 +216,5 @@ tests/fixtures/               无隐私共享夹具
 - README、负责人、测试和已知限制齐全。
 - 默认测试无密钥、无付费调用、可重复。
 - 有副作用操作经过 Runtime、Policy 和 ToolGateway。
-- PR 由非作者评审并合并后，才根据完整验收更新为 done。
+- PR 完成自审、必要检查与实际合并后，按完整验收更新 done；不等待指定协作者的 PR 批准。
 - 依赖接口必须为 frozen；如只能消费 provisional，工作包记录精确提交和迁移风险。unavailable 接口不能作为开工前提已满足。

@@ -1,5 +1,7 @@
 # 本地运行数据
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 该目录只用于开发环境中的数据库、缓存、检查点和临时运行状态。除本说明外，目录内容默认被 Git 忽略。
 
 该规则同时约束当前 [Huawei ICT AgentArts Competition Profile](../docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)：个人世界状态、授权、原始 Evidence、凭据和本地执行记录默认留在受信 Runtime；只向 AgentArts 发送完成当前步骤所需的最小脱敏数据或受控引用。Local Profile 仅为可选留存，不形成另一套数据目录或存储事实来源。

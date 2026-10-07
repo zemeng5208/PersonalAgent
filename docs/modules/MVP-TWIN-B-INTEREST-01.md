@@ -1,5 +1,7 @@
 # MVP-TWIN-B-INTEREST-01：持续兴趣的合法选项
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`；MOD-28；负责人 zemeng。
 - 状态：`review`；依赖 #187 的 InterestPolicy 与 #190 的主动选择/AgentArts 交接方向。
 - 所有权：`packages/cognition/**` 和本文件；根接线及连接器注册由主任务负责。

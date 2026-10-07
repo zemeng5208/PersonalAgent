@@ -1,5 +1,7 @@
 # 架构设计与技术契约
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 版本：0.7 · 日期：2026-09-09 · 状态：只实施 Huawei ICT AgentArts Competition Profile，Local Profile 可选留存
 
 参赛主架构见[华为 ICT AgentArts Competition Profile](competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)；模块所有权以 [模块分工](MODULE_ASSIGNMENTS.md) 为准；消息语义以 [公共开发协议](DEVELOPMENT_PROTOCOL.md) 为准；接口是否冻结和生产可用以 [当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md) 为准。

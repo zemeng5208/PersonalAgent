@@ -1,5 +1,7 @@
 # 有界多次云调用工具 MVP
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 2026-09-24，主控已选择本方案。负责人 zemeng（MOD-04B/29/30/32）；状态 in_progress。
 基线为文字适配 PR #99；Runtime 接线由 B 的独立 PR 负责。接口为现有 provisional
 CoordinationResult/CoordinationContinuation，无 wire Schema 或数据库迁移。

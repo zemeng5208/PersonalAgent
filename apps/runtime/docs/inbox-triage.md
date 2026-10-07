@@ -1,5 +1,7 @@
 # 本地邮件分类派生流水线
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 MOD-11/认知消费者，zemeng，Competition Profile。消费 Potato 已有 `mail.inbox` 返回的 ConnectorItem；不修改 mail provider，不读取账号或凭据。分类保持 `private`、`headersOnly:true`，不创建 Fact，也不更改邮件标签、已读状态、移动、发送或删除邮件。
 
 生产装配通过 `@personal-agent/runtime/application` 的 `createInboxTriagePipeline({storage,namespace,triage,labels,meetingLabels,authorizeRead})`：

@@ -1,5 +1,7 @@
 # P5 设备通知：策略与 Runtime 持久回执消费
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`；工作包：P5-DEVICE-DELIVERY-CONSUMER。
 - 唯一写入者：设备通知对话；原宿主/专属 case/docs，以及 P8 明确释放的 receipt store/case。
 - 工作树复用 `.worktrees/p5-notification-lifecycle`，分支 `codex/zemeng/p5-device-delivery-consumer`，

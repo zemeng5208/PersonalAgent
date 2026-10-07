@@ -1,5 +1,7 @@
 # MOD-09H：用户确认的事实更正与撤回首片
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`；需求：PA-020、PA-024。
 - 负责人：`goo122`；非作者消费语义评审：`zemeng`。
 - 基线：MOD-09G 分支与 PR #203；本片在 #202、#203 之后集成。

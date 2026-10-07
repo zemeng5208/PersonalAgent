@@ -1,5 +1,7 @@
 # 接口文档
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 本目录是跨模块接口状态、兼容范围和可用性判定的唯一登记入口。接口在源码中出现、能够编译或存在 Fake，均不自动等于已冻结或生产可用。
 
 当前只实施[华为 ICT AgentArts Competition Profile](../competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)，Local Profile 仅可选留存现有代码且当前不新增。部署 profile 的优先级不提升接口状态；AgentArts 在真实部署、API、trace 和本地可信工具闭环完成前仍为 `unavailable`。

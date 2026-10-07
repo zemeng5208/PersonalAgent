@@ -1,5 +1,7 @@
 # P7 关注事项与知识增量更新：集成说明
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 Profile：`huawei_ict_agentarts`。本文只说明 Desktop 消费宿主。`snapshot().mountedInMain` 恒为 `false`。导入本模块或跑测试都不等于桌面进程已经挂上。
 
 P7 宿主及测试由 zemeng 维护；`apps/desktop/electron/main.js`、Runtime Application 和共享 UI 由 P8 总装者串行接线。当前文档同时记录宿主契约和 P8 真实接线状态。

@@ -1,5 +1,7 @@
 # MOD-16-GEMINI-MVP-WINDOWS-EXECUTION：Windows Host 执行生产缺口补齐与目标状态读回
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - 目标 Profile：`huawei_ict_agentarts`（比赛主路径，Local 保留为可选 baseline）。
 - 需求与任务：MOD-16 / PA-016；负责人 `zemeng`，非作者评审 `goo122`。
 - 本工作包分支：`codex/gemini-windows-execution`（基于 PR #179 head `108d9136343eecdcc6e10bc65333e26b56f6514b`，向 `codex/zemeng/mod16-pipe-bridge` 发起草稿 PR）。

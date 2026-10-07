@@ -1,5 +1,7 @@
 # MVP-TWIN-B-KNOWLEDGE-01：知识失效与精确依赖重评
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`；MOD-28，消费 MOD-27 的 `NodeRef`。
 - 负责人：zemeng；状态：`review`；非作者评审由 goo122 完成后才可合并。
 - 所有权：`packages/cognition/**` 和本文件。真实来源、知识库、Runtime checkpoint 与 Desktop 接线由原模块负责人维护。

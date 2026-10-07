@@ -1,5 +1,7 @@
 # P8 参考工具及共享装配增量
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 目标为 `huawei_ict_agentarts`；集成树 `mvp-assembly/PersonalAgent`，分支 `codex/zemeng/p8-mvp-final-integration`。模块源保持原作者所有权。
 
 ## 当前接线

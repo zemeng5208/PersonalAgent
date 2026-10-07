@@ -1,5 +1,7 @@
 # MOD-18-WORKSPACE-PATCH-STAGE-01
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`；负责人 `zemeng`；非作者评审 `goo122`；状态 `review`。
 - 前置：PR #112 的只读预览已合入 main；本包只触及 `packages/coding-tools/**` 与本记录。PR #133 已获非作者批准并合入 main（`7034276`）。
 

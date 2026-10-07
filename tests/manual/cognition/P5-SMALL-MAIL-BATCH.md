@@ -1,5 +1,7 @@
 # 同单例 Laya：小型邮件分页验收准备
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 已提供可注入的 `p5-small-mail-batch.mjs`，真实模型验收仍未执行。Goal 真实验收优先；P8 在同一个已 ready 的 owned Laya 模型槽顺带执行此批次，不新建 host、不 start/stop 模型、不安装、不联网 QQ、不发送云。
 
 ## 可直接消费的函数

@@ -1,5 +1,7 @@
 # MOD-29～31：AgentArts 持续认知多智能体构建首片
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - 日期：2026-09-12；Profile：`huawei_ict_agentarts`。
 - 负责人：zemeng；状态：review（云端配置已读回，仓库记录未评审）。
 - 分支：`codex/zemeng/agentarts-multi-agent-evidence`；基线：`87ee444`（PR #38）。

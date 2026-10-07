@@ -1,5 +1,7 @@
 # Desktop workspace command configuration
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 The Competition Desktop keeps the selected workspace in the existing encrypted `coding-workspace.json` version 1 record. Optional encrypted fields hold a user-selected Node executable, one workspace-relative JavaScript file for syntax checking, and a fixed npm CLI file outside the workspace. Older version 1 records remain readable and retain their read and patch abilities. A new selection revokes the current session grant; the tool catalog is rebound after a Desktop restart.
 
 Trusted Main injects `selectNodeExecutable()`, `selectCheckFile(workspaceRoot)`, and `createCommandRecipeTool(options)` into `createWorkspaceConfigHost`. A fallback `selectNpmCli()` is needed only when the fixed `node_modules/npm/bin/npm-cli.js` file cannot be resolved from the selected Node installation. The callbacks use native file dialogs and return absolute paths to Main only. Renderer invokes `coding.selectNode`, `coding.selectCheckFile`, and `coding.selectNpmCli` without path arguments. The host requires the Node executable and npm CLI to be regular files outside the writable workspace and the selected `.js`, `.mjs`, or `.cjs` file to be a regular file inside it. The recipe helper verifies fixed canonical paths again. The model sees empty input objects and cannot choose an executable, path, arguments, or working directory.

@@ -1,5 +1,7 @@
 # @personal-agent/learning — provisional workflow candidate lifecycle
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 This Competition Profile package stores descriptive workflow candidates. It does not
 execute steps, call tools, train a model, or register a Runtime/Desktop capability.
 

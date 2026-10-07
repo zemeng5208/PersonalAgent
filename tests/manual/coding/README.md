@@ -1,5 +1,7 @@
 # P6 编码工具真实本地验收
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 Profile：`huawei_ict_agentarts`。负责人 zemeng / P6；非作者评审 goo122。
 使用新建的合成演示项目，但文件修改、PowerShell 独占写入、命令进程、SQLite、Runtime、Policy 与 ToolGateway 均为真实实现。没有 Fake 工具、伪造 authorizationRef 或云端调用。
 

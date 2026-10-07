@@ -1,5 +1,7 @@
 # 批次 A：Runtime 公开查询接口
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 状态：**Core Runtime Profile 1 已冻结**。实现提交 `e5e20cad16566c6bdf821b7880efad96f0513ef1` 已由 `zemeng` 非作者批准，Foundation CI 通过，并随 PR #34 合并为 `bcbeaa2`。协议线版本保持 `1.0.0`；本批只增加向后兼容的只读 operation 和 TaskSnapshot 可选字段。
 
 这里的冻结仅覆盖下列任务、会话和审批查询语义，不代表整套 wire、事件通道、模型、工具或连接器接口均已冻结。完整边界见[当前接口目录](../interfaces/CURRENT_INTERFACE_CATALOG.md)。

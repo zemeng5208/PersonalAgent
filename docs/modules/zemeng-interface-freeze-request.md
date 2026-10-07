@@ -1,5 +1,7 @@
 # MOD-11～19：请求 goo122 提前交付并冻结独立开发接口包
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 日期：2026-09-08。提出方 / 消费者：`zemeng`；公共协议、SDK、fake 与根装配负责人：`goo122`。
 
 状态：**请求 PR #32 已合并；批次 A 的查询/恢复子集已随 PR #34 交付并冻结**。批次 A 的最终签名见 [Runtime 公开查询接口](RUNTIME_QUERY_API.md)；逐项状态见[当前接口目录](../interfaces/CURRENT_INTERFACE_CATALOG.md)。F01～F10 的其余部分仍为 `provisional` 或 `unavailable`，不宣称 MOD-11～19 已获得完整接口或全部开工授权。

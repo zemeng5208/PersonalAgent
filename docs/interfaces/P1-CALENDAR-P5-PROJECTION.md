@@ -1,5 +1,7 @@
 # P1 日历 → P5 认知 投影消费契约（provisional）
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - 登记号：MOD-20B-CALENDAR-P5-PROJECTION-01；登记日：2026-09-30。
 - 负责人：P1 原语 `Potatos498`（`@personal-agent/calendar`）；投影消费 `zemeng`（P5 `packages/cognition`）。
 - 状态：`provisional`——本文件固定双方当前消费的名称与语义；升格 `frozen` 需两侧非作者评审。

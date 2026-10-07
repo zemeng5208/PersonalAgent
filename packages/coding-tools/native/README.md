@@ -1,5 +1,7 @@
 # WindowsJobProcessHost：Windows 进程树作业对象宿主（MOD-18）
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 本项目为 `@personal-agent/coding-tools` 提供 Windows 平台下的进程树销毁保证，用于受控执行 npm 构建与测试脚本（`npm-build` / `npm-test`）。
 
 ## 背景与设计目标

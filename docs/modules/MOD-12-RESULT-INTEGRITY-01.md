@@ -1,5 +1,7 @@
 # MOD-12-RESULT-INTEGRITY-01：回答正文完整性
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：huawei_ict_agentarts；MOD-11/12，PA-001/004。
 - 负责人 zemeng；非作者评审者 goo122；状态 review，待评审及集成。
 - 基线 main `72cc76b`；工作树 `.worktrees/zemeng-desktop-result-integrity`。

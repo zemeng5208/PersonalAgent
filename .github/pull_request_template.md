@@ -2,7 +2,7 @@
 
 - 任务 ID：
 - 目标 Profile（默认 `huawei_ict_agentarts`；Local 需说明为何进入当前范围）：
-- 模块 ID / GitHub 负责人（`goo122` / `zemeng` / 已登记协作者）：
+- 模块 ID / GitHub 负责人（`goo122` / `zemeng` / `Potatos498`）：
 - 需求 ID（PA-xxx）：
 - 修改解决的问题及最终行为：
 
@@ -10,7 +10,7 @@
 
 - 涉及模块：
 - 公共接口/数据迁移/依赖变化（无则注明）：
-- 消费的契约版本；公共变更由 `goo122` 集成（无则注明）：
+- 消费的契约版本；实施者完成的必要公共接线及兼容/迁移说明（无则注明）：
 - 涉及接口在 `docs/interfaces/CURRENT_INTERFACE_CATALOG.md` 中的状态与冻结基线：
 - 新增或未提供 capability 的握手、Fake 与 `UNSUPPORTED_CAPABILITY` 行为：
 - 权限、隐私或外部副作用变化（无则注明）：
@@ -36,4 +36,4 @@
 - [ ] 必要文档及进度已同步
 - [ ] 接口状态、能力发现和真实验证等级未被 Fake/编译结果误提升
 - [ ] Competition Profile 未静默回退 Local；Local/Fake 结果未冒充 AgentArts 证据
-- [ ] 指定评审者并完成评审后才合并
+- [ ] 已完成自审、必要检查及兼容说明；同行评审按需记录，不等待指定协作者批准

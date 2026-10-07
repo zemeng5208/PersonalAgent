@@ -1,5 +1,7 @@
 # Live 与主动提醒工作记录
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 日期：2026-09-27。身份：zemeng；范围：Competition Profile，MOD-11/12/14 及已授权主动提醒接线。
 工作树：`C:\Users\24035\.codex\worktrees\mod11-fact-public-desktop\PersonalAgent`。
 分支：`codex/zemeng/mod11-voice-sis-desktop`。本记录对应工作树增量，不宣称已提交、合并或发布。

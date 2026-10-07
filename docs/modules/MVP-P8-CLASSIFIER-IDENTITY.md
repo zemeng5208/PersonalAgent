@@ -1,5 +1,7 @@
 # P8 邮件分类的实际模型身份消费
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`；Issue #212，P5/P8 消费。
 - 负责人：zemeng P8；公共兼容评审：goo122；模型身份提供者：P5。
 - 基线：PR #236 `4c37b3683ad4d46cdd705473f3108ddc5a541141`，该 PR head 保持不变。

@@ -1,5 +1,7 @@
 # PersonalAgent Desktop
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 ## 2026-09-27 当前语音与主动提醒增量
 
 本轮按 Competition Profile 区分两个入口：麦克风使用 SIS 听写，只填入可编辑输入框，

@@ -1,5 +1,7 @@
 # MOD-06 / MOD-07 首版 Competition 纵片
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`；PA-005 MCP / PA-006 Skills。
 - 状态：`review`，不等于整版 MVP 或接口 frozen。
 - 负责人：本专项代表 zemeng；范围 `packages/mcp/**`、`packages/skills/**` 和本文。根/Runtime/IPC/Renderer/lock 由 P8 唯一消费；远端 PR/合并由专线处理。

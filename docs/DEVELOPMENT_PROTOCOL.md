@@ -1,5 +1,7 @@
 # 公共开发协议
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 版本：0.3.0 · 日期：2026-09-09 · 协议负责人：`goo122`
 
 状态：开发包仍为 0.1.0-alpha.1、wire 主版本仍为 1.0.0。按 [ADR-0005](adr/0005-layered-interface-freeze.md) 采用逐接口冻结：Core Runtime Profile 1 的消息、任务、会话和审批只读查询子集已冻结；整套协议、模型工具调用和 Agent 编排未冻结。当前只实施[华为 ICT AgentArts Competition Profile](competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)，Local Profile 仅留存现有代码、当前不新增；profile 决策不改变已冻结 wire。精确状态见 [当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md)。
@@ -8,10 +10,10 @@
 
 - `goo122` 维护 `packages/contracts/` 的 JSON Schema、生成类型与测试夹具；本文件解释语义。`goo122` 在首次交付时使两者一致，消费者不得自行复制不同版本。
 - wire 版本为 `1.0.0`，与文档和开发包版本分开。wire 主版本不代表全部 operation 已冻结；冻结单位是接口 profile 或单项端口。
-- 状态分为 `frozen`、`provisional`、`unavailable`、`deprecated`。接口只有具备单一来源、生产实现、Fake/失败夹具、消费验证、非作者评审和 CI 后才可冻结；外部行为影响语义时还需要真实目标系统闭环。
+- 状态分为 `frozen`、`provisional`、`unavailable`、`deprecated`。接口只有具备单一来源、生产实现、Fake/失败夹具、消费验证、负责人自审和 CI 后才可冻结；外部行为影响语义时还需要真实目标系统闭环。
 - 新增可选字段为兼容扩展；删除字段、修改含义、增加消费者无法处理的必需状态必须升级不兼容版本或协商能力。
 - 握手交换协议版本与能力列表；主版本不一致拒绝连接。新操作必须先通过能力发现，不能只凭次版本猜测支持。
-- 变更流程：提出差异和消费者影响 → 更新接口目录为 provisional → `goo122` 更新 Schema/夹具 → 消费方黑盒验证 → 非作者评审与 CI → 更新为 frozen。禁止 UI 和服务端私自约定临时字段。
+- 变更流程：提出差异和消费者影响 → 更新接口目录为 provisional → 实施者更新单一 Schema/夹具和必要接线 → 消费契约验证 → 自审与 CI → 按证据更新为 frozen。goo122 负责公共协议长期维护，不是独占实施或审批者；不等待指定他人批准，禁止 UI 和服务端私设临时字段。
 - Schema 中已知但生产握手未公布的 operation 为 unavailable；消费者不调用，Host 返回 `UNSUPPORTED_CAPABILITY`，UI 明确展示不可用。
 
 ## 2. Profile 与通信分层
@@ -23,7 +25,7 @@
 - AgentArts 外部 DTO 由 CloudAgentPort/Adapter 隔离，不直接进入公共 wire、TaskRuntime 或连接器。
 
 - Electron 渲染器只调用 `packages/client/` 公开 API，经 `zemeng` 的 preload 桥接；不访问 Named Pipe、密钥或原生工具。
-- Runtime 与 Windows Host 使用受限 Named Pipe。`goo122` 发布 Schema 与 JSONL 帧定义，`zemeng` 实现 Host；每帧一行 UTF-8 JSON，字符串内换行转义，最大 1 MiB，超限拒绝。
+- Runtime 与 Windows Host 使用受限 Named Pipe。公共 Schema 与 JSONL 帧由 goo122 长期维护，zemeng 实现 Host 时可一并完成兼容契约变更和消费验证；每帧一行 UTF-8 JSON，字符串内换行转义，最大 1 MiB，超限拒绝。
 - 应用 IPC 封装为同一消息对象，不要求所有传输都采用 JSONL。
 - 大音频、截图、附件使用宿主生成的临时 `artifactRef`，单独分片传输；引用绑定任务/会话、访问主体和到期时间，不能接受外部任意路径作为可信引用。流具有序号、取消和背压。
 - 时间统一 ISO 8601 UTC；日程额外带 IANA 时区；业务计算不使用界面格式化文本。标识符视为不透明字符串，生产环境由可信组件生成。

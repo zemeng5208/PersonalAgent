@@ -1,5 +1,7 @@
 # 本地 Laya 真批处理适配
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 `batch-server.py` 属于本项目，不修改第三方 site-packages。只有直接执行 `main()` 才加载模型。
 现有 `laya[serve]` 虚拟环境可运行，启动前由可信宿主设置：
 

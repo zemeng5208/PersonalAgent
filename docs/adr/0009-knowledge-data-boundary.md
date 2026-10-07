@@ -1,5 +1,7 @@
 # ADR-0009：知识结果的本地持久化与云端出机边界
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - 状态：proposed；产品负责人已选择先用明确可公开的演示资料推进比赛链路，未批准私人 Vault 接入或真实付费云调用
 - 日期：2026-09-24
 - Profile：`huawei_ict_agentarts`；关联 MOD-08、PA-008/023

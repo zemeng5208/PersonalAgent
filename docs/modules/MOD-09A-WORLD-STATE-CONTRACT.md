@@ -1,5 +1,7 @@
 # MOD-09A：世界状态查询与变化流契约准备
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`；关联 PA-020、PA-024、MOD-09/27/28。
 - 负责人：`goo122`；消费语义确认：`zemeng`；状态：`review`。
 - 分支：`codex/mod-09a-world-state-contract`；交付基线：PR #40/#42/#44 合并后的 `main@3eb9156`。

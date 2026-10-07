@@ -1,5 +1,7 @@
 # MOD-27-GRAPH-01：本地版本化图谱领域核心
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - 负责人：zemeng；profile：huawei_ict_agentarts；基线：5944061（PR #36）。
 - 分支：`codex/zemeng/mod27-goal-graph`；工作树：`.worktrees/zemeng-mod27-goal-graph`。
 - 状态：review；本地增量已实现并验证，待非作者评审与集成；提交/PR 状态以 Git 为准。

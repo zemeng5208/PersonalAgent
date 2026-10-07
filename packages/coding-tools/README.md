@@ -1,5 +1,7 @@
 # 编程工具：可信工作区能力（MOD-18）
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 `@personal-agent/coding-tools` 为 `huawei_ict_agentarts` Competition Profile 提供两个受限只读工具、一个须由可信宿主显式注册的固定命令工具，以及独立授权的补丁候选和原文件应用工具。它不接受自由 shell/argv，不自动把候选文件应用到原文件，不自动发布，也不提供 Artifact/Evidence 服务。
 
 ## 当前增量：独占句柄内应用文本补丁

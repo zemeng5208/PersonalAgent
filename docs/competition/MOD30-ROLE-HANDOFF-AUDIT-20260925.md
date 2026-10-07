@@ -1,5 +1,7 @@
 # MOD-30：已发布控制器的角色与交接结构核对
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 Profile：`huawei_ict_agentarts`。本记录只核对现有 AgentArts 多智能体应用
 `32d4d44c-eade-4f3f-8f76-209c74609e79` 的配置，不作为请求级三角色执行验收。
 

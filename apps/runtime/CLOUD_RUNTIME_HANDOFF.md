@@ -1,5 +1,7 @@
 # Cloud Runtime delivery
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 Baseline: P8 d2a23bea182a0a61104f601a6769d6ac16d7db5b, normally merged P8 9a60ae5 and MCP/Skills PR269 fe0666021cae04b3873393cca25b9b0b32713ec5. Original cloud WIP remains in the local Git stash; no hard reset or force push.
 
 Local continuation of the same Draft #273: source ef4c5e29e4fe2c9f76e9dd169be9acb9329a273f normally merged into the original model-config worktree, then PR269 cbc3af583c546e718ce45fadd0a2cf0e53ffc4cc and PR270 1655275f07dd4e89287c511e3b26d961e48bebb9. The interrupted cloud task remains idle. No changes to the knowledge/learning author's source beyond consuming those exact commits.

@@ -1,5 +1,7 @@
 # MOD-16-WINDOWS-EXECUTION-01：受限记事本操作核心
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`；MOD-16、PA-016；负责人 zemeng；非作者评审 goo122。
 - 原核心基线：`main@4efa7f60feaaa007d73c80e7d90091e0caab3bc7`；本次诊断分支 `codex/zemeng/mod16-windows-manual-probe`（`#120`，起点 `f962e4d`，已含 `#117` 的写前时序修复）。
 - 文件边界：`apps/windows-host/**` 与本文；MOD-17 的 `packages/windows-client/**` 和历史 `MOD-16-SYSTEM-OBSERVATION-01.md` 均不改。

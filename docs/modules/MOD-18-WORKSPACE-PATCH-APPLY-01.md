@@ -1,5 +1,7 @@
 # MOD-18-WORKSPACE-PATCH-APPLY-01
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`；负责人 `zemeng`；状态 `review`。PR #147 已合入 main（`5816785`），合并前未取得非作者批准评审。
 - 基线：已合并的 #133 stage 工作包；本增量仅涉及 `packages/coding-tools/**` 和本记录。不改公共 Schema、Runtime/Policy、根 lock、Desktop 或业务连接器。
 

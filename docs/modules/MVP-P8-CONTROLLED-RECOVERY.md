@@ -1,5 +1,7 @@
 # P8：审批恢复与受信装配
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 Profile：`huawei_ict_agentarts`。P8 集成树 `mvp-assembly`，分支 `codex/zemeng/p8-mvp-final-integration`；状态 review，整体 MVP 尚未验收。
 
 ## 共享接线

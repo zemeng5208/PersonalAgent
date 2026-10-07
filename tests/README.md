@@ -1,5 +1,7 @@
 # 跨模块测试
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 模块单元测试放在各自 workspace 的 `test/`。这里只保存必须跨模块验证的测试：
 
 - `architecture/`：目录、依赖方向、公共导出和循环依赖检查。

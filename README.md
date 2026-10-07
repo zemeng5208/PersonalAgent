@@ -6,23 +6,25 @@
 
 ## 当前状态
 
-截至 2026-09-09，MOD-01/02/03/25 及 MOD-04/05 的离线增量已集成；PR #31 已加入 Runtime-owned 会话上下文，PR #34 已完成非作者评审、CI 和合并，Desktop 已通过公开 task/conversation/approval 查询恢复状态。只冻结 [Core Runtime Profile 1](docs/interfaces/CURRENT_INTERFACE_CATALOG.md) 的消息、任务、会话和审批只读查询子集。
+截至 2026-10-07，本地已同步到 `main@4d15f063`，该提交的 Foundation CI（run 37563282512）已读回成功。项目主要负责人为 **zemeng / zemeng5208**，用户继续负责核心与 AgentArts，goo122 和 Potatos 各自独立负责基础与业务主线；[模块分工](docs/MODULE_ASSIGNMENTS.md) 是负责人和文件所有权的唯一登记。
 
-整套协议、模型工具调用和 Agent 编排**尚未冻结**。盘古 Provider 当前仅声明非流式文本能力；原生 function calling 未提供，文字 JSON 工具提案没有真实盘古→审批→工具→读回闭环证据。AgentArts、记忆、知识、MCP、Skills、语音、Windows Host 等缺少生产提供者的能力统一登记为 unavailable。Competition Profile 已完成架构确认，但尚无 AgentArts Adapter、云端部署、API trace 或完整生产闭环。
+主分支已包含 AgentArts Adapter、Competition Runtime/审批工具循环、Desktop、语音与业务连接器，以及知识/记忆、认知和 DEV-WORKFLOWS 增量。#294 的撤回记忆管理与恢复、#297 的开发工作流修复均已合并；这纠正了旧文档中“尚无 Adapter”和“未合并”的描述。代码存在、CI 成功与真实功能验收分别记录。
+
+整体 MVP 仍为 `in_progress`。真实 Competition 全链、原生 Desktop/Live、目标账号、设备及恢复读回按各自证据推进；本轮仅做同步、文档和清理，没有重跑真实模型或桌面验收。开放 PR 为 #298（CI 增量）与 #291（明确不合并的验收草稿）。最新任务状态见 [ROADMAP](docs/ROADMAP.md)，清理备份与继续入口见 [接手记录](docs/PROJECT_TAKEOVER_20261007.md)。
 
 ## 文档入口
 
 - [华为 ICT AgentArts Competition Profile](docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)：参赛主路径、比赛与可选 Local 边界、实施顺序和验收矩阵。
 - [产品需求 PRD](docs/PRD.md)：产品范围、需求编号、优先级和验收条件。
 - [架构设计](docs/ARCHITECTURE.md)：模块、进程、协议、数据与技术验证项。
-- [模块分工](docs/MODULE_ASSIGNMENTS.md)：32 个主模块及 MOD-04A/04B 独占工作面；`Potatos498` 的 MOD-20～26 保持不变。
+- [模块分工](docs/MODULE_ASSIGNMENTS.md)：主模块、DEV-WORKFLOWS 及独占工作面；三人各自负责完整交付，同行 PR 评审不作为默认等待门槛。
 - [公共开发协议](docs/DEVELOPMENT_PROTOCOL.md)：`goo122` 维护的任务、事件、工具、连接器契约与联调交付要求。
 - [当前接口目录](docs/interfaces/CURRENT_INTERFACE_CATALOG.md)：逐接口冻结状态、生产可用性、证据和未提供能力。
 - [协作开发规范](CONTRIBUTING.md)：任务分配、分支、PR、评审和完成标准。
 - [开发计划与进度](docs/ROADMAP.md)：阶段门槛、首批工作包和当前状态。
 - [Agent 协作规则](AGENTS.md)：在本仓库工作的自动化开发者必须遵循的约束。
 
-阅读顺序：Competition Profile → PRD → 模块分工 → 当前接口目录 → 公共开发协议 → 架构 → 协作规范 → 开发计划。`goo122` 与 `zemeng` 从同一冻结接口提交使用 Fake 独立开发；`Potatos498` 保持原连接器分工。当前新增实现只面向 `huawei_ict_agentarts`；Local Profile 仅留存现有代码，除非产品负责人以后明确启用，否则不新增、不扩展、不作为当前验收对象。任何实现变更必须关联需求编号、profile 和验收证据。
+阅读顺序：Competition Profile → PRD → 模块分工 → 当前接口目录 → 公共开发协议 → 架构 → 协作规范 → 开发计划。`goo122` 与 `zemeng` 从同一冻结接口提交使用 Fake 独立开发；Potatos 独立交付业务连接器与业务接线，三人可按公开契约自行补齐 Fake 和必要集成。当前新增实现只面向 `huawei_ict_agentarts`；Local Profile 仅留存现有代码，除非产品负责人以后明确启用，否则不新增、不扩展、不作为当前验收对象。任何实现变更必须关联需求编号、profile 和验收证据。
 
 ## 开发入口
 

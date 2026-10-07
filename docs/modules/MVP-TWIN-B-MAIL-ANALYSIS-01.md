@@ -1,5 +1,7 @@
 # MVP-TWIN-B-MAIL-ANALYSIS-01：邮件分类到 AgentArts 的持久交接
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`；负责人 zemeng；状态：`review`，待主任务集成及非作者评审。
 - 工作树：`2972/PersonalAgent`；分支：`codex/mvp-twin-b-mail-analysis-outbox`；基线：`8df399b`。
 - 文件范围：Runtime Application 的 `inbox-triage.ts`、`mail-triage.ts` 及专属测试。本包不修改 Desktop、公共 wire Schema、连接器或 Runtime 任务库。

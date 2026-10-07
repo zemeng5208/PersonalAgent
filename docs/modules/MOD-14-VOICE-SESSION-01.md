@@ -1,5 +1,7 @@
 # MOD-14 VOICE-SESSION-01：语音会话最小生命周期
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - Profile：`huawei_ict_agentarts`（当前唯一实施路径；不扩展 `local`）
 - 模块 / 需求：MOD-14 / PA-007
 - 负责人：`zemeng`

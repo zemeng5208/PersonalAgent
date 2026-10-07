@@ -1,5 +1,7 @@
 # MOD-34 受控 Git 工具
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 生产入口 `packages/coding-tools/src/dev-workflows/git-tools.ts` 提供 `createGitTools`、`registerGitTools`、`readGitWorkspaceFingerprint`。组合入口负责公开导出和注入可信 Runtime receipt 查询。
 
 | 工具 | 输入 | 输出 | 授权 |

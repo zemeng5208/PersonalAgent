@@ -1,5 +1,7 @@
 # Huawei Cloud SIS adapter (MOD-14, Competition Profile)
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 Status: code-only, **unconfigured / untested / not accepted**. This adapter is a
 thin, opt-in implementation of the existing `SpeechRecognitionPort` and
 `SpeechOutputPort`. It does not change the default Unavailable provider or publish

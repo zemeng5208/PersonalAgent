@@ -1,5 +1,7 @@
 # ADR-0011：文字与原生 Live 共用任务执行体系
 
+> 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
+
 - 状态：accepted（产品负责人在 2026-09-27 当前任务直接授权）
 - 负责人：zemeng；范围：MOD-11/14，必要 ModelGateway 音频入口与装配
 
