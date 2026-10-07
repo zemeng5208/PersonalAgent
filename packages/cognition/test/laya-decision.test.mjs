@@ -43,6 +43,26 @@ test('suggestions retain source when distinct sources reuse one event ID', async
   ]);
 });
 
+test('model input mutation cannot rewrite the validated suggestion references', async () => {
+  const original = event();
+  const before = structuredClone(original);
+  const service = new ProactiveDecisionService({async choose(events) {
+    events[0].eventId = 'invented-event';
+    events[0].source = 'invented-source';
+    events[0].facts[0].id = 'invented-fact';
+    events[0].facts[0].revision = 99;
+    events[0].plan.revision = 99;
+    events[0].authorization.revision = 99;
+    events[0].goal.ref.revision = 99;
+    return [{intervention: 'REMIND', confidence: 0.9}];
+  }});
+  const [result] = await service.decide(request([original]));
+  assert.deepEqual(result, {eventId: before.eventId, source: before.source,
+    intervention: 'REMIND', confidence: 0.9, reason: 'model',
+    facts: before.facts, plan: before.plan, authorizationRevision: before.authorization.revision});
+  assert.deepEqual(original, before, 'the caller retains its original event');
+});
+
 test('uncalibrated suppression and action labels never become executable results', async () => {
   for (const intervention of ['IGNORE', 'MERGE', 'DEFER', 'EXECUTE']) {
     const service = new ProactiveDecisionService({async choose() { return [{intervention, confidence: 0.99}]; }});
@@ -63,6 +83,19 @@ test('low confidence and malformed model response escalate without leaking model
   assert.deepEqual([failed.intervention, failed.reason, failed.confidence],
     ['ESCALATE_AGENTARTS', 'model_unavailable', null]);
   assert.doesNotMatch(JSON.stringify(failed), /private provider message/);
+});
+
+test('a sparse model choice batch escalates every unique event without throwing', async () => {
+  const service = new ProactiveDecisionService({async choose() {
+    const choices = new Array(2);
+    choices[0] = {intervention: 'REMIND', confidence: 0.9};
+    return choices;
+  }});
+  const results = await service.decide(request([event(), event({eventId: 'change-2'})]));
+  assert.deepEqual(results.map(item => [item.intervention, item.reason, item.confidence]), [
+    ['ESCALATE_AGENTARTS', 'model_unavailable', null],
+    ['ESCALATE_AGENTARTS', 'model_unavailable', null],
+  ]);
 });
 
 test('deadline bounds even an uncooperative model, and caller cancellation stays distinct', async () => {

@@ -1,5 +1,6 @@
 import {DecisionError, INTERVENTIONS} from './proactive-decision.js';
 import type {DecisionEvent, DecisionPort, DecisionRef, DecisionSuggestion} from './proactive-decision.js';
+import {withCognitionDeadline} from './deadline.js';
 
 /** Structural view of Runtime's committed FactProjectionReceipt. No Runtime dependency. */
 export interface ProjectedFactDecisionInput {
@@ -147,7 +148,8 @@ export async function decideProjectedFactImpact(
     facts: event.facts.map(reference => ({...reference})),
     authorization: {...event.authorization},
   }));
-  const suggestions = await decision.decide({events: submittedEvents, deadline, signal});
+  const suggestions = await withCognitionDeadline({deadline, signal},
+    context => decision.decide({events: submittedEvents, ...context}));
   checkLifecycle(deadline, signal);
   return validatedSuggestions(suggestions, expectedEvents);
 }

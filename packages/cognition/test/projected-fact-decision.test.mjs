@@ -117,6 +117,34 @@ test('an ignored cancellation still prevents a late decision result from being r
   }}, request), {code: 'CANCELLED'});
 });
 
+test('uncooperative DecisionPorts still settle on cancellation and deadline', async () => {
+  for (const code of ['CANCELLED', 'TIMEOUT']) {
+    const controller = new AbortController();
+    const request = input();
+    request.signal = controller.signal;
+    if (code === 'TIMEOUT') request.deadline = new Date(Date.now() + 30).toISOString();
+    let portSignal;
+    let started;
+    const entered = new Promise(resolve => { started = resolve; });
+    const pending = decideProjectedFactImpact({decide({signal}) {
+      portSignal = signal;
+      started();
+      return new Promise(() => {});
+    }}, request);
+    await entered;
+    if (code === 'CANCELLED') controller.abort();
+    let guard;
+    try {
+      const result = await Promise.race([
+        pending.then(() => 'unexpected success', error => error.code),
+        new Promise(resolve => { guard = setTimeout(() => resolve('unsettled'), 300); }),
+      ]);
+      assert.equal(result, code, 'the adapter must finish even if its injected port ignores abort');
+      assert.equal(portSignal.aborted, true, 'the deadline must also reach the injected port');
+    } finally { clearTimeout(guard); }
+  }
+});
+
 test('port mutation cannot rewrite the private Fact, source or authorization binding', async () => {
   const mutate = [
     event => { event.source = 'forged-source'; },
