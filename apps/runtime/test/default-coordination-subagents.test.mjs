@@ -1,8 +1,12 @@
 import test from 'node:test';
+import {mkdtemp,rm} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
 import {Client} from '@personal-agent/client';
 import {FakeCoordinationPort} from '@personal-agent/coordination/testing';
-import {createRuntimeApplication,createDesktopSubagentDispatchTool,SUBAGENT_DISPATCH_TOOL_NAME,SUBAGENT_DISPATCH_TOOL_VERSION} from '../dist/application.js';
+import {createAgentArtsRuntimeApplication,createRuntimeApplication,createDesktopSubagentDispatchTool,SUBAGENT_DISPATCH_TOOL_NAME,SUBAGENT_DISPATCH_TOOL_VERSION} from '../dist/application.js';
 const read={name:'fixture.default-child-read',version:'1.0.0',sideEffect:'read',requiredScopes:['fixture:read'],
   requiresPresence:false,recoverySupport:true,idempotencySupport:true,inputSchema:{type:'object',required:['value'],properties:{value:{type:'string'}},additionalProperties:false},outputSchema:{type:'object'}};
 async function until(predicate){for(let n=0;n<200;n++){if(predicate())return;await new Promise(r=>setTimeout(r,5));}throw Error('state did not arrive');}
@@ -43,4 +47,105 @@ test('default children reuse Competition worker and original approvals without a
   assert.equal(app.runtime.readToolExecutions(child.taskId)[0].state,'confirmed');
   assert.ok(app.runtime.getTask(parent.taskId).evidenceRefs.includes(approval.approvalId));
   assert.throws(()=>app.resumeTask(child.taskId),{code:'REVISION_CONFLICT'});assert.equal(reads,1);
+});
+
+
+test('persistent default children retain the original AgentArts candidate protocol across approval restarts',async t=>{
+  for(const [initial,restored] of [[undefined,undefined],['1.0','1.0'],[undefined,'1.0'],['1.0',undefined]]) {
+    await t.test(`${initial??'disabled'} -> ${restored??'disabled'}`,async()=>{
+      const directory=await mkdtemp(path.join(os.tmpdir(),'pa-child-config-'));
+      let app,reads=0;
+      const sends=[];
+      const open=repairCandidateVersion=>{
+        const dispatch=createDesktopSubagentDispatchTool({getRuntime:()=>app.runtime,getTools:()=>app.tools,
+          runDefaultWorker:(subtask,worker,tools)=>app.runDefaultSubagentWorker(subtask,worker,tools)});
+        return createAgentArtsRuntimeApplication({path:path.join(directory,'runtime.sqlite'),
+          gatewayUrl:'https://agentarts.example.test',runtimeName:'binding',responseMode:'tool-proposal-json',
+          ...(repairCandidateVersion===undefined?{}:{repairCandidateVersion}),
+          authorizationProvider:{read:async()=>'Bearer synthetic'},
+          tools:[dispatch,{descriptor:read,execute:async input=>{reads++;return input;}}],
+          automaticTools:[{toolName:SUBAGENT_DISPATCH_TOOL_NAME,toolVersion:SUBAGENT_DISPATCH_TOOL_VERSION}],
+          competitionToolExports:[
+            {toolName:SUBAGENT_DISPATCH_TOOL_NAME,toolVersion:SUBAGENT_DISPATCH_TOOL_VERSION,
+              exportPolicyVersion:'fixture-v1',accepts:()=>true,project:({result})=>({succeeded:result.succeeded})},
+            {toolName:read.name,toolVersion:read.version,exportPolicyVersion:'fixture-v1',
+              accepts:()=>true,project:({result})=>result},
+          ],
+          beforeCompetitionSend:request=>sends.push({taskId:request.taskId,continuation:request.continuation}),
+          fetchImpl:async(_url,init)=>{
+            const body=JSON.parse(init.body);
+            let query;try {query=JSON.parse(body.query);}catch {query={goal:body.query};}
+            const continuation=query.continuation||query.goal?.startsWith('以下本地已确认');
+            const result=continuation?{kind:'text',text:'Synthetic done'}
+              :query.goal.includes('original child')?{kind:'tool_proposal',proposalId:'original-child-read',
+                toolName:read.name,toolVersion:read.version,arguments:{value:'public'}}
+              :{kind:'tool_proposal',proposalId:'original-dispatch',toolName:SUBAGENT_DISPATCH_TOOL_NAME,
+                toolVersion:SUBAGENT_DISPATCH_TOOL_VERSION,
+                arguments:{subtasks:[{subtaskId:'one',role:'researcher',goal:'original child'}]}};
+            return new Response(JSON.stringify({event:'message',data:{text:JSON.stringify(result),index:0}}),
+              {headers:{'content-type':'application/json'}});
+          },
+        });
+      };
+      try {
+        app=open(initial);
+        const client=new Client(app);await client.connect();
+        const parent=await client.call('task.submit',{goal:'Delegate one role',conversationId:'binding'},
+          {idempotencyKey:'binding'});
+        await until(()=>app.runtime.findTaskByIdempotencyKey(`subagent-dispatch-${parent.taskId}-one`)
+          &&app.activeTaskCount===0);
+        const child=app.runtime.findTaskByIdempotencyKey(`subagent-dispatch-${parent.taskId}-one`);
+        assert.equal(child.state,'waiting_approval');assert.equal(reads,0);
+        const originalBinding=app.runtime.loadCheckpoint(child.taskId,'subtask-coordination-binding');
+        const originalLoop=app.runtime.loadCheckpoint(child.taskId,'competition-loop');
+        const originalDeadline=app.runtime.loadCheckpoint(child.taskId,'application-deadline');
+        const oldRef=app.coordinationConfigurationRef;
+        if(initial===undefined)assert.equal(oldRef,createHash('sha256').update(JSON.stringify({
+          gatewayUrl:'https://agentarts.example.test',runtimeName:'binding',invokeMode:'published',
+          workflowGoalInput:null,responseMode:'tool-proposal-json',initialRequestMode:'goal',
+        })).digest('hex'));
+        app.close();app=open(restored);
+        const restoredClient=new Client(app);await restoredClient.connect();
+        const approval=app.runtime.getApproval(`competition-tool-${child.taskId}-1`);
+        await restoredClient.call('authorization.respond',{approvalId:approval.approvalId,
+          expectedRevision:approval.revision,decision:'allow_once'});
+        await until(()=>app.activeTaskCount===0);
+        const outcome=app.runtime.getTask(child.taskId);
+        assert.deepEqual(app.runtime.loadCheckpoint(child.taskId,'subtask-coordination-binding'),originalBinding);
+        assert.equal(app.runtime.loadCheckpoint(child.taskId,'application-deadline'),originalDeadline);
+        if(initial!==restored){
+          assert.equal(outcome.state,'failed');assert.equal(outcome.error.code,'REVISION_CONFLICT');
+          assert.notEqual(app.coordinationConfigurationRef,oldRef);
+          assert.equal(reads,0);assert.deepEqual(app.runtime.readToolExecutions(child.taskId),[]);
+          assert.deepEqual(app.runtime.loadCheckpoint(child.taskId,'competition-loop'),originalLoop);
+          assert.equal(sends.filter(send=>send.taskId===child.taskId).length,1);
+        }else{
+          assert.equal(app.coordinationConfigurationRef,oldRef);
+          assert.equal(outcome.state,'succeeded');assert.equal(reads,1);
+          const execution=app.runtime.readToolExecutions(child.taskId);
+          assert.equal(execution.length,1);assert.equal(execution[0].evidenceId,approval.approvalId);
+          assert.equal(execution[0].state,'confirmed');
+          assert.equal(sends.filter(send=>send.taskId===child.taskId&&send.continuation).length,1);
+        }
+      }finally{app?.close();await rm(directory,{recursive:true,force:true});}
+    });
+  }
+});
+
+test('AgentArts factory snapshots the candidate mode once for the adapter and child binding',()=>{
+  let reads=0,fetches=0;
+  const app=createAgentArtsRuntimeApplication({path:':memory:',
+    gatewayUrl:'https://agentarts.example.test',runtimeName:'binding',responseMode:'tool-proposal-json',
+    get repairCandidateVersion(){reads++;return reads===1?'1.0':undefined;},
+    authorizationProvider:{read:async()=>'Bearer synthetic'},
+    fetchImpl:async()=>{fetches++;throw Error('No request expected');},
+  });
+  try{
+    assert.equal(reads,1);
+    assert.equal(app.coordinationConfigurationRef,createHash('sha256').update(JSON.stringify({
+      gatewayUrl:'https://agentarts.example.test',runtimeName:'binding',invokeMode:'published',
+      workflowGoalInput:null,responseMode:'tool-proposal-json',initialRequestMode:'goal',repairCandidateVersion:'1.0',
+    })).digest('hex'));
+    assert.equal(fetches,0);
+  }finally{app.close();}
 });

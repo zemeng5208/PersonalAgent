@@ -43,6 +43,7 @@ export function createAgentArtsRuntimeApplication(
     workflowGoalInput,
     responseMode,
     initialRequestMode,
+    repairCandidateVersion,
     authorizationProvider,
     fetchImpl,
     onDiagnostic,
@@ -68,7 +69,7 @@ export function createAgentArtsRuntimeApplication(
       ...(workflowGoalInput === undefined ? {} : {workflowGoalInput}),
       ...(responseMode === undefined ? {} : {responseMode}),
       ...(initialRequestMode === undefined ? {} : {initialRequestMode}),
-      ...(options.repairCandidateVersion === undefined ? {} : {repairCandidateVersion: options.repairCandidateVersion}),
+      ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
     },
     authorizationProvider,
     fetchImpl,
@@ -86,10 +87,12 @@ export function createAgentArtsRuntimeApplication(
   );
   application = createRuntimeApplication({
     ...runtimeOptions,
+    ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion}),
     profile: 'huawei_ict_agentarts',
     coordinationBinding:createHash('sha256').update(JSON.stringify({gatewayUrl,runtimeName,
       invokeMode:invokeMode??'published',workflowGoalInput:workflowGoalInput??null,
-      responseMode:responseMode??'text',initialRequestMode:initialRequestMode??'goal'})).digest('hex'),
+      responseMode:responseMode??'text',initialRequestMode:initialRequestMode??'goal',
+      ...(repairCandidateVersion === undefined ? {} : {repairCandidateVersion})})).digest('hex'),
     coordination: new CompetitionCoordinator(cloud),
   });
   return application;
