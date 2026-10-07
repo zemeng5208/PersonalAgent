@@ -143,8 +143,7 @@ export function mountProactiveControls(container, invoke, {settings = false} = {
       } catch (error) {feedback.textContent = error.message;}
       finally {
         saving = false;
-        for(const name of fields) form.elements[name].disabled=!current;
-        form.querySelector('button').disabled = !current;
+        render(current);
       }
     });
   }

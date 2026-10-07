@@ -76,6 +76,14 @@ class Element {
       } else {const node=new Element('#text');node.textContent=token;stack.at(-1).append(node);}
     }
   }
+  insertAdjacentHTML(position,value) {
+    assert.equal(position,'beforebegin');
+    const fragment=new Element('fragment');fragment.innerHTML=value;
+    const index=this.parentNode.children.indexOf(this);
+    for(const node of fragment.children)node.parentNode=this.parentNode;
+    this.parentNode.children.splice(index,0,...fragment.children);
+  }
+  get elements() {return Object.fromEntries(this.querySelectorAll('input').map(node=>[node.attributes.name,node]));}
   addEventListener(name,handler) {(this.listeners[name]??=[]).push(handler);}
   async emit(name,event) {await Promise.all((this.listeners[name]??[]).map(handler=>handler(event)));}
   matches(selector) {
@@ -104,6 +112,58 @@ function controls(t,invoke) {
   const status=()=>list.querySelector('.cognition-status')?.textContent;
   return {render,button,click,status,list};
 }
+
+function settingControls(t,invoke) {
+  const original=globalThis.document;t.after(()=>{globalThis.document=original;});
+  globalThis.document={createElement:tag=>new Element(tag)};
+  const container=new Element('main'),control=mountProactiveControls(container,invoke,{settings:true});
+  const form=container.querySelector('form');
+  return {form,render:control.render,feedback:()=>container.querySelector('[data-feedback]').textContent,
+    submit:()=>form.emit('submit',{preventDefault(){}})};
+}
+
+test('settings save completion reads actual ProactiveHost lease expiry published before its older reply', async t => {
+  const {mkdir,mkdtemp,rm}=await import('node:fs/promises');
+  const {fileURLToPath}=await import('node:url');
+  const {createDesktopProactiveHost}=await import('../electron/proactive-host.js');
+  const directory=fileURLToPath(new URL('../../../.cache/proactive-settings-expiry/',import.meta.url));
+  await mkdir(directory,{recursive:true});const userData=await mkdtemp(directory+'case-');
+  let now=Date.parse('2026-10-07T00:00:00.000Z'),ui,calls=0,stops=0;
+  const host=createDesktopProactiveHost({namespace:'synthetic-settings-expiry',userData,
+    application:{profile:'huawei_ict_agentarts',createCompetitionFactHost:()=>({close(){}}),
+      startSystemObservationSession:input=>({sessionId:'synthetic-observation-session',expiresAt:input.expiresAt}),
+      stopSystemObservationSession:()=>{stops++;}},client:{},now:()=>now,onUpdate:()=>ui?.render(host.snapshot())});
+  t.after(async()=>{host.close();await rm(userData,{recursive:true,force:true});});
+  await host.configure({enabled:true,cloudAnalysis:false});
+  ui=settingControls(t,async(action,payload)=>{
+    assert.equal(action,'proactive.configure');calls++;
+    const older=await host.configure(payload);
+    now+=8*60*60_000;await host.tick();
+    assert.equal(older.enabled,true);assert.equal(host.snapshot().enabled,false);
+    return older;
+  });
+  ui.render(host.snapshot());assert.equal(ui.form.elements.enabled.checked,true);
+  ui.form.elements.cloudAnalysis.checked=true;await ui.form.emit('change',{});
+  await ui.submit();
+  assert.equal(ui.form.elements.enabled.checked,false);assert.equal(ui.form.elements.cloudAnalysis.checked,false);
+  assert.equal(ui.form.querySelector('button').disabled,false);assert.equal(calls,1);assert.equal(stops,1);
+  assert.match(ui.feedback(),/设置已保存/);
+});
+
+test('settings failed save preserves the dirty form draft while enabling controls after a publication', async t => {
+  const reply=deferred();let calls=0;
+  const ui=settingControls(t,()=>{calls++;return reply.promise;});
+  const snapshot={suggestions:[],enabled:false,cloudAnalysis:false,cognition:{enabled:false,cloudAllowed:false,reviews:[]}};
+  ui.render(snapshot);
+  for(const field of Object.values(ui.form.elements))field.checked=true;
+  await ui.form.emit('change',{});const work=ui.submit();
+  ui.render(snapshot);reply.reject(Error('Synthetic rejected configuration'));await work;
+  for(const field of Object.values(ui.form.elements)) {assert.equal(field.checked,true);assert.equal(field.disabled,false);}
+  assert.equal(ui.form.querySelector('button').disabled,false);assert.equal(calls,1);
+  assert.match(ui.feedback(),/Synthetic rejected configuration/);
+  ui.render(snapshot);
+  for(const field of Object.values(ui.form.elements))assert.equal(field.checked,true);
+});
 
 async function actualCognitionHost(t,onUpdate) {
   const {createDesktopGoalCognitionHost}=await import('../electron/goal-cognition-host.js');
