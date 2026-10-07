@@ -88,7 +88,7 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
     if (snapshot.revision!==review.graphRevision) return;
     const strategies={plan:'目标已登记；请制定第一步计划、所需工具与待确认事项，尚未创建 Plan 或执行目标',
       recheck:'先复核变化来源与依赖，再决定是否调整计划',
-      defer:'保留当前计划，安排后续复核，不执行已经失效的步骤',
+      defer:review.subjectGoal?'暂缓首次规划，安排后续复核，不执行目标':'保留当前计划，安排后续复核，不执行已经失效的步骤',
       revise:'评估最小影响范围，并按新事实修订相关计划的内容'};
     const needsMachineReview=machineReview(review);
     const strategy=needsMachineReview?'Laya 尚不确定，请复核当前变化与可选方案，再给出有依据的计划建议':strategies[review.selectedOption.id];
@@ -400,7 +400,7 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
       const graphRevision=store.read().revision;
       return {enabled,cloudAllowed,status,reason,reviews:[...reviews.values()].map(value=>{
       const r = value.review;
-      const trigger = r?.subjectGoal ? `新登记目标：${r.subjectGoal.id}` :
+      const trigger = r?.subjectGoal ? `${r.subjectGoal.revision>1?'待首次规划目标':'新登记目标'}：${r.subjectGoal.id}` :
         (Array.isArray(r?.affected) && r.affected.length > 0) ? r.affected.map(a => a.causes?.map(c => `依赖 ${c.reference.id} ${c.reason === 'superseded' ? '版本已更新' : c.reason === 'withdrawn' ? '已撤回' : c.reason === 'not_effective' ? '当前不在有效期内' : '状态变化'}`).join(', ') || a.node?.summary || a.node?.id).filter(Boolean).join('；') :
         '事实或目标变更';
       const choice = r?.selectedOption ? `${r.selectedOption.id} · ${r.selectedOption.description}` :
