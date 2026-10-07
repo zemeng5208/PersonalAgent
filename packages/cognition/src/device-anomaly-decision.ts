@@ -409,6 +409,14 @@ export class DeviceAnomalyDecisionService {
           // Persist intent before delivery. A crash or final checkpoint failure
           // retains an unknown result that requires host readback, never resend.
           await this.save();
+          if (signal.aborted || this.now() >= Date.parse(deadline)) {
+            // This intent was created above and delivery has not been attempted.
+            if (state.pendingDelivery?.id === deliveryId) state.pendingDelivery = undefined;
+            return {receiptId: deliveryId, source: sample.source, status: 'monitoring',
+              isAlertActive: state.isAlertActive, consecutiveElevatedCount: state.consecutiveElevatedCount,
+              sample, selection, selectedCandidate, candidates, notificationDelivered: false,
+              safeAdvice: '本次请求已取消或到期，通知未投递，继续监测且未锁定冷却窗口'};
+          }
           try {
             const deliveryResult = await this.notificationPort.sendAdvisoryNotification({
               id: deliveryId,

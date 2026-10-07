@@ -78,6 +78,50 @@ test('uncooperative device choices honor cancellation and deadline without block
   }
 });
 
+test('cancellation or deadline expiry during durable intent save prevents notification and preserves recovery', async () => {
+  for (const mode of ['cancelled', 'deadline']) {
+    let saved, saves = 0, deliveries = 0, entered, release, firstIntent, clock = Date.now();
+    const started = new Promise(resolve => {entered = resolve;});
+    const waiting = new Promise(resolve => {release = resolve;});
+    const checkpoint = {load: () => saved, async save(value) {
+      if (++saves === 1) {firstIntent = structuredClone(value); entered(); await waiting;}
+      saved = structuredClone(value);
+    }};
+    const inference = createMockLayaChoiceInference(), controller = new AbortController();
+    const options = {checkpoint, sustainedSampleCount: 1, now: () => clock,
+      notificationPort: {sendAdvisoryNotification: () => {deliveries++; return {delivered: true};}}};
+    const service = new DeviceAnomalyDecisionService(inference, options);
+    const sample = {source: 'synthetic', timestamp: new Date(clock).toISOString(), cpuPercent: 95,
+      memoryPercent: 50, samplingIntervalMs: 1000};
+    const request = {signal: controller.signal, deadline: new Date(clock + 60_000).toISOString()};
+    const pending = service.evaluateSample(sample, request);
+    await started;
+    assert.ok(firstIntent.sources.synthetic.pendingDelivery);
+    assert.equal(deliveries, 0);
+    if (mode === 'cancelled') controller.abort();
+    else clock = Date.parse(request.deadline);
+    release();
+    const receipt = await pending;
+    assert.equal(deliveries, 0, mode);
+    assert.equal(receipt.status, 'monitoring', mode);
+    assert.equal(receipt.notificationDelivered, false, mode);
+    assert.equal(saved.sources.synthetic.pendingDelivery, undefined);
+    assert.equal(saved.sources.synthetic.lastAlertTimestampMs, null);
+    const restarted = new DeviceAnomalyDecisionService(inference, options);
+    const feedback = (await restarted.readFeedback())[0];
+    assert.equal(feedback.pendingDeliveryId, undefined);
+    assert.equal(feedback.receipt.status, 'monitoring');
+    assert.equal((await restarted.evaluateSample(sample)).status, 'replayed');
+    assert.equal(deliveries, 0);
+    const fresh = {...sample, timestamp: new Date(Date.parse(sample.timestamp) + 1000).toISOString()};
+    assert.equal((await restarted.evaluateSample(fresh)).notificationDelivered, true);
+    assert.equal(deliveries, 1);
+    assert.equal((await restarted.evaluateSample({...sample,
+      timestamp: new Date(Date.parse(sample.timestamp) + 2000).toISOString()})).status, 'cooldown_suppressed');
+    assert.equal(deliveries, 1);
+  }
+});
+
 test('durable device feedback preserves cooldown and replay protection across restart', async () => {
   let saved;
   const checkpoint = {load: () => saved, save: value => {saved = structuredClone(value);}};
