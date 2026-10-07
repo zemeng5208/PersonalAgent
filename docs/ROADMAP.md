@@ -105,14 +105,14 @@
 | MOD-08 | M2 | in_progress | `goo122` / PR #93～#95、#97、#98 已经非作者评审并合并；只读端口、脱机及 Obsidian 只读适配器、Policy 检索工具和公开演示资料的 Competition Fake 审批链均完成离线验收。真实私人 Vault 授权/验收、生产注册、可安装插件、私人结果出机控制和 LLM Wiki 未完成 |
 | MOD-09 | M1.6/M4 | in_progress | `goo122` 保留在途范围，P7/P8 剩余按当前分工交接；#209/#210、经 #210 集成的 #211、#270/P8 生产桥及 #280 已进入 main，#284 的同步门禁修复及实际 Runtime 父/子副本回归经 #285 评审后进入 main。#289 已合并实际官方 MCP 与 SQLite 审批的学习验证/回滚/重启/删除验收和内部错误码失败持久化修复。#294 撤回后管理及删除恢复已合并到 main@4d15f063，当前主分支 Foundation 成功；新 head 的原生交互与真实来源验收仍须分别取得回执。真实来源具体摘要确认及持久生命周期、Electron 原生交互、完整 parent→child 许可与云消费仍待验收；详见 [收口验收矩阵](modules/MOD-09-PA020-MVP-PRODUCTION.md#2026-10-06-收口验收矩阵)；不能将本地通过记为整个模块 done |
 | MOD-10 | M4 后研究，无交付日期承诺 | todo | 未启动 |
-| MOD-11 | M1 | in_progress | `zemeng` / PR #54 已进入 main 并修复取消受理；转写任务消费 #75 仅合并到语音堆叠分支，DPI/透明命中及比赛实机验收仍未完成 |
-| MOD-12 | M1 | in_progress | `zemeng` / 文字交互、会话恢复、状态展示、取消和大工作区可用；真实 AgentArts 对话、工具回传与语音组合尚未完成端到端验收 |
-| MOD-13 | M1 基础页面、M2 配置闭环 | in_progress | `zemeng` / PR #77 增加过期审批 fail-closed；设置/连接器生产 API、只读 AgentArts 配置状态和完整授权管理仍未完成 |
-| MOD-14 | M1 基础、M2 验收 | in_progress | `zemeng` / 会话生命周期、唤醒组合、Runtime 转写消费与合成语音可行性探针已由 PR #61/#70/#75/#79 进入 main（#184 补 Huawei SIS 桌面接线；2026-09-30 台账核对）；真实麦克风采集、ASR/TTS 与 Desktop 组合验收未完成 |
-| MOD-15 | M4 后扩展 | in_progress | `zemeng` / 有界授权唤醒生命周期已由 PR #70 进入 main（#65 被其覆盖后关闭；2026-09-30 台账核对）；真实唤醒算法、设备、误触和回声测试未完成 |
+| MOD-11 | M1 | in_progress | `zemeng` / main@4b5ec614 已具受控 IPC、本机桌面设置/恢复及 SIS/Live 宿主消费；#75 已进入 main（非仅语音堆叠）。当前开发 #302 尚未合并；DPI/透明命中、真实崩溃和比赛实机验收仍未完成；[源码核对](../apps/desktop/README.md#2026-10-07-原功能源码核对) |
+| MOD-12 | M1 | in_progress | `zemeng` / main@4b5ec614 已具文字交互、公开会话/任务恢复、取消、大工作区及 Live 发言持久化与每会话偏好；显式会话管理 API 未公布，真实 AgentArts 对话、工具回传及语音组合仍待端到端验收；当前开发 #302 尚未合并 |
+| MOD-13 | M1 基础页面、M2 配置闭环 | in_progress | `zemeng` / main@4b5ec614 已具过期审批 fail-closed、脱敏历史分页、受信宿主任务级撤销读回、AgentArts 加密配置/撤销与启动状态消费；生产 settings/connector wire API、跨任务持续授权与真实云验收仍未完成；当前开发 #302 尚未合并 |
+| MOD-14 | M1 基础、M2 验收 | in_progress | `zemeng` / #61/#70/#75/#79 已进入 main；main@4b5ec614 已装配 Huawei SIS 听写/WAV 播放、授权 PCM 与原生 Live（听写不自动发送，停止不取消任务）。本机入口不等于 voice.start/stop wire 已公布；真实 SIS、设备、网络续连及 Desktop/AgentArts 联合验收仍待取得回执；当前开发 #302 尚未合并 |
+| MOD-15 | M4 后扩展 | in_progress | `zemeng` / main@4b5ec614 已纳入 voice-wake 根 build/锁文件，有界生命周期、共享 PCM 限定词源和 bindVoiceWake 已有源码；Desktop 尚无可信授权/检测器/显式启用组合，中文引擎、命中、误触、回声及物理释放仍待 Windows 实测；当前开发 #302 尚未合并 |
 | MOD-16 | 受限记事本执行与实机验收 | in_progress | `zemeng` / Host、Bridge、Runtime 导出与 Desktop 受信确认消费已实现；仅在 Windows 和固定 Host/Bridge 可用时装配受限记事本能力。历史实机证据仅到 `hello_ack`，完整 F9 确认、Policy 授权、UIA 写入及独立读回仍待现场验收，见 [模块记录](modules/MOD-16-WINDOWS-EXECUTION-01.md) |
 | MOD-17 | 只读系统观测与实机验收 | in_progress | `zemeng` / CPU、内存与 uptime 提供者、Runtime 工具注册和 Desktop 只读消费已实现；已有 Windows provider 直读证据，完整 Policy/ToolGateway、AgentArts 与 Desktop 实机闭环未验收，见 [模块记录](modules/MOD-17-COMPUTER-STATUS-01.md) |
-| MOD-18 | M4 | in_progress | `zemeng` / PR #83 已将受限 `workspace.list` 与 `workspace.read_text` 重建到 main；PR #84 已合入 Competition 审批消费链，证据仍仅为 provisional/mock；写入、命令和 Artifact 未交付 |
+| MOD-18 | M4 | in_progress | `zemeng` / main@4b5ec614 已有 WorkspaceConfigHost 条件注册受限读取/枚举、补丁预览/暂存/应用与固定命令及进程/任务绑定许可；“写入和命令未交付”为历史滞后。Artifact 服务、真实项目写入/命令、Windows 恢复与 AgentArts 联合验收未完成；当前开发 #302 尚未合并；[消费边界](modules/MOD-18-DESKTOP-WORKSPACE-SETTINGS.md) |
 | MOD-19 | M5 | todo | `zemeng` 已确定，未启动 |
 | MOD-20 | M2 本地提醒、M3 日历 | in_progress | `Potatos498` / PR #22 已合并（Fake 日历）；#216 合并 iCal 只读订阅源；MOD-20A 交付 CalDAV 只读提供商（ctag/etag 轮询＋time-range 查询＋TZID 换算，20/20 离线测试，见 2026-09-30 登记）；真实日历账号读回与授权写入仍未验收 |
 | MOD-21 | M3 | review | `Potatos498` / PR #28 已合并为 `42db8f51`；QQ 增量同步、安全发送语义和受控真实读回已有证据，完整账号生命周期与长期稳定性未验收 |

@@ -2,6 +2,22 @@
 
 > 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
 
+## 2026-10-07 原功能源码核对
+
+本节核对 `main@4b5ec614` 已有入口；当前开发 PR #302 尚未合并，其新增修复不能记为该基线已交付。下文旧日期的记录保留原验收范围，模块状态继续为 `in_progress`。
+
+| 功能 | 已有源码与消费入口 | 具体剩余边界 |
+| --- | --- | --- |
+| 桌面本机设置 | [DesktopHost](electron/desktop-host.js) 提供托盘及后台的“桌面设置与恢复”、偏好读取/保存、窗口恢复；[设置页](src/desktop-settings/settings.js) 和 [外壳](src/ui/desktop-shell.js) 消费本机偏好 | 这是 Desktop 本机设置，不是 Runtime `settings.get/update`；后者仅有 Schema/Fake，生产握手不公布且调用返回 `UNSUPPORTED_CAPABILITY`。物理多屏/DPI、真实崩溃及快捷键冲突仍须 Windows 验收 |
+| 授权管理 | [后台](src/features/admin/view.js) 消费待处理审批、公开 `approval.list` 的脱敏分页历史及一次性允许/拒绝；[受信宿主](electron/evidence-host.js) 逐次检查会话与任务归属，消费已有宿主元数据读取和授权撤销端口并核对 grant 删除读回 | 不提供原始参数或 Evidence 内容；宿主撤销不是新增 wire operation，也不代表跨任务持续授权或完整凭据管理已完成 |
+| AgentArts 配置与状态 | [后台模型页](src/features/admin/agentarts-model.js) 展示配置状态，并挂载 [配置控件](src/app/agentarts-controls.js)；[主进程配置](electron/agentarts-config.js) 负责 HTTPS 目的地校验、加密保存、恢复与撤销，配置路由消费 Runtime 启动结果并提示是否需重启 | `configured` 表示已持有配置，配置快照的 `runtimeReady` 只表示目的地可供本机装配；Runtime 启动成功、云端连接成功和真实任务完成分别核实。真实 deployment/version/trace、工具回传及云端结果仍待联合验收 |
+| 文字会话与 Live 历史 | [会话元数据](electron/conversations.js) 持久化面板/工作区任务归属、每会话思考/辅助模型偏好及 Live 发言；任务恢复使用公开 `task.list/conversation.list/approval.list`，状态仍由 Runtime 决定 | 当前使用 `desktop-panel`、`desktop-workspace` 两个固定会话；显式创建、重命名、归档、删除和重试关联尚无公开生产 API，不能由 UI 另建任务或会话系统 |
+| SIS 与 Live 语音组合 | 主进程 `initializeSisVoice()` 已把 Huawei SIS 端口、同一授权 PCM 源、[Desktop 语音消费](electron/voice-input.js) 及本机 WAV 播放装配；听写仅填输入框。Live 使用独立可信宿主和显式开启入口，业务工作仍经过 Runtime/Policy/ToolGateway | 本机 `voice.record.*`、播放及停止入口不等于生产 wire `voice.start/stop` 已公布；本轮未重新执行真实 SIS/IAM、麦克风、扬声器、Live 网络续连或 AgentArts 联合验收，也不撤回旧记录中用户确认听到 Live 的事实 |
+| 有界唤醒 | 根 build/锁文件已包含 `@personal-agent/voice-wake`；`@personal-agent/voice` 已公开 `bindVoiceWake`、共享 PCM 端口和 Windows System.Speech 限定词检测器 | Desktop 尚未注册 `WakeLifecycleController`、可信唤醒授权和检测器组合，也没有显式启用入口；需先按已公布端口确认组合方案。中文识别器可用性、实际命中、误触、回声和设备释放另需 Windows 实测 |
+| 受控编程工作区 | [WorkspaceConfigHost](electron/workspace-config-host.js) 与 Worktrees/环境控件已消费受限枚举、读取、补丁预览/暂存/条件应用及固定命令；许可绑定本次进程、任务 checkpoint 与代次，撤销不复活旧任务 | “写入和命令未交付”是历史状态；当前能力仍受权限、平台和已有文件限制。Artifact 服务、真实项目补丁/命令、Windows 恢复与 AgentArts 联合验收未完成，详见 [工作区设置边界](../../docs/modules/MOD-18-DESKTOP-WORKSPACE-SETTINGS.md) |
+
+本节通过源码、公开接口目录和入口归属核对更新；没有运行真实云服务或设备验收。生产设置/连接器 wire API、会话管理 API 和完整持续授权仍按 [接口目录](../../docs/interfaces/CURRENT_INTERFACE_CATALOG.md) 保持未公布边界。只读 AgentArts 状态页及唤醒首片的旧模块说明是历史增量记录，不能据其中“未接线/未纳入根 build”的旧结论否认当前已存在的代码，也不能据新代码宣布整个模块完成。
+
 ## 语音设备释放与配置编辑
 
 Live 输出和麦克风采集在确认音频上下文关闭（采集还需确认所有轨道停止）前保留当前设备归属；释放未确认时阻止新会话。单个清理步骤失败仍继续尝试释放其余资源，迟到回调和已注销页面的命令不会重新开启设备。停止语音继续与 Runtime 任务取消分离。
