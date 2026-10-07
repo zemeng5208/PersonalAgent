@@ -80,3 +80,45 @@ test('classifies failed calls separately from incorrect decisions', () => {
   assert.equal(report.comparisonReady, false);
   assert.throws(() => scoreAgentArtsRuns([{...input[0], errorCode: 'NONE'}]), TypeError);
 });
+
+test('empty event lists never count as routed and sparse event arrays are rejected', () => {
+  const input = records();
+  input[0].events = [];
+  const report = scoreAgentArtsRuns([input[0]]);
+  assert.equal(report.multiAgent.routed, 0);
+  assert.equal(report.multiAgent.routeConformance, 0);
+  assert.equal(report.multiAgent.handoffs, 0);
+  for (const events of [Array(6), Object.assign(Array(6), {0: 'impact:start'})]) {
+    assert.throws(() => scoreAgentArtsRuns([{...input[0], events}]),
+      {name: 'TypeError', message: 'Invalid AgentArts evaluation record'});
+  }
+});
+
+test('event array accessors and custom array methods cannot forge routing or run during scoring', () => {
+  let calls = 0;
+  const getter = [...route];
+  Object.defineProperty(getter, '0', {enumerable: true, get() { calls++; return 'impact:start'; }});
+  const every = [...route]; every.every = () => { calls++; return true; };
+  const some = [...route]; some.some = () => { calls++; return false; };
+  const symbol = [...route]; symbol[Symbol('extra')] = 'private';
+  const extra = [...route]; extra.extra = 'private';
+  const hidden = [...route]; Object.defineProperty(hidden, 'extra', {value: 'private'});
+  for (const events of [getter, every, some, symbol, extra, hidden]) {
+    assert.throws(() => scoreAgentArtsRuns([{...records()[0], events}]),
+      {name: 'TypeError', message: 'Invalid AgentArts evaluation record'});
+  }
+  assert.equal(calls, 0);
+});
+
+test('event snapshots preserve valid JSON lists and the original 24-event bound', () => {
+  const input = records();
+  const jsonInput = JSON.parse(JSON.stringify(input));
+  assert.deepEqual(scoreAgentArtsRuns(input), scoreAgentArtsRuns(jsonInput));
+  assert.equal(Object.isFrozen(input[0].events), false);
+  assert.deepEqual(input[0].events, route);
+  const repeated = Array(24).fill('impact:start');
+  const report = scoreAgentArtsRuns([{...input[0], events: repeated}]);
+  assert.equal(report.multiAgent.routed, 0);
+  assert.equal(report.multiAgent.handoffs, 0);
+  assert.throws(() => scoreAgentArtsRuns([{...input[0], events: [...repeated, 'impact:start']}]), TypeError);
+});
