@@ -29,6 +29,112 @@ function fixture(mixed=false) {
   return {namespace,store,input,event,receipts};
 }
 
+test('reviewed meeting receipts satisfy the actual lossless JSON checkpoint contract across reopen', async t => {
+  for (const mode of ['no_binding', 'kept', 'pending_review', 'optional_feedback', 'confirmed_repair']) await t.test(mode, async () => {
+    const f = fixture();
+    if (mode === 'kept') {
+      for (const [id, dependencies] of [['goal', [ref('meeting', 2)]], ['plan', [ref('goal', 2)]]]) {
+        const {revision, graphRevision, ...input} = f.store.read().history.findLast(node => node.id === id);
+        f.store.append(f.store.read().revision, {...input, dependencies});
+      }
+    }
+    const before = f.store.read();
+    let reviewed = 0, applied = 0, writes = 0, finished = mode !== 'pending_review', feedback;
+    const scope = selectMeetingRepairScope(before, at,
+      {...f.input, projection: {...f.input.projection, graphRevision: before.revision}}, ref('meeting', 2));
+    const options = buildMeetingRepairOptions(before, at,
+      {...f.input, projection: {...f.input.projection, graphRevision: before.revision}});
+    const review = {taskId: 'synthetic-json-review', graphNamespace: f.namespace, graphRevision: before.revision,
+      bindingVersion: 'existing-host', evaluatedAt: at, affected: scope.items, options,
+      action: mode === 'confirmed_repair' ? 'REVISE' : 'RECHECK',
+      ...(mode === 'confirmed_repair' ? {selectedOption: options.find(option => option.action === 'REVISE'),
+        selection: {state: 'selected', eligibleForRuntime: true, selected: ref('revise'), answerConfidence: 0.9}} : {})};
+    const result = () => ({task: {taskId: review.taskId, state: finished ? 'succeeded' : 'running'},
+      ...(finished ? {review} : {})});
+    const receiptStore = {loadReceipt: query => f.receipts.loadReceipt(query),
+      listReceipts: filter => f.receipts.listReceipts(filter), saveReceipt(record) {
+        const encoded = JSON.parse(JSON.stringify(record));
+        assert.deepEqual(record, encoded, 'actual host-state storage rejects lossy JSON');
+        f.receipts.saveReceipt(encoded);
+      }};
+    const reviewedRepair = {readCommittedProjection: async () => ({sourceRevision: '2', meetingFact: ref('meeting', 2), input: f.input}),
+      reviewCommittedFact: async () => {reviewed++; return result();}, readReview: result,
+      async applyDecision() {
+        applied++;
+        if (mode !== 'confirmed_repair') return {status: 'waiting_reconciliation'};
+        if (!feedback) {
+          const committed = f.store.appendBatch(before.revision, review.selectedOption.repair.changes.map(change => {
+            const {revision, graphRevision, ...input} = before.history.findLast(node => node.id === change.node.id);
+            return {...input, summary: change.summary, reason: change.reason, dependencies: change.dependencies};
+          }));
+          writes++;
+          feedback = {status: 'applied', taskId: 'synthetic-guarded-repair', executionVerified: true,
+            graphUpdateVerified: true, graphRevision: committed.revision,
+            updatedNodes: scope.items.map(item => ref(item.node.id, item.node.revision + 1)),
+            evidenceRefs: ['explicit-trusted-runtime-feedback-fixture']};
+        }
+        return feedback;
+      }};
+    const open = () => new ReviewedMeetingFactConsumer({store: f.store, receiptStore, namespace: f.namespace,
+      ...(mode === 'no_binding' ? {} : {reviewedRepair})});
+    const first = await open().processEvent(f.event);
+    if (mode === 'no_binding' || mode === 'kept') {
+      assert.equal(first.status, mode === 'kept' ? 'kept' : 'requires_review');
+      assert.equal(reviewed, 0); assert.equal(applied, 0);
+      assert.equal(first.retryableInference, mode === 'no_binding' ? true : undefined);
+    } else if (mode === 'pending_review') {
+      assert.equal(first.reviewTaskId, review.taskId); assert.equal(first.status, 'requires_review');
+      assert.equal(first.retryableInference, undefined); assert.equal(applied, 0);
+      finished = true;
+    } else assert.equal(first.status, mode === 'confirmed_repair' ? 'applied' : 'waiting_reconciliation');
+    const reopened = await open().processEvent(f.event);
+    if (mode === 'pending_review' || mode === 'optional_feedback') {
+      assert.equal(reopened.status, 'waiting_reconciliation');
+      assert.equal(Object.hasOwn(reopened, 'selection'), false);
+      assert.equal(Object.hasOwn(reopened, 'repairTaskId'), false);
+    }
+    assert.equal(reviewed, ['no_binding', 'kept'].includes(mode) ? 0 : 1);
+    assert.equal(writes, mode === 'confirmed_repair' ? 1 : 0);
+    if (mode !== 'no_binding') assert.equal(Object.hasOwn(reopened, 'retryableInference'), false);
+    if (mode === 'confirmed_repair') {
+      assert.equal(reopened.status, 'already_processed'); assert.equal(applied, 1);
+      assert.equal(f.store.read().revision, before.revision + scope.items.length);
+    } else assert.deepEqual(f.store.read(), before);
+    assert.equal(f.receipts.listReceipts().length, 1);
+    assert.deepEqual(reopened, JSON.parse(JSON.stringify(reopened)));
+  });
+});
+
+test('resumed legacy meeting receipts omit an absent repair task ID without losing their selection', async () => {
+  const f = fixture(), before = f.store.read();
+  const scope = selectMeetingRepairScope(before, at, f.input, ref('meeting', 2));
+  const review = {taskId: 'legacy-review', graphNamespace: f.namespace, graphRevision: before.revision,
+    bindingVersion: 'existing-host', evaluatedAt: at, affected: scope.items,
+    options: buildMeetingRepairOptions(before, at, f.input), action: 'RECHECK',
+    selection: {state: 'review', reason: 'uncertain', eligibleForRuntime: false, answerConfidence: 0.4}};
+  const result = {task: {taskId: review.taskId, state: 'succeeded'}, review};
+  let reviewed = 0;
+  const reviewedRepair = {readCommittedProjection: async () => ({sourceRevision: '2', meetingFact: ref('meeting', 2), input: f.input}),
+    reviewCommittedFact: async () => {reviewed++; return result;}, readReview: () => result,
+    applyDecision: async () => ({status: 'waiting_reconciliation'})};
+  await new ReviewedMeetingFactConsumer({store: f.store, receiptStore: f.receipts, namespace: f.namespace,
+    reviewedRepair}).processEvent(f.event);
+  // The existing file/JSON representation omits undefined optional properties.
+  const legacy = JSON.parse(JSON.stringify(f.receipts.listReceipts()[0]));
+  f.receipts.saveReceipt(legacy);
+  const receiptStore = {loadReceipt: query => f.receipts.loadReceipt(query), saveReceipt(record) {
+    assert.deepEqual(record, JSON.parse(JSON.stringify(record)), 'actual host-state storage rejects lossy JSON');
+    f.receipts.saveReceipt(record);
+  }};
+  const resumed = await new ReviewedMeetingFactConsumer({store: f.store, receiptStore, namespace: f.namespace,
+    reviewedRepair}).processEvent(f.event);
+  assert.equal(resumed.status, 'waiting_reconciliation');
+  assert.equal(Object.hasOwn(resumed, 'repairTaskId'), false);
+  assert.deepEqual(resumed.selection, review.selection);
+  assert.equal(reviewed, 1);
+  assert.deepEqual(f.store.read(), before);
+});
+
 test('queued reviewed proposal queries retain the submitted event identity', async () => {
   const f = fixture(), before = f.store.read();
   const consumer = new ReviewedMeetingFactConsumer({store: f.store, receiptStore: f.receipts, namespace: f.namespace});

@@ -147,6 +147,12 @@ export class ReviewedMeetingFactConsumer {
     return await this.options.receiptStore.listReceipts?.({...filter, namespace: this.options.namespace}) ?? [];
   }
   private async save(record: MeetingReceiptRecord, receipt: MeetingDecisionReceipt): Promise<MeetingDecisionReceipt> {
+    // These optional fields are cleared by the consumer, while the existing
+    // host-state checkpoint requires their absent representation in JSON.
+    receipt = {...receipt};
+    for (const key of ['retryableInference', 'selection', 'repairTaskId'] as const) {
+      if (receipt[key] === undefined) delete receipt[key];
+    }
     await this.options.receiptStore.saveReceipt({...record, status: receipt.status, receipt,
       updatedAt: new Date(this.now()).toISOString()});
     return receipt;
@@ -224,12 +230,11 @@ export class ReviewedMeetingFactConsumer {
     if (review.action === 'REVISE' && prepareReviewedRepair(current, event.detectedAt, review).kind !== 'prepared') {
       throw new CognitionError('NOT_APPLICABLE');
     }
-    const chosen: MeetingDecisionReceipt = {...receipt, reviewTaskId: review.taskId,
+    const chosen: MeetingDecisionReceipt = await this.save(record, {...receipt, reviewTaskId: review.taskId,
       retryableInference: undefined, selectedCandidateId: review.selectedOption?.id ?? 'recheck',
       selection: review.selection, confidence: review.selection?.answerConfidence ?? null,
       decisionAction: review.action, status: review.action === 'KEEP' ? 'kept' : 'proposal',
-      reason: '既有 Runtime 已记录 Laya 选择；等待 AgentArts 编排和受控工具结果'};
-    await this.save(record, chosen);
+      reason: '既有 Runtime 已记录 Laya 选择；等待 AgentArts 编排和受控工具结果'});
     // Current host authorization controls whether applyDecision can hand off/submit.
     // This call itself grants no authority, and uncertainty stays RECHECK.
     return this.refreshSerial({...record, receipt: chosen, status: chosen.status}, event);
