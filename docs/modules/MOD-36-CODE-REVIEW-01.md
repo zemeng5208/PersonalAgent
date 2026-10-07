@@ -2,7 +2,7 @@
 
 > 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
 
-- 负责人：zemeng；非作者验收：Potatos498；状态：review（已有外部定向验证与只读验收报告，完整写入闭环及协议兼容评审仍待完成）。
+- 当前负责人：goo122（2026-10-07 接续）；自行实现、接线、验证与自审，原 zemeng 作者及 Potatos 历史验收保留；状态：review（已有外部定向验证与只读验收报告，完整写入闭环及协议兼容评审仍待完成）。
 - Profile：2026-10-03 产品负责人授权的 Local DEV-WORKFLOWS 增量，不替代 Huawei ICT AgentArts Competition Profile 或计入比赛验收；实现为公开 ModelPort / Runtime-backed AgentToolPort 的消费流程，不新增模型、GitHub授权或工具注册体系。
 - 工厂：`createCodeReviewWorkflow({model,tools,maxDiffChars?,maxPages?,maxFindings?,maxTokens?})`；公开类型位于 `packages/cognition/src/dev-workflows/code-review-types.ts`，根组合负责公共导出、依赖与 Runtime 装配。
 

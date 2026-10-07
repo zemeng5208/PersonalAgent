@@ -7,9 +7,9 @@
 | 角色 | 责任 |
 | --- | --- |
 | 产品负责人（用户） | 已决定只实施 Huawei ICT AgentArts Competition Profile；Local Profile 可选保留；负责产品目标、关键交互、范围与重大取舍 |
-| `goo122` | 工程/存储、公共协议、TaskRuntime、ModelGateway/Provider、本地工具/MCP/Skills、知识与记忆 |
+| `goo122` | 工程/存储、公共协议、TaskRuntime、ModelGateway/Provider、本地工具/MCP/Skills、知识与记忆，以及 MOD-33/36/37 开发底座、预审和文档维护 |
 | `zemeng` / `zemeng5208` | 项目主要负责人；核心架构/认知、AgentArts/Competition、桌面/语音/Windows 与编码工具，独立交付本主线 |
-| `Potatos498` | MOD-20～26 业务连接器与消费接线、MOD-35 定位器，独立实现、验证和交付 |
+| `Potatos498` | MOD-20～26 业务连接器与消费接线、MOD-34/35/38 修复链、定位器与 Issue 工作流，独立实现、验证和交付 |
 | 模块负责人 | 在分配范围内实现、验证、维护文档、报告阻碍 |
 | 评审者 | 对照需求、接口、权限边界及验收证据审查 |
 

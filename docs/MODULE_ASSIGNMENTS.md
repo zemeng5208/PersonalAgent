@@ -1,6 +1,6 @@
 # 模块分工与独立交付清单
 
-版本：0.9 · 日期：2026-10-07 · 状态：只实施 Huawei ICT AgentArts Competition Profile；Local Profile 可选留存
+版本：1.0 · 日期：2026-10-07 · 状态：只实施 Huawei ICT AgentArts Competition Profile；Local Profile 可选留存
 
 本文件是未来工作负责人、文件所有权和交付边界的唯一登记处。[Competition Profile](competition/HUAWEI_ICT_AGENTARTS_PROFILE.md) 定义当前优先参赛路径，[PRD](PRD.md) 定义需求，[公共开发协议](DEVELOPMENT_PROTOCOL.md) 定义互通语义，[当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md) 决定接口是否冻结或可用，[ROADMAP](ROADMAP.md) 维护执行状态。
 
@@ -10,22 +10,26 @@
 
 | 负责人 | 独立主线 | 模块归属 | 可独立交付的结果 |
 | --- | --- | --- | --- |
-| **zemeng / zemeng5208** | **核心认知、AgentArts、桌面与受控执行** | MOD-04B、10～19、27～34、36、38；MOD-19 仍暂停 | CloudAgent/Competition 编排、Agent/Workflow/多 Agent、Goal/Fact/Decision/Plan、Laya/主动认知、Desktop/语音/Windows/编码工具、比赛评估与 Demo；含本主线所需消费接线 |
-| **goo122** | **基础运行时、协议与知识记忆** | MOD-01～03、04A、05～09、37；MOD-37 按原范围待开工 | TaskRuntime、ModelGateway/Provider、Policy/ToolGateway、存储/凭据、MCP/Skills、知识/Obsidian/记忆/学习、协议与工程底座；含本主线所需宿主和管理接线 |
-| **Potatos498** | **业务能力与业务侧用户流程** | MOD-20～26、35；未选社交平台仍不自动开工 | 待办/日历/邮件/订阅/通知/研究/天气/已选社交连接器、测试失败定位；含业务设置页、业务工具注册、业务结果展示与真实来源验收 |
+| **zemeng / zemeng5208** | **核心认知、AgentArts、桌面与受控执行** | MOD-04B、10～19、27～32；MOD-19 仍暂停 | CloudAgent/Competition 编排、Agent/Workflow/多 Agent、Goal/Fact/Decision/Plan、Laya/主动认知、Desktop/语音/Windows/编码工具、比赛评估与 Demo；含本主线所需消费接线 |
+| **goo122** | **基础运行时、协议与知识记忆** | MOD-01～03、04A、05～09、33、36、37；MOD-37 按原范围待开工 | TaskRuntime、ModelGateway/Provider、Policy/ToolGateway、存储/凭据、MCP/Skills、知识/Obsidian/记忆/学习、协议与工程底座、GitHub 连接器、代码预审与 API 文档维护；含本主线所需宿主和管理接线 |
+| **Potatos498** | **业务能力与业务侧用户流程** | MOD-20～26、34、35、38；未选社交平台仍不自动开工 | 待办/日历/邮件/订阅/通知/研究/天气/已选社交连接器、CI 修复、测试失败定位、Issue 分类与修复 PR；含业务设置页、业务工具注册、业务结果展示与真实来源验收 |
 
 zemeng 掌握核心产品架构、认知语义和 AgentArts 云端方向；另外两人可在其既定目标内直接完成普通实现与交付，无需先等 zemeng 分派下一步或批准 PR。历史作者、评审、证据和已集成成果保留原归属。
 
 ### 0.1 DEV-WORKFLOWS 归属
 
+按用户最新减负要求，六项由 goo122 与 Potatos498 各承担三项，zemeng 不再承担本组日常实现、返修或集中验收，继续负责核心认知、AgentArts 与桌面执行主线。两人的交付包含必要接线、自审和实际验收，不能把集成或验收默认交回 zemeng。
+
 | 模块 | 功能 | 负责人 | 独立交付边界 |
 | --- | --- | --- | --- |
-| MOD-33 | GitHub 连接器底座 | zemeng | 公开 GitHub 端口、Provider、Fake 和消费接入 |
-| MOD-34 | CI 失败修复 | zemeng | 模型归因、受控补丁/Git、Runtime 修复流程及验证 |
+| MOD-33 | GitHub 连接器底座 | goo122 | 公开 GitHub 端口、Provider、Fake 和消费接入 |
+| MOD-34 | CI 失败修复 | Potatos498 | 模型归因、受控补丁/Git、Runtime 修复流程及验证 |
 | MOD-35 | 测试失败定位 | Potatos498 | 解析器、定位报告、公开 exports、CLI/测试和 MOD-34 接入适配 |
-| MOD-36 | Code Review 预审 | zemeng | 模型预审、意见锚定和受控发表流程 |
+| MOD-36 | Code Review 预审 | goo122 | 模型预审、意见锚定和受控发表流程 |
 | MOD-37 | API 文档维护 | goo122 | 协议/exports 与文档一致性；当前仍为待开工规划 |
-| MOD-38 | Issue 分类与修复 PR | zemeng | 分类、受控标签写回和修复流程接入 |
+| MOD-38 | Issue 分类与修复 PR | Potatos498 | 分类、受控标签写回和修复流程接入 |
+
+主要维护文件：goo122 负责 `packages/connectors/github/`、`packages/cognition/src/dev-workflows/code-review*` 及 MOD-37 文档维护工作包；Potatos498 负责 `packages/coding-tools/src/dev-workflows/ci-fix*`、`git-tools*`、`packages/coding-tools/src/test-locate/` 和 `packages/cognition/src/dev-workflows/issue-triage*` 及对应测试。上述 cognition/dev-workflows 文件是模块归属的明确例外，核心 cognition/AgentArts 仍归 zemeng；共享 exports、`apps/runtime/src/dev-workflows-runtime.ts` 及 Desktop 接线由实际变更人随工作包完成，保持兼容并自行验证。
 
 DEV-WORKFLOWS 保留已授权的 Local Profile 增量范围。每个模块由自己的负责人验证和交付，不再要求 Potatos 集中验收其余两人的成果。
 
@@ -48,8 +52,8 @@ DEV-WORKFLOWS 保留已授权的 Local Profile 增量范围。每个模块由自
 | 主线 | 上游未就绪时 | 本人负责的验证 | 不需等待的事项 |
 | --- | --- | --- | --- |
 | zemeng 核心与 AgentArts | Fake CloudAgent/Memory/Tool/Runtime；固定契约与合成事实 | 编排、审批消费、认知与端口回归；有授权后做云端/桌面/设备真实读回 | goo122 的真实数据库与模型配置、Potatos 的真实账号、对方 PR 批准 |
-| goo122 基础运行时与知识记忆 | FakeCoordination、固定来源与测试 Vault、显式模型/工具替身 | 状态、持久化、迁移、取消/恢复、权限及公开消费契约 | AgentArts 控制台和部署、真实 Desktop、zemeng 的审批 |
-| Potatos 业务能力与定位器 | FakeClock/Storage/ToolHost、固定 Provider 响应和测试日志 | 业务读写/去重/时区/失败语义、定位器、业务注册与展示；有授权后做真实来源读回 | 核心 Agent 完成、云端账号、goo122 的专属集成 PR |
+| goo122 基础运行时、知识记忆与开发底座 | FakeCoordination、固定来源与测试 Vault、显式模型/工具替身 | 状态、持久化、迁移、取消/恢复、权限及公开消费契约；GitHub Provider、代码预审与文档一致性 | AgentArts 控制台和部署、真实 Desktop、zemeng 的审批 |
+| Potatos 业务能力与开发修复链 | FakeClock/Storage/ToolHost、固定 Provider 响应和测试日志 | 业务读写/去重/时区/失败语义、定位器、CI 修复、Issue 分类与修复 PR、业务注册与展示；有授权后做真实来源读回 | 核心 Agent 完成、云端账号、goo122 的专属集成 PR |
 
 人员归属是长期维护责任，不是跨目录修复的阻断权。已有实现优先复用；必要的小范围跨模块接线由提出需求的人随工作包完成，保持公开依赖方向和单一契约来源。
 

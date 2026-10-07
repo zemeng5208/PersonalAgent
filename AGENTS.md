@@ -31,9 +31,9 @@
 
 分工概览如下；具体目录及后续调整以 MODULE_ASSIGNMENTS 为准。
 
-- `goo122`：底座、公共协议、根配置和集成，Runtime、ModelGateway/Provider、Policy/工具宿主、本地 MCP/Skills、知识与记忆。
-- `zemeng`（GitHub：`zemeng5208`）：项目主要负责人，继续负责核心架构、认知/目标/持续决策、AgentArts/Competition、桌面、语音、Windows 与编码工具；具体模块见 MODULE_ASSIGNMENTS。
-- `Potatos498`：独立负责 MOD-20～26 业务连接器、业务消费接线与验证、MOD-35 测试定位；不集中代验另外两人的模块。
+- `goo122`：底座、公共协议、根配置和集成，Runtime、ModelGateway/Provider、Policy/工具宿主、本地 MCP/Skills、知识与记忆；DEV-WORKFLOWS 的 MOD-33/36/37。
+- `zemeng`（GitHub：`zemeng5208`）：项目主要负责人，继续负责核心架构、认知/目标/持续决策、AgentArts/Competition、桌面、语音、Windows 与编码工具；具体模块见 MODULE_ASSIGNMENTS；DEV-WORKFLOWS 六项已交由 goo122 与 Potatos498，不承担其日常集中验收。
+- `Potatos498`：独立负责 MOD-20～26 业务连接器、业务消费接线与验证、MOD-34/35/38 的 CI 修复、测试定位和 Issue 修复链；不集中代验另外两人的模块。
 
 工作包应具备唯一负责人、拥有目录、依赖、交付边界和验收方式；同行评审者按需登记，不是开工或合并前置。复用现有任务记录，避免维护相互冲突的进度副本。
 
