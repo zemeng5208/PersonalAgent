@@ -82,3 +82,33 @@ node tests/manual/agentarts/support/fixed-synthetic-batch.mjs --deadline $evalua
 - 不调用云端、不读取凭据、不访问历史记录，也不执行或读回任何真实工具。
 - 不提供基线对照、重复统计、模型质量结论、AgentArts deployment/API/trace/usage 或成本证据。
 - `CoordinationPort` 仍为 provisional；离线 Fake 通过不改变 AgentArts 的真实可用性状态。
+
+### 固定合成最小修复评估（2026-10-07，PR #302 未合并增量）
+
+新增 [修复 runner](../../tests/manual/agentarts/support/fixed-synthetic-repair-batch.mjs)
+`runFixedSyntheticRepairBatch(port, {deadline, signal, repetitions})`，不改变上方分类 runner。
+调用者必须显式注入已有 `CoordinationPort`；默认一次、最多三次重复三个固定合成案例。
+[纯夹具](../../tests/manual/agentarts/support/fixed-synthetic-repair-cases.mjs) 提供合法的
+Fact/Goal/Decision/Plan 世界与一般最小修复规则：依赖链、并列受影响目标、仅 Plan 受影响。
+只有 `goal` 输入发送到端口；独立期望、干扰候选和验证材料留在评估端，不发送正确答案。
+
+结果沿用公开 `CoordinationRepairCandidateResult` 与 parser；按独立期望比对图 revision、
+精确目标集合、当前节点 revision、摘要和依赖身份/版本。引用本批新节点 revision 的变化
+必须保持依赖先于使用者；独立变化和依赖列表可换序。多改未影响目标、少改、错误依赖或
+源版本、旧图基线与错误摘要均不计匹配。reason 只要求现有 parser 的合法非空文本，
+不以措辞相同作为评分条件；此评估不是自由文本理由或总体模型能力评价。
+
+全部调用串行复用同一原始 deadline/signal，通过既有 Coordinator 处理取消、期限和
+不合作端口。普通失败保留固定错误码并继续，不重试；取消或到期停止后续案例。
+报告只列实际尝试，分别统计计划总数、尝试、匹配、不匹配、错误与未运行数。
+准确率为匹配数 / 实际尝试数（错误也在分母），没有尝试时为 `null`；取消后的未运行
+不能填成成功。每例和总耗时只表示本机等待/校验经过的时间，不是平台 span 或推理耗时。
+报告不含响应正文、期望、图谱、任务 ID、trace、token 或费用；导入不自动运行。
+
+该入口不写图、不创建 Runtime task、不授权或执行工具、不读凭据、不选择服务，
+不自动调用云端。报告固定 `synthetic: true`、`verification: unverified`，离线端口验证
+只证明此限定评估管线；有限重复不构成独立样本或统计显著性。真实候选质量、角色协作
+及平台效果仍需独立真实运行与证据。
+必要定向验证：`node --test --test-concurrency=1 tests/manual/agentarts/support/fixed-synthetic-repair-cases.test.mjs tests/manual/agentarts/support/fixed-synthetic-repair-batch.test.mjs`。
+正式夹具集成后，新 runner 的定向测试 12/12 通过，无跳过；仅运行本批 runner，
+未重复旧分类/配对绿色测试，也未运行真实平台、整仓检查或 GUI。
