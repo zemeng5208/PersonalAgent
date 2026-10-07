@@ -255,6 +255,24 @@ Host；主进程相关路由从实际 main 源码提取执行，不等于运行 
 独立进程 exit0、console/pageerror 为零，新增证据 `wake-native-device-ended-validation.md`
 及对应脚本、JSON、日志/截图。未重跑前述正常/unknown 场景，不提升物理拔插或现场验收。
 
+## 2026-10-07：原手动听写的重试与隐藏消费者
+
+另两项原420 panel/CSP消费者实际exit0，没有源码修改或重跑旧正式套件。
+原talk开始/结束经过实际VoiceSession/PCM、VoiceInput和MicrophoneHost，Chromium
+context/track由明确Fake-device flags提供；ASR、许可、IPC和window为Fake。
+首次结束先释放麦克风再等待ASR，识别失败经原core净化为“语音处理失败”，保留用户
+在等待期间编辑的草稿。用户显式点击原按钮重试建立新的context/track，成功文字仅追加
+一次到当时草稿，不自动提交任务；两代context closed/track ended、各6400B音频清零、
+许可及识别handle各释放一次。正常失败/成功的ASR signal没有被abort，不能泛称中止。
+
+另一独立消费者在手动识别pending时点击原close，Fake window派发原hide listener并启动
+真实stopPanelVoice，探针另行等待聚合清理；hidePanel本身并不等待全部manual/Live释放。
+此时ASR signal确实中止，handle停止、音频清零、Host verified；同renderer再次显示并
+编辑草稿后，迟到Fake识别结果不追加文字、不重捕获。两项console/pageerror零，
+manual-dictation-retry-consumer-*与hide-consumer-*保存原命令/JSON/日志/截图。
+前者固定列明source和公开index，后者还固定全部已有Voice dist JS；不泛称全部依赖一致。
+未消费Runtime，不代替真实SIS、物理麦克风或Electron隐藏时序验收。
+
 ## 2026-10-07：Live 双 native 链与聚合关闭反馈
 
 固定源码 `4dc01f6f397e8d1e941fadc17ab031f95353b3de` 的新增独立原面板场景，

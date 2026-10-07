@@ -249,8 +249,10 @@ cdea490f1d90e282e5f806123834d662519f37e4。定向33/33实际exit0；实际公开
 Fact source record/drain/processImpacts 与 SQLite AFTER 为 graph2/infer1/dispatch0，
 仅旧 Goal 卡标记 true，当前 Fact KEEP 为 false，整体仍 reviewed。原 panel/CSP 通过
 明确 Fake IPC 消费该实际状态，禁用且 apply0，console/pageerror为零。私证据
-source-outdated-frozen.json 保留编译/出口映射及错误探针尝试；后续独立公开 restart
-在既有 nextTick 和 Fact backlog 后恢复同 reviewTaskId，不借初轮错误探针声称缺卡。
+source-outdated-frozen.json 保留编译/出口映射及错误探针尝试；后续独立验证在同一个
+已打开的 RuntimeApplication 上重建 Desktop Host，并在既有 nextTick 和 Fact backlog
+后恢复同 reviewTaskId。这不是完整 Runtime/SQLite 关闭重开或 Goal.create IPC 验收，
+不借初轮错误探针声称缺卡。
 此项不解决稳定 Goal review 的重新分析/继任合同，不放宽 CAS。
 
 另一个独立公开 producer 对照发现：合法 GoalCloudHost goals.revise 把 Goal 修订为
@@ -270,3 +272,23 @@ idle[0,0]→[1,0]、infer0→1，active/withdrawn 对照不变，图3/dispatch0�
 Plan/Laya 与 ToolGateway context 为明确合成/Fake，公共 Goal tools/SQLite 为真实本地
 出口，不是 Policy ledger或实云验收。validity-revision-frozen.json 固定新编译 producer，
 旧 withdrawal/source-outdated/expiry 私输出保留；根必要检查另记，不借固定874的2455项。
+
+## 原窄屏方案卡片与本地整仓检查（2026-10-07 续接）
+
+原320×480 panel消费实际已受理Host状态时，长Fact来源引用令thread横向scrollWidth
+396而可用宽318，卡片378而可用宽274；420宽卡片也有378/374的横溢。
+仅为触发原因和方案两个段落复用既有assistant-message类，控件blob由
+3424e89e7a22775b111a2a0fe2eca1eb2adfdae6变为
+4fc387698fdb753a697624dc63904a6035a242b2，没有修改CSS、事件、转义、许可或CAS。
+原HTTP/CSP panel在320/420的12项AFTER均无横向溢出；实际受理引用与明确合成长无空格
+方案分开记录，accepted/unknown锁定、stale/permit拒绝及KEEP反馈保持。
+复用panel类也令字体为14px/1.8，长文本卡片变高，仍通过原thread纵向滚动到达按钮；
+不声称全部内容同时可见或每个按钮像素严格contain，原320边缘约0.109px舍入保持。
+私narrow-panel-frozen.json固定源码、探针、前后JSON/日志与24张截图；独立审查核对
+全部40个source/artifact SHA及关键截图。IPC明确Fake，workspace/admin布局未浏览器验收。
+
+固定23ad629/treeeac85fde的完整npm run check在22:02:16Z实际exit1：33组2438项、
+2386通过、1失败、1取消、50跳过。唯一独立失败是未改动GitHub repair-link原1000ms
+子测试超时，其父项聚合为失败；root integration未执行。Desktop606项595通过11跳过、
+Runtime421/421。日志core-cognition-revision131-full-check.log保留；同head原文件隔离
+71/71实际exit0仍不是整仓通过，也未确定原失败根因。后续新源码必须另作必要检查。

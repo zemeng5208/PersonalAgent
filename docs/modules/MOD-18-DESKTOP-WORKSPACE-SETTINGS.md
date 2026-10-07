@@ -70,3 +70,39 @@ UNSUPPORTED_CAPABILITY。它限制canonical普通文件，不把源内容固定�
 clientCalls各多一次末尾定时订阅，源于await writeFile前后活体数组序列化，原件保留，
 不据此声称所有旁观计数原子一致。实际Runtime/Policy/ToolGateway与明确Fake
 HTTP/JSON提案/凭据/IPC边界不变，均不替代真实云native function calling或设备验收。
+
+## 原工作区候选、取消与公开读取的消费者（2026-10-07 续接）
+
+新增原composer消费者均实际exit0，使用新合成cache项目、原panel/Worktrees/main函数和
+公开Runtime/Policy/ToolGateway，不修改产品源码。main固定741f8f4；每项列明的编译出口
+before/after相同，不据此推断整个source/dist一致。HTTP文字JSON提案、凭据、原生窗口、
+IPC和确认dialog均为明确Fake，不是AgentArts原生function calling或Windows验收。
+
+运行中Node取消：真实固定Node24 --check已spawn，探针仅对其新私有PID实施显式Fake
+OS调度SIGSTOP并核对/proc身份。原stop经过真实task.cancel和native abort，SIGKILL/close
+及PID消失确认回收；不证明语法检查完成。原local_write描述未变，因此执行记录仍是
+unknown/RESULT_UNKNOWN，任务waiting_reconciliation并保留cancelRequested，单次grant
+已消费为0；进程死亡不等于确认结果或任务终态。原界面待核实、草稿保留，三次后续pump
+无命令重做或续发，清理后readonly SQLite确认没有第二次事件。证据
+workspace-node-running-cancel-consumer-*及post-finally-readback.json；不推广Windows进程语义。
+
+Preview/Stage：原cloud+write许可经两次真实参数绑定grant，preview与stage各confirmed。
+实际stage创建64B候选，SHA0fdc8b14bd648e277a54f7f73c09048aca0be6e4c40734b74331598750f19c13，
+原文件字节不变；仅既有previewed/staged/changed布尔投影出云。任务成功表示候选流程完成。
+PowerShell/native apply不可用，实际catalog无apply，未注入替代提供者。合法stage提案等待时
+外改合成文件，真实provider在创建前REVISION_CONFLICT，既有写工具保守记录unknown，
+无候选、外改内容保留；只读许可则stage缺catalog，执行/grant前拒绝UNSUPPORTED_CAPABILITY。
+三项后续pump均无重做，分别保存workspace-patch-stage-composer/boundary-consumer-*。
+
+PUBLIC读取：原main的NativePublicReferenceConsent/WorkspaceReferenceExport先确认1024B
+范围，再确认真实read_text返回的76B CRLF文本与精确SHA，两阶段身份/期限一致。
+正常一次confirmed读取，消费workspace:read grant，仅6个公开结果字段经
+workspace-reference-3.0.0发送；无路径、authorizationId或合成private remainder。
+前置拒绝没有读取/grant；精确确认拒绝保留已confirmed读取和原tool-result，任务
+waiting_reconciliation/UNAUTHORIZED，无continuation，不重读。许可投影已保存后，在第二次
+异步Fake凭据返回前原Worktrees撤销，最终beforeSend拒绝发送，保留receipt/continuation及
+export-withheld；撤销清宿主许可并旋转generation，不逆转已消费数据库grant。
+两阶段dialog各自在pending时由原stop取消的独立对照均到cancelled；精确阶段保留confirmed
+只读结果，迟到确认不成为新authorization或续发。证据workspace-reference-read-composer、
+final-guard和dialog-cancel-consumer-*，独立审查读回SQLite/原文件/截图。只读取消结论
+不能套到写入，PUBLIC验收不等于真实云、用户工作区或完整ArtifactPort验收。
