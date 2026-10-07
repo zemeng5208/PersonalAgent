@@ -322,5 +322,43 @@ Desktop608项597通过11跳过、Runtime426/426、root integration22/22，构建
 contracts/generated门禁均执行。Node24.15.0、实际4CPU，原断言和期限未改；日志
 core-ancestor-reference137-full-check.log SHA256
 db9cb86a352e0d122dfdf2a71de1533d2f03bf2e89bc826fe74524b4a9cff5a8。
-包含前述来源/有效期/祖先差集、窄屏与参考工具pending修复；此行之后的纯DOC交付
-不变source/tests。原23ad失败仍保留，不据本次通过认定其根因，也不覆盖后续新增源码。
+包含前述来源/有效期/祖先差集、窄屏与参考工具pending修复；5946141到已发布a5b5bbd
+仅本DOC结果行改变，source/tests相同。原23ad失败仍保留，不据本次通过认定其根因，
+也不覆盖后续新增源码。
+
+## 首次规划前已修订的未复查目标（2026-10-07 续接）
+
+合法公开Goal1创建后、首次idle前修订为Goal2且无历史规划，原连续修订入口保存KEEP，
+不会进入首次规划。新增本地reviewUnplannedGoal只接受精确当前graph/Goal head、rev>1
+且active/effective，排除同namespace任何可信Goal相关复查intent和曾依赖该Goal任一版本的
+历史Decision/Plan；后来的依赖重绑不擦除规划历史，无关Plan不阻塞新Goal。
+原rev1、已selected/unavailable/真实failed/KEEP选择保留，不重新规划。身份绑定精确Goal，
+ref属性顺序归一化，先恢复同scope；idle采用固定分页task快照，旧初次选择不能遮住后来
+新增的连续修订/祖先消费者。历史依赖用stack/visited遍历，不引入递归深度假设。
+
+Runtime producer/test EXACT2冻结manifest SHA256
+9e4a39d8d6fe6715df569f1904fac4e2493990d78fb81be49be79c920c7f1854，
+14项artifact及两源码hash独立核对；受影响host文件38/38实际exit0，Runtime构建通过。
+实际公开producer六矩阵中never-reviewed/unrelatedPlan由KEEP0infer变为subjectGoal2
+RECHECK1infer；其余旧复查/历史规划矩阵保持，second idle不重复，graph/旧choice不变。
+所有首次选项仍RECHECK、affected空，不追加Plan或伪造Fact收据，不更改DTO/schema、
+permit/整图CAS、Fact cursor或Plan自身expiry合同。
+
+未改Desktop的实际project/assertCloudSend消费新review，FakeHTTP1send/1infer、graph4；
+公有Goal当前摘要及hashedid进入原nodes，private Fact2仅背景并省略1来源，无private正文/ref。
+另一个实际本地GoalHost工具消费者有两条原Policy allow/confirmed写收据：cloudGoalConsent
+保持off，Runtime watermark规划一次，Desktop原revision marker另保存KEEP但不再次规划。
+同Runtime重建DesktopHost且grant不恢复后不重发；此时UI仅恢复旧KEEP，不冒称所有卡片
+恢复或完整Runtime重启。Goal工具/SQLite/本地Policy为实际出口，Laya/HTTP/背景明确Fake。
+新Runtime源码合入e9cb64b；后续根完整检查另记，5946141通过不覆盖本节新源码。
+
+该实际消费者还发现首次规划defer出云策略错误沿用“保留当前计划”。Desktop仅两处
+表达式：subjectGoal的defer改“暂缓首次规划，安排后续复核，不执行目标”，rev>1卡片改
+“待首次规划目标”；rev1标签和无subject影响范围的defer原样保持，不声称整个图无Plan。
+goal-cognition-host.js最终blob fdeb8754369f09550854ca21f92aa46f166b0824；反向两表达式
+逐字节恢复原文件。三项实际before/after分别覆盖Goal1/Goal2初次规划和Goal3祖先Plan
+影响范围，均1infer/1FakeHTTP，graph2/4/6不变，private来源省略1/1/2；wire除strategy
+全部逐字段相同，原影响范围策略/标签不变。冻结manifest SHA256
+0b26860ffc6ad79b91e15a4eeb6616541e29cfe28ad34a0b8d6ca6fb05dc70a9；21项artifact，
+新AFTER报告复制的boundary/case元数据纠正记录与旧原件保留，实际observation/log未改。
+低风险文案不增镜像正式测试，syntax/diff通过，projection/CAS/permit/handlers保持。

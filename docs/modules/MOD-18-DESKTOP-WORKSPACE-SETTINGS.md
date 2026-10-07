@@ -127,3 +127,30 @@ stop后晚回执仍disabled且误点不派发，重新连接/启用可正常提�
 desktop-reference-run-late-receipt-before/after/fixed-*保存原失败、JSON/日志和截图；
 source固定d3152570a9e063c3e885220f11be23e92a7893ed，test固定
 1870bcc2b0608d8a8038c1bd16c3e28586d6d4c2，必要整仓检查另在root新固定head执行。
+
+原320插件页的路径input还有实际布局缺口：宽210/right377超过viewport320与卡片right290，
+main可用202而scroll259；该完整before实际exit1保留。仅在原pathlabel外加普通
+div.settings-form，复用已有label grid与无type input的width100%/border-box，不新增form
+提交、共享CSS或事件。最终controls blob de96171eeda20d3c094d7305fb9f0930ec13269f。
+修后320原连接/启用/输入/摘要/stop完整消费者实际exit0，三个阶段input104/right271在
+卡片/viewport内，main202=scroll202；原read/confirmed/任务成功各一次，grant0、cloud0、
+credentials0/errors0。420仅同页便宜几何核对，未重复已绿任务流程。原纵向滚动保留，
+不称首屏全部可见；证据desktop-reference-narrow-{before,after}-consumer-*及fixed-validation。
+
+另一个原Worktrees撤销消费者使用实际官方stdio/Runtime/Policy/SQLite，并明确Fake调度
+hold已返回的76B原文在RegisteredTool→Gateway确认前。原record仍started、task running、
+grant0。原撤销先await referenceHost.invalidate/dispose并请求任务取消，再清workspace许可；
+放行后record failed/CANCELLED、task cancelled9，不成为confirmed或重读。
+Skill checkpoint却为unknown/evidenceRefs空，不能把Task终态推广到所有层级。后续pump
+无第二record、cloud0/credentials0，10个具体compiled出口前后稳定，不证明整构建或PIDreap。
+证据desktop-reference-workspace-revoke-consumer-*；首helper把started误写running的exit1
+保留，最终完整实际exit0，不计首失败为通过。不套用到写工具或真实用户项目。
+
+原参考摘要无效路径消费者实际exit0：main先受理Skill任务，空path由worker校验FAILED/
+INVALID_ARGUMENT、0toolrecord；../outside合成canary由真实服务拒绝，Task FAILED且
+record FAILED/INVALID_ARGUMENT，已executionStarted/Policy allow/单次read grant消费0。
+没有confirmed读取或canary正文；Skill checkpoint仍unknown/refs空，read-step快照running，
+不称IPC拒绝、0task/0尝试或所有层终态。两失败不自动重试，用户明确改reference.md才
+新建第三Task，真实76B CRLF读取confirmed/Task成功/Skill complete，cloud0/credentials0。
+原UI保无效输入、支持明确重试；停止后run disabled。证据desktop-reference-invalid-path-
+consumer-*，十个具体compiled出口稳定；仅body横向范围通过，不覆盖前述Live内部4px失败。

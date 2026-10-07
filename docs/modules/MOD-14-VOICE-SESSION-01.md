@@ -304,6 +304,31 @@ Fake hide 已发生，本修复没有将其改成等待全部 Live 释放才隐�
 及脚本/日志/截图。IPC、Runtime/Gateway、BrowserWindow 和故障注入明确 Fake，
 截图浏览器仍可见；没有 Electron 窗口、Windows、物理资源或真实业务终态结论。
 
+后续原320手动听写重试消费者实际exit0，未重复420绿色流程：两轮原talk/native
+Fake-device各6400B PCM，首次Fake ASR失败净化为“语音处理失败”并保留待识别时编辑的
+草稿；明确第二次点击仅追加一次到当前草稿。两代context closed/track ended、音频清零、
+subscriber0、许可/handle各释放一次；signalAborted实际false，Runtime调用0/errors0。
+四阶段水平范围通过，原voice最终unavailable值保留，不称最终ready或物理设备验收。
+证据manual-dictation-narrow-320-retry-consumer-*，六项具体source/dist blob前后相等。
+
+原听写与提交交错消费者的两次实际exit1同样保留：pending重复click/Enter不追加提交，
+迟到Fake task.submit回执保留新的听写草稿，明确第二次send提交精确新payload并只清
+本轮未改草稿；无实际Runtime调用。唯一末尾严格几何失败为empty→Live后bar可用268而
+scroll272，原send margin与窄屏grid造成内部4px溢出；按钮仍在viewport320及composer内、
+无重叠/可见裁切。没有sharedCSS改动，不将功能断言成立写成完整消费者通过。
+证据manual-dictation-composer-send-interleave-consumer-*及首失败日志。
+
+原浏览器microphone permission denied/granted的新独立消费者实际exit0：原talk调用真正
+getUserMedia得到NotAllowedError，未分配context/track、无ASR；Host error与stopped(true)
+收据accepted、busyfalse/subscriber0、lastRelease stopped/verified true。界面却保守显示
+“麦克风释放未确认”：公开PCM start失败未获得releaseHandle，closed合同特意reject，
+voice core据此显示cleanup失败；宿主physical证明不能倒改这个公共合同。
+不是Host锁死或泄漏证据，用户明确授权后原talk重试成功6400B听写、append一次、错误
+清空、资源关闭/清零，Runtime0/errors0；最终voice.unavailable保留。CDP配置浏览器权限，
+Fake-device/ASR/IPC/Host许可仍明确Fake，不是OS对话框/物理设备/SIS验收。证据
+manual-dictation-native-permission-consumer-*；首CDP描述符错误和旧错误文案断言exit1
+保留，最终完整资源/重试消费者才计通过。没有公共PCM或产品源码修改。
+
 同一聚合修复的独立正常取消场景使用 child `ab7c5ef0979acc5f30870bfcc87c58c33ca1f180`：
 24 kHz native output.resume 已执行，但返回被显式 hold；原面板关闭后 context closed、
 Live inactive、聚合正常完成，尚未授权 Mic 或连接 Gateway。放行迟到 resume 不产生 ready 或新音源。
