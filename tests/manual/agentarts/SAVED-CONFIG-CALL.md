@@ -17,7 +17,7 @@ node tests/manual/agentarts/support/run-saved-config-call.mjs --describe
 ```powershell
 $request = @{
   goal = '仅回复已连接，不调用任何工具。'
-  deadline = [DateTime]::UtcNow.AddMinutes(3).ToString('o')
+  deadline = [DateTime]::UtcNow.AddMinutes(3).ToString('yyyy-MM-ddTHH:mm:ss.fffZ', [Globalization.CultureInfo]::InvariantCulture)
   dataClass = 'synthetic'
   responseMode = 'text'
 }
