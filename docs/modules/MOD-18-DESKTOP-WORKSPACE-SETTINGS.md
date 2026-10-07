@@ -154,3 +154,20 @@ record FAILED/INVALID_ARGUMENT，已executionStarted/Policy allow/单次read gra
 新建第三Task，真实76B CRLF读取confirmed/Task成功/Skill complete，cloud0/credentials0。
 原UI保无效输入、支持明确重试；停止后run disabled。证据desktop-reference-invalid-path-
 consumer-*，十个具体compiled出口稳定；仅body横向范围通过，不覆盖前述Live内部4px失败。
+
+## 摘要启用按钮与连接状态（2026-10-07 续接）
+
+原服务未连接、Skill 未启用时，启用按钮仍可点击，原 host 拒绝后只显示通用错误；
+实际 task/read/服务/云凭据均0。控件仅增加连接谓词：未启用的 Skill 必须在
+`mcp.connected === true` 时才可启用；已启用的 Skill 仍可在断开时关闭，原 pending、
+重复点击、迟到回执与卸载保护保持。controls/test EXACT2，不修改 host/协议/CSS。
+原 UI BEFORE actual1、AFTER actual0，断开点击和 dispatch guard 都不派发 IPC；新增两项
+正式测试在原源码2fail，修后本文件定向4/4。连接/停止状态仅复用旧实际 stdio 快照做
+FakeIPC renderer 对照，不重复或冒称新 stdio 验收。冻结 manifest SHA256
+2f8202c4df6dfddc7ec9c4397fd25316ef5fcb6f940f77689d17c22fee839fe0。
+
+根固定 dcfcf6bc/tree6f0edd11，将此变更与保存 Goal 卡片恢复一起执行原 Desktop typecheck、
+两处 JS syntax 和完整 workspace test；18527/1470c2 实际 exit0，23:28:25Z：612项601通过、
+失败/取消0、11跳过。日志 core-desktop-saved-cards-skill137-check.log SHA256
+3afda5190a65e169d20caa13ed2df6e0830c38035e09b67c8526ebebe67c20bc，独立全文读回及源码一致。
+中断的旧 overlay94070/4c6f19 actual1 仅留历史，不计通过；本节不是整仓、Windows 或真实设备验收。

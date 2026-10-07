@@ -370,3 +370,24 @@ build/type/generated/contracts/architecture门禁执行。Node24.15、实际4CPU
 不变；日志core-initial-planning137-full-check.log SHA256
 7444f126386ada32dfa0218774f6aa35325b1054bfc2c7c385a9164988ea3250。独立完整日志/
 34组和源码集成读回一致；不解释23ad旧超时，也不覆盖本批之后的控件/卡片恢复新源码。
+
+## 保存 Goal 卡片的显示恢复（2026-10-07 续接）
+
+上节本地消费者实际保存的初次规划 review 没有旧 Desktop marker，重建 Host 只显示旧
+KEEP。恢复入口保留旧 marker 扫描，另用 public runtime.listTasks 在同 proactive namespace
+固定快照分页100，接受精确 v1 四类 Goal intent 与 task/namespace/review 绑定，并去重。
+无 review、错误 namespace/kind/binding 均忽略；恢复已有 choice/receipt/status，不产生
+新的 infer/repair/handoff/出云或许可。任务无需 succeeded，合法 waiting_reconciliation
+卡片也可显示；Fact/meeting 通用 intent 不被纳入，当前 sourceOutdated 优先关系保持。
+
+仅 goal-cognition-host.js 与已有 test 两文件，源码 blob97a58846、test2395dd5c，冻结
+manifest SHA256 539e668617056fc69e9efcb2dfbc74f8b4d19bbbbe3fe036016b3fa8da8fcdeb。
+新增两项测试原源码0/2实际失败，修后2/2、受影响文件18/18；包含实际 Runtime/SQLite
+关闭重开且不恢复权限的正式案例。另一次实际本地 GoalHost/Policy confirmed 工具消费者
+before/after：原两卡同 id 和旧 handoff receipt 均恢复，重建后 local-only tick 不增调用。
+该消费者仍明确 Fake 模型/HTTP，不将显示恢复当重新授权或真实云验收。
+
+根 dcfcf6bc/tree6f0edd11 的完整 Desktop 检查18527/1470c2实际0、612项601通过11跳过；
+日志 SHA256 3afda5190a65e169d20caa13ed2df6e0830c38035e09b67c8526ebebe67c20bc。
+独立审核冻结10artifact及原读回链，未改变 Runtime producer/Plan expiry/稳定 review
+重新分析合同。本节 Desktop 检查与上节 d654 完整2476项分别记载，不挪用整仓覆盖。
