@@ -27,6 +27,24 @@ function jobHostEnvironment() {
   return process.env.DOTNET_ROOT_X64 ? {DOTNET_ROOT_X64:process.env.DOTNET_ROOT_X64} : {};
 }
 
+function observeJobExecution(execution) {
+  const observation = {outcome: undefined};
+  observation.settled = execution.then(
+    result => { observation.outcome = {exitCode: result.exitCode, stderr: result.stderr.slice(0, 1024)}; },
+    error => { observation.outcome = {code: error.code, message: String(error.message).slice(0, 1024)}; },
+  );
+  return observation;
+}
+
+async function diagnoseJobStartup(t, observation, pidPath, stagePath) {
+  const readBounded = async file => {
+    try { return (await readFile(file, 'utf8')).slice(0, 256); }
+    catch (error) { return {code: error.code}; }
+  };
+  t.diagnostic(JSON.stringify({jobExecution: observation.outcome ?? 'pending',
+    pid: await readBounded(pidPath), stage: await readBounded(stagePath)}));
+}
+
 async function fixture(t) {
   const base = await mkdtemp(join(tmpdir(), 'personal-agent-command-'));
   const root = join(base, 'workspace');
@@ -293,13 +311,18 @@ test('WindowsJobProcessHost terminates grandchild process tree on abort', {
   }
 
   const grandchildPidPath = join(root, 'grandchild.pid');
+  const stagePath = join(root, 'startup.stage');
   const spawnerScript = join(root, 'spawner.cjs');
   await writeFile(spawnerScript, `
     const { spawn } = require('node:child_process');
+    const fs = require('node:fs');
+    fs.writeFileSync(${JSON.stringify(stagePath)}, 'spawner-started');
     const child = spawn(process.execPath, ['-e', 'require("node:fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)', ${JSON.stringify(grandchildPidPath)}], {
       stdio: 'ignore',
       detached: false,
     });
+    child.once('spawn', () => fs.writeFileSync(${JSON.stringify(stagePath)}, 'grandchild-spawned'));
+    child.once('error', error => fs.writeFileSync(${JSON.stringify(stagePath)}, 'spawn-error:' + String(error.code).slice(0, 64)));
     setInterval(() => {}, 1000);
   `);
 
@@ -315,39 +338,48 @@ test('WindowsJobProcessHost terminates grandchild process tree on abort', {
 
   const controller = new AbortController();
   const execution = treeTool.execute({recipeId: 'run-tree'}, context({signal: controller.signal}));
+  const observation = observeJobExecution(execution);
 
-  let grandchildPid;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    try {
-      grandchildPid = Number(await readFile(grandchildPidPath, 'utf8'));
-      if (grandchildPid > 0) break;
-    } catch {
+  try {
+    let grandchildPid;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try {
+        grandchildPid = Number(await readFile(grandchildPidPath, 'utf8'));
+        if (Number.isSafeInteger(grandchildPid) && grandchildPid > 0) break;
+      } catch {}
       await new Promise(resolve => setTimeout(resolve, 20));
+      if (observation.outcome) break;
     }
-  }
-  assert.ok(Number.isSafeInteger(grandchildPid) && grandchildPid > 0, 'grandchild started');
+    assert.ok(Number.isSafeInteger(grandchildPid) && grandchildPid > 0, 'grandchild started');
 
-  // Verify grandchild is currently alive
-  assert.doesNotThrow(() => process.kill(grandchildPid, 0));
+    // Verify grandchild is currently alive
+    assert.doesNotThrow(() => process.kill(grandchildPid, 0));
 
-  // Abort execution: tool kills WindowsJobProcessHost -> Job Object terminates grandchild!
-  controller.abort();
-  await assert.rejects(execution, {code: 'CANCELLED'});
+    // Abort execution: tool kills WindowsJobProcessHost -> Job Object terminates grandchild!
+    controller.abort();
+    await assert.rejects(execution, {code: 'CANCELLED'});
 
-  // Wait briefly for Windows kernel to finish Job Object process tree termination
-  let grandchildDied = false;
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    try {
-      process.kill(grandchildPid, 0);
-      await new Promise(resolve => setTimeout(resolve, 50));
-    } catch (e) {
-      if (e.code === 'ESRCH') {
-        grandchildDied = true;
-        break;
+    // Wait briefly for Windows kernel to finish Job Object process tree termination
+    let grandchildDied = false;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      try {
+        process.kill(grandchildPid, 0);
+        await new Promise(resolve => setTimeout(resolve, 50));
+      } catch (e) {
+        if (e.code === 'ESRCH') {
+          grandchildDied = true;
+          break;
+        }
       }
     }
+    assert.ok(grandchildDied, 'grandchild process must be terminated by Job Object');
+  } catch (error) {
+    await diagnoseJobStartup(t, observation, grandchildPidPath, stagePath);
+    throw error;
+  } finally {
+    controller.abort();
+    await observation.settled;
   }
-  assert.ok(grandchildDied, 'grandchild process must be terminated by Job Object');
 });
 
 test('WindowsJobProcessHost runs fixed command successfully and returns complete output', {
@@ -366,6 +398,7 @@ test('WindowsJobProcessHost runs fixed command successfully and returns complete
   }
 
   const pidPath = join(root, 'child-success.pid');
+  const stagePath = join(root, 'success-startup.stage');
   const tool = createWorkspaceCommandTool({
     rootPath: root,
     recipes: [{
@@ -373,21 +406,33 @@ test('WindowsJobProcessHost runs fixed command successfully and returns complete
       executable: jobHostExe,
       env: jobHostEnvironment(),
       args: ['--cwd', root, '--exe', process.execPath, '--', '-e', `
+        require("node:fs").writeFileSync(${JSON.stringify(stagePath)}, 'node-started');
         require("node:fs").writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
         process.stdout.write("JOB_SUCCESS_MARKER\\n");
       `],
     }],
   });
 
-  const res = await tool.execute({recipeId: 'job-success'}, context());
-  assert.equal(res.recipeId, 'job-success');
-  assert.equal(res.exitCode, 0);
-  assert.equal(res.stdout, 'JOB_SUCCESS_MARKER\n');
-  assert.equal(res.stderr, '');
+  const controller = new AbortController();
+  const execution = tool.execute({recipeId: 'job-success'}, context({signal: controller.signal}));
+  const observation = observeJobExecution(execution);
+  try {
+    const res = await execution;
+    assert.equal(res.recipeId, 'job-success');
+    assert.equal(res.exitCode, 0);
+    assert.equal(res.stdout, 'JOB_SUCCESS_MARKER\n');
+    assert.equal(res.stderr, '');
 
-  const childPid = Number(await readFile(pidPath, 'utf8'));
-  assert.ok(Number.isSafeInteger(childPid) && childPid > 0);
-  assert.throws(() => process.kill(childPid, 0), {code: 'ESRCH'});
+    const childPid = Number(await readFile(pidPath, 'utf8'));
+    assert.ok(Number.isSafeInteger(childPid) && childPid > 0);
+    assert.throws(() => process.kill(childPid, 0), {code: 'ESRCH'});
+  } catch (error) {
+    await diagnoseJobStartup(t, observation, pidPath, stagePath);
+    throw error;
+  } finally {
+    controller.abort();
+    await observation.settled;
+  }
 });
 
 test('WindowsJobProcessHost terminates grandchild process tree on deadline timeout', {
@@ -406,13 +451,18 @@ test('WindowsJobProcessHost terminates grandchild process tree on deadline timeo
   }
 
   const grandchildPidPath = join(root, 'grandchild-timeout.pid');
+  const stagePath = join(root, 'timeout-startup.stage');
   const spawnerScript = join(root, 'spawner-timeout.cjs');
   await writeFile(spawnerScript, `
     const { spawn } = require('node:child_process');
+    const fs = require('node:fs');
+    fs.writeFileSync(${JSON.stringify(stagePath)}, 'spawner-started');
     const child = spawn(process.execPath, ['-e', 'require("node:fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)', ${JSON.stringify(grandchildPidPath)}], {
       stdio: 'ignore',
       detached: false,
     });
+    child.once('spawn', () => fs.writeFileSync(${JSON.stringify(stagePath)}, 'grandchild-spawned'));
+    child.once('error', error => fs.writeFileSync(${JSON.stringify(stagePath)}, 'spawn-error:' + String(error.code).slice(0, 64)));
     setInterval(() => {}, 1000);
   `);
 
@@ -426,38 +476,49 @@ test('WindowsJobProcessHost terminates grandchild process tree on deadline timeo
     }],
   });
 
+  const controller = new AbortController();
   const execution = treeTool.execute({recipeId: 'run-tree-timeout'}, context({
+    signal: controller.signal,
     deadline: new Date(Date.now() + 300).toISOString(),
   }));
+  const observation = observeJobExecution(execution);
 
-  let grandchildPid;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    try {
-      grandchildPid = Number(await readFile(grandchildPidPath, 'utf8'));
-      if (grandchildPid > 0) break;
-    } catch {
+  try {
+    let grandchildPid;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try {
+        grandchildPid = Number(await readFile(grandchildPidPath, 'utf8'));
+        if (Number.isSafeInteger(grandchildPid) && grandchildPid > 0) break;
+      } catch {}
       await new Promise(resolve => setTimeout(resolve, 20));
+      if (observation.outcome) break;
     }
-  }
-  assert.ok(Number.isSafeInteger(grandchildPid) && grandchildPid > 0, 'grandchild started');
+    assert.ok(Number.isSafeInteger(grandchildPid) && grandchildPid > 0, 'grandchild started');
 
-  assert.doesNotThrow(() => process.kill(grandchildPid, 0));
+    assert.doesNotThrow(() => process.kill(grandchildPid, 0));
 
-  await assert.rejects(execution, err => err.code === 'TIMEOUT' || err.code === 'RESULT_UNKNOWN');
+    await assert.rejects(execution, err => err.code === 'TIMEOUT' || err.code === 'RESULT_UNKNOWN');
 
-  let grandchildDied = false;
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    try {
-      process.kill(grandchildPid, 0);
-      await new Promise(resolve => setTimeout(resolve, 50));
-    } catch (e) {
-      if (e.code === 'ESRCH') {
-        grandchildDied = true;
-        break;
+    let grandchildDied = false;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      try {
+        process.kill(grandchildPid, 0);
+        await new Promise(resolve => setTimeout(resolve, 50));
+      } catch (e) {
+        if (e.code === 'ESRCH') {
+          grandchildDied = true;
+          break;
+        }
       }
     }
+    assert.ok(grandchildDied, 'grandchild process must be terminated by Job Object after timeout');
+  } catch (error) {
+    await diagnoseJobStartup(t, observation, grandchildPidPath, stagePath);
+    throw error;
+  } finally {
+    controller.abort();
+    await observation.settled;
   }
-  assert.ok(grandchildDied, 'grandchild process must be terminated by Job Object after timeout');
 });
 
 test('WindowsJobProcessHost closes its job when the root exits, before draining inherited output', {

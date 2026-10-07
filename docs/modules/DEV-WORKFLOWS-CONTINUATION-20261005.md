@@ -875,3 +875,19 @@ job112605184647 为 2125/0/16。两者各 34 组汇总，root22/22、架构3/3�
 新准确提交的实际编译及四项回归必须另读 CI 原日志，不能借上述旧头成功计为通过。
 这只覆盖生产 helper 的合成进程树，不证明原设备 UIA/用户接管、完整授权链、
 Windows 安装包或 #291 原自动写闭环；连接器真实 WRITE 和 AgentArts 仍按原 owner 验收。
+
+新增 CI 增量已沿原分支交 #298 Draft，初头 `e25c52a` / tree
+`2a752c1a96f92d4da2f71a76323fb9497cc5df40`，仅上述三个文件。两路首次 Windows
+helper 编译与 `PA_TEST_JOB_HOST_EXE` 注入成功，四项原测试实际执行，但整套未通过：
+push run37565575276/job112612385030 为 helper3通过/1失败，abort 测试尚未主动取消，
+即因准备阶段 `grandchild started` 失败；PR run37565593918/job112612445148 为
+helper1通过/3失败，另有 success 原10秒 TIMEOUT、deadline 原300ms 在准备阶段拒绝。
+root-exit 两路都通过。完整失败原日志保留，不把编译成功记为四项或整套验收通过。
+
+两名 Sol 代理独立确认原测试生命周期缺口：执行 Promise 在准备后才被消费，
+准备断言失败时跳过取消和收尾，fixture 会先清理，原 deadline 随后触发未处理拒绝。
+尚不能由此认定冷启动或生产 Job/取消逻辑根因。沿原 #212 登记新增本人 P6 原测试
+唯一写槽 `packages/coding-tools/test/workspace-command.test.mjs`，先补立即观察、
+所有失败路径取消并等待收尾及有界启动诊断；保留原等待/执行期限与 PID、存活、
+严格 CANCELLED、实际 ESRCH 杀树和精确输出断言。生产 native/command 不猜改，
+新准确 Windows 运行继续定位；沿现有 #298 交付，不开新任务或重复 PR。
