@@ -235,7 +235,7 @@ export class MailTriagePipeline {
         || typeof msg.sourceRevision !== 'string' || typeof msg.text !== 'string') {
         throw new CognitionError('INVALID_ARGUMENT');
       }
-      const rawIdentity = `${msg.source}:${msg.messageId}:${msg.sourceRevision}`;
+      const rawIdentity = JSON.stringify([msg.source, msg.messageId, msg.sourceRevision]);
       if (!seenBatch.has(rawIdentity)) {
         seenBatch.add(rawIdentity);
         uniqueMessages.push(msg);

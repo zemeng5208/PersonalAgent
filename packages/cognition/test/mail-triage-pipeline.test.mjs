@@ -129,6 +129,25 @@ function createMockInference(options = {}) {
   return inference;
 }
 
+test('batch deduplication preserves colon-containing identity tuples and still reuses exact duplicates', async () => {
+  const inference=createMockInference(),pipeline=new MailTriagePipeline({inference});
+  const distinct=[
+    {source:'mail:one',messageId:'two',sourceRevision:'r1',text:'First work update'},
+    {source:'mail',messageId:'one:two',sourceRevision:'r1',text:'Second work update'},
+    {source:'mail',messageId:'one',sourceRevision:'two:r1',text:'Third work update'},
+  ];
+  const request={messages:[...distinct,{...distinct[0]}],
+    deadline:new Date(Date.now()+60_000).toISOString(),signal:new AbortController().signal};
+  const first=await pipeline.processBatch(request);
+  assert.equal(first.total,3);assert.equal(first.newlyClassifiedCount,3);assert.equal(first.cachedCount,0);
+  assert.deepEqual(first.results.map(({source,messageId,sourceRevision})=>[source,messageId,sourceRevision]),
+    distinct.map(({source,messageId,sourceRevision})=>[source,messageId,sourceRevision]));
+  assert.deepEqual(inference.calls[0].state.events.map(event=>event.observation),distinct.map(message=>message.text));
+  const replay=await pipeline.processBatch(request);
+  assert.equal(replay.total,3);assert.equal(replay.cachedCount,3);assert.equal(replay.newlyClassifiedCount,0);
+  assert.equal(inference.calls.length,1);
+});
+
 test('MailTriagePipeline processes messages in bounded chunks and deduplicates in-batch duplicates', async () => {
   const inference = createMockInference();
   const pipeline = new MailTriagePipeline({
