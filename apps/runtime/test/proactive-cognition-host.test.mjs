@@ -1074,3 +1074,134 @@ test('host preparation callbacks cannot replace private lifecycle checks after i
     });
   }
 });
+
+function appendAncestorFixture(binding, {withOlderPlan = true, withLatestPlan = false, withMixedPlan = false} = {}) {
+  const store = binding.application.runtime.bindCoordinationStore(graphNamespace);
+  const {kind: _kind, ...goal} = node('ancestor-goal', 'goal', []);
+  createGoal(store, 0, goal);
+  if (withOlderPlan) store.append(store.read().revision, node('older-plan', 'plan', [ref(goal.id)]));
+  reviseGoal(store, store.read().revision, 1, {...goal, summary: 'Synthetic Goal2'});
+  if (withLatestPlan) store.append(store.read().revision, node('latest-plan', 'plan', [ref(goal.id, 2)]));
+  if (withMixedPlan) {
+    store.append(store.read().revision, node('older-decision', 'decision', [ref(goal.id)]));
+    store.append(store.read().revision, node('latest-decision', 'decision', [ref(goal.id, 2)]));
+    store.append(store.read().revision, node('mixed-plan', 'plan', [ref('older-decision'), ref('latest-decision')]));
+  }
+  reviseGoal(store, store.read().revision, 2, {...goal, summary: 'Synthetic Goal3'});
+  return store;
+}
+
+test('coalesced Goal ancestor discovery preserves KEEP and recovers one bounded stable handoff after restart', async () => {
+  const paths = await workspace(), calls = state();
+  let binding = open(paths, calls);
+  const poll = () => binding.host.consumeAndReview({...context(), at, limit: 1, afterGraphRevision: 0});
+  try {
+    let store = appendAncestorFixture(binding);
+    const original = (await poll()).reviews[0];
+    assert.equal(original.review.action, 'KEEP');
+    assert.deepEqual(original.review.affected, []); assert.equal(calls.layaCalls, 0);
+    const ancestor = (await poll()).reviews[0];
+    assert.deepEqual(ancestor.review.affected.map(item => item.node.id), ['older-plan']);
+    assert.equal(ancestor.review.selectedOption.id, 'revise');
+    assert.notEqual(ancestor.task.taskId, original.task.taskId);
+    await waitFor(binding.application, ancestor.handoff.task.taskId, 'succeeded');
+    assert.equal(calls.layaCalls, 1); assert.equal(calls.agentArtsCalls, 1);
+    const reversed = await binding.host.reviewGoalAncestorImpact({currentGoal: {revision: 3, id: 'ancestor-goal'},
+      expectedGraphRevision: 4}, {...context(), at});
+    assert.equal(reversed.task.taskId, ancestor.task.taskId);
+    assert.deepEqual(binding.application.runtime.loadCheckpoint(reversed.task.taskId,
+      'proactive-cognition-intent-v1').trigger.input.currentGoal, ref('ancestor-goal', 3));
+    assert.equal(store.read().revision, 4, 'review never appends a repaired Plan');
+    const expectedReview = structuredClone(ancestor.review);
+    assert.equal((await poll()).reviews.length, 0);
+    store.append(4, node('unrelated-public-fact', 'fact', []));
+    binding.close(); binding = open(paths, calls);
+    store = binding.application.runtime.bindCoordinationStore(graphNamespace);
+    assert.equal((await poll()).reviews.length, 0);
+    const replay = await binding.host.reviewGoalAncestorImpact({expectedGraphRevision: 5,
+      currentGoal: ref('ancestor-goal', 3)}, {...context(), at});
+    assert.equal(replay.task.taskId, ancestor.task.taskId);
+    assert.equal(replay.handoff.task.taskId, ancestor.handoff.task.taskId);
+    assert.deepEqual(replay.review, expectedReview);
+    assert.equal(calls.layaCalls, 1); assert.equal(calls.agentArtsCalls, 1);
+    store.append(5, node('new-older-plan', 'plan', [ref('ancestor-goal')]));
+    const expanded = (await poll()).reviews[0];
+    assert.deepEqual(expanded.review.affected.map(item => item.node.id), ['older-plan', 'new-older-plan']);
+    assert.notEqual(expanded.task.taskId, ancestor.task.taskId, 'new exact consumers bind a new scope identity');
+    await waitFor(binding.application, expanded.handoff.task.taskId, 'succeeded');
+    assert.equal(calls.layaCalls, 2); assert.equal(calls.agentArtsCalls, 2);
+    assert.deepEqual(binding.host.readReview(ancestor.task.taskId).review, expectedReview);
+    assert.equal((await poll()).reviews.length, 0);
+    assert.equal(store.read().revision, 6);
+  } finally {binding.close(); await rm(paths.directory, {recursive: true, force: true});}
+});
+
+test('Goal ancestor difference excludes latest pins and mixed items without repeating the original choice', async () => {
+  const paths = await workspace(), calls = state({handoff: false});
+  const binding = open(paths, calls);
+  try {
+    const store = appendAncestorFixture(binding, {withOlderPlan: false, withLatestPlan: true, withMixedPlan: true});
+    const first = await binding.host.consumeAndReview({...context(), at, limit: 10, afterGraphRevision: 0});
+    assert.equal(first.reviews.length, 2);
+    const [consecutive, ancestor] = first.reviews;
+    assert.deepEqual(consecutive.review.affected.map(item => item.node.id), ['latest-plan', 'latest-decision', 'mixed-plan']);
+    assert.deepEqual(ancestor.review.affected.map(item => item.node.id), ['older-decision']);
+    assert.equal(calls.layaCalls, 2);
+    const replay = await binding.host.reviewGoalRevision({expectedGraphRevision: store.read().revision,
+      previousGoal: ref('ancestor-goal', 2), currentGoal: ref('ancestor-goal', 3)}, {...context(), at});
+    assert.equal(replay.task.taskId, consecutive.task.taskId); assert.equal(calls.layaCalls, 2);
+    assert.equal((await binding.host.consumeAndReview({...context(), at, limit: 10, afterGraphRevision: 0})).reviews.length, 0);
+  } finally {binding.close(); await rm(paths.directory, {recursive: true, force: true});}
+});
+
+test('empty and stale ancestor requests create no task and old nonconsecutive requests remain rejected', async () => {
+  const paths = await workspace(), calls = state({handoff: false});
+  const binding = open(paths, calls);
+  try {
+    const store = appendAncestorFixture(binding, {withOlderPlan: false, withLatestPlan: true});
+    const input = {expectedGraphRevision: store.read().revision, currentGoal: ref('ancestor-goal', 3)};
+    assert.equal(await binding.host.reviewGoalAncestorImpact(input, {...context(), at}), undefined);
+    for (const bad of [{...input, expectedGraphRevision: input.expectedGraphRevision - 1},
+      {...input, currentGoal: ref('ancestor-goal', 2)}]) {
+      await assert.rejects(async () => binding.host.reviewGoalAncestorImpact(bad, {...context(), at}), {code: 'REVISION_CONFLICT'});
+    }
+    await assert.rejects(async () => binding.host.reviewGoalRevision({...input, previousGoal: ref('ancestor-goal')},
+      {...context(), at}), {code: 'INVALID_ARGUMENT'});
+    assert.equal(binding.application.runtime.listTasks({conversationId: 'proactive-cognition:' + graphNamespace}).items.length, 0);
+    assert.equal(calls.layaCalls, 0); assert.equal(calls.dispatchAttempts, 0);
+  } finally {binding.close(); await rm(paths.directory, {recursive: true, force: true});}
+});
+
+test('new ancestor scope is not starved by a recorded latest-pin handoff at limit one', async () => {
+  const paths = await workspace(), calls = state({prepareUnavailable: true});
+  const binding = open(paths, calls);
+  try {
+    const store = appendAncestorFixture(binding, {withOlderPlan: true, withLatestPlan: true});
+    const poll = () => binding.host.consumeAndReview({...context(), at, limit: 1, afterGraphRevision: 0});
+    const original = (await poll()).reviews[0];
+    assert.deepEqual(original.review.affected.map(item => item.node.id), ['latest-plan']);
+    const ancestor = (await poll()).reviews[0];
+    assert.deepEqual(ancestor.review.affected.map(item => item.node.id), ['older-plan']);
+    assert.notEqual(ancestor.task.taskId, original.task.taskId); assert.equal(calls.layaCalls, 2);
+    assert.equal(store.read().revision, 5); assert.equal(calls.dispatchAttempts, 0);
+  } finally {binding.close(); await rm(paths.directory, {recursive: true, force: true});}
+});
+
+test('public ancestor request with reversed ref fields is found by later idle discovery', async () => {
+  const paths = await workspace(), calls = state({handoff: false});
+  const binding = open(paths, calls);
+  try {
+    const store = appendAncestorFixture(binding);
+    const direct = await binding.host.reviewGoalAncestorImpact({currentGoal: {revision: 3, id: 'ancestor-goal'},
+      expectedGraphRevision: store.read().revision}, {...context(), at});
+    assert.equal(calls.layaCalls, 1);
+    const intent = binding.application.runtime.loadCheckpoint(direct.task.taskId, 'proactive-cognition-intent-v1');
+    assert.deepEqual(Object.keys(intent.trigger.input.currentGoal), ['id', 'revision']);
+    const first = await binding.host.consumeAndReview({...context(), at, limit: 1, afterGraphRevision: 0});
+    assert.equal(first.reviews.length, 1); assert.equal(first.reviews[0].review.action, 'KEEP');
+    const second = await binding.host.consumeAndReview({...context(), at, limit: 1, afterGraphRevision: 0});
+    assert.equal(second.reviews.length, 0, 'completed ancestor must not reoccupy the bounded review slot');
+    assert.equal(calls.layaCalls, 1);
+    assert.equal(binding.application.runtime.listTasks({conversationId: 'proactive-cognition:' + graphNamespace}).items.length, 2);
+  } finally {binding.close(); await rm(paths.directory, {recursive: true, force: true});}
+});

@@ -1,8 +1,8 @@
 import {ProtocolError} from '@personal-agent/contracts';
 import type {TaskSnapshot} from '@personal-agent/contracts';
 import {actionArgumentsDigest, analyzeImpact, buildMinimalRepairCandidate, previewStoredRepair,
-  selectGoalRevisionImpact, selectProjectedRepairScope} from '@personal-agent/cognition';
-import type {GoalRevisionSelectionRequest, ImpactItem, LayaActionChoiceService,
+  selectGoalRevisionImpact, selectGoalAncestorImpact, selectProjectedRepairScope} from '@personal-agent/cognition';
+import type {GoalRevisionSelectionRequest, GoalAncestorSelectionRequest, ImpactItem, LayaActionChoiceService,
   LayaActionSelection, ProjectedRepairInput, StoredRepairRequest} from '@personal-agent/cognition';
 import type {MemoryReadContext} from '@personal-agent/memory';
 import {isEffective} from '@personal-agent/goals';
@@ -18,6 +18,7 @@ const LAYA_COOLDOWN = 'proactive-cognition-laya-cooldown-v1';
 type Trigger = {kind: 'fact'; input: ProjectedRepairInput}
   | {kind: 'goal'; input: GoalRevisionSelectionRequest}
   | {kind: 'goal_created'; input: GoalCreatedSelectionRequest}
+  | {kind: 'goal_ancestor'; input: GoalAncestorSelectionRequest & {consumers: NodeRef[]}}
   | {kind: 'expiry'; input: {graphRevision: number; facts: NodeRef[]; consumers: NodeRef[]}};
 export interface GoalCreatedSelectionRequest {expectedGraphRevision: number; currentGoal: NodeRef}
 interface ReviewIntent {
@@ -91,6 +92,8 @@ export interface ProactiveCognitionHost {
   }>;
   reviewGoalRevision(input: GoalRevisionSelectionRequest, request: MemoryReadContext & {at: string}): Promise<ProactiveReviewReadback>;
   reviewGoalCreated(input: GoalCreatedSelectionRequest, request: MemoryReadContext & {at: string}): Promise<ProactiveReviewReadback>;
+  /** Additive current-head difference scope. Empty scope creates no task; old choices stay immutable. */
+  reviewGoalAncestorImpact(input: GoalAncestorSelectionRequest, request: MemoryReadContext & {at: string}): Promise<ProactiveReviewReadback | undefined>;
   readReview(taskId: string): ProactiveReviewReadback;
   /** Retry the same idempotent AgentArts handoff, never rerun a saved Laya decision. */
   handoffReview(taskId: string, context: MemoryReadContext): Promise<ProactiveReviewReadback>;
@@ -211,7 +214,10 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
     ? JSON.stringify([trigger.kind, trigger.input.currentGoal.id, trigger.input.currentGoal.revision])
     : trigger.kind === 'goal' ? JSON.stringify([trigger.kind,
       trigger.input.previousGoal.id, trigger.input.previousGoal.revision,
-      trigger.input.currentGoal.id, trigger.input.currentGoal.revision]) : undefined;
+      trigger.input.currentGoal.id, trigger.input.currentGoal.revision])
+      : trigger.kind === 'goal_ancestor' ? JSON.stringify([trigger.kind,
+        trigger.input.currentGoal.id, trigger.input.currentGoal.revision,
+        trigger.input.consumers.map(ref => [ref.id, ref.revision])]) : undefined;
   const goalTasks = (context: MemoryReadContext): Map<string, TaskSnapshot> => {
     const found = new Map<string, TaskSnapshot>();
     let beforeSequence: number | undefined;
@@ -339,7 +345,9 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
       consumers: trigger.input.consumers} : trigger.kind === 'goal_created'
         ? {kind: trigger.kind, currentGoal: trigger.input.currentGoal} : trigger.kind === 'goal'
           ? {kind: trigger.kind, previousGoal: trigger.input.previousGoal,
-            currentGoal: trigger.input.currentGoal} : trigger;
+            currentGoal: trigger.input.currentGoal} : trigger.kind === 'goal_ancestor'
+            ? {kind: trigger.kind, currentGoal: trigger.input.currentGoal,
+              consumers: trigger.input.consumers} : trigger;
     let key = 'proactive-cognition:' + toolArgumentsDigest({graphNamespace, bindingVersion, trigger: identity});
     let existing = runtime.findTaskByIdempotencyKey(key);
     if (!existing) {
@@ -383,15 +391,22 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
     const persisted = existing ? runtime.loadCheckpoint(existing.taskId, INTENT) as ReviewIntent : undefined;
     if (persisted) { request = {...request, at: persisted.evaluatedAt}; trigger = persisted.trigger; }
     const revision = trigger.kind === 'fact' ? trigger.input.projection.graphRevision
-      : trigger.kind === 'goal' || trigger.kind === 'goal_created'
+      : trigger.kind === 'goal' || trigger.kind === 'goal_created' || trigger.kind === 'goal_ancestor'
         ? trigger.input.expectedGraphRevision : trigger.input.graphRevision;
     const snapshot = store.read(revision);
     const scope = trigger.kind === 'fact'
       ? selectProjectedRepairScope(snapshot, request.at, trigger.input)
       : trigger.kind === 'goal' ? selectGoalRevisionImpact(snapshot, request.at, trigger.input)
+        : trigger.kind === 'goal_ancestor' ? selectGoalAncestorImpact(snapshot, request.at, {
+          expectedGraphRevision: trigger.input.expectedGraphRevision, currentGoal: trigger.input.currentGoal})
         : trigger.kind === 'goal_created' ? {items: [] as ImpactItem[]}
         : {items: expiredPublicFactScope(snapshot, request.at).items.filter(item =>
           trigger.input.consumers.some(ref => refKey(ref) === refKey(item.node)))};
+    if (trigger.kind === 'goal_ancestor'
+      && JSON.stringify(scope.items.map(item => item.node).sort((a, b) => refKey(a).localeCompare(refKey(b))))
+        !== JSON.stringify(trigger.input.consumers)) {
+      throw new ProtocolError('REVISION_CONFLICT', 'Goal ancestor scope changed');
+    }
     const subject = trigger.kind === 'goal_created'
       ? createdGoal(snapshot, trigger.input.currentGoal, request.at) : undefined;
     const intent: ReviewIntent = {version: 1, graphNamespace, bindingVersion, trigger: structuredClone(trigger),
@@ -546,8 +561,23 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
               previousGoal, currentGoal}};
           }
           const prior = recorded.get(goalIdentity(trigger)!);
-          if (prior && !goalNeedsReview(prior)) continue;
-          reviews.push(await review(trigger, request, recorded));
+          const ancestorScope = goal.revision > 1 ? selectGoalAncestorImpact(snapshot, request.at,
+            {expectedGraphRevision: snapshot.revision, currentGoal}) : undefined;
+          const ancestor: Trigger | undefined = ancestorScope?.items.length ? {kind: 'goal_ancestor', input: {
+            expectedGraphRevision: snapshot.revision, currentGoal,
+            consumers: ancestorScope.items.map(item => item.node).sort((a, b) => refKey(a).localeCompare(refKey(b))),
+          }} : undefined;
+          const previousAncestor = ancestor && recorded.get(goalIdentity(ancestor)!);
+          // Newly uncovered local work precedes an older pending handoff at the same request bound.
+          if (prior && ancestor && !previousAncestor) {
+            reviews.push(await review(ancestor, request, recorded));
+            if (reviews.length >= request.limit) break;
+          }
+          if (!prior || goalNeedsReview(prior)) reviews.push(await review(trigger, request, recorded));
+          if (ancestor && reviews.length < request.limit && !(prior && !previousAncestor)
+            && (!previousAncestor || goalNeedsReview(previousAncestor))) {
+            reviews.push(await review(ancestor, request, recorded));
+          }
         }
         if (reviews.length === 0) await reviewExpiry();
       }
@@ -564,6 +594,16 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
       }
       createdGoal(snapshot, selected.currentGoal, request.at);
       return review({kind: 'goal_created', input: selected}, request);
+    },
+    reviewGoalAncestorImpact: (input: GoalAncestorSelectionRequest, request: MemoryReadContext & {at: string}) => {
+      open(); active(request); evaluationTime(request.at);
+      const snapshot = store.read();
+      const scope = selectGoalAncestorImpact(snapshot, request.at, structuredClone(input));
+      if (!scope.items.length) return Promise.resolve(undefined);
+      return review({kind: 'goal_ancestor', input: {
+        expectedGraphRevision: scope.graphRevision, currentGoal: scope.currentGoal,
+        consumers: scope.items.map(item => item.node).sort((a, b) => refKey(a).localeCompare(refKey(b))),
+      }}, request);
     },
     readReview, handoffReview,
     close: () => { closed = true; for (const controller of controllers) controller.abort(); },
