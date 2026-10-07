@@ -8,6 +8,7 @@ import {
 } from './laya-action-choice.js';
 import type {LayaInferencePort} from './laya-decision.js';
 import {CognitionError} from './impact.js';
+import {withCognitionDeadline} from './deadline.js';
 
 export interface DeviceAnomalyActionChoicePort {
   choose(request: LayaActionChoiceRequest): Promise<LayaActionSelection>;
@@ -236,15 +237,21 @@ export class DeviceAnomalyDecisionService {
     sample: DeviceSample,
     layaRequest?: {deadline: string; signal: AbortSignal}
   ): Promise<DeviceAnomalyDecisionReceipt> {
+    // Capture caller-owned data before waiting for queued work or checkpoint I/O.
+    let submittedSample: DeviceSample;
+    try { submittedSample = structuredClone(sample); }
+    catch { throw new CognitionError('INVALID_ARGUMENT'); }
+    const submittedRequest = layaRequest
+      ? {deadline: layaRequest.deadline, signal: layaRequest.signal} : undefined;
     const operation = this.tail.then(async () => {
       await this.load();
       try {
-        const receipt = await this.evaluateSerial(sample, layaRequest);
+        const receipt = await this.evaluateSerial(submittedSample, submittedRequest);
         if (receipt.status !== 'replayed') {
-          this.getSourceState(sample.source).lastReceipt = receipt;
+          this.getSourceState(submittedSample.source).lastReceipt = structuredClone(receipt);
           await this.save();
         }
-        return receipt;
+        return structuredClone(receipt);
       } catch (error) {
         if (this.checkpoint) {this.loaded = false; this.sourceStates.clear();}
         throw error;
@@ -349,12 +356,8 @@ export class DeviceAnomalyDecisionService {
 
         let selection: LayaActionSelection;
         try {
-          selection = await this.choiceService.choose({
-            context,
-            candidates,
-            deadline,
-            signal,
-          });
+          selection = await withCognitionDeadline({deadline, signal}, bounded =>
+            this.choiceService.choose({context, candidates, ...bounded}), this.now);
         } catch {
           // If inference fails, do NOT update cooldown timestamp so subsequent attempts can proceed
           return {

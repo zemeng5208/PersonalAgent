@@ -5,6 +5,79 @@ import {
   CognitionError,
 } from '../dist/index.js';
 
+test('queued device evaluation preserves submitted telemetry and request deadline', async () => {
+  let release;
+  const loading = new Promise(resolve => { release = resolve; });
+  const checkpoint = {load: () => loading, save() {}};
+  const service = new DeviceAnomalyDecisionService(createMockLayaChoiceInference(), {checkpoint});
+  const sample = {source: 'synthetic', timestamp: new Date().toISOString(), cpuPercent: 10,
+    memoryPercent: 20, samplingIntervalMs: 1000, unavailableMetrics: []};
+  const expected = structuredClone(sample);
+  const request = {deadline: new Date(Date.now() + 5000).toISOString(), signal: new AbortController().signal};
+  const pending = service.evaluateSample(sample, request);
+  sample.cpuPercent = 95;
+  sample.unavailableMetrics.push('memory');
+  request.deadline = new Date(Date.now() - 1000).toISOString();
+  release(undefined);
+  const receipt = await pending;
+  assert.equal(receipt.status, 'normal');
+  assert.deepEqual(receipt.sample, expected);
+});
+
+test('returned device receipts cannot rewrite later feedback or caller telemetry', async () => {
+  let saved;
+  const checkpoint = {load: () => saved, save: value => { saved = structuredClone(value); }};
+  const service = new DeviceAnomalyDecisionService(createMockLayaChoiceInference(), {checkpoint});
+  const sample = {source: 'synthetic', timestamp: new Date().toISOString(), cpuPercent: 10,
+    memoryPercent: 20, samplingIntervalMs: 1000};
+  const receipt = await service.evaluateSample(sample);
+  const expected = structuredClone(receipt);
+  receipt.status = 'alert_triggered';
+  receipt.notificationDelivered = true;
+  receipt.sample.cpuPercent = 99;
+  assert.equal(sample.cpuPercent, 10);
+  sample.memoryPercent = 99;
+  assert.deepEqual((await service.readFeedback())[0].receipt, expected);
+  assert.deepEqual(saved.sources.synthetic.lastReceipt, expected);
+});
+
+test('uncooperative device choices honor cancellation and deadline without blocking feedback', async () => {
+  for (const interruption of ['cancel', 'deadline']) {
+    const controller = new AbortController();
+    let portSignal;
+    let started;
+    const entered = new Promise(resolve => { started = resolve; });
+    let deliveries = 0;
+    const service = new DeviceAnomalyDecisionService({choose({signal}) {
+      portSignal = signal;
+      started();
+      return new Promise(() => {});
+    }}, {sustainedSampleCount: 1, notificationPort: {sendAdvisoryNotification() {
+      deliveries++;
+      return {delivered: true};
+    }}});
+    const sample = {source: 'synthetic', timestamp: new Date().toISOString(), cpuPercent: 95,
+      memoryPercent: 20, samplingIntervalMs: 1000};
+    const pending = service.evaluateSample(sample, {
+      deadline: new Date(Date.now() + (interruption === 'deadline' ? 30 : 5000)).toISOString(),
+      signal: controller.signal,
+    });
+    await entered;
+    if (interruption === 'cancel') controller.abort();
+    let guard;
+    try {
+      const receipt = await Promise.race([pending,
+        new Promise(resolve => { guard = setTimeout(() => resolve({status: 'unsettled'}), 300); })]);
+      assert.equal(receipt.status, 'monitoring');
+      assert.equal(portSignal.aborted, true);
+      assert.equal(deliveries, 0);
+      assert.equal((await service.readFeedback())[0].receipt.status, 'monitoring');
+      assert.equal((await service.evaluateSample({...sample, cpuPercent: 10,
+        timestamp: new Date(Date.parse(sample.timestamp) + 1000).toISOString()})).status, 'normal');
+    } finally { clearTimeout(guard); }
+  }
+});
+
 test('durable device feedback preserves cooldown and replay protection across restart', async () => {
   let saved;
   const checkpoint = {load: () => saved, save: value => {saved = structuredClone(value);}};
