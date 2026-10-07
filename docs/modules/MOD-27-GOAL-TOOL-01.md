@@ -198,3 +198,26 @@ Goal/Fact/GoalCognitionHost、SQLite Runtime 与显式 Fake Laya 读回覆盖 Go
 实际 exit0，操作保持禁用、bridge0、console/pageerror 为零。语法及 diff 校验通过，
 此低风险文案没有新增或重复正式测试。私有证据为认知工作树下
 `goal-plan-cause-*`；首轮错误选择器超时也保留，不将该项提升为真实云或设备验收。
+
+## 新到期分析与待云许可 Goal 分离（2026-10-07 续接）
+
+公开 Fact source record/drain/process completed receipt 和公开 createGoal 命令的实际
+对照发现：Fact 水位及 receipt backlog 已清空后，旧 Goal 已有本地选择、等待云许可，
+每次 idle consume 都返回该旧 review，导致独立的只随时间到期分析一直未启动。
+同图仅开启云许可才出现 expiry，违背本地持续认知与云交接分别授权的边界。
+
+核心 producer 仅让尚未记录 exact expiry trigger 的第一次本地分析，在较旧 Goal
+交接重放之前取得一个计入 request.limit 的名额。新 Goal 与 Fact backlog 仍优先；
+任何已记录 expiry 都沿原零-review fallback，不反向占据 Goal 恢复名额。
+保留原任务稳定 key、Fact cursor、fullgraphRevision/CAS、云许可及历史 checkpoint，
+不新增持久队列、不改 TaskRuntime/FactHost/Policy，也不宣称普遍调度轮换。
+
+固定 producer blob `a1f14df4a1cdc16b2eb99bd927a3be105ada5de6`、专属测试 blob
+`b0a9613653692ef4888a636af8a56b62a5c70e00`，认知线在私输出编译该新 producer 后，
+Host suite24/24实际 exit0：覆盖limit1、新Goal优先、旧expiry不可受理不挡Goal、
+SQLite重启与分开许可的两个原 handoff各受理一次，图及cursor不变。
+实际公开 DesktopHost 消费在 cloudfalse 下 infer2/dispatch0、随后许可 infer仍2/dispatch2，
+graph始终3；Laya/HTTP为明确Fake、时间注入，未运行 Goal.create 的UI IPC或DOM现场。
+认知私目录 `expiry-fairness-frozen.json` 保存私编译出口、baseline依赖、命令与实际退出
+回执，`public-goal-pending-expiry-*` 保存公开消费者前后；初次错误createGoal签名日志保留。
+根集成检查与真实模型/云/设备验收另记，不把旧599项结果借给新 producer。

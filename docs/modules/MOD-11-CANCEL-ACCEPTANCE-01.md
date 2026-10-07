@@ -87,3 +87,23 @@ runtimeConnection 延后已捕获的合法批次，证明原消费者可保护�
 599 项中588通过、0失败/取消、11跳过；Node24.15.0、两核，
 完成于2026-10-07 21:05:23 UTC，日志 `core-desktop129-check.log`。
 后续纯记录变更不当新源码重跑；根完整、当前 Windows CI及物理验收另记。
+
+## 公开进度事件的权威步骤读回（2026-10-07 续接）
+
+生产同步 `readEvents` 的实际消费对照发现：Runtime `recordProgress` 已持久化
+running/revision4 的 Step，合法 `task.progress` 事件推进游标到4，面板投影却仍为
+running/revision3、无步骤；公开 get 读回后才显示实际标签。progress payload 只有
+stepId/label/可选完成单位，没有 Task revision，不能直接当 TaskSnapshot。
+
+原 pump 现在在普通事件分支完整处理后，按 accepted progress 的 taskId 批内去重，
+复用公开 `refresh` 取得实际 Task。多个读回分别等待结算；一个失败不会跳过同批终态
+或取消审批清理，也不会阻断另一个 Task 的成功读回。错误沿原路径显示，重放事件不
+触发额外 get；不造 Step/revision/百分比，不新增队列或盲重试。
+
+新增四个公开消费者测试与前两包/原取消检查共14/14，最终冻结测试实际 exit0；
+原 panel/CSP AFTER 自动显示真实步骤标签、无手工 refresh，停止仍取消本地合成只读
+worker，发送与草稿正常，console/pageerror 为零。main blob
+`741f8f42595baf2ddc3d697203bc5e3ea63e258d`，新测试 blob
+`4a3a86513080d4566aa63630e37f3c0ed2357787`；私证据 `panel-task-progress-*`。
+get 失败及旧回执延后为明确 Fake，公共 Task/Step/events 为实际本地 Runtime 读回。
+未验证真实云 worker、完整 Electron/Windows 或物理桌面，不借上一599项覆盖新源码。
