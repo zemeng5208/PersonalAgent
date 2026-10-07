@@ -926,6 +926,44 @@ test('withdrawn Goal revisions review pinned plans while inactive creations and 
   }
 });
 
+test('future or expired Goal revisions review pinned plans without starting first planning or rewriting validity', async () => {
+  for (const validity of [{validFrom: '2027-01-01T00:00:00.000Z'}, {validUntil: '2026-09-26T00:00:00.000Z'}]) {
+    for (const withPlan of [false, true]) {
+      const paths = await workspace(), calls = state({selectedId: 'recheck', prepareUnavailable: true});
+      let binding = open(paths, calls);
+      const poll = () => binding.host.consumeAndReview({...context(), at, limit: 1, afterGraphRevision: 0});
+      try {
+        const store = binding.application.runtime.bindCoordinationStore(graphNamespace);
+        const {kind: _kind, ...input} = node('validity-revision-goal', 'goal', []);
+        createGoal(store, 0, input);
+        if (withPlan) store.append(1, node('validity-pinned-plan', 'plan', [ref(input.id)]));
+        reviseGoal(store, store.read().revision, 1, {...input, ...validity, reason: 'User revised Goal validity'});
+        const before = store.read(), batch = await poll(), first = batch.reviews[0];
+        assert.equal(batch.reviews.length, 1);assert.equal(batch.nextGraphRevision, 0);
+        assert.equal(first.review.subjectGoal, undefined);
+        assert.equal(first.review.action, withPlan ? 'RECHECK' : 'KEEP');
+        assert.deepEqual(first.review.affected.map(item => item.node.id), withPlan ? ['validity-pinned-plan'] : []);
+        assert.equal(calls.layaCalls, withPlan ? 1 : 0);assert.equal(calls.agentArtsCalls, 0);
+        binding.close();binding = open(paths, calls);
+        const restored = await poll();
+        assert.equal(restored.reviews.length, withPlan ? 1 : 0);
+        if (withPlan) {
+          assert.equal(restored.reviews[0].task.taskId, first.task.taskId);
+          calls.prepareUnavailable = false;
+          const submitted = (await poll()).reviews[0];
+          assert.equal(submitted.task.taskId, first.task.taskId);
+          await waitFor(binding.application, submitted.handoff.task.taskId, 'succeeded');
+          assert.equal((await poll()).reviews.length, 0);
+        }
+        assert.equal(calls.layaCalls, withPlan ? 1 : 0);assert.equal(calls.agentArtsCalls, withPlan ? 1 : 0);
+        assert.deepEqual(binding.application.runtime.bindCoordinationStore(graphNamespace).read(), before);
+      } finally {
+        binding.close();await rm(paths.directory, {recursive: true, force: true});
+      }
+    }
+  }
+});
+
 test('graph Goal consumption resumes a legacy created revision task without changing its identity', async () => {
   const paths = await workspace();
   const calls = state();
