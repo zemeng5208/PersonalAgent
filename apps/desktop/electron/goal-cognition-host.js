@@ -254,6 +254,25 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
       const prior=application.runtime.loadCheckpoint(item.taskId,MARKER);
       if (typeof prior==='string') record(cognition.readReview(prior));
     }
+    // Watermark Goal reviews have no Goal-tool marker. Restore their saved cards,
+    // including valid choices awaiting reconciliation, without resuming any work.
+    let snapshotSequence,beforeSequence;
+    do {
+      const page=application.runtime.listTasks({conversationId:`proactive-cognition:${namespace}`,limit:100,
+        ...(snapshotSequence===undefined?{}:{snapshotSequence}),
+        ...(beforeSequence===undefined?{}:{beforeSequence})});
+      snapshotSequence=page.snapshotSequence;
+      for (const task of page.items) {
+        if (reviews.has(task.taskId)) continue;
+        const intent=application.runtime.loadCheckpoint(task.taskId,'proactive-cognition-intent-v1');
+        if (intent?.version!==1 || intent.graphNamespace!==namespace || intent.bindingVersion!==VERSION
+          || !['goal','goal_created','goal_unplanned','goal_ancestor'].includes(intent.trigger?.kind)) continue;
+        const value=cognition.readReview(task.taskId),review=value.review;
+        if (!review || review.taskId!==task.taskId || review.graphNamespace!==namespace || review.bindingVersion!==VERSION) continue;
+        record(value);
+      }
+      beforeSequence=page.nextBeforeSequence;
+    } while (beforeSequence!==undefined);
   }
   function execution(value) {
     if (value.handoff?.state!=='submitted') return {state:value.handoff?.state??value.review?.selection?.state??'local',

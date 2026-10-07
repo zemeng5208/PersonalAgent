@@ -101,6 +101,109 @@ test('goal change chooses locally; explicit cloud grant sends one minimized task
   assert.throws(()=>restarted.assertCloudSend({taskId,goal:f.sent[0].query,signal:new AbortController().signal}),/当前会话/);
 });
 
+async function savedGoalCards(t) {
+  const root=fileURLToPath(new URL('../../../.cache/desktop-goal-cognition/',import.meta.url));
+  await mkdir(root,{recursive:true});const directory=await mkdtemp(path.join(root,'restore-'));
+  let application,facts,host,layaCalls=0;const sent=[];
+  const chooser=new LayaActionChoiceService({infer:async payload=>{
+    layaCalls++;const keys=Object.keys(payload.questions.action.criteria),selected=keys[0];
+    return {answers:{action:{choice:selected,probabilities:Object.fromEntries(keys.map(key=>
+      [key,key===selected?0.98:0.02/(keys.length-1)])),answer_confidence:0.98,confidence:0.5}}};
+  }});
+  async function open() {
+    application=createAgentArtsRuntimeApplication({path:path.join(directory,'runtime.sqlite'),
+      gatewayUrl:'https://agentarts.example.test',runtimeName:'synthetic',
+      beforeCompetitionSend:request=>host.assertCloudSend(request),
+      authorizationProvider:{read:async()=> 'Bearer synthetic-not-a-key'},
+      fetchImpl:async(_url,input)=>{sent.push(JSON.parse(input.body));return new Response(
+        JSON.stringify({event:'message',data:{text:'Synthetic saved planning receipt',index:0}}),
+        {headers:{'content-type':'application/json'}});}});
+    application.runtime.provisionCoordinationStore(namespace);
+    facts=application.createCompetitionFactHost({memoryPath:path.join(directory,'memory.sqlite'),
+      memoryNamespace:'synthetic-public-memory',graphNamespace:namespace,consumerKey:'saved-cards'});
+    const client=new Client(application,Date.now);await client.connect();
+    host=createDesktopGoalCognitionHost({application,client,facts,namespace,goalHost:{listTasks:()=>[]},
+      chooser,ready:()=>true,createHost:createProactiveCognitionHost});
+  }
+  await open();const store=application.runtime.bindCoordinationStore(namespace);
+  store.append(0,node('private-source','fact',[],'PRIVATE_SOURCE_SENTINEL','private'));
+  store.append(1,node('goal','goal',[ref('private-source')],'Registered Goal','private'));
+  store.append(2,node('goal','goal',[ref('private-source')],'Revised before first planning','private'));
+  host.configure({enabled:true,cloudAllowed:true});await host.tick();
+  const card=host.snapshot().reviews[0];assert.ok(card?.taskId);
+  assert.equal((await terminal(application,card.taskId)).state,'succeeded');
+  const review=application.runtime.loadCheckpoint(card.reviewTaskId,'proactive-cognition-review-v1');
+  const intent=application.runtime.loadCheckpoint(card.reviewTaskId,'proactive-cognition-intent-v1');
+  assert.equal(intent.trigger.kind,'goal_unplanned');assert.equal(layaCalls,1);assert.equal(sent.length,1);
+  t.after(async()=>{host.close();facts.close();application.close();await rm(directory,{recursive:true,force:true});});
+  return {application:()=>application,host:()=>host,review,intent,card,sent,layaCalls:()=>layaCalls,
+    async rebuild(reopenRuntime=false) {
+      host.close();
+      if(reopenRuntime) {facts.close();application.close();await open();}
+      else {
+        const client=new Client(application,Date.now);await client.connect();
+        host=createDesktopGoalCognitionHost({application,client,facts,namespace,goalHost:{listTasks:()=>[]},
+          chooser,ready:()=>true,createHost:createProactiveCognitionHost});
+      }
+      return host;
+    }};
+}
+
+test('saved Goal cards restore through all task pages with exact bindings and no new handoff',async t=>{
+  const f=await savedGoalCards(t),runtime=f.application().runtime;
+  const save=(key,intent,review=f.review,conversationId=`proactive-cognition:${namespace}`)=>{
+    const task=runtime.submitTaskWithCheckpoint({goal:'Synthetic persisted review fixture',conversationId,
+      idempotencyKey:key},'proactive-cognition-intent-v1',intent);
+    if(review) runtime.saveCheckpoint(task.taskId,'proactive-cognition-review-v1',{...review,taskId:task.taskId});
+    return task;
+  };
+  const unknown=save('saved-goal-unknown',{...f.intent,retryOf:f.card.reviewTaskId});
+  await runtime.runTask(unknown.taskId,async()=>{
+    runtime.transitionTask(unknown.taskId,'waiting_reconciliation',{
+      error:{code:'RESULT_UNKNOWN',message:'Synthetic persisted review completion needs reconciliation',retryable:false}});
+    return {resultSummary:'Original saved choice remains available'};
+  },{deadline:new Date(Date.now()+60_000).toISOString(),sideEffect:'read'});
+  for(let n=0;n<105;n++) save('saved-goal-unreviewed-'+n,f.intent,null);
+  const excluded=[
+    save('saved-goal-old-binding',{...f.intent,bindingVersion:'old-desktop-binding'}),
+    save('saved-goal-other-namespace',{...f.intent,graphNamespace:'other-namespace'}),
+    save('saved-goal-other-conversation',f.intent,f.review,'other-conversation'),
+    save('saved-goal-fact-not-in-this-scope',{...f.intent,trigger:{kind:'fact',input:{}}}),
+  ];
+  const snapshots=Object.fromEntries([f.card.reviewTaskId,unknown.taskId,...excluded.map(task=>task.taskId)]
+    .map(id=>[id,{task:runtime.getTask(id),review:runtime.loadCheckpoint(id,'proactive-cognition-review-v1')}]));
+  const restored=await f.rebuild(),cards=restored.snapshot().reviews;
+  assert.deepEqual(new Set(cards.map(card=>card.reviewTaskId)),new Set([f.card.reviewTaskId,unknown.taskId]));
+  const completed=cards.find(card=>card.reviewTaskId===f.card.reviewTaskId);
+  assert.equal(completed.taskId,f.card.taskId);assert.equal(completed.state,'succeeded');
+  assert.equal(cards.find(card=>card.reviewTaskId===unknown.taskId).selected,f.review.selectedOption.id);
+  assert.equal(runtime.getTask(unknown.taskId).state,'waiting_reconciliation');
+  assert.equal(restored.snapshot().enabled,false);assert.equal(restored.snapshot().cloudAllowed,false);
+  assert.throws(()=>restored.assertCloudSend({taskId:f.card.taskId,goal:f.sent[0].query,
+    signal:new AbortController().signal}),/当前会话/);
+  for(const [id,snapshot] of Object.entries(snapshots)) {
+    assert.deepEqual(runtime.getTask(id),snapshot.task);
+    assert.deepEqual(runtime.loadCheckpoint(id,'proactive-cognition-review-v1'),snapshot.review);
+  }
+  assert.equal(f.layaCalls(),1);assert.equal(f.sent.length,1);
+});
+
+test('saved Goal cards survive actual Runtime SQLite close and reopen without restoring permission',async t=>{
+  const f=await savedGoalCards(t),review=structuredClone(f.review);
+  f.application().runtime.bindCoordinationStore(namespace).append(3,node('later-fact','fact',[],'Later graph revision'));
+  const original=f.application(),restored=await f.rebuild(true);
+  assert.notEqual(f.application(),original,'the Runtime application and SQLite connection are recreated');
+  const snapshot=restored.snapshot();assert.equal(snapshot.reviews.length,1);
+  assert.equal(snapshot.reviews[0].reviewTaskId,f.card.reviewTaskId);
+  assert.equal(snapshot.reviews[0].taskId,f.card.taskId);assert.equal(snapshot.reviews[0].state,'succeeded');
+  assert.equal(snapshot.reviews[0].sourceOutdated,true);
+  assert.deepEqual(f.application().runtime.loadCheckpoint(f.card.reviewTaskId,'proactive-cognition-review-v1'),review);
+  assert.equal(snapshot.enabled,false);assert.equal(snapshot.cloudAllowed,false);
+  await restored.tick();assert.equal(f.layaCalls(),1);assert.equal(f.sent.length,1);
+  assert.throws(()=>restored.assertCloudSend({taskId:f.card.taskId,goal:f.sent[0].query,
+    signal:new AbortController().signal}),/当前会话/);
+});
+
 test('revocation while credentials are pending prevents the actual cloud request',async t=>{
   const f=await fixture(t,{revokeDuringCredentialRead:true});
   f.host().configure({enabled:true,cloudAllowed:true});await f.host().tick();
