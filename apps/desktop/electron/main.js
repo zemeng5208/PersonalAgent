@@ -667,6 +667,9 @@ function reportPanelVoiceFailure() {
 
 async function stopPanelVoice() {
   const results = await Promise.allSettled([stopWakeVoice()]);
+  if (voiceInput?.hasActive()) {
+    results.push(...await Promise.allSettled([voiceInput.cancelCapture(panel?.webContents.id)]));
+  }
   results.push(...await Promise.allSettled([
     liveVoice?.stop(), sisPlaybackHost?.stop(), microphoneCaptureHost?.revoke(),
   ]));
