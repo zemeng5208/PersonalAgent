@@ -4,6 +4,7 @@ import {mkdir,mkdtemp,rm} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {Client} from '@personal-agent/client';
+import {toolArgumentsDigest} from '@personal-agent/tool-gateway';
 import {LayaActionChoiceService,createCommittedMeetingProjectionReader,selectProjectedRepairScope} from '@personal-agent/cognition';
 import {createAgentArtsRuntimeApplication,createProactiveCognitionHost} from '@personal-agent/runtime/application';
 import {createDesktopGoalCognitionHost} from '../electron/goal-cognition-host.js';
@@ -537,3 +538,86 @@ test('meeting reviewed repair CAS leaves the other Fact Goal and Plan in the sam
 });
 
 
+
+async function loseAcceptedHandoff(f) {
+  f.host().configure({enabled:true,cloudAllowed:false});await f.host().tick();
+  const reviewTaskId=f.host().snapshot().reviews.find(card=>card.action!=='KEEP').reviewTaskId;
+  const call=f.client.call.bind(f.client);let captured;
+  f.client.call=async (operation,payload,options)=>{
+    const receipt=await call(operation,payload,options);
+    if(operation==='task.submit') {captured=receipt;throw Error('Synthetic delivery lost an accepted validated receipt');}
+    return receipt;
+  };
+  f.host().configure({enabled:true,cloudAllowed:true});
+  await assert.rejects(f.host().applyDecision(reviewTaskId),/Synthetic delivery/);
+  f.client.call=call;assert.ok(captured?.taskId);
+  assert.equal(f.application.runtime.loadCheckpoint(reviewTaskId,'desktop-goal-cognition-handoff-task-v1'),undefined);
+  return {reviewTaskId,taskId:captured.taskId};
+}
+
+test('lost handoff receipt restores a succeeded task without cloud permission or another inference',async t=>{
+  const f=await fixture(t),accepted=await loseAcceptedHandoff(f);
+  assert.equal((await terminal(f.application,accepted.taskId)).state,'succeeded');
+  const saved=f.application.runtime.loadCheckpoint(accepted.reviewTaskId,'proactive-cognition-review-v1');
+  f.store.append(5,node('later-goal','goal',[],'Later source revision'));
+  const host=f.restart(),card=host.snapshot().reviews.find(item=>item.reviewTaskId===accepted.reviewTaskId);
+  assert.equal(card.taskId,accepted.taskId);assert.equal(card.state,'succeeded');assert.equal(card.sourceOutdated,true);
+  assert.equal(card.graphUpdateVerified,false);assert.equal(host.snapshot().enabled,false);assert.equal(host.snapshot().cloudAllowed,false);
+  assert.throws(()=>host.assertCloudSend({taskId:accepted.taskId,goal:f.sent[0].query,signal:new AbortController().signal}),/当前会话/);
+  assert.deepEqual(f.application.runtime.loadCheckpoint(accepted.reviewTaskId,'proactive-cognition-review-v1'),saved);
+  assert.equal(f.layaCalls(),1);assert.equal(f.sent.length,1);
+});
+
+test('lost handoff receipt restores the current running task without waiting or redispatch',async t=>{
+  const f=await fixture(t,{holdFetch:true});t.after(()=>f.releaseFetch());
+  const accepted=await loseAcceptedHandoff(f);
+  for(let n=0;n<100 && !f.sent.length;n++) await new Promise(resolve=>setTimeout(resolve,5));
+  assert.equal(f.sent.length,1);assert.equal(f.application.runtime.getTask(accepted.taskId).state,'running');
+  try {
+    const card=f.restart().snapshot().reviews.find(item=>item.reviewTaskId===accepted.reviewTaskId);
+    assert.equal(card.taskId,accepted.taskId);assert.equal(card.state,'running');assert.equal(card.graphUpdateVerified,false);
+    assert.equal(f.host().snapshot().cloudAllowed,false);assert.equal(f.layaCalls(),1);assert.equal(f.sent.length,1);
+  } finally {f.releaseFetch();await terminal(f.application,accepted.taskId);}
+});
+
+test('lost handoff receipt restores created tasks and rejects absent or mismatched durable bindings',async t=>{
+  const f=await fixture(t);f.host().configure({enabled:true,cloudAllowed:false});await f.host().tick();
+  const runtime=f.application.runtime,reviewTaskId=f.host().snapshot().reviews[0].reviewTaskId;
+  const review=runtime.loadCheckpoint(reviewTaskId,'proactive-cognition-review-v1');
+  const commandId='proactive-'+toolArgumentsDigest({graphNamespace:namespace,bindingVersion:'desktop-goal-analysis-v1',taskId:reviewTaskId});
+  const task=runtime.submitTask({goal:'Synthetic persisted accepted goal',conversationId:`desktop-proactive-goals:${namespace}`,idempotencyKey:commandId});
+  const envelope={commandId,reviewTaskId,selectionDigest:toolArgumentsDigest(review),exportPolicyVersion:'desktop-goal-analysis-v1',goal:task.goal,deadline:'2026-01-01T00:00:00.000Z'};
+  runtime.saveCheckpoint(reviewTaskId,'proactive-cognition-handoff-v1',envelope);
+  let card=f.restart().snapshot().reviews[0];assert.equal(card.taskId,task.taskId);assert.equal(card.state,'created');
+  // An already accepted task remains a receipt after its dispatch deadline expires.
+  for(const changed of [{...envelope,reviewTaskId:'foreign-review'},{...envelope,selectionDigest:'foreign-digest'},
+    {...envelope,exportPolicyVersion:'foreign-binding'},{...envelope,commandId:'foreign-command'},
+    {...envelope,goal:'foreign payload'},null]) {
+    runtime.saveCheckpoint(reviewTaskId,'proactive-cognition-handoff-v1',changed);
+    card=f.restart().snapshot().reviews[0];assert.equal(card.taskId,undefined);
+  }
+  const foreign=runtime.submitTask({goal:task.goal,conversationId:'desktop-proactive-goals:foreign-namespace',idempotencyKey:'foreign-receipt'});
+  runtime.saveCheckpoint(reviewTaskId,'proactive-cognition-handoff-v1',{...envelope,commandId:'foreign-receipt'});
+  card=f.restart().snapshot().reviews[0];assert.equal(card.taskId,undefined);assert.equal(runtime.getTask(foreign.taskId).state,'created');
+  runtime.saveCheckpoint(reviewTaskId,'proactive-cognition-handoff-v1',envelope);
+  runtime.saveCheckpoint(reviewTaskId,'desktop-goal-cognition-handoff-task-v1',null);
+  assert.equal(f.restart().snapshot().reviews[0].taskId,undefined,'a present malformed Desktop marker is not replaced by fallback');
+  assert.equal(f.layaCalls(),1);assert.equal(f.sent.length,0);assert.equal(f.host().snapshot().cloudAllowed,false);
+  // A foreign-conversation task under the exact otherwise valid command is not this receipt.
+  const other=await fixture(t);other.host().configure({enabled:true,cloudAllowed:false});await other.host().tick();
+  const otherId=other.host().snapshot().reviews[0].reviewTaskId,otherRuntime=other.application.runtime;
+  const otherReview=otherRuntime.loadCheckpoint(otherId,'proactive-cognition-review-v1');
+  const exactCommand='proactive-'+toolArgumentsDigest({graphNamespace:namespace,bindingVersion:'desktop-goal-analysis-v1',taskId:otherId});
+  const foreignTask=otherRuntime.submitTask({goal:envelope.goal,conversationId:'desktop-proactive-goals:foreign-namespace',idempotencyKey:exactCommand});
+  otherRuntime.saveCheckpoint(otherId,'proactive-cognition-handoff-v1',{...envelope,commandId:exactCommand,reviewTaskId:otherId,selectionDigest:toolArgumentsDigest(otherReview)});
+  assert.equal(other.restart().snapshot().reviews[0].taskId,undefined);
+  assert.equal(otherRuntime.getTask(foreignTask.taskId).state,'created');assert.equal(other.sent.length,0);
+});
+
+test('lost handoff receipt fallback preserves the original Desktop receipt marker priority',async t=>{
+  const f=await fixture(t);f.host().configure({enabled:true,cloudAllowed:true});await f.host().tick();
+  const original=f.host().snapshot().reviews[0];await terminal(f.application,original.taskId);
+  f.application.runtime.saveCheckpoint(original.reviewTaskId,'proactive-cognition-handoff-v1',{commandId:'foreign-command',reviewTaskId:'foreign-review'});
+  const card=f.restart().snapshot().reviews[0];assert.equal(card.taskId,original.taskId);assert.equal(card.state,'succeeded');
+  assert.equal(f.layaCalls(),1);assert.equal(f.sent.length,1);assert.equal(f.host().snapshot().cloudAllowed,false);
+});

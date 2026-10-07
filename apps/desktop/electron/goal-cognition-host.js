@@ -238,6 +238,23 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
         const task=application.runtime.getTask(saved.taskId);
         if (task.conversationId!==conversationId) throw Error('目标分析回执绑定不匹配');
         value={...value,handoff:{state:'submitted',task}};
+      } else if (saved===undefined) {
+        // A submit receipt may be lost after Runtime accepted the durable command.
+        // Recover only its bound existing Goal task; no dispatch or session grant.
+        const reviewIntent=application.runtime.loadCheckpoint(value.task.taskId,'proactive-cognition-intent-v1');
+        const intent=application.runtime.loadCheckpoint(value.task.taskId,'proactive-cognition-handoff-v1');
+        const commandId='proactive-'+toolArgumentsDigest({graphNamespace:namespace,bindingVersion:VERSION,taskId:value.task.taskId});
+        if (reviewIntent?.version===1 && reviewIntent.graphNamespace===namespace && reviewIntent.bindingVersion===VERSION
+          && ['goal','goal_created','goal_unplanned','goal_ancestor'].includes(reviewIntent.trigger?.kind)
+          && value.review.graphNamespace===namespace && value.review.bindingVersion===VERSION
+          && intent?.commandId===commandId && intent.reviewTaskId===value.task.taskId
+          && intent.selectionDigest===toolArgumentsDigest(value.review) && intent.exportPolicyVersion===VERSION
+          && typeof intent.goal==='string' && intent.goal.trim()) {
+          const task=application.runtime.findTaskByIdempotencyKey(commandId);
+          if (task?.conversationId===conversationId && task.goal===intent.goal) {
+            value={...value,handoff:{state:'submitted',task}};
+          }
+        }
       }
     }
     reviews.set(value.task.taskId,value);
