@@ -162,3 +162,42 @@ apps/desktop/test/live-voice-history.test.mjs` 共 18/18 通过；`git diff --ch
 真实千问双向音频与工具桥、物理麦克风/扬声器仍需在最终组合中分别验收。
 磁盘持续不可写时，覆盖层不具备跨进程耐久性，不能宣称重启后仍保留未落盘消息。
 当前增量为 `review` / `provisional`，不据此将 PA-007 或 MOD-14 整体标记 done。
+
+## 2026-10-07：原面板与浏览器音频生命周期读回
+
+本节是现有 PR #302 的独立消费证据，尚未合入 `main@4b5ec61`，保留前述历史结论。
+使用原 panel HTML、Renderer、bootstrap、CSS/CSP 和 Chromium 原生 WebAudio；
+IPC、Gateway 与桌面快照为显式 Fake；Live 采集回执为 Fake，PCM/WAV 为本地合成静音。
+下述采集链使用浏览器明确的 Fake 设备，MediaStreamTrack/AudioWorklet API 实际运行。
+没有调用真实 SIS、Live 或 AgentArts API，没有物理麦克风或扬声器验收。
+
+- Live 正常链固定 head `70b506e8239f78b2376d27931fb764aaf869293c`：公开 Host 经原
+  面板按钮收到 ready，原生 AudioContext 为 running/24 kHz；PCM 播放结束后原
+  Renderer 发 drained，Host 恢复 listening。停止读回 context closed/stopped 后
+  Host inactive；再次启动建立独立新 context，旧 context 保持 closed。ready/stopped
+  各两次、drained 一次，Gateway close 与 Fake 麦克风授权/撤销各两次，console/pageerror 为零。
+- 同一固定版本的故障链显式让 `context.close()` 拒绝：原 Renderer 报 error，Host
+  经过原五秒确认期限保留释放未确认、active/hasActive 和错误原因。公开麦克风 Host
+  的 Fake track 回执已 verified，而真实浏览器输出 context 仍 running；原面板手动
+  录音与 Wake 禁用，重复 Live 点击没有新 context、Gateway 或麦克风授权。该结果
+  证明两种资源读回必须分别核实，不能用采集回执推断输出已释放。
+- SIS 播放固定 head `1a115444635d978191584f88f6e45efa86b1be14`：公开播放 Host 经原
+  Renderer 对 50 ms WAV 实际 decode/resume/start/onended 后收到 completed，原生
+  context 为 closed/44.1 kHz，Renderer 音频副本清零。第二个一秒 WAV 在 started 后
+  并发停止，单一 stopped 回执、结果拒绝为已停止；两个 context 均 closed，音频副本
+  清零，completed/stopped 各一次，error/release_failed 和 console/pageerror 为零。
+- 采集链固定 head `5d68903956bd5614b9338fe2deae6318e877c4f3`：真实 localhost HTTP
+  原页面和 MIME、原 CSP，经明确的浏览器 Fake media device/permission 开关，运行原
+  AudioWorklet 与公开麦克风 Host/PCM source。两个逻辑订阅共享一个 native stream，
+  均收到 16 kHz/3200 bytes 帧；释放首订阅后 track 仍 live，最后释放后实际读回
+  track ended/context closed，Host verified。重开建立新代，旧代维持关闭，最终两代
+  均 ended/closed，ready/stopped 各两次、console/pageerror 为零。最初虚拟 HTTP
+  路由无法供 Worklet 独立加载的 AbortError 与生产清理读回保留；改用合法本地 HTTP
+  后通过，没有放宽 CSP、禁用浏览器安全或修改生产源码。
+
+私有诊断记录在 `.worktrees/mod15-host-20261007/.cache/review-evidence/20261007/`：
+`live-native-webaudio-validation.md`、`live-native-webaudio-close-fault-validation.md`、
+`sis-native-webaudio-validation.md`、`microphone-native-worklet-validation.md` 及相应
+脚本、JSON、日志（包括首个 Worklet 宿主失败）。没有新增正式测试或重复
+既有 Fake AudioContext 绿色套件。这些结果只核实真实浏览器 API 与公开 Host/原面板的
+消费；Electron/Windows、实际 ASR/TTS、设备误触/回声、账号 API 和任务结果仍分别待现场验收。
