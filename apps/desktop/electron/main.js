@@ -2305,7 +2305,8 @@ async function action(event, name, payload) {
     if (name === 'voice.wake.disable') {
       await stopWakeVoice(); publish(); return snapshot('panel').wake;
     }
-    if (!panel.isVisible() || panelHiding || voiceConfigurationPending || wakeQuitUnknown || !wakeVoice || !voiceInput) {
+    if (!panel.isVisible() || panelHiding || voiceConfigurationPending || wakeQuitUnknown
+      || !sisConfigHost?.snapshot().configured || !wakeVoice || !voiceInput) {
       throw Error('请先显示面板并连接华为 SIS 语音');
     }
     pinned = true;
