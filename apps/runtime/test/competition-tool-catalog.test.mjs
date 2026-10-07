@@ -73,6 +73,65 @@ async function waitFor(app, taskId, states) {
   throw new Error(`Task did not settle: ${states.join(',')}`);
 }
 
+test('initial AgentArts tool directory preserves signed numeric bounds and local validation', async t => {
+  const signedDescriptor = {...descriptor, name: 'fixture.signed-bounds', inputSchema: {
+    type: 'object', required: ['signed', 'negative', 'samples'], additionalProperties: false,
+    properties: {signed: {type: 'number', minimum: -90, maximum: 90},
+      negative: {type: 'integer', minimum: -10, maximum: -1},
+      samples: {type: 'array', minItems: 1, maxItems: 2,
+        items: {type: 'number', minimum: -2.5, maximum: -0.25}}},
+  }, outputSchema: {type: 'object'}};
+  for (const [label, argumentsValue, valid] of [
+    ['legal negative values', {signed: -45, negative: -5, samples: [-1.25]}, true],
+    ['below signed minimum', {signed: -91, negative: -5, samples: [-1.25]}, false],
+    ['above negative maximum', {signed: -45, negative: 0, samples: [-1.25]}, false],
+  ]) await t.test(label, async () => {
+    let executions = 0;
+    const requests = [];
+    const app = createAgentArtsRuntimeApplication({path: ':memory:',
+      gatewayUrl: 'https://agentarts.example.test', runtimeName: 'signed-bounds',
+      responseMode: 'tool-proposal-json', initialRequestMode: 'goal-with-tools-json',
+      authorizationProvider: {read: async () => 'Bearer synthetic'},
+      tools: [{descriptor: signedDescriptor, execute: async input => {executions++; return input;}}],
+      competitionToolAvailability: [{toolName: signedDescriptor.name, toolVersion: signedDescriptor.version, available: () => true}],
+      competitionToolExports: [{toolName: signedDescriptor.name, toolVersion: signedDescriptor.version,
+        exportPolicyVersion: 'signed-v1', accepts: () => true, project: ({result}) => result}],
+      fetchImpl: async (_url, init) => {
+        const query = JSON.parse(JSON.parse(init.body).query);
+        requests.push(query);
+        const result = query.continuation ? {kind: 'text', text: 'Signed fixture completed'}
+          : {kind: 'tool_proposal', proposalId: 'signed-1', toolName: signedDescriptor.name,
+            toolVersion: signedDescriptor.version, arguments: argumentsValue};
+        return new Response(JSON.stringify({event: 'message', data: {text: JSON.stringify(result), index: 0}}),
+          {headers: {'content-type': 'application/json'}});
+      },
+    });
+    try {
+      const client = new Client(app); await client.connect();
+      const {taskId} = await client.call('task.submit', {goal: 'Use explicit signed numeric ranges', conversationId: 'signed'},
+        {idempotencyKey: 'signed'});
+      const initial = await waitFor(app, taskId, ['waiting_approval', 'failed']);
+      assert.equal(requests.length, 1);
+      assert.deepEqual(requests[0].availableTools[0].inputSchema, signedDescriptor.inputSchema);
+      if (!valid) {
+        assert.equal(initial.state, 'failed'); assert.equal(initial.error.code, 'INVALID_ARGUMENT');
+        assert.deepEqual((await client.call('approval.list', {taskId})).items, []);
+        assert.equal(executions, 0); assert.deepEqual(app.runtime.readToolExecutions(taskId), []);
+      } else {
+        assert.equal(initial.state, 'waiting_approval'); assert.equal(executions, 0);
+        const approval = (await client.call('approval.list', {taskId})).items[0];
+        await client.call('authorization.respond', {approvalId: approval.approvalId,
+          expectedRevision: approval.revision, decision: 'allow_once'});
+        const completed = await waitFor(app, taskId, ['succeeded', 'failed']);
+        assert.equal(completed.state, 'succeeded'); assert.equal(executions, 1);
+        assert.equal(requests.length, 2); assert.equal(requests[1].availableTools, undefined);
+        assert.deepEqual(requests[1].continuation.result, argumentsValue);
+        assert.equal(app.runtime.readToolExecutions(taskId)[0].state, 'confirmed');
+      }
+    } finally {app.close();}
+  });
+});
+
 test('provider lifecycle errors exclude only that tool and never enter task snapshots', async t => {
   for (const [code, mutateInput] of [['CANCELLED', false], ['TIMEOUT', false],
     ['CANCELLED', true], ['TIMEOUT', true]]) await t.test(`${code}, mutation=${mutateInput}`, async () => {

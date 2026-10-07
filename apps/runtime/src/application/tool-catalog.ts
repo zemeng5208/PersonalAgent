@@ -82,7 +82,8 @@ function safeSchema(value: unknown, depth = 0, publicEnums: ReadonlySet<string> 
   }
   for (const key of ['minLength', 'maxLength', 'minimum', 'maximum', 'minItems', 'maxItems']) {
     const number = schema[key];
-    if (typeof number === 'number' && Number.isFinite(number) && number >= 0) result[key] = number;
+    const signed = key === 'minimum' || key === 'maximum';
+    if (typeof number === 'number' && Number.isFinite(number) && (signed || number >= 0)) result[key] = number;
   }
   return result;
 }
