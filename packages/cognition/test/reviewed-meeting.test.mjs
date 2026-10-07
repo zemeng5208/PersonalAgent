@@ -29,6 +29,53 @@ function fixture(mixed=false) {
   return {namespace,store,input,event,receipts};
 }
 
+test('queued reviewed proposal queries retain the submitted event identity', async () => {
+  const f = fixture(), before = f.store.read();
+  const consumer = new ReviewedMeetingFactConsumer({store: f.store, receiptStore: f.receipts, namespace: f.namespace});
+  const expected = await consumer.processEvent(f.event);
+  await consumer.processEvent({...f.event, eventId: 'different-event'});
+  const query = {eventId: f.event.eventId, source: f.event.source, namespace: f.namespace};
+  const pending = consumer.applyApprovedProposal(query, f.event);
+  query.eventId = 'different-event';
+  assert.deepEqual(await pending, expected);
+  assert.deepEqual(f.store.read(), before);
+});
+
+test('reviewed proposal handoff cannot replace a cancelled signal or renew an expired lease during receipt load', async () => {
+  for (const mode of ['cancelled', 'expired']) {
+    const f = fixture(), before = f.store.read();
+    let clock = Date.now(), blocking = false, entered, release, applied = 0;
+    const started = new Promise(resolve => {entered = resolve;});
+    const loading = new Promise(resolve => {release = resolve;});
+    const review = {taskId: 'existing-review', graphNamespace: f.namespace, graphRevision: before.revision,
+      bindingVersion: 'existing-host', action: 'RECHECK', evaluatedAt: at,
+      affected: selectProjectedRepairScope(before, at, f.input).items,
+      options: buildMeetingRepairOptions(before, at, f.input)};
+    const result = {task: {taskId: review.taskId, state: 'succeeded'}, review};
+    const reviewedRepair = {readCommittedProjection: async () => ({sourceRevision: '2', meetingFact: ref('meeting', 2), input: f.input}),
+      reviewCommittedFact: async () => result, readReview: () => result,
+      applyDecision: async () => {applied++; return {status: 'waiting_approval', taskId: 'original-task'};}};
+    const consumer = new ReviewedMeetingFactConsumer({store: f.store, namespace: f.namespace, now: () => clock,
+      reviewedRepair, receiptStore: {async loadReceipt(query) {
+        if (blocking) {entered(); await loading;}
+        return f.receipts.loadReceipt(query);
+      }, saveReceipt: record => f.receipts.saveReceipt(record)}});
+    assert.equal((await consumer.processEvent(f.event)).status, 'waiting_approval');
+    const originalReceipts = f.receipts.listReceipts(), baseline = applied, controller = new AbortController();
+    const context = {deadline: f.event.deadline, signal: controller.signal};
+    blocking = true;
+    const pending = consumer.applyApprovedProposal({eventId: f.event.eventId, source: f.event.source}, context);
+    await started;
+    if (mode === 'cancelled') {controller.abort(); context.signal = new AbortController().signal;}
+    else {clock = Date.parse(context.deadline); context.deadline = new Date(clock + 60_000).toISOString();}
+    release();
+    await assert.rejects(pending, error => error.code === 'INVALID_ARGUMENT');
+    assert.equal(applied, baseline, 'The cancelled/expired handoff must not call the host');
+    assert.deepEqual(f.receipts.listReceipts(), originalReceipts);
+    assert.deepEqual(f.store.read(), before);
+  }
+});
+
 test('pending reviewed meeting work retains constructor bindings and live original port hooks', async () => {
   const f=fixture(),before=f.store.read(),clock=Date.now();
   let release,entered;

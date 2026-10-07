@@ -236,6 +236,8 @@ export class ReviewedMeetingFactConsumer {
   }
   applyApprovedProposal(query: {eventId: string; source: string; namespace?: string},
     context: MeetingReviewContext): Promise<MeetingDecisionReceipt> {
+    query = {...query};
+    context = {...context};
     return this.serialize(async () => {
       this.active(context);
       if (query.namespace !== undefined && query.namespace !== this.options.namespace) throw new CognitionError('INVALID_ARGUMENT');
