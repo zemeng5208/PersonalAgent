@@ -983,8 +983,11 @@ async function dispatchKnowledgeRecheckTask(task) {
 function applyEvent(event) {
   if (event.type === 'notification.created' && event.payload) notifications.set(event.payload.notificationId, {...event.payload,occurredAt:event.occurredAt});
   if (event.taskId && event.payload && ['task.created', 'task.state_changed', 'task.completed', 'task.failed', 'task.cancelled'].includes(event.type)) {
-    tasks.set(event.taskId, structuredClone(event.payload));
-    clearInactiveTaskExitWarning();
+    const current = tasks.get(event.taskId);
+    if (!(current?.taskId === event.payload.taskId && current.revision > event.payload.revision)) {
+      tasks.set(event.taskId, structuredClone(event.payload));
+      clearInactiveTaskExitWarning();
+    }
     if (event.type === 'task.created' && event.payload.conversationId?.startsWith('knowledge-watch:')
       && event.payload.goal?.startsWith('RECHECK ')) {
       void dispatchKnowledgeRecheckTask(event.payload);
