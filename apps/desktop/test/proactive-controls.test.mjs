@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {cognitionReviewFeedback} from '../src/app/proactive-controls.js';
+import {cognitionReviewFeedback, mountProactiveControls} from '../src/app/proactive-controls.js';
 
 test('goal treatment feedback never upgrades acceptance, analysis or legacy prose into verified update', () => {
   for (const status of ['created', 'submitted', 'pending', 'running', 'verifying', 'waiting_approval', 'waiting_reconciliation', 'succeeded', 'failed', 'cancelled']) {
@@ -35,4 +35,155 @@ test('pending Goal handoff without an accepted task ID stays unresolved and lock
     assert.equal(cognitionReviewFeedback({state}).locked,false);
   }
   assert.equal(cognitionReviewFeedback({executionStatus:'编排受理结果待核实，尚未确认执行'}).locked,false);
+});
+
+// Explicit Fake DOM with normal parent/descendant identity; innerHTML replaces actual test nodes.
+class Element {
+  constructor(tag) {this.tag=tag;this.children=[];this.dataset={};this.attributes={};this.listeners={};this.disabled=false;this._text='';}
+  append(...nodes) {for(const node of nodes){node.parentNode=this;this.children.push(node);}}
+  after(node) {node.parentNode=this.parentNode;const index=this.parentNode.children.indexOf(this);this.parentNode.children.splice(index+1,0,node);}
+  setAttribute(name,value='') {
+    this.attributes[name]=value;
+    if(name==='class')this.className=value;
+    if(name==='disabled')this.disabled=true;
+    if(name.startsWith('data-'))this.dataset[name.slice(5).replace(/-([a-z])/g,(_,letter)=>letter.toUpperCase())]=value;
+  }
+  set textContent(value) {this._text=String(value);this.children=[];}
+  get textContent() {return this._text+this.children.map(node=>node.textContent).join('');}
+  set innerHTML(value) {
+    for(const child of this.children)child.parentNode=null;
+    this.children=[];this._text='';const stack=[this];
+    for(const token of String(value).match(/<[^>]+>|[^<]+/g)??[]) {
+      if(token.startsWith('</')) {stack.pop();continue;}
+      if(token.startsWith('<')) {
+        const tag=token.match(/^<([a-z0-9-]+)/i)?.[1];if(!tag)continue;
+        const node=new Element(tag);
+        for(const match of token.slice(tag.length+1,-1).matchAll(/([\w-]+)(?:="([^"]*)")?/g))node.setAttribute(match[1],match[2]??'');
+        stack.at(-1).append(node);
+        if(!['input','br','hr','link','img'].includes(tag))stack.push(node);
+      } else {const node=new Element('#text');node.textContent=token;stack.at(-1).append(node);}
+    }
+  }
+  addEventListener(name,handler) {(this.listeners[name]??=[]).push(handler);}
+  async emit(name,event) {await Promise.all((this.listeners[name]??[]).map(handler=>handler(event)));}
+  matches(selector) {
+    const match=selector.match(/^([\w-]+)?(?:\.([\w-]+))?(?:\[([\w-]+)(?:="([^"]*)")?\])?$/);
+    return Boolean(match)&&(!match[1]||this.tag===match[1])
+      &&(!match[2]||String(this.className??'').split(/\s+/).includes(match[2]))
+      &&(!match[3]||Object.hasOwn(this.attributes,match[3])&&(match[4]===undefined||this.attributes[match[3]]===match[4]));
+  }
+  querySelectorAll(selector) {return this.children.flatMap(node=>[...(node.matches(selector)?[node]:[]),...node.querySelectorAll(selector)]);}
+  querySelector(selector) {return this.querySelectorAll(selector)[0]??null;}
+  closest(selector) {return this.matches(selector)?this:this.parentNode?.closest(selector)??null;}
+}
+function deferred() {let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
+const reviewId='synthetic-review';
+const localReview=()=>({reviewTaskId:reviewId,state:'selected',trigger:'Synthetic Goal',choice:'recheck',executionVerified:false,graphUpdateVerified:false});
+const accepted=()=>({reviewTaskId:reviewId,status:'submitted',state:'running',taskId:'synthetic-handoff',executionVerified:false,graphUpdateVerified:false});
+const verified=()=>({...accepted(),status:'applied',state:'succeeded',executionVerified:true,graphUpdateVerified:true});
+function controls(t,invoke) {
+  const original=globalThis.document;t.after(()=>{globalThis.document=original;});
+  globalThis.document={createElement:tag=>new Element(tag)};
+  const container=new Element('main'),control=mountProactiveControls(container,invoke);
+  const render=(reviews,permission={enabled:true,cloudAllowed:true})=>control.render({suggestions:[],cognition:{...permission,reason:'Synthetic host',reviews}});
+  const list=container.querySelector('[data-cognition-reviews]');
+  const button=()=>list.querySelector('[data-action="apply-cognition"]');
+  const click=()=>list.emit('click',{target:button()});
+  const status=()=>list.querySelector('.cognition-status')?.textContent;
+  return {render,button,click,status,list};
+}
+
+async function actualCognitionHost(t,onUpdate) {
+  const {createDesktopGoalCognitionHost}=await import('../electron/goal-cognition-host.js');
+  const namespace='synthetic-repaint-host',option={id:'recheck',revision:1,action:'RECHECK',description:'Synthetic review'};
+  const review={taskId:reviewId,graphNamespace:namespace,graphRevision:1,bindingVersion:'desktop-goal-analysis-v1',
+    evaluatedAt:'2026-10-07T00:00:00.000Z',action:'RECHECK',affected:[],subjectGoal:{id:'synthetic-goal',revision:1},
+    options:[option],selectedOption:option,selection:{state:'selected',selected:{id:option.id,revision:1},eligibleForRuntime:true}};
+  const readback={task:{taskId:reviewId,state:'succeeded',revision:3},review};
+  const graph={namespace,revision:1,history:[{id:'synthetic-goal',kind:'goal',revision:1,graphRevision:1,
+    summary:'Synthetic Goal',reason:'Synthetic fixture',sourceRef:'synthetic/source',validFrom:'2026-01-01T00:00:00.000Z',
+    validUntil:'2099-01-01T00:00:00.000Z',sensitivity:'public',state:'active',dependencies:[]}]};
+  let handoffs=0;
+  const host=createDesktopGoalCognitionHost({namespace,
+    application:{runtime:{bindCoordinationStore:()=>({read:()=>structuredClone(graph)}),
+      loadCheckpoint:(id,key)=>id==='synthetic-source'&&key==='desktop-goal-cognition-review'?reviewId:undefined}},
+    goalHost:{listTasks:()=>[{taskId:'synthetic-source'}]},client:{call(){throw Error('Unexpected cloud dispatch');}},
+    facts:{},chooser:{},ready:()=>true,onUpdate:()=>onUpdate?.(host.snapshot()),
+    createHost:()=>({readReview:()=>readback,async handoffReview(){handoffs++;return {...readback,handoff:{state:'unavailable'}};},close(){}})});
+  t.after(()=>host.close());
+  return {host,handoffs:()=>handoffs};
+}
+
+test('proactive action completion updates the replacement card after an actual Host unavailable publication', async t => {
+  let ui;
+  const {host,handoffs}=await actualCognitionHost(t,snapshot=>ui?.render(snapshot.reviews,snapshot));
+  host.configure({enabled:true,cloudAllowed:true});
+  ui=controls(t,()=>host.applyDecision(reviewId));ui.render(host.snapshot().reviews,host.snapshot());
+  const previous=ui.button();await ui.click();
+  assert.notEqual(ui.button(),previous);
+  assert.equal(cognitionReviewFeedback(host.snapshot().reviews[0]).locked,false);
+  assert.equal(ui.button().disabled,false);
+  assert.match(ui.status(),/当前无法交给/);
+  assert.match(ui.list.querySelector('[data-feedback-id]').textContent,/当前无法交给/);
+  assert.equal(handoffs(),1);
+});
+
+test('published permission denial avoids an actual Host preflight rejection and permits later authorized dispatch', async t => {
+  for(const permission of [{enabled:true,cloudAllowed:false},{enabled:false,cloudAllowed:true}]) {
+    let ui,calls=0;
+    const {host,handoffs}=await actualCognitionHost(t,snapshot=>ui?.render(snapshot.reviews,snapshot));
+    host.configure(permission);
+    // This public producer rejects before reaching the Fake Runtime handoff.
+    await assert.rejects(host.applyDecision(reviewId),/目标云端分析许可未开启/);
+    assert.equal(handoffs(),0);
+    ui=controls(t,()=>{calls++;return host.applyDecision(reviewId);});
+    ui.render(host.snapshot().reviews,host.snapshot());
+    assert.equal(ui.button().disabled,true);assert.match(ui.status(),/请先在设置中/);
+    await ui.click();assert.equal(calls,0);assert.equal(handoffs(),0);
+    host.configure({enabled:true,cloudAllowed:true});
+    assert.equal(ui.button().disabled,false);assert.doesNotMatch(ui.status(),/待核实/);
+    await ui.click();assert.equal(calls,1);assert.equal(handoffs(),1);
+    assert.equal(ui.button().disabled,false);assert.match(ui.status(),/当前无法交给/);
+  }
+});
+
+test('proactive action keeps an identified accepted receipt when later snapshots have no task', async t => {
+  let calls=0;
+  const ui=controls(t,async()=>{calls++;return accepted();});ui.render([localReview()]);
+  await ui.click();
+  assert.equal(ui.button().disabled,true);
+  assert.match(ui.status(),/已受理/);
+  ui.render([]);ui.render([localReview()]);
+  assert.equal(ui.button().disabled,true);
+  await ui.click();assert.equal(calls,1);
+  assert.doesNotMatch(ui.status(),/尚未交给/);
+});
+
+test('proactive action late receipt or error cannot replace a verified snapshot on a new card', async t => {
+  for(const fail of [false,true]) {
+    const reply=deferred(),ui=controls(t,()=>reply.promise);ui.render([localReview()]);
+    const work=ui.click();ui.render([verified()]);
+    if(fail)reply.reject(Error('Synthetic lost response'));else reply.resolve(accepted());
+    await work;
+    assert.equal(ui.button().disabled,true);
+    assert.match(ui.status(),/执行与目标更新已核实/);
+    assert.equal(ui.button().textContent,'更新已核实');
+  }
+});
+
+test('proactive action lost or mismatched reply retains uncertainty through redraw and an empty list', async t => {
+  for(const malformed of [false,true]) {
+    const reply=deferred();let calls=0;
+    const ui=controls(t,()=>{calls++;return reply.promise;});ui.render([localReview()]);
+    const work=ui.click();ui.render([localReview()]);
+    assert.match(ui.list.querySelector('[data-feedback-id]').textContent,/正在交给/);
+    if(malformed)reply.resolve({...accepted(),reviewTaskId:'different-review'});else reply.reject(Error('Synthetic acceptance reply lost'));
+    await work;
+    assert.match(ui.status(),/待核实/);assert.equal(ui.button().disabled,true);
+    ui.render([]);ui.render([localReview()]);
+    assert.equal(ui.button().disabled,true);await ui.click();assert.equal(calls,1);
+    ui.render([accepted()]);
+    assert.equal(ui.button().disabled,true);assert.equal(ui.button().textContent.trim(),'已交给主智能体');
+    assert.match(ui.status(),/已受理/);
+  }
 });

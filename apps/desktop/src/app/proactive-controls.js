@@ -51,27 +51,78 @@ export function mountProactiveControls(container, invoke, {settings = false} = {
   let current, dirty = false, saving = false;
   const rows = new Map(), pending = new Set();
   const cognitionPending = new Set();
+  // Keep identified acceptance or uncertainty when a redraw replaces the action's DOM nodes.
+  const cognitionOutcomes = new Map();
+  const handoffPermissionFeedback = () => current?.cognition?.enabled === false
+    ? {message:'目标分析已关闭，请先在设置中开启',label:'交给主智能体处理',locked:true}
+    : current?.cognition?.cloudAllowed === false
+      ? {message:'目标云端规划许可未开启，请先在设置中允许',label:'交给主智能体处理',locked:true} : null;
+  const currentReviewFeedback = id => {
+    const item = current?.cognition?.reviews?.find(review => review.reviewTaskId === id);
+    return item ? cognitionReviewFeedback(item) : null;
+  };
+  function reviewFeedback(item) {
+    const feedback = cognitionReviewFeedback(item);
+    if (feedback.locked) {
+      cognitionOutcomes.set(item.reviewTaskId, feedback);
+      return feedback;
+    }
+    const retained = cognitionOutcomes.get(item.reviewTaskId) ?? feedback;
+    return retained.locked ? retained : handoffPermissionFeedback() ?? retained;
+  }
+  function syncReview(id, completed) {
+    const item = current?.cognition?.reviews?.find(review => review.reviewTaskId === id);
+    const latest = item ? reviewFeedback(item) : null;
+    const feedback = latest?.locked ? latest
+      : cognitionOutcomes.get(id) ?? completed;
+    if (!feedback) return;
+    for (const card of reviewsList.querySelectorAll('.cognition-review-card')) {
+      if (card.dataset.reviewId !== id) continue;
+      const button = card.querySelector('[data-action="apply-cognition"]');
+      button.textContent = feedback.label;
+      button.disabled = cognitionPending.has(id) || feedback.locked;
+      card.querySelector('.cognition-status').innerHTML = `<strong>处理状态：</strong>${escape(feedback.message)}`;
+      card.querySelector('[data-feedback-id]').textContent = feedback.message;
+    }
+  }
   if (reviewsList) {
     reviewsList.addEventListener('click', async event => {
       const button = event.target.closest('button[data-action="apply-cognition"]');
       if (!button || button.disabled) return;
       const reviewTaskId = button.dataset.reviewId;
       if (!reviewTaskId || cognitionPending.has(reviewTaskId)) return;
+      // A published denial is known before dispatch; it is not an unknown submission.
+      if (handoffPermissionFeedback()) {syncReview(reviewTaskId, handoffPermissionFeedback());return;}
+      const initial = currentReviewFeedback(reviewTaskId);
       cognitionPending.add(reviewTaskId);
       button.disabled = true;
       const card = button.closest('.cognition-review-card');
       const cardNotice = card?.querySelector('[data-feedback-id]');
       if (cardNotice) cardNotice.textContent = '正在交给主智能体处理…';
+      let completed;
       try {
         const result = await invoke('proactive.cognition.apply', {reviewTaskId});
-        const feedback = cognitionReviewFeedback(result);
-        if (cardNotice) cardNotice.textContent = feedback.message;
-        button.textContent = feedback.label;
-        button.disabled = feedback.locked;
-      } catch (err) {
-        if (cardNotice) cardNotice.textContent = err.message;
-        button.disabled = false;
-      } finally {cognitionPending.delete(reviewTaskId);}
+        if (result?.reviewTaskId !== reviewTaskId
+          || !['applied','unavailable','expired','pending','submitted','succeeded','failed','cancelled',
+            'waiting_approval','waiting_reconciliation'].includes(result.status)
+          || typeof result.executionVerified !== 'boolean' || typeof result.graphUpdateVerified !== 'boolean') {
+          throw Error('处理回执尚未核实');
+        }
+        const receipt = cognitionReviewFeedback(result);
+        const latest = currentReviewFeedback(reviewTaskId);
+        const retained = cognitionOutcomes.get(reviewTaskId);
+        completed = latest?.locked ? latest : retained?.locked ? retained : receipt.locked ? receipt
+          : latest && (latest.message !== initial?.message || latest.label !== initial?.label) ? latest : receipt;
+        if (completed.locked) cognitionOutcomes.set(reviewTaskId, completed);
+      } catch {
+        const latest = currentReviewFeedback(reviewTaskId);
+        completed = latest?.locked ? latest : cognitionOutcomes.get(reviewTaskId)
+          ?? {...cognitionReviewFeedback({status:'submission_unknown'}), label:'受理结果待核实'};
+        cognitionOutcomes.set(reviewTaskId, completed);
+      } finally {
+        cognitionPending.delete(reviewTaskId);
+        syncReview(reviewTaskId, completed);
+      }
     });
   }
   if (form) {
@@ -144,7 +195,7 @@ export function mountProactiveControls(container, invoke, {settings = false} = {
     if (reviewsList) {
       if (cognitionReviews.length > 0) {
         reviewsList.innerHTML = '<h3 class="cognition-review-title">目标与计划决策</h3>' + cognitionReviews.map(r => {
-          const feedback = cognitionReviewFeedback(r);
+          const feedback = reviewFeedback(r);
           return `
           <article class="task cognition-review-card" data-review-id="${escape(r.reviewTaskId || '')}">
             <p class="cognition-trigger"><strong>触发原因：</strong>${escape(r.trigger || '事实或目标变更')}</p>
@@ -154,7 +205,7 @@ export function mountProactiveControls(container, invoke, {settings = false} = {
               <button class="btn btn-sm" type="button" data-action="apply-cognition" data-review-id="${escape(r.reviewTaskId || '')}" ${feedback.locked || cognitionPending.has(r.reviewTaskId) ? 'disabled' : ''}>
                 ${feedback.label}
               </button>
-              <span class="notice" data-feedback-id="${escape(r.reviewTaskId || '')}"></span>
+              <span class="notice" data-feedback-id="${escape(r.reviewTaskId || '')}">${cognitionPending.has(r.reviewTaskId) && !feedback.locked ? '正在交给主智能体处理…' : ''}</span>
             </div>
           </article>
         `;
