@@ -9,15 +9,23 @@ export function mountLiveVoiceControls(root, invoke) {
   const reserved=[...hotkey.options].find(option=>option.value === 'F9');
   if (reserved) {reserved.disabled=true;reserved.textContent='F9（记事本写入确认）';}
   const result = settings.querySelector('#live-config-result');
-  let editing = false;
-  settings.addEventListener('input', () => {editing = true;});
+  let editing = false, editRevision = 0, saving = false, toggling = false;
+  settings.addEventListener('input', () => {editing = true; editRevision++;});
   settings.querySelector('#live-save').onclick = async () => {
+    if (saving) return;
+    saving = true; editing = true;
+    const submittedRevision = editRevision;
     const button = settings.querySelector('#live-save'); button.disabled = true;
     const request = {workspaceId: workspace.value.trim(), apiKey: key.value.trim(), hotkey: hotkey.value, audioConsent: consent.checked};
     key.value = ''; result.textContent = '正在加密保存…';
-    try {await invoke('live.configure', request); editing = false; result.textContent = '已保存；点圆形语音按钮或按快捷键开始 Live。'; settings.open = false;}
+    try {
+      await invoke('live.configure', request);
+      editing = editRevision !== submittedRevision;
+      result.textContent = editing ? '已保存本次提交；新修改尚未保存。' : '已保存；点圆形语音按钮或按快捷键开始 Live。';
+      if (!editing) settings.open = false;
+    }
     catch (error) {result.textContent = error.message;}
-    finally {request.apiKey = ''; button.disabled = false;}
+    finally {request.apiKey = ''; saving = false; button.disabled = false;}
   };
   return {
     showSettings(show, expanded = false) {
@@ -25,8 +33,11 @@ export function mountLiveVoiceControls(root, invoke) {
       if (show && expanded) settings.open = true;
     },
     async toggle() {
+      if (toggling) return;
+      toggling = true;
       try {await invoke('live.toggle');}
       catch (error) {result.textContent = error.message; settings.open = true;}
+      finally {toggling = false;}
     },
     render(live = {}) {
       settings.querySelector('summary').textContent=live.configured?'Live 实时语音设置 · 已配置':'Live 实时语音设置';
