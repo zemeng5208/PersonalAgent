@@ -115,3 +115,15 @@ final-guard和dialog-cancel-consumer-*，独立审查读回SQLite/原文件/截�
 原stop按钮等待dispose后，服务unavailable、Skill disabled、run禁用且不重读；未独立观察
 PID/reap，不推广OS进程树验收。desktop-reference-ui-native-summary-consumer-*保存命令、
 JSON/日志/三张原admin/panel截图；四次helper失败留存，最终完整消费者才计通过。
+
+该真实消费者还复现原控件的独立可用性缺口：受理IPC回执延后时，ready状态刷新会
+提前启用run；停止服务后迟到回执的finally又会无条件启用。原host拒绝误点，实际任务/
+读取仍各1，不是授权突破。控件按action保留pending，render/finally共同依据当前snapshot
+同步按钮，拒绝disabled/重复pending点击；失败恢复可用动作，卸载后不处理迟到回执。
+只改reference-tools-controls.js与其行为回归测试，不改main/MCP/Runtime/CSS/协议。
+新两项测试在原不可变源码实际2fail，修复后2/2exit0；原stdio/UI AFTER pending仍disabled，
+stop后晚回执仍disabled且误点不派发，重新连接/启用可正常提交第二个独立任务，真实
+读取/confirmed grant分别各一次，旧任务不重复，cloud0/凭据0/errors0。私
+desktop-reference-run-late-receipt-before/after/fixed-*保存原失败、JSON/日志和截图；
+source固定d3152570a9e063c3e885220f11be23e92a7893ed，test固定
+1870bcc2b0608d8a8038c1bd16c3e28586d6d4c2，必要整仓检查另在root新固定head执行。
