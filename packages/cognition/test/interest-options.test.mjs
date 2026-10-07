@@ -35,6 +35,41 @@ function chooser(pick, onInfer = () => {}) {
 const request = () => ({deadline: iso(Date.now() + 60 * minute),
   signal: new AbortController().signal});
 
+test('uncooperative interest choices still reject on deadline and cancellation', async () => {
+  for (const code of ['CANCELLED', 'TIMEOUT']) {
+    const controller=new AbortController();
+    let portSignal,started;
+    const entered=new Promise(resolve=>{started=resolve;});
+    const service=new LayaInterestDecisionService({choose({signal}) {
+      portSignal=signal;started();return new Promise(()=>{});
+    }});
+    const lease={deadline:iso(Date.now()+(code==='TIMEOUT'?30:5000)),signal:controller.signal};
+    const pending=service.choose(fixture(),lease);
+    await entered;
+    if(code==='CANCELLED')controller.abort();
+    let guard;
+    try {
+      const result=await Promise.race([pending.then(()=> 'unexpected success',error=>error.code),
+        new Promise(resolve=>{guard=setTimeout(()=>resolve('unsettled'),300);})]);
+      assert.equal(result,code);assert.equal(portSignal.aborted,true);
+    } finally {clearTimeout(guard);}
+  }
+});
+
+test('caller cannot renew an interest lease by replacing its signal or deadline while choosing', async () => {
+  for(const code of ['CANCELLED','TIMEOUT']) {
+    let clock=Date.now();const controller=new AbortController(),expires=clock+1000;
+    const lease={deadline:iso(expires),signal:controller.signal};
+    const service=new LayaInterestDecisionService({async choose() {
+      if(code==='CANCELLED') {controller.abort();lease.signal=new AbortController().signal;}
+      else {clock=expires+1;lease.deadline=iso(clock+60*minute);}
+      return {state:'selected',selected:{id:'track_public',revision:1},eligibleForRuntime:true,
+        reason:'selected',calibrated:false,scores:[],receipt:{id:'synthetic'}};
+    }},()=>clock);
+    await assert.rejects(service.choose(fixture(clock),lease),{code});
+  }
+});
+
 test('a single inquiry stays candidate; sustained public scope offers three bound approaches', () => {
   const input = fixture();
   const candidate = buildInterestOptions({...input, evidence: [input.evidence[0]]});
@@ -129,7 +164,10 @@ test('async mutation and expiry cannot turn an old choice into a tracking decisi
     input.evidence[0].sourceRevision = 'forged';
     clock = expires + 1;
   }), () => clock);
-  const result = await service.choose(input, request());
+  // Policy validity expires while the caller's independent operation lease is
+  // still current. An expired operation lease is covered by the TIMEOUT tests.
+  const result = await service.choose(input, {deadline: iso(expires + minute),
+    signal: new AbortController().signal});
   assert.equal(result.policy.state, 'watch_public', 'caller mutation cannot alter captured policy');
   assert.equal(result.outcome, 'recheck');
   assert.equal(result.selected, undefined);
