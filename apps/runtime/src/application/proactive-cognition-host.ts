@@ -278,7 +278,7 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
         runtime.saveCheckpoint(taskId, REVIEW, result);
         readback.review = structuredClone(result);
       }
-      const projected = await handoff.prepare(structuredClone(result), context);
+      const projected = await handoff.prepare(structuredClone(result), {...context});
       active(context); open();
       if (!projected) return {...readback, handoff: {state: 'unavailable'}};
       if (typeof projected.exportPolicyVersion !== 'string' || !projected.exportPolicyVersion.trim()
@@ -428,7 +428,7 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
               description: 'Ask AgentArts to evaluate this minimal dependency repair and revise affected plan content as needed; the candidate is not yet executed.',
               repair: candidate.request}] : []),
           ];
-          if (prepareOptions) result.options = structuredClone([...await prepareOptions(structuredClone(result), context)]);
+          if (prepareOptions) result.options = structuredClone([...await prepareOptions(structuredClone(result), {...context})]);
           active(context);
           if (result.options.length < 2 || result.options.length > 16) throw new ProtocolError('INVALID_ARGUMENT', 'Expected bounded cognition options');
           const seen = new Set<string>();

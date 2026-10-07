@@ -60,8 +60,9 @@ function open(paths, state) {
   const client = new Client(application, Date.now);
   let connected = false;
   const selectionHandoff = state.handoff === false ? undefined : {
-    async prepare(review) {
+    async prepare(review,request) {
       state.prepares++;
+      state.onPrepare?.(request);
       if (state.prepareGate) {
         state.prepareGate.arrive();
         await state.prepareGate.pending;
@@ -836,5 +837,79 @@ test('graph Goal consumption resumes a legacy created revision task without chan
   } finally {
     binding.close();
     await rm(paths.directory, {recursive: true, force: true});
+  }
+});
+
+
+test('host preparation callbacks cannot replace private lifecycle checks after interruption',async t=>{
+  for(const callback of ['prepare','prepareOptions'])for(const lifecycle of ['cancel','deadline']){
+    await t.test(`${callback}, ${lifecycle}`,async()=>{
+      const paths=await workspace(),blocked=gate(),calls=state({handoff:callback==='prepareOptions'});
+      let binding=open(paths,calls);
+      const controller=new AbortController();
+      const replaceContext=request=>{
+        request.signal=new AbortController().signal;
+        request.deadline=new Date(Date.now()+60_000).toISOString();
+      };
+      try{
+        let reviewTaskId,pending,initialTaskIds;
+        if(callback==='prepare'){
+          const {review}=await factChain(binding);
+          reviewTaskId=review.task.taskId;
+          assert.equal(review.handoff.state,'unavailable');
+          binding.close();
+          calls.handoff=true;calls.onPrepare=replaceContext;calls.prepareGate=blocked;
+          binding=open(paths,calls);
+          pending=binding.host.handoffReview(reviewTaskId,{...context(500),signal:controller.signal});
+        }else{
+          record(binding.facts,'a',null);
+          await binding.host.consumeAndReview({...context(),at,limit:10,afterGraphRevision:0});
+          const store=binding.application.runtime.bindCoordinationStore(graphNamespace);
+          const factId=store.read().history[0].id;
+          store.append(1,node('goal','goal',[ref(factId)]));
+          record(binding.facts,'b',1);
+          binding.close();
+          calls.prepareOptions=async(review,request)=>{
+            replaceContext(request);blocked.arrive();await blocked.pending;return review.options;
+          };
+          binding=open(paths,calls);
+          initialTaskIds=new Set(binding.application.runtime.listTasks({conversationId:'proactive-cognition:'+graphNamespace,limit:10}).items.map(task=>task.taskId));
+          pending=binding.host.consumeAndReview({...context(500),signal:controller.signal,
+            at,limit:10,afterGraphRevision:1});
+        }
+        // Observe early failure as well as entry so setup itself cannot hang.
+        const settled=pending.then(()=>undefined,error=>error);
+        await Promise.race([blocked.entered,settled.then(error=>{throw error??Error('Preparation did not block');})]);
+        if(lifecycle==='cancel')controller.abort('Synthetic caller cancellation');
+        if(callback==='prepare'){
+          await assert.rejects(pending,{code:lifecycle==='cancel'?'CANCELLED':'TIMEOUT'});
+          blocked.release();
+        }else{
+          if(lifecycle==='deadline')await new Promise(resolve=>setTimeout(resolve,550));
+          blocked.release();
+          await assert.rejects(pending,{code:lifecycle==='cancel'?'CANCELLED':'TIMEOUT'});
+        }
+        await new Promise(resolve=>setImmediate(resolve));
+        for(let n=0;n<200&&binding.application.activeTaskCount;n++)await new Promise(resolve=>setTimeout(resolve,5));
+        assert.equal(calls.dispatchAttempts,0);assert.equal(calls.agentArtsCalls,0);
+        assert.deepEqual(binding.application.runtime.listTasks({conversationId:'synthetic-agentarts-handoff',limit:10}).items,[]);
+        if(callback==='prepare'){
+          assert.equal(binding.application.runtime.loadCheckpoint(reviewTaskId,'proactive-cognition-handoff-v1'),undefined);
+          assert.equal(binding.host.readReview(reviewTaskId).task.state,'succeeded');
+        }else{
+          const tasks=binding.application.runtime.listTasks({conversationId:'proactive-cognition:'+graphNamespace,limit:10}).items;
+          const interrupted=tasks.find(task=>!initialTaskIds.has(task.taskId));
+          assert.ok(interrupted);
+          assert.notEqual(interrupted.state,'succeeded');
+          assert.equal(binding.application.runtime.loadCheckpoint(interrupted.taskId,'proactive-cognition-review-v1'),undefined);
+          assert.equal(binding.application.runtime.loadCheckpoint(interrupted.taskId,'proactive-cognition-handoff-v1'),undefined);
+          assert.equal(calls.layaCalls,0);
+        }
+      }finally{
+        blocked.release();
+        for(let n=0;n<200&&binding.application.activeTaskCount;n++)await new Promise(resolve=>setTimeout(resolve,5));
+        binding.close();await rm(paths.directory,{recursive:true,force:true});
+      }
+    });
   }
 });
