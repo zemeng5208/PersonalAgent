@@ -40,9 +40,9 @@ export function mountModelApiControls(root, invoke) {
   let state = {}, busy = false, closed = false;
   const effortInputs = [...settings.querySelectorAll('[data-model-effort]')];
   const buttons = () => {
-    field('save').disabled = busy;
+    settings.setAttribute('aria-busy', String(busy));
+    settings.querySelectorAll('input,select,button').forEach(control => {control.disabled = busy;});
     field('remove').disabled = busy || !field('saved').value;
-    field('saved').disabled = busy;
   };
   function select() {
     const entry = state.models?.find(item => item.id === field('saved').value);
@@ -75,6 +75,7 @@ export function mountModelApiControls(root, invoke) {
     select();
   }
   async function run(operation, payload) {
+    if (busy || closed) return;
     busy = true; buttons();
     try {
       const value = await invoke(operation, payload);
@@ -90,6 +91,7 @@ export function mountModelApiControls(root, invoke) {
     field('capabilities').textContent = '目的地或模型已更改，请重新声明支持列表；真实端点尚未验证';
   });
   field('save').onclick = async () => {
+    if (busy || closed) return;
     const selected = state.models?.find(entry => entry.id === field('saved').value);
     const payload = {provider: field('provider').value, displayName: field('displayName').value,
       baseUrl: field('baseUrl').value, model: field('model').value, apiKey: field('key').value,
