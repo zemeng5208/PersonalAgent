@@ -275,3 +275,33 @@ Real source adapters, private Fact ingestion, Desktop source lifecycle, authoriz
 cloud projection, Laya/AgentArts live execution and later Policy/Evidence write
 acceptance remain main integration/live-validation work. Interest policy from #187
 is reusable, but this increment does not start permanent subscriptions or crawling.
+
+## Current source wiring — 2026-10-07
+
+Source baseline: `main@4b5ec61`. This section records the wiring present at that
+revision; the earlier dates, toolchain observations and test counts remain the
+historical results of their original increments.
+
+[Runtime's existing proactive host](../../apps/runtime/src/application/proactive-cognition-host.ts)
+implements initial Goal planning, Goal revision review, public Fact correction and
+time-only expiry review. It also preserves uncertain choices as machine review and
+recovers unavailable Laya choices through persisted cooldown/successor checkpoints.
+[The existing Desktop Goal host](../../apps/desktop/electron/goal-cognition-host.js)
+consumes current graph Goals through the same review API, including Goals committed
+outside its UI command path, and handles the legacy unavailable markers. Its cloud
+projection recognizes machine review and rechecks the current grant and graph;
+[Desktop main](../../apps/desktop/electron/main.js) binds the existing host and final
+cloud-send checks. These local consumers are already present, rather than pending
+new hosts. The source scenarios are recorded in
+[Runtime host tests](../../apps/runtime/test/proactive-cognition-host.test.mjs) and
+[Desktop Goal host tests](../../apps/desktop/test/goal-cognition-host.test.mjs).
+
+The separate knowledge/interest consumer and reviewed-repair wiring are also
+present at this baseline; their current boundaries are recorded in
+[MVP-TWIN-B-INTEREST-01](MVP-TWIN-B-INTEREST-01.md) and
+[MOD-28-REVIEWED-REPAIR-01](MOD-28-REVIEWED-REPAIR-01.md). Their source evidence is
+not synthesized from public Fact summaries. Missing or revoked providers/grants
+still fail closed, and a submitted cloud task is not a verified local write.
+
+This update is a source-wiring reconciliation. It adds no live-model, cloud,
+private-source, Electron or installer acceptance and does not mark MOD/MVP done.

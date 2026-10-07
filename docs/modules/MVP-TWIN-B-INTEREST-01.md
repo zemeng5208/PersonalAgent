@@ -36,3 +36,28 @@
 没有 contracts、数据库迁移、新依赖或业务连接器变更。
 主任务仍需接入兴趣证据来源、最新 scope 状态及 AgentArts 的最小出云交接。
 真实订阅来源、次日知识更新和生产持久撤销链尚未验收；本包不改变接口冻结状态。
+
+## 当前源码接线核对（2026-10-07）
+
+来源基线为 `main@4b5ec61`。以上日期、工具链与测试数量保留各原工作包的历史结论；
+其中“主任务仍需接入”按以下当前源码状态理解，不再作为另建消费者的待办。
+
+[既有 Desktop knowledge-watch-host](../../apps/desktop/electron/knowledge-watch-host.js)
+已消费 `buildInterestOptions`、`LayaInterestDecisionService` 和
+`planKnowledgeReevaluation`。`consumeInterestTask` 从可信 reader 读取 Runtime
+任务绑定的兴趣证据，保存原始 intake 身份与未知/完成回执，在判断及提交阶段复核原任务、
+来源和跟踪许可；已完成回执复用当前 watch，不能重开已撤销兴趣。已有 due/source-change
+路径复用 Runtime 调度和知识重评估，不需要新增任务库或另一宿主。
+
+[Desktop main](../../apps/desktop/electron/main.js) 已装配该宿主的 Laya、
+`readInterestSignal`、当前 tracking grant、原生 feed 工具及其持久执行证据 reader。
+该 reader 检查公开无凭据传输证据、来源配置、原始读取回执和有效期，才生成兴趣输入；
+消费者身份、内容哈希和成功检查时间来自这些原始绑定，不能由摘要或模型输出补造。
+本地接线场景见
+[兴趣任务检查](../../apps/desktop/test/knowledge-watch-interest-task.test.mjs)、
+[due/撤销检查](../../apps/desktop/test/knowledge-watch-due.test.mjs) 和
+[feed 消费检查](../../apps/desktop/test/knowledge-watch-formal-feeds.test.mjs)。
+
+这是现有源码接线的校正，未在本次启动真实订阅、Laya、AgentArts 或桌面进程。
+真实来源的次日更新、生产持久撤销和云端最终读回仍需现场验收；源码装配和本地场景
+不能替代该验收，也不改变原接口冻结状态或将 MOD/MVP 标记 done。

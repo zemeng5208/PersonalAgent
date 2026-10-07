@@ -56,3 +56,30 @@ source 任务仅受理/返回候选时不会显示 applied。已有 tick/applyDe
 - 3 个新增 reviewed-local-repair 检查通过，包含纯 Goal 来源实际 SQLite/Policy/CAS/Evidence 和持久重建、4 个来源/候选/图/许可变化零追加场景，以及取消 started 后未知状态不重放。
 - Desktop 专属检查 13 项通过，包括 Fake Laya/AgentArts 候选经真实 Runtime 审批、SQLite 图 5→7、Decision/Plan revision 1→2、Evidence 和目标读回后才 applied；重建保持 task ID/verification 且不恢复许可，后续 Plan revision 3 降核实。
 - 没有启动/训练真实模型、联网邮箱/日历、全仓 check 或重复全包测试。真实云 router、P8 main 生产装配、实际用户目标/会议仍待集成验收；MOD/MVP 未 done。
+
+## 当前源码接线核对（2026-10-07）
+
+来源基线为 `main@4b5ec61`。以上工作包分工、验证数量和云兼容结论保留历史含义；
+P8 main 的源码装配已存在，真实生产运行与云端返回仍未由本次核验。
+
+[Desktop main](../../apps/desktop/electron/main.js) 的非 synthetic Competition
+Runtime 构造已传入 `repairCandidateVersion: '1.0'`、固定 namespace/bindingVersion、
+既有 `withReviewedRepairLock` 及 `reviewedSource.resolve`。resolver 读取
+`proactiveHost.readPreparedRepair(sourceTaskId)`，仅接收 prepared 且精确匹配
+`reviewTaskId` 的候选。[Goal host](../../apps/desktop/electron/goal-cognition-host.js)
+提供可信 binding/preparation 与提交、反馈读回，
+[proactive-host](../../apps/desktop/electron/proactive-host.js) 转发同一入口；
+不存在需要补建的另一修复宿主。
+
+[Runtime local-repair](../../apps/runtime/src/application/local-repair.ts) 与
+[Runtime Application](../../apps/runtime/src/application/runtime-application.ts)
+已消费 Goal review 来源，继续通过既有 Policy、工具、source lock、原子图 CAS 和
+历史读回完成执行核实。源码场景见
+[reviewed local-repair 检查](../../apps/runtime/test/reviewed-local-repair.test.mjs) 与
+[Desktop Goal host 检查](../../apps/desktop/test/goal-cognition-host.test.mjs)。
+候选受理、模型选择或 source task 成功仍不能单独证明修复已执行；必须满足原有
+confirmed Evidence、精确输入与提交历史、当前目标版本的核实条件。
+
+本次仅校正接线记录，没有执行真实云 router、真实 Laya/AgentArts、Electron 或实际
+用户目标/会议链路。源码已装配不等于云候选兼容或现场验收通过；缺候选、许可或可信
+绑定仍保持 unavailable，保留原恢复语义与 MOD/MVP 未 done 的边界。
