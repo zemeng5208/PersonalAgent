@@ -340,7 +340,8 @@ test('synchronous device release failures still close the session and block unsa
   await fixture.host.start();
   const state=await fixture.host.stop();
   assert.equal(closed,true);
-  assert.equal(state.active,false);
+  assert.equal(state.active,true);
+  assert.equal(fixture.host.hasActive(),true);
   assert.match(state.reason,/释放未确认/);
   await assert.rejects(fixture.host.start(),/释放未确认/);
 });
