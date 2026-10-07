@@ -15,7 +15,7 @@ export function mountNotepadControls(container, invoke) {
     catch {failure = '操作未受理，请检查执行组件、文本与当前任务状态。';}
     finally {pending = false; render(state); if(failure) status.textContent=failure;}
   }
-  form.addEventListener('submit',event => {event.preventDefault();void run('notepad.start',{text:form.elements.text.value});});
+  form.addEventListener('submit',event => {event.preventDefault();if(pending || submit.disabled)return;void run('notepad.start',{text:form.elements.text.value});});
   cancel.onclick = () => run('notepad.cancel');
   check.onclick = () => run('notepad.reconcile',{taskId:select.value});
   function render(value = {}) {
