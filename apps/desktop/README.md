@@ -26,6 +26,19 @@ Live 配置保存期间可继续编辑。保存成功后，新修改保留为未
 
 上述边界由 `test/live-voice-playback.test.mjs`、`test/microphone-capture.test.mjs` 和 `test/live-voice-controls.test.mjs` 的合成测试覆盖；它们不证明 Windows 麦克风、扬声器或真实 Live 云端验收。
 
+### 隐藏面板后的听写恢复（PR #302 未合并增量）
+
+隐藏、主页面导航或 renderer 崩溃时，主进程请求关闭唤醒并取消活动的手动听写；
+`cancelCapture` 中止该次会话，随后等待采集、识别和相关资源的释放确认。
+迟到的旧听写不能重新填入草稿；停止语音不自动提交或取消 Runtime 任务。
+仅隐藏同一存活面板保留当前输入草稿；导航重载和崩溃不承诺草稿持久化。
+重新打开面板不会自动恢复 Wake 或录音，须在有效 SIS 配置及释放确认后显式开启；
+原唤醒许可的取消与期限继续生效，不能借重开延长或恢复旧许可。
+释放未确认时保持设备门禁；退出或重启不能作为物理释放已验证的回执。
+此说明对应尚未进入 main 的 [PR #302](https://github.com/zemeng5208/PersonalAgent/pull/302)，
+不改变旧设备验收记录；实现与现场边界见 [MOD-14](../../docs/modules/MOD-14-VOICE-SESSION-01.md)
+和 [MOD-15](../../docs/modules/MOD-15-WAKE-LIFECYCLE-01.md)。
+
 ## 2026-09-27 当前语音与主动提醒增量
 
 本轮按 Competition Profile 区分两个入口：麦克风使用 SIS 听写，只填入可编辑输入框，
