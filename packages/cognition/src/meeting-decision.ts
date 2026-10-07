@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto';
+import {isDeepStrictEqual} from 'node:util';
 import {existsSync, mkdirSync, readFileSync, renameSync, readdirSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {
@@ -301,8 +302,11 @@ export function createPolicyGuardedExecutionPort(options: PolicyGuardedExecution
     || !options.policy || typeof options.policy.evaluateExecution !== 'function') {
     throw new CognitionError('INVALID_ARGUMENT');
   }
+  options = {...options};
   return {
     async executeBatch(request) {
+      try { request = {...request, inputs: structuredClone(request.inputs)}; }
+      catch { return {applied: false, snapshot: options.store.read(), error: '非法执行输入'}; }
       if (request.signal?.aborted) {
         return { applied: false, snapshot: options.store.read(), error: '执行前已取消' };
       }
@@ -319,7 +323,9 @@ export function createPolicyGuardedExecutionPort(options: PolicyGuardedExecution
       const policyDecision = await options.policy.evaluateExecution({
         eventId: request.eventId,
         source: request.source,
-        inputs: request.inputs,
+        // Policy receives its own view; neither it nor the caller can replace
+        // the private candidate committed after this awaited decision.
+        inputs: structuredClone(request.inputs),
         risk: 'low',
       });
       if (!policyDecision.allowed) {
@@ -348,8 +354,19 @@ export function createPolicyGuardedExecutionPort(options: PolicyGuardedExecution
               source: request.source,
               namespace: options.namespace,
             });
-            if (record && record.status === 'applied' && record.sourceRevision === request.sourceRevision) {
-              return { applied: true, snapshot: options.store.read() };
+            if (record && record.status === 'applied' && record.receipt.status === 'applied'
+              && record.eventId === request.eventId && record.source === request.source
+              && record.sourceRevision === request.sourceRevision
+              && record.receipt.eventId === request.eventId && record.receipt.source === request.source
+              && record.receipt.sourceRevision === request.sourceRevision
+              && record.receipt.graphRevisionBefore === request.expectedRevision) {
+              const expected = appendVersions(options.store.read(request.expectedRevision),
+                request.expectedRevision, request.inputs);
+              if (record.namespace === (options.namespace ?? expected.namespace)
+                && record.receipt.graphRevisionAfter === expected.revision
+                && isDeepStrictEqual(options.store.read(expected.revision), expected)) {
+                return { applied: true, snapshot: options.store.read() };
+              }
             }
           } catch {}
         }

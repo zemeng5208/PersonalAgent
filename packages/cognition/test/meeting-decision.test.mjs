@@ -772,6 +772,91 @@ test('MeetingRescheduleCoordinator: rejects baseline revision mismatch with conf
   assert.match(receipt.reason, /源事实基线版本不匹配/);
 });
 
+test('guarded execution commits only the captured input and store after asynchronous policy review', async () => {
+  const host=new FakeCoordinationStoreHost(),approved=host.provision('approved'),other=host.provision('other');
+  const input={id:'approved-fact',kind:'fact',summary:'approved summary',sourceRef:'calendar:synthetic',
+    sensitivity:'public',state:'active',validFrom:'2026-01-01T00:00:00.000Z',validUntil:'2099-01-01T00:00:00.000Z',
+    reason:'synthetic',dependencies:[]};
+  let release,entered,policyInput,commits=0,notified=0,replacedCalls=0;
+  const reviewing=new Promise(resolve=>{release=resolve;});
+  const started=new Promise(resolve=>{entered=resolve;});
+  const store={read:revision=>approved.read(revision),appendBatch:(revision,inputs)=>approved.appendBatch(revision,inputs)};
+  const policy={evaluateExecution:async()=>{throw Error('original method should be replaced on the same port');}};
+  const options={store,policy,namespace:'approved',onExecuted:()=>{notified++;}};
+  const port=createPolicyGuardedExecutionPort(options);
+  policy.evaluateExecution=async request=>{policyInput=request;entered();await reviewing;return {allowed:true};};
+  const request={expectedRevision:0,inputs:[structuredClone(input)],eventId:'approved-event',source:'calendar:synthetic',sourceRevision:'r1'};
+  const pending=port.executeBatch(request);
+  await started;
+  assert.equal(policyInput.inputs[0].summary,input.summary);
+  request.inputs[0].summary='caller replacement';
+  request.inputs.push({...input,id:'unapproved-extra'});
+  policyInput.inputs[0].summary='policy replacement';
+  policyInput.inputs[0].dependencies.push({id:'missing',revision:1});
+  options.store=other;options.namespace='other';
+  options.policy={evaluateExecution(){replacedCalls++;return {allowed:false};}};
+  options.onExecuted=()=>{replacedCalls++;};
+  store.appendBatch=(revision,inputs)=>{commits++;return approved.appendBatch(revision,inputs);};
+  release();
+  const result=await pending;
+  assert.equal(result.applied,true);assert.equal(commits,1);assert.equal(notified,1);assert.equal(replacedCalls,0);
+  assert.deepEqual(approved.read().history,[{...input,revision:1,graphRevision:1}]);
+  assert.deepEqual(result.snapshot,approved.read());assert.equal(other.read().revision,0);
+});
+
+test('guarded execution cannot replace the captured cancellation signal during policy review', async () => {
+  const store=new FakeCoordinationStoreHost().provision('approved'),controller=new AbortController();
+  let release,entered;
+  const reviewing=new Promise(resolve=>{release=resolve;});
+  const started=new Promise(resolve=>{entered=resolve;});
+  const port=createPolicyGuardedExecutionPort({store,policy:{async evaluateExecution(){entered();await reviewing;return {allowed:true};}}});
+  const request={expectedRevision:0,eventId:'approved-event',source:'calendar:synthetic',sourceRevision:'r1',
+    signal:controller.signal,deadline:new Date(Date.now()+5000).toISOString(),inputs:[{id:'fact',kind:'fact',summary:'approved',
+      sourceRef:'calendar:synthetic',sensitivity:'public',state:'active',reason:'synthetic',dependencies:[],
+      validFrom:'2026-01-01T00:00:00.000Z',validUntil:'2099-01-01T00:00:00.000Z'}]};
+  const pending=port.executeBatch(request);await started;
+  controller.abort();request.signal=new AbortController().signal;release();
+  const result=await pending;
+  assert.equal(result.applied,false);assert.match(result.error,/异步授权后中止/);assert.equal(store.read().revision,0);
+});
+
+test('guarded recovery verifies the exact committed input and receipt boundaries against graph history', async () => {
+  const store=new FakeCoordinationStoreHost().provision('synthetic-recovery'),receipts=new InMemoryMeetingDecisionReceiptStore();
+  const input={id:'recovered-fact',kind:'fact',summary:'approved summary',sourceRef:'calendar:synthetic',
+    sensitivity:'public',state:'active',validFrom:'2026-01-01T00:00:00.000Z',validUntil:'2099-01-01T00:00:00.000Z',
+    reason:'synthetic',dependencies:[]};
+  store.appendBatch(0,[input]);
+  const record=syntheticReceiptRecord('synthetic-recovery','calendar:synthetic','recovered-event');
+  record.status='applied';record.receipt={...record.receipt,status:'applied',graphRevisionBefore:0,graphRevisionAfter:1,
+    appliedNodeRevisions:[{id:input.id,revision:1}]};
+  receipts.saveReceipt(record);
+  const request={expectedRevision:0,inputs:[input],eventId:record.eventId,source:record.source,sourceRevision:record.sourceRevision};
+  const port=createPolicyGuardedExecutionPort({store,receiptStore:receipts,namespace:record.namespace,
+    policy:{evaluateExecution:()=>({allowed:true})}});
+  assert.equal((await port.executeBatch(request)).applied,true);
+  store.appendBatch(1,[{...input,id:'unrelated-fact',summary:'unrelated append'}]);
+  const recovered=await port.executeBatch(request);
+  assert.equal(recovered.applied,true);assert.equal(recovered.snapshot.revision,2);
+  const before=store.read();
+  assert.equal((await port.executeBatch({...request,inputs:[{...input,summary:'unexecuted replacement'}]})).applied,false);
+  for(const mutation of [
+    value=>{value.namespace='other-namespace';},value=>{value.source='other-source';},
+    value=>{value.eventId='other-event';},value=>{value.receipt.sourceRevision='other-revision';},
+    value=>{value.receipt.source='other-source';},value=>{value.receipt.eventId='other-event';},
+    value=>{value.receipt.graphRevisionBefore=1;},value=>{value.receipt.graphRevisionAfter=2;},
+  ]) {
+    const forged=structuredClone(record);mutation(forged);
+    const mismatched=createPolicyGuardedExecutionPort({store,namespace:record.namespace,
+      receiptStore:{loadReceipt:()=>forged,saveReceipt(){}},policy:{evaluateExecution:()=>({allowed:true})}});
+    assert.equal((await mismatched.executeBatch(request)).applied,false);
+  }
+  const unavailable=createPolicyGuardedExecutionPort({store:{appendBatch:(...args)=>store.appendBatch(...args),
+    read:revision=>{if(revision!==undefined)throw Error('history unavailable');return store.read();}},
+    namespace:record.namespace,receiptStore:receipts,policy:{evaluateExecution:()=>({allowed:true})}});
+  assert.equal((await unavailable.executeBatch(request)).applied,false);
+  assert.deepEqual(store.read(),before,'recovery neither retries nor changes persisted history');
+});
+
 test('MeetingRescheduleCoordinator: createPolicyGuardedExecutionPort evaluates policy before commit', async () => {
   const {store} = createMeetingFixture();
   const mockLaya = createMockLaya(0, 0.95);
