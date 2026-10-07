@@ -221,3 +221,21 @@ Runtime 名称、API 200、模型正文和控制台当前 `Latest` 都不能代�
 MOD-32 剩余验收：新版本与请求级部署绑定、精确 trace/usage/费用读回、平台失败
 及回退演练、角色交接与评估、无静默 Local 回退。真实云调用和发布变更需由主控
 协调单槽资源；本文没有运行它们。
+
+## 2026-10-07 当前源码与剩余现场验收
+
+本节只核对 main `4b5ec61` 和尚未合并的 [PR #302](https://github.com/zemeng5208/PersonalAgent/pull/302)。
+上方带日期的历史平台及本地回执保持原结论。本轮环境没有云账户绑定/凭据，没有发起
+真实云调用、发布、回退或 GUI 验收；离线通过不续期历史平台健康或升级 capability。
+
+| 交付项 | main 已有代码 / #302 未合并增量 | 剩余现场证据 |
+| --- | --- | --- |
+| 云调用及失败诊断 | main [adapter](../../packages/coordination/src/agentarts.ts) 已支持 Workflow 输入、严格提案/候选与不含正文的失败 diagnostic；#302 补 JSON/日期/信号及 guard 一致性 | 当次部署健康、请求级版本、原生 trace 精确关联、实际响应及失败读回；本地 request ID 和配置名不能替代平台字段 |
+| 本地执行与恢复 | main 工具目录、Policy/审批、ToolGateway、confirmed receipt、候选预览/CAS、Fact/Goal/proactive 消费已有接线；#302 补 provider、候选模式、子任务取消及 hook 合同一致性，见 [MOD-29](MOD-29-AGENTARTS-RUNTIME-INTEGRATION.md)、[MOD-30](MOD-30-COMPETITION-EXPORT-01.md) | 采用实际集成 head 的同批合成 Desktop 场景、目标系统读回和同库重启；不能拼接不同批次任务为新 Golden Path |
+| 固定评估和基线重复 | main 已有 [fixed runner](../../tests/manual/agentarts/support/fixed-synthetic-batch.mjs) 与 trace scorer；#302 新增 [paired runner](../../tests/manual/agentarts/support/paired-synthetic-batch.mjs)，显式注入两个端口，1～3 对批次沿用同一 deadline/cancel，只报告实际三标签分类及 await 时长；scorer 只计真实 dense own-data records/events | 独立标注的实际平台输出、固定版本及对照；World/Plan/Review 的源身份、路由、交接、预算和失败分支仍须真实 trace，不能由三标签得分推断多 Agent 优势 |
+| 费用、发布和回退 | 当前端口没有已验证的请求级部署版本、usage/费用或发布回退契约；#302 不增加这些字段 | 原生请求关联、usage 与账单依据、此前已验证版本、实际回退后的绑定/健康/API/trace 读回。没有精确证据时保持 unknown |
+
+上述 main 接线是实现盘点，不表示 MOD27～32 全部完成。#302 的离线补丁必须在合并与
+必要检查后才算 main 增量；真实平台评估、可视化比赛 Demo 和整体验收仍分别判定。
+缺少真实嵌套 trace 字段时沿用 [MOD-31 的现有边界](MOD-31-TRACE-EVALUATION-02.md)，
+不创建猜测角色 DTO、虚拟 usage 或“一键回滚”实现。
