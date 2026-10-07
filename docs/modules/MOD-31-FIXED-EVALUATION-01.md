@@ -109,6 +109,8 @@ Fact/Goal/Decision/Plan 世界与一般最小修复规则：依赖链、并列�
 不自动调用云端。报告固定 `synthetic: true`、`verification: unverified`，离线端口验证
 只证明此限定评估管线；有限重复不构成独立样本或统计显著性。真实候选质量、角色协作
 及平台效果仍需独立真实运行与证据。
+运行下列联合验证前，先在当前隔离工作树安装依赖并完成根 `npm run build`，准备该树的公开包产物。
+若只定向构建，须准备 `@personal-agent/contracts`、`@personal-agent/coordination`、`@personal-agent/goals`、`@personal-agent/cognition` 及其完整传递依赖的 `dist`；cognition 的 build 仅先构建 goals，不代建其余传递依赖，不借用其他工作树的 workspace 链接。
 必要定向验证：`node --test --test-concurrency=1 tests/manual/agentarts/support/fixed-synthetic-repair-cases.test.mjs tests/manual/agentarts/support/fixed-synthetic-repair-batch.test.mjs`。
 正式夹具集成后，新 runner 的定向测试 12/12 通过，无跳过；仅运行本批 runner，
 未重复旧分类/配对绿色测试，也未运行真实平台、整仓检查或 GUI。
