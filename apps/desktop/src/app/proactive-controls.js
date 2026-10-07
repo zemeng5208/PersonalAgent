@@ -27,6 +27,7 @@ export function cognitionReviewFeedback(item = {}) {
   return {message: verified ? '执行与目标更新已核实'
     : pendingReceipt ? '编排受理结果待核实，请勿重复提交；目标更新尚未核实'
     : reconciliationReceipt ? '处理结果待核实，请勿重复提交；目标更新尚未核实'
+    : item.taskId && state === 'unavailable' ? '编排任务已受理，受控修复暂不可用；目标更新尚未核实'
     : item.taskId ? labels[state] ?? '处理状态待核实，目标更新尚未核实'
     : ['unavailable','expired','submission_unknown'].includes(state) ? labels[state] : '方案已记录，尚未交给主智能体处理',
     label: verified ? '更新已核实' : pendingReceipt || reconciliationReceipt ? '受理结果待核实' : item.taskId ? '已交给主智能体' : '交给主智能体处理',

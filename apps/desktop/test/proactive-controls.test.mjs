@@ -49,6 +49,24 @@ test('Goal reconciliation without task identity stays locked based on structured
   assert.equal(cognitionReviewFeedback({executionStatus:'修复回执绑定待核实，不会重复提交'}).locked,false);
 });
 
+test('accepted unavailable repair receipt retains its handoff and unverified update meaning', () => {
+  // Public GoalCognitionHost's missing localRepair port branch returns unavailable
+  // alongside the already succeeded source task ID, rather than refusing handoff.
+  const receipt={status:'unavailable',state:'succeeded',taskId:'synthetic-succeeded-source',
+    reviewTaskId:'synthetic-reviewed-repair',executionVerified:false,graphUpdateVerified:false};
+  for(const reason of [undefined,'受控修复端口尚未装配','Untrusted unrelated prose']) {
+    const feedback=cognitionReviewFeedback({...receipt,reason});
+    assert.match(feedback.message,/编排任务已受理.*受控修复暂不可用.*目标更新尚未核实/);
+    assert.doesNotMatch(feedback.message,/无法交给|更新已核实/);
+    assert.equal(feedback.label,'已交给主智能体');assert.equal(feedback.locked,true);
+  }
+  const {taskId,...unsubmitted}=receipt;
+  assert.equal(cognitionReviewFeedback(unsubmitted).message,'当前无法交给主智能体处理');
+  assert.equal(cognitionReviewFeedback(unsubmitted).locked,false);
+  assert.equal(cognitionReviewFeedback({...receipt,status:'applied',executionVerified:true,graphUpdateVerified:true}).message,
+    '执行与目标更新已核实');
+});
+
 // Explicit Fake DOM with normal parent/descendant identity; innerHTML replaces actual test nodes.
 class Element {
   constructor(tag) {this.tag=tag;this.children=[];this.dataset={};this.attributes={};this.listeners={};this.disabled=false;this._text='';}
