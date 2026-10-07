@@ -50,7 +50,7 @@ def valid_context(value, goal=False):
         if not isinstance(target, dict) or set(target) != {"node", summary_key, "requestedDependencies"}:
             return False
         node, deps = target["node"], target["requestedDependencies"]
-        if not valid_ref(node, goal) or not text(target[summary_key], 4096):
+        if not valid_ref(node, goal) or not text(target[summary_key], 8192 if goal else 4096):
             return False
         if not isinstance(deps, list) or len(deps) > 64 or not all(valid_ref(r, goal) for r in deps):
             return False
