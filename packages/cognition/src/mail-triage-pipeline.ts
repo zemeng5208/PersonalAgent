@@ -231,16 +231,24 @@ export class MailTriagePipeline {
 
     // Deduplicate duplicate messages within the batch request itself
     const uniqueMessages: LayaTriageMessage[] = [];
-    const seenBatch = new Set<string>();
+    const seenBatch = new Map<string, number>();
     for (const msg of request.messages) {
       if (!msg || typeof msg.source !== 'string' || typeof msg.messageId !== 'string'
-        || typeof msg.sourceRevision !== 'string' || typeof msg.text !== 'string') {
+        || typeof msg.sourceRevision !== 'string' || typeof msg.text !== 'string'
+        || (msg.highImpact !== undefined && typeof msg.highImpact !== 'boolean')) {
         throw new CognitionError('INVALID_ARGUMENT');
       }
       const rawIdentity = JSON.stringify([msg.source, msg.messageId, msg.sourceRevision]);
-      if (!seenBatch.has(rawIdentity)) {
-        seenBatch.add(rawIdentity);
+      const previousIndex = seenBatch.get(rawIdentity);
+      if (previousIndex === undefined) {
+        seenBatch.set(rawIdentity, uniqueMessages.length);
         uniqueMessages.push(msg);
+      } else {
+        const previous = uniqueMessages[previousIndex]!;
+        if (previous.text !== msg.text) throw new CognitionError('INVALID_ARGUMENT');
+        if (msg.highImpact === true && previous.highImpact !== true) {
+          uniqueMessages[previousIndex] = {...previous, highImpact: true};
+        }
       }
     }
 
@@ -257,7 +265,8 @@ export class MailTriagePipeline {
           || cached.sourceRevision !== msg.sourceRevision || cached.receipt?.contextDigest !== hash(msg.text)) {
           throw new CognitionError('INVALID_ARGUMENT');
         }
-        allResults.push(structuredClone(cached));
+        const result = structuredClone(cached);
+        allResults.push(msg.highImpact === true ? {...result, route: 'main_agent', reason: 'high_impact'} : result);
         cachedCount++;
       } else {
         pendingMessages.push(msg);

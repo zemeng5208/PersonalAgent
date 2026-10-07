@@ -224,6 +224,58 @@ test('classifier input mutation cannot redefine the private submitted message id
   assert.equal(request.messages[0].text, 'Work update');
 });
 
+test('in-batch conflicting content is rejected before inference or checkpoint save', async () => {
+  const inference = createMockInference(); let saves = 0;
+  const pipeline = new MailTriagePipeline({inference, checkpoint: {load: () => ({}), save: () => {saves++;}}});
+  const message = {source: 'mail', messageId: 'conflict', sourceRevision: '1', text: 'Routine update'};
+  await assert.rejects(pipeline.processBatch({messages: [message, {...message, text: 'URGENT meeting moved', highImpact: true}],
+    signal: new AbortController().signal, deadline: new Date(Date.now() + 60_000).toISOString()}),
+    error => error.code === 'INVALID_ARGUMENT');
+  assert.equal(inference.calls.length, 0);
+  assert.equal(saves, 0);
+});
+
+test('exact duplicate messages merge trusted high-impact hints without losing classification reuse', async () => {
+  for (const hints of [[false, true, false], [true, false, true]]) {
+    const inference = createMockInference(), pipeline = new MailTriagePipeline({inference});
+    const message = {source: 'mail', messageId: 'risk-merge', sourceRevision: '1', text: 'Work update'};
+    const request = {messages: hints.map(highImpact => ({...message, highImpact})),
+      signal: new AbortController().signal, deadline: new Date(Date.now() + 60_000).toISOString()};
+    const result = await pipeline.processBatch(request);
+    assert.equal(result.total, 1);
+    assert.equal(result.highImpactCount, 1);
+    assert.equal(result.results[0].route, 'main_agent');
+    const replay = await pipeline.processBatch({...request, messages: [{...message, highImpact: false}]});
+    assert.equal(replay.highImpactCount, 1, 'Cached high-impact routes cannot be downgraded');
+    assert.equal(replay.cachedCount, 1);
+    assert.equal(inference.calls.length, 1);
+  }
+});
+
+test('trusted hints elevate only the current cached view and invalid hints never bypass validation', async () => {
+  const inference = createMockInference(); let saved, saves = 0;
+  const pipeline = new MailTriagePipeline({inference, checkpoint: {load: () => ({}), save: value => {saved = value; saves++;}}});
+  const message = {source: 'mail', messageId: 'cached-risk', sourceRevision: '1', text: 'Work update'};
+  const request = {messages: [message], signal: new AbortController().signal,
+    deadline: new Date(Date.now() + 60_000).toISOString()};
+  const first = await pipeline.processBatch(request), original = structuredClone(first.results[0]), checkpoint = structuredClone(saved);
+  assert.equal(original.route, 'group');
+  const elevated = await pipeline.processBatch({...request, messages: [{...message, highImpact: true}]});
+  assert.deepEqual(elevated.results, [{...original, route: 'main_agent', reason: 'high_impact'}]);
+  assert.equal(elevated.highImpactCount, 1);
+  assert.equal(elevated.highImpactNotices.length, 1);
+  assert.equal(elevated.cachedCount, 1);
+  assert.equal(elevated.newlyClassifiedCount, 0);
+  assert.deepEqual(saved, checkpoint);
+  assert.deepEqual((await pipeline.processBatch(request)).results, [original]);
+  for (const highImpact of ['true', 1, null]) {
+    await assert.rejects(pipeline.processBatch({...request, messages: [{...message, highImpact}]}),
+      error => error.code === 'INVALID_ARGUMENT');
+  }
+  assert.equal(saves, 1);
+  assert.equal(inference.calls.length, 1);
+});
+
 test('batch deduplication preserves colon-containing identity tuples and still reuses exact duplicates', async () => {
   const inference=createMockInference(),pipeline=new MailTriagePipeline({inference});
   const distinct=[
@@ -277,7 +329,7 @@ test('MailTriagePipeline processes messages in bounded chunks and deduplicates i
   const messages = [
     {source: 'mail:inbox', messageId: 'm1', sourceRevision: 'r1', text: 'URGENT: Contract review today'},
     {source: 'mail:inbox', messageId: 'm2', sourceRevision: 'r1', text: 'Weekly sync notes'},
-    {source: 'mail:inbox', messageId: 'm2', sourceRevision: 'r1', text: 'Weekly sync notes (duplicate in batch)'},
+    {source: 'mail:inbox', messageId: 'm2', sourceRevision: 'r1', text: 'Weekly sync notes'},
     {source: 'mail:inbox', messageId: 'm3', sourceRevision: 'r1', text: 'Status update 3'},
     {source: 'mail:inbox', messageId: 'm4', sourceRevision: 'r1', text: 'Status update 4'},
     {source: 'mail:inbox', messageId: 'm5', sourceRevision: 'r1', text: 'Status update 5'},
