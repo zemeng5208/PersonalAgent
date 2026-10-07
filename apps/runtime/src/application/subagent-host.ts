@@ -207,6 +207,17 @@ export async function resumeRuntimeSubagentTask(options: SubagentHostOptions, ch
   if (['succeeded', 'failed', 'cancelled'].includes(parent.state) || child.state !== 'waiting_approval') {
     throw new ProtocolError('REVISION_CONFLICT', 'Subagent is not resumable for this parent');
   }
+  const runOriginalWorker = async (): Promise<TaskSnapshot> => {
+    const cancel = () => {
+      try {runtime.requestCancel(childTaskId, 'Parent task cancelled');}
+      catch { /* A terminal child cannot be cancelled or reopened. */ }
+    };
+    parentSignal?.addEventListener('abort', cancel, {once: true});
+    try {
+      return await runtime.runTask(childTaskId, worker => runSubagentWorker(options, binding, worker),
+        {deadline: binding.parentDeadline, sideEffect: subagentSideEffect(options,runtime,childTaskId), resume: true});
+    } finally {parentSignal?.removeEventListener('abort', cancel);}
+  };
   const execution = runtime.loadCheckpoint(childTaskId, 'subtask-execution-binding') as {kind?: string} | undefined;
   const defaultChild = execution?.kind === 'competition' || runtime.loadCheckpoint(childTaskId, 'subtask-coordination-binding') !== undefined;
   const competition=runtime.loadCheckpoint(childTaskId,'competition-loop') as {pending?:unknown;continuation?:unknown}|undefined;
@@ -214,8 +225,7 @@ export async function resumeRuntimeSubagentTask(options: SubagentHostOptions, ch
   if(defaultChild && !competition?.pending && competition?.continuation && replay
     && runtime.readToolExecutions(childTaskId).some(record=>record.evidenceId===replay.runId && record.inputDigest===replay.inputDigest
       && record.state==='confirmed' && record.executionStarted && record.policyDecision==='allow')) {
-    return runtime.runTask(childTaskId,worker=>runSubagentWorker(options,binding,worker),
-      {deadline:binding.parentDeadline,sideEffect:subagentSideEffect(options,runtime,childTaskId),resume:true});
+    return runOriginalWorker();
   }
   let runId: string, toolName: string, argumentsValue: Record<string, unknown>;
   if (defaultChild) {
@@ -251,15 +261,7 @@ export async function resumeRuntimeSubagentTask(options: SubagentHostOptions, ch
     || (!confirmed && !runtime.policy.get(runId))) {
     throw new ProtocolError('UNAUTHORIZED', 'Subagent invocation is not approved or grant was revoked');
   }
-  const cancel = () => {
-    try {runtime.requestCancel(childTaskId, 'Parent task cancelled');}
-    catch { /* A terminal child cannot be cancelled or reopened. */ }
-  };
-  parentSignal?.addEventListener('abort', cancel, {once: true});
-  try {
-    return await runtime.runTask(childTaskId, worker => runSubagentWorker(options, binding, worker),
-      {deadline: binding.parentDeadline, sideEffect: subagentSideEffect(options,runtime,childTaskId), resume: true});
-  } finally {parentSignal?.removeEventListener('abort', cancel);}
+  return runOriginalWorker();
 }
 
 /** Read-only aggregation from persistent children; never reopens a terminal parent. */
