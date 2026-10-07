@@ -254,3 +254,42 @@ Host；主进程相关路由从实际 main 源码提取执行，不等于运行 
 新代分配后旧 keyword 回调不启动新的听写；最终关闭读回两代均 ended/closed。
 独立进程 exit0、console/pageerror 为零，新增证据 `wake-native-device-ended-validation.md`
 及对应脚本、JSON、日志/截图。未重跑前述正常/unknown 场景，不提升物理拔插或现场验收。
+
+## 2026-10-07：Live 双 native 链与聚合关闭反馈
+
+固定源码 `4dc01f6f397e8d1e941fadc17ab031f95353b3de` 的新增独立原面板场景，
+同时运行 24 kHz 输出 context、16 kHz Fake-device 采集 context/track/Worklet 和公开
+PCM source；Fake Gateway 收到三个 3200 bytes 帧，没有真实音频上传。
+实际 RuntimeClientTranscriptConsumer 经显式 Fake Runtime Client 提交一次并等待
+不合作的 task.get；actual main 为同一任务保留 panel 关联。
+原 Live 按钮关闭后等待被中止，native 两个 context closed、track ended、Host verified，
+Gateway close 一次；已受理任务仍“结果待核实”，不 task.cancel 或重提。
+迟到 succeeded 返回及旧 Gateway 回调均不能改草稿、任务界面或重新播放/提交。
+此场景实际 exit0、console/pageerror 为零；证据 `live-native-runtime-wait-validation.md`
+及对应脚本、JSON、日志/截图，仍非真实 Runtime/云/设备验收。
+
+该固定版本的另一个 actual Live/main 复现显示：Live.stop 的既有 API 可以正常返回
+error 快照并保持 hasActive 释放未确认，stopPanelVoice 仅检查 Promise 拒绝会误当
+聚合关闭完成。现在在原 allSettled 结束后检查公共 Live.hasActive；所有清理仍尝试，
+聚合拒绝由原 reportPanelVoiceFailure 显示固定错误。不改变 Live API、期限或任务取消。
+新增实际 Live/Microphone/PCM 明确 Fake 组合与原四项共 5/5、语法/diff 校验通过。
+
+独立原 native panel BEFORE/AFTER 让输出 close 显式拒绝：采集 ended/closed、Mic verified，
+但输出仍 running/Live active；原收起的 Fake hide 回调随后执行聚合关闭。
+修复前聚合 fulfilled、错误为空，修复后聚合 reject 并显示“语音资源释放未确认”；
+Fake hide 已发生，本修复没有将其改成等待全部 Live 释放才隐藏。
+待核实任务与 unknown 锁保留，迟到 task.get 不改变状态，两场景 submit/get 各一次，
+不取消或重提。BEFORE/AFTER 各实际 exit0、console/pageerror 为零；首次私有 cleanup
+重复关闭已 closed context 的 exit1 保留，纠正 helper 后才记录成功。
+最终 main blob `f0f37bbefcb36dc5b413d89beb773d8104c535d8`；证据同私有目录中的
+`panel-stop-live-unknown-fix-validation.md`、`live-native-panel-stop-unknown-{before,after}.json`
+及脚本/日志/截图。IPC、Runtime/Gateway、BrowserWindow 和故障注入明确 Fake，
+截图浏览器仍可见；没有 Electron 窗口、Windows、物理资源或真实业务终态结论。
+
+同一聚合修复的独立正常取消场景使用 child `ab7c5ef0979acc5f30870bfcc87c58c33ca1f180`：
+24 kHz native output.resume 已执行，但返回被显式 hold；原面板关闭后 context closed、
+Live inactive、聚合正常完成，尚未授权 Mic 或连接 Gateway。放行迟到 resume 不产生 ready 或新音源。
+仅原按钮显式重试才建立新 output 和 16 kHz Fake-device input/Worklet；最终三 context closed、
+track ended、Host verified，Runtime 调用零。此新场景实际 exit0、console/pageerror 为零，
+证据 `live-native-resume-hide-validation.md` 及对应脚本、JSON、日志/截图。
+resume hold、IPC 和 BrowserWindow.hide 明确 Fake，不能据此认定真实 Electron 或物理设备验收通过。
