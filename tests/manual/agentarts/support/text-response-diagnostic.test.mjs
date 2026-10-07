@@ -103,6 +103,36 @@ test('configured completion replay matches the actual text and proposal ports', 
   }
 });
 
+test('terminal order rejections retain the known producer reason in manual replay', async () => {
+  const frames = [message(JSON.stringify({kind: 'text', text: 'private-terminal-response'})),
+    {event: 'task_end'}, {event: 'end'}];
+  const frame = value => 'data: ' + JSON.stringify(value) + '\n\n';
+  for (const body of [
+    frame(frames[0]) + frame(frames[1]) + frame(frames[0]) + frame(frames[2]),
+    frames.map(frame).join('') + 'data: [DONE]\n\n' + frame(frames[0]),
+  ]) {
+    let calls = 0, producerDiagnostic;
+    const diagnostic = createTextDiagnosticFetch(async () => {
+      calls++;
+      return new Response(body, {headers: {'content-type': 'text/event-stream'}});
+    }, true);
+    const cloud = new AgentArtsCloudAgentPort({gatewayUrl: 'https://synthetic.example.test',
+      runtimeName: 'synthetic', responseMode: 'tool-proposal-json'},
+      {read: async () => 'Bearer private-token'}, diagnostic.fetch, undefined, undefined,
+      value => {producerDiagnostic = value;});
+    await assert.rejects(cloud.invoke({taskId: 'synthetic-terminal-probe', revision: 1,
+      goal: 'synthetic', deadline: new Date(Date.now() + 5000).toISOString(),
+      signal: new AbortController().signal}), {code: 'EXTERNAL_FAILURE'});
+    const report = diagnostic.snapshot();
+    assert.equal(calls, 1);
+    assert.equal(producerDiagnostic.schemaCategory, 'event_order');
+    assert.equal(report.bodyOutcome, 'complete');
+    assert.equal(report.diagnostic.parserOutcome, 'rejected');
+    assert.equal(report.diagnostic.rejection, 'workflow_order');
+    assert.equal(JSON.stringify(report).includes('private'), false);
+  }
+});
+
 test('transport details cannot appear in diagnostic reports', async () => {
   const diagnostic = createTextDiagnosticFetch(async () => { throw new Error('private transport details'); });
   await assert.rejects(diagnostic.fetch('https://example.test', {}));

@@ -8,6 +8,8 @@ const REASONS = new Map([
   ['AgentArts response contains conflicting text', 'index_conflict'],
   ['AgentArts response exceeds the text limit', 'text_limit'],
   ['AgentArts workflow event order is malformed', 'workflow_order'],
+  ['AgentArts text follows the task terminal', 'workflow_order'],
+  ['AgentArts event follows the stream terminator', 'workflow_order'],
   ['AgentArts response contains no text', 'no_final_text'],
   ['AgentArts response event is malformed', 'event_shape'],
   ['AgentArts response reported a failure', 'provider_failure'],
