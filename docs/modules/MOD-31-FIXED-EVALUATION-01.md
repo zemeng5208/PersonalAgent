@@ -112,3 +112,22 @@ Fact/Goal/Decision/Plan 世界与一般最小修复规则：依赖链、并列�
 必要定向验证：`node --test --test-concurrency=1 tests/manual/agentarts/support/fixed-synthetic-repair-cases.test.mjs tests/manual/agentarts/support/fixed-synthetic-repair-batch.test.mjs`。
 正式夹具集成后，新 runner 的定向测试 12/12 通过，无跳过；仅运行本批 runner，
 未重复旧分类/配对绿色测试，也未运行真实平台、整仓检查或 GUI。
+
+### 有界配对修复质量对照（2026-10-07，PR #302 未合并增量）
+
+[配对修复入口](../../tests/manual/agentarts/support/paired-synthetic-repair-batch.mjs)
+`runPairedSyntheticRepairBatch({candidate, baseline}, {deadline, signal, repetitions})`
+复用上述固定修复 runner、夹具和评分，不增加另一份期望。调用者显式提供两个
+`CoordinationPort`；默认一对、最多三对，每侧每批运行原三个案例一次，最多 18 次请求。
+批次顺序逐对交替，全部串行沿用同一绝对 deadline 和取消信号；不选择服务、读取凭据、
+自动云调用或写图。原 execute 方法在入口捕获，调用期间替换方法不改变已选端口。
+
+只有两侧均完整尝试三个案例且未取消或到期的批次才进入配对比较；普通错误计入每侧
+三个案例的分母。未配对批次保留实际计数与失败，无完整配对时正确率及差值为 `null`。
+报告只含原 runner 的脱敏结果、实际配对正确率和 await 时长，不含期望、候选正文、
+trace 或费用；少量重复不证明统计显著性、真实平台质量或多 Agent 优势。
+
+单独运行 `node --test tests/manual/agentarts/support/paired-synthetic-repair-batch.test.mjs`：
+新增组合测试 8/8 通过、零跳过，覆盖两侧不同语义错误、普通错误分母、交替顺序、
+18 请求上限、取消后的不完整配对及共享期限耗尽。没有重复运行原单端或分类测试，
+没有真实云调用。
