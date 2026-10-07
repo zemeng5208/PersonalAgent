@@ -673,7 +673,7 @@ async function stopPanelVoice() {
   results.push(...await Promise.allSettled([
     liveVoice?.stop(), sisPlaybackHost?.stop(), microphoneCaptureHost?.revoke(),
   ]));
-  if (results.some(result => result.status === 'rejected')) throw Error('语音资源释放未确认');
+  if (results.some(result => result.status === 'rejected') || liveVoice?.hasActive()) throw Error('语音资源释放未确认');
   publish();
 }
 

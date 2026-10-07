@@ -4,6 +4,8 @@ import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 import ts from 'typescript';
 import {createDesktopVoiceInput} from '../electron/voice-input.js';
+import {createLiveVoiceHost} from '../electron/live-voice-host.js';
+import {createMicrophoneCaptureHost} from '../electron/microphone-capture-host.js';
 import {createVoicePcmFrameSourcePort} from '@personal-agent/voice';
 
 const sourceText = await readFile(new URL('../electron/main.js', import.meta.url), 'utf8');
@@ -30,7 +32,7 @@ function fixture({stopFails = false} = {}) {
   const panel = {isVisible: () => visible, isDestroyed: () => false, webContents: contents};
   const context = {panel, wakeQuitUnknown: false, wakeVoice: undefined, Promise, Error,
     publish: () => calls.push('publish'),
-    liveVoice: {stop: async () => calls.push('live-stop')},
+    liveVoice: {stop: async () => calls.push('live-stop'), hasActive: () => false},
     sisPlaybackHost: {stop: async () => calls.push('playback-stop')},
     microphoneCaptureHost: {revoke: async () => { calls.push('panel-revoke'); revokes++; }},
   };
@@ -122,4 +124,44 @@ test('ASR release failure remains a failed panel stop while Live, playback and m
   assert.equal(f.drafts.length, 0);
   assert.ok(f.calls.includes('live-stop') && f.calls.includes('playback-stop') && f.calls.includes('panel-revoke'));
   await f.input.dispose();
+});
+
+test('actual Live release unknown rejects aggregate panel stop even when microphone and playback have closed', async () => {
+  const f = fixture();
+  const contents = f.context.panel.webContents;
+  contents.mainFrame = {};
+  const event = {sender: contents, senderFrame: contents.mainFrame};
+  let live, gatewayCloses = 0;
+  const microphone = createMicrophoneCaptureHost({getPanel: () => f.context.panel,
+    permissionGate: {grant: () => () => {}}});
+  // Explicit Fake renderer receipts exercise actual public hosts and PCM; no native device.
+  contents.send = (channel, message) => queueMicrotask(() => {
+    if (channel === 'desktop:microphone-command') {
+      microphone.receive(event, {token: message.token, type: message.type === 'start' ? 'ready' : 'stopped',
+        trackLive: true, sampleRate: 16_000, tracksStopped: true});
+    } else {
+      assert.equal(channel, 'desktop:live-command');
+      live.receive(event, {token: message.token, type: message.type === 'start' ? 'ready' : 'stopped'});
+    }
+  });
+  live = createLiveVoiceHost({getPanel: () => f.context.panel,
+    config: {snapshot: () => ({configured: true}), current: () => ({})}, microphoneHost: microphone,
+    createSource: () => createVoicePcmFrameSourcePort(microphone.binding),
+    createGateway: () => ({async connect() {return {sendAudio() {}, interrupt() {}, async close() {
+      gatewayCloses++; throw Error('explicit Fake Gateway close receipt failure');
+    }};}}), createConsumer: () => ({}), client: {}, readContext: () => '', onTranscript() {},
+  });
+  f.context.liveVoice = live;
+  f.context.microphoneCaptureHost = microphone;
+  try {
+    await live.start();
+    await assert.rejects(f.stopPanel(), /语音资源释放未确认/);
+    assert.equal(live.hasActive(), true);
+    assert.equal(live.snapshot().status, 'error');
+    assert.match(live.snapshot().reason, /释放未确认/);
+    assert.equal(microphone.snapshot().lastRelease.verified, true);
+    assert.equal(microphone.snapshot().busy, false);
+    assert.equal(gatewayCloses, 1);
+    assert.ok(f.calls.includes('playback-stop'));
+  } finally {await live.dispose(); await f.input.dispose();}
 });
