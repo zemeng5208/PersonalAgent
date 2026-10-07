@@ -275,7 +275,7 @@ test('refreshing the same task preserves in-flight cancel and approval locks, an
 
 test('normal confirmed save reads the full exact Goal revision and can revise it again', async t => {
   const saved = {...goals[1], revision: 2, summary: 'Confirmed B', reason: 'Confirmed reason',
-    dependencies: [{kind: 'fact', id: 'synthetic-fact', revision: 3}]};
+    dependencies: [{id: 'synthetic-fact', revision: 3}]};
   let written = false;
   const task = {...applied(goals[1].id), result: {kind: 'applied', graphRevision: 3,
     previousGoal: {id: saved.id, revision: 1}, currentGoal: {id: saved.id, revision: 2}}};
