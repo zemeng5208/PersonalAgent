@@ -347,3 +347,49 @@ test('proactive action lost or mismatched reply retains uncertainty through redr
     assert.match(ui.status(),/已受理/);
   }
 });
+
+test('known source revision changes disable only the affected review and are checked before dispatch', async t => {
+  const submitted=[];
+  const ui=controls(t,async(_action,payload)=>{submitted.push(payload.reviewTaskId);return {...accepted(),reviewTaskId:payload.reviewTaskId};});
+  ui.render([{...localReview(),sourceOutdated:true},{...localReview(),reviewTaskId:'current-review',sourceOutdated:false}]);
+  const cards=ui.list.querySelectorAll('.cognition-review-card');
+  const stale=cards[0].querySelector('[data-action="apply-cognition"]');
+  const current=cards[1].querySelector('[data-action="apply-cognition"]');
+  assert.equal(stale.disabled,true);assert.equal(current.disabled,false);
+  assert.match(cards[0].querySelector('.cognition-status').textContent,/图版本已变化/);
+  assert.doesNotMatch(cards[1].querySelector('.cognition-status').textContent,/图版本已变化/);
+  stale.disabled=false;await ui.list.emit('click',{target:stale});
+  assert.equal(stale.disabled,true);assert.deepEqual(submitted,[]);
+  await ui.list.emit('click',{target:current});assert.deepEqual(submitted,['current-review']);
+  ui.render([{...localReview(),sourceOutdated:false}]);
+  assert.equal(ui.button().disabled,false);
+});
+
+test('source revision presentation preserves accepted, verified, pending and reconciliation feedback', async t => {
+  const receipts=[accepted(),verified(),{...localReview(),status:'pending'},
+    {...localReview(),status:'waiting_reconciliation'},
+    {...accepted(),status:'unavailable',state:'unavailable'}];
+  for(const item of receipts) {
+    let calls=0;const ui=controls(t,()=>{calls++;});
+    const expected=cognitionReviewFeedback(item);
+    ui.render([{...item,sourceOutdated:true}]);
+    assert.equal(ui.button().disabled,true);assert.equal(ui.button().textContent.trim(),expected.label);
+    assert.ok(ui.status().includes(expected.message));
+    assert.doesNotMatch(ui.status(),/图版本已变化/);await ui.click();assert.equal(calls,0);
+    ui.render([]);ui.render([{...localReview(),sourceOutdated:true}]);
+    assert.equal(ui.button().disabled,true);assert.ok(ui.status().includes(expected.message));
+    assert.doesNotMatch(ui.status(),/图版本已变化/);await ui.click();assert.equal(calls,0);
+  }
+});
+
+test('a source revision change after dispatch cannot replace an unknown submission', async t => {
+  const reply=deferred();let calls=0;
+  const ui=controls(t,()=>{calls++;return reply.promise;});ui.render([localReview()]);
+  const work=ui.click();ui.render([{...localReview(),sourceOutdated:true}]);
+  reply.reject(Error('Synthetic revision changed after dispatch'));await work;
+  assert.equal(ui.button().disabled,true);assert.match(ui.status(),/提交结果待核实/);
+  assert.doesNotMatch(ui.status(),/图版本已变化/);
+  ui.render([]);ui.render([{...localReview(),sourceOutdated:true}]);
+  assert.match(ui.status(),/提交结果待核实/);await ui.click();assert.equal(calls,1);
+  ui.render([{...accepted(),sourceOutdated:true}]);assert.match(ui.status(),/已受理/);
+});

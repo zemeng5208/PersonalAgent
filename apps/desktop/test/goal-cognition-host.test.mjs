@@ -240,8 +240,10 @@ test('uncertain action remains a machine review; stale or substituted choices ca
   const next=await fixture(t);
   next.host().configure({enabled:true,cloudAllowed:false});await next.host().tick();
   const id=next.host().snapshot().reviews[0].reviewTaskId;
+  assert.equal(next.host().snapshot().reviews[0].sourceOutdated,false);
   next.store.append(5,node('another-goal','goal',[],'另一目标'));
   next.host().configure({enabled:true,cloudAllowed:true});
+  assert.equal(next.host().snapshot().reviews[0].sourceOutdated,true);
   await assert.rejects(next.host().applyDecision(id),/来源版本已变化/);
   assert.equal(next.goalWrites(),0);assert.equal(next.sent.length,0);
 });

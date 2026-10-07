@@ -396,7 +396,9 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
       // Session grants are not restored from persisted tasks after restart.
       throw Error('此主动分析任务没有当前会话的出云许可');
     },
-    snapshot:()=>({enabled,cloudAllowed,status,reason,reviews:[...reviews.values()].map(value=>{
+    snapshot:()=>{
+      const graphRevision=store.read().revision;
+      return {enabled,cloudAllowed,status,reason,reviews:[...reviews.values()].map(value=>{
       const r = value.review;
       const trigger = r?.subjectGoal ? `新登记目标：${r.subjectGoal.id}` :
         (Array.isArray(r?.affected) && r.affected.length > 0) ? r.affected.map(a => a.causes?.map(c => `依赖 ${c.reference.id} ${c.reason === 'superseded' ? '版本已更新' : c.reason === 'withdrawn' ? '已撤回' : c.reason === 'not_effective' ? '当前不在有效期内' : '状态变化'}`).join(', ') || a.node?.summary || a.node?.id).filter(Boolean).join('；') :
@@ -408,11 +410,13 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
         reviewTaskId: value.task.taskId,
         action: r?.action,
         selected: r?.selectedOption?.id,
+        sourceOutdated: Number.isSafeInteger(r?.graphRevision) && r.graphRevision>=0 && r.graphRevision!==graphRevision,
         trigger,
         choice,
         executionVerified:false,graphUpdateVerified:false,...feedback,
       };
-    })}),
+      })};
+    },
     async tick() {
       if (!enabled || closed || busy || now()<nextTick) return;
       if (!ready()) {status='waiting_model';reason='等待本地 Laya 服务就绪';return;}

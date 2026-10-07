@@ -67,6 +67,8 @@ export function mountProactiveControls(container, invoke, {settings = false} = {
   const localKeepFeedback = item => item?.action === 'KEEP' && !item.taskId
     && (item.status ?? item.state) === 'local'
     ? {message:'保持现状，无需交给主智能体处理',label:'保持现状',locked:true} : null;
+  const sourceOutdatedFeedback = item => item?.sourceOutdated === true && !item.taskId
+    ? {message:'分析所用的图版本已变化，当前方案不能提交。',label:'来源版本已变化',locked:true} : null;
   function reviewFeedback(item) {
     const feedback = cognitionReviewFeedback(item);
     if (feedback.locked) {
@@ -74,7 +76,7 @@ export function mountProactiveControls(container, invoke, {settings = false} = {
       return feedback;
     }
     const retained = cognitionOutcomes.get(item.reviewTaskId) ?? feedback;
-    return retained.locked ? retained : localKeepFeedback(item) ?? handoffPermissionFeedback() ?? retained;
+    return retained.locked ? retained : sourceOutdatedFeedback(item) ?? localKeepFeedback(item) ?? handoffPermissionFeedback() ?? retained;
   }
   function syncReview(id, completed) {
     const item = current?.cognition?.reviews?.find(review => review.reviewTaskId === id);
@@ -101,6 +103,8 @@ export function mountProactiveControls(container, invoke, {settings = false} = {
       if (handoffPermissionFeedback()) {syncReview(reviewTaskId, handoffPermissionFeedback());return;}
       const keep = localKeepFeedback(current?.cognition?.reviews?.find(review => review.reviewTaskId === reviewTaskId));
       if (keep) {syncReview(reviewTaskId, keep);return;}
+      const outdated = sourceOutdatedFeedback(current?.cognition?.reviews?.find(review => review.reviewTaskId === reviewTaskId));
+      if (outdated) {syncReview(reviewTaskId, outdated);return;}
       const initial = currentReviewFeedback(reviewTaskId);
       cognitionPending.add(reviewTaskId);
       button.disabled = true;
