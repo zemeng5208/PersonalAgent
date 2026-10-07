@@ -880,6 +880,52 @@ test('graph Goal consumption discovers command writes and shares UI handoffs acr
   }
 });
 
+test('withdrawn Goal revisions review pinned plans while inactive creations and unaffected revisions stay local', async () => {
+  for (const withPlan of [false, true]) {
+    const paths = await workspace();
+    const calls = state({selectedId: 'recheck', prepareUnavailable: true});
+    let binding = open(paths, calls);
+    const poll = () => binding.host.consumeAndReview({...context(), at, limit: 1, afterGraphRevision: 0});
+    try {
+      const store = binding.application.runtime.bindCoordinationStore(graphNamespace);
+      const {kind: _kind, ...input} = node('withdrawn-revision-goal', 'goal', []);
+      createGoal(store, 0, {...input, id: 'inactive-creation', state: 'withdrawn'});
+      createGoal(store, 1, {...input, id: 'future-creation', validFrom: '2027-01-01T00:00:00.000Z'});
+      createGoal(store, 2, input);
+      if (withPlan) store.append(3, node('pinned-plan', 'plan', [ref(input.id)]));
+      const revision = store.read().revision;
+      reviseGoal(store, revision, 1, {...input, state: 'withdrawn', reason: 'User withdrew this Goal'});
+      const before = store.read();
+      const batch = await poll(), first = batch.reviews[0];
+      assert.equal(batch.reviews.length, 1);assert.equal(batch.nextGraphRevision, 0);
+      assert.equal(first.review.subjectGoal, undefined, 'withdrawal is a revision review, never initial planning');
+      assert.equal(first.review.action, withPlan ? 'RECHECK' : 'KEEP');
+      assert.deepEqual(first.review.affected.map(item => item.node.id), withPlan ? ['pinned-plan'] : []);
+      assert.equal(calls.layaCalls, withPlan ? 1 : 0);
+      assert.equal(calls.agentArtsCalls, 0);
+      binding.close();binding = open(paths, calls);
+      const recovered = await poll();
+      assert.equal(recovered.reviews.length, withPlan ? 1 : 0);
+      if (withPlan) {
+        assert.equal(recovered.reviews[0].task.taskId, first.task.taskId);
+        assert.equal(recovered.reviews[0].handoff.state, 'unavailable');
+        calls.prepareUnavailable = false;
+        const submitted = (await poll()).reviews[0];
+        assert.equal(submitted.task.taskId, first.task.taskId);
+        assert.equal(submitted.handoff.state, 'submitted');
+        await waitFor(binding.application, submitted.handoff.task.taskId, 'succeeded');
+        assert.equal((await poll()).reviews.length, 0);
+      }
+      assert.equal(calls.layaCalls, withPlan ? 1 : 0);
+      assert.equal(calls.agentArtsCalls, withPlan ? 1 : 0);
+      assert.deepEqual(binding.application.runtime.bindCoordinationStore(graphNamespace).read(), before,
+        'review and handoff never reactivate the Goal or rewrite its Plan');
+    } finally {
+      binding.close();await rm(paths.directory, {recursive: true, force: true});
+    }
+  }
+});
+
 test('graph Goal consumption resumes a legacy created revision task without changing its identity', async () => {
   const paths = await workspace();
   const calls = state();

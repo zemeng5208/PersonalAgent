@@ -523,7 +523,8 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
           expiryReviewed = true;
         };
         const goals = [...heads.values()].filter(node => node.kind === 'goal'
-          && node.state === 'active' && isEffective(node, request.at))
+          && ((node.state === 'active' && isEffective(node, request.at))
+            || (node.revision > 1 && node.state === 'withdrawn')))
           .sort((a, b) => Number(recordedGoal(a)) - Number(recordedGoal(b))
             || (a.revision === 1 ? 0 : 1) - (b.revision === 1 ? 0 : 1)
             || a.graphRevision - b.graphRevision);
