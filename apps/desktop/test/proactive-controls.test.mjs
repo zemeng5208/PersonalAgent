@@ -165,12 +165,16 @@ test('settings failed save preserves the dirty form draft while enabling control
   for(const field of Object.values(ui.form.elements))assert.equal(field.checked,true);
 });
 
-async function actualCognitionHost(t,onUpdate) {
+async function actualCognitionHost(t,onUpdate,{keep=false}={}) {
   const {createDesktopGoalCognitionHost}=await import('../electron/goal-cognition-host.js');
   const namespace='synthetic-repaint-host',option={id:'recheck',revision:1,action:'RECHECK',description:'Synthetic review'};
   const review={taskId:reviewId,graphNamespace:namespace,graphRevision:1,bindingVersion:'desktop-goal-analysis-v1',
     evaluatedAt:'2026-10-07T00:00:00.000Z',action:'RECHECK',affected:[],subjectGoal:{id:'synthetic-goal',revision:1},
     options:[option],selectedOption:option,selection:{state:'selected',selected:{id:option.id,revision:1},eligibleForRuntime:true}};
+  if(keep) {
+    review.action='KEEP';review.options=[];
+    delete review.selectedOption;delete review.selection;delete review.subjectGoal;
+  }
   const readback={task:{taskId:reviewId,state:'succeeded',revision:3},review};
   const graph={namespace,revision:1,history:[{id:'synthetic-goal',kind:'goal',revision:1,graphRevision:1,
     summary:'Synthetic Goal',reason:'Synthetic fixture',sourceRef:'synthetic/source',validFrom:'2026-01-01T00:00:00.000Z',
@@ -185,6 +189,41 @@ async function actualCognitionHost(t,onUpdate) {
   t.after(()=>host.close());
   return {host,handoffs:()=>handoffs};
 }
+
+test('actual Host local KEEP publication prevents a known preflight refusal without invoking', async t => {
+  const {host,handoffs}=await actualCognitionHost(t,undefined,{keep:true});
+  host.configure({enabled:true,cloudAllowed:true});
+  await assert.rejects(host.applyDecision(reviewId),/没有合法选择/);
+  assert.equal(handoffs(),0);
+  const snapshot=host.snapshot(),item=snapshot.reviews[0];
+  assert.equal(item.action,'KEEP');assert.equal(item.state,'local');assert.equal(item.taskId,undefined);
+  let calls=0;
+  const ui=controls(t,()=>{calls++;return host.applyDecision(reviewId);});ui.render(snapshot.reviews,snapshot);
+  assert.equal(ui.button().disabled,true);assert.equal(ui.button().textContent.trim(),'保持现状');
+  assert.match(ui.status(),/保持现状.*无需交给/);assert.doesNotMatch(ui.status(),/待核实|更新已核实/);
+  await ui.click();assert.equal(calls,0);assert.equal(handoffs(),0);
+  ui.render([]);ui.render(snapshot.reviews,snapshot);
+  assert.equal(ui.button().disabled,true);await ui.click();assert.equal(calls,0);
+});
+
+test('local KEEP gate preserves prior unknown accepted and verified receipts and cannot replace pending states', async t => {
+  const keep={...localReview(),action:'KEEP',state:'local'};
+  for(const receipt of ['unknown','accepted','verified']) {
+    let calls=0;
+    const ui=controls(t,async()=>{calls++;if(receipt==='unknown')throw Error('Synthetic lost IPC');return accepted();});
+    ui.render([localReview()]);await ui.click();
+    if(receipt==='verified')ui.render([verified()]);
+    const before=ui.status();ui.render([]);ui.render([keep]);
+    assert.equal(ui.status(),before);assert.equal(ui.button().disabled,true);
+    await ui.click();assert.equal(calls,1);
+  }
+  const ui=controls(t,()=>assert.fail('Unresolved KEEP data cannot invoke'));
+  for(const state of ['pending','waiting_reconciliation','submission_unknown']) {
+    ui.render([{...keep,state}]);
+    assert.equal(ui.button().disabled,true);assert.match(ui.status(),/待核实/);
+    assert.doesNotMatch(ui.status(),/无需交给/);
+  }
+});
 
 test('proactive action completion updates the replacement card after an actual Host unavailable publication', async t => {
   let ui;
