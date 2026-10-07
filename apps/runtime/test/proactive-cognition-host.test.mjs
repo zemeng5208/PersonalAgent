@@ -1205,3 +1205,188 @@ test('public ancestor request with reversed ref fields is found by later idle di
     assert.equal(binding.application.runtime.listTasks({conversationId: 'proactive-cognition:' + graphNamespace}).items.length, 2);
   } finally {binding.close(); await rm(paths.directory, {recursive: true, force: true});}
 });
+
+
+test('clarified never-reviewed Goal enters first planning with stable reversed refs and once-only restart handoff', async () => {
+  const paths = await workspace(), calls = state({selectedId: 'plan'});
+  let binding = open(paths, calls);
+  const poll = () => binding.host.consumeAndReview({...context(), at, limit: 1, afterGraphRevision: 0});
+  try {
+    let store = binding.application.runtime.bindCoordinationStore(graphNamespace);
+    const {kind: _kind, ...input} = node('clarified-unplanned', 'goal', []);
+    createGoal(store, 0, input);
+    reviseGoal(store, 1, 1, {...input, summary: 'Clarified before first planning'});
+    const first = await binding.host.reviewUnplannedGoal({currentGoal: {revision: 2, id: input.id}, expectedGraphRevision: 2}, {...context(), at});
+    assert.deepEqual(first.review.subjectGoal, ref(input.id, 2));
+    assert.deepEqual(first.review.affected, []);
+    assert.deepEqual(first.review.options.map(option => option.id), ['plan', 'recheck', 'defer']);
+    assert.ok(first.review.options.every(option => option.action === 'RECHECK' && !option.repair));
+    await waitFor(binding.application, first.handoff.task.taskId, 'succeeded');
+    assert.equal((await poll()).reviews.length, 0, 'public ref order must not occupy an idle slot');
+    store.append(2, node('unrelated-after', 'fact', []));
+    binding.close(); binding = open(paths, calls);
+    store = binding.application.runtime.bindCoordinationStore(graphNamespace);
+    const replay = await binding.host.reviewUnplannedGoal({expectedGraphRevision: 3, currentGoal: ref(input.id, 2)}, {...context(), at});
+    assert.equal(replay.task.taskId, first.task.taskId);
+    assert.equal(replay.handoff.task.taskId, first.handoff.task.taskId);
+    assert.equal((await poll()).reviews.length, 0);
+    assert.equal(calls.layaCalls, 1); assert.equal(calls.agentArtsCalls, 1);
+    assert.equal(store.read().revision, 3);
+    assert.ok(store.read().history.every(version => !['decision', 'plan'].includes(version.kind)));
+  } finally { binding.close(); await rm(paths.directory, {recursive: true, force: true}); }
+});
+
+test('unplanned idle distinguishes prior selected, unavailable, failed and KEEP reviews from never reviewed Goals', async () => {
+  for (const previous of ['none', 'selected', 'unavailable', 'failed', 'keep']) {
+    const paths = await workspace(), calls = state({selectedId: 'plan', handoff: false,
+      ...(previous === 'failed' ? {prepareOptions: async () => { throw Error('Synthetic option preparation failure'); }} : {})});
+    const binding = open(paths, calls);
+    try {
+      const store = binding.application.runtime.bindCoordinationStore(graphNamespace);
+      const {kind: _kind, ...input} = node('unplanned-matrix', 'goal', []);
+      createGoal(store, 0, input);
+      if (['selected', 'unavailable', 'failed'].includes(previous)) {
+        if (previous === 'unavailable') calls.onInfer = () => { throw Error('Temporary synthetic Laya failure'); };
+        if (previous === 'selected') await binding.host.reviewGoalCreated({expectedGraphRevision: 1, currentGoal: ref(input.id)}, {...context(), at});
+        else if (previous === 'failed') {
+          const failed = await binding.host.reviewGoalCreated({expectedGraphRevision: 1, currentGoal: ref(input.id)}, {...context(), at});
+          assert.equal(failed.task.state, 'failed');
+          assert.equal(failed.review, undefined);
+        } else await assert.rejects(binding.host.reviewGoalCreated({expectedGraphRevision: 1, currentGoal: ref(input.id)}, {...context(), at}), {code: 'EXTERNAL_FAILURE'});
+        delete calls.onInfer;
+      }
+      reviseGoal(store, 1, 1, {...input, summary: 'Clarified Goal'});
+      if (previous === 'keep') await binding.host.reviewGoalRevision({expectedGraphRevision: 2,
+        previousGoal: ref(input.id), currentGoal: ref(input.id, 2)}, {...context(), at});
+      const before = calls.layaCalls;
+      const first = await binding.host.consumeAndReview({...context(), at, limit: 1, afterGraphRevision: 0});
+      assert.equal(calls.layaCalls - before, previous === 'none' ? 1 : 0);
+      assert.equal(first.reviews.length, previous === 'keep' ? 0 : 1);
+      if (first.reviews.length) assert.equal(first.reviews[0].review.action, previous === 'none' ? 'RECHECK' : 'KEEP');
+      assert.equal(await binding.host.reviewUnplannedGoal({expectedGraphRevision: 2, currentGoal: ref(input.id, 2)}, {...context(), at}) === undefined, previous !== 'none');
+      assert.equal((await binding.host.consumeAndReview({...context(), at, limit: 1, afterGraphRevision: 0})).reviews.length, 0);
+      assert.equal(store.read().revision, 2);
+    } finally { binding.close(); await rm(paths.directory, {recursive: true, force: true}); }
+  }
+});
+
+test('unplanned scope follows historical planning paths and excludes inactive heads without blocking unrelated work', async () => {
+  for (const mode of ['historical', 'unrelated', 'withdrawn', 'future', 'expired']) {
+    const paths = await workspace(), calls = state({selectedId: 'plan', handoff: false});
+    const binding = open(paths, calls);
+    try {
+      const store = binding.application.runtime.bindCoordinationStore(graphNamespace);
+      const {kind: _kind, ...input} = node('unplanned-history', 'goal', []);
+      createGoal(store, 0, input);
+      if (mode === 'historical') {
+        store.append(1, node('past-decision', 'decision', [ref(input.id)]));
+        store.append(2, node('past-plan', 'plan', [ref('past-decision')]));
+      } else if (mode === 'unrelated') store.append(1, node('unrelated-plan', 'plan', []));
+      const validity = mode === 'withdrawn' ? {state: 'withdrawn'} : mode === 'future'
+        ? {validFrom: '2027-01-01T00:00:00.000Z'} : mode === 'expired'
+        ? {validUntil: '2026-09-26T00:00:00.000Z'} : {};
+      reviseGoal(store, store.read().revision, 1, {...input, ...validity});
+      if (mode === 'historical') {
+        store.append(store.read().revision, node('past-decision', 'decision', []));
+        store.append(store.read().revision, node('past-plan', 'plan', []));
+      }
+      const before = store.read();
+      const result = await binding.host.reviewUnplannedGoal({expectedGraphRevision: before.revision, currentGoal: ref(input.id, 2)}, {...context(), at});
+      assert.equal(Boolean(result), mode === 'unrelated');
+      const idle = await binding.host.consumeAndReview({...context(), at, limit: 1, afterGraphRevision: 0});
+      assert.equal(calls.layaCalls, mode === 'unrelated' ? 1 : 0);
+      assert.equal(idle.reviews.length, mode === 'unrelated' ? 0 : 1);
+      assert.deepEqual(store.read(), before);
+    } finally { binding.close(); await rm(paths.directory, {recursive: true, force: true}); }
+  }
+});
+
+test('unplanned public scope rejects malformed, stale graph and stale head receipts before recording work', async () => {
+  const paths = await workspace(), calls = state({handoff: false}), binding = open(paths, calls);
+  try {
+    const store = binding.application.runtime.bindCoordinationStore(graphNamespace);
+    const {kind: _kind, ...input} = node('strict-unplanned', 'goal', []);
+    createGoal(store, 0, input); reviseGoal(store, 1, 1, input);
+    for (const request of [{expectedGraphRevision: 2, currentGoal: ref(input.id)},
+      {expectedGraphRevision: 2, currentGoal: {...ref(input.id, 2), extra: true}}]) {
+      await assert.rejects(async () => binding.host.reviewUnplannedGoal(request, {...context(), at}), {code: 'INVALID_ARGUMENT'});
+    }
+    await assert.rejects(async () => binding.host.reviewUnplannedGoal({expectedGraphRevision: 1, currentGoal: ref(input.id, 2)}, {...context(), at}), {code: 'REVISION_CONFLICT'});
+    reviseGoal(store, 2, 2, input);
+    await assert.rejects(async () => binding.host.reviewUnplannedGoal({expectedGraphRevision: 3, currentGoal: ref(input.id, 2)}, {...context(), at}), {code: 'REVISION_CONFLICT'});
+    assert.equal(calls.layaCalls, 0);
+    assert.equal(binding.application.runtime.listTasks({conversationId: `proactive-cognition:${graphNamespace}`}).items.length, 0);
+  } finally { binding.close(); await rm(paths.directory, {recursive: true, force: true}); }
+});
+
+
+test('saved unplanned choice cannot hide newly pinned consumers at the same current Goal head', async () => {
+  for (const pending of [false, true]) for (const currentRevision of [2, 3]) {
+    const paths = await workspace(), calls = state({selectedId: 'plan', handoff: pending, prepareUnavailable: true});
+    const binding = open(paths, calls);
+    try {
+      const store = binding.application.runtime.bindCoordinationStore(graphNamespace);
+      const {kind: _kind, ...input} = node('unplanned-new-consumer', 'goal', []);
+      createGoal(store, 0, input); reviseGoal(store, 1, 1, input);
+      if (currentRevision === 3) reviseGoal(store, 2, 2, input);
+      const initial = (await binding.host.consumeAndReview({...context(), at, limit: 1, afterGraphRevision: 0})).reviews[0];
+      assert.deepEqual(initial.review.subjectGoal, ref(input.id, currentRevision));
+      store.append(currentRevision, node('new-ancestor-plan', 'plan', [ref(input.id)]));
+      calls.selectedId = 'revise';
+      const review = (await binding.host.consumeAndReview({...context(), at, limit: 1, afterGraphRevision: 0})).reviews[0];
+      if (currentRevision === 3) assert.equal(review.review.action, 'KEEP', 'original consecutive path remains unchanged');
+      const ancestor = currentRevision === 2 ? review : (await binding.host.consumeAndReview({...context(), at, limit: 1, afterGraphRevision: 0})).reviews[0];
+      assert.deepEqual(ancestor.review.affected.map(item => item.node.id), ['new-ancestor-plan']);
+      assert.equal(ancestor.review.subjectGoal, undefined);
+      assert.equal(calls.layaCalls, 2, 'only the new scope infers; the saved initial choice stays immutable');
+      assert.deepEqual(binding.host.readReview(initial.task.taskId).review, initial.review);
+      assert.equal(store.read().revision, currentRevision + 1);
+    } finally { binding.close(); await rm(paths.directory, {recursive: true, force: true}); }
+  }
+});
+
+test('namespace-wide prior Goal intents survive binding changes and fixed pagination without blocking another Goal', async () => {
+  const paths = await workspace(), calls = state({handoff: false}), binding = open(paths, calls);
+  let earlier;
+  try {
+    const store = binding.application.runtime.bindCoordinationStore(graphNamespace);
+    const {kind: _kind, ...input} = node('old-binding-reviewed', 'goal', []);
+    createGoal(store, 0, input);
+    earlier = createProactiveCognitionHost({application: binding.application, facts: binding.facts,
+      graphNamespace, bindingVersion: 'earlier-trusted-binding', chooser: chooser(calls)});
+    await earlier.reviewGoalCreated({expectedGraphRevision: 1, currentGoal: ref(input.id)}, {...context(), at});
+    earlier.close(); earlier = undefined;
+    reviseGoal(store, 1, 1, input);
+    for (let n = 0; n < 105; n++) binding.application.runtime.submitTask({goal: 'Unrelated task without cognition intent',
+      conversationId: `proactive-cognition:${graphNamespace}`, idempotencyKey: 'pagination-no-intent-' + n});
+    assert.equal(await binding.host.reviewUnplannedGoal({expectedGraphRevision: 2, currentGoal: ref(input.id, 2)}, {...context(), at}), undefined);
+    createGoal(store, 2, {...input, id: 'another-unreviewed'});
+    reviseGoal(store, 3, 1, {...input, id: 'another-unreviewed'});
+    const fresh = await binding.host.reviewUnplannedGoal({expectedGraphRevision: 4, currentGoal: ref('another-unreviewed', 2)}, {...context(), at});
+    assert.deepEqual(fresh.review.subjectGoal, ref('another-unreviewed', 2));
+    assert.equal(calls.layaCalls, 2);
+  } finally { earlier?.close(); binding.close(); await rm(paths.directory, {recursive: true, force: true}); }
+});
+
+
+test('trusted prior Fact-scope review counts as Goal review evidence without a Decision or Plan', async () => {
+  const paths = await workspace(), calls = state({handoff: false}), binding = open(paths, calls);
+  try {
+    record(binding.facts, 'a', null);
+    const baseline = await binding.host.consumeAndReview({...context(), at, limit: 10, afterGraphRevision: 0});
+    const store = binding.application.runtime.bindCoordinationStore(graphNamespace), factId = store.read().history[0].id;
+    const {kind: _kind, ...input} = node('fact-reviewed-goal', 'goal', [ref(factId)]);
+    createGoal(store, 1, input);
+    record(binding.facts, 'b', 1);
+    const factReview = (await binding.host.consumeAndReview({...context(), at, limit: 10, afterGraphRevision: baseline.nextGraphRevision})).reviews[0];
+    assert.deepEqual(factReview.review.affected.map(item => item.node.id), [input.id]);
+    assert.equal(binding.application.runtime.loadCheckpoint(factReview.task.taskId, 'proactive-cognition-intent-v1').trigger.kind, 'fact');
+    reviseGoal(store, 3, 1, {...input, dependencies: [ref(factId, 2)]});
+    assert.equal(await binding.host.reviewUnplannedGoal({expectedGraphRevision: 4, currentGoal: ref(input.id, 2)}, {...context(), at}), undefined);
+    const inferred = calls.layaCalls;
+    const idle = await binding.host.consumeAndReview({...context(), at, limit: 1, afterGraphRevision: factReview.review.graphRevision});
+    assert.equal(idle.reviews[0].review.action, 'KEEP');
+    assert.equal(calls.layaCalls, inferred);
+    assert.ok(store.read().history.every(version => !['decision', 'plan'].includes(version.kind)));
+  } finally { binding.close(); await rm(paths.directory, {recursive: true, force: true}); }
+});
