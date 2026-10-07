@@ -145,3 +145,34 @@ HTML/CSS/CSP 和 native 浏览器前后读回均通过，console/pageerror 为�
 两核亲和度，日志 `.cache/review-evidence/20261007/core-desktop122-check.log`。
 该检查覆盖本节三次增量和原 panel 审批到期刷新最终源码；其后至交付仅变更模块记录，
 没有将结果称为根完整 check、Windows/Electron 或跳过场景已通过。
+
+## 本地 KEEP 与已受理回执（2026-10-07 续接）
+
+公开 Fact/GoalCognitionHost 的 `action=KEEP`、`state=local`、无 taskId 卡片现在显示
+“保持现状，无需交给主智能体处理”，不触发已知的“没有合法选择”前置拒绝。
+门禁仅消费公布的结构化状态，不解析异常文字；已保留的 unknown、accepted、verified
+以及 pending/reconciliation 锁优先，不把 KEEP 当作执行或图更新已核实。
+新增 2/2、因原 Host helper 增加 KEEP 模式而受影响的默认分支 2/2 分别实际 exit0；
+公开 Host/SQLite/Fake Laya 与 HTTP 产生的原 panel AFTER 为 apply0、额外 cloud0、console0。
+
+另一合法回执为编排 task 已 succeeded，但受控修复端口未装配，返回
+`status=unavailable` 且含原 taskId。界面按该结构显示“编排任务已受理，受控修复暂不可用；
+目标更新尚未核实”；已交接标签和锁不变，无 taskId 的 unavailable 保留未能交接语义。
+新必要对照 1/1、原 panel 同一实际回执 BEFORE/AFTER 分别 exit0，
+不以 reason 文本判断执行，不改 Host/Runtime 或目标图。证据在原认知私有目录的
+`keep-*` 与 `unavailable-accepted-*` 脚本、JSON、实际 exit 日志/截图，Fake IPC 与
+真实 Runtime producer 分开记录，均不替代云、Electron 或 Windows 验收。
+
+不确定 Laya 的既有 machine-review 路径仍由主智能体复核，区别于用户审批；
+Host choice 文案改为“Laya尚不确定，需主智能体复核 (RECHECK)”。仅修改一处文字，
+判定/许可/交接不变，语法与 diff 校验通过，没有新增或重复正式测试。
+公开 Host snapshot 配合 Fake Runtime 的原 panel native 读回在许可前后均显示新文案，
+实际 exit0、call0、console0；原实际 Runtime 路由 producer 的一项 Fake HTTP/succeeded
+证据另记，不能称该文字读回阶段重新执行了 Runtime 或云端。
+
+Goal router 的 targets.summary 是原节点 baseline，不是旧 Fact 的 requestedSummary。
+actual Host/Public Runtime 的 4096/5000 字符对照发现合法 5000 baseline 在不足 32 KiB 请求内
+被旧 4096 限制拒绝；现在与既有 nodes.summary 一致使用 8192 上限。
+原 deterministic verifier 新增 direct Goal 边界、旧 Fact 4096/5000 及大 wrapper 拒绝对照，
+实际 exit0；独立 goal-with-tools 的 8192 字符、总请求 32 KiB、公开 adapter 总预算与
+候选输出限制保持原值。源修复不代表新版本已部署或所有 8192 长摘要可通过总预算。

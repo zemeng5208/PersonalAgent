@@ -21,6 +21,21 @@
 
 此能力仅面向新建独立、单标签记事本目标的受限文本替换，不提供通用鼠标键盘、截图、安装或保存能力，也不因模型提案自动获得前台操作授权。源码和合成消费测试不能代替完整 Windows 普通用户会话验收；以下历史回执仅证明其实际执行的步骤，完整 F9 确认、授权消费、UIA 操作、取消/接管、独立读回及重启恢复仍由 Windows 现场协作者取证。当前 Linux 执行环境没有这些实机条件，不将其记为通过。
 
+## 2026-10-07 原记事本恢复控件补证
+
+固定核心 `b3ffdaa894aefaeef5b498afb3eeb6a8dc1073af` 的原 admin/Notepad 控件、
+actual main 路由与公开 DesktopNotepadHost/RuntimeApplication/Client/Policy/ToolGateway、
+Windows adapter/attemptstore 使用新私有 SQLite 夹具完成一项独立消费，实际 exit0、console0。
+显式 Fake F9 前没有 observe/execute 或授权；之后仅一次 allow_once 消费、execute 和 spawn。
+Fake unknown 回执使原任务与 UI 待核实并禁止新写入；一次 adapter 自动 status 加两次原
+核实按钮分别读回 in_progress/in_progress/匹配的 Fake verified。实际 Runtime 最后保存
+execution 与独立 readback 引用并 succeeded，原任务不重放，不追加授权，UI 提示文件未保存。
+证据 `notepad-runtime-recovery-consumer-validation.md` 及脚本、JSON、日志/截图在
+`.worktrees/mod15-host-20261007/.cache/review-evidence/20261007/`；两个早期 helper 误计
+自动 status 导致的 wait timeout 日志保留，不计通过，没有为本场景修改生产源。
+F9/窗口/Pipe/前台目标/原生 status 与读回/IPC 均明确 Fake；这些 Evidence 是该协议夹具
+的持久化消费，不是实际 Windows 写入或物理读回。下列实机验收仍未通过。
+
 ## Windows 实机验收步骤与证据
 
 在普通用户 Windows 会话中，从仓库根目录运行 `dotnet build apps/windows-host/manual/ManualNotepadProbe.csproj`，再运行 `dotnet run --no-build --project apps/windows-host/manual/ManualNotepadProbe.csproj` **一次**。探针创建随机合成文件并启动 System32 入口；启动前只快照已有 Notepad 的顶层 HWND/PID/启动时间，不读取标题或标签。随后寻找全局唯一且新增的可见顶层 HWND，可属于既有可信进程或新进程；旧 HWND 即使新增标签也始终排除。零新增窗口、身份不可核及多个新增窗口分别拒绝；不读取既有私人标签、窗口标题和内容，不切换标签。显示随机文本和 `CONFIRM` 提示前先复用核心的 `TryGetOnlyTab` 检查同一 HWND 的目标身份与唯一选中标签，多标签或结构不明直接拒绝。通过该检查后，操作者仍须目视核对完整随机文本，输入 `CONFIRM`，五秒内手动激活原窗口。核心仅读取该已确认前台 HWND 的单个编辑控件，精确核对随机全文后才可能写入；标记不符、多标签或无法识别单标签均写前拒绝。同时出现其他新窗口时不能把它当合成目标。探针不代表产品授权链。记录一次结果、退出码、脱敏目标身份与是否目视确认；不要记录私人内容或合成全文。随后按下列步骤补足负向和集成验收：
