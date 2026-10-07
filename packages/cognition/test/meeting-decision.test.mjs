@@ -22,6 +22,47 @@ const guardedEvent = extra => ({eventId: 'guarded-meeting', source: 'calendar:wo
   detectedAt: '2026-09-29T11:00:00.000Z', deadline: new Date(Date.now() + 60_000).toISOString(),
   signal: new AbortController().signal, ...extra});
 
+test('queued meeting events preserve submitted content and source revision while receipts await', async () => {
+  const {store}=createMeetingFixture(),receipts=new InMemoryMeetingDecisionReceiptStore();
+  let release,entered;
+  const loading=new Promise(resolve=>{release=resolve;});
+  const started=new Promise(resolve=>{entered=resolve;});
+  const coordinator=new MeetingRescheduleCoordinator({store,namespace:'test-user-namespace',
+    chooser:new LayaActionChoiceService(createMockLaya()),executionPort:createStoreExecutionPort(store),
+    receiptStore:{async loadReceipt(query){entered();await loading;return receipts.loadReceipt(query);},
+      saveReceipt:record=>receipts.saveReceipt(record)}});
+  const event=guardedEvent(),submitted={...event};
+  const pending=coordinator.processEvent(event);await started;
+  event.newSummary='Changed after submission';event.sourceRevision='changed-revision';release();
+  assert.equal((await pending).status,'applied');
+  assert.equal(store.read().history.findLast(node=>node.id===submitted.meetingFactId).summary,submitted.newSummary);
+  assert.equal(receipts.listReceipts()[0].sourceRevision,submitted.sourceRevision);
+});
+
+test('queued approved proposals retain query and execution options while keeping original port hooks live', async () => {
+  const {store}=createMeetingFixture(),receipts=new InMemoryMeetingDecisionReceiptStore();
+  let release,entered,blocking=false,executed,replacedCalls=0;
+  const loading=new Promise(resolve=>{release=resolve;});
+  const started=new Promise(resolve=>{entered=resolve;});
+  const coordinator=new MeetingRescheduleCoordinator({store,namespace:'test-user-namespace',
+    chooser:new LayaActionChoiceService(createMockLaya()),receiptStore:{async loadReceipt(query){
+      if(blocking){entered();await loading;}return receipts.loadReceipt(query);
+    },saveReceipt:record=>receipts.saveReceipt(record)}});
+  const event=guardedEvent();assert.equal((await coordinator.processEvent(event)).status,'proposal');
+  const executionPort={executeBatch:request=>createStoreExecutionPort(store).executeBatch(request)};
+  const options={executionPort,deadline:event.deadline,signal:event.signal};
+  const query={eventId:event.eventId,source:event.source,namespace:'test-user-namespace'};
+  blocking=true;const pending=coordinator.applyApprovedProposal(query,options);await started;
+  query.eventId='replaced-event';query.source='replaced-source';
+  options.deadline=new Date(Date.now()-1000).toISOString();options.signal=new AbortController().signal;
+  options.executionPort={executeBatch:async()=>{replacedCalls++;return {applied:false,snapshot:store.read()};}};
+  executionPort.executeBatch=request=>{executed=request;return createStoreExecutionPort(store).executeBatch(request);};
+  release();assert.equal((await pending).status,'applied');
+  assert.equal(replacedCalls,0);assert.equal(executed.eventId,event.eventId);assert.equal(executed.source,event.source);
+  assert.equal(executed.deadline,event.deadline);assert.equal(executed.signal,event.signal);
+  assert.equal(store.read().history.findLast(node=>node.id===event.meetingFactId).summary,event.newSummary);
+});
+
 test('meeting revision excludes unrelated stale dependencies from selected repair', async () => {
   const {store} = createMeetingFixture();
   const fields = {sourceRef: 'unrelated-source', sensitivity: 'private', state: 'active',

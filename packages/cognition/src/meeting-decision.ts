@@ -472,6 +472,8 @@ export class MeetingRescheduleCoordinator {
       readonly signal?: AbortSignal | undefined;
     } = {}
   ): Promise<MeetingDecisionReceipt> {
+    query = {...query};
+    options = {...options};
     const operation = this.tail.then(() => this.applyProposalSerial(query, options));
     this.tail = operation.then(() => {}, () => {});
     return operation;
@@ -584,6 +586,7 @@ export class MeetingRescheduleCoordinator {
    * 7. Execution through trusted port via atomic appendBatch or emission of proposal
    */
   async processEvent(event: MeetingRescheduleEvent): Promise<MeetingDecisionReceipt> {
+    event = {...event};
     const operation = this.tail.then(() => this.processEventSerial(event));
     this.tail = operation.then(() => {}, () => {});
     return operation;
