@@ -64,7 +64,7 @@ else {
   wakeControls.innerHTML='<div class="wake-control-row"><span>唤醒词：你好小派</span><button type="button" id="wake-toggle" disabled aria-pressed="false">开启 10 分钟</button></div><p id="wake-state" role="status" aria-live="polite">唤醒未开启</p><p class="wake-hint">本次最多 10 分钟；关闭面板停止。唤醒后语音发送到华为 SIS 转文字，仅填草稿，需手动发送。</p>';
   form.append(wakeControls);
   const wakeButton=wakeControls.querySelector('#wake-toggle'),wakeStatus=wakeControls.querySelector('#wake-state');
-  let wakePending=false;
+  let wakePending=false,wakeClosed=false,updateVersion=0;
   const wakeBlocksCapture=data=>['enabling','disabling','release_unconfirmed','disposed'].includes(data?.wake?.phase);
   const renderWake=data=>{
     const wake=data?.wake,phase=wake?.phase??'unavailable';
@@ -85,12 +85,17 @@ else {
     if(wakePending||wakeButton.disabled)return;
     const operation=current?.wake?.phase==='listening'?'voice.wake.disable':'voice.wake.enable';
     wakePending=true;renderWake(current);
+    const operationVersion=updateVersion;
+    let readVersion;
     try{
       await invoke(operation);
+      if(wakeClosed)return;
+      readVersion=updateVersion;
       const data=await invoke('snapshot');
+      if(wakeClosed||readVersion!==updateVersion)return;
       render(data);root.querySelector('#error').textContent='';
-    }catch(error){report(error);}
-    finally{wakePending=false;renderWake(current);}
+    }catch(error){if(!wakeClosed&&(readVersion??operationVersion)===updateVersion)report(error);}
+    finally{wakePending=false;if(!wakeClosed)renderWake(current);}
   };
   const removeDictation=bridge?.onDictation?.(result=>{
     if(typeof result?.text!=='string'||!result.text.trim())return;
@@ -98,7 +103,7 @@ else {
     input.dispatchEvent(new Event('input',{bubbles:true}));
     input.focus();input.setSelectionRange(input.value.length,input.value.length);
   });
-  window.addEventListener('unload',()=>removeDictation?.());
+  window.addEventListener('unload',()=>{wakeClosed=true;removeDictation?.();});
   const sisSettings=document.createElement('details');
   sisSettings.className='sis-settings';
   sisSettings.innerHTML='<summary>华为云语音设置</summary><div class="sis-fields"><label>区域<select id="sis-region"><option value="cn-north-4">华北-北京四</option><option value="cn-east-3">华东-上海一</option></select></label><label>华为云账号名<input id="sis-domain" autocomplete="off" maxlength="128" placeholder="IAM 用户所属的账号名"></label><label>IAM 用户名<input id="sis-username" autocomplete="off" maxlength="128" value="personalagent-sis"></label><label>IAM 用户密码<input id="sis-password" type="password" autocomplete="off" maxlength="1024"></label><button type="button" id="sis-login">连接华为云语音</button><p class="notice">密码仅用于向华为 IAM 登录，不保存；项目令牌在本机加密保存。录音仅在你开启后发送到华为 SIS。</p><details><summary>已有 IAM Token：手动配置</summary><label>项目 ID<input id="sis-project" autocomplete="off" maxlength="128"></label><label>独立 IAM Token<input id="sis-token" type="password" autocomplete="off" maxlength="16384"></label><label>Token 到期时间（UTC，可选）<input id="sis-expiry" autocomplete="off" placeholder="YYYY-MM-DDTHH:mm:ssZ"></label><button type="button" id="sis-save">保存 SIS 配置</button></details><p class="notice" id="sis-reason"></p></div>';
@@ -197,7 +202,7 @@ else {
       approvalDecisions.set(id,'submitted');syncApprovalButtons();}
     catch(error){approvalDecisions.delete(id);report(error);syncApprovalButtons();}
   });
-  render=data=>{current=data;const task=currentTask(data.tasks);const connectionNode=root.querySelector('#connection');connectionNode.textContent=data.fakeModel?data.connection+' · Fake Model':data.connection;const liveStates={connecting:'正在连接',reconnecting:'正在续接',listening:'正在聆听',speaking:'正在回答',working:'正在处理任务',stopping:'正在关闭',error:'连接失败'};root.querySelector('#state').textContent=data.live?.active?(liveStates[data.live.status]??'Live 已开启'):task?stateNames[task.state]:'待机';
+  render=data=>{updateVersion++;current=data;const task=currentTask(data.tasks);const connectionNode=root.querySelector('#connection');connectionNode.textContent=data.fakeModel?data.connection+' · Fake Model':data.connection;const liveStates={connecting:'正在连接',reconnecting:'正在续接',listening:'正在聆听',speaking:'正在回答',working:'正在处理任务',stopping:'正在关闭',error:'连接失败'};root.querySelector('#state').textContent=data.live?.active?(liveStates[data.live.status]??'Live 已开启'):task?stateNames[task.state]:'待机';
     liveControls.render(data.live);
     renderWake(data);
     if(!data.live?.active&&!task&&data.wake?.phase==='listening')root.querySelector('#state').textContent='唤醒聆听中';
