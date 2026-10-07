@@ -66,6 +66,7 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
 
   let graphRevision = null;
   let selected = null;
+  let validity = null;
   let activeTask = null;
   let initialized = false;
   let available = false;
@@ -137,6 +138,16 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
     }
   }
 
+  function setValidity(goal) {
+    validFrom.control.value = toLocalTime(goal.validFrom);
+    validUntil.control.value = toLocalTime(goal.validUntil);
+    // Keep the UTC identity of untouched fields, including ambiguous local DST times.
+    validity = {
+      from: {local: validFrom.control.value, utc: goal.validFrom},
+      until: {local: validUntil.control.value, utc: goal.validUntil},
+    };
+  }
+
   async function refreshGoals(scope = context()) {
     const request = ++listVersion;
     try {
@@ -173,8 +184,7 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
       id.control.readOnly = true;
       summary.control.value = selected.summary;
       reason.control.value = selected.reason;
-      validFrom.control.value = toLocalTime(selected.validFrom);
-      validUntil.control.value = toLocalTime(selected.validUntil);
+      setValidity(selected);
       sensitivity.control.value = selected.sensitivity;
       state.control.value = selected.state;
       state.label.hidden = false;
@@ -193,6 +203,7 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
   function resetDraft() {
     changeDraft();
     selected = null;
+    validity = null;
     form.reset();
     id.control.readOnly = false;
     id.control.value = globalThis.crypto?.randomUUID?.() ?? '';
@@ -296,8 +307,7 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
       id.control.readOnly = true;
       summary.control.value = selected.summary;
       reason.control.value = selected.reason;
-      validFrom.control.value = toLocalTime(selected.validFrom);
-      validUntil.control.value = toLocalTime(selected.validUntil);
+      setValidity(selected);
       sensitivity.control.value = selected.sensitivity;
       state.control.value = selected.state;
       source.textContent = `来源：${selected.sourceRef}；目标版本 ${selected.revision}，图版本 ${graphRevision}。`;
@@ -309,7 +319,9 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
       }
       if (!current(scope)) return;
       const previous = task.result.previousGoal?.revision ?? '新建';
-      setStatus('saved', `目标已确认并读回：版本 ${previous} → ${ref.revision}，图版本 ${task.result.graphRevision}。`);
+      setStatus(outcomeUnknown ? 'pending' : 'saved', outcomeUnknown
+        ? `所选历史任务的目标已确认并读回：版本 ${previous} → ${ref.revision}，图版本 ${task.result.graphRevision}；先前提交结果仍待核实，请勿重复提交。`
+        : `目标已确认并读回：版本 ${previous} → ${ref.revision}，图版本 ${task.result.graphRevision}。`);
     } catch (error) {
       if (!current(scope)) return;
       save.disabled = true;
@@ -369,8 +381,10 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
   form.onsubmit = async event => {
     event.preventDefault();
     if (!available || writePending() || !Number.isSafeInteger(graphRevision)) return;
-    const start = Date.parse(validFrom.control.value);
-    const end = Date.parse(validUntil.control.value);
+    const start = Date.parse(validity?.from.local === validFrom.control.value
+      ? validity.from.utc : validFrom.control.value);
+    const end = Date.parse(validity?.until.local === validUntil.control.value
+      ? validity.until.utc : validUntil.control.value);
     if (!id.control.value.trim() || !summary.control.value.trim() || !reason.control.value.trim()
       || !Number.isFinite(start) || !Number.isFinite(end) || start >= end) {
       setStatus('error', '请填写目标 ID、内容、原因和有效的起止时间。');
@@ -421,6 +435,7 @@ function field(name, tag, type) {
   const label = element('label', name);
   const control = element(tag);
   if (type) control.type = type;
+  if (type === 'datetime-local') control.step = '0.001';
   control.setAttribute('aria-label', name);
   label.append(control);
   return {label, control};
@@ -435,5 +450,5 @@ function options(select, values) {
 function message(error) { return error?.message || String(error); }
 function toLocalTime(iso) {
   const date = new Date(iso);
-  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, -1);
 }

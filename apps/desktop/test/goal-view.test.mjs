@@ -79,6 +79,91 @@ function fixture(t, handler, tasks = []) {
   return {...control, open: () => control.button.onclick(), calls, button, field, status, select, history, submit};
 }
 
+test('summary-only Goal revisions preserve exact UTC validity, including DST overlap, while edited times use local input', async t => {
+  const {FakeCoordinationStoreHost} = await import('@personal-agent/goals/store');
+  const {createGoal} = await import('@personal-agent/goals/commands');
+  const {createGoalHost} = await import('../electron/goal-host.js');
+  const previousTZ = process.env.TZ;
+  t.after(() => { if (previousTZ === undefined) delete process.env.TZ; else process.env.TZ = previousTZ; });
+  process.env.TZ = 'America/New_York';
+  for (const variant of ['sub-minute', 'DST-overlap', 'edited']) {
+    const namespace = `synthetic-validity-${variant}`;
+    const store = new FakeCoordinationStoreHost().provision(namespace);
+    const original = {...goal('synthetic-precision'), sourceRef: 'synthetic/source',
+      validFrom: variant === 'sub-minute' ? '2026-01-01T00:00:45.123Z' : '2026-11-01T06:30:45.123Z',
+      validUntil: variant === 'sub-minute' ? '2026-01-01T00:00:45.789Z' : '2099-01-01T00:00:45.789Z'};
+    delete original.revision;
+    createGoal(store, 0, original);
+    const host = createGoalHost(namespace);
+    let request;
+    host.bind({runtime: {provisionCoordinationStore: () => store,
+      listTasks: () => ({snapshotSequence: 0, items: []})},
+    submitHostToolTask(value) {
+      request = value;
+      return {commandId: value.commandId, toolName: value.toolName, toolVersion: value.toolVersion,
+        task: {taskId: 'synthetic-validity-task', state: 'waiting_approval', revision: 1,
+          updatedAt: '2026-10-07T00:00:00.000Z'}};
+    }});
+    const ui = fixture(t, (name, payload) => {
+      if (name === 'goal.list') return host.list();
+      if (name === 'goal.listTasks') return host.listTasks();
+      if (name === 'goal.get') return host.get(payload);
+      if (name === 'goal.revise') return host.revise(payload);
+    });
+    await ui.open();
+    await ui.select(0);
+    assert.equal(ui.field('开始时间').step, '0.001');
+    assert.equal(ui.field('截止时间').step, '0.001');
+    assert.match(ui.field('开始时间').value, /:45\.123$/);
+    ui.field('目标内容').value = 'Explicit summary-only edit';
+    let expectedFrom = original.validFrom;
+    if (variant === 'edited') {
+      ui.field('开始时间').value = '2026-11-02T01:30:12.345';
+      expectedFrom = new Date(ui.field('开始时间').value).toISOString();
+    }
+    await ui.submit();
+    assert.ok(request, `${variant} must submit a valid revision`);
+    assert.equal(request.arguments.expectedGraphRevision, 1);
+    assert.equal(request.arguments.expectedGoalRevision, 1);
+    assert.equal(request.arguments.goal.validFrom, expectedFrom);
+    assert.equal(request.arguments.goal.validUntil, original.validUntil);
+    // Actual public Goal tool/store consume the request; Policy/task/DOM/bridge are explicit Fake.
+    const outcome = await host.tools.find(tool => tool.descriptor.name === request.toolName)
+      .execute(request.arguments, {scopes: ['goals:write']});
+    assert.equal(outcome.kind, 'applied');
+    const committed = host.get(original.id);
+    assert.equal(committed.graphRevision, 2);
+    assert.equal(committed.goal.revision, 2);
+    assert.equal(committed.goal.summary, 'Explicit summary-only edit');
+    assert.equal(committed.goal.validFrom, expectedFrom);
+    assert.equal(committed.goal.validUntil, original.validUntil);
+  }
+});
+
+test('verified history after a lost submit reply distinguishes its confirmation from the still unknown submission', async t => {
+  let tasks = [];
+  const ui = fixture(t, (name, payload) => {
+    if (name === 'goal.revise') throw Error('explicit Fake IPC lost acceptance reply');
+    if (name === 'goal.listTasks') return tasks;
+    if (name === 'goal.readTask') return tasks.find(task => task.taskId === payload);
+  });
+  await ui.open();
+  await ui.select(0);
+  await ui.submit();
+  tasks = [applied()];
+  ui.button('关闭').onclick();
+  await ui.open();
+  await ui.history(0);
+  assert.match(ui.status(), /所选历史任务的目标已确认并读回/);
+  assert.match(ui.status(), /先前提交结果仍待核实/);
+  assert.match(ui.status(), /请勿重复提交/);
+  assert.equal(ui.button('保存修订').disabled, true);
+  ui.button('新建目标').onclick();
+  assert.equal(ui.button('保存目标').disabled, true);
+  await ui.submit();
+  assert.equal(ui.calls.filter(call => ['goal.create', 'goal.revise'].includes(call.name)).length, 1);
+});
+
 test('late applied Task A readback cannot mix its identity with selected Goal B', async t => {
   const read = deferred();
   const ui = fixture(t, (name, id) => {
