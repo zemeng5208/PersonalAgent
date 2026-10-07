@@ -315,3 +315,12 @@ ToolGateway context、Plan/背景、Laya与HTTP明确合成/Fake，Goal工具/SQ
 子测试超时，其父项聚合为失败；root integration未执行。Desktop606项595通过11跳过、
 Runtime421/421。日志core-cognition-revision131-full-check.log保留；同head原文件隔离
 71/71实际exit0仍不是整仓通过，也未确定原失败根因。后续新源码必须另作必要检查。
+
+后续固定5946141d3916cd5c0b5600e380185cdc7d3cc534/tree1183d52c的必要完整检查实际exit0，
+2026-10-07 22:47:26 UTC完成：34组2469项、2419通过、0失败/取消、50跳过；
+Desktop608项597通过11跳过、Runtime426/426、root integration22/22，构建/类型/架构/
+contracts/generated门禁均执行。Node24.15.0、实际4CPU，原断言和期限未改；日志
+core-ancestor-reference137-full-check.log SHA256
+db9cb86a352e0d122dfdf2a71de1533d2f03bf2e89bc826fe74524b4a9cff5a8。
+包含前述来源/有效期/祖先差集、窄屏与参考工具pending修复；此行之后的纯DOC交付
+不变source/tests。原23ad失败仍保留，不据本次通过认定其根因，也不覆盖后续新增源码。
