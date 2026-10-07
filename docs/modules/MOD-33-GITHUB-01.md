@@ -4,7 +4,7 @@
 
 - Profile：Local（DEV-WORKFLOWS-PLAN-20261002 #276 的明确范围）。
 - 状态：review / provisional；源码、构建和受控测试已交付，真实部分只读已验证；账号写入、Windows 与完整消费者验收未完成，不标 done/frozen。
-- 负责人：zemeng；非作者评审：goo122。
+- 当前负责人：goo122（2026-10-07 接续）；自行完成实现、接线、验证与自审，同行评审按需。原 zemeng 实现和历史评审归属保留。
 - 独占：packages/connectors/github/** 与本文件；其他模块只消费公开 package exports。
 - 初始基线：3d4d917；初始工作树 .worktrees/dev-github、分支 codex/dev-github。
   历史续接沿 PR #290，当前沿已有 PR #297；精确提交和证据见下方续接清单。

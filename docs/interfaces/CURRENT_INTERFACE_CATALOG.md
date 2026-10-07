@@ -30,7 +30,7 @@
 
 ### DEV-WORKFLOWS 开发增量（2026-10-03）
 
-产品负责人已明确启动 PR #276 分配给 zemeng 的 MOD-33/34/36/38 Local Profile 增量。
+历史上 PR #276 的 MOD-33/34/36/38 Local Profile 增量由 zemeng 启动；2026-10-07 最新分工为 goo122 负责 MOD-33/36/37，Potatos498 负责 MOD-34/35/38，接口范围和历史证据不因交接改变。
 公开 `@personal-agent/github`、`@personal-agent/coding-tools` 的开发修复与受控 Git 工厂、
 `@personal-agent/cognition` 的 Review/Issue 工厂以及 `@personal-agent/runtime/dev-workflows`
 新组合入口。精确输入输出以各包公开 exports 为单一来源，状态 **provisional / 待真实宿主闭环验证**；

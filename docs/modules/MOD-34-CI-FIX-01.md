@@ -2,7 +2,7 @@
 
 > 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
 
-状态：review；目标 profile：`local`（本轮明确授权的开发工作流增量）。负责人 zemeng；非作者集中验收由 Potatos498 执行。本增量不声明真实 GitHub、模型、Windows 或 AgentArts 验收已完成，也不替代 Competition Golden Path。
+状态：review；目标 profile：`local`（本轮明确授权的开发工作流增量）。当前负责人 Potatos498（2026-10-07 接续）；负责实现、受控 Git、Runtime/桌面必要接线、验证、自审及交付，历史 zemeng 作者归属保留。本增量不声明真实 GitHub、模型、Windows 或 AgentArts 验收已完成，也不替代 Competition Golden Path。
 
 ## 入口与依赖
 
