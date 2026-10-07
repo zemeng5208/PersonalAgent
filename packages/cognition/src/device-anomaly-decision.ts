@@ -207,7 +207,9 @@ export class DeviceAnomalyDecisionService {
         status: delivered ? 'alert_triggered' : 'monitoring', notificationDelivered: delivered,
         safeAdvice: delivered ? '受信通知宿主已读回确认投递，冷却状态已持久化'
           : '受信通知宿主确认未投递，后续新采样可以重试'};
-      state.pendingDelivery = undefined;
+      // Host-state checkpoints require lossless JSON; absent optional state
+      // must not be represented by an own property with an undefined value.
+      delete state.pendingDelivery;
       try {await this.save();}
       catch (error) {if (this.checkpoint) {this.loaded = false; this.sourceStates.clear();} throw error;}
     });
@@ -411,7 +413,7 @@ export class DeviceAnomalyDecisionService {
           await this.save();
           if (signal.aborted || this.now() >= Date.parse(deadline)) {
             // This intent was created above and delivery has not been attempted.
-            if (state.pendingDelivery?.id === deliveryId) state.pendingDelivery = undefined;
+            if (state.pendingDelivery?.id === deliveryId) delete state.pendingDelivery;
             return {receiptId: deliveryId, source: sample.source, status: 'monitoring',
               isAlertActive: state.isAlertActive, consecutiveElevatedCount: state.consecutiveElevatedCount,
               sample, selection, selectedCandidate, candidates, notificationDelivered: false,
@@ -444,7 +446,7 @@ export class DeviceAnomalyDecisionService {
         if (deliveryConfirmed) {
           state.lastAlertTimestampMs = sampleTimeMs;
         }
-        state.pendingDelivery = undefined;
+        delete state.pendingDelivery;
 
         let adviceText = safeAdvice;
         if (!this.notificationPort) {

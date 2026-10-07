@@ -122,6 +122,56 @@ test('cancellation or deadline expiry during durable intent save prevents notifi
   }
 });
 
+test('cleared device intents remain lossless JSON for the actual host-state checkpoint contract', async t => {
+  for (const mode of ['delivered', 'cancelled', 'reconciled']) await t.test(mode, async () => {
+    let saved, deliveries = 0;
+    const controller = new AbortController();
+    const checkpoint = {load: () => saved, save(value) {
+      const encoded = JSON.parse(JSON.stringify(value));
+      assert.deepEqual(value, encoded, 'host-state storage rejects lossy JSON');
+      saved = encoded;
+      if (mode === 'cancelled' && saved.sources.synthetic.pendingDelivery) controller.abort();
+    }};
+    const inference = createMockLayaChoiceInference();
+    const options = {checkpoint, sustainedSampleCount: 1, notificationPort: {
+      sendAdvisoryNotification() {
+        deliveries++;
+        if (mode === 'reconciled') throw Error('explicit unknown delivery fixture');
+        return {delivered: true};
+      }
+    }};
+    const service = new DeviceAnomalyDecisionService(inference, options);
+    const sample = {source: 'synthetic', timestamp: new Date().toISOString(), cpuPercent: 95,
+      memoryPercent: 50, samplingIntervalMs: 1000};
+    const receipt = await service.evaluateSample(sample, {signal: controller.signal,
+      deadline: new Date(Date.now() + 60_000).toISOString()});
+    if (mode === 'reconciled') {
+      assert.equal(receipt.status, 'indeterminate');
+      const id = (await service.readFeedback())[0].pendingDeliveryId;
+      assert.ok(id);
+      await assert.rejects(service.reconcileDelivery('synthetic', 'wrong-id', true), {code: 'INVALID_ARGUMENT'});
+      assert.equal(saved.sources.synthetic.pendingDelivery.id, id);
+      await service.reconcileDelivery('synthetic', id, true);
+    } else assert.equal(receipt.notificationDelivered, mode === 'delivered');
+    assert.equal(Object.hasOwn(saved.sources.synthetic, 'pendingDelivery'), false);
+    assert.equal(deliveries, mode === 'cancelled' ? 0 : 1);
+    const restarted = new DeviceAnomalyDecisionService(inference, options);
+    const feedback = (await restarted.readFeedback())[0];
+    assert.equal(feedback.pendingDeliveryId, undefined);
+    assert.equal(feedback.receipt.notificationDelivered, mode !== 'cancelled');
+    assert.equal((await restarted.evaluateSample(sample)).status, 'replayed');
+    const next = {...sample, timestamp: new Date(Date.parse(sample.timestamp) + 1000).toISOString()};
+    if (mode === 'cancelled') {
+      assert.equal(saved.sources.synthetic.lastAlertTimestampMs, null);
+      assert.equal((await restarted.evaluateSample(next)).notificationDelivered, true);
+      assert.equal(deliveries, 1);
+    } else {
+      assert.equal((await restarted.evaluateSample(next)).status, 'cooldown_suppressed');
+      assert.equal(deliveries, 1);
+    }
+  });
+});
+
 test('durable device feedback preserves cooldown and replay protection across restart', async () => {
   let saved;
   const checkpoint = {load: () => saved, save: value => {saved = structuredClone(value);}};
