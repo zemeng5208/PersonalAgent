@@ -63,6 +63,37 @@ test('pending reviewed meeting work retains constructor bindings and live origin
   assert.deepEqual(f.store.read(),before);
 });
 
+test('committed meeting reader retains its factory and request bindings while the source awaits', async () => {
+  const f=fixture(),submitted={...f.event},before=f.store.read();
+  let release,entered,getterCalls=0,reads=0,factReads=0,replacedCalls=0;
+  const loading=new Promise(resolve=>{release=resolve;});
+  const started=new Promise(resolve=>{entered=resolve;});
+  const store={read:revision=>f.store.read(revision)};
+  const facts={listImpactReceipts:()=>[]};
+  const options={namespace:f.namespace,store,facts,readSourceRevision:async(event,context)=>{
+    getterCalls++;assert.equal(event.newSummary,submitted.newSummary);assert.equal(context.deadline,submitted.deadline);
+    entered();await loading;
+    return {source:submitted.source,sourceRevision:submitted.sourceRevision,meetingFact:ref('meeting',2)};
+  }};
+  const reader=createCommittedMeetingProjectionReader(options);
+  const pending=reader(f.event,f.event);await started;
+  options.namespace='other-namespace';
+  options.store={read(){replacedCalls++;throw Error('replaced graph');}};
+  options.facts={listImpactReceipts(){replacedCalls++;return [];}};
+  options.readSourceRevision=async()=>{replacedCalls++;return undefined;};
+  f.event.newSummary='replaced summary';f.event.sourceRevision='replaced revision';
+  f.event.deadline=new Date(Date.now()-1000).toISOString();
+  store.read=revision=>{reads++;return f.store.read(revision);};
+  facts.listImpactReceipts=()=>{factReads++;return [{projection:f.input.projection,
+    completed:{batchToken:f.input.projection.batchToken,report:analyzeImpact(before,at)}}];};
+  release();
+  const result=await pending;
+  assert.deepEqual(result,{sourceRevision:submitted.sourceRevision,meetingFact:ref('meeting',2),input:f.input});
+  assert.equal(reads,1);assert.equal(factReads,1);assert.equal(replacedCalls,0);
+  assert.deepEqual(await reader(submitted,submitted),result,'later calls retain the original source getter');
+  assert.equal(getterCalls,2);assert.deepEqual(f.store.read(),before);
+});
+
 test('mixed completed batch retains both links as proof but meeting selection and restart remain on one chain',async()=>{
   const f=fixture(true),before=f.store.read();let calls=0,applied=0;
   const completed={batchToken:f.input.projection.batchToken,report:analyzeImpact(before,at)};

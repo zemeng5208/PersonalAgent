@@ -66,7 +66,10 @@ export function createCommittedMeetingProjectionReader(options: {
     || typeof options.facts?.listImpactReceipts !== 'function' || typeof options.readSourceRevision !== 'function') {
     throw new CognitionError('INVALID_ARGUMENT');
   }
+  options = {...options};
   return async (event, context) => {
+    event = {...event};
+    context = {...context};
     const source = await withCognitionDeadline(context,
       bounded => options.readSourceRevision({...event, ...bounded}, bounded));
     if (!source || source.source !== event.source || source.sourceRevision !== event.sourceRevision
