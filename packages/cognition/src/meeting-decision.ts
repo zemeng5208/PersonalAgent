@@ -486,7 +486,8 @@ export class MeetingRescheduleCoordinator {
     if (!query || !query.eventId || !query.source) throw new CognitionError('INVALID_ARGUMENT');
     if (query.namespace !== undefined && query.namespace !== this.namespace) throw new CognitionError('INVALID_ARGUMENT');
     if (options.signal?.aborted) throw new CognitionError('INVALID_ARGUMENT');
-    if (options.deadline && this.now() >= Date.parse(options.deadline)) throw new CognitionError('INVALID_ARGUMENT');
+    if (options.deadline !== undefined && (!Number.isFinite(Date.parse(options.deadline))
+      || this.now() >= Date.parse(options.deadline))) throw new CognitionError('INVALID_ARGUMENT');
 
     const ns = query.namespace ?? this.namespace;
     const record = await this.receiptStore.loadReceipt({ eventId: query.eventId, namespace: ns, source: query.source });
@@ -522,6 +523,9 @@ export class MeetingRescheduleCoordinator {
       });
       return conflictReceipt;
     }
+
+    if (options.signal?.aborted || (options.deadline !== undefined
+      && this.now() >= Date.parse(options.deadline))) throw new CognitionError('INVALID_ARGUMENT');
 
     const execResult = await execPort.executeBatch({
       expectedRevision: currentGraph.revision,

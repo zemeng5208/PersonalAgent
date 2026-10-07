@@ -63,6 +63,63 @@ test('queued approved proposals retain query and execution options while keeping
   assert.equal(store.read().history.findLast(node=>node.id===event.meetingFactId).summary,event.newSummary);
 });
 
+test('approved proposal cancellation and original deadline expiry during receipt load prevent execution', async () => {
+  for (const mode of ['cancelled', 'expired']) {
+    const {store} = createMeetingFixture(), receipts = new InMemoryMeetingDecisionReceiptStore();
+    let release, entered, blocking = false, executions = 0, clock = Date.now();
+    const loading = new Promise(resolve => {release = resolve;});
+    const started = new Promise(resolve => {entered = resolve;});
+    const coordinator = new MeetingRescheduleCoordinator({store, namespace: 'test-user-namespace',
+      inference: createMockLaya(), now: () => clock, receiptStore: {async loadReceipt(query) {
+        if (blocking) {entered(); await loading;}
+        return receipts.loadReceipt(query);
+      }, saveReceipt: record => receipts.saveReceipt(record)}});
+    const event = guardedEvent(), proposal = await coordinator.processEvent(event);
+    assert.equal(proposal.status, 'proposal');
+    const before = store.read(), originalRecords = receipts.listReceipts(), controller = new AbortController();
+    const options = {signal: controller.signal, deadline: event.deadline,
+      executionPort: {executeBatch: request => {executions++; return createStoreExecutionPort(store).executeBatch(request);}}};
+    blocking = true;
+    const pending = coordinator.applyApprovedProposal({eventId: event.eventId, source: event.source}, options);
+    await started;
+    if (mode === 'cancelled') {controller.abort(); options.signal = new AbortController().signal;}
+    else {clock = Date.parse(event.deadline); options.deadline = new Date(clock + 60_000).toISOString();}
+    release();
+    await assert.rejects(pending, error => error.code === 'INVALID_ARGUMENT', mode);
+    assert.equal(executions, 0, mode);
+    assert.deepEqual(store.read(), before, mode);
+    assert.deepEqual(receipts.listReceipts(), originalRecords, mode);
+  }
+});
+
+test('approved proposals reject invalid deadlines while completed receipts retain replay behavior', async () => {
+  const {store} = createMeetingFixture(), receipts = new InMemoryMeetingDecisionReceiptStore();
+  let blocking = false, entered, release, executions = 0;
+  const loading = new Promise(resolve => {release = resolve;});
+  const started = new Promise(resolve => {entered = resolve;});
+  const coordinator = new MeetingRescheduleCoordinator({store, namespace: 'test-user-namespace',
+    inference: createMockLaya(), receiptStore: {async loadReceipt(query) {
+      if (blocking) {entered(); await loading;}
+      return receipts.loadReceipt(query);
+    }, saveReceipt: record => receipts.saveReceipt(record)}});
+  const event = guardedEvent(), query = {eventId: event.eventId, source: event.source};
+  assert.equal((await coordinator.processEvent(event)).status, 'proposal');
+  const executionPort = {executeBatch: request => {executions++; return createStoreExecutionPort(store).executeBatch(request);}};
+  await assert.rejects(coordinator.applyApprovedProposal(query, {executionPort, deadline: 'invalid-date'}),
+    error => error.code === 'INVALID_ARGUMENT');
+  assert.equal(executions, 0);
+  const applied = await coordinator.applyApprovedProposal(query, {executionPort, deadline: event.deadline});
+  assert.equal(applied.status, 'applied');
+  const before = store.read(), controller = new AbortController();
+  blocking = true;
+  const pending = coordinator.applyApprovedProposal(query, {executionPort, signal: controller.signal, deadline: event.deadline});
+  await started;
+  controller.abort(); release();
+  assert.deepEqual(await pending, applied);
+  assert.equal(executions, 1);
+  assert.deepEqual(store.read(), before);
+});
+
 test('meeting revision excludes unrelated stale dependencies from selected repair', async () => {
   const {store} = createMeetingFixture();
   const fields = {sourceRef: 'unrelated-source', sensitivity: 'private', state: 'active',
