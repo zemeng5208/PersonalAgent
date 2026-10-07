@@ -1,5 +1,28 @@
 # MOD-32：AgentArts 请求级观测与恢复边界
 
+## 2026-10-07：显式只读 Trace helper
+
+[`read-platform-trace.mjs`](../../tests/manual/agentarts/support/read-platform-trace.mjs) 新增手动调用导出 `readAgentArtsTrace({traceId, deadline, signal, authorize, fetchImpl})`。导入时没有网络或文件操作；没有 CLI、凭据读取、自动调用、重试、云发布或资源创建。`fetchImpl` 默认使用 `globalThis.fetch`，也可由受信调用者提供传输实现。
+
+入口仅使用已由[官方观测 API 示例](https://support.huaweicloud.com/api-agentarts/agentarts_07_0037.html)证明的 `https://agentarts.cn-southwest-2.myhuaweicloud.com`，**仅限西南-贵阳一**，不推断其他区域；路径为 [ShowOpsTrace](https://support.huaweicloud.com/api-agentarts/ShowOpsTrace.html) 的 `GET /v1/ops/observation/traces/{trace_id}`。手动入口接受 1～64 位英文、数字、下划线或连字符 TraceID。调用者须对所读 Trace 有明确授权；IAM 用户需 `agentarts::showOpsTrace` 及该官方页面列出的 APM/模型查询依赖权限。
+
+调用者的 `authorize(request)` 接收冻结的完整 GET 描述（`url`、`method`、空 `body`、`headers`、原 `deadline` 和联动 `signal`），并用官方 AK/SK 签名 SDK 返回完整已签请求头。必须保留原 Host、Content-Type、Accept；签名 Authorization、X-Sdk-Date 必填，临时凭据可包含 X-Security-Token。helper 不修改这些已签头值、URL 或消息体，禁止 redirect，且不自动重试。[认证分类](https://support.huaweicloud.com/api-agentarts/agentarts_07_0005.html)明确观测接口使用 AK/SK；**现有运行实例 Bearer 不可替代观测签名**。仓库目前没有观测签名 Provider；使用者仍须提供受信 SDK 签名回调，不能把此 helper 宣传为已接通账号。
+
+请求头格式检查不验证签名有效性或账号权限；只有真实服务回执能证明该请求通过鉴权。未取得真实回执前，合成签名头只用于离线消费测试。
+
+```js
+// signObservationRequest 由明确获授权的宿主提供；这里不读取或示范存放密钥。
+const {readAgentArtsTrace} = await import('./support/read-platform-trace.mjs');
+const summary = await readAgentArtsTrace({
+  traceId, deadline, signal,
+  authorize: signObservationRequest,
+});
+```
+
+原 canonical UTC 绝对截止时间和取消信号覆盖签名、fetch 与至多 1 MiB 的 JSON 响应读取，包括不合作的异步回调。错误只暴露固定 `code`（INVALID_ARGUMENT、UNAUTHORIZED、EXTERNAL_FAILURE、CANCELLED、TIMEOUT）及已知 HTTP 状态，不返回原始错误正文或鉴权值。返回摘要只含 `total`、`returnedSpanCount` 及逐 Span 的 `durationMs`、tokens/inputTokens/outputTokens 和 isError；缺失指标为 `null`，不合计各 Span token 或换算费用。官方示例 `total:5` 但只列一个 Span，因此两者分别保留。input/output/metadata、任意名称、资源/会话 ID 与原始 Trace 内容不进入摘要，也不自动落盘。
+
+摘要的 requestCorrelation、deploymentVersion、cost 始终为 `not_checked`；该手动读取不确立本地请求、运行实例、版本或账单的关联。新增测试仅使用官方结构的合成响应和故障夹具，没有真实账号、云调用或目标系统读回；原有历史验收和未读回结论继续保留。
+
 > 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
 
 - Profile：`huawei_ict_agentarts` Competition Profile；负责人：`zemeng`。
