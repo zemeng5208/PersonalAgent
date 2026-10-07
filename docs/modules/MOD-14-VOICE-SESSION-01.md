@@ -201,3 +201,48 @@ IPC、Gateway 与桌面快照为显式 Fake；Live 采集回执为 Fake，PCM/WA
 脚本、JSON、日志（包括首个 Worklet 宿主失败）。没有新增正式测试或重复
 既有 Fake AudioContext 绿色套件。这些结果只核实真实浏览器 API 与公开 Host/原面板的
 消费；Electron/Windows、实际 ASR/TTS、设备误触/回声、账号 API 和任务结果仍分别待现场验收。
+
+## 2026-10-07：采集撤销与 Wake 原面板交错读回
+
+以下新增独立场景固定源码 head `c7a619f6720ddc5d0002b910c739f626b9284ef9`，
+没有修改生产源码或重跑上述已通过场景。使用原 panel/Renderer/Worklet/CSP、真实
+localhost HTTP 和 Chromium 原生 track/context；浏览器设备、IPC/许可、keyword、ASR
+以及 BrowserWindow 方法明确为 Fake。实际消费公开 Wake/VoiceInput/Microphone/PCM
+Host；主进程相关路由从实际 main 源码提取执行，不等于运行 Electron。
+
+- 采集迟到：原生 Fake-device track 已分配但 getUserMedia 返回被显式延迟。公开 Host
+  撤销后保持 busy/未确认，没有提前 ready 或新授权；返回放行后原 Renderer 结束
+  track，尚未建立 context，Host 最终 verified/revoked。因启动未返回 attachment，
+  PCM ready 与 closed 均为 EXTERNAL_FAILURE；不能把 Host 的物理句柄读回描述为
+  attachment 成功完成。
+- 采集关闭故障：track 实际 ended，但显式拒绝的 context.close 使 context 仍 running。
+  Renderer/Host 保留 verified=false，PCM closed 拒绝；busy=false、订阅清零不能清除
+  释放未确认锁，新授权仍拒绝，重复撤销不冒充已释放。
+- Wake 正常听写：原按钮开启、Fake keyword 触发原听写，共享单一路 native 采集；
+  原 talk 按钮完成录音后 Fake ASR 一次，actual onTranscript 只回填 textarea，Runtime
+  调用零。Wake 继续监听且保留单订阅；原按钮关闭后 track ended/context closed、Host
+  verified，已有草稿保留。
+- Wake 取消识别：等待 Fake ASR 时按原 Wake 关闭按钮，中止 ASR signal、stop 一次，
+  native 资源确认关闭、VoiceInput 无 active。迟到识别结果不会回填，音频缓冲清零，
+  Runtime 调用零。恢复后的独立执行明确 exit0；首次私有等待条件错误记录保留。
+- 面板收起：等待识别时按原收起按钮，actual hidePanel/stopWakeVoice 在资源 verified、
+  Wake/VoiceInput 无 active 后才调用 Fake BrowserWindow.hide 一次；迟到结果仍丢弃。
+  实际浏览器页面继续可见，不能将 Fake hide 方法调用宣称为 Electron 窗口已隐藏。
+- 收起关闭故障：context.close 显式拒绝，track ended/context running；Wake logical
+  disabled 仍为 release_unconfirmed/hasActive。actual hidePanel 不调用 Fake hide，
+  面板 visible/pinned 保留；原 Wake/talk 禁用，实际 enable/record.start 路由也拒绝。
+  迟到识别稿丢弃、音频清零；pressed=false 或 busy=false 不构成完整释放。
+- 草稿与手动受理并发：Fake ASR 等待期间，用户原 textarea 输入并点击 send 一次；
+  显式 Fake task.submit 受理被延迟。听写追加后原 draftRevision 保留新草稿，迟到受理
+  不清除追加内容，按钮恢复。手动 payload 仅含点击时用户文字、手动提交一次、语音
+  路径 Runtime 调用零；最终原 Wake 关闭确认 native 资源释放。此处没有真实 Runtime
+  提交或云端执行。
+
+各场景实际独立进程 exit0、pageerror/console error 为零。证据同前述私有目录中的
+`microphone-native-late-acquire-validation.md`、`microphone-native-close-fault-validation.md`、
+`wake-native-dictation-validation.md`、`wake-native-cancel-recognition-validation.md`、
+`wake-native-hide-recognition-validation.md`、`wake-native-hide-close-fault-validation.md`、
+`wake-native-draft-submit-validation.md` 及对应脚本、JSON、日志/截图。首次私有 helper
+选择器匹配多个 textarea 的失败日志保留，修正 ARIA 定位后通过，未修改生产 Goal 控件。
+这些结果仍不完成真实 Windows 中文唤醒、SIS/Live API、物理设备、回声/噪声或账号验收；
+本模块继续 `review`，现场验收仍由原现场负责人执行。
