@@ -127,3 +127,11 @@ MOD-28 保持 `in_progress`。接口状态以[接口目录](../interfaces/CURREN
 固定5a914851733e8df0854a9586acaf1e7493b1c1cd/tree675495396e586e6415a263f8208901d836b78d15，原npm run check实际92996/9d606e→8e9231/exit0，03:58:46.980177Z至04:09:52.674357Z，Node24.15/CPU0–3/原期限断言。34组2613项2563通过、0失败0取消、50跳过；Cognition320/320、Desktop690/679通过11跳过、Runtime439/439、Calendar47/44通过3跳过、root integration22/22；原build/type/generated/architecture/contracts全部执行。完整raw257325字节SHAb3602a0b770352cbd9c6010f1dd2a14a11f576160ef89f051ebf3a53adcfa4e0；root及三执行线分别独立核原日志、全七字段、原50跳过边界、固定21文件和原启动回执。
 
 Mail并行首次load候选经原、新公开batchTail入口及真实async屏障分别核实：仅load1，两批全结果与两条JSON持久记录一致、随后重放infer0，无新增并行回归，未为该候选改源。只在本文追加已发生的完整结果，发布头与上述固定source/test/config/generated逐blob相同，不为DOC重跑绿检查；此前0a6/e942及历史失败各自保留。真实现场验收步骤已明确交给用户、zemeng及对应协作者；本轮停止不表示整体MVP完成，不批准或合并。
+
+### 第十三项：Wake迟到响应保留较新反馈
+
+原完整HTTP/CSP页面中，Wake关闭后的只读snapshot迟到会清除其间实际SIS配置拒绝的新错误；旧配置文件精确不变、Wake仍disabled、Task0，无权限或状态绕过。只在自有renderer统一反馈写身份，Wake迟到成功继续更新状态但保留新反馈，迟到失败也不覆盖；同文本新写仍归新操作，当前snapshot的connection/voice错误不再额外清除，原updateVersion/unload/受理门禁不变。新增7例原handler/feedback回归；旧talk测试夹具仅注入原setter及revision声明，原6个测试正文/断言/期限字节不变。
+
+固定47b8f98c3b1a7fe07aa59c95e49949d2dac16199的原完整Desktop工作区测试及原typecheck实际75775/ea8ef3→ac9a5c/exit0，04:25:11.042906Z–04:25:53.585032Z，Node24.15：697项686通过0失败0取消11原跳过，7新增例均实际执行；raw68123BSHA353401e95b1efc7987f2a3bd05406b07fc480c8b6844f3f7858354d10cf694c4，typecheck595BSHA7f7884a613131fdf9ec4eab7cd5c69b76586f1af2b8819b0e73b28147df1e36b。此次为Desktop内部UI修复的必要完整workspace检查；此前2613整仓检查覆盖前十二包，不覆盖新renderer，计数不相加。首轮A隔离Desktop679/666通过2失败11跳过的missing-setFeedback夹具故障及原portable失败均保留。
+
+fresh AFTER实际527304/59772→999857/exit0，冻结renderer741a7da，原main配置/Wake路线AST、实际Host和配置文件、原全页面保留相同新SIS错误，按钮恢复、文件精确不变、初始化/Task/pageError均0。Fake设备/IPC传递与合成snapshot包络明确，不称原main整个snapshot或真实SIS/设备验收；AFTER配置metadata补用原main voice property AST，原BEFOREv4漏该字段但原证据未改或重跑。冻结A d9b6573d(18项)、D AFTER0a6b69e8(14项)，root逐字节核全部；仅DOC追加实际结果，仍沿原PR，不批准/合并，现场与整体MVP未完成。
