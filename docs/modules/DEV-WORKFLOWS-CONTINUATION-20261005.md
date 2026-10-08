@@ -143,7 +143,7 @@ MOD36 COMMENT、MOD38 标签仍按原持有环境 owner 接续，不能据此完
 该main的tree9906fed9与前一分支相同，未包含本次11文件增量。
 依据用户已明确要求“前置分支后继续做到可交付Draft”，本次在同一原分支消费该main祖先，
 保留历史后交唯一后继Draft；只包含本次新diff，不重复已合入的10文件，也不批准/合并PR。
-同source tree完整 Node24.15/npm11.12 check：31workspace1772通过、0失败、49平台门控跳过，
+同source tree完整 Node24.15/npm11.12 check：31workspace1772通过、0失败、49跳过，
 根integration19/19、架构3/3、契约4/4、生成/全类型检查通过。新head Windows门禁另读。
 
 ### MOD34 公开工厂有界等待与最新协作者交付
@@ -215,7 +215,7 @@ CheckRun的明确opt-in底座与消费；仍不是原run页面评论，不使用
 不妨碍本轮独立源码和必要组合接线；整体Goal保持进行中。
 
 本节整套 Node 增量最终完整 `npm run check` 已实跑通过（Node 24.15.0 / npm 11.12.1）：
-31 workspace 1839 通过、0 失败、49 Linux 平台门控跳过；根 integration 19/19、
+31 workspace 1839 通过、0 失败、49跳过；根 integration 19/19、
 architecture 3/3、contracts 4/4、生成一致性、全 workspace build/typecheck 通过。
 MOD34 CI 53、MOD36 Review 21、MOD38 Issue 38、Runtime DEV-WORKFLOWS 28 的定向检查
 与独立源码/SQLite复核覆盖上述新边界。原初次完整检查因发现 UTF16 页尾缺陷被主动中止，
@@ -279,7 +279,7 @@ Desktop434，Runtime330；根integration19、architecture3、contracts4通过。
   Runtime组合33/33、MOD34 discovery30+既有CI53共83/83；尚非真实账号COMMENT验收。
 
 本节12路径源码冻结后已完整执行 Node24.15/npm11.12 `npm run check`：架构3、契约4、
-生成一致性、全build/typecheck通过；31workspace1876通过、1失败、50平台门控跳过。
+生成一致性、全build/typecheck通过；31workspace1876通过、1失败、50跳过。
 唯一失败为此前同症状 P1 `calendar/test/cloud-business.test.mjs:88` 的超时错误码
 EXTERNAL_FAILURE vs TIMEOUT，未修改该模块，已在 #212 `6001147118` 交 Potatos498 原owner。
 本人coding-tools153通过/15跳过、Desktop425通过/11跳过、Runtime335通过/0跳过。
@@ -325,7 +325,7 @@ CI关联写独立审批/原执行hash/confirmed与unknown重启后无model/patch
 整套check与新head Foundation结果随后实际读取，不沿用上一head或定向测试冒充。
 
 本节15路径冻结后完整 Node24.15/npm11.12 `npm run check` 实际 exit0：
-31workspace1976通过、0失败、50平台跳过，GitHub89、coding-tools183、Desktop425、Runtime340；
+31workspace1976通过、0失败、50跳过，GitHub89、coding-tools183、Desktop425、Runtime340；
 根integration19/architecture3/contracts4、生成一致性、全build/typecheck通过。
 上一轮P1日历同源码此轮44通过，此前超时错误码失败证据和owner交接仍保留，
 没有修改日历或将偶现问题宣称已修复。上一交付 `07e8a60` 双Windows Foundation完整日志
@@ -348,7 +348,7 @@ Runtime只保存原审批执行/journal/hash绑定的候选正整数ID和原参�
 GitHub完整96/96（新增observer7）已通过；Runtime与全仓检查及独立复核按实际结果续写。
 
 第三7路径冻结源码完整 Node24.15/npm11.12 check 已实际 exit0：31workspace1990通过、
-0失败、50平台跳过，GitHub96、coding-tools183、Desktop425、Runtime347；根integration19、
+0失败、50跳过，GitHub96、coding-tools183、Desktop425、Runtime347；根integration19、
 architecture3/contracts4、生成一致性、全build/typecheck均通过，冻结文件验证无变化。
 原未知候选/明确读回/保存失败/实际冲突/缓存伪hint/取消标记定向7/7，非作者独立复核14/14。
 独立复核发现的既存缓存hint绕过及unknown取消仍等待核实的cancelRequested展示问题已修复，
@@ -518,7 +518,7 @@ push和建PR；公开CI不能证明自动push→PR→backlink confirmed，也不
 `cb50647e4fda6e540ddf0ac01722864dc169beaa`，父main1e5566d；API树等于本地受检树。
 用户允许后建立唯一后续#293，两位正式非作者审核请求保留，未自行批准或合并。
 Node24.15新行为回归旧代码5通过/1失败、修后6/6；独立只读复核6/6，Desktop完整
-428通过/0失败/11平台跳过，typecheck、源码语法及diff检查通过，失败原始日志保留。
+428通过/0失败/11跳过，typecheck、源码语法及diff检查通过，失败原始日志保留。
 Browser插件不可用，已有Playwright/Chromium151加载真实app/index与renderer、明确
 合成宿主桥，1280×900及480×900验证草稿、取消cloud、背景快照、等待、畸形回执、
 显式重试与再编辑，无console/page错误或横向溢出，不冒充原Electron/Windows或云验收。
@@ -558,7 +558,7 @@ root唯一负责文档和串行交付，未接管MOD35、MOD37、P5/P7、业务�
 - P8：AgentArts输入Enter保存或按钮撤销，在busy禁用后失去原键盘焦点；settlement现
   仅当前focus仍body、面板与原控件有效可见时恢复。等待期间用户移往外部或切页即使
   返回也不抢焦点，不自动重试，不变凭据清理/授权/宿主或玻璃样式。原新回归7通过/1
-  失败、修后8/8，独立相关3/3；Desktop完整429通过/0失败/11平台跳过及typecheck通过。
+  失败、修后8/8，独立相关3/3；Desktop完整429通过/0失败/11跳过及typecheck通过。
   真实app+明确合成桥Chromium151宽/窄屏各十次save/revoke成功/失败/畸形及焦点离开
   操作均通过，无console/page错误、溢出或错误遮罩。首轮临时QA脚本selector错误已
   单独保留、修正后最终浏览器命令exit0，不把脚本失败混作产品失败或最终通过。
@@ -623,8 +623,8 @@ CI、正式非作者评审与集成另记，整体及原真实验收仍未关闭
 `5430070658`，由 goo122 于 14:48:37 UTC 合入 main `111bb90ad94808b87424a7fa02041b44f42313b6`；
 本执行未 APPROVE 或 merge。两路首次 Windows Foundation 完整原始日志实际读取并归档：
 push 37479487409/job112323564604，323953 字符；PR 37479964577/job112325196887，324869 字符。
-各 31 workspace 2076/0/16，coding-tools 219/4 平台跳过、cognition 207、GH 103、
-windows-client 12、Desktop 443/1 平台跳过、Runtime 349；实际受控 .NET8 fixture
+各 31 workspace 2076/0/16，coding-tools 219/4 跳过、cognition 207、GH 103、
+windows-client 12、Desktop 443/1 跳过、Runtime 349；实际受控 .NET8 fixture
 25.84/25.18 秒，check/dev/两项 demo 与清理均成功，零重跑。
 
 MOD33 新严格 UTF-8 实现的公开生产 Provider 另完成真实只读 3/3：实际
@@ -649,7 +649,7 @@ P8 四种选择器取消仅返回临时 `selectionCancelled:true`，普通快照
 既有 main 分支转发私有 `codingSelectionCancelled:true`，Renderer 限定四 selector 与
 明确布尔 true 保留已有未生效草稿。正常换选、授权/撤销、legacy 回执仍原清理；
 宿主撤销或配置失效保持优先，不自动授权，不以同名工作区猜测取消。定向 53/53、
-Desktop typecheck、源语法通过，完整包 434/0/11 Linux 平台跳过。真实 app 配合明确
+Desktop typecheck、源语法通过，完整包 434/0/11 跳过。真实 app 配合明确
 合成 IPC 与生产 Host 回执在 1280/480 屏幕通过，无页面错误或溢出；另实际 main
 分支提取加生产 Host 组合核对四取消、正常操作、权限与 invalidate/publish。
 后者是受控私有端口验证，不是原生 Electron/Windows 选择器或 DPI 验收。
@@ -683,7 +683,7 @@ MOD33 另实际只读失败 run/job 元数据可消费：公开 Provider/runner 
 
 上述四项沿唯一 #297 发布 `026412c9671b3d16a9528a0162075ce89df71bd7` / tree
 `dab9f3be26b7005393db78672928a3819bf19d3b`，16 个 diff 文件、API 树等于本地受检树。
-最终 Node24.15 完整 check exit0，31 workspace 2066/0/50 Linux 平台跳过、根22/22、
+最终 Node24.15 完整 check exit0，31 workspace 2066/0/50 跳过、根22/22、
 架构3/3、生成协议与类型检查通过，203685 字符原始日志归档；Windows准确head另读回。
 
 继续 P8 工作区按钮键盘焦点（#212 `6019311625`）：原按钮经 Enter 启动后禁用，成功或
@@ -781,7 +781,7 @@ unknown精确原run/args/steps1、实时授权与ready属性。源hash
 上述九项增量的准确 head `e109368779ba833f9d75b331766256701201338b` /
 tree `73bd2f9a44418523c160a9d4158db03ba3b5e37d` 两路 Windows 首次全检成功：
 push run37492638458/job112369024033、PR run37492644255/job112369046672，完整
-raw328961/329841字符均读取归档。31workspace2117/0/16平台跳过、根22/22、架构
+raw328961/329841字符均读取归档。31workspace2117/0/16跳过、根22/22、架构
 3/3，check/dev/两项demo均通过。#212原交付记录已更新同head及原验收owner；阶段
 邮件1a1120a846b4d144已核SENT/To，非停止通知，整体仍in_progress。
 
@@ -831,7 +831,7 @@ Calendar标记误说消失，也不重复全量读取；无凭据/正文/签名U
 上述第十项源码增量已发布准确head `6fe4a922813dcb565ac60393959ef4cf9caa13f4` /
 tree `541f4871e838cffa2cfab23760d545fca4cf5947`，28diff文件；双Windows首次attempt1
 push37503321460/job112405575122、PR37503328395/job112405602544均成功。完整原
-日志329222/329992字符已读回归档，34组汇总、31workspace2119/0/16平台skip/0cancel、
+日志329222/329992字符已读回归档，34组汇总、31workspace2119/0/16skip/0cancel、
 root22/22、arch3/3、GitHub105/105，新增runner两回归实际执行；check/dev/两项demo
 全success。阶段邮件1a1125046fc5ec31已核SENT/To，非停止通知，整体仍in_progress。
 
@@ -849,3 +849,47 @@ coding-tools build/typecheck、完整232/0/15 Linux平台skip均通过。冻结�
 只本人两源码及三配套说明，沿现有#297交付；新提交Windows准确门禁另读回，不借
 6fe双绿。真实原现场自动修复/账号写/Windows/AgentArts仍由原owner验收，整体
 Goal继续in_progress，持续新PR/分工/认证邮件核对至Oct7北京时间20:00。
+
+### 2026-10-07：跳过分类与 Windows Job helper 编译接线
+
+Potatos498 对准确 `df99818d` 作非作者批准后，#297 合并为 `813fb727`，合并树与
+已验证源码一致；11 项源码增量已完成评审和集成。goo 的 #294 随后合并，当前
+main `4d15f06312745c45412c3d9caf6086fa16a99436` /
+tree `87e9e8ea4d2a05aa7193d3667941b0f9a13c372f`，本人原 28 交付文件内容未变。
+
+这两个准确合并头的首次 Windows CI 完整原日志已读取：`813fb727` run37563088156 /
+job112604581622 的 31 workspace 为 2121/0/16；新 main `4d15f063` run37563282512 /
+job112605184647 为 2125/0/16。两者各 34 组汇总，root22/22、架构3/3、fixtures4/4，
+全部 required check/dev/demo 步骤成功。历史总跳过数保留，不能将整个 workspace 的
+跳过统称为“平台跳过”；新 main 的实际 16 项如下：
+
+| 原因 | 数量 | 证据边界 |
+| --- | --- | --- |
+| `WindowsJobProcessHost.exe not compiled` | 4 | 现有成功执行、abort 杀进程树、deadline、root exit/继承输出回归尚未执行 |
+| 显式 opt-in 连接器 live 测试 | 11 | Calendar3、feeds1、mail2、research1、weather4；不代表真实账号/服务已验收，mail send 另有独立 opt-in |
+| Desktop 显式 opt-in 渲染测试 | 1 | knowledge controls 读回/交付/绑定区分与订阅刷新，需要 `PA_KNOWLEDGE_UI_TEST=1` 及浏览器；不推断为已通过的 Windows 行为 |
+
+沿 #212 原登记 `6022269030` 开展本人 P8 唯一共享 CI 接线，goo122 评审公共兼容：
+在现有 Windows check 前核验 runner 预装 .NET8 SDK，调用已有
+`packages/coding-tools/native/build-helper.mjs --target-dir`，只发布到 runner 外部
+临时目录，并在解析 `helperPath`、确认文件存在后写入已有 `PA_TEST_JOB_HOST_EXE`。
+不下载 SDK、不改公共接口/依赖或四项原测试断言，保留原构建失败而非静默 skip。
+新准确提交的实际编译及四项回归必须另读 CI 原日志，不能借上述旧头成功计为通过。
+这只覆盖生产 helper 的合成进程树，不证明原设备 UIA/用户接管、完整授权链、
+Windows 安装包或 #291 原自动写闭环；连接器真实 WRITE 和 AgentArts 仍按原 owner 验收。
+
+新增 CI 增量已沿原分支交 #298 Draft，初头 `e25c52a` / tree
+`2a752c1a96f92d4da2f71a76323fb9497cc5df40`，仅上述三个文件。两路首次 Windows
+helper 编译与 `PA_TEST_JOB_HOST_EXE` 注入成功，四项原测试实际执行，但整套未通过：
+push run37565575276/job112612385030 为 helper3通过/1失败，abort 测试尚未主动取消，
+即因准备阶段 `grandchild started` 失败；PR run37565593918/job112612445148 为
+helper1通过/3失败，另有 success 原10秒 TIMEOUT、deadline 原300ms 在准备阶段拒绝。
+root-exit 两路都通过。完整失败原日志保留，不把编译成功记为四项或整套验收通过。
+
+两名 Sol 代理独立确认原测试生命周期缺口：执行 Promise 在准备后才被消费，
+准备断言失败时跳过取消和收尾，fixture 会先清理，原 deadline 随后触发未处理拒绝。
+尚不能由此认定冷启动或生产 Job/取消逻辑根因。沿原 #212 登记新增本人 P6 原测试
+唯一写槽 `packages/coding-tools/test/workspace-command.test.mjs`，先补立即观察、
+所有失败路径取消并等待收尾及有界启动诊断；保留原等待/执行期限与 PID、存活、
+严格 CANCELLED、实际 ESRCH 杀树和精确输出断言。生产 native/command 不猜改，
+新准确 Windows 运行继续定位；沿现有 #298 交付，不开新任务或重复 PR。
