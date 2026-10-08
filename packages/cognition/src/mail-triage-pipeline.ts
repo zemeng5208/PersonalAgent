@@ -320,7 +320,7 @@ export class MailTriagePipeline {
             calibrated: false,
             batching: 'multi_question',
             receipt: {
-              id: hash(JSON.stringify([msg.source, msg.messageId, msg.sourceRevision, this.configDigest, msg.text])),
+              id: hash(JSON.stringify([msg.source, msg.messageId, msg.sourceRevision, hash(JSON.stringify(this.labels)), msg.text])),
               promptVersion: 'mail-triage-v1',
               model: 'multilingual',
               candidateLabels: Object.keys(this.labels),

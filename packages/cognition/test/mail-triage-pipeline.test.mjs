@@ -49,6 +49,53 @@ test('checkpoint receipts bind the exact label order accepted by public triage d
   assert.equal(Object.keys(saved).length, 2);
 });
 
+test('interrupted pipeline receipts remain valid deferred inputs to public triage dispatch', async t => {
+  for (const reason of ['cancelled', 'deadline']) for (const highImpact of [false, true]) {
+    await t.test(`${reason}, trusted high impact ${highImpact}`, async () => {
+      const labels = {work: 'Synthetic work', news: 'Synthetic news'};
+      const messages = [0, 1].map(index => ({source: 'synthetic-mail', messageId: `interrupted-${index}`,
+        sourceRevision: 'rev1', text: `Synthetic work update ${index}`,
+        ...(index === 1 ? {highImpact} : {})}));
+      const controller = new AbortController(), inference = createMockInference();
+      let saved = {}, clock = Date.now();
+      const deadline = new Date(clock + 10000).toISOString();
+      const checkpoint = {load: () => saved, save: value => {saved = structuredClone(value);}};
+      const pipeline = new MailTriagePipeline({inference, labels, checkpoint, chunkSize: 1, now: () => clock});
+      const result = await pipeline.processBatch({messages, deadline, signal: controller.signal,
+        onProgress: progress => {if (progress.processedCount === 1) {
+          if (reason === 'cancelled') controller.abort();
+          else clock = Date.parse(deadline);
+        }}});
+      assert.deepEqual(result.results.map(item => item.reason), ['classified', reason]);
+      assert.equal(inference.calls.length, 1);
+      const original = structuredClone(saved);
+      assert.equal(Object.keys(original).length, 1);
+      const dispatchInput = {namespace: 'synthetic/interrupted', messages, labels, results: result.results};
+      assert.doesNotThrow(() => prepareTriageDispatch(dispatchInput));
+      const deferred = prepareTriageDispatch(dispatchInput).deferred;
+      assert.equal(deferred.length, 1);
+      assert.equal(deferred[0].reason, reason);
+      assert.equal(deferred[0].requiredRoute, highImpact ? 'main_agent' : 'review');
+      const direct = await new LayaTriageService(inference).classify({messages: [messages[1]], labels,
+        deadline: reason === 'deadline' ? new Date(Date.now() - 1).toISOString() : deadline,
+        signal: controller.signal});
+      assert.deepEqual(result.results[1].receipt, direct[0].receipt);
+      assert.equal(inference.calls.length, 1);
+      const forged = structuredClone(result.results);
+      forged[1].receipt.id = '0'.repeat(64);
+      assert.throws(() => prepareTriageDispatch({...dispatchInput, results: forged}), /Invalid local triage dispatch/);
+      const resumed = await new MailTriagePipeline({inference, labels, checkpoint, chunkSize: 1})
+        .processBatch({messages, deadline: new Date(Date.now() + 10000).toISOString(), signal: new AbortController().signal});
+      assert.equal(resumed.cachedCount, 1);
+      assert.equal(resumed.newlyClassifiedCount, 1);
+      assert.equal(inference.calls.length, 2);
+      assert.doesNotThrow(() => prepareTriageDispatch({...dispatchInput, results: resumed.results}));
+      for (const [key, value] of Object.entries(original)) assert.deepEqual(saved[key], value);
+      assert.equal(Object.keys(saved).length, 2);
+    });
+  }
+});
+
 test('legal mixed-case labels reuse their exact checkpoint across portable locale ordering', async () => {
   const moduleUrl = new URL('../dist/index.js', import.meta.url).href;
   const run = (locale, checkpoint = {}) => new Promise((resolve, reject) => {
