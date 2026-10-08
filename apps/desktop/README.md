@@ -141,6 +141,10 @@ AgentArts 发送还需单独的出机确认，保存记忆本身不授予消费�
 及精确收据；私人 Memory 源库尚无生产 backup/restore 路径，外部独立副本与已发送正文不在本机删除保证内。
 验收步骤见 [本机私人记忆验收](../../tests/manual/desktop/README.md#私人记忆本机验收)。
 
+私人记忆控制器关闭后释放会话 Vault，并拒绝新的搜索和已开始搜索的结果；
+关闭期间尚未完成的目录选择不得重新安装来源。该检查不声称中断已经发生的系统文件读取。
+合成回归与验证条件见 [关闭生命周期记录](../../docs/modules/MOD-09-VAULT-LIFECYCLE-20261008.md)。
+
 ## 文字交互垂直链路
 
 显式 `PA_RUNTIME_PROFILE=local` 时，文字任务通过 Runtime Application 的 `task.submit` 入口执行已有 Agent、`ModelGateway` 和 Provider。普通启动的 Competition Profile 由 AgentArts 编排，辅助模型配置只用于其委派子任务。Desktop 主进程负责安全配置、IPC、事件订阅和任务展示；缺少配置保持不可用，不会生成假回答。`--fake-runtime` / `--fake-model` 的显式联调入口默认 Local，不能与显式 Competition 同时启用。
