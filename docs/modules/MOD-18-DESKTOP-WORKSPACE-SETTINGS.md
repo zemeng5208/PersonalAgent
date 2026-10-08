@@ -188,3 +188,10 @@ SQLite readonly task/toolrecord/grant均0，main DB字节不变；十个具体co
 不称全build或PID/真实设备验收。最初loader/cleanup错误只保留历史。源码与完整消费者/
 四截图、原失败及22hash独立只读核对；根在全仓d3cb结束后整合，本增量另作固定HEAD
 必要Desktop检查，不挪用d3cb完整绿结果。
+
+固定f04f3fcacf55a1e53aed5c87b2543026b23b3cf6、tree
+e4277e65d1ae78f506c0f3905172101baa473cd5，原Desktop typecheck、control syntax及完整
+workspace test 38391/bb0bbf actual0，00:23:05.521Z完成：628项、617通过、0失败/取消、
+11跳过；三phase均0，原断言期限不改、Node24.15/4CPU。log62076B SHA256
+ceb2124c02dd62e1b3e07a56e545f39a858585136aa0e782b5ea434ae7e38625。
+d3cb至此只有这两源文件与两自有DOC变更；本节增量与d3cb完整2497项分别记载。
