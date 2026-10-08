@@ -3,7 +3,7 @@
 > 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
 
 `@personal-agent/github` 是 DEV-WORKFLOWS 的 Local Profile 增量。接口为
-provisional，真实 GitHub 部分只读已验证；Windows CLI、账号写入和消费者闭环尚未验收；不纳入 Competition
+provisional，真实 GitHub 部分只读已验证，含本轮 Windows CLI 失败日志分页；账号写入和完整消费者闭环尚未验收；不纳入 Competition
 Profile 的完成证据。生产 provider 不自动回退 Fake。
 
 公开入口导出 `GitHubInputs`、`GitHubOutputs`、`GitHubOperation`、`GitHubPort`、
@@ -140,6 +140,9 @@ CLI stdout+stderr 总上限 1 MiB；超过明确失败，不将部分 diff/log �
 对仅含合并 job 文件 `0_check.txt` 和 `check/system.txt` 的归档会跳过全部步骤，
 使 `--log` 与 `--log-failed` 均成功退出但返回空文本。宿主验收需要检查原失败 job 的
 实际非空日志和完整分页，不能仅凭退出码确认读取成功；CLI 路径仍由可信组合注入。
+Provider 对 `conclusion=failure` 的 job 拒绝原始空/纯空白日志，返回脱敏
+`EXTERNAL_FAILURE`，不重试或自动换 CLI。成功 job 的空失败日志及非空原日志的分页末尾空页
+保持原语义；此检查不校验日志归因，也不表示真实模型或账号写入已经可用。
 
 2026-10-06 的真实 `GhCliProvider + SpawnGhCommandRunner` 在固定 Node24.15、官方
 gh2.102.0 下读取授权仓库 `zemeng5208/PersonalAgent` 的失败 run `37474438969` /
@@ -148,6 +151,11 @@ job `112306058042`：正式 Schema 六页通过，offset 连续，末页 `nextOf
 `334b89ed82dc50fd73546b104ce4d760e2ca1c526ada1f6c565e4696245a253d`。
 原 Calendar 测试路径及 TIMEOUT/EXTERNAL_FAILURE 失败标记实际存在；这是受限账号
 GET 读取证据，未修复该历史测试，也不覆盖真实写入、Windows 或 Runtime 完整闭环。
+
+2026-10-07 在 Windows/Node24.15、当前安装的 gh2.97.0 上通过生产 Provider/runner
+复核同一失败日志：六页连续完整读回，字符数与 SHA256 同上，13 条只读命令，
+账号写入与模型调用均为零。此结果不宣称最低兼容 CLI 版本或完整 Runtime 审批链，
+详见 [本轮记录](../../../docs/modules/MOD-33-LOG-READ-ACCEPTANCE-20261007.md)。
 
 pr.diff 每页读前及读后核对两端 SHA；review.comment 写前核对 commitId 及可选 expectedBaseSha（MOD-36 总是提供）；pr.create
 写前核对 head branch SHA。issue.label 为追加标签，写前核对 expectedUpdatedAt，

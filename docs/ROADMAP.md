@@ -127,7 +127,7 @@
 | MOD-30 | M1.5 第一优先 | in_progress | `zemeng` / PR #49、#72（Workflow 输入）、#80（载荷边界）均已进入 main（2026-09-30 台账核对），工具提案/审批/continuation 离线链可用；真实 MCP/Skill 与目标系统读回未完成 |
 | MOD-31 | M1.5/M3 | in_progress | `zemeng` / PR #58 已合并固定合成评估 runner；真实多 Agent 角色、重复运行指标和平台评估未完成 |
 | MOD-32 | M1.5/M5 第一优先 | in_progress | `zemeng` / 手动验收脚手架和失败诊断已有记录；真实发布、健康读回、trace、成本、回滚和端到端成功证据未提供 |
-| MOD-33 | M6 产品化 | review | `goo122`（2026-10-07 接续；历史作者不变） / #277 与 #297 已合并；连接器生命周期修复及官方 gh 2.102 真实 Actions 分页日志读回见 [接续记录](modules/DEV-WORKFLOWS-CONTINUATION-20261005.md)；不将只读证据提升为全部账号写入验收 |
+| MOD-33 | M6 产品化 | review | `goo122`（2026-10-07 接续；历史作者不变） / #277 与 #297 已合并；新工作包拒绝失败 job 的空 CLI 日志，并在 Windows/gh2.97 完成真实六页只读读回；MOD-33/36 受影响回归 139/139，交付与剩余边界见 [日志验收记录](modules/MOD-33-LOG-READ-ACCEPTANCE-20261007.md)。历史连接器生命周期修复见 [接续记录](modules/DEV-WORKFLOWS-CONTINUATION-20261005.md)；不将只读证据提升为全部账号写入验收 |
 | MOD-34 | M6 产品化 | review | `Potatos498`（2026-10-07 接续；历史作者不变） / #277/#290/#297 已合并；历史真实 GLM→审批→patch→tsc→commit 有回执，push unknown 后核实与 PR 创建为人工收尾（#291 不合并）；最新代码的完整自动写入及设备场景仍待对应验收 |
 | MOD-35 | M6 产品化 | review | `Potatos498` / #279 的确定性定位器与 zemeng #282 的源码边界、真实 TAP 修正已组合；定向 9/9，完整 coding-tools 55 通过、11 个 Windows 跳过；#279/#282 实现已进入 main，后续改动及真实消费分别验收，见 [登记与验收记录](modules/MOD-35-TEST-LOCATE-01.md) |
 | MOD-36 | M6 产品化 | review | `goo122`（2026-10-07 接续；历史作者不变） / #277/#297 已合并；历史真实 gh+GLM 只读预审及变更行锚定有回执，取消、期限与端口绑定有离线回归；真实评论写入及最新原场景验收分别记录 |
