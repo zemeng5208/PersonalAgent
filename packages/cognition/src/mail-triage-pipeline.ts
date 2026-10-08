@@ -221,12 +221,15 @@ export class MailTriagePipeline {
     // Load durable progress once if checkpoint port provided
     if (this.checkpointPort && !this.checkpointLoaded) {
       const persisted = await this.checkpointPort.load();
+      const staged = new Map<string, LayaTriageResult>();
       if (persisted && typeof persisted === 'object') {
         for (const [key, val] of Object.entries(persisted)) {
           if (!val || typeof val !== 'object') throw new CognitionError('INVALID_ARGUMENT');
-          if (!transientReasons.has(val.reason)) this.cache.set(key, structuredClone(val));
+          if (!transientReasons.has(val.reason)) staged.set(key, structuredClone(val));
         }
       }
+      this.cache.clear();
+      for (const [key, val] of staged) this.cache.set(key, val);
       this.checkpointLoaded = true;
     }
 

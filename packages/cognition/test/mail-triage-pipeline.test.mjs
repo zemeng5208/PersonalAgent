@@ -9,6 +9,55 @@ import {
   prepareTriageDispatch,
 } from '../dist/index.js';
 
+test('failed checkpoint loads publish no prefix after trusted replacement', async t => {
+  for (const failure of ['invalid', 'clone']) for (const replacement of ['empty', 'valid']) {
+    await t.test(`${failure} row, ${replacement} replacement`, async () => {
+      const labels = {work: 'Synthetic work', news: 'Synthetic news'};
+      const messages = ['removed', 'retained', 'new'].map(messageId => ({source: 'synthetic-mail',
+        messageId, sourceRevision: 'r1', text: `Synthetic work update ${messageId}`}));
+      const inference = createMockInference();
+      let saved = {};
+      const checkpoint = {load: () => saved, save: value => {saved = structuredClone(value);}};
+      const request = selected => ({messages: selected, deadline: new Date(Date.now() + 10000).toISOString(),
+        signal: new AbortController().signal});
+      await new MailTriagePipeline({inference, labels, checkpoint}).processBatch(request(messages.slice(0, 2)));
+      const original = structuredClone(saved), entries = Object.entries(original);
+      const removed = entries.find(([, value]) => value.messageId === 'removed');
+      const retained = entries.find(([, value]) => value.messageId === 'retained');
+      saved = {[removed[0]]: removed[1], invalid: failure === 'invalid' ? null
+        : {...retained[1], syntheticUncloneable: () => {}}};
+      const invalid = saved, callsBeforeFailure = inference.calls.length;
+      const pipeline = new MailTriagePipeline({inference, labels, checkpoint});
+      await assert.rejects(pipeline.processBatch(request([messages[0]])),
+        error => failure === 'invalid' ? error.code === 'INVALID_ARGUMENT' : error.name === 'DataCloneError');
+      assert.equal(saved, invalid);
+      assert.deepEqual(saved[removed[0]], original[removed[0]]);
+      assert.equal(inference.calls.length, callsBeforeFailure);
+      saved = replacement === 'empty' ? {} : {[retained[0]]: structuredClone(retained[1])};
+      const next = await pipeline.processBatch(request([messages[2]]));
+      assert.equal(next.newlyClassifiedCount, 1);
+      assert.equal(Object.hasOwn(saved, removed[0]), false);
+      assert.equal(Object.keys(saved).length, replacement === 'empty' ? 1 : 2);
+      if (replacement === 'valid') {
+        assert.deepEqual(saved[retained[0]], original[retained[0]]);
+        const calls = inference.calls.length;
+        const replay = await pipeline.processBatch(request([messages[1]]));
+        assert.equal(replay.cachedCount, 1);
+        assert.equal(inference.calls.length, calls);
+        assert.doesNotThrow(() => prepareTriageDispatch({namespace: 'synthetic/staged-load', messages: [messages[1]], labels,
+          results: replay.results}));
+      }
+      const calls = inference.calls.length, durable = structuredClone(saved);
+      const restart = await new MailTriagePipeline({inference, labels, checkpoint}).processBatch(request([messages[2]]));
+      assert.equal(restart.cachedCount, 1);
+      assert.equal(inference.calls.length, calls);
+      assert.deepEqual(saved, durable);
+      assert.doesNotThrow(() => prepareTriageDispatch({namespace: 'synthetic/staged-load', messages: [messages[2]], labels,
+        results: restart.results}));
+    });
+  }
+});
+
 test('checkpoint receipts bind the exact label order accepted by public triage dispatch', async () => {
   const labels = {work: 'Synthetic work', news: 'Synthetic news'};
   const reordered = {news: 'Synthetic news', work: 'Synthetic work'};
