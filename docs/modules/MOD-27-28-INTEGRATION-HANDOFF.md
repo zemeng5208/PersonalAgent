@@ -91,7 +91,7 @@ MOD-28 保持 `in_progress`。接口状态以[接口目录](../interfaces/CURREN
 
 ## 12:30续接的公开消费契约与前端恢复（2026-10-08）
 
-用户将本轮截止延至北京时间12:30；先行清单邮件已实际发送并核实后，三个原GPT-6.1 Sol执行线在独立工作树继续自有工作。以下八个工作包已精确整合至本地交付分支；它们需要新的固定源码完整检查，不能借用前述0b3eef9检查或24a1290的两条Windows CI成功元数据。仍沿原#302交付，不自行批准或合并，整体MVP与真实现场验收未完成。
+用户将本轮截止延至北京时间12:30；先行清单邮件已实际发送并核实后，三个原GPT-6.1 Sol执行线在独立工作树继续自有工作。以下八个工作包已精确整合至本地交付分支，以本轮新固定源码的必要完整检查交付；不能借用前述0b3eef9检查或24a1290的两条Windows CI成功元数据。仍沿原#302交付，不自行批准或合并，整体MVP与真实现场验收未完成。
 
 - Mail缓存身份绑定原分类criteriaDigest的精确标签顺序。同序跨locale重开infer0，改序重新分类并通过原公开Dispatch；旧收据仍按原校验拒绝。新增摘要字段会让所有旧配置的checkpoint首次可能miss，含默认标签；旧记录保留，无迁移或改写收据。原三个affected文件33/33，独立Node/disk公开消费者9进程，冻结清单72e2016a。
 - Mail在分块之间取消或到达期限时，用原Laya/Dispatch定义的criteriaDigest生成剩余收据ID。真实AbortController和注入的合成期限时钟分记；剩余项不推理、不存瞬态checkpoint，重开复用已完成项。原三个affected文件38/38、独立Node/disk消费者6进程，de48fe11；没有额外缓存身份变化。
@@ -104,3 +104,9 @@ MOD-28 保持 `in_progress`。接口状态以[接口目录](../interfaces/CURREN
 - Device检查点先在局部Map中验证并克隆全部来源，成功后才发布到当前状态。坏行使公开readFeedback或evaluate首次读取拒绝时，不遗留已验证前缀；可信宿主随后修为空或替换来源，同实例不会显示幽灵反馈或误判replayed，后续合法采样仍持久化并在重开后防重放。原四恢复子例及父聚合失败、另一个非JSON克隆失败均保留；修复后原五个完整affected文件56/56，四个独立Node/真实SQLite公开HostState/P5消费者读回精确，e228ef33。无shape/key/configDigest/schema/阈值/通知意图或迁移变化，旧测试字节相同。坏行与可信修复是合成输入，仅原migration10表，不算完整TaskRuntime或真实OS；unused Fake推理/通知均0，nonJSON克隆例保留原DataCloneError，实际JSON端口会提前拒绝该数据。
 
 原before/final源码、完整raw、实际启动回执和独立消费者均冻结；C/A/D交叉只读核验全部证据字节与摘要，未为同行审核重复生产绿色测试。工具命令固定Node24.15；formal未打印内部版本的情况按实际pinned启动回执记录，公开helper的内嵌版本另记。夹具故障和原正式失败均独立保留。必要整仓检查和精确发布头读回结果在实际发生后追加。
+
+### 本轮八包固定源码的必要完整检查
+
+固定0a6abb72ec157407cd115b4826a2ecf51be1d342/treefafa73c1c68c317facf9f368fdfc1ba4dfe78cc7，原npm run check实际13229/968c83→068f90/exit0，03:24:02.381800Z至03:32:30.531926Z，Node24.15/实际CPU0–3/原期限断言。34组2593项2543通过、0失败0取消、50跳过；Cognition307/307、Desktop683/672通过11跳过、Runtime439/439、Calendar47/44通过3跳过、root integration22/22；build/type/generated/architecture/contracts实际执行。完整raw3367行255471字节SHA86feac67a0f027ac88083b65839817da17e202eed40294bc819a63d9f55d66d1；root独立逐组核全部七字段、固定producer和原记录，9a7e88c3905dc65d75313ef8b82c42c7886f48172db32196971a21f844900d3a。
+
+以上覆盖原十二包及本轮八包；原旧完整失败和隔离结果各自保留，不解释他人模块失败根因。随后仅本文记录实际结果，发布时核全source/test/config/generated与0a6abb相同，不为DOC另跑绿检查。真实现场步骤已列入自有Voice/Goal交接，仍待用户和zemeng实际读回；没有批准或合并。后续新具体缺口须独立证据和新检查，不以本轮通过覆盖未来源码。
