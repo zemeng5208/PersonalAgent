@@ -376,3 +376,36 @@ de713722aa4230a58b1d95947997fd29887578b56f31d22c6f415d1e9c41e24b。
 再放旧start仍保相同错误。6400B PCM清空、context closed/track ended/Host release verified，
 0dictation/Runtime/cloud，明确Fake-device/IPC/ASR，未宣称物理设备/SIS/Windows通过。
 源码与正式/raw消费者及截图独立审核，本节之后根在新固定head执行必要完整检查。
+
+## 连接中的 Live 显式停止（2026-10-08 续接）
+
+原 Host 已发布 active/connecting、按钮已显示“关闭 Live”时，尚未返回的 start
+回执使单一 toggling 标志吞掉第二次点击，原 main 的 stop 没被调用。只在最新
+snapshot 已 active 时允许显式 stop 超越 pending start，分别标记 pending start/stop，
+用动作 revision 防止旧 start 的 catch/finally 重开设置或覆盖当前反馈；初始 start
+及 pending stop 仍防重复，当前 stop 失败可见并可明确重试。原保存、编辑和 F24
+合同不变，未改 main/Host/CSS/音频/Runtime。
+EXACT2 manifest SHA256 116551043dd3c9ade6e06a05fa6bd540e303dcc2eb52f19f3a762764da9b3c50，
+sourcee2e49d4/test099bf5f9；正式旧源码3729e1 actual1（7pass2fail），修后d7cd85
+actual0、9/9。fresh 原 HTTP/CSP renderer、LiveConfigHost/LiveVoiceHost/main
+消费者60452/6701ef actual0：两次原 live.toggle IPC 的 start/stop token 对应，
+Fake held Gateway 被 abort，Host inactive/idle，旧取消回执不恢复错误，尚未
+分配麦克风或音源。IPC/window/storage/playback/Gateway 明确 Fake，无真实网络、
+物理音频、Runtime task 或云验收；错误 helper 的 timeout/SIGINT 和原 before
+77928/17c509 actual1 保留。根cf6f5ee已整合，完整检查结论另记。
+
+## Live 显式重试成功后的错误反馈（2026-10-08 续接）
+
+原首次 connect 失败后，明确第二次开启已到 listening/active，但设置仍显示旧连接
+错误，before62132/c94db8 actual1。仅控件内部标记 toggle 错误所有权，重试捕获旧
+标记，只有当前动作成功且该标记仍拥有反馈时清空；configure 的 pending/成功/失败
+写反馈都取消旧 toggle 所有权。较新配置反馈、用户重开的 settings 和草稿保留，
+不改保存关闭/凭据清除规则；旧 start 不能清当前 stop 失败，connecting stop 门禁保持。
+EXACT2 manifest SHA256 5d26b559398817b26748428e747f299a88182253106641f2b07599bca8caceb1，
+source8f6db419/test5d254e19。原新增7例84dec3 actual1（5pass2fail）；受影响完整
+文件21cff4 actual0、16/16，运行 Node24.19；后续根固定检查使用 Node24.15。
+fresh 原完整 HTTP/CSP renderer、持久 ConfigHost/LiveVoiceHost/main AST 消费者
+11126/02b6d0 actual0：重试 listening/active、旧 result 清空、settings 仍开，
+三次原 toggle IPC；stop 后 Fake source/session 各关闭一次、mic revoke2，Runtime0、
+console/pageerror0。25 artifacts 核实；window/IPC/storage/Gateway/mic/source 明确
+Fake，无真实 Electron、物理设备/音频、云账号/Provider 或 Runtime Task 验收。

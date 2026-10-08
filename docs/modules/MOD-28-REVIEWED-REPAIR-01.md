@@ -136,3 +136,27 @@ checkpoint 合同；重开后不重复 review/repair。confirmed 分支的可信
 合成端口，Graph CAS 与持久读回实际运行；没有真实 Runtime repair 任务、Policy/Evidence、
 Laya、Calendar 或云执行。本证据证明这些绑定消费与持久化分支，不证明默认 main 已接通
 Calendar Fact 链，也不改变真实现场验收未完成的状态。
+
+## 公开会议复查选项的完整范围（2026-10-08 续接）
+
+原buildMeetingRepairOptions对可信会议Fact的选中scope无条件调用100-target结构候选。
+真实PUBLICVault recordPublicSource/drain/processImpacts得到completed Fact1→2，加原
+公开Goal工具写入及101个合成Plan，graph104完整publicImpact/meeting scope均102条
+RECHECK。原Runtime默认大scope guard不替custom callback处理这个helper：before
+20891/ea1fd2观测task failed/EXTERNAL_FAILURE（内层INVALID_ARGUMENT）、custom1、
+infer0/无REVIEW/dispatch0，完整失败DB保留。
+
+仅helper scope>100跳过可选candidate并安全读取其kind，保全部精确scope及原recheck/
+defer，100项边界仍可revise；不扩大public repair100上限，不改selector/Runtime/custom
+callback/CAS/身份/隐私/许可/Schema，也不迁移或重试旧failed任务。EXACT2 sourcec9e29d4c/
+test33f2d069冻结23artifact manifest SHA256
+28ac847001237874177f86d180197ba7df9f4820677761bf906b1b0f42258e92。
+新增100/101回归原源码f7cfd3 actual1，修后80345f完整受影响文件18/18、cognition build
+c95a92 actual0。fresh公开Fact/可信custom callback after15484/24f264 actual0：102完整
+affected、仅recheck/defer、无repair、custom1/infer1/dispatch0；同completed receipt重放
+同task/完整review且不再infer。原9个before证据中两个源路径对应immutable旧base副本，
+其余七个原字节保留；两DB/完整日志和scope独立只读核对。
+
+此处证明公开Fact选项消费者，不证明Calendar sourceRevision/P5默认binding、Policy
+ledger、真实Laya/HTTP或Desktop102云交接；合成Plan、Gateway context和Laya明确标记。
+根已整合到f0548d8，后续必要固定HEAD完整检查另行记载，不挪用先前d3cb绿结果。

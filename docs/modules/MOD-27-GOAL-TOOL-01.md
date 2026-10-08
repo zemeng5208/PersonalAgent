@@ -475,3 +475,50 @@ f4fc3c6c01fb15ee0a395e0fad0d9d52de713b07，原npm run check在Node24.15/实际4C
 eb1d56b2433236efeb708528d903d3af7bd70871f827aebf34ffd30c9fe83323。
 本结果覆盖上述Goal回执/即时反馈、locale/101及Live/手动录音集成源，不覆盖随后
 reference停止pending增量。手动SDK9+官方离线2例仍独立记录，不计入此自动测试数。
+
+## 精确 Unicode Goal ID 的分页与受理任务面板登记（2026-10-08 续接）
+
+Goal 导出原先用 localeCompare 排序及推进游标，合法且不同的 `a\u0301` 与 `\u00e1`
+会比较为相等，limit=1 的遍历遗漏后者。仅统一为原字符串 code-unit 排序与 afterId
+比较，不归一化 ID、不新增游标或迁移。排序由 locale 改为固定顺序；跨版本旧游标
+不保证同一快照，原 filter、scope、limit、许可与 Graph/CAS 合同保持。
+EXACT2 manifest SHA256 6291f99d393b180bcc63ab1bb24144fb840a252596735009ecdaba5c9302355c。
+正式旧源码98bdc4 actual1；修后71636/1c7955 actual0、4/4。fresh public after
+98911/83241a actual0：原 SQLite 真正重开、新会话明确授权后遍历全部三个精确 ID，
+get/graph 对应，撤销拒绝，无新 graph 写入。Gateway context 明确 Fake，不是云或
+Policy ledger 验收。根已整合7a2dd6a，不挪用此前完整检查结论。
+
+原 Goal task.submit 已受理而回执丢失时，卡片可恢复 task，但原 main 的 panel 过滤
+还缺 onTask 登记；重建 Host 后正常受理的旧任务也缺该登记。只在同一 Host 内以 Set
+先记录通知尝试，让正常 dispatch 与已验证 submitted receipt 共用原最小元数据通知，
+卡片先保存后再通知；不重发任务、不恢复云许可，不改 main、过滤器或公共协议。
+通知可能部分持久化后抛错，同 Host 不自动重试；原 delivery Error 保留，新 Host
+可以恢复历史登记一次。这不证明失败通知已完成持久化。
+EXACT2 manifest SHA256 2ab26c96f2ae03743d3c47fa2d8444f075bda51c9add57122afe289b0fbdde7c，
+source3bc48182/teste1c7fb61；旧正式33963/fb38ca actual1，修后18781/85d4a3 actual0、
+27/27。fresh 原 main AST snapshot/filter/onAnalysisTask、原公开 task.list 与持久
+Conversations after46301/c14ff3 actual0：精确受理 task 出现在 panel，通知一次，
+持久 turn 可重读，infer1/FakeHTTP1/graph4；原 Goal 工具与 Policy 两条 confirmed
+写入保留。其他模块快照与 IPC 明确 Fake，非 Electron/真实云验收；task succeeded
+但 step 仍 running、evidence 空，不能提升为图更新已 verified。根3b309d已整合，
+后续固定 HEAD 完整检查另记。
+
+## 公开 Fact 到期复查跨语言恢复（2026-10-08 续接）
+
+原 expiry 的 Fact/consumer 身份依赖 localeCompare；相同图在 en-US 保存任务后，
+sv-SE 真进程/SQLite 重开产生第二 expiry task 并再次推理。仅 expiry 新身份使用
+精确 ref 的 code-unit/numeric revision 多重集顺序，并用同一 canonical identity
+查可信旧 INTENT，保留项数及重复项、namespace/binding 与旧 checkpoint 字节。
+历史 expiry 在 limit=1 不再被误作新工作抢占 Goal 恢复槽；新增 consumer 范围
+仍产生新 review。原公开 Fact selector/到期时间/cursor、Plan/Goal/其他 trigger、
+100-target 修复边界、CAS、许可、handoff 与 terminal failed 合同保持，无迁移。
+
+EXACT2 manifest SHA256 b04194927206104ac69a5ca24a9cd3f74c567f7214b0c6badf328f5154ecdf0b，
+source4f95bf7c/testcd1d20ec。Node24.15 portable 旧源码23394/696bd6 actual1；
+build2969/72dbac、受影响文件42887/9a69ed actual0、44/44。独立旧 compiled
+b4f658b7 与原 TS ESM emit 逐字一致，新 one-task 数据库用它在 en-US 创建，
+51051/fe2f21 actual0；fixed sv-SE 真进程重开4c1c19 actual0，同原 task
+2b310c13、review/choice/INTENT/所有 rows/graph3 完全相同，infer0、dispatch0、
+cursor1。原坏两任务 DB 和不合格/诊断日志保留。32 artifacts 冻结核对；公开
+Vault/SQLite 为实际本地消费，Plans/Laya/context 为合成 Fake，不是 Calendar、
+真实云、Policy ledger 或 Windows 默认 locale 验收。后续新固定 HEAD 全仓结论另记。
