@@ -1,14 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdir,mkdtemp,rm} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,rm} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import vm from 'node:vm';
+import ts from 'typescript';
 import {Client} from '@personal-agent/client';
 import {toolArgumentsDigest} from '@personal-agent/tool-gateway';
 import {LayaActionChoiceService,createCommittedMeetingProjectionReader,selectProjectedRepairScope} from '@personal-agent/cognition';
 import {createAgentArtsRuntimeApplication,createProactiveCognitionHost} from '@personal-agent/runtime/application';
 import {createDesktopGoalCognitionHost} from '../electron/goal-cognition-host.js';
 import {createGoalHostCore} from '../electron/goal-host-core.js';
+import {Conversations} from '../electron/conversations.js';
 
 const namespace='synthetic-desktop-cognition';
 const ref=(id,revision=1)=>({id,revision});
@@ -23,7 +26,7 @@ async function terminal(application,id) {
   }
   throw Error('Synthetic task did not settle');
 }
-async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCredentialRead=false,uncertain=false,unavailableInitially=false,newGoal=false,holdFetch=false,controlledRepair=false}={}) {
+async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCredentialRead=false,uncertain=false,unavailableInitially=false,newGoal=false,holdFetch=false,controlledRepair=false,onTaskCallback=()=>{}}={}) {
   const root=fileURLToPath(new URL('../../../.cache/desktop-goal-cognition/',import.meta.url));
   await mkdir(root,{recursive:true});const directory=await mkdtemp(path.join(root,'case-'));
   let host,layaCalls=0,goalWrites=0,updateCalls=0,releaseFetch,time=Date.now(),unavailable=unavailableInitially;const sent=[],announced=[];
@@ -79,7 +82,7 @@ async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCred
       answer_confidence:probability,confidence:0.5}}};
   }});
   const options={application,client,facts,namespace,goalHost,chooser,ready:()=>true,
-    createHost:input=>createProactiveCognitionHost({...input,now:()=>time}),onTask:item=>announced.push(item),onUpdate:()=>{updateCalls++;},now:()=>time};
+    createHost:input=>createProactiveCognitionHost({...input,now:()=>time}),onTask:item=>{announced.push(item);onTaskCallback(item);},onUpdate:()=>{updateCalls++;},now:()=>time};
   host=createDesktopGoalCognitionHost(options);
   t.after(async()=>{host.close();facts.close();application.close();await rm(directory,{recursive:true,force:true});});
   return {application,client,facts,sent,announced,store,sourceTaskId:sourceTask.taskId,host:()=>host,layaCalls:()=>layaCalls,
@@ -673,4 +676,100 @@ test('lost handoff immediate feedback cannot invent acceptance or restore revoke
     }
     assert.equal(f.layaCalls(),1);assert.equal(f.sent.length,0);
   }
+});
+
+async function originalGoalTaskSurface() {
+  const text=await readFile(new URL('../electron/main.js',import.meta.url),'utf8');
+  const ast=ts.createSourceFile('main.js',text,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+  const declaration=name=>ast.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text===name).getText(ast);
+  let notify,filter;
+  function visit(n) {
+    if(ts.isCallExpression(n)&&n.expression.getText(ast)==='createDesktopProactiveHost') {
+      notify=n.arguments[0].properties.find(p=>p.name?.getText(ast)==='onAnalysisTask').initializer.getText(ast);
+    }
+    if(ts.isPropertyAssignment(n)&&n.name.getText(ast)==='tasks'&&n.initializer.getText(ast).startsWith('orderedTasks().filter(')) {
+      filter=n.initializer.expression.expression.getText(ast);
+    }
+    ts.forEachChild(n,visit);
+  }
+  visit(ast);assert.ok(notify&&filter);
+  const conversations=new Conversations(undefined),taskGoals=new Map(),tasks=new Map();
+  const context=vm.createContext({conversations,taskGoals,tasks,Date});
+  vm.runInContext(declaration('orderedTasks')+'\n'+declaration('taskSurface'),context);
+  return {conversations,taskGoals,tasks,notify:vm.runInContext('('+notify+')',context),
+    panelTasks:()=>{context.surface='panel';return vm.runInContext(filter,context);}};
+}
+
+test('Goal task metadata makes accepted lost receipts visible in the original panel once per Host',async t=>{
+  for(const lost of [false,true]) {
+    const ui=await originalGoalTaskSurface(),f=await fixture(t,{onTaskCallback:ui.notify});
+    f.host().configure({enabled:true,cloudAllowed:false});await f.host().tick();
+    const id=f.host().snapshot().reviews[0].reviewTaskId,call=f.client.call.bind(f.client);
+    const deliveryError=Error('Synthetic metadata receipt delivery lost');let taskId,submissions=0;
+    f.client.call=async(operation,payload,options)=>{
+      const result=await call(operation,payload,options);
+      if(operation==='task.submit'){submissions++;taskId=result.taskId;if(lost)throw deliveryError;}
+      return result;
+    };
+    f.host().configure({enabled:true,cloudAllowed:true});
+    if(lost) await assert.rejects(f.host().applyDecision(id),error=>error===deliveryError);
+    else await f.host().applyDecision(id);
+    await terminal(f.application,taskId);ui.tasks.set(taskId,f.application.runtime.getTask(taskId));
+    assert.equal(ui.panelTasks().some(task=>task.taskId===taskId),true,'accepted task needs original panel metadata even when its reply was lost');
+    assert.equal(ui.conversations.goal(taskId),'根据目标与事实变化主动规划');
+    assert.equal(f.announced.length,1,'normal dispatch and repeated record share one notification');
+    f.host().configure({enabled:true,cloudAllowed:false});f.advance();await f.host().tick();
+    await f.host().applyDecision(id);assert.equal(f.announced.length,1);assert.equal(submissions,1);
+    ui.conversations.turns.clear();ui.taskGoals.clear();const reopened=f.restart();
+    assert.equal(ui.panelTasks().some(task=>task.taskId===taskId),true,'rebuilding the Host restores historical panel registration');
+    assert.equal(f.announced.length,2);assert.equal(reopened.snapshot().cloudAllowed,false);
+    assert.throws(()=>reopened.assertCloudSend({taskId,goal:f.application.runtime.getTask(taskId).goal,signal:new AbortController().signal}));
+    assert.equal(f.sent.length,1);assert.equal(f.layaCalls(),1);assert.equal(f.store.read().revision,5);
+  }
+});
+
+test('Goal task metadata callback failures keep the original delivery error and never duplicate notification',async t=>{
+  for(const accepted of [false,true]) {
+    const callbackError=Error('Synthetic metadata persistence failed'),f=await fixture(t,{onTaskCallback:()=>{throw callbackError;}});
+    f.host().configure({enabled:true,cloudAllowed:false});await f.host().tick();
+    const id=f.host().snapshot().reviews[0].reviewTaskId,call=f.client.call.bind(f.client);
+    const deliveryError=Error('Synthetic original delivery failure');let taskId;
+    f.client.call=async(operation,payload,options)=>{
+      if(operation!=='task.submit')return call(operation,payload,options);
+      if(accepted)taskId=(await call(operation,payload,options)).taskId;
+      throw deliveryError;
+    };
+    f.host().configure({enabled:true,cloudAllowed:true});
+    await assert.rejects(f.host().applyDecision(id),error=>error===deliveryError);
+    assert.equal(f.announced.length,accepted?1:0);
+    const card=f.host().snapshot().reviews[0];assert.equal(card.taskId,taskId);
+    assert.equal(f.application.runtime.loadCheckpoint(id,'desktop-goal-cognition-handoff-task-v1'),undefined);
+    f.host().configure({enabled:true,cloudAllowed:false});f.advance();await f.host().tick();
+    assert.equal(f.announced.length,accepted?1:0,'a notification that may have partly completed is not repeated by reconciliation');
+    if(taskId)await terminal(f.application,taskId);
+    assert.equal(f.layaCalls(),1);assert.ok(f.sent.length<=1);
+  }
+});
+
+test('Goal task metadata rejects malformed receipts and foreign bindings before notifying an existing created task',async t=>{
+  const f=await fixture(t);f.host().configure({enabled:true,cloudAllowed:false});await f.host().tick();
+  const runtime=f.application.runtime,id=f.host().snapshot().reviews[0].reviewTaskId;
+  const review=runtime.loadCheckpoint(id,'proactive-cognition-review-v1');
+  const commandId='proactive-'+toolArgumentsDigest({graphNamespace:namespace,bindingVersion:'desktop-goal-analysis-v1',taskId:id});
+  const task=runtime.submitTask({goal:'Synthetic existing created Goal',conversationId:`desktop-proactive-goals:${namespace}`,idempotencyKey:commandId});
+  const envelope={commandId,reviewTaskId:id,selectionDigest:toolArgumentsDigest(review),exportPolicyVersion:'desktop-goal-analysis-v1',goal:task.goal,deadline:'2026-01-01T00:00:00.000Z'};
+  for(const changed of [{...envelope,selectionDigest:'foreign-digest'},{...envelope,goal:'foreign-goal'},{...envelope,exportPolicyVersion:'foreign-binding'}]) {
+    runtime.saveCheckpoint(id,'proactive-cognition-handoff-v1',changed);f.restart();assert.equal(f.announced.length,0);
+  }
+  runtime.saveCheckpoint(id,'proactive-cognition-handoff-v1',envelope);
+  runtime.saveCheckpoint(id,'desktop-goal-cognition-handoff-task-v1',null);f.restart();assert.equal(f.announced.length,0);
+  // The valid durable binding was never replaced by the malformed marker.
+  const other=await fixture(t);other.host().configure({enabled:true,cloudAllowed:false});await other.host().tick();
+  const otherId=other.host().snapshot().reviews[0].reviewTaskId,otherRuntime=other.application.runtime;
+  const otherCommand='proactive-'+toolArgumentsDigest({graphNamespace:namespace,bindingVersion:'desktop-goal-analysis-v1',taskId:otherId});
+  const foreign=otherRuntime.submitTask({goal:task.goal,conversationId:'desktop-proactive-goals:foreign',idempotencyKey:otherCommand});
+  otherRuntime.saveCheckpoint(otherId,'proactive-cognition-handoff-v1',{...envelope,commandId:otherCommand,reviewTaskId:otherId,
+    selectionDigest:toolArgumentsDigest(otherRuntime.loadCheckpoint(otherId,'proactive-cognition-review-v1'))});
+  other.restart();assert.equal(other.announced.length,0);assert.equal(otherRuntime.getTask(foreign.taskId).state,'created');
+  assert.equal(f.sent.length+other.sent.length,0);assert.equal(f.host().snapshot().cloudAllowed,false);
 });

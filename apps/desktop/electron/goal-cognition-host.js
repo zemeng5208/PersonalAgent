@@ -31,6 +31,13 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
   let enabled=false,cloudAllowed=false,closed=false,busy=false,nextTick=0,cursor=0;
   let controller=new AbortController(),generation=randomUUID(),status='disabled',reason='目标主动分析未开启';
   const outgoing=new Map(),reviews=new Map(),meetingHosts=new Set();
+  const announcedTasks=new Set();
+  function announceTask(task) {
+    if (announcedTasks.has(task.taskId)) return;
+    // A callback can persist metadata before throwing; attempt it once per Host.
+    announcedTasks.add(task.taskId);
+    onTask({taskId:task.taskId,goal:'根据目标与事实变化主动规划'});
+  }
   const context=()=>({signal:controller.signal,deadline:new Date(now()+180_000).toISOString()});
   const callerContext=input=>{
     const local=context();
@@ -143,7 +150,7 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
         {idempotencyKey:request.commandId,signal:input.signal,
           timeoutMs:Math.max(1,Date.parse(request.deadline)-now())});
       const task=application.runtime.getTask(receipt.taskId);
-      onTask({taskId:task.taskId,goal:'根据目标与事实变化主动规划'});
+      announceTask(task);
       return task;
     },
   };
@@ -265,6 +272,7 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
     reason=value.handoff?.state==='submitted'?(machineReview(value.review)?'Laya 尚不确定，已交 AgentArts 复核，尚未执行计划':'Laya 选择已交 AgentArts，执行结果以任务回执为准')
       :machineReview(value.review)?'Laya 尚不确定，等待有效云端分析许可后交 AgentArts 复核'
       :value.review.selectedOption?'Laya 已选择方案，等待有效云端分析许可':'本地分析已记录；未选择可自动推进的方案';
+    if (value.handoff?.state==='submitted') announceTask(value.handoff.task);
   }
   function restoreMarkers() {
     for (const item of goalHost.listTasks()) {
