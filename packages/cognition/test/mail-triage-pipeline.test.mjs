@@ -96,6 +96,109 @@ test('interrupted pipeline receipts remain valid deferred inputs to public triag
   }
 });
 
+test('cached host-only high impact is classified afresh when the current trusted flag is absent', async t => {
+  for (const highImpact of [false, undefined]) await t.test(`current flag ${highImpact}`, async () => {
+    const labels = {work: 'Synthetic work', news: 'Synthetic news'}, inference = createMockInference();
+    let saved = {};
+    const checkpoint = {load: () => saved, save: value => {saved = structuredClone(value);}};
+    const base = {source: 'synthetic-mail', messageId: 'host-impact', sourceRevision: 'r1', text: 'Synthetic work update'};
+    const run = async flag => {
+      const message = {...base, ...(flag === undefined ? {} : {highImpact: flag})};
+      const result = await new MailTriagePipeline({inference, labels, checkpoint}).processBatch({messages: [message],
+        deadline: new Date(Date.now() + 10000).toISOString(), signal: new AbortController().signal});
+      return {result, input: {namespace: 'synthetic/host-impact', messages: [message], labels, results: result.results}};
+    };
+    const first = await run(true);
+    assert.equal(prepareTriageDispatch(first.input).mainAgent.length, 1);
+    const changed = await run(highImpact);
+    assert.doesNotThrow(() => prepareTriageDispatch(changed.input));
+    assert.equal(changed.result.cachedCount, 0);
+    assert.equal(changed.result.newlyClassifiedCount, 1);
+    assert.equal(prepareTriageDispatch(changed.input).groups.length, 1);
+    assert.equal(inference.calls.length, 2);
+    assert.deepEqual(changed.result.results[0].receipt, first.result.results[0].receipt);
+    const replay = await run(highImpact === undefined ? false : undefined);
+    assert.equal(replay.result.cachedCount, 1);
+    assert.deepEqual(replay.result.results, changed.result.results);
+    assert.doesNotThrow(() => prepareTriageDispatch(replay.input));
+    const promoted = await run(true);
+    assert.equal(promoted.result.cachedCount, 1);
+    assert.equal(prepareTriageDispatch(promoted.input).mainAgent.length, 1);
+    assert.deepEqual((await run(highImpact)).result.results, changed.result.results);
+    assert.equal(inference.calls.length, 2);
+    assert.equal(Object.keys(saved).length, 1);
+  });
+});
+
+test('blank cached inputs preserve insufficient input and the current required route without inference', async t => {
+  for (const [prior, current] of [[true, true], [true, false], [true, undefined], [false, true]]) {
+    await t.test(`trusted flag ${prior} to ${current}`, async () => {
+      const labels = {work: 'Synthetic work', news: 'Synthetic news'}, inference = createMockInference();
+      let saved = {};
+      const checkpoint = {load: () => saved, save: value => {saved = structuredClone(value);}};
+      const run = async flag => {
+        const message = {source: 'synthetic-mail', messageId: 'blank-impact', sourceRevision: 'r1', text: '  ',
+          ...(flag === undefined ? {} : {highImpact: flag})};
+        const result = await new MailTriagePipeline({inference, labels, checkpoint}).processBatch({messages: [message],
+          deadline: new Date(Date.now() + 10000).toISOString(), signal: new AbortController().signal});
+        return {result, input: {namespace: 'synthetic/blank-impact', messages: [message], labels, results: result.results}};
+      };
+      const first = await run(prior), original = structuredClone(saved);
+      assert.equal(prepareTriageDispatch(first.input).deferred.length, 1);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const replay = await run(current);
+        assert.doesNotThrow(() => prepareTriageDispatch(replay.input));
+        const deferred = prepareTriageDispatch(replay.input).deferred;
+        assert.equal(deferred[0].reason, 'insufficient_input');
+        assert.equal(deferred[0].requiredRoute, current === true ? 'main_agent' : 'review');
+        assert.equal(replay.result.cachedCount, 1);
+        assert.deepEqual(replay.result.results[0].receipt, first.result.results[0].receipt);
+      }
+      assert.equal(inference.calls.length, 0);
+      assert.deepEqual(saved, original);
+    });
+  }
+});
+
+test('a failed host-impact refresh retains the old checkpoint and only returns deferred work', async () => {
+  const labels = {work: 'Synthetic work', news: 'Synthetic news'}, inference = createMockInference();
+  let saved = {};
+  const checkpoint = {load: () => saved, save: value => {saved = structuredClone(value);}};
+  const message = {source: 'synthetic-mail', messageId: 'impact-failure', sourceRevision: 'r1', text: 'Synthetic work update'};
+  const context = () => ({deadline: new Date(Date.now() + 10000).toISOString(), signal: new AbortController().signal});
+  await new MailTriagePipeline({inference, labels, checkpoint}).processBatch({messages: [{...message, highImpact: true}], ...context()});
+  const original = structuredClone(saved);
+  let calls = 0;
+  const result = await new MailTriagePipeline({inference: {infer: async () => {calls++; throw Error('Synthetic unavailable');}}, labels, checkpoint})
+    .processBatch({messages: [message], ...context()});
+  const dispatch = prepareTriageDispatch({namespace: 'synthetic/impact-failure', messages: [message], labels, results: result.results});
+  assert.equal(calls, 1);
+  assert.equal(result.cachedCount, 0);
+  assert.equal(dispatch.deferred[0].reason, 'unavailable');
+  assert.deepEqual(saved, original);
+});
+
+test('model high impact and meeting categories retain their cached main-agent route', async t => {
+  for (const meeting of [false, true]) await t.test(`meeting category ${meeting}`, async () => {
+    const labels = meeting ? {meeting: 'Synthetic meeting', news: 'Synthetic news'}
+      : {work: 'Synthetic work', news: 'Synthetic news'};
+    const inference = createMockInference({forceHighImpact: !meeting});
+    let saved = {};
+    const checkpoint = {load: () => saved, save: value => {saved = structuredClone(value);}};
+    const base = {source: 'synthetic-mail', messageId: 'model-impact', sourceRevision: 'r1', text: 'Synthetic work update'};
+    let first;
+    for (const highImpact of [true, false, undefined]) {
+      const message = {...base, ...(highImpact === undefined ? {} : {highImpact})};
+      const result = await new MailTriagePipeline({inference, labels, checkpoint}).processBatch({messages: [message],
+        deadline: new Date(Date.now() + 10000).toISOString(), signal: new AbortController().signal});
+      assert.equal(prepareTriageDispatch({namespace: 'synthetic/model-impact', messages: [message], labels, results: result.results}).mainAgent.length, 1);
+      if (first) {assert.equal(result.cachedCount, 1); assert.deepEqual(result.results, first.results);}
+      else first = result;
+    }
+    assert.equal(inference.calls.length, 1);
+  });
+});
+
 test('legal mixed-case labels reuse their exact checkpoint across portable locale ordering', async () => {
   const moduleUrl = new URL('../dist/index.js', import.meta.url).href;
   const run = (locale, checkpoint = {}) => new Promise((resolve, reject) => {
@@ -356,7 +459,7 @@ test('in-batch conflicting content is rejected before inference or checkpoint sa
   assert.equal(saves, 0);
 });
 
-test('exact duplicate messages merge trusted high-impact hints without losing classification reuse', async () => {
+test('exact duplicates merge trusted high-impact hints and later flags require fresh classification', async () => {
   for (const hints of [[false, true, false], [true, false, true]]) {
     const inference = createMockInference(), pipeline = new MailTriagePipeline({inference});
     const message = {source: 'mail', messageId: 'risk-merge', sourceRevision: '1', text: 'Work update'};
@@ -367,9 +470,15 @@ test('exact duplicate messages merge trusted high-impact hints without losing cl
     assert.equal(result.highImpactCount, 1);
     assert.equal(result.results[0].route, 'main_agent');
     const replay = await pipeline.processBatch({...request, messages: [{...message, highImpact: false}]});
-    assert.equal(replay.highImpactCount, 1, 'Cached high-impact routes cannot be downgraded');
-    assert.equal(replay.cachedCount, 1);
-    assert.equal(inference.calls.length, 1);
+    assert.equal(replay.highImpactCount, 0);
+    assert.equal(replay.cachedCount, 0);
+    assert.equal(inference.calls.length, 2);
+    assert.equal(prepareTriageDispatch({namespace: 'synthetic/risk-merge',
+      messages: [{...message, highImpact: false}], labels: DEFAULT_MAIL_LABELS, results: replay.results}).groups.length, 1);
+    const repeated = await pipeline.processBatch({...request, messages: [{...message, highImpact: false}]});
+    assert.equal(repeated.cachedCount, 1);
+    assert.deepEqual(repeated.results, replay.results);
+    assert.equal(inference.calls.length, 2);
   }
 });
 

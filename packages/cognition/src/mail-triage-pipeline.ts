@@ -266,8 +266,15 @@ export class MailTriagePipeline {
           || cached.sourceRevision !== msg.sourceRevision || cached.receipt?.contextDigest !== hash(msg.text)) {
           throw new CognitionError('INVALID_ARGUMENT');
         }
+        if (msg.highImpact !== true && cached.reason === 'high_impact'
+          && cached.impactScores?.choice === 'routine' && cached.candidateLabel !== 'meeting') {
+          pendingMessages.push(msg);
+          continue;
+        }
         const result = structuredClone(cached);
-        allResults.push(msg.highImpact === true ? {...result, route: 'main_agent', reason: 'high_impact'} : result);
+        allResults.push(result.reason === 'insufficient_input'
+          ? {...result, route: msg.highImpact === true ? 'main_agent' : 'review'}
+          : msg.highImpact === true ? {...result, route: 'main_agent', reason: 'high_impact'} : result);
         cachedCount++;
       } else {
         pendingMessages.push(msg);
