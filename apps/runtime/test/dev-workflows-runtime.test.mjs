@@ -531,6 +531,9 @@ test('Unicode pre-review survives SQLite approval restarts and publishes its ori
     assert.equal(sawCommentApproval, true); assert.equal(snapshot.taskId, task.taskId);
     assert.equal(snapshot.state, 'succeeded'); assert.equal(modelCalls, 1); assert.equal(writes, 1);
     assert.equal(host.runtime.readToolExecutions(task.taskId).filter(record => record.toolName === 'github.pr.review.comment').length, 1);
+    const diffReads = host.runtime.readToolExecutions(task.taskId).filter(record => record.toolName === 'github.pr.diff');
+    assert.equal(diffReads.length, 1);
+    assert.ok(host.readResult(task.taskId).report.evidenceRefs.includes(diffReads[0].evidenceId));
   } finally {if (host) await host.close(); await rm(directory, {recursive: true, force: true});}
 });
 
