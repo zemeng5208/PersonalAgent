@@ -22,7 +22,8 @@ Profile：`huawei_ict_agentarts`。公共 Runtime 后续源码交 Work 云端唯
   工具测试任务没有逐项执行记录，语音却宣称天气、研究可用、子任务不可用。
   这些播报均缺少相应结果依据。
 - 用户截图要求：长对话滚动/消息定位控件自动隐藏并限制高度；文字能输入并发送；
-  删除输入框下面的“唤醒词 / 开启 10 分钟”区域。
+  将输入框下面的“唤醒词 / 开启 10 分钟”显示和操作入口移到设置。
+  用户随后明确说明功能保留，只调整显示位置。
 - 用户要求 Live 内部的“查询某地天气”工具工作文本不出现在聊天中。
   用户原始语音转写、实际答复、审批及失败状态仍须可查看，任务记录不能删除。
 
@@ -35,7 +36,8 @@ Profile：`huawei_ict_agentarts`。公共 Runtime 后续源码交 Work 云端唯
 - `apps/desktop/electron/conversations.js`、`main.js`：区分 Live 内部工作与用户消息，
   保留原任务/审批/取消语义及重启后的视图投影。
 - `apps/desktop/src/app/renderer.js`、`style.css` 和 conversation 视图：
-  输入发送、滚动控件、内部工具消息展示、移除底部唤醒区域。
+  输入发送、滚动控件、内部工具消息展示；底部唤醒显示/入口迁至设置。
+  设置侧组件属于本工作包，复用现有 voice.wake 操作，不另建控制链路。
 - `packages/coordination/src/agentarts.ts`、相应测试及 `tests/manual/agentarts/`：
   核对普通业务工具续接与图谱修复候选的输入契约，必要时修复适配/云端协议。
   若修改公共协议或 Runtime 行为，与 goo122 的公开端口保持兼容。
@@ -58,8 +60,9 @@ Profile：`huawei_ict_agentarts`。公共 Runtime 后续源码交 Work 云端唯
 4. `initializeLiveVoice` 的 `onTaskSubmitted` 当前把工具生成的 goal 加入
    普通 panel turns；timeline 同时渲染这些 turns 与 Live transcripts。
    通过可信宿主元数据做显示投影，不能靠“查询”关键词过滤用户文本。
-5. 移除底部唤醒控件时保留音频释放与窗口关闭处理，不能顺带绕过
-   麦克风授权、删除 MOD-15 整个模块或占用 Live 设备。
+5. 将底部唤醒控件迁入设置，保留原配置、启停、权限与状态反馈，
+   保留音频释放与窗口关闭处理。不能删除功能、绕过麦克风授权或占用 Live 设备；
+   不能因入口位于设置而扩大原先“关闭面板停止”的音频使用期限。
 
 ### 交付与最少验收
 
@@ -74,7 +77,8 @@ Profile：`huawei_ict_agentarts`。公共 Runtime 后续源码交 Work 云端唯
   重启后仍保持视图区别，Runtime 记录和幂等性保留。
 - [ ] 历史 waiting_approval 不永久锁死后续合法消息；验证 Renderer 与主进程行为，
   新请求仍经过 Runtime/Policy，原审批 revision 与权限绑定不变。
-- [ ] 无底部唤醒区域；输入、Enter 发送、Shift+Enter 换行及中文输入法正常；
+- [ ] 聊天面板无底部唤醒区域，设置中可查看配置、启停及真实状态，功能保留；
+  输入、Enter 发送、Shift+Enter 换行及中文输入法正常；
   长对话控件在滚动/悬停/键盘操作时可用，空闲隐藏且不覆盖输入框。
 - [ ] 按实际改动运行受影响测试与必要 Desktop 文字/窗口验证；
   公共协议或 Runtime 集成变更按 AGENTS 要求验证。
