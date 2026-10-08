@@ -506,7 +506,13 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
         if (!canHandoff(r)) throw Error('当前决策没有合法选择或可交接的复核方案');
         if (store.read().revision!==r.graphRevision) throw Error('决策来源版本已变化，请重新评估');
         if (!allowed()) throw Error('目标云端分析许可未开启，尚未提交编排');
-        value=await cognition.handoffReview(reviewTaskId,current);
+        try {value=await cognition.handoffReview(reviewTaskId,current);}
+        catch(error) {
+          // A failed delivery may still have an accepted durable Runtime task.
+          // Publish its readonly receipt while preserving the original failure.
+          try {record(cognition.readReview(reviewTaskId));onUpdate();} catch {}
+          throw error;
+        }
         record(value);
       }
       try {submitRepair(value,current);} catch(error) {

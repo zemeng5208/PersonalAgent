@@ -26,7 +26,7 @@ async function terminal(application,id) {
 async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCredentialRead=false,uncertain=false,unavailableInitially=false,newGoal=false,holdFetch=false,controlledRepair=false}={}) {
   const root=fileURLToPath(new URL('../../../.cache/desktop-goal-cognition/',import.meta.url));
   await mkdir(root,{recursive:true});const directory=await mkdtemp(path.join(root,'case-'));
-  let host,layaCalls=0,goalWrites=0,releaseFetch,time=Date.now(),unavailable=unavailableInitially;const sent=[],announced=[];
+  let host,layaCalls=0,goalWrites=0,updateCalls=0,releaseFetch,time=Date.now(),unavailable=unavailableInitially;const sent=[],announced=[];
   const application=createAgentArtsRuntimeApplication({path:path.join(directory,'runtime.sqlite'),
     gatewayUrl:'https://agentarts.example.test',runtimeName:'synthetic',
     ...(controlledRepair?{repairCandidateVersion:'1.0',responseMode:'tool-proposal-json',localRepair:{graphNamespace:namespace,bindingVersion:'desktop-reviewed-execution-v1',
@@ -79,11 +79,11 @@ async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCred
       answer_confidence:probability,confidence:0.5}}};
   }});
   const options={application,client,facts,namespace,goalHost,chooser,ready:()=>true,
-    createHost:input=>createProactiveCognitionHost({...input,now:()=>time}),onTask:item=>announced.push(item),now:()=>time};
+    createHost:input=>createProactiveCognitionHost({...input,now:()=>time}),onTask:item=>announced.push(item),onUpdate:()=>{updateCalls++;},now:()=>time};
   host=createDesktopGoalCognitionHost(options);
   t.after(async()=>{host.close();facts.close();application.close();await rm(directory,{recursive:true,force:true});});
   return {application,client,facts,sent,announced,store,sourceTaskId:sourceTask.taskId,host:()=>host,layaCalls:()=>layaCalls,
-    goalWrites:()=>goalWrites,releaseFetch:()=>releaseFetch?.(),
+    goalWrites:()=>goalWrites,updateCalls:()=>updateCalls,releaseFetch:()=>releaseFetch?.(),
     restoreLaya:()=>{unavailable=false;},advance:(ms=1100)=>{time+=ms;},restart:()=>{host.close();host=createDesktopGoalCognitionHost(options);return host;}};
 }
 
@@ -620,4 +620,57 @@ test('lost handoff receipt fallback preserves the original Desktop receipt marke
   f.application.runtime.saveCheckpoint(original.reviewTaskId,'proactive-cognition-handoff-v1',{commandId:'foreign-command',reviewTaskId:'foreign-review'});
   const card=f.restart().snapshot().reviews[0];assert.equal(card.taskId,original.taskId);assert.equal(card.state,'succeeded');
   assert.equal(f.layaCalls(),1);assert.equal(f.sent.length,1);assert.equal(f.host().snapshot().cloudAllowed,false);
+});
+
+test('lost handoff immediate feedback shows the accepted task and retains the original delivery error',async t=>{
+  const f=await fixture(t,{holdFetch:true});let taskId;
+  try {
+    f.host().configure({enabled:true,cloudAllowed:false});await f.host().tick();
+    const reviewTaskId=f.host().snapshot().reviews[0].reviewTaskId,call=f.client.call.bind(f.client);
+    const deliveryError=Error('Synthetic immediate lost receipt');let submissions=0;
+    f.client.call=async (operation,payload,options)=>{
+      const result=await call(operation,payload,options);
+      if(operation==='task.submit') {submissions++;taskId=result.taskId;throw deliveryError;}
+      return result;
+    };
+    f.host().configure({enabled:true,cloudAllowed:true});const updates=f.updateCalls();
+    await assert.rejects(f.host().applyDecision(reviewTaskId),error=>error===deliveryError);
+    const card=f.host().snapshot().reviews[0];assert.equal(card.taskId,taskId);
+    assert.equal(card.state,f.application.runtime.getTask(taskId).state);assert.equal(card.graphUpdateVerified,false);
+    assert.equal(f.host().snapshot().status,'submitted');assert.equal(f.updateCalls(),updates+1);
+    assert.equal(submissions,1);assert.equal(f.layaCalls(),1);
+    assert.equal(f.application.runtime.loadCheckpoint(reviewTaskId,'desktop-goal-cognition-handoff-task-v1'),undefined);
+  } finally {f.releaseFetch();if(taskId) await terminal(f.application,taskId);}
+});
+
+test('lost handoff immediate feedback cannot invent acceptance or restore revoked and closed sessions',async t=>{
+  for(const mode of ['not_accepted','revoked','closed']) {
+    const f=await fixture(t);f.host().configure({enabled:true,cloudAllowed:false});await f.host().tick();
+    const reviewTaskId=f.host().snapshot().reviews[0].reviewTaskId,call=f.client.call.bind(f.client);
+    const originalError=Error('Synthetic original '+mode);let taskId,submissions=0;
+    f.client.call=async (operation,payload,options)=>{
+      if(operation!=='task.submit') return call(operation,payload,options);
+      if(mode==='not_accepted') throw originalError;
+      const result=await call(operation,payload,options);submissions++;taskId=result.taskId;
+      if(mode==='revoked') f.host().configure({enabled:true,cloudAllowed:false});else f.host().close();
+      throw originalError;
+    };
+    f.host().configure({enabled:true,cloudAllowed:true});
+    let result;
+    if(mode==='not_accepted') await assert.rejects(f.host().applyDecision(reviewTaskId),error=>error===originalError);
+    else result=await f.host().applyDecision(reviewTaskId);
+    const view=f.host().snapshot(),card=view.reviews[0];
+    if(mode==='not_accepted') {
+      assert.equal(card.taskId,undefined);assert.equal(submissions,0);
+      assert.equal(f.application.runtime.loadCheckpoint(reviewTaskId,'desktop-goal-cognition-handoff-task-v1'),undefined);
+    } else {
+      // Original Runtime cancellation reconciliation already returns the accepted
+      // task after revocation/close. Preserve that success-path receipt contract.
+      assert.equal(result.taskId,taskId);assert.equal(view.cloudAllowed,false);assert.equal(submissions,1);
+      assert.throws(()=>f.host().assertCloudSend({taskId,goal:f.application.runtime.getTask(taskId).goal,signal:new AbortController().signal}));
+      if(mode==='revoked') assert.equal(card.taskId,taskId);else assert.equal(view.enabled,false);
+      await terminal(f.application,taskId);
+    }
+    assert.equal(f.layaCalls(),1);assert.equal(f.sent.length,0);
+  }
 });
