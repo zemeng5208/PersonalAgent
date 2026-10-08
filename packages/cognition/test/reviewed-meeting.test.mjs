@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {FakeCoordinationStoreHost} from '@personal-agent/goals/store';
 import {InMemoryMeetingDecisionReceiptStore, ReviewedMeetingFactConsumer, buildMeetingRepairOptions,
-  analyzeImpact, createCommittedMeetingProjectionReader, selectMeetingRepairScope, selectProjectedRepairScope} from '../dist/index.js';
+  analyzeImpact, buildMinimalRepairCandidate, createCommittedMeetingProjectionReader, selectMeetingRepairScope, selectProjectedRepairScope} from '../dist/index.js';
 
 const at='2026-09-30T08:00:00.000Z';
 const ref=(id,revision=1)=>({id,revision});
@@ -336,4 +336,47 @@ test('pending review recovery preserves its actual choice and rejects a replaced
   assert.deepEqual(recovered.selection,review.selection);assert.equal(recovered.confidence,0.35);assert.equal(applied,1);
   review.affected=[];
   await open().processEvent(f.event);assert.equal(applied,1);assert.deepEqual(f.store.read(),before);
+});
+
+
+test('meeting options retain full 101-item recheck scope without exceeding the optional repair bound', () => {
+  for (const count of [100, 101]) {
+    const namespace = 'synthetic-public-vault-meeting-options-' + count;
+    const store = new FakeCoordinationStoreHost().provision(namespace);
+    const append = (id, kind, summary, dependencies = []) => store.append(store.read().revision,
+      {id, kind, summary, dependencies, sourceRef: 'synthetic-public-vault/meeting.md#L1',
+        sensitivity: 'public', state: 'active', reason: 'Synthetic public options boundary',
+        validFrom: '2026-01-01T00:00:00.000Z', validUntil: '2099-01-01T00:00:00.000Z'});
+    append('meeting', 'fact', '15:00');
+    append('goal', 'goal', 'Attend public meeting', [ref('meeting')]);
+    for (let index = 1; index < count; index++) append('plan-' + index, 'plan', 'Prepare unchanged', [ref('goal')]);
+    append('unrelated', 'plan', 'Retain unrelated content');
+    append('meeting', 'fact', '17:00');
+    const before = store.read(), input = {graphNamespace: namespace, projection: {
+      batchToken: 'synthetic-public-projection', graphRevision: before.revision,
+      links: [{eventId: 'synthetic-public-fact-change', fact: ref('memory-meeting', 2), node: ref('meeting', 2)}]}};
+    const scope = selectMeetingRepairScope(before, at, input, ref('meeting', 2));
+    assert.equal(scope.items.length, count);
+    assert.deepEqual(scope.items, analyzeImpact(before, at).items.filter(item => item.action === 'RECHECK'));
+    const options = buildMeetingRepairOptions(before, at, input, ref('meeting', 2));
+    assert.deepEqual(options.slice(0, 2).map(option => [option.id, option.action]), [['recheck', 'RECHECK'], ['defer', 'RECHECK']]);
+    if (count === 100) {
+      assert.equal(options.length, 3);
+      const candidate = options.find(option => option.action === 'REVISE');
+      assert.equal(candidate.repair.changes.length, count);
+      assert.deepEqual(new Set(candidate.repair.changes.map(change => change.node.id)), new Set(scope.items.map(item => item.node.id)));
+      for (const change of candidate.repair.changes) {
+        const old = before.history.findLast(node => node.id === change.node.id);
+        assert.equal(change.summary, old.summary); assert.equal(change.reason, old.reason);
+      }
+    } else {
+      assert.equal(options.length, 2);
+      assert.equal(options.some(option => Object.hasOwn(option, 'repair')), false);
+      assert.throws(() => buildMinimalRepairCandidate(before, at, {
+        expectedGraphRevision: before.revision, targets: scope.items.map(item => item.node)}), {code: 'INVALID_ARGUMENT'});
+    }
+    assert.deepEqual(store.read(), before, 'Building options never changes the graph or its unrelated Plan');
+    const stale = {...input, projection: {...input.projection, graphRevision: before.revision - 1}};
+    assert.throws(() => buildMeetingRepairOptions(before, at, stale, ref('meeting', 2)), {code: 'REVISION_CONFLICT'});
+  }
 });

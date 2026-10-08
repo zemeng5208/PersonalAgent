@@ -101,13 +101,15 @@ export function buildMeetingRepairOptions(snapshot: GraphSnapshot, at: string, p
   if (!selected) throw new CognitionError('INVALID_ARGUMENT');
   const scope = selectMeetingRepairScope(snapshot, at, projection, selected);
   if (!scope.items.length) return [];
-  const candidate = buildMinimalRepairCandidate(snapshot, at, {
+  // The optional structural candidate is bounded to 100 targets. Larger
+  // scopes still retain every affected item for recheck and defer choices.
+  const candidate = scope.items.length > 100 ? undefined : buildMinimalRepairCandidate(snapshot, at, {
     expectedGraphRevision: snapshot.revision, targets: scope.items.map(item => item.node),
   });
   return [
     {id: 'recheck', revision: 1, action: 'RECHECK', description: 'Verify the changed meeting Fact and affected dependencies through AgentArts before changing the plan.'},
     {id: 'defer', revision: 1, action: 'RECHECK', description: 'Keep current plan content and arrange a recheck; do not execute stale dependent steps.'},
-    ...(candidate.kind === 'candidate' ? [{id: 'revise', revision: 1, action: 'REVISE',
+    ...(candidate?.kind === 'candidate' ? [{id: 'revise', revision: 1, action: 'REVISE',
       description: 'Ask AgentArts to evaluate the minimal affected repair and revise plan content; this is not execution authorization.',
       repair: candidate.request}] : []),
   ];
