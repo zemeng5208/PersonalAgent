@@ -1,11 +1,44 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {Worker} from 'node:worker_threads';
 import {
   MailTriagePipeline,
   DEFAULT_MAIL_LABELS,
   CognitionError,
   LayaTriageService,
 } from '../dist/index.js';
+
+test('legal mixed-case labels reuse their exact checkpoint across portable locale ordering', async () => {
+  const moduleUrl = new URL('../dist/index.js', import.meta.url).href;
+  const run = (locale, checkpoint = {}) => new Promise((resolve, reject) => {
+    const worker = new Worker(`
+      const {parentPort,workerData}=require('node:worker_threads');
+      (async()=>{
+        const {MailTriagePipeline}=await import(workerData.moduleUrl);
+        const collator=new Intl.Collator(workerData.locale);
+        String.prototype.localeCompare=function(other){return collator.compare(String(this),String(other));};
+        let saved=workerData.checkpoint,calls=0;
+        const labels={'i-work':'Synthetic lower-case category','I-work':'Synthetic upper-case category'};
+        const inference={async infer(payload){calls++;const answers={};
+          for(const [key,question] of Object.entries(payload.questions)) {
+            const choice=key.startsWith('category_')?'i-work':'routine';
+            answers[key]={choice,probabilities:Object.fromEntries(Object.keys(question.criteria).map(id=>[id,id===choice?0.9:0.1])),answer_confidence:0.9,confidence:0.7};
+          } return {answers};}};
+        const pipeline=new MailTriagePipeline({inference,labels,checkpoint:{load:()=>saved,save:value=>{saved=structuredClone(value);}}});
+        const result=await pipeline.processBatch({messages:[{source:'synthetic-mail',messageId:'mixed-case',sourceRevision:'rev1',text:'Synthetic routine work update'}],
+          deadline:new Date(Date.now()+10000).toISOString(),signal:new AbortController().signal});
+        parentPort.postMessage({calls,saved,cachedCount:result.cachedCount,newlyClassifiedCount:result.newlyClassifiedCount,results:result.results});
+      })().catch(error=>{throw error;});
+    `, {eval: true, workerData: {moduleUrl, locale, checkpoint}});
+    worker.once('error', reject); worker.once('message', resolve);
+    worker.once('exit', code => {if (code) reject(Error(`Synthetic locale worker exited ${code}`));});
+  });
+  const first = await run('en-US');
+  assert.equal(first.calls, 1); assert.equal(first.newlyClassifiedCount, 1);
+  const resumed = await run('tr-TR', first.saved);
+  assert.equal(resumed.calls, 0); assert.equal(resumed.cachedCount, 1); assert.equal(resumed.newlyClassifiedCount, 0);
+  assert.deepEqual(resumed.saved, first.saved); assert.deepEqual(resumed.results, first.results);
+});
 
 test('partial page cancellation retains the prior cursor and resumes completed chunks from checkpoint', async () => {
   let saved = {};

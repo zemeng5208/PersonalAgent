@@ -181,7 +181,7 @@ export class MailTriagePipeline {
     this.margin = options.minimumMargin ?? 0.15;
     this.now = options.now ?? Date.now;
 
-    const sortedLabels = Object.entries(this.labels).sort(([a], [b]) => a.localeCompare(b));
+    const sortedLabels = Object.entries(this.labels).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
     this.configDigest = hash(JSON.stringify({
       strategyVersion: MAIL_TRIAGE_STRATEGY_VERSION,
       model: 'multilingual',
