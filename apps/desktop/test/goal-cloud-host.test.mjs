@@ -151,3 +151,63 @@ test('restricted goals, unsafe content and unrelated conversations stay off the 
   const exportRevise=cloud.competitionToolExports.find(item=>item.toolName==='goals.revise');
   assert.equal(exportRevise.accepts({taskId:task.taskId,arguments:{goal:goal('Make public','public')}}),false);
 });
+
+
+test('exact Unicode Goal IDs survive bounded cloud pagination and SQLite reopen', async t => {
+  const namespace = 'synthetic-public-goal-paging-reopen';
+  const file = path.join(mkdtempSync(new URL('unicode-paging-', cache)), 'runtime.sqlite');
+  const ids = ['a\u0301', '\u00e1', 'z'];
+  let app, cloud, host;
+  const open = phase => {
+    host = createGoalHost(namespace);
+    cloud = createDesktopGoalCloudHost({goalHost: host, namespace});
+    app = createRuntimeApplication({path: file, profile: 'huawei_ict_agentarts', hostUserNamespace: namespace, tools: cloud.tools});
+    host.bind(app); cloud.bindApplication(app); cloud.authorize({goalCloudConsent: true});
+    const task = app.runtime.submitTask({goal: 'Read synthetic public Goal pages', conversationId: 'desktop-panel',
+      idempotencyKey: 'synthetic-unicode-paging-' + phase});
+    const context = {taskId: task.taskId, runId: 'synthetic-explicit-fake-tool-gateway',
+      authorizationRef: 'synthetic-explicit-fake-tool-gateway', signal,
+      deadline: new Date(Date.now() + 60_000).toISOString(), scopes: ['goals:read', 'goals:write']};
+    const execute = (name, input) => cloud.tools.find(tool => tool.descriptor.name === name).execute(input, context);
+    const available = name => cloud.competitionToolAvailability.find(item => item.toolName === name)
+      .available({...context, revision: task.revision});
+    assert.equal(available('goals.list'), true);
+    return {task, context, execute, available};
+  };
+  t.after(() => {cloud?.close(); app?.close();});
+  const created = open('create');
+  assert.equal(created.available('goals.create'), true);
+  for (const [index, id] of ids.entries()) {
+    const write = await created.execute('goals.create', {expectedGraphRevision: index,
+      goal: {...goal('Synthetic distinct exact Goal ' + index, 'public'), id}});
+    assert.equal(write.kind, 'applied'); assert.equal(write.currentGoal.id, id);
+  }
+  const read = async binding => {
+    const pages = [], visited = []; let afterId;
+    for (let pageIndex = 0; pageIndex < 4; pageIndex++) {
+      const page = await binding.execute('goals.list', {limit: 1, ...(afterId === undefined ? {} : {afterId})});
+      assert.equal(page.graphRevision, 3); assert.ok(page.goals.length <= 1);
+      const exported = cloud.competitionToolExports.find(item => item.toolName === 'goals.list')
+        .project({taskId: binding.task.taskId, result: page, signal});
+      assert.deepEqual(exported, page); pages.push(page); visited.push(...page.goals.map(item => item.id));
+      if (page.nextAfterId === null) break;
+      afterId = page.nextAfterId;
+    }
+    assert.equal(pages.at(-1).nextAfterId, null);
+    assert.deepEqual(new Set(visited), new Set(ids), 'Distinct exact IDs cannot collapse because their collation compares equal');
+    assert.equal(visited.length, ids.length);
+    assert.deepEqual(visited, ['a\u0301', 'z', '\u00e1']);
+    const whole = await binding.execute('goals.list', {});
+    assert.deepEqual(whole.goals.map(item => item.id), visited);
+    for (const id of ids) assert.equal((await binding.execute('goals.get', {id})).goal.id, id);
+    return pages;
+  };
+  const before = await read(created);
+  cloud.close(); app.close(); cloud = undefined; app = undefined;
+  const reopened = open('reopen');
+  assert.deepEqual(await read(reopened), before, 'Existing SQLite Goal IDs reopen without normalization or new graph writes');
+  assert.equal(host.list().graphRevision, 3);
+  cloud.revoke();
+  await assert.rejects(() => reopened.execute('goals.list', {limit: 1}), /unavailable/);
+  assert.equal(host.list().graphRevision, 3);
+});

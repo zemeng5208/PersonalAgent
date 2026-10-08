@@ -148,8 +148,8 @@ export function createDesktopGoalCloudHost({goalHost,namespace,readProactiveBind
     if(!input || typeof input!=='object' || Array.isArray(input)) throw Error('Goal list arguments are invalid');
     const {graphRevision,goals}=goalHost.list();
     const limit=input.limit??20;
-    const visible=goals.map(goal=>scopedGoal(goal,taskId)).filter(Boolean).sort((a,b)=>a.id.localeCompare(b.id));
-    const remaining=visible.filter(goal=>input.afterId===undefined || goal.id.localeCompare(input.afterId)>0);
+    const visible=goals.map(goal=>scopedGoal(goal,taskId)).filter(Boolean).sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0);
+    const remaining=visible.filter(goal=>input.afterId===undefined || goal.id>input.afterId);
     const page=remaining.slice(0,limit);
     return {graphRevision,goals:page,nextAfterId:remaining.length>page.length?page.at(-1).id:null};
   }
