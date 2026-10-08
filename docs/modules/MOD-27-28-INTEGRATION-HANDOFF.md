@@ -82,3 +82,9 @@ MOD-28 保持 `in_progress`。接口状态以[接口目录](../interfaces/CURREN
 ## 固定九项整合批次完整检查（2026-10-08 续接）
 
 固定68fb1563ef73457dab1747e6eb15c08e6c32010a/tree8d6fa5b8ac47ff8d095d8c8dca0bd2f001f14bb0，Node24.15/4CPU原npm run check，01:19:57.495576Z至01:28:21.974862Z，实际session34257/dccf1d→dac3e6/exit0。34组2523项2473通过、0失败0取消、50跳过；Desktop647/636通过11跳过、Runtime439/439、Cognition273/273、Calendar47/44通过3跳过、root integration22/22。raw249163字节SHA5af62dc48f62442cf5dd9a22da3c63f6736c7951e0a52b038de76a9cff56e286；A独立完整raw+固定source核实4dd26739620a9d2249593f49db071ca711b20b1b900bbcb8d4707ec81342a0b3。原1f548整仓Calendar失败和同head隔离8/8仍完整保留，后来此批通过不能解释旧失败原因。此完整结果不覆盖随后新增Laya reader取消、Live shortcut反馈或Mail cache排序；新源码固定后须另跑原完整检查。没有借用旧远端Windows CI结论。
+
+## 最终十二项自有增量的完整检查与交付（2026-10-08）
+
+最终固定0b3eef9fa57340d2e992551dbcac26cea7827763/tree8918053995597cab9659dd29b1e37f5117d350e6，原npm run check实际5856/48cf7c→dd7d8c/exit0，01:40:40.655086Z至01:48:22.341844Z，Node24.15/实际4CPU/原期限与断言。34组2545项2495通过、0失败0取消、50跳过；Cognition283/283、Desktop659/648通过11跳过、Runtime439/439、Calendar47/44通过3跳过、root integration22/22；build/type/generated/architecture/contracts全部实际执行。完整raw3314行/251009字节SHAa8ba69d2a9d2068d54f5b47f8a0d9f9255fa4630524dabd9d8ac926e196edc22，A独审9f478df34f9c75bf69b6b9e5966488b3c4f9cc0e963bf233886fb64c3cec3fd8核全部34组七字段、50skip、全文及15冻结source/test。
+
+覆盖原九项加Laya取消、Live快捷键反馈和Mail配置稳定排序十二项；此前68fb与1f548批次各自结果不混用，1f Calendar失败仍不解释根因。随后仅本文记录已发生结果的DOC提交，不改任何source/test；发布时须核源码一致、实际PR head/tree/全文件名/body。真实云/邮箱/Electron/Windows/物理设备与用户项目仍按原现场交接，未通过，不批准或合并；停止前由root向指定QQ邮箱发送实际结果、剩余事项、阻塞和责任人。
