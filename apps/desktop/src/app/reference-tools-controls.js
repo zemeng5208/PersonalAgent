@@ -6,7 +6,7 @@ export function mountReferenceToolsControls(root,invoke) {
   const syncButtons=()=>{
     if(!host.isConnected)return;
     for(const action of ['mcp','skill','run'])host.querySelector(`[data-reference="${action}"]`).disabled=
-      pending.has(action)||(action==='run'&&state?.skill?.health?.state!=='ready')
+      pending.has(action)||(action==='run'&&(pending.has('mcp')||pending.has('skill')||state?.skill?.health?.state!=='ready'))
       ||(action==='skill'&&state?.skill?.health?.enabled!==true&&state?.mcp?.connected!==true);
   };
   host.addEventListener('click',async event=>{

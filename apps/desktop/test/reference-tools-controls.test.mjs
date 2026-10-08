@@ -80,3 +80,25 @@ test('reference Skill failures restore an available action but disconnected and 
   assert.equal(ui.fields.skill.disabled,true);assert.equal(ui.fields.result.textContent,'');
   await ui.click('skill');assert.equal(calls.length,3);
 });
+
+test('reference stop receipt pending blocks new summary runs across stale snapshots',async t=>{
+  const calls=[];let resolve;
+  const ui=harness(t,(action,input)=>{calls.push({action,input});return new Promise(done=>{resolve=done;});});
+  ui.render('ready');const stopping=ui.click('mcp');
+  assert.equal(ui.fields.run.disabled,true,'stopping service must make the summary unavailable before its next snapshot');
+  ui.render('ready');await ui.click('run');assert.equal(calls.length,1,'a stale ready snapshot cannot submit a summary while stop is pending');
+  ui.render('disabled');resolve({});await stopping;assert.equal(ui.fields.run.disabled,true);
+  assert.deepEqual(calls,[{action:'reference.mcp',input:{enabled:false}}]);
+});
+
+test('reference Skill changes pause summary runs but failure restores ready service and run never blocks stop',async t=>{
+  const calls=[];let resolve,reject;
+  const ui=harness(t,(action,input)=>{calls.push({action,input});return new Promise((done,fail)=>{resolve=done;reject=fail;});});
+  ui.render('ready');const changing=ui.click('skill');
+  assert.equal(ui.fields.run.disabled,true,'pending Skill transition must stop new summary submission');
+  ui.render('ready');await ui.click('run');assert.equal(calls.length,1);
+  reject(Error('synthetic Skill transition failed'));await changing;assert.equal(ui.fields.run.disabled,false);
+  const running=ui.click('run');assert.equal(ui.fields.mcp.disabled,false,'an in-flight read cannot block the user stop action');
+  const runResolve=resolve;const stopping=ui.click('mcp');assert.equal(calls.length,3);ui.render('disabled');resolve({});await stopping;
+  runResolve({taskId:'accepted-original'});await running;assert.equal(ui.fields.run.disabled,true);
+});
