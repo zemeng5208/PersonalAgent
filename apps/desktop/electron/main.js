@@ -186,6 +186,8 @@ let wakeDisposal;
 let panelHiding;
 let liveShortcut = {key: 'F8', registered: false, reason: ''};
 let lastLiveShortcutAt = 0;
+let liveToggleRevision = 0;
+let liveShortcutError;
 let voiceInitializationFailure = null;
 let voiceDisposed = false;
 let voiceDisposal;
@@ -2649,14 +2651,34 @@ async function initializeSisVoice() {
   }
 }
 
-async function toggleLive() {
-  if (!liveVoice) throw Error('Live 服务尚未装配');
-  if (liveVoice.hasActive()) return liveVoice.stop();
-  if (voiceConfigurationPending || panelHiding) throw Error('请先结束面板或语音配置更新');
-  await stopWakeVoice();
-  if (voiceConfigurationPending || panelHiding || voiceInput?.hasActive() || wakeVoice?.hasActive()) throw Error('请先结束语音转文字或配置更新');
-  pinned = true; openPanel(true); publish();
-  return liveVoice.start();
+async function toggleLive(shortcut) {
+  const revision = ++liveToggleRevision;
+  const registration = liveShortcut, previousError = liveShortcutError;
+  const current = () => revision === liveToggleRevision && liveShortcut === registration
+    && (shortcut === undefined || shortcut === registration);
+  try {
+    if (!liveVoice) throw Error('Live 服务尚未装配');
+    let result;
+    if (liveVoice.hasActive()) result = await liveVoice.stop();
+    else {
+      if (voiceConfigurationPending || panelHiding) throw Error('请先结束面板或语音配置更新');
+      await stopWakeVoice();
+      if (voiceConfigurationPending || panelHiding || voiceInput?.hasActive() || wakeVoice?.hasActive()) throw Error('请先结束语音转文字或配置更新');
+      pinned = true; openPanel(true); publish();
+      result = await liveVoice.start();
+    }
+    if (current() && previousError && liveShortcutError === previousError && previousError.registration === registration) {
+      registration.reason = ''; liveShortcutError = undefined; publish();
+    }
+    return result;
+  } catch (error) {
+    if (shortcut === registration && current()) {
+      registration.reason = error instanceof Error ? error.message : 'Live 开关失败';
+      liveShortcutError = {registration};
+      pinned = true; openPanel(true); publish();
+    }
+    throw error;
+  }
 }
 
 function readNativePublicSkillSource(input) {
@@ -2703,20 +2725,19 @@ async function chooseNativePublicSkillSource(input) {
 
 function registerLiveShortcut() {
   if (liveShortcut.registered) globalShortcut.unregister(liveShortcut.key);
+  liveShortcutError = undefined;
   const key = liveConfig.snapshot().hotkey;
   if (key === 'F9') {
     liveShortcut={key,registered:false,reason:'F9 用于记事本写入确认，请在 Live 设置中更换快捷键'};
     return;
   }
+  let registration;
   const registered = globalShortcut.register(key, () => {
     if (Date.now() - lastLiveShortcutAt < 400) return;
     lastLiveShortcutAt = Date.now();
-    void toggleLive().catch(error => {
-      liveShortcut.reason = error instanceof Error ? error.message : 'Live 开关失败';
-      pinned = true; openPanel(true); publish();
-    });
+    void toggleLive(registration).catch(() => {});
   });
-  liveShortcut = {key, registered, reason: registered ? '' : `${key} 已被占用，请在 Live 设置中更换快捷键`};
+  registration = liveShortcut = {key, registered, reason: registered ? '' : `${key} 已被占用，请在 Live 设置中更换快捷键`};
 }
 
 async function initializeLiveVoice() {
