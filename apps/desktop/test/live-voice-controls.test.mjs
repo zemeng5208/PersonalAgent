@@ -154,3 +154,73 @@ test('current stop failure stays visible and permits only explicit retry after s
   operations[0].reject(Error('older cancelled start'));await starting;assert.equal(f.fields['live-config-result'].textContent,'current stop failed');
   const retry=f.controls.toggle();assert.equal(operations.length,3);operations[2].resolve();await retry;
 });
+
+test('successful explicit retry clears its old toggle error and preserves open settings and draft', async t => {
+  const retry = deferred(); let calls = 0;
+  const f = fixture(t, () => ++calls === 1 ? Promise.reject(Error('first connection failed')) : retry.promise);
+  await f.controls.toggle();
+  const toggling = f.controls.toggle();
+  f.settings.open = false; f.settings.open = true;
+  f.edit('live-workspace', 'new-draft'); f.edit('live-key', 'synthetic-new-draft-key');
+  retry.resolve(); await toggling;
+  assert.equal(f.fields['live-config-result'].textContent, '');
+  assert.equal(f.settings.open, true);
+  f.controls.render({configured: true, active: true, status: 'listening', workspaceId: 'host-value'});
+  assert.equal(f.fields['live-workspace'].value, 'new-draft');
+  assert.equal(f.fields['live-key'].value, 'synthetic-new-draft-key');
+  assert.equal(calls, 2);
+});
+
+test('failed explicit retries replace their own error and only later success clears it', async t => {
+  let calls = 0;
+  const f = fixture(t, async () => {if (++calls < 3) throw Error(`connection failure ${calls}`);});
+  await f.controls.toggle(); await f.controls.toggle();
+  assert.equal(f.fields['live-config-result'].textContent, 'connection failure 2');
+  await f.controls.toggle();
+  assert.equal(f.fields['live-config-result'].textContent, '');
+  assert.equal(calls, 3);
+});
+
+for (const outcome of ['pending', 'success', 'failure']) {
+  test(`successful retry preserves newer configure ${outcome} feedback`, async t => {
+    const retry = deferred(), save = deferred(); let toggles = 0;
+    const f = fixture(t, name => name === 'live.configure' ? save.promise
+      : ++toggles === 1 ? Promise.reject(Error('old toggle failure')) : retry.promise);
+    await f.controls.toggle(); const toggling = f.controls.toggle();
+    f.edit('live-workspace', 'submitted'); const saving = f.save();
+    if (outcome === 'success') {save.resolve(); await saving;}
+    if (outcome === 'failure') {save.reject(Error('new configuration failure')); await saving;}
+    const feedback = f.fields['live-config-result'].textContent;
+    assert.ok(feedback); assert.notEqual(feedback, 'old toggle failure');
+    retry.resolve(); await toggling;
+    assert.equal(f.fields['live-config-result'].textContent, feedback);
+    if (outcome === 'pending') {save.resolve(); await saving;}
+    assert.equal(f.fields['live-save'].disabled, false);
+  });
+}
+
+test('configure completion retakes feedback ownership after an intervening toggle failure', async t => {
+  for (const fails of [false, true]) {
+    const save = deferred(), retry = deferred(); let toggles = 0;
+    const f = fixture(t, name => name === 'live.configure' ? save.promise
+      : ++toggles === 1 ? Promise.reject(Error('toggle failed during save')) : retry.promise);
+    const saving = f.save(); await f.controls.toggle(); const toggling = f.controls.toggle();
+    if (fails) save.reject(Error('configuration failed later')); else save.resolve();
+    await saving; const feedback = f.fields['live-config-result'].textContent;
+    retry.resolve(); await toggling;
+    assert.equal(f.fields['live-config-result'].textContent, feedback);
+    assert.match(feedback, fails ? /configuration failed later/ : /已保存/);
+  }
+});
+
+test('an older successful start cannot clear the current stop error', async t => {
+  const operations = [];
+  const f = fixture(t, () => {const op = deferred(); operations.push(op); return op.promise;});
+  const starting = f.controls.toggle();
+  f.controls.render({configured: true, active: true, status: 'connecting'});
+  const stopping = f.controls.toggle();
+  operations[1].reject(Error('current stop failure')); await stopping;
+  operations[0].resolve(); await starting;
+  assert.equal(f.fields['live-config-result'].textContent, 'current stop failure');
+  assert.equal(f.settings.open, true);
+});

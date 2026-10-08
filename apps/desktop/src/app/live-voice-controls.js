@@ -11,6 +11,7 @@ export function mountLiveVoiceControls(root, invoke) {
   const result = settings.querySelector('#live-config-result');
   let editing = false, editRevision = 0, saving = false;
   let pendingToggle, toggleRevision = 0, liveActive = false;
+  let toggleErrorOwner;
   settings.addEventListener('input', () => {editing = true; editRevision++;});
   settings.querySelector('#live-save').onclick = async () => {
     if (saving) return;
@@ -18,14 +19,15 @@ export function mountLiveVoiceControls(root, invoke) {
     const submittedRevision = editRevision;
     const button = settings.querySelector('#live-save'); button.disabled = true;
     const request = {workspaceId: workspace.value.trim(), apiKey: key.value.trim(), hotkey: hotkey.value, audioConsent: consent.checked};
-    key.value = ''; result.textContent = '正在加密保存…';
+    key.value = ''; toggleErrorOwner = undefined; result.textContent = '正在加密保存…';
     try {
       await invoke('live.configure', request);
       editing = editRevision !== submittedRevision;
+      toggleErrorOwner = undefined;
       result.textContent = editing ? '已保存本次提交；新修改尚未保存。' : '已保存；点圆形语音按钮或按快捷键开始 Live。';
       if (!editing) settings.open = false;
     }
-    catch (error) {result.textContent = error.message;}
+    catch (error) {toggleErrorOwner = undefined; result.textContent = error.message;}
     finally {request.apiKey = ''; saving = false; button.disabled = false;}
   };
   return {
@@ -38,8 +40,14 @@ export function mountLiveVoiceControls(root, invoke) {
       if (pendingToggle && !(pendingToggle === 'start' && action === 'stop')) return;
       pendingToggle = action;
       const revision = ++toggleRevision;
-      try {await invoke('live.toggle');}
-      catch (error) {if (revision === toggleRevision) {result.textContent = error.message; settings.open = true;}}
+      const previousErrorOwner = toggleErrorOwner;
+      try {
+        await invoke('live.toggle');
+        if (revision === toggleRevision && previousErrorOwner && toggleErrorOwner === previousErrorOwner) {
+          toggleErrorOwner = undefined; result.textContent = '';
+        }
+      }
+      catch (error) {if (revision === toggleRevision) {toggleErrorOwner = {}; result.textContent = error.message; settings.open = true;}}
       finally {if (revision === toggleRevision) pendingToggle = undefined;}
     },
     render(live = {}) {
