@@ -522,3 +522,23 @@ b4f658b7 与原 TS ESM emit 逐字一致，新 one-task 数据库用它在 en-US
 cursor1。原坏两任务 DB 和不合格/诊断日志保留。32 artifacts 冻结核对；公开
 Vault/SQLite 为实际本地消费，Plans/Laya/context 为合成 Fake，不是 Calendar、
 真实云、Policy ledger 或 Windows 默认 locale 验收。后续新固定 HEAD 全仓结论另记。
+
+## 本地计划修复的原面板审批入口（2026-10-08 续接）
+
+原 local repair 任务已 waiting_approval、原 approval.list 有 pending1，卡片也有
+repairTaskId，但任务未登记原 panel 元数据，原 main 过滤后缺失，Renderer 按任务
+遍历的审批入口因此不可见；admin 无 surface 过滤，原管理入口仍可恢复。
+仅在 submitRepair 保存原 marker 后，以及 record 经既有 repairTask 验证历史绑定
+后，共用 per-Host once-attempt 的原 onTask 通知，使用固定本地修复描述。错误 marker
+保持 reconciliation、不通知，不改原 task/INTENT/marker、Policy、审批、CAS 或执行。
+通知可能部分持久化再失败，同 Host 不盲重试，原回调 Error 保留；新 Host 可恢复一次。
+
+EXACT2 manifest SHA256 64b6ec05d0f170caca8137ee5caa6a3cee34b4dc8d2df71fac974a301e78d15c，
+source0883b3c7/test09e95651，21 artifacts。Node24.15 旧3回归88670/0d8d94 actual1，
+完整受影响文件57543/0cdfed actual0、30/30。fresh 原 main callback/filter、真实
+Runtime/Policy/SQLite、公开 task.list/approval.list 和原 approvalCards
+3417/95cc0b actual0：repair waiting_approval、pending1、panel/admin 均可见，原
+allow_once markup 有入口；cloud panel 仍可见，通知各一次、infer1/FakeHTTP1、graph5。
+未点击审批、未执行修复，重建仍无云许可；Fake Laya/HTTP/credential 和合成 Graph
+明确标记，不是 Electron/真实 IPC/云或物理 Windows 验收。诊断 loader/compiled drift
+失败保留；前1f548完整检查不覆盖本增量，根后续固定源码再验证。

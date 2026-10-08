@@ -403,9 +403,31 @@ Fake held Gateway 被 abort，Host inactive/idle，旧取消回执不恢复错�
 不改保存关闭/凭据清除规则；旧 start 不能清当前 stop 失败，connecting stop 门禁保持。
 EXACT2 manifest SHA256 5d26b559398817b26748428e747f299a88182253106641f2b07599bca8caceb1，
 source8f6db419/test5d254e19。原新增7例84dec3 actual1（5pass2fail）；受影响完整
-文件21cff4 actual0、16/16，运行 Node24.19；后续根固定检查使用 Node24.15。
+文件21cff4 actual0、16/16；成功进程未内嵌版本回执，冻结后同默认 PATH 环境观测
+为 Node24.19，不能冒作该进程的独立版本证明。根固定1f548bb新完整检查用 Node24.15，
+Desktop641/630通过11跳过，Runtime439/439；整仓唯一Calendar失败，结果另记。
 fresh 原完整 HTTP/CSP renderer、持久 ConfigHost/LiveVoiceHost/main AST 消费者
 11126/02b6d0 actual0：重试 listening/active、旧 result 清空、settings 仍开，
 三次原 toggle IPC；stop 后 Fake source/session 各关闭一次、mic revoke2，Runtime0、
 console/pageerror0。25 artifacts 核实；window/IPC/storage/Gateway/mic/source 明确
 Fake，无真实 Electron、物理设备/音频、云账号/Provider 或 Runtime Task 验收。
+
+## 启动时回补已有本地 Live 历史（2026-10-08 续接）
+
+原 durable recovery cache 的待回补消息在新 Host overlay 可见，但正式主对话只读
+Conversations，启动未调用已有 flushHistory，必须再次开启 Live 才能回补。仅在
+原 main initializeLiveVoice 构造 Host 后调用原同步 local flushHistory；不启动
+麦克风、Gateway、模型或 Task，不改 Host/store/协议/配置/quit 及未知释放保护。
+写入失败保留 durable cache/degraded 和原2s unref重试，未保证每次启动写盘都成功。
+
+EXACT2 manifest SHA256 eff4694d5ec1ae30d03da6e580694485cd13db9d2177d8db4a1d0d0d67efacd6，
+main5146d65b/newtest2361a75a，25 artifacts。Node24.15 原源码4e8f38 actual1、0pass3fail；
+修后89a5f3 actual0、3/3，覆盖重复重开、修订保原 chronology 及 sink 失败保留缓存。
+fresh 独立已退出的 producer 进程存 pending1，再由原 main initializer/完整snapshot、
+真实 History/FileStore/Conversations/Host 在新进程消费，4d68d7 actual0：正式主对话1、
+持久重读1、cache pending0、activefalse/idle，0Mic/网络/Task，第二次 flush 幂等。
+两进程内嵌 Node24.15，原 before75d7dc actual1 保留；formal 动态 voice import 与
+时间端口为显式 Fake，fresh helper 使用真实 voice exports 但没有调用资源工厂。
+这是本地 Node/文件的重启消费，不是 Electron、生产 userData、真实云或物理设备验收。
+原 shutdown 未调用 dispose 的静态交接仍未改变；unref timer 不证明退出阻断，durable
+cache 可由下次启动回补，不据静态遗漏宣称数据丢失。根新固定源码检查另记。

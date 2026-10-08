@@ -160,3 +160,19 @@ affected、仅recheck/defer、无repair、custom1/infer1/dispatch0；同complete
 此处证明公开Fact选项消费者，不证明Calendar sourceRevision/P5默认binding、Policy
 ledger、真实Laya/HTTP或Desktop102云交接；合成Plan、Gateway context和Laya明确标记。
 根已整合到f0548d8，后续必要固定HEAD完整检查另行记载，不挪用先前d3cb绿结果。
+
+## 此批固定源码完整检查与既有 Calendar 交接（2026-10-08）
+
+固定1f548bb479a54bf807f30d7c707d8bfec61450d9、tree14baef295592c3fe3ff36d2fa9408538ba7b0e13，
+Node24.15/实际4CPU、原 npm run check 的49829/a721c2 actual1，于01:14:12.383Z结束。
+原raw33组2494项2443通过、1失败、0取消、50跳过；Desktop641/630通过11跳过、
+Runtime439/439，构建/类型/生成/架构/合同已执行，root integration未执行。
+完整日志248081B，SHA256 e1586ab7dca74c157124f2c230d284d2751a6aa5cb5caf5368099aaeaad6fe73。
+
+唯一独立失败仍为 Potato 的原 Calendar `test/cloud-business.test.mjs:88`：预期TIMEOUT，
+实际EXTERNAL_FAILURE；源码和测试与main4b5ec61逐字相同。原leaf失败、摘要和重复的
+failing-tests列表不是三个故障，不放宽断言或期限、不改Calendar文件。此问题沿#212
+原c7失败交接由Potato处理；同固定HEAD原完整文件隔离a28ffe actual0、8/8，日志SHA256
+09513b55f94ab6b00aaac647261b5fdf83232afe9258bdb288311678c4c4e788，
+不能据此抹掉整仓失败或声称旧根因已解释。此轮覆盖前述六项已整合源码，不覆盖
+后续Interest收据或新面板/Live启动恢复；有新增源码时另作必要固定HEAD检查。

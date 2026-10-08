@@ -61,3 +61,19 @@
 这是现有源码接线的校正，未在本次启动真实订阅、Laya、AgentArts 或桌面进程。
 真实来源的次日更新、生产持久撤销和云端最终读回仍需现场验收；源码装配和本地场景
 不能替代该验收，也不改变原接口冻结状态或将 MOD/MVP 标记 done。
+
+## 选择收据的跨语言稳定摘要（2026-10-08 续接）
+
+同一精确公开 evidence、scope、来源、时刻和模型选择，原 receipt 证据排序依赖
+localeCompare，在 en-US/sv-SE 下生成不同 digest。只将原 fresh-copy 的四字段 ref
+tuple 排序改为 code-unit 比较，保持原字符串、重复项数及全部 binding 字段；不改
+policy/options/选择/freshness/deadline，不迁移旧 receipt，也不改知识 watch 或 Runtime。
+当前 Desktop 存 modelReceiptId，没有以此 digest 去重，未证明重复 tracking 后果。
+
+EXACT2 manifest SHA256 782dd30b501adc4b851854dc017ba0b39d50fa0f9cb9c15e3c40b5c733f68a54，
+source7dac4ffb/testcee8a733，17 artifacts 与原 discovery 证据保留。Node24.15 portable
+原正式42789/d42230 actual1；cognition build7653/bee61f、受影响两文件39483/c035fa
+actual0、10/10。fresh 公开 service8a0371 actual0，同输入两 locale 的完整 result
+与 digest 相同；精确 scope/source/evidence ref 改变仍产生不同 digest。旧 compiled
+与原 source ESM emit 逐字相同，合法旧证据未改写。Chooser/infer 为显式 Fake，无
+SQLite、真实来源、跟踪、云或外部写验收；前1f548检查不覆盖本增量，后续根检查另记。
