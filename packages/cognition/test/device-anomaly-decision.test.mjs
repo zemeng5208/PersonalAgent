@@ -24,6 +24,57 @@ test('queued device evaluation preserves submitted telemetry and request deadlin
   assert.deepEqual(receipt.sample, expected);
 });
 
+
+test('rejected device checkpoint loads publish no partial sources after trusted repair', async t => {
+  for (const entry of ['feedback', 'evaluation']) {
+    for (const repair of ['empty', 'replacement']) await t.test(`${entry}:${repair}`, async () => {
+      let saved, inferenceCalls = 0;
+      const checkpoint = {load: () => structuredClone(saved), save(value) {saved = structuredClone(value);}};
+      const chooser = {choose() {inferenceCalls++; throw Error('unexpected synthetic inference');}};
+      const sample = {source: 'synthetic-original', timestamp: '2026-10-08T03:00:00.000Z',
+        cpuPercent: 10, memoryPercent: 20, samplingIntervalMs: 1000};
+      const producer = new DeviceAnomalyDecisionService(chooser, {checkpoint});
+      assert.equal((await producer.evaluateSample(sample)).status, 'normal');
+      const valid = structuredClone(saved);
+      saved.sources['synthetic-invalid'] = {consecutiveElevatedCount: -1, isAlertActive: false,
+        sampleCounter: 0, lastAlertTimestampMs: null, lastSampleTimestampMs: null};
+      const affected = new DeviceAnomalyDecisionService(chooser, {checkpoint});
+      const read = () => entry === 'feedback' ? affected.readFeedback() : affected.evaluateSample(sample);
+      await assert.rejects(read, {code: 'INVALID_ARGUMENT'});
+      saved = {...valid, sources: repair === 'empty' ? {} : {'synthetic-replacement': {
+        consecutiveElevatedCount: 0, isAlertActive: false, sampleCounter: 0,
+        lastAlertTimestampMs: null, lastSampleTimestampMs: null}}};
+      const repaired = structuredClone(saved);
+      assert.deepEqual((await affected.readFeedback()).map(item => item.source),
+        repair === 'empty' ? [] : ['synthetic-replacement']);
+      assert.deepEqual(saved, repaired, 'loading and feedback must not rewrite trusted repaired disk state');
+      assert.equal((await affected.evaluateSample(sample)).status, 'normal');
+      const restarted = new DeviceAnomalyDecisionService(chooser, {checkpoint});
+      assert.equal((await restarted.evaluateSample(sample)).status, 'replayed');
+      assert.equal(inferenceCalls, 0);
+    });
+  }
+});
+
+test('device checkpoint clone failure retains its error and publishes no validated prefix', async () => {
+  let saved;
+  const checkpoint = {load: () => saved, save(value) {saved = structuredClone(value);}};
+  const chooser = {choose() {throw Error('unexpected synthetic inference');}};
+  const sample = {source: 'synthetic-original', timestamp: '2026-10-08T03:00:00.000Z',
+    cpuPercent: 10, memoryPercent: 20, samplingIntervalMs: 1000};
+  const producer = new DeviceAnomalyDecisionService(chooser, {checkpoint});
+  await producer.evaluateSample(sample);
+  const valid = structuredClone(saved);
+  // Synthetic non-JSON port data; the actual lossless-JSON SQLite adapter rejects it earlier.
+  saved.sources['synthetic-uncloneable'] = {...structuredClone(saved.sources[sample.source]),
+    lastReceipt: {syntheticUnsupportedValue() {}}};
+  const affected = new DeviceAnomalyDecisionService(chooser, {checkpoint});
+  await assert.rejects(() => affected.readFeedback(), {name: 'DataCloneError'});
+  saved = {...valid, sources: {}};
+  assert.deepEqual(await affected.readFeedback(), []);
+  assert.equal((await affected.evaluateSample(sample)).status, 'normal');
+});
+
 test('returned device receipts cannot rewrite later feedback or caller telemetry', async () => {
   let saved;
   const checkpoint = {load: () => saved, save: value => { saved = structuredClone(value); }};

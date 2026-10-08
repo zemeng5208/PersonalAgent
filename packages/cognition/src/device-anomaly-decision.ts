@@ -157,6 +157,8 @@ export class DeviceAnomalyDecisionService {
 
   private async load(): Promise<void> {
     if (this.loaded) return;
+    // A rejected checkpoint must not expose a partially loaded source prefix.
+    const loadedSources = new Map<string, SourceState>();
     const value = await this.checkpoint?.load();
     if (value !== undefined && value !== null) {
       const saved = value as {version: number; configDigest: string; sources: Record<string, SourceState>};
@@ -171,9 +173,11 @@ export class DeviceAnomalyDecisionService {
           || ![state.lastAlertTimestampMs, state.lastSampleTimestampMs].every(time => time === null || Number.isFinite(time))
           || (state.pendingDelivery && (typeof state.pendingDelivery.id !== 'string'
             || !Number.isFinite(state.pendingDelivery.timestampMs)))) throw new CognitionError('INVALID_ARGUMENT');
-        this.sourceStates.set(source, structuredClone(state));
+        loadedSources.set(source, structuredClone(state));
       }
     }
+    this.sourceStates.clear();
+    for (const [source, state] of loadedSources) this.sourceStates.set(source, state);
     this.loaded = true;
   }
 
