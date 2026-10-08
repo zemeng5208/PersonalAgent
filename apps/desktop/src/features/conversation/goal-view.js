@@ -81,6 +81,7 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
   let selecting = false;
   const cancellations = new Set();
   const decisions = new Set();
+  let approvalTimer;
 
   // Bind every asynchronous UI result to the interaction that requested it.
   const context = () => ({view: viewVersion, draft: draftVersion, task: taskVersion});
@@ -91,6 +92,7 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
   const changeDraft = () => { draftVersion++; taskVersion++; selecting = false; };
   const changeTask = () => { taskVersion++; selecting = false; };
   const changeView = () => {
+    clearApprovalTimer();
     viewVersion++;
     if (selecting) { selecting = false; save.disabled = writePending(); }
   };
@@ -108,7 +110,42 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
   }
   function syncTaskActions() {
     cancelTask.disabled = cancellations.has(activeTask?.taskId);
-    allow.disabled = deny.disabled = decisionPending(activeTask);
+    const actionable = activeTask?.state === 'waiting_approval' && activeTask.approval?.state === 'pending'
+      && Number.isFinite(approvalExpiry(activeTask)) && approvalExpiry(activeTask) > Date.now();
+    allow.hidden = deny.hidden = !actionable;
+    allow.disabled = deny.disabled = !actionable || decisionPending(activeTask);
+  }
+
+  function approvalExpiry(task) {
+    return typeof task?.approval?.expiresAt === 'string' ? Date.parse(task.approval.expiresAt) : Number.NaN;
+  }
+  function approvalNotice(task) {
+    if (task.approval?.state === 'allowed') return '授权已批准，等待任务恢复。';
+    const expiry = approvalExpiry(task);
+    return !Number.isFinite(expiry) ? '授权期限无法核实，请刷新任务状态；仍可取消目标任务。'
+      : expiry <= Date.now() ? '此授权已过期，请取消目标任务后重新发起。' : '等待一次性授权决定。';
+  }
+  function clearApprovalTimer() {
+    clearTimeout(approvalTimer);
+    approvalTimer = undefined;
+  }
+  function scheduleApprovalExpiry(task, scope) {
+    clearApprovalTimer();
+    const expiry = approvalExpiry(task);
+    if (task.state !== 'waiting_approval' || task.approval?.state !== 'pending'
+      || !Number.isFinite(expiry) || expiry <= Date.now()) return;
+    const {approvalId, revision} = task.approval;
+    const timer = setTimeout(() => {
+      if (approvalTimer !== timer) return;
+      approvalTimer = undefined;
+      if (!dialog.open || activeTask !== task || activeTask.approval?.approvalId !== approvalId
+        || activeTask.approval?.revision !== revision) return;
+      syncTaskActions();
+      if (expiry > Date.now()) { scheduleApprovalExpiry(task, scope); return; }
+      if (current(scope)) setStatus('pending', approvalNotice(task));
+    }, Math.min(Math.max(expiry - Date.now(), 1), 2_147_483_647));
+    approvalTimer = timer;
+    timer.unref?.();
   }
 
   function setStatus(kind, message) {
@@ -268,7 +305,7 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
     readTask.disabled = false;
     syncTaskActions();
     cancelTask.hidden = isTerminal(task) || task.state === 'cancelling';
-    allow.hidden = deny.hidden = !(task.state === 'waiting_approval' && task.approval?.state === 'pending');
+    scheduleApprovalExpiry(task, scope);
     save.disabled = writePending();
 
     if (task.state === 'waiting_reconciliation') {
@@ -276,7 +313,7 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
     } else if (task.state === 'cancelling') {
       setStatus('pending', '取消已受理，等待 Runtime 确认终态。');
     } else if (task.state === 'waiting_approval') {
-      setStatus('pending', task.approval?.state === 'allowed' ? '授权已批准，等待任务恢复。' : '等待一次性授权决定。');
+      setStatus('pending', approvalNotice(task));
     } else if (!isTerminal(task)) {
       setStatus('pending', `任务${stateNames[task.state] ?? task.state}，尚未保存成功。`);
     } else if (appliedGoalRef(task)) {
@@ -353,6 +390,11 @@ export function createGoalControl(invoke, getDraftSummary = () => '') {
   async function decide(decision) {
     const approval = activeTask?.approval;
     if (activeTask?.state !== 'waiting_approval' || approval?.state !== 'pending') return;
+    if (!Number.isFinite(approvalExpiry(activeTask)) || approvalExpiry(activeTask) <= Date.now()) {
+      syncTaskActions();
+      setStatus('pending', approvalNotice(activeTask));
+      return;
+    }
     if (decisionPending(activeTask)) return;
     const taskId = activeTask.taskId;
     const request = {taskId, approvalId: approval.approvalId, revision: approval.revision};

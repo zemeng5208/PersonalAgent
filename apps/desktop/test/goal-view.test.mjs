@@ -43,7 +43,23 @@ const applied = (id = 'synthetic-A') => ({taskId: `task-${id}`, revision: 3, sta
   evidenceRefs: ['synthetic-evidence'], result: {kind: 'applied', graphRevision: 2,
     previousGoal: null, currentGoal: {id, revision: 1}}});
 const pending = id => ({taskId: id, revision: 1, state: 'waiting_approval',
-  approval: {state: 'pending', approvalId: `approval-${id}`, revision: 1}});
+  approval: {state: 'pending', approvalId: `approval-${id}`, revision: 1,
+    expiresAt: '2099-01-01T00:00:00.000Z'}});
+
+function expiryClock(t) {
+  const originalNow = Date.now, originalSet = globalThis.setTimeout, originalClear = globalThis.clearTimeout;
+  let now = Date.parse('2026-10-08T00:00:00.000Z'), next = 0;
+  const timers = new Map();
+  Date.now = () => now;
+  globalThis.setTimeout = (callback, delay) => {
+    const id = ++next;
+    timers.set(id, {callback() {timers.delete(id); callback();}, delay});
+    return id;
+  };
+  globalThis.clearTimeout = id => timers.delete(id);
+  t.after(() => {Date.now = originalNow; globalThis.setTimeout = originalSet; globalThis.clearTimeout = originalClear;});
+  return {timers, now: () => now, advance: amount => {now += amount;}};
+}
 const documents = new WeakMap();
 function fixture(t, handler, tasks = []) {
   if (!documents.has(t)) {
@@ -381,4 +397,63 @@ test('normal confirmed save reads the full exact Goal revision and can revise it
   assert.equal(next.expectedGraphRevision, 3);
   assert.equal(next.expectedGoalRevision, 2);
   assert.deepEqual(next.goal.dependencies, saved.dependencies);
+});
+
+test('expired, missing or invalid Goal approval deadlines hide decisions without unlocking accepted writes', async t => {
+  for (const expiresAt of ['2000-01-01T00:00:00.000Z', undefined, 'invalid', 0]) {
+    const task = pending('expired');
+    if (expiresAt === undefined) delete task.approval.expiresAt;
+    else task.approval.expiresAt = expiresAt;
+    const ui = fixture(t, undefined, [task]); await ui.open();
+    assert.equal(ui.button('批准一次').hidden, true, String(expiresAt));
+    assert.equal(ui.button('拒绝').hidden, true);
+    assert.equal(ui.button('批准一次').disabled, true);
+    assert.equal(ui.button('保存目标').disabled, true);
+    assert.equal(ui.button('取消目标任务').hidden, false);
+    assert.equal(ui.button('刷新任务状态').disabled, false);
+    assert.match(ui.status(), expiresAt === '2000-01-01T00:00:00.000Z' ? /过期/ : /期限无法核实/);
+    ui.button('批准一次').onclick(); ui.button('拒绝').onclick(); await settle();
+    assert.equal(ui.calls.some(call => call.name === 'authorization.respond'), false);
+    ui.button('关闭').onclick();
+  }
+});
+
+test('a visible Goal approval expires while open and a delayed callback cannot bypass the click deadline guard', async t => {
+  const clock = expiryClock(t), task = pending('future');
+  task.approval.expiresAt = new Date(clock.now() + 100).toISOString();
+  const ui = fixture(t, undefined, [task]); await ui.open();
+  assert.equal(ui.button('批准一次').hidden, false);
+  assert.equal(ui.button('批准一次').disabled, false);
+  assert.equal(clock.timers.size, 1);
+  const callback = [...clock.timers.values()][0].callback;
+  clock.advance(100);
+  ui.button('批准一次').onclick(); await settle();
+  assert.equal(ui.calls.some(call => call.name === 'authorization.respond'), false);
+  assert.equal(ui.button('批准一次').hidden, true);
+  callback();
+  assert.match(ui.status(), /过期/);
+  assert.equal(ui.button('保存目标').disabled, true);
+  ui.button('关闭').onclick(); assert.equal(clock.timers.size, 0);
+});
+
+test('Goal expiry callbacks cannot replace newer draft feedback or another approval revision and close clears them', async t => {
+  const clock = expiryClock(t), tasks = [pending('same')];
+  tasks[0].approval.expiresAt = new Date(clock.now() + 100).toISOString();
+  const ui = fixture(t, undefined, tasks); await ui.open();
+  const old = [...clock.timers.values()][0].callback;
+  ui.button('新建目标').onclick(); const drafting = ui.status();
+  clock.advance(100); old();
+  assert.equal(ui.status(), drafting);
+  assert.equal(ui.button('批准一次').hidden, true);
+  tasks[0] = {...tasks[0], approval: {...tasks[0].approval, revision: 2,
+    expiresAt: new Date(clock.now() + 100).toISOString()}};
+  ui.button('刷新任务状态').onclick(); await settle();
+  const newer = ui.status(); old();
+  assert.equal(ui.status(), newer);
+  assert.equal(ui.button('批准一次').hidden, false);
+  const callback = [...clock.timers.values()][0].callback;
+  ui.button('关闭').onclick(); assert.equal(clock.timers.size, 0);
+  clock.advance(100); callback();
+  assert.equal(ui.status(), newer);
+  assert.equal(ui.calls.some(call => call.name === 'authorization.respond'), false);
 });
