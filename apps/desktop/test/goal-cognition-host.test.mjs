@@ -12,6 +12,7 @@ import {createAgentArtsRuntimeApplication,createProactiveCognitionHost} from '@p
 import {createDesktopGoalCognitionHost} from '../electron/goal-cognition-host.js';
 import {createGoalHostCore} from '../electron/goal-host-core.js';
 import {Conversations} from '../electron/conversations.js';
+import {approvalCards} from '../src/features/conversation/approval-card.js';
 
 const namespace='synthetic-desktop-cognition';
 const ref=(id,revision=1)=>({id,revision});
@@ -697,7 +698,8 @@ async function originalGoalTaskSurface() {
   const context=vm.createContext({conversations,taskGoals,tasks,Date});
   vm.runInContext(declaration('orderedTasks')+'\n'+declaration('taskSurface'),context);
   return {conversations,taskGoals,tasks,notify:vm.runInContext('('+notify+')',context),
-    panelTasks:()=>{context.surface='panel';return vm.runInContext(filter,context);}};
+    panelTasks:()=>{context.surface='panel';return vm.runInContext(filter,context);},
+    adminTasks:()=>{context.surface=undefined;return vm.runInContext(filter,context);}};
 }
 
 test('Goal task metadata makes accepted lost receipts visible in the original panel once per Host',async t=>{
@@ -772,4 +774,87 @@ test('Goal task metadata rejects malformed receipts and foreign bindings before 
     selectionDigest:toolArgumentsDigest(otherRuntime.loadCheckpoint(otherId,'proactive-cognition-review-v1'))});
   other.restart();assert.equal(other.announced.length,0);assert.equal(otherRuntime.getTask(foreign.taskId).state,'created');
   assert.equal(f.sent.length+other.sent.length,0);assert.equal(f.host().snapshot().cloudAllowed,false);
+});
+
+async function pendingOriginalPanelRepair(f,ui) {
+  const cloudTaskId=f.announced[0].taskId;await terminal(f.application,cloudTaskId);
+  const reviewTaskId=f.host().snapshot().reviews[0].reviewTaskId;
+  const accepted=await f.host().applyDecision(reviewTaskId),taskId=accepted.taskId;
+  for(let n=0;n<100&&f.application.runtime.getTask(taskId).state!=='waiting_approval';n++)await new Promise(done=>setTimeout(done,5));
+  assert.equal(f.application.runtime.getTask(taskId).state,'waiting_approval');
+  const approvals=(await f.client.call('approval.list',{taskId})).items;
+  assert.equal(approvals.length,1);assert.equal(approvals[0].state,'pending');
+  let snapshotSequence,beforeSequence;
+  do {
+    const page=await f.client.call('task.list',{limit:100,...(snapshotSequence===undefined?{}:{snapshotSequence}),
+      ...(beforeSequence===undefined?{}:{beforeSequence})});
+    snapshotSequence=page.snapshotSequence;
+    for(const task of page.items)ui.tasks.set(task.taskId,task);
+    beforeSequence=page.nextBeforeSequence;
+  }while(beforeSequence!==undefined);
+  return {cloudTaskId,reviewTaskId,taskId,approvals};
+}
+
+test('local repair pending approval is visible in the original panel and restored once per Host',async t=>{
+  const ui=await originalGoalTaskSurface(),f=await fixture(t,{controlledRepair:true,onTaskCallback:ui.notify});
+  f.host().configure({enabled:true,cloudAllowed:true});await f.host().tick();
+  const pending=await pendingOriginalPanelRepair(f,ui),taskId=pending.taskId;
+  const panelTask=ui.panelTasks().find(task=>task.taskId===taskId);
+  assert.ok(panelTask,'the original panel filter must expose the pending local repair task');
+  assert.match(approvalCards(panelTask,pending.approvals),/data-approval-decision="allow_once"/);
+  assert.equal(ui.adminTasks().some(task=>task.taskId===taskId),true);
+  assert.equal(ui.conversations.goal(taskId),'根据已选择方案受控修复计划');
+  assert.equal(f.announced.filter(task=>task.taskId===taskId).length,1);
+  assert.equal((await f.host().applyDecision(pending.reviewTaskId)).taskId,taskId);
+  assert.equal(f.announced.filter(task=>task.taskId===taskId).length,1);
+  ui.conversations.turns.clear();ui.taskGoals.clear();f.restart();
+  assert.equal(f.announced.filter(task=>task.taskId===taskId).length,2);
+  assert.equal(ui.panelTasks().some(task=>task.taskId===taskId),true);
+  assert.equal(f.host().snapshot().cloudAllowed,false);
+  assert.throws(()=>f.host().assertCloudSend({taskId:pending.cloudTaskId,goal:f.application.runtime.getTask(pending.cloudTaskId).goal,signal:new AbortController().signal}));
+  assert.deepEqual((await f.client.call('approval.list',{taskId})).items,pending.approvals);
+  assert.equal(f.application.runtime.getTask(taskId).state,'waiting_approval');
+  assert.equal(f.store.read().revision,5);assert.equal(f.sent.length,1);assert.equal(f.layaCalls(),1);
+});
+
+test('local repair metadata callback failure preserves its error and does not repeat an attempted notification',async t=>{
+  const callbackError=Error('Synthetic local repair metadata persistence failed');
+  const f=await fixture(t,{controlledRepair:true,onTaskCallback:item=>{if(item.goal==='根据已选择方案受控修复计划')throw callbackError;}});
+  f.host().configure({enabled:true,cloudAllowed:true});await f.host().tick();
+  await terminal(f.application,f.announced[0].taskId);
+  const reviewTaskId=f.host().snapshot().reviews[0].reviewTaskId;
+  await assert.rejects(f.host().applyDecision(reviewTaskId),error=>error===callbackError);
+  const marker=f.application.runtime.loadCheckpoint(reviewTaskId,'desktop-goal-cognition-repair-task-v1');
+  assert.ok(marker);assert.equal(f.announced.filter(task=>task.taskId===marker.taskId).length,1);
+  const repeated=await f.host().applyDecision(reviewTaskId);assert.equal(repeated.taskId,marker.taskId);
+  assert.equal(f.announced.filter(task=>task.taskId===marker.taskId).length,1);
+  const intent=f.application.runtime.loadCheckpoint(marker.taskId,'local-repair-intent');
+  f.restart();assert.equal(f.announced.filter(task=>task.taskId===marker.taskId).length,2);
+  assert.deepEqual(f.application.runtime.loadCheckpoint(marker.taskId,'local-repair-intent'),intent);
+  assert.deepEqual(f.application.runtime.loadCheckpoint(reviewTaskId,'desktop-goal-cognition-repair-task-v1'),marker);
+  assert.equal(f.store.read().revision,5);assert.equal(f.sent.length,1);assert.equal(f.layaCalls(),1);
+});
+
+test('historical local repair metadata rejects malformed markers and a foreign task conversation',async t=>{
+  const ui=await originalGoalTaskSurface(),f=await fixture(t,{controlledRepair:true,onTaskCallback:ui.notify});
+  f.host().configure({enabled:true,cloudAllowed:true});await f.host().tick();
+  const pending=await pendingOriginalPanelRepair(f,ui),runtime=f.application.runtime;
+  const marker=runtime.loadCheckpoint(pending.reviewTaskId,'desktop-goal-cognition-repair-task-v1');
+  const intent=runtime.loadCheckpoint(pending.taskId,'local-repair-intent');
+  const foreign=runtime.submitTask({goal:'Synthetic foreign metadata task',conversationId:'foreign-conversation',idempotencyKey:'synthetic-foreign-local-repair-metadata'});
+  runtime.saveCheckpoint(foreign.taskId,'local-repair-intent',intent);
+  for(const changed of [{...marker,namespace:'foreign'},{...marker,reviewTaskId:'foreign'},
+    {...marker,sourceTaskId:'foreign'},{...marker,candidateDigest:'foreign'},{...marker,taskId:foreign.taskId}]) {
+    runtime.saveCheckpoint(pending.reviewTaskId,'desktop-goal-cognition-repair-task-v1',changed);
+    f.announced.length=0;ui.conversations.turns.clear();ui.taskGoals.clear();f.restart();
+    assert.equal(f.announced.some(task=>task.taskId===pending.taskId||task.taskId===foreign.taskId),false);
+    assert.equal(ui.panelTasks().some(task=>task.taskId===pending.taskId||task.taskId===foreign.taskId),false);
+    assert.equal(f.host().snapshot().reviews[0].state,'waiting_reconciliation');
+    assert.deepEqual(runtime.loadCheckpoint(pending.reviewTaskId,'desktop-goal-cognition-repair-task-v1'),changed);
+  }
+  runtime.saveCheckpoint(pending.reviewTaskId,'desktop-goal-cognition-repair-task-v1',marker);f.restart();
+  assert.equal(ui.panelTasks().some(task=>task.taskId===pending.taskId),true);
+  assert.deepEqual(runtime.loadCheckpoint(pending.taskId,'local-repair-intent'),intent);
+  assert.deepEqual((await f.client.call('approval.list',{taskId:pending.taskId})).items,pending.approvals);
+  assert.equal(f.store.read().revision,5);assert.equal(f.sent.length,1);assert.equal(f.layaCalls(),1);
 });
