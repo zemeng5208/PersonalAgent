@@ -457,3 +457,21 @@ fresh公开工具 after bb0c34 actual0：graph103、完整101 affected、仅rech
 infer1/dispatch0。原failed DB及全部11个before artifact逐字保留，32artifact独立核实。
 工具context/Plan/FakeLaya为受控消费者，不称Desktop投影、Policyledger、真实云或设备
 验收通过；后续根固定HEAD完整check另行记载。
+
+同轮另外经原公开Goal/SQLite、原Desktop project及AgentArts adapter核大范围导出边界：
+101个Plan与两版私有Fact的图为graph106，本地101项RECHECK/1infer；projection完整103
+nodes、私有版本省略2、无repair context，但goal为24338字符，超过原16000文本上限。
+实际cloud task失败外层EXTERNAL_FAILURE；同原journal goal直接调用公开adapter确认内层
+INVALID_ARGUMENT。auth/hook/HTTP均0，probe自身exit0仅表示成功观测拒绝，不是云交接
+通过。不截断、不扩大DTO或出云上限。只读manifest a75a599e及8artifact/A独审分别保留。
+
+## 本轮已集成源码的完整检查（2026-10-08）
+
+固定d3cb172cce433069e5a72dc1187430e4e25e776b、tree
+f4fc3c6c01fb15ee0a395e0fad0d9d52de713b07，原npm run check在Node24.15/实际4CPU、
+原断言与期限下5746/d08bc9 actual0，于00:19:47.508Z完成：34组2497项、2447通过、
+0失败/取消、50跳过；Desktop626/615通过11跳过、Runtime436/436、root integration22/22。
+构建、类型、生成、合同与架构检查均执行；原log 246437B，SHA256
+eb1d56b2433236efeb708528d903d3af7bd70871f827aebf34ffd30c9fe83323。
+本结果覆盖上述Goal回执/即时反馈、locale/101及Live/手动录音集成源，不覆盖随后
+reference停止pending增量。手动SDK9+官方离线2例仍独立记录，不计入此自动测试数。

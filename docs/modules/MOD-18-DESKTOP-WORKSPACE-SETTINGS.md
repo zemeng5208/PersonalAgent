@@ -171,3 +171,20 @@ FakeIPC renderer 对照，不重复或冒称新 stdio 验收。冻结 manifest S
 失败/取消0、11跳过。日志 core-desktop-saved-cards-skill137-check.log SHA256
 3afda5190a65e169d20caa13ed2df6e0830c38035e09b67c8526ebebe67c20bc，独立全文读回及源码一致。
 中断的旧 overlay94070/4c6f19 actual1 仅留历史，不计通过；本节不是整仓、Windows 或真实设备验收。
+
+## 服务停止回执 pending 时的摘要可用性（2026-10-08 续接）
+
+原实际官方stdio服务已经完全disposed，Host disconnected/Skill disabled，而明确Fake
+wrapper持住stop回执，UI尚显示旧ready时仍可点击run；Host拒绝一次IPC，Task/read/grant/
+云凭据均0。只给run门禁增加pending mcp或skill；原连接/启用谓词、失败恢复、late/
+卸载保护保持。已启用Skill仍能停用，run pending也不能阻止用户stop，不改Host/main/
+Runtime/CSS。EXACT2 source6ddef98f/test955db9ce，冻结22artifact manifest SHA256
+cc4c0651770f707f1b66e0ad8cdbc4caf6665602ae548ece783505012c4e95df。
+
+原正式行为before33a541为4pass2fail，修后90a684为6/6 actual0。原消费者before
+52300/194609 actual1保持；after60342/17e63d actual0，真实服务closed/stop回执held时
+run disabled，native click及dispatched click都0run IPC；release后仍disabled且停用可用。
+SQLite readonly task/toolrecord/grant均0，main DB字节不变；十个具体compiled出口稳定，
+不称全build或PID/真实设备验收。最初loader/cleanup错误只保留历史。源码与完整消费者/
+四截图、原失败及22hash独立只读核对；根在全仓d3cb结束后整合，本增量另作固定HEAD
+必要Desktop检查，不挪用d3cb完整绿结果。
