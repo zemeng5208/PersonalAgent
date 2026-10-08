@@ -46,6 +46,12 @@ export function createDesktopProactiveHost({application, client, userData, names
     }
   });
   async function configure(input) {
+    if(input && Object.keys(input).length===2 && Object.hasOwn(input,'goalAnalysis') && Object.hasOwn(input,'goalCloudAnalysis')) {
+      if(typeof input.goalAnalysis!=='boolean' || typeof input.goalCloudAnalysis!=='boolean') throw Error('目标分析设置无效');
+      if(!cognition) throw Error('目标分析尚未装配');
+      cognition.configure({enabled:input.goalAnalysis,cloudAllowed:input.goalCloudAnalysis});
+      publish();return snapshot();
+    }
     if (!input || Object.keys(input).some(key => !['enabled', 'cloudAnalysis', 'goalAnalysis', 'goalCloudAnalysis'].includes(key))
       || typeof input.enabled !== 'boolean' || typeof input.cloudAnalysis !== 'boolean') throw Error('主动提醒设置无效');
     if ('goalAnalysis' in input || 'goalCloudAnalysis' in input) {

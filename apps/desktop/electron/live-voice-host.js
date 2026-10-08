@@ -39,7 +39,8 @@ export function createLiveVoiceHost({getPanel, config, microphoneHost, createSou
     }
     return history.snapshot();
   }
-  const snapshot = () => ({...config.snapshot(), active: enabled || Boolean(active), status: active?.phase ?? (enabled ? 'reconnecting' : lastError ? 'error' : 'idle'),
+  const hasActive = () => enabled || Boolean(active) || releaseUnknown;
+  const snapshot = () => ({...config.snapshot(), active: hasActive(), status: active?.phase ?? (enabled ? 'reconnecting' : lastError ? 'error' : 'idle'),
     reason: lastError || (history.snapshot().degraded ? (history.snapshot().durable
       ? '对话记录保存异常，已缓存待回补记录'
       : '对话记录保存异常，恢复缓存未确认；内存记录退出可能丢失')
@@ -284,9 +285,10 @@ export function createLiveVoiceHost({getPanel, config, microphoneHost, createSou
     assertRead();
     return messages;
   }
-  return {snapshot, historyMessages, hasActive: () => enabled || Boolean(active), start, stop, receive,
+  return {snapshot, historyMessages, hasActive, start, stop, receive,
     flushHistory() {const result = flushHistory(); publish(); return result;},
     interrupt() {
+      if (releaseUnknown) throw Error(lastError);
       if (active?.session && !active.controller.signal.aborted && now() < Date.parse(active.deadline)) active.session.interrupt();
     },
     async dispose() {

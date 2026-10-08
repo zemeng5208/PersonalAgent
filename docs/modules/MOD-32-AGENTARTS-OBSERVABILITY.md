@@ -1,5 +1,67 @@
 # MOD-32：AgentArts 请求级观测与恢复边界
 
+## 2026-10-07：显式只读 Trace helper
+
+[`read-platform-trace.mjs`](../../tests/manual/agentarts/support/read-platform-trace.mjs) 新增手动调用导出 `readAgentArtsTrace({traceId, deadline, signal, authorize, fetchImpl})`。导入时没有网络或文件操作；没有 CLI、凭据读取、自动调用、重试、云发布或资源创建。`fetchImpl` 默认使用 `globalThis.fetch`，也可由受信调用者提供传输实现。
+
+入口仅使用已由[官方观测 API 示例](https://support.huaweicloud.com/api-agentarts/agentarts_07_0037.html)证明的 `https://agentarts.cn-southwest-2.myhuaweicloud.com`，**仅限西南-贵阳一**，不推断其他区域；路径为 [ShowOpsTrace](https://support.huaweicloud.com/api-agentarts/ShowOpsTrace.html) 的 `GET /v1/ops/observation/traces/{trace_id}`。手动入口接受 1～64 位英文、数字、下划线或连字符 TraceID。调用者须对所读 Trace 有明确授权；IAM 用户需 `agentarts::showOpsTrace` 及该官方页面列出的 APM/模型查询依赖权限。
+
+调用者的 `authorize(request)` 接收冻结的完整 GET 描述（`url`、`method`、空 `body`、`headers`、原 `deadline` 和联动 `signal`），并用官方 AK/SK 签名 SDK 返回完整已签请求头。必须保留原 Host、Content-Type、Accept；签名 Authorization、X-Sdk-Date 必填，临时凭据可包含 X-Security-Token。helper 不修改这些已签头值、URL 或消息体，禁止 redirect，且不自动重试。[认证分类](https://support.huaweicloud.com/api-agentarts/agentarts_07_0005.html)明确观测接口使用 AK/SK；**现有运行实例 Bearer 不可替代观测签名**。仓库另提供下述显式注入的 SDK 适配器；使用者仍须提供受信 SDK 与逐请求凭据授权回调，不能把 helper 宣传为已接通账号。
+
+请求头格式检查不验证签名有效性或账号权限；只有真实服务回执能证明该请求通过鉴权。未取得真实回执前，合成签名头只用于离线消费测试。
+
+以下示例在仓库根目录的 Node REPL（支持顶层 await）中使用，所需参数与受信签名回调须由调用者先准备；加载模块不等于发出请求。
+
+```js
+// signObservationRequest 由明确获授权的宿主提供；这里不读取或示范存放密钥。
+const {readAgentArtsTrace} = await import('./tests/manual/agentarts/support/read-platform-trace.mjs');
+const summary = await readAgentArtsTrace({
+  traceId, deadline, signal,
+  authorize: signObservationRequest,
+});
+```
+
+原 canonical UTC 绝对截止时间和取消信号覆盖签名、fetch 与至多 1 MiB 的 JSON 响应读取，包括不合作的异步回调。错误只暴露固定 `code`（INVALID_ARGUMENT、UNAUTHORIZED、EXTERNAL_FAILURE、CANCELLED、TIMEOUT）及已知 HTTP 状态，不返回原始错误正文或鉴权值。返回摘要只含 `total`、`returnedSpanCount` 及逐 Span 的 `durationMs`、tokens/inputTokens/outputTokens 和 isError；缺失指标为 `null`，不合计各 Span token 或换算费用。官方示例 `total:5` 但只列一个 Span，因此两者分别保留。input/output/metadata、任意名称、资源/会话 ID 与原始 Trace 内容不进入摘要，也不自动落盘。
+
+摘要的 requestCorrelation、deploymentVersion、cost 始终为 `not_checked`；该手动读取不确立本地请求、运行实例、版本或账单的关联。新增测试仅使用官方结构的合成响应和故障夹具，没有真实账号、云调用或目标系统读回；原有历史验收和未读回结论继续保留。
+
+## 2026-10-07：显式注入官方 SDK 签名适配
+
+[`sdk-trace-authorizer.mjs`](../../tests/manual/agentarts/support/sdk-trace-authorizer.mjs)
+导出 `createAgentArtsTraceAuthorizer({sdk, readCredentials})`，返回上述 `authorize` 回调。
+`sdk` 必须由受信调用者明确提供[官方 APIG JavaScript SDK](https://support.huaweicloud.com/devg-apisign/api-sign-sdk-nodejs.html)
+的 `HttpRequest`/`Signer`；`readCredentials(request)` 对冻结的完整描述逐请求授权，返回
+`{accessKey, secretKey, securityToken?}`，未提供凭据时拒绝。模块导入与工厂不读取凭据、
+下载 SDK 或发请求，没有环境/文件发现、缓存、重试、Runtime/Desktop 自动接线、依赖或锁文件变更。
+
+```js
+// sdk、readCredentials、traceId、deadline、signal 已由获授权宿主准备。
+const traceReader = await import('./tests/manual/agentarts/support/read-platform-trace.mjs');
+const {createAgentArtsTraceAuthorizer} = await import('./tests/manual/agentarts/support/sdk-trace-authorizer.mjs');
+const authorize = createAgentArtsTraceAuthorizer({sdk, readCredentials});
+const traceSummary = await traceReader.readAgentArtsTrace({traceId, deadline, signal, authorize});
+```
+
+适配仅接受原固定区域/GET/安全 TraceID/空 query 与 body/三个原请求头，取凭据前校验。
+每次使用新的 SDK 请求、独立 header 副本与 Signer；临时 token 在签名前加入且须列入
+SignedHeaders。签名前后核 method/host/path/query/body/headers，拒绝 SDK 改写范围，
+只返回原 helper 接受的已签头。官方 CanonicalURI 的签名尾斜杠不改变实际发送 URL。
+原 reader 的 deadline/取消竞速保持；迟到凭据不能启动 SDK 或发送，同步 Sign 无法由
+JavaScript 抢断，返回后过期或取消的结果被拒绝。错误仅固定脱敏 code；清空本地 Signer
+字段是尽力处理，不保证 JavaScript 字符串或受信 SDK 内部副本已擦除。
+
+冻结 EXACT2 manifest SHA256 0589d6f6da7a5018b3f56fd780b2b9a6161fb3344b00d0f0f73ce7addd377636，
+两个新源码 blob15274156/4ad7c15a；原 reader blob4e32b07c 未改。根固定639b070d/treeac8e3358
+正常相对导入运行新测试9/9及 syntax/diff，另用 SHA256 3a6ee0a3e064da1be9bfb2583d52d40af665e1e57612029757725b30fc23c484
+的原官方 SDK2.0.6 跑普通/临时凭据两例，各1签名/1凭据回调/1FakeHTTP，实际 exit0
+（a21d13，23:36:26Z）。日志 core-sdk-authorizer139-integration.log SHA256
+11f282ee5a888429f6e8634ab580110f5ca8113cb1674e58a5cdb077b45eecb2。
+子树缺原 reader 时的单映射私有 loader 不进入根消费或 Git；初 SDK glue 错误和共享
+expectedHeaders 导致的8pass/1fail日志保留，最终两个独立副本在 Sign 前拒绝改写。
+独立 GPT-6.1 Sol 审查原 reader 的摘要隐私与适配的请求/凭据/取消边界。
+这些都是合成凭据/FakeHTTP 离线接线，未取得真实 IAM/平台 Trace、精确部署关联或费用，
+也不是整仓/Windows 验收。
+
 > 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
 
 - Profile：`huawei_ict_agentarts` Competition Profile；负责人：`zemeng`。
@@ -221,3 +283,21 @@ Runtime 名称、API 200、模型正文和控制台当前 `Latest` 都不能代�
 MOD-32 剩余验收：新版本与请求级部署绑定、精确 trace/usage/费用读回、平台失败
 及回退演练、角色交接与评估、无静默 Local 回退。真实云调用和发布变更需由主控
 协调单槽资源；本文没有运行它们。
+
+## 2026-10-07 当前源码与剩余现场验收
+
+本节只核对 main `4b5ec61` 和尚未合并的 [PR #302](https://github.com/zemeng5208/PersonalAgent/pull/302)。
+上方带日期的历史平台及本地回执保持原结论。本轮环境没有云账户绑定/凭据，没有发起
+真实云调用、发布、回退或 GUI 验收；离线通过不续期历史平台健康或升级 capability。
+
+| 交付项 | main 已有代码 / #302 未合并增量 | 剩余现场证据 |
+| --- | --- | --- |
+| 云调用及失败诊断 | main [adapter](../../packages/coordination/src/agentarts.ts) 已支持 Workflow 输入、严格提案/候选与不含正文的失败 diagnostic；#302 补 JSON/日期/信号及 guard 一致性 | 当次部署健康、请求级版本、原生 trace 精确关联、实际响应及失败读回；本地 request ID 和配置名不能替代平台字段 |
+| 本地执行与恢复 | main 工具目录、Policy/审批、ToolGateway、confirmed receipt、候选预览/CAS、Fact/Goal/proactive 消费已有接线；#302 补 provider、候选模式、子任务取消及 hook 合同一致性，见 [MOD-29](MOD-29-AGENTARTS-RUNTIME-INTEGRATION.md)、[MOD-30](MOD-30-COMPETITION-EXPORT-01.md) | 采用实际集成 head 的同批合成 Desktop 场景、目标系统读回和同库重启；不能拼接不同批次任务为新 Golden Path |
+| 固定评估和基线重复 | main 已有 [fixed runner](../../tests/manual/agentarts/support/fixed-synthetic-batch.mjs) 与 trace scorer；#302 新增 [paired runner](../../tests/manual/agentarts/support/paired-synthetic-batch.mjs)，显式注入两个端口，1～3 对批次沿用同一 deadline/cancel，只报告实际三标签分类及 await 时长；scorer 只计真实 dense own-data records/events | 独立标注的实际平台输出、固定版本及对照；World/Plan/Review 的源身份、路由、交接、预算和失败分支仍须真实 trace，不能由三标签得分推断多 Agent 优势 |
+| 费用、发布和回退 | 当前端口没有已验证的请求级部署版本、usage/费用或发布回退契约；#302 不增加这些字段 | 原生请求关联、usage 与账单依据、此前已验证版本、实际回退后的绑定/健康/API/trace 读回。没有精确证据时保持 unknown |
+
+上述 main 接线是实现盘点，不表示 MOD27～32 全部完成。#302 的离线补丁必须在合并与
+必要检查后才算 main 增量；真实平台评估、可视化比赛 Demo 和整体验收仍分别判定。
+缺少真实嵌套 trace 字段时沿用 [MOD-31 的现有边界](MOD-31-TRACE-EVALUATION-02.md)，
+不创建猜测角色 DTO、虚拟 usage 或“一键回滚”实现。

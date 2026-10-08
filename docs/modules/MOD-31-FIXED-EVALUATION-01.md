@@ -67,6 +67,14 @@ node tests/manual/agentarts/support/fixed-synthetic-batch.mjs --deadline $evalua
 
 ## 排除项与已知限制
 
+### 有界配对分类增量（2026-10-07）
+
+`support/paired-synthetic-batch.mjs` 的 `runPairedSyntheticBatch({candidate, baseline}, {deadline, signal, repetitions})` 复用上述固定三案例 runner。两个 `CoordinationPort` 必须由调用者显式注入；默认一对，重复次数仅允许 1～3，同一绝对期限和取消信号贯穿全部调用。每轮串行运行两个批次，轮换先后顺序，不选服务、不读凭据、不创建部署或自动触发云调用。
+
+报告仅保存实际开始的批次、完整配对的三标签正确计数、配对正确率差及实际等待耗时。普通端口失败沿用原固定错误码；取消或到期停止，不重试，缺少完整配对时正确率为 `null`。严格单词评分保持原合同，不从结构化提案猜决策，不输出响应正文、角色、trace、token 或成本。合成端口回归只证明评估管线，少量重复不证明统计显著性、真实多 Agent 效果或云端可用性；真实对照仍须另核部署、模型设置、输入一致性和平台回执。
+
+新配对回归与原固定批次共 14 项通过；它们不属于根 `npm run check` 的自动发现范围，单独运行 `node --test --test-concurrency=1 tests/manual/agentarts/support/paired-synthetic-batch.test.mjs tests/manual/agentarts/support/fixed-synthetic-batch.test.mjs`。下列排除项保留原首片的范围；本增量仅补有界配对分类准备，不改变真实验收等级。
+
 实际执行：contracts/coordination 构建通过；上述定向测试 6/6 通过，包含提示词不泄露
 案例答案的检查；脚本语法与 `git diff --check` 通过。没有真实云端验收。
 
@@ -74,3 +82,54 @@ node tests/manual/agentarts/support/fixed-synthetic-batch.mjs --deadline $evalua
 - 不调用云端、不读取凭据、不访问历史记录，也不执行或读回任何真实工具。
 - 不提供基线对照、重复统计、模型质量结论、AgentArts deployment/API/trace/usage 或成本证据。
 - `CoordinationPort` 仍为 provisional；离线 Fake 通过不改变 AgentArts 的真实可用性状态。
+
+### 固定合成最小修复评估（2026-10-07，PR #302 未合并增量）
+
+新增 [修复 runner](../../tests/manual/agentarts/support/fixed-synthetic-repair-batch.mjs)
+`runFixedSyntheticRepairBatch(port, {deadline, signal, repetitions})`，不改变上方分类 runner。
+调用者必须显式注入已有 `CoordinationPort`；默认一次、最多三次重复三个固定合成案例。
+[纯夹具](../../tests/manual/agentarts/support/fixed-synthetic-repair-cases.mjs) 提供合法的
+Fact/Goal/Decision/Plan 世界与一般最小修复规则：依赖链、并列受影响目标、仅 Plan 受影响。
+只有 `goal` 输入发送到端口；独立期望、干扰候选和验证材料留在评估端，不发送正确答案。
+
+结果沿用公开 `CoordinationRepairCandidateResult` 与 parser；按独立期望比对图 revision、
+精确目标集合、当前节点 revision、摘要和依赖身份/版本。引用本批新节点 revision 的变化
+必须保持依赖先于使用者；独立变化和依赖列表可换序。多改未影响目标、少改、错误依赖或
+源版本、旧图基线与错误摘要均不计匹配。reason 只要求现有 parser 的合法非空文本，
+不以措辞相同作为评分条件；此评估不是自由文本理由或总体模型能力评价。
+
+全部调用串行复用同一原始 deadline/signal，通过既有 Coordinator 处理取消、期限和
+不合作端口。普通失败保留固定错误码并继续，不重试；取消或到期停止后续案例。
+报告只列实际尝试，分别统计计划总数、尝试、匹配、不匹配、错误与未运行数。
+准确率为匹配数 / 实际尝试数（错误也在分母），没有尝试时为 `null`；取消后的未运行
+不能填成成功。每例和总耗时只表示本机等待/校验经过的时间，不是平台 span 或推理耗时。
+报告不含响应正文、期望、图谱、任务 ID、trace、token 或费用；导入不自动运行。
+
+该入口不写图、不创建 Runtime task、不授权或执行工具、不读凭据、不选择服务，
+不自动调用云端。报告固定 `synthetic: true`、`verification: unverified`，离线端口验证
+只证明此限定评估管线；有限重复不构成独立样本或统计显著性。真实候选质量、角色协作
+及平台效果仍需独立真实运行与证据。
+运行下列联合验证前，先在当前隔离工作树安装依赖并完成根 `npm run build`，准备该树的公开包产物。
+若只定向构建，须准备 `@personal-agent/contracts`、`@personal-agent/coordination`、`@personal-agent/goals`、`@personal-agent/cognition` 及其完整传递依赖的 `dist`；cognition 的 build 仅先构建 goals，不代建其余传递依赖，不借用其他工作树的 workspace 链接。
+必要定向验证：`node --test --test-concurrency=1 tests/manual/agentarts/support/fixed-synthetic-repair-cases.test.mjs tests/manual/agentarts/support/fixed-synthetic-repair-batch.test.mjs`。
+正式夹具集成后，新 runner 的定向测试 12/12 通过，无跳过；仅运行本批 runner，
+未重复旧分类/配对绿色测试，也未运行真实平台、整仓检查或 GUI。
+
+### 有界配对修复质量对照（2026-10-07，PR #302 未合并增量）
+
+[配对修复入口](../../tests/manual/agentarts/support/paired-synthetic-repair-batch.mjs)
+`runPairedSyntheticRepairBatch({candidate, baseline}, {deadline, signal, repetitions})`
+复用上述固定修复 runner、夹具和评分，不增加另一份期望。调用者显式提供两个
+`CoordinationPort`；默认一对、最多三对，每侧每批运行原三个案例一次，最多 18 次请求。
+批次顺序逐对交替，全部串行沿用同一绝对 deadline 和取消信号；不选择服务、读取凭据、
+自动云调用或写图。原 execute 方法在入口捕获，调用期间替换方法不改变已选端口。
+
+只有两侧均完整尝试三个案例且未取消或到期的批次才进入配对比较；普通错误计入每侧
+三个案例的分母。未配对批次保留实际计数与失败，无完整配对时正确率及差值为 `null`。
+报告只含原 runner 的脱敏结果、实际配对正确率和 await 时长，不含期望、候选正文、
+trace 或费用；少量重复不证明统计显著性、真实平台质量或多 Agent 优势。
+
+单独运行 `node --test tests/manual/agentarts/support/paired-synthetic-repair-batch.test.mjs`：
+新增组合测试 8/8 通过、零跳过，覆盖两侧不同语义错误、普通错误分母、交替顺序、
+18 请求上限、取消后的不完整配对及共享期限耗尽。没有重复运行原单端或分类测试，
+没有真实云调用。

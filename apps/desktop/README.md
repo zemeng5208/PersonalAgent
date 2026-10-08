@@ -2,6 +2,55 @@
 
 > 维护入口（2026-10-07）：项目主要负责人为 zemeng；当前分工以 [模块分工](../../docs/MODULE_ASSIGNMENTS.md) 为准，最新状态见 [ROADMAP](../../docs/ROADMAP.md)。历史日期、作者和验收结论按原记录保留。
 
+## 2026-10-07 原功能源码核对
+
+本节核对 `main@4b5ec614` 已有入口；当前开发 PR #302 尚未合并，其新增修复不能记为该基线已交付。下文旧日期的记录保留原验收范围，模块状态继续为 `in_progress`。
+
+| 功能 | 已有源码与消费入口 | 具体剩余边界 |
+| --- | --- | --- |
+| 桌面本机设置 | [DesktopHost](electron/desktop-host.js) 提供托盘及后台的“桌面设置与恢复”、偏好读取/保存、窗口恢复；[设置页](src/desktop-settings/settings.js) 和 [外壳](src/ui/desktop-shell.js) 消费本机偏好 | 这是 Desktop 本机设置，不是 Runtime `settings.get/update`；后者仅有 Schema/Fake，生产握手不公布且调用返回 `UNSUPPORTED_CAPABILITY`。物理多屏/DPI、真实崩溃及快捷键冲突仍须 Windows 验收 |
+| 授权管理 | [后台](src/features/admin/view.js) 消费待处理审批、公开 `approval.list` 的脱敏分页历史及一次性允许/拒绝；[受信宿主](electron/evidence-host.js) 逐次检查会话与任务归属，消费已有宿主元数据读取和授权撤销端口并核对 grant 删除读回 | 不提供原始参数或 Evidence 内容；宿主撤销不是新增 wire operation，也不代表跨任务持续授权或完整凭据管理已完成 |
+| AgentArts 配置与状态 | [后台模型页](src/features/admin/agentarts-model.js) 展示配置状态，并挂载 [配置控件](src/app/agentarts-controls.js)；[主进程配置](electron/agentarts-config.js) 负责 HTTPS 目的地校验、加密保存、恢复与撤销，配置路由消费 Runtime 启动结果并提示是否需重启 | `configured` 表示已持有配置，配置快照的 `runtimeReady` 只表示目的地可供本机装配；Runtime 启动成功、云端连接成功和真实任务完成分别核实。真实 deployment/version/trace、工具回传及云端结果仍待联合验收 |
+| 文字会话与 Live 历史 | [会话元数据](electron/conversations.js) 持久化面板/工作区任务归属、每会话思考/辅助模型偏好及 Live 发言；任务恢复使用公开 `task.list/conversation.list/approval.list`，状态仍由 Runtime 决定 | 当前使用 `desktop-panel`、`desktop-workspace` 两个固定会话；显式创建、重命名、归档、删除和重试关联尚无公开生产 API，不能由 UI 另建任务或会话系统 |
+| SIS 与 Live 语音组合 | 主进程 `initializeSisVoice()` 已把 Huawei SIS 端口、同一授权 PCM 源、[Desktop 语音消费](electron/voice-input.js) 及本机 WAV 播放装配；听写仅填输入框。Live 使用独立可信宿主和显式开启入口，业务工作仍经过 Runtime/Policy/ToolGateway | 本机 `voice.record.*`、播放及停止入口不等于生产 wire `voice.start/stop` 已公布；本轮未重新执行真实 SIS/IAM、麦克风、扬声器、Live 网络续连或 AgentArts 联合验收，也不撤回旧记录中用户确认听到 Live 的事实 |
+| 有界唤醒 | 根 build/锁文件已包含 `@personal-agent/voice-wake`；`@personal-agent/voice` 已公开 `bindVoiceWake`、共享 PCM 端口和 Windows System.Speech 限定词检测器 | Desktop 尚未注册 `WakeLifecycleController`、可信唤醒授权和检测器组合，也没有显式启用入口；需先按已公布端口确认组合方案。中文识别器可用性、实际命中、误触、回声和设备释放另需 Windows 实测 |
+| 受控编程工作区 | [WorkspaceConfigHost](electron/workspace-config-host.js) 与 Worktrees/环境控件已消费受限枚举、读取、补丁预览/暂存/条件应用及固定命令；许可绑定本次进程、任务 checkpoint 与代次，撤销不复活旧任务 | “写入和命令未交付”是历史状态；当前能力仍受权限、平台和已有文件限制。Artifact 服务、真实项目补丁/命令、Windows 恢复与 AgentArts 联合验收未完成，详见 [工作区设置边界](../../docs/modules/MOD-18-DESKTOP-WORKSPACE-SETTINGS.md) |
+
+本节通过源码、公开接口目录和入口归属核对更新；没有运行真实云服务或设备验收。生产设置/连接器 wire API、会话管理 API 和完整持续授权仍按 [接口目录](../../docs/interfaces/CURRENT_INTERFACE_CATALOG.md) 保持未公布边界。只读 AgentArts 状态页及唤醒首片的旧模块说明是历史增量记录，不能据其中“未接线/未纳入根 build”的旧结论否认当前已存在的代码，也不能据新代码宣布整个模块完成。
+
+## 语音设备释放与配置编辑
+
+### PR #302 的未合并唤醒增量（2026-10-08）
+
+上表保留 `main@4b5ec614` 的基线含义；该main没有Desktop Wake宿主。现有PR #302的工作树已由 `initializeSisVoice()` 装配 [Wake宿主](electron/wake-voice-host.js)、共享授权PCM及限定词检测器，并提供可信面板的显式 `voice.wake.enable/disable`。单次许可最多10分钟，隐藏面板、撤销、停止或释放未确认仍按原生命周期处理，唤醒后的听写只填输入框。新增源码未合并，不记为main已发布；中文识别器、真实命中/误触/回声和Windows设备释放仍需现场验收。
+
+本轮补充了活动任务拒绝退出前的资源保护，以及SIS配置保存失败时保留可显式重新启用的旧Wake宿主。原启动、晚到任务和未知释放守卫保留，不自动续退或复活许可；保存后资源释放未知不回滚已保存配置。原公开消费者及合成端口检查分记于[本轮集成交接](../../docs/modules/MOD-27-28-INTEGRATION-HANDOFF.md)，不能当作真实设备或云验收。
+
+晚到任务阻止退出后，显式成功配置新的语音宿主会重新建立该宿主的退出清理归属；下次显式退出取消新宿主尚在识别的请求。初始化失败或旧资源释放未知仍保留原守卫。检查使用实际公开Voice/Config组合和合成ASR、app及设备回执，不证明物理设备验收。
+
+### Goal审批到期的界面恢复（PR #302 未合并增量）
+
+Goal任务只在原公开审批记录的身份、任务、工具、revision与状态全部匹配时展示原期限。期限缺失、无效或已过期时不提供批准/拒绝按钮；页面打开期间到期也会更新，点击时再次检查。刷新和取消目标任务仍可使用，已受理或受理未知的写入继续锁定，不能重复提交。界面时钟检查不替代Runtime原审批期限守卫，也不改变原授权或图版本；真实Runtime/SQLite与原完整HTTP页面的合成期限验证另记于本轮交接。
+
+Live 输出和麦克风采集在确认音频上下文关闭（采集还需确认所有轨道停止）前保留当前设备归属；释放未确认时阻止新会话。单个清理步骤失败仍继续尝试释放其余资源，迟到回调和已注销页面的命令不会重新开启设备。停止语音继续与 Runtime 任务取消分离。
+
+Live 配置保存期间可继续编辑。保存成功后，新修改保留为未保存草稿，宿主刷新不覆盖它；没有新增修改时才关闭设置并接受后续读回。正在处理的保存和界面启停请求不会重复提交。
+
+上述边界由 `test/live-voice-playback.test.mjs`、`test/microphone-capture.test.mjs` 和 `test/live-voice-controls.test.mjs` 的合成测试覆盖；它们不证明 Windows 麦克风、扬声器或真实 Live 云端验收。
+
+### 隐藏面板后的听写恢复（PR #302 未合并增量）
+
+隐藏、主页面导航或 renderer 崩溃时，主进程请求关闭唤醒并取消活动的手动听写；
+`cancelCapture` 中止该次会话，随后等待采集、识别和相关资源的释放确认。
+迟到的旧听写不能重新填入草稿；停止语音不自动提交或取消 Runtime 任务。
+仅隐藏同一存活面板保留当前输入草稿；导航重载和崩溃不承诺草稿持久化。
+重新打开面板不会自动恢复 Wake 或录音，须在有效 SIS 配置及释放确认后显式开启；
+原唤醒许可的取消与期限继续生效，不能借重开延长或恢复旧许可。
+释放未确认时保持设备门禁；退出或重启不能作为物理释放已验证的回执。
+此说明对应尚未进入 main 的 [PR #302](https://github.com/zemeng5208/PersonalAgent/pull/302)，
+不改变旧设备验收记录；实现与现场边界见 [MOD-14](../../docs/modules/MOD-14-VOICE-SESSION-01.md)
+和 [MOD-15](../../docs/modules/MOD-15-WAKE-LIFECYCLE-01.md)。
+
 ## 2026-09-27 当前语音与主动提醒增量
 
 本轮按 Competition Profile 区分两个入口：麦克风使用 SIS 听写，只填入可编辑输入框，

@@ -10,7 +10,7 @@ import {createGoalControl} from '../features/conversation/goal-view.js';
 import {mountDesktopShell} from '../ui/desktop-shell.js';
 import {mountLiveVoiceControls} from './live-voice-controls.js';
 import {mountProactiveControls} from './proactive-controls.js';
-import {approvalCards,approvalResponse} from '../features/conversation/approval-card.js';
+import {approvalCards,approvalResponse,nextApprovalExpiry} from '../features/conversation/approval-card.js';
 
 applyPreferences();
 mountDesktopShell();
@@ -52,19 +52,63 @@ else {
   expand.title='放大到工作区';expand.setAttribute('aria-label','放大到工作区');
   expand.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6m0-6-7 7M10 20H4v-6m0 6 7-7"/></svg>';
   root.querySelector('#close').before(expand);
-  expand.onclick=()=>invoke('workspace.open').catch(error=>{root.querySelector('#error').textContent=error.message;});
-  let current,pending=false,lastTaskSignature='';const likedTasks=new Set();
-  const report=e=>root.querySelector('#error').textContent=typeof e==='string'?e:e.message;
+  expand.onclick=()=>invoke('workspace.open').catch(error=>{setFeedback(error.message);});
+  let current,pending=false,lastTaskSignature='',draftRevision=0;const likedTasks=new Set();
+  const approvalDecisions=new Map();
+  let approvalExpiryTimer;
+  let errorFeedbackRevision=0;
+  const setFeedback=value=>{errorFeedbackRevision++;root.querySelector('#error').textContent=value;};
+  const report=e=>setFeedback(typeof e==='string'?e:e.message);
   const form=root.querySelector('form'),input=root.querySelector('textarea'),thread=root.querySelector('.thread'),tasksNode=root.querySelector('#tasks');
   const liveControls=mountLiveVoiceControls(root,invoke);
   const proactiveControls=mountProactiveControls(root.querySelector('.thread'),invoke);
+  const wakeControls=document.createElement('div');
+  wakeControls.className='wake-controls';
+  wakeControls.innerHTML='<div class="wake-control-row"><span>唤醒词：你好小派</span><button type="button" id="wake-toggle" disabled aria-pressed="false">开启 10 分钟</button></div><p id="wake-state" role="status" aria-live="polite">唤醒未开启</p><p class="wake-hint">本次最多 10 分钟；关闭面板停止。唤醒后语音发送到华为 SIS 转文字，仅填草稿，需手动发送。</p>';
+  form.append(wakeControls);
+  const wakeButton=wakeControls.querySelector('#wake-toggle'),wakeStatus=wakeControls.querySelector('#wake-state');
+  let wakePending=false,wakeClosed=false,updateVersion=0;
+  const wakeBlocksCapture=data=>['enabling','disabling','release_unconfirmed','disposed'].includes(data?.wake?.phase);
+  const renderWake=data=>{
+    const wake=data?.wake,phase=wake?.phase??'unavailable';
+    const listening=phase==='listening';
+    const labels={disabled:'唤醒已关闭',enabling:'正在准备唤醒检测与麦克风',listening:'正在聆听“你好小派”',
+      disabling:'正在关闭并核实音频释放',unavailable:'唤醒尚未就绪',release_unconfirmed:'音频释放未确认，无法重新开启',disposed:'唤醒已停止'};
+    wakeButton.textContent=listening?'关闭唤醒':phase==='unavailable'?'重试开启 10 分钟':'开启 10 分钟';
+    wakeButton.setAttribute('aria-pressed',String(listening));
+    wakeButton.disabled=wakePending || Boolean(data?.live?.active) || !data?.voice?.experimental
+      || !['disabled','unavailable','listening'].includes(phase)
+      || (!listening && !['unavailable','error','awaiting_speech'].includes(data?.voice?.status));
+    const expiry=listening&&Number.isFinite(wake?.expiresAtMs)
+      ? ` · 本次至 ${new Date(wake.expiresAtMs).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}`:'';
+    wakeStatus.textContent=(labels[phase]??'唤醒未开启')+expiry
+      + (['unavailable','release_unconfirmed'].includes(phase)&&wake?.reason?` · ${wake.reason}`:'');
+  };
+  wakeButton.onclick=async()=>{
+    if(wakePending||wakeButton.disabled)return;
+    const operation=current?.wake?.phase==='listening'?'voice.wake.disable':'voice.wake.enable';
+    wakePending=true;renderWake(current);
+    const operationVersion=updateVersion;
+    const feedbackRevision=errorFeedbackRevision;
+    let readVersion;
+    try{
+      await invoke(operation);
+      if(wakeClosed)return;
+      readVersion=updateVersion;
+      const data=await invoke('snapshot');
+      if(wakeClosed||readVersion!==updateVersion)return;
+      render(data,{preserveFeedback:feedbackRevision!==errorFeedbackRevision});
+    }catch(error){if(!wakeClosed&&(readVersion??operationVersion)===updateVersion
+      && feedbackRevision===errorFeedbackRevision)report(error);}
+    finally{wakePending=false;if(!wakeClosed)renderWake(current);}
+  };
   const removeDictation=bridge?.onDictation?.(result=>{
     if(typeof result?.text!=='string'||!result.text.trim())return;
     input.value=(input.value.trim()?input.value.trimEnd()+'\n':'')+result.text;
     input.dispatchEvent(new Event('input',{bubbles:true}));
     input.focus();input.setSelectionRange(input.value.length,input.value.length);
   });
-  window.addEventListener('unload',()=>removeDictation?.());
+  window.addEventListener('unload',()=>{wakeClosed=true;clearTimeout(approvalExpiryTimer);approvalExpiryTimer=undefined;removeDictation?.();});
   const sisSettings=document.createElement('details');
   sisSettings.className='sis-settings';
   sisSettings.innerHTML='<summary>华为云语音设置</summary><div class="sis-fields"><label>区域<select id="sis-region"><option value="cn-north-4">华北-北京四</option><option value="cn-east-3">华东-上海一</option></select></label><label>华为云账号名<input id="sis-domain" autocomplete="off" maxlength="128" placeholder="IAM 用户所属的账号名"></label><label>IAM 用户名<input id="sis-username" autocomplete="off" maxlength="128" value="personalagent-sis"></label><label>IAM 用户密码<input id="sis-password" type="password" autocomplete="off" maxlength="1024"></label><button type="button" id="sis-login">连接华为云语音</button><p class="notice">密码仅用于向华为 IAM 登录，不保存；项目令牌在本机加密保存。录音仅在你开启后发送到华为 SIS。</p><details><summary>已有 IAM Token：手动配置</summary><label>项目 ID<input id="sis-project" autocomplete="off" maxlength="128"></label><label>独立 IAM Token<input id="sis-token" type="password" autocomplete="off" maxlength="16384"></label><label>Token 到期时间（UTC，可选）<input id="sis-expiry" autocomplete="off" placeholder="YYYY-MM-DDTHH:mm:ssZ"></label><button type="button" id="sis-save">保存 SIS 配置</button></details><p class="notice" id="sis-reason"></p></div>';
@@ -76,25 +120,29 @@ else {
   const sisLoginStatus=document.createElement('p');
   sisLoginStatus.className='notice';sisLoginStatus.setAttribute('role','status');
   sisSettings.querySelector('#sis-login').after(sisLoginStatus);
+  let sisPending=false;
+  const setSisPending=value=>{sisPending=value;for(const control of sisSettings.querySelectorAll('input,select,button'))control.disabled=value;};
   sisSettings.querySelector('#sis-login').onclick=async()=>{
-    const login=sisSettings.querySelector('#sis-login'),password=sisSettings.querySelector('#sis-password');
+    if(sisPending)return;
+    setSisPending(true);
+    const password=sisSettings.querySelector('#sis-password');
     const request={region:sisRegion.value,domainName:sisSettings.querySelector('#sis-domain').value.trim(),
       username:sisSettings.querySelector('#sis-username').value.trim(),password:password.value};
-    password.value='';login.disabled=true;sisLoginStatus.textContent='正在连接华为 IAM…';
+    password.value='';sisLoginStatus.textContent='正在连接华为 IAM…';
     try{const result=await invoke('voice.login',request);
       sisLoginStatus.textContent=result.connected?'已连接华为云语音，可以开始录音':'凭据已保存，等待任务引擎就绪';
       if(result.connected)sisSettings.open=false;}
     catch(err){sisLoginStatus.textContent=err instanceof Error?err.message:'连接失败，请重试';}
-    finally{request.password='';login.disabled=false;}
+    finally{request.password='';setSisPending(false);}
   };
   sisSettings.querySelector('#sis-save').onclick=async()=>{
-    const save=sisSettings.querySelector('#sis-save');
-    save.disabled=true;
+    if(sisPending)return;
+    setSisPending(true);
     try { const result=await invoke('voice.configure',{region:sisRegion.value,projectId:sisProject.value.trim(),
       iamToken:sisToken.value,tokenExpiresAt:sisExpiry.value.trim()});
-      sisToken.value='';sisSettings.open=false;root.querySelector('#error').textContent=result.connected?'':'SIS 配置已保存；等待 Competition Runtime 接通后启用语音'; }
+      sisToken.value='';sisSettings.open=false;setFeedback(result.connected?'':'SIS 配置已保存；等待 Competition Runtime 接通后启用语音'); }
     catch(err){sisToken.value='';report(err);}
-    finally{save.disabled=false;}
+    finally{setSisPending(false);}
   };
   const goalControl=createGoalControl(invoke,()=>input.value);
   root.querySelector('.composer-bar .spacer').before(goalControl.button);
@@ -125,39 +173,76 @@ else {
   document.addEventListener('click',e=>{if(!modelMenu.hidden&&!e.target.closest('.model-box'))closeModel();if(!bellMenu.hidden&&!e.target.closest('.bell-box'))closeBell();});
   slider.addEventListener('input',()=>{syncSlider();invoke('thinking.update',{depth:Number(slider.value),fast:fastBtn.getAttribute('aria-pressed')==='true'}).catch(report);});syncSlider();
   fastBtn.onclick=()=>{const on=fastBtn.getAttribute('aria-pressed')!=='true';fastBtn.setAttribute('aria-pressed',String(on));modelMenu.classList.toggle('fast',on);invoke('thinking.update',{depth:Number(slider.value),fast:on}).catch(report);};
-  input.addEventListener('input',e=>{setSendMode(Boolean(e.target.value.trim()));invoke('panel.pin',true).catch(report);});
+  input.addEventListener('input',e=>{draftRevision++;setSendMode(Boolean(e.target.value.trim()));invoke('panel.pin',true).catch(report);});
   input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();if(input.value.trim()&&!pending)form.requestSubmit();}});
   sendBtn.addEventListener('click',e=>{e.preventDefault();if(sendBtn.dataset.mode==='live'){
     void liveControls.toggle();
   }else if(!pending)form.requestSubmit();});
   document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(!modelMenu.hidden){closeModel();return;}if(!bellMenu.hidden){closeBell();return;}invoke('panel.hide').catch(report);});
-  form.onsubmit=async e=>{e.preventDefault();if(pending||!input.value.trim())return;pending=true;setSendMode(true);try{await invoke('task.submit',input.value);input.value='';requestAnimationFrame(()=>{thread.scrollTop=thread.scrollHeight;});root.querySelector('#error').textContent='';}catch(err){report(err);}finally{pending=false;setSendMode(Boolean(input.value.trim()));}};
+  form.onsubmit=async e=>{e.preventDefault();if(pending||sendBtn.disabled||!input.value.trim())return;const submittedRevision=draftRevision;pending=true;setSendMode(true);try{await invoke('task.submit',input.value);if(draftRevision===submittedRevision)input.value='';requestAnimationFrame(()=>{thread.scrollTop=thread.scrollHeight;});setFeedback('');}catch(err){report(err);}finally{pending=false;setSendMode(Boolean(input.value.trim()));}};
   const stopButton=root.querySelector('#stop');
   // Stopping playback never sends task.cancel to Runtime.
   stopButton.onclick=async()=>{window.speechSynthesis?.cancel();try{const result=await invoke('voice.stop');if(!result?.stopped)report(result?.reason??'语音供应商尚未连接');}catch(err){report(err);}};
   const talkButton=root.querySelector('#talk');
+  let talkFeedbackRevision=0;
   talkButton.onclick=async()=>{
+    if(wakeClosed)return;
+    const feedbackRevision=++talkFeedbackRevision;
     const state=current?.voice?.status;
     const action=state==='listening'?'voice.record.finish':'voice.record.start';
     talkButton.disabled=true;
-    try{await invoke(action);root.querySelector('#error').textContent='';}
-    catch(err){report(err);}
-    finally{talkButton.disabled=Boolean(current?.live?.active)||!current?.voice?.experimental||!['unavailable','error','listening','awaiting_speech'].includes(current?.voice?.status);}
+    try{await invoke(action);if(!wakeClosed&&feedbackRevision===talkFeedbackRevision&&current?.voice?.status!=='error')setFeedback('');}
+    catch(err){if(!wakeClosed&&feedbackRevision===talkFeedbackRevision)report(err);}
+    finally{if(!wakeClosed&&feedbackRevision===talkFeedbackRevision)talkButton.disabled=Boolean(current?.live?.active)||wakeBlocksCapture(current)||!current?.voice?.experimental||!['unavailable','error','listening','awaiting_speech'].includes(current?.voice?.status);}
   };
   root.querySelector('#tasks').onclick=async e=>{const b=e.target.closest('[data-action],[data-ui-action]');if(!b)return;const uiAction=b.dataset.uiAction;if(uiAction==='like'){const on=!likedTasks.has(b.dataset.id);if(on)likedTasks.add(b.dataset.id);else likedTasks.delete(b.dataset.id);b.classList.toggle('active',on);b.setAttribute('aria-pressed',String(on));return;}if(uiAction==='locate'){const block=b.closest('.locate-block');const resultNode=block?.querySelector('.locate-result');if(!resultNode)return;resultNode.hidden=false;resultNode.textContent='定位中…';try{const response=await invoke('task.locate',{text:b.dataset.locateText||''});const report=response&&typeof response==='object'&&'failures' in response?response:null;const failures=report&&Array.isArray(report.failures)?report.failures:[];if(!failures.length){resultNode.textContent='未能从错误输出定位到源码位置';}else{resultNode.innerHTML=failures.slice(0,3).map(f=>{const top=f.frames&&f.frames[0];const head=`<div class="locate-head">${escape(f.name)}${f.timedOut?'（超时）':''}</div>`;const frames=top?`<div class="locate-frame">${escape(top.file)}:${top.line}${top.column?':'+top.column:''}<span class="locate-conf">置信度 ${(top.confidence*100).toFixed(0)}%</span></div>${top.snippet?`<pre class="locate-snippet">${escape(top.snippet)}</pre>`:''}`:'';return head+frames;}).join('');}}catch(err){resultNode.textContent='定位失败：'+(err&&err.message?err.message:'未知错误');}return;}if(uiAction==='copy'||uiAction==='share'){const task=current?.tasks.find(item=>item.taskId===b.dataset.id);const message=current?.messages?.find(item=>item.id===b.dataset.messageId);const text=b.dataset.messageId?message?.text:resultText(task?.resultSummary,task?.resultMetadata);if(!text)return;try{if(uiAction==='share'&&navigator.share){await navigator.share({text});}else{await invoke('clipboard.writeText',text);b.title=uiAction==='copy'?'已复制':'已复制分享文本';b.setAttribute('aria-label',b.title);setTimeout(()=>{b.title=uiAction==='copy'?'复制':'分享';b.setAttribute('aria-label',`${b.title}回答`);},1600);}}catch(err){if(err?.name!=='AbortError')report(err);}return;}b.disabled=true;try{await invoke(b.dataset.action,b.dataset.id);}catch(err){report(err);}finally{b.disabled=false;}};
+  const syncApprovalButtons=()=>{
+    for(const [id,phase] of approvalDecisions)if(phase==='submitted' && !(current?.approvals??[]).some(item=>
+      item.approvalId===id && item.state==='pending' && current?.tasks.some(task=>task.taskId===item.taskId && task.state==='waiting_approval')))approvalDecisions.delete(id);
+    for(const button of tasksNode.querySelectorAll('[data-approval-decision]'))button.disabled=approvalDecisions.has(button.dataset.approvalId);
+  };
+  function refreshApprovalCards() {
+    if(wakeClosed||!current)return;
+    const now=Date.now();
+    for(const task of current.tasks) {
+      const article=tasksNode.querySelector(`[data-turn="${CSS.escape(task.taskId)}"]`);
+      if(!article)continue;
+      const markup=approvalCards(task,current.approvals,now);
+      if(article.approvalMarkup===markup)continue;
+      for(const card of article.querySelectorAll('.approval-card'))card.remove();
+      if(markup)article.insertAdjacentHTML('beforeend',markup);
+      article.approvalMarkup=markup;
+    }
+    syncApprovalButtons();
+  }
+  function scheduleApprovalExpiry() {
+    clearTimeout(approvalExpiryTimer);approvalExpiryTimer=undefined;
+    if(wakeClosed||!current)return;
+    const now=Date.now(),expiry=nextApprovalExpiry(current.tasks,current.approvals,now);
+    if(expiry===undefined)return;
+    approvalExpiryTimer=setTimeout(()=>{
+      approvalExpiryTimer=undefined;
+      if(wakeClosed)return;
+      refreshApprovalCards();scheduleApprovalExpiry();
+    },Math.min(Math.max(expiry-now+25,0),2_147_483_647));
+  }
   root.querySelector('#tasks').addEventListener('click',async event=>{
-    const button=event.target.closest('[data-approval-decision]');if(!button)return;
-    button.disabled=true;
-    try{await invoke('authorization.respond',approvalResponse(button.dataset.approvalId,
-      button.dataset.approvalDecision,current?.tasks??[],current?.approvals??[]));}
-    catch(error){report(error);button.disabled=false;}
+    const button=event.target.closest('[data-approval-decision]');if(!button||button.disabled)return;
+    const id=button.dataset.approvalId;if(approvalDecisions.has(id))return;
+    approvalDecisions.set(id,'pending');syncApprovalButtons();
+    try{await invoke('authorization.respond',approvalResponse(id,
+      button.dataset.approvalDecision,current?.tasks??[],current?.approvals??[]));
+      approvalDecisions.set(id,'submitted');syncApprovalButtons();}
+    catch(error){approvalDecisions.delete(id);report(error);syncApprovalButtons();}
   });
-  render=data=>{current=data;const task=currentTask(data.tasks);const connectionNode=root.querySelector('#connection');connectionNode.textContent=data.fakeModel?data.connection+' · Fake Model':data.connection;const liveStates={connecting:'正在连接',reconnecting:'正在续接',listening:'正在聆听',speaking:'正在回答',working:'正在处理任务',stopping:'正在关闭',error:'连接失败'};root.querySelector('#state').textContent=data.live?.active?(liveStates[data.live.status]??'Live 已开启'):task?stateNames[task.state]:'待机';
+  render=(data,{preserveFeedback=false}={})=>{updateVersion++;current=data;const task=currentTask(data.tasks);const connectionNode=root.querySelector('#connection');connectionNode.textContent=data.fakeModel?data.connection+' · Fake Model':data.connection;const liveStates={connecting:'正在连接',reconnecting:'正在续接',listening:'正在聆听',speaking:'正在回答',working:'正在处理任务',stopping:'正在关闭',error:'连接失败'};root.querySelector('#state').textContent=data.live?.active?(liveStates[data.live.status]??'Live 已开启'):task?stateNames[task.state]:'待机';
     liveControls.render(data.live);
+    renderWake(data);
+    if(!data.live?.active&&!task&&data.wake?.phase==='listening')root.querySelector('#state').textContent='唤醒聆听中';
     proactiveControls.render(data.proactive);
     const notifs=Array.isArray(data.notifications)?data.notifications:[];
     if(notifs.length>0){
-      bellMenu.innerHTML=notifs.slice(0,5).map(n=>`<div class="notice" style="color:var(--fg);margin:6px 4px"><strong>${escape(n.summary)}</strong><br><small style="color:var(--muted)">${escape(new Date(n.occurredAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}))}</small></div>`).join('');
+      bellMenu.innerHTML=notifs.slice(0,5).map(n=>`<div class="notice bell-notice"><strong>${escape(n.summary)}</strong><br><small>${escape(new Date(n.occurredAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}))}</small></div>`).join('');
       bellBtn.title=`通知 (${notifs.length})`;bellBtn.setAttribute('aria-label',bellBtn.title);
     }else{
       bellMenu.innerHTML='<div class="notice">暂无新通知</div>';
@@ -174,7 +259,7 @@ else {
     const voiceFailure=data.voice?.status==='error'?data.voice.failure:null;
     const voiceFailureStage=voiceFailureStages[voiceFailure?.stage]??'处理';
     const voiceError=data.voice?.status==='error'?`语音${voiceFailureStage}失败：${voiceFailure?.message??data.voice.reason??'语音处理失败'}`:'';
-    root.querySelector('#error').textContent=data.connectionError||voiceError;
+    if(!preserveFeedback)setFeedback(data.connectionError||voiceError);
     const modelReady=data.model?.status==='ready';
     // Thinking controls are a local test surface.  They must remain draggable
     // even while the provider is unconfigured or its connection test failed;
@@ -197,7 +282,7 @@ else {
     const modelNotice=root.querySelector('#model-notice');if(modelNotice)modelNotice.textContent=data.thinking?.applied?data.thinking.reason:(modelReady?'思考设置已保存到桌面测试状态；Runtime 参数契约接入后才会影响任务。':`${data.model?.reason??'模型未完成真实连接测试'}；思考设置仍可调整，但不会用于真实任务。`);
     const voiceState=data.voice?.status;
     const voiceReady=Boolean(data.voice?.experimental);
-    talkButton.disabled=Boolean(data.live?.active)||!voiceReady||!['unavailable','error','listening','awaiting_speech'].includes(voiceState);
+    talkButton.disabled=Boolean(data.live?.active)||wakeBlocksCapture(data)||!voiceReady||!['unavailable','error','listening','awaiting_speech'].includes(voiceState);
     talkButton.title=voiceState==='listening'?'结束录音并填入文字':voiceReady?'语音转文字（不自动发送）':'语音转文字未连接';
     talkButton.setAttribute('aria-label',talkButton.title);
     const micStatus=voiceError || (voiceState==='listening'?'麦克风：正在采集，点击结束':voiceState==='acquiring'?'麦克风：等待设备就绪':voiceState==='recognizing'?'语音：正在转成文字':'');
@@ -205,15 +290,20 @@ else {
     stopButton.disabled=voiceState!=='speaking'&&!data.live?.active;stopButton.title=data.live?.active?'打断回答（保持 Live）':voiceState==='speaking'?'停止播报':'停止播报（当前未播放）';
     root.querySelector('.bubble').hidden=data.tasks.length>0 || Boolean(data.messages?.length);
     const taskSignature=JSON.stringify([data.tasks.map(t=>[t.taskId,t.createdAt,t.state,t.revision,t.userMessage,t.resultSummary,t.error?.message,t.steps?.map(s=>[s.stepId,s.status,s.label])]),data.messages,data.approvals]);
-    const thinkingGrid='<span class="thinking-grid" aria-hidden="true">'+[0,1,2,1,2,3,2,3,4].map((delay,index)=>`<i style="--i:${delay}" data-cell="${index}"></i>`).join('')+'</span>';
+    const thinkingGrid='<span class="thinking-grid" aria-hidden="true">'+[0,1,2,3,4,5,6,7,8].map(index=>`<i data-cell="${index}"></i>`).join('')+'</span>';
     const wasAtBottom=thread.scrollHeight-thread.scrollTop-thread.clientHeight<90;
-    if(taskSignature!==lastTaskSignature) tasksNode.innerHTML=conversationTimeline(data.tasks,data.messages).map(entry=>{if(entry.kind==='message'){const m=entry.value;const body=`<div class="${m.role==='user'?'user-message':'assistant-message'}">${escape(m.text)}</div><div class="response-actions"><button type="button" data-ui-action="copy" data-message-id="${escape(m.id)}" title="复制" aria-label="复制语音消息">${responseIcons.copy}</button></div>`;return `<article class="task turn" data-turn="live:${escape(m.id)}">${m.role==='assistant'?`<div class="assistant-turn">${body}</div>`:body}</article>`;}const t=entry.value;const terminal=isTerminal(t);const waiting=['waiting_approval','waiting_external','waiting_reconciliation','cancelling'].includes(t.state);const activeStep=Array.isArray(t.steps)&&t.steps.length?t.steps[t.steps.length-1]:null;const activity=waiting?stateNames[t.state]:activeStep?.label?activeStep.label:t.state==='verifying'?'整理回答':t.state==='running'?'执行中':'思考中';const answer=resultText(t.resultSummary,t.resultMetadata);const failure=t.error?.message;const answerActions=answer?`<div class="response-actions"><button type="button" data-ui-action="copy" data-id="${escape(t.taskId)}" title="复制" aria-label="复制回答">${responseIcons.copy}</button><button type="button" data-ui-action="share" data-id="${escape(t.taskId)}" title="分享" aria-label="分享回答">${responseIcons.share}</button><button type="button" data-ui-action="like" data-id="${escape(t.taskId)}" title="点赞" aria-label="点赞回答" aria-pressed="${likedTasks.has(t.taskId)}" class="${likedTasks.has(t.taskId)?'active':''}">${responseIcons.like}</button></div>`:'';return `<article class="task turn" data-turn="${escape(t.taskId)}">${t.userMessage?`<div class="user-message">${escape(t.userMessage)}</div>`:''}<div class="assistant-turn">${!terminal?`<div class="thinking-line">${thinkingGrid}<span>${activity}</span></div>`:answer?`<div class="assistant-message">${escape(answer)}</div>${answerActions}`:failure?`<div class="assistant-error">${escape(failure)}</div><div class="locate-block" data-locate-for="${escape(t.taskId)}"><button type="button" class="turn-action" data-ui-action="locate" data-locate-id="${escape(t.taskId)}" data-locate-text="${escape(failure)}" aria-label="定位失败原因">定位失败原因</button><div class="locate-result" hidden></div></div>`:''}</div>${!terminal?`<div class="turn-actions"><button class="turn-action" data-action="task.cancel" data-id="${escape(t.taskId)}" ${t.state==='cancelling'?'disabled':''}>停止</button>${data.fake?`<button class="turn-action" data-action="test.advance" data-id="${escape(t.taskId)}">推进联调</button>`:''}</div>`:''}</article>`;}).join('');
-    if(taskSignature!==lastTaskSignature) for(const task of data.tasks){
-      const article=tasksNode.querySelector(`[data-turn="${CSS.escape(task.taskId)}"]`);
-      article?.insertAdjacentHTML('beforeend',approvalCards(task,data.approvals));
-    }
-    setSendMode(Boolean(input.value.trim()));
+    if(taskSignature!==lastTaskSignature) tasksNode.innerHTML=conversationTimeline(data.tasks,data.messages).map(entry=>{if(entry.kind==='message'){const m=entry.value;const body=`<div class="${m.role==='user'?'user-message':'assistant-message'}">${escape(m.text)}</div><div class="response-actions"><button type="button" data-ui-action="copy" data-message-id="${escape(m.id)}" title="复制" aria-label="复制语音消息">${responseIcons.copy}</button></div>`;return `<article class="task turn" data-turn="live:${escape(m.id)}">${m.role==='assistant'?`<div class="assistant-turn">${body}</div>`:body}</article>`;}const t=entry.value;const terminal=isTerminal(t);const waiting=['waiting_approval','waiting_external','waiting_reconciliation','cancelling'].includes(t.state);const activeStep=Array.isArray(t.steps)&&t.steps.length?t.steps[t.steps.length-1]:null;const activity=waiting?stateNames[t.state]:activeStep?.label?activeStep.label:t.state==='verifying'?'整理回答':t.state==='running'?'执行中':'思考中';const answer=resultText(t.resultSummary,t.resultMetadata);const failure=t.error?.message;const answerActions=answer?`<div class="response-actions"><button type="button" data-ui-action="copy" data-id="${escape(t.taskId)}" title="复制" aria-label="复制回答">${responseIcons.copy}</button><button type="button" data-ui-action="share" data-id="${escape(t.taskId)}" title="分享" aria-label="分享回答">${responseIcons.share}</button><button type="button" data-ui-action="like" data-id="${escape(t.taskId)}" title="点赞" aria-label="点赞回答" aria-pressed="${likedTasks.has(t.taskId)}" class="${likedTasks.has(t.taskId)?'active':''}">${responseIcons.like}</button></div>`:'';return `<article class="task turn" data-turn="${escape(t.taskId)}">${t.userMessage?`<div class="user-message">${escape(t.userMessage)}</div>`:''}<div class="assistant-turn">${!terminal?`<div class="thinking-line">${thinkingGrid}<span>${escape(activity)}</span></div>`:answer?`<div class="assistant-message">${escape(answer)}</div>${answerActions}`:failure?`<div class="assistant-error">${escape(failure)}</div><div class="locate-block" data-locate-for="${escape(t.taskId)}"><button type="button" class="turn-action" data-ui-action="locate" data-locate-id="${escape(t.taskId)}" data-locate-text="${escape(failure)}" aria-label="定位失败原因">定位失败原因</button><div class="locate-result" hidden></div></div>`:''}</div>${!terminal?`<div class="turn-actions"><button class="turn-action" data-action="task.cancel" data-id="${escape(t.taskId)}" ${t.state==='cancelling'?'disabled':''}>停止</button>${data.fake?`<button class="turn-action" data-action="test.advance" data-id="${escape(t.taskId)}">推进联调</button>`:''}</div>`:''}</article>`;}).join('');
+    refreshApprovalCards();scheduleApprovalExpiry();setSendMode(Boolean(input.value.trim()));
     if(taskSignature!==lastTaskSignature){lastTaskSignature=taskSignature;updateRail();requestAnimationFrame(()=>{if(wasAtBottom)thread.scrollTop=thread.scrollHeight;});}};
 }
-if(bridge){const unsubscribe=bridge.subscribe(render);invoke('snapshot').then(render).catch(e=>{root.textContent=e.message;});window.addEventListener('unload',()=>{unsubscribe();orb?.dispose();});}
+if(bridge){
+  let receivedUpdate=false,closed=false;
+  const unsubscribe=bridge.subscribe(data=>{if(closed)return;receivedUpdate=true;render(data);});
+  invoke('snapshot').then(data=>{if(!closed&&!receivedUpdate)render(data);}).catch(e=>{
+    if(closed||receivedUpdate)return;
+    if(mode==='panel')root.querySelector('#error').textContent=e.message;
+    else root.textContent=e.message;
+  });
+  window.addEventListener('unload',()=>{closed=true;unsubscribe();orb?.dispose();});
+}
 else root.textContent='桌面桥未连接，请从 PersonalAgent 桌面应用启动。';

@@ -1365,7 +1365,16 @@ export class RuntimeApplication implements RuntimeApplicationTransport {
         || effective.deadline!==request.deadline || effective.signal.aborted) {
         throw new ProtocolError('UNAUTHORIZED','Ephemeral send lease is unavailable');
       }
-      this.coordinationInput.beforeCoordinationSend(request,this.ephemeralGoals.get(request.taskId)!);
+      try {
+        const guardResult:unknown=this.coordinationInput.beforeCoordinationSend(request,this.ephemeralGoals.get(request.taskId)!);
+        if(guardResult!==undefined) {
+          void Promise.resolve(guardResult).catch(()=>undefined);
+          throw new Error();
+        }
+      } catch {
+        this.assertInputActive(request);
+        throw new ProtocolError('UNAUTHORIZED','Coordination input export denied');
+      }
       this.assertInputActive(request);
     }
     if(request.continuation) {

@@ -7,6 +7,13 @@ COMPETITION-PORTS-01 provides provisional, in-process `CoordinationPort.execute`
 Runtime injects CoordinationPort; `AgentArtsCloudAgentPort` is the explicit,
 offline-testable HTTP implementation of the CloudAgentPort boundary.
 
+Source status checked on 2026-10-07: main `4b5ec61` already contains the HTTP
+adapter, Workflow input, tool-proposal/candidate modes and Runtime consumers.
+The additional JSON-copy, direct-call lifecycle and continuation-snapshot fixes
+described below belong to [PR #302](https://github.com/zemeng5208/PersonalAgent/pull/302),
+which is not yet merged at this checkpoint. All remain provisional; current cloud
+deployment/version/trace/usage and local target read-back need separate evidence.
+
 MOD-04B adds `CompetitionCoordinator`, which validates each bounded text/tool-proposal
 exchange with an explicitly injected `CloudAgentPort`. It forwards task revision and
 deadline, relays cancellation through a child signal, bounds non-cooperative calls,
@@ -98,6 +105,13 @@ is best effort and does not await an uncooperative transport, replace the origin
 error, or trigger a retry. Successfully consumed readers are only released. These
 local lifecycle checks do not prove that remote cloud execution has stopped.
 
+In pending PR #302, direct cloud-port calls use the same canonical UTC deadline forms as the coordinator
+(`...Z` with optional three-digit milliseconds); normalized impossible dates and
+other date formats fail before credentials or transport. Request/signal accessor
+and listener-setup failures return a fixed `INVALID_ARGUMENT`. Partially registered
+listeners are released where possible, and signal cleanup failures cannot replace
+a successful result or the original cancellation, deadline or provider error.
+
 When a response uses workflow events, each `workflow_start` must pair with a
 `workflow_end`; supplied workflow IDs/names must match. The adapter keeps the latest
 workflow answer and returns it only after the ordered `task_end` then `end` events.
@@ -108,7 +122,10 @@ For a cloud deployment whose prompt accepts tool selection, trusted composition 
 set `responseMode: 'tool-proposal-json'` and `initialRequestMode: 'goal-with-tools-json'`.
 The initial `query` then contains exactly `{"goal": string, "availableTools":
 [{"name": string, "version": string, "inputSchema": object}]}`. The host selects
-and minimizes the directory for that task; it is capped at 16 entries and 8 KiB.
+and minimizes the directory for that task; it is capped at 64 entries and 24,576
+UTF-8 JSON bytes by `MAX_AVAILABLE_TOOLS` and `MAX_AVAILABLE_TOOLS_JSON_BYTES`
+in [the public parser](src/index.ts). These limits are already present in main
+`4b5ec61`; they are separate from the 32 KiB initial query limit.
 Missing or empty directories fail locally with `UNSUPPORTED_CAPABILITY`, before
 credentials or network. The host must provide `beforeInitialToolCatalogSend` as the
 fifth constructor argument to recheck its current task binding after credential read;
@@ -150,7 +167,22 @@ authorization; the original goal is not automatically sent again. Request-level
 deployment/version/trace and usage association need separate verified contracts. No
 wire Schema or storage migration changes.
 
+In pending PR #302, the adapter deeply freezes its private, validated continuation copy before building
+the request text. The final host guard reviews that same snapshot and cannot rewrite
+it after serialization. A throwing mutation is denied before transport; caller-owned
+continuation data stays mutable. This preserves JSON special keys and the existing
+continuation budget and grants no new export or tool permission.
+
 Tool proposal and confirmed continuation JSON copies preserve own special keys such
 as `__proto__` as ordinary data properties. They do not change the copied object's
 prototype or silently drop fields before validation and authorization. Repeated
 parsing preserves the same JSON payload; schema and Policy checks still apply.
+
+Pending PR #302 adds a shared budget while copying tool proposal arguments, retaining the existing
+65,536 UTF-16 code-unit limit for their serialized JSON. This limit includes keys,
+escaped strings and container punctuation; it is separate from the UTF-8 continuation
+and tool-directory budgets. Dense JSON arrays are copied from own data properties;
+sparse arrays, accessors, custom methods and extra properties are rejected rather
+than running provider `map` implementations or silently changing argument data.
+Reflection failures return the fixed `INVALID_ARGUMENT` result. These in-process
+checks do not sandbox a provider, authorize a tool or establish cloud availability.

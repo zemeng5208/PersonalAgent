@@ -1,6 +1,5 @@
 const CAPTURE_MS = 60_000;
 const SESSION_MS = 10 * 60_000;
-const TERMINAL = new Set(['stopped', 'cancelled', 'expired']);
 const VOICE_ERROR_CODES = new Set(['INVALID_ARGUMENT', 'INVALID_STATE', 'UNSUPPORTED_CAPABILITY',
   'CANCELLED', 'TIMEOUT', 'STALE_SESSION', 'EXTERNAL_FAILURE']);
 
@@ -29,6 +28,7 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
   let lastError = '';
   let lastFailure = null;
   let disposed = false;
+  const sharedCleanups = new WeakMap();
   const publish = () => { try { onUpdate(); } catch {} };
 
   function recordFailure(stage, error, message = safeFailure(error)) {
@@ -53,45 +53,72 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
     if (!active || active.senderId !== senderId) throw Error('语音操作来源不受信任');
   }
 
-  async function cleanup(record, reason = 'user') {
-    let releaseError;
-    record.controller.abort();
-    record.subscription?.unsubscribe();
-    try { await record.subscription?.closed; } catch (error) { releaseError = error; }
-    record.buffer?.dispose();
-    if (record.sessionId) {
-      const state = manager.current();
-      if (state?.sessionId === record.sessionId && !TERMINAL.has(state.state)) {
-        try { await manager.stop(record.sessionId, reason); }
+  function cleanup(record, reason = 'user') {
+    if (record.cleanupPromise) return record.cleanupPromise;
+    record.cleanupPromise = Promise.resolve().then(async () => {
+      let releaseError;
+      record.parentSignal?.removeEventListener('abort', record.onParentAbort);
+      record.controller.abort();
+      try { record.subscription?.unsubscribe(); } catch (error) { releaseError = error; }
+      try { await record.subscription?.closed; } catch (error) { releaseError = error; }
+      try { record.buffer?.dispose(); } catch (error) { releaseError ??= error; }
+      if (record.startingSession) {
+        try {record.sessionId = (await record.startingSession).sessionId;} catch {}
+      }
+      if (record.sessionId && manager.current()?.sessionId === record.sessionId) {
+        try {
+          // Manager publishes terminal state before its asynchronous release receipt.
+          const stopped = await manager.stop(record.sessionId, reason);
+          if (stopped?.resourcesReleased !== true) throw Error('语音会话资源释放未确认');
+        } catch (error) { releaseError ??= error; }
+      }
+      if (microphoneHost.snapshot().subscriberCount === 0) {
+        try { await microphoneHost.revoke(); }
         catch (error) { releaseError ??= error; }
       }
-    }
-    if (microphoneHost.snapshot().subscriberCount === 0) {
-      try { await microphoneHost.revoke(); }
-      catch (error) { releaseError ??= error; }
-    }
-    if (active === record) active = undefined;
-    publish();
-    if (releaseError) throw releaseError;
+      if (active === record) active = undefined;
+      publish();
+      if (releaseError) throw releaseError;
+    });
+    if (record.parentSignal) sharedCleanups.set(record.parentSignal, record.cleanupPromise);
+    return record.cleanupPromise;
   }
 
-  async function beginCapture(senderId) {
+  async function startCapture(senderId, lease) {
     if (!enabled || disposed) throw Error('语音试用当前不可用');
     if (!Number.isSafeInteger(senderId) || senderId <= 0) throw Error('语音操作来源不受信任');
     if (active) throw Error('请先结束当前语音会话');
-    microphoneHost.authorize();
+    if (lease && sharedCleanups.has(lease.signal)) {
+      try {await sharedCleanups.get(lease.signal);} catch {throw Error('共享麦克风资源释放未确认');}
+      if (active) throw Error('请先结束当前语音会话');
+    }
+    const sharedDeadline = lease ? Date.parse(lease.deadline) : now() + SESSION_MS;
+    if (lease && (inputMode !== 'dictation' || !Number.isFinite(sharedDeadline) || sharedDeadline <= now()
+      || sharedDeadline > now() + SESSION_MS || !lease.signal || lease.signal.aborted
+      || typeof lease.signal.addEventListener !== 'function' || typeof lease.signal.removeEventListener !== 'function'
+      || !microphoneHost.snapshot().authorized)) throw Error('共享麦克风租约无效');
+    if (!lease) microphoneHost.authorize();
     const controller = new AbortController();
-    const captureDeadline = new Date(now() + CAPTURE_MS).toISOString();
-    const sessionDeadline = new Date(now() + SESSION_MS).toISOString();
+    const captureDeadline = new Date(Math.min(now() + CAPTURE_MS, sharedDeadline)).toISOString();
+    const sessionDeadline = new Date(sharedDeadline).toISOString();
     const record = {senderId, controller, captureDeadline, sessionDeadline, phase: 'acquiring', subscription: undefined,
       buffer: createBuffer({signal: controller.signal, deadline: sessionDeadline, maxDurationMs: CAPTURE_MS}),
-      sessionId: undefined, replyId: undefined};
+      sessionId: undefined, replyId: undefined, parentSignal: lease?.signal};
     active = record;
+    if (record.parentSignal) {
+      record.onParentAbort = () => {
+        record.controller.abort();
+        void cleanup(record).catch(error => recordFailure('cleanup', error, '麦克风释放未确认'));
+      };
+      record.parentSignal.addEventListener('abort', record.onParentAbort, {once: true});
+      if (record.parentSignal.aborted) record.onParentAbort();
+    }
     lastError = '';
     lastFailure = null;
     publish();
     let stage = 'pcm_acquire';
     try {
+      if (record.controller.signal.aborted) throw Error('语音采集已取消');
       record.subscription = source.subscribe({signal: controller.signal, deadline: captureDeadline,
         onFrame: frame => {
           if (active !== record || record.phase !== 'acquiring' && record.phase !== 'listening') return;
@@ -114,8 +141,10 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
       await record.subscription.ready;
       if (active !== record || controller.signal.aborted) throw Error('语音采集已取消');
       stage = 'session_start';
-      const session = await manager.start({deadline: sessionDeadline, signal: controller.signal, locale: 'zh-CN'});
+      record.startingSession = manager.start({deadline: sessionDeadline, signal: controller.signal, locale: 'zh-CN'});
+      const session = await record.startingSession;
       record.sessionId = session.sessionId;
+      if (active !== record || controller.signal.aborted) throw Error('语音采集已取消');
       record.phase = 'listening';
       publish();
       return snapshot();
@@ -126,6 +155,21 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
       }
       throw Error(lastError);
     }
+  }
+
+  const beginCapture = senderId => startCapture(senderId);
+  const beginSharedCapture = (senderId, lease) => {
+    if (!lease) return Promise.reject(Error('共享麦克风租约无效'));
+    return startCapture(senderId, lease);
+  };
+
+  async function cancelSharedCapture(signal) {
+    if (!active || active.parentSignal !== signal) {
+      await sharedCleanups.get(signal);
+      return {cancelled: false};
+    }
+    await cleanup(active);
+    return {cancelled: true};
   }
 
   async function finishCapture(senderId) {
@@ -156,6 +200,9 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
         });
         if (record.controller.signal.aborted || active !== record) throw Error('语音输入已取消');
         await cleanup(record);
+        if (record.parentSignal && (record.parentSignal.aborted || now() >= Date.parse(record.sessionDeadline))) {
+          throw Object.assign(Error('语音输入已取消'), {code: 'CANCELLED'});
+        }
         onTranscript({senderId, text});
         return {text, voice: snapshot()};
       }
@@ -238,5 +285,6 @@ export function createDesktopVoiceInputCore({source, microphoneHost, client, cre
   }
 
   return {snapshot, beginCapture, finishCapture, playReply, stopSpeaking, cancelCapture, dispose,
+    beginSharedCapture, cancelSharedCapture, subscribePlayback: listener => manager.subscribe(listener),
     hasActive: () => Boolean(active)};
 }

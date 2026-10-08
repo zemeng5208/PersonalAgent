@@ -15,6 +15,27 @@
 
 本增量在 `apps/windows-host/host/` 增加独立 Host 进程：读取 #168 的同源 Schema、当前用户 Pipe/对端身份和 nonce 会话绑定、短期 opaque 目标、写前持久 run 记录、断连取消及跨会话只读状态核实。另有受信 Pipe Bridge 进程持有真正的 Windows Pipe client handle，以 Win32 API 核对服务端 PID 后才对 Node 透传原协议帧；Host 反向核对 Bridge PID、进程起始时间、session 与用户 SID。Bridge 启动及退出会改变进程生命周期，但不构成授权。Host 仅是执行端；`ConfirmedNotepadTarget` 仍可构造，Pipe 帧里的 `authorizationRef` 也不是授权凭证。Runtime/Policy/ToolGateway 的授权消费、跨进程调用仲裁、Desktop 受信确认与产品 Evidence 仍按 #114 由原负责人正式组合。未完成这些接线和真实验收时不能注册 capability。此包不改公共 Schema、Runtime/Policy/ToolGateway、Desktop 或根配置/锁文件。没有凭据适配；MOD-05 的 SecretStore 与 Windows 安全存储另需边界契约，不能把机器本地凭据当作授权。
 
+## 当前源码装配核对（2026-10-07）
+
+在当前 `main@4b5ec61` 核对，Runtime 已公开受限记事本宿主入口，Desktop 已消费固定 Host/Bridge 路径，并在 Windows 且两个可执行文件存在时创建宿主。管理控件提供绑定、启动、取消和核实入口；F9 受信本地确认与 Policy/ToolGateway 授权消费已有源码接线。未配置或平台不满足时能力仍不可用。上述历史切片中“待 #114 接线”的说明记录当时交付范围，不再表示这些源码入口尚未实现。
+
+此能力仅面向新建独立、单标签记事本目标的受限文本替换，不提供通用鼠标键盘、截图、安装或保存能力，也不因模型提案自动获得前台操作授权。源码和合成消费测试不能代替完整 Windows 普通用户会话验收；以下历史回执仅证明其实际执行的步骤，完整 F9 确认、授权消费、UIA 操作、取消/接管、独立读回及重启恢复仍由 Windows 现场协作者取证。当前 Linux 执行环境没有这些实机条件，不将其记为通过。
+
+## 2026-10-07 原记事本恢复控件补证
+
+固定核心 `b3ffdaa894aefaeef5b498afb3eeb6a8dc1073af` 的原 admin/Notepad 控件、
+actual main 路由与公开 DesktopNotepadHost/RuntimeApplication/Client/Policy/ToolGateway、
+Windows adapter/attemptstore 使用新私有 SQLite 夹具完成一项独立消费，实际 exit0、console0。
+显式 Fake F9 前没有 observe/execute 或授权；之后仅一次 allow_once 消费、execute 和 spawn。
+Fake unknown 回执使原任务与 UI 待核实并禁止新写入；一次 adapter 自动 status 加两次原
+核实按钮分别读回 in_progress/in_progress/匹配的 Fake verified。实际 Runtime 最后保存
+execution 与独立 readback 引用并 succeeded，原任务不重放，不追加授权，UI 提示文件未保存。
+证据 `notepad-runtime-recovery-consumer-validation.md` 及脚本、JSON、日志/截图在
+`.worktrees/mod15-host-20261007/.cache/review-evidence/20261007/`；两个早期 helper 误计
+自动 status 导致的 wait timeout 日志保留，不计通过，没有为本场景修改生产源。
+F9/窗口/Pipe/前台目标/原生 status 与读回/IPC 均明确 Fake；这些 Evidence 是该协议夹具
+的持久化消费，不是实际 Windows 写入或物理读回。下列实机验收仍未通过。
+
 ## Windows 实机验收步骤与证据
 
 在普通用户 Windows 会话中，从仓库根目录运行 `dotnet build apps/windows-host/manual/ManualNotepadProbe.csproj`，再运行 `dotnet run --no-build --project apps/windows-host/manual/ManualNotepadProbe.csproj` **一次**。探针创建随机合成文件并启动 System32 入口；启动前只快照已有 Notepad 的顶层 HWND/PID/启动时间，不读取标题或标签。随后寻找全局唯一且新增的可见顶层 HWND，可属于既有可信进程或新进程；旧 HWND 即使新增标签也始终排除。零新增窗口、身份不可核及多个新增窗口分别拒绝；不读取既有私人标签、窗口标题和内容，不切换标签。显示随机文本和 `CONFIRM` 提示前先复用核心的 `TryGetOnlyTab` 检查同一 HWND 的目标身份与唯一选中标签，多标签或结构不明直接拒绝。通过该检查后，操作者仍须目视核对完整随机文本，输入 `CONFIRM`，五秒内手动激活原窗口。核心仅读取该已确认前台 HWND 的单个编辑控件，精确核对随机全文后才可能写入；标记不符、多标签或无法识别单标签均写前拒绝。同时出现其他新窗口时不能把它当合成目标。探针不代表产品授权链。记录一次结果、退出码、脱敏目标身份与是否目视确认；不要记录私人内容或合成全文。随后按下列步骤补足负向和集成验收：

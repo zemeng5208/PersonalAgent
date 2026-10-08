@@ -5,6 +5,8 @@ import {parseCoordinationRepairCandidate} from '@personal-agent/coordination';
 import {isDeepStrictEqual} from 'node:util';
 
 const VERSION='desktop-goal-analysis-v1';
+// Match the existing AgentArts coordination goal contract; never trim a reviewed scope.
+const GOAL_EXPORT_MAX_CHARS=16_000;
 const MARKER='desktop-goal-cognition-review';
 const HANDOFF_TASK_MARKER='desktop-goal-cognition-handoff-task-v1';
 const REPAIR_TASK_MARKER='desktop-goal-cognition-repair-task-v1';
@@ -31,6 +33,13 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
   let enabled=false,cloudAllowed=false,closed=false,busy=false,nextTick=0,cursor=0;
   let controller=new AbortController(),generation=randomUUID(),status='disabled',reason='目标主动分析未开启';
   const outgoing=new Map(),reviews=new Map(),meetingHosts=new Set();
+  const announcedTasks=new Set();
+  function announceTask(task,goal='根据目标与事实变化主动规划') {
+    if (announcedTasks.has(task.taskId)) return;
+    // A callback can persist metadata before throwing; attempt it once per Host.
+    announcedTasks.add(task.taskId);
+    onTask({taskId:task.taskId,goal});
+  }
   const context=()=>({signal:controller.signal,deadline:new Date(now()+180_000).toISOString()});
   const callerContext=input=>{
     const local=context();
@@ -88,7 +97,7 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
     if (snapshot.revision!==review.graphRevision) return;
     const strategies={plan:'目标已登记；请制定第一步计划、所需工具与待确认事项，尚未创建 Plan 或执行目标',
       recheck:'先复核变化来源与依赖，再决定是否调整计划',
-      defer:'保留当前计划，安排后续复核，不执行已经失效的步骤',
+      defer:review.subjectGoal?'暂缓首次规划，安排后续复核，不执行目标':'保留当前计划，安排后续复核，不执行已经失效的步骤',
       revise:'评估最小影响范围，并按新事实修订相关计划的内容'};
     const needsMachineReview=machineReview(review);
     const strategy=needsMachineReview?'Laya 尚不确定，请复核当前变化与可选方案，再给出有依据的计划建议':strategies[review.selectedOption.id];
@@ -129,13 +138,13 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
   }
   let cognition;
   const handoff={
-    async prepare(review) {return project(review);},
+    async prepare(review) {const projected=project(review);return exportLimit(projected)?undefined:projected;},
     read:commandId=>application.runtime.findTaskByIdempotencyKey(commandId),
     async dispatch(request,input) {
       if (input.signal.aborted) throw Error('目标分析已取消');
       const review=cognition.readReview(request.reviewTaskId).review;
       const projected=review && project(review);
-      if (!projected || toolArgumentsDigest(review)!==request.selectionDigest
+      if (!projected || exportLimit(projected) || toolArgumentsDigest(review)!==request.selectionDigest
         || projected.exportPolicyVersion!==request.exportPolicyVersion || projected.goal!==request.goal
         || Date.parse(request.deadline)<=now()) throw Error('目标分析范围或授权已经变化');
       outgoing.set(request.commandId,{...request,generation});
@@ -143,7 +152,7 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
         {idempotencyKey:request.commandId,signal:input.signal,
           timeoutMs:Math.max(1,Date.parse(request.deadline)-now())});
       const task=application.runtime.getTask(receipt.taskId);
-      onTask({taskId:task.taskId,goal:'根据目标与事实变化主动规划'});
+      announceTask(task);
       return task;
     },
   };
@@ -199,6 +208,7 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
       idempotencyKey,deadline:input.deadline});
     application.runtime.saveCheckpoint(value.task.taskId,REPAIR_TASK_MARKER,{version:1,namespace,
       reviewTaskId:value.task.taskId,sourceTaskId:value.handoff.task.taskId,taskId:task.taskId,candidateDigest:prepared.binding.candidateDigest});
+    announceTask(task,'根据已选择方案受控修复计划');
   }
   function verifiedRepair(value,bound) {
     const {task,intent}=bound;
@@ -238,6 +248,23 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
         const task=application.runtime.getTask(saved.taskId);
         if (task.conversationId!==conversationId) throw Error('目标分析回执绑定不匹配');
         value={...value,handoff:{state:'submitted',task}};
+      } else if (saved===undefined) {
+        // A submit receipt may be lost after Runtime accepted the durable command.
+        // Recover only its bound existing Goal task; no dispatch or session grant.
+        const reviewIntent=application.runtime.loadCheckpoint(value.task.taskId,'proactive-cognition-intent-v1');
+        const intent=application.runtime.loadCheckpoint(value.task.taskId,'proactive-cognition-handoff-v1');
+        const commandId='proactive-'+toolArgumentsDigest({graphNamespace:namespace,bindingVersion:VERSION,taskId:value.task.taskId});
+        if (reviewIntent?.version===1 && reviewIntent.graphNamespace===namespace && reviewIntent.bindingVersion===VERSION
+          && ['goal','goal_created','goal_unplanned','goal_ancestor'].includes(reviewIntent.trigger?.kind)
+          && value.review.graphNamespace===namespace && value.review.bindingVersion===VERSION
+          && intent?.commandId===commandId && intent.reviewTaskId===value.task.taskId
+          && intent.selectionDigest===toolArgumentsDigest(value.review) && intent.exportPolicyVersion===VERSION
+          && typeof intent.goal==='string' && intent.goal.trim()) {
+          const task=application.runtime.findTaskByIdempotencyKey(commandId);
+          if (task?.conversationId===conversationId && task.goal===intent.goal) {
+            value={...value,handoff:{state:'submitted',task}};
+          }
+        }
       }
     }
     reviews.set(value.task.taskId,value);
@@ -248,14 +275,59 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
     reason=value.handoff?.state==='submitted'?(machineReview(value.review)?'Laya 尚不确定，已交 AgentArts 复核，尚未执行计划':'Laya 选择已交 AgentArts，执行结果以任务回执为准')
       :machineReview(value.review)?'Laya 尚不确定，等待有效云端分析许可后交 AgentArts 复核'
       :value.review.selectedOption?'Laya 已选择方案，等待有效云端分析许可':'本地分析已记录；未选择可自动推进的方案';
+    if (value.handoff?.state==='submitted') {
+      announceTask(value.handoff.task);
+      let local;
+      try {local=repairTask(value);} catch {}
+      if (local) announceTask(local.task,'根据已选择方案受控修复计划');
+    }
   }
   function restoreMarkers() {
     for (const item of goalHost.listTasks()) {
       const prior=application.runtime.loadCheckpoint(item.taskId,MARKER);
       if (typeof prior==='string') record(cognition.readReview(prior));
     }
+    // Watermark Goal reviews have no Goal-tool marker. Restore their saved cards,
+    // including valid choices awaiting reconciliation, without resuming any work.
+    let snapshotSequence,beforeSequence;
+    do {
+      const page=application.runtime.listTasks({conversationId:`proactive-cognition:${namespace}`,limit:100,
+        ...(snapshotSequence===undefined?{}:{snapshotSequence}),
+        ...(beforeSequence===undefined?{}:{beforeSequence})});
+      snapshotSequence=page.snapshotSequence;
+      for (const task of page.items) {
+        if (reviews.has(task.taskId)) continue;
+        const intent=application.runtime.loadCheckpoint(task.taskId,'proactive-cognition-intent-v1');
+        if (intent?.version!==1 || intent.graphNamespace!==namespace || intent.bindingVersion!==VERSION
+          || !['goal','goal_created','goal_unplanned','goal_ancestor'].includes(intent.trigger?.kind)) continue;
+        const value=cognition.readReview(task.taskId),review=value.review;
+        if (!review || review.taskId!==task.taskId || review.graphNamespace!==namespace || review.bindingVersion!==VERSION) continue;
+        record(value);
+      }
+      beforeSequence=page.nextBeforeSequence;
+    } while (beforeSequence!==undefined);
+  }
+  function exportLimit(projected) {
+    return typeof projected?.goal==='string' && projected.goal.length>GOAL_EXPORT_MAX_CHARS
+      ? {state:'blocked',reason:'goal_text_limit',chars:projected.goal.length,maxChars:GOAL_EXPORT_MAX_CHARS} : undefined;
+  }
+  function cloudExport(value) {
+    if(value.handoff?.state==='submitted') {
+      // Describe the immutable accepted projection, without reviving its task or grant.
+      const saved=application.runtime.loadCheckpoint(value.task.taskId,'proactive-cognition-handoff-v1');
+      const task=application.runtime.getTask(value.handoff.task.taskId);
+      if(task.state==='failed' && saved?.reviewTaskId===value.task.taskId && saved.exportPolicyVersion===VERSION
+        && saved.selectionDigest===toolArgumentsDigest(value.review) && saved.goal===task.goal) return exportLimit(saved);
+      return;
+    }
+    // Original project() retains current consent, selection and exact graph-revision gates.
+    if(!['pending','expired'].includes(value.handoff?.state)) return exportLimit(project(value.review));
   }
   function execution(value) {
+    let blocked;try {blocked=cloudExport(value);} catch {}
+    if(blocked && value.handoff?.state!=='submitted') return {state:'unavailable',cloudExport:blocked,
+      executionStatus:'完整目标投影超出云端上限，方案保留在本地，尚未提交'};
+
     if (value.handoff?.state!=='submitted') return {state:value.handoff?.state??value.review?.selection?.state??'local',
       executionStatus:value.handoff?.state==='pending'?'编排受理结果待核实，尚未确认执行'
         :value.review?.selection?.state==='review'?'等待复核，尚未执行':'本地决策建议，尚未执行'};
@@ -269,7 +341,7 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
       succeeded:'AgentArts 编排任务已完成；目标更新尚未核实',failed:'编排任务失败，未确认目标更新',
       cancelled:'编排任务已取消，未确认目标更新'};
     let verified={};try {if(local) verified=verifiedRepair(value,local);} catch {}
-    return {state:task.state,taskId:task.taskId,...(local?{sourceTaskId:value.handoff.task.taskId}:{}),
+    return {state:task.state,taskId:task.taskId,...(blocked?{cloudExport:blocked}:{}),...(local?{sourceTaskId:value.handoff.task.taskId}:{}),
       executionStatus:labels[task.state]??'编排任务已受理，执行结果尚未核实',...verified,
       ...(task.state==='succeeded' && verified.executionVerified && verified.graphUpdateVerified?{status:'applied'}:{})};
   }
@@ -396,23 +468,27 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
       // Session grants are not restored from persisted tasks after restart.
       throw Error('此主动分析任务没有当前会话的出云许可');
     },
-    snapshot:()=>({enabled,cloudAllowed,status,reason,reviews:[...reviews.values()].map(value=>{
+    snapshot:()=>{
+      const graphRevision=store.read().revision;
+      return {enabled,cloudAllowed,status,reason,reviews:[...reviews.values()].map(value=>{
       const r = value.review;
-      const trigger = r?.subjectGoal ? `新登记目标：${r.subjectGoal.id}` :
-        (Array.isArray(r?.affected) && r.affected.length > 0) ? r.affected.map(a => a.causes?.map(c => `事实 ${c.reference.id} 变更`).join(', ') || a.node?.summary || a.node?.id).filter(Boolean).join('；') :
+      const trigger = r?.subjectGoal ? `${r.subjectGoal.revision>1?'待首次规划目标':'新登记目标'}：${r.subjectGoal.id}` :
+        (Array.isArray(r?.affected) && r.affected.length > 0) ? r.affected.map(a => a.causes?.map(c => `依赖 ${c.reference.id} ${c.reason === 'superseded' ? '版本已更新' : c.reason === 'withdrawn' ? '已撤回' : c.reason === 'not_effective' ? '当前不在有效期内' : '状态变化'}`).join(', ') || a.node?.summary || a.node?.id).filter(Boolean).join('；') :
         '事实或目标变更';
       const choice = r?.selectedOption ? `${r.selectedOption.id} · ${r.selectedOption.description}` :
-        machineReview(r) ? 'Laya 置信不足，转人工复核 (RECHECK)' : (r?.action === 'KEEP' ? '保持现状 (KEEP)' : '本地建议方案');
+        machineReview(r) ? 'Laya尚不确定，需主智能体复核 (RECHECK)' : (r?.action === 'KEEP' ? '保持现状 (KEEP)' : '本地建议方案');
       const feedback=execution(value);
       return {
         reviewTaskId: value.task.taskId,
         action: r?.action,
         selected: r?.selectedOption?.id,
+        sourceOutdated: Number.isSafeInteger(r?.graphRevision) && r.graphRevision>=0 && r.graphRevision!==graphRevision,
         trigger,
         choice,
         executionVerified:false,graphUpdateVerified:false,...feedback,
       };
-    })}),
+      })};
+    },
     async tick() {
       if (!enabled || closed || busy || now()<nextTick) return;
       if (!ready()) {status='waiting_model';reason='等待本地 Laya 服务就绪';return;}
@@ -466,7 +542,13 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
         if (!canHandoff(r)) throw Error('当前决策没有合法选择或可交接的复核方案');
         if (store.read().revision!==r.graphRevision) throw Error('决策来源版本已变化，请重新评估');
         if (!allowed()) throw Error('目标云端分析许可未开启，尚未提交编排');
-        value=await cognition.handoffReview(reviewTaskId,current);
+        try {value=await cognition.handoffReview(reviewTaskId,current);}
+        catch(error) {
+          // A failed delivery may still have an accepted durable Runtime task.
+          // Publish its readonly receipt while preserving the original failure.
+          try {record(cognition.readReview(reviewTaskId));onUpdate();} catch {}
+          throw error;
+        }
         record(value);
       }
       try {submitRepair(value,current);} catch(error) {
