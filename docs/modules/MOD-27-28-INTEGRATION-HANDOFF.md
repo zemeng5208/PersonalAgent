@@ -88,3 +88,19 @@ MOD-28 保持 `in_progress`。接口状态以[接口目录](../interfaces/CURREN
 最终固定0b3eef9fa57340d2e992551dbcac26cea7827763/tree8918053995597cab9659dd29b1e37f5117d350e6，原npm run check实际5856/48cf7c→dd7d8c/exit0，01:40:40.655086Z至01:48:22.341844Z，Node24.15/实际4CPU/原期限与断言。34组2545项2495通过、0失败0取消、50跳过；Cognition283/283、Desktop659/648通过11跳过、Runtime439/439、Calendar47/44通过3跳过、root integration22/22；build/type/generated/architecture/contracts全部实际执行。完整raw3314行/251009字节SHAa8ba69d2a9d2068d54f5b47f8a0d9f9255fa4630524dabd9d8ac926e196edc22，A独审9f478df34f9c75bf69b6b9e5966488b3c4f9cc0e963bf233886fb64c3cec3fd8核全部34组七字段、50skip、全文及15冻结source/test。
 
 覆盖原九项加Laya取消、Live快捷键反馈和Mail配置稳定排序十二项；此前68fb与1f548批次各自结果不混用，1f Calendar失败仍不解释根因。随后仅本文记录已发生结果的DOC提交，不改任何source/test；发布时须核源码一致、实际PR head/tree/全文件名/body。真实云/邮箱/Electron/Windows/物理设备与用户项目仍按原现场交接，未通过，不批准或合并；停止前由root向指定QQ邮箱发送实际结果、剩余事项、阻塞和责任人。
+
+## 12:30续接的公开消费契约与前端恢复（2026-10-08）
+
+用户将本轮截止延至北京时间12:30；先行清单邮件已实际发送并核实后，三个原GPT-6.1 Sol执行线在独立工作树继续自有工作。以下八个工作包已精确整合至本地交付分支；它们需要新的固定源码完整检查，不能借用前述0b3eef9检查或24a1290的两条Windows CI成功元数据。仍沿原#302交付，不自行批准或合并，整体MVP与真实现场验收未完成。
+
+- Mail缓存身份绑定原分类criteriaDigest的精确标签顺序。同序跨locale重开infer0，改序重新分类并通过原公开Dispatch；旧收据仍按原校验拒绝。新增摘要字段会让所有旧配置的checkpoint首次可能miss，含默认标签；旧记录保留，无迁移或改写收据。原三个affected文件33/33，独立Node/disk公开消费者9进程，冻结清单72e2016a。
+- Mail在分块之间取消或到达期限时，用原Laya/Dispatch定义的criteriaDigest生成剩余收据ID。真实AbortController和注入的合成期限时钟分记；剩余项不推理、不存瞬态checkpoint，重开复用已完成项。原三个affected文件38/38、独立Node/disk消费者6进程，de48fe11；没有额外缓存身份变化。
+- 当前可信highImpact提示撤去时，之前仅因该提示产生的高影响缓存会重新分类，不伪造语义降级；模型高影响和meeting缓存继续保留。空输入缓存保留insufficient_input原因，只按当前提示选择deferred路线、infer0。无key或收据迁移。原duplicate测试的batch内OR断言保留，后续false的旧缓存预期改为有依据的新分类及公开Dispatch验收；首轮49/50失败日志保留，最终原affected50/50、独立Node/disk14进程，28457636。三项都是原基线已有公开组合缺口；未发现当前生产Pipeline→Dispatch调用，不能声称修复了真实邮件、Task或通知失败。
+- Desktop有活动任务时，在永久关闭Wake/Voice前拒绝退出；活动任务完成不会自动续退，用户下一次显式退出才开始清理。原末尾任务守卫及未知Live/SIS释放阻塞保留。原五个affected文件39/39，原完整main quit/IPC和实际Voice/Wake公开消费者验证，863001fc；Runtime计数、app和设备端口为Fake，不算Windows退出验收。
+- SIS无效参数、过期Token、加密不可用或文件写入失败不再提前永久移除旧Wake宿主。原初次disable和IAM前后活跃校验保留；旧宿主保持disabled，可由用户显式重新启用。配置成功才继续原永久替换；保存后若资源释放未知，保留已保存副作用且不初始化，不宣称原子回滚。原八个affected文件66/66，原main IPC与实际ConfigHost文件/Voice/Wake消费者，1a76abb9；加密和设备替身明确，无真实IAM/网络验收。
+- Goal完整投影24338字符超出原AgentArts16000上限时，prepare/dispatch先阻塞提交，保留全部101项复查和原图。控件显示实数/上限；用户可通过原proactive.configure的严格两个Goal布尔字段撤销目标云端许可，保原本地分析、独立CPU租约/云开关及未保存草稿。当前无授权或图版本已失效时不伪造可用投影，旧已受理/未知/失败任务的锁和完整journal不变。原三个affected文件58/58和Desktop typecheck通过；原HTTP/CSP完整renderer、实际Proactive/Goal/SQLite新消费者与原失败DB独立字节副本读回通过，eea1e521。Fake IPC、Laya及工具授权上下文明示，不算物理Electron、云或修复审批通过。
+- 超过320字符的触发原因使用原生details/summary，保留完整转义文本、101项范围和原状态/动作。原6367字符原因在520×900页面使状态和本地恢复按钮初始落在3474/3525处；折叠后为574/625，用户展开仍可滚动。原Tab可到达按钮，故这是首屏可读性改善，不记为旧键盘不可用缺陷。按reviewID保留用户实际open状态并清理缺席记录；仅原summary当前有焦点且同ID仍存在时，以preventScroll恢复焦点，不抢输入框或其他控制的焦点、不复活移除项。原2正式失败后23/23、补充原焦点失败后完整24/24；原HTTP/CSP页面连续Enter跨刷新无需重新focus可开/关，0376cb89链保留原58685fe0和before。IPC为冻结的原真实Host投影的Fake回放，本次未新增Host/DB/任务/许可操作，也不是物理Electron验收。
+
+- Device检查点先在局部Map中验证并克隆全部来源，成功后才发布到当前状态。坏行使公开readFeedback或evaluate首次读取拒绝时，不遗留已验证前缀；可信宿主随后修为空或替换来源，同实例不会显示幽灵反馈或误判replayed，后续合法采样仍持久化并在重开后防重放。原四恢复子例及父聚合失败、另一个非JSON克隆失败均保留；修复后原五个完整affected文件56/56，四个独立Node/真实SQLite公开HostState/P5消费者读回精确，e228ef33。无shape/key/configDigest/schema/阈值/通知意图或迁移变化，旧测试字节相同。坏行与可信修复是合成输入，仅原migration10表，不算完整TaskRuntime或真实OS；unused Fake推理/通知均0，nonJSON克隆例保留原DataCloneError，实际JSON端口会提前拒绝该数据。
+
+原before/final源码、完整raw、实际启动回执和独立消费者均冻结；C/A/D交叉只读核验全部证据字节与摘要，未为同行审核重复生产绿色测试。工具命令固定Node24.15；formal未打印内部版本的情况按实际pinned启动回执记录，公开helper的内嵌版本另记。夹具故障和原正式失败均独立保留。必要整仓检查和精确发布头读回结果在实际发生后追加。
