@@ -88,6 +88,7 @@ export function mountAdmin(root, invoke, escape) {
   let memorySearch = {query: '', hits: [], truncated: false, status: ''};
   const memorySummaries = new Map();
   let savedMemory = {facts: [], status: ''};
+  let renderedSection, memoryRenderKey;
   let historyGeneration = 0;
   async function loadHistory(reset = false) {
     if (history.loading && !reset) return;
@@ -283,7 +284,7 @@ export function mountAdmin(root, invoke, escape) {
       ${memorySearch.truncated ? '<p class="muted">结果已截断，请缩小搜索范围。</p>' : ''}</section>`;
   }
 
-  function render(data) {
+  function render(data, refreshMemory = false) {
     current = data;
     const consumableMemoryRefs = savedMemory.facts.filter(fact => fact.state === 'active'
       && Date.parse(fact.validFrom) <= Date.now() && Date.now() < Date.parse(fact.validUntil)).map(fact => fact.ref);
@@ -390,6 +391,11 @@ export function mountAdmin(root, invoke, escape) {
     } else {
       content = `<div class="sheet"><h2>${sections[section]}</h2><div class="empty">尚未连接${sections[section]}服务<br>连接后将在这里显示真实数据。</div></div>`;
     }
+    const nextMemoryKey = section === 'memory'
+      ? JSON.stringify({state: data.privateMemory, search: memorySearch, saved: savedMemory}) : undefined;
+    if (section === 'memory' && data.privateMemory?.available && renderedSection === section
+      && !refreshMemory && nextMemoryKey === memoryRenderKey) return;
+    renderedSection = section; memoryRenderKey = nextMemoryKey;
     root.querySelector('#content').innerHTML = content;
     if (section === 'authorizations') {
       const nextExpiry = nextApprovalExpiry(data.approvals, approvalNow);
@@ -403,16 +409,17 @@ export function mountAdmin(root, invoke, escape) {
     }
     if (section === 'profile') bindProfile(root, escape);
     root.querySelector('#memory-select-vault')?.addEventListener('click', async event => {
-      event.currentTarget.disabled = true;
+      const button = event.currentTarget;
+      button.disabled = true;
       try {
         const result = await invoke('memory.selectVault');
         if (result.selected) {
           memorySearch = {query: '', hits: [], truncated: false, status: 'Vault 已选择，尚未保存任何摘录。'};
           memorySummaries.clear();
         }
-        render(current);
+        render(current, true);
       } catch (error) {
-        event.currentTarget.disabled = false;
+        button.disabled = false;
         root.querySelector('#error').textContent = error.message;
       }
     });
@@ -424,7 +431,7 @@ export function mountAdmin(root, invoke, escape) {
         memorySearch = {query, hits: result.hits, truncated: result.truncated,
           status: result.hits.length ? `找到 ${result.hits.length} 条引文；尚未保存。` : '没有匹配引文。'};
         memorySummaries.clear();
-        render(current);
+        render(current, true);
       } catch (error) { root.querySelector('#error').textContent = error.message; }
     });
     root.querySelectorAll('[data-memory-summary]').forEach(input => input.addEventListener('input', () => {
@@ -434,7 +441,7 @@ export function mountAdmin(root, invoke, escape) {
       try {
         const page = await invoke('memory.listSaved');
         savedMemory = {...page, status: page.facts.length ? '仅显示当前版本。' : '没有已保存的私人记忆。'};
-        render(current);
+        render(current, true);
       } catch (error) { root.querySelector('#error').textContent = error.message; }
     });
     root.querySelector('#memory-list-next')?.addEventListener('click', async () => {
@@ -442,7 +449,7 @@ export function mountAdmin(root, invoke, escape) {
         const page = await invoke('memory.listSaved',
           {at: savedMemory.at, snapshot: savedMemory.snapshot, cursor: savedMemory.nextCursor});
         savedMemory = {...page, facts: [...savedMemory.facts, ...page.facts], status: '仅显示当前版本。'};
-        render(current);
+        render(current, true);
       } catch (error) { root.querySelector('#error').textContent = error.message; }
     });
     root.querySelectorAll('[data-memory-delete]').forEach(button => button.addEventListener('click', async () => {
@@ -454,7 +461,7 @@ export function mountAdmin(root, invoke, escape) {
           savedMemory = {...page, status: result.state === 'deleted' ? '已删除该记忆的全部版本并完成读回。'
             : '来源已停止引用，关联任务副本仍待核实清除；删除尚未完成。'};
         } else savedMemory.status = '已取消，未删除记忆。';
-        render(current);
+        render(current, true);
       } catch (error) { root.querySelector('#error').textContent = error.message; button.disabled = false; }
     }));
     root.querySelectorAll('[data-memory-save]').forEach(button => button.addEventListener('click', async () => {
@@ -468,7 +475,7 @@ export function mountAdmin(root, invoke, escape) {
         memorySearch.status = result.state === 'saved' ? `私人记忆已保存为版本 ${result.revision}。`
           : result.state === 'unchanged' ? '这条私人记忆已经保存。' : '已取消，未写入记忆。';
         if (result.state === 'saved') savedMemory = {facts: [], status: '已保存，点击查看已保存记忆刷新列表。'};
-        render(current);
+        render(current, true);
       } catch (error) { root.querySelector('#error').textContent = error.message; button.disabled = false; }
     }));
     root.querySelector('#quit')?.addEventListener('click', () => invoke('app.quit'));
