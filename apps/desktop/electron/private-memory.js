@@ -75,12 +75,17 @@ export function createPrivateMemoryController(databasePath, confirm, confirmDele
       const canonical = await realpath(rootPath);
       const selected = await openReadOnlyVault({vaultId: hash(process.platform === 'win32'
         ? canonical.toLowerCase() : canonical), rootPath});
+      if (closed) throw Error('私人记忆控制器已关闭');
       vault = selected;
       configurationRevision += 1;
     },
     search(query) {
+      if (closed) throw Error('私人记忆控制器已关闭');
       if (!vault) throw Error('请先选择本机 Vault');
-      return vault.search({query, limit: 5, ...context()});
+      return vault.search({query, limit: 5, ...context()}).then(result => {
+        if (closed) throw Error('私人记忆控制器已关闭');
+        return result;
+      });
     },
     async previewSave(source) {
       if (!vault || closed) throw Error('请先选择本机 Vault');
@@ -221,6 +226,6 @@ export function createPrivateMemoryController(databasePath, confirm, confirmDele
         afterFactId = markers.at(-1).factId;
       }
     },
-    close() { if (!closed) memory?.close(); closed = true; },
+    close() { if (!closed) memory?.close(); closed = true; vault = undefined; },
   });
 }

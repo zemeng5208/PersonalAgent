@@ -381,6 +381,50 @@ test('identical head reuses cached diff on re-prepare without re-pulling pages',
   assert.equal(third.state, 'prepared');
   assert.equal(f.calls.filter(call => call.toolName === 'github.pr.diff').length, diffCallsAfterFirst + 1);
 });
+test('approval resume retains every cached diff page evidence reference after checkpoint recovery', async () => {
+  let afterReady = false;
+  const split = Math.floor(diff.length / 2);
+  const f = fixture({invoke: async request => {
+    if (request.toolName === 'github.pr.get') {
+      if (request.runId.endsWith(':head-after') && !afterReady) return {state: 'pending', evidenceRefs: []};
+      return {state: 'confirmed', evidenceRefs: [request.runId], result: {number: 7, title: 'Change', body: '',
+        state: 'open', headSha: head, baseSha: base}};
+    }
+    assert.equal(request.toolName, 'github.pr.diff');
+    const offset = request.arguments.offset, end = offset === 0 ? split : diff.length;
+    return {state: 'confirmed', evidenceRefs: [`diff-page-${offset}`], result: {text: diff.slice(offset, end),
+      offset, nextOffset: end < diff.length ? end : null, truncated: end < diff.length}};
+  }});
+  assert.equal((await f.prepare()).state, 'pending');
+  assert.equal(f.modelCalls.length, 0);
+  for (const [key, value] of f.checkpoints) f.checkpoints.set(key, JSON.parse(JSON.stringify(value)));
+  afterReady = true;
+  const recovered = createCodeReviewWorkflow({model: {complete: async () => ({response: {kind: 'final',
+    text: JSON.stringify({findings: [finding]})}})}, tools: f.tools});
+  const result = await recovered.prepare({repo: 'owner/repo', number: 7,
+    rules: [{id: 'safe', text: 'Reject unsafe changes'}]}, f.context, f.access);
+  assert.equal(result.state, 'prepared');
+  assert.deepEqual(result.report.findings, [finding]);
+  assert.ok(result.report.evidenceRefs.includes('diff-page-0'));
+  assert.ok(result.report.evidenceRefs.includes(`diff-page-${split}`));
+  assert.equal(f.calls.filter(call => call.toolName === 'github.pr.diff').length, 2);
+});
+test('legacy or invalid cached diff evidence is refreshed through the original read port', async t => {
+  for (const invalidRefs of [undefined, [42]]) await t.test(JSON.stringify(invalidRefs) ?? 'missing', async () => {
+    const f = fixture();
+    assert.equal((await f.prepare()).state, 'prepared');
+    const key = [...f.checkpoints.keys()].find(key => key.startsWith('code-review-input:'));
+    const cached = structuredClone(f.checkpoints.get(key));
+    if (invalidRefs === undefined) delete cached.evidenceRefs;
+    else cached.evidenceRefs = invalidRefs;
+    f.checkpoints.set(key, cached);
+    const result = await f.prepare();
+    assert.equal(result.state, 'prepared');
+    assert.equal(f.calls.filter(call => call.toolName === 'github.pr.diff').length, 2);
+    assert.ok(result.report.evidenceRefs.includes('tool-evidence'));
+    assert.equal(f.calls.some(call => call.toolName === 'github.pr.review.comment'), false);
+  });
+});
 test('rejects confidence fields, unknown rules and approval categories; off-line findings are dropped', async () => {
   for (const changed of [{...finding, confidence: 0.99}, {...finding, ruleId: 'from-pr'}, {...finding, kind: 'approve'},
     {...finding, kind: ['blocking']}, {...finding, side: ['RIGHT']}]) {

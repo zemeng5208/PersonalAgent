@@ -111,7 +111,7 @@ Fake行为测试位于 `packages/cognition/test/issue-triage.test.mjs`：
 四类、置信度/字段/证据校验、凭据拦截、指纹变化、审批与未知结果、幂等恢复、
 bug修复回链、预算、取消/deadline和分页；后续补齐原修复委派绑定与重读缓存代际恢复。
 历史source `2eda73d` 固定Node24.15完整check exit0，cognition201、Runtime347、
-根集成19通过，全部31workspace1990/0/50平台跳过。原内容/已confirmed标签与原修复预算
+根集成19通过，全部31workspace1990/0/50跳过。原内容/已confirmed标签与原修复预算
 在后续暂停/重启时保留，未将同一Issue改写为新的模型任务。
 这些为明确Fake/SQLite受控证据，非真实标签或修复PR验收；当前精确head门禁及交接见
 [统一续接清单](DEV-WORKFLOWS-CONTINUATION-20261005.md)，状态仍review/provisional。
