@@ -9,7 +9,8 @@ export function mountLiveVoiceControls(root, invoke) {
   const reserved=[...hotkey.options].find(option=>option.value === 'F9');
   if (reserved) {reserved.disabled=true;reserved.textContent='F9（记事本写入确认）';}
   const result = settings.querySelector('#live-config-result');
-  let editing = false, editRevision = 0, saving = false, toggling = false;
+  let editing = false, editRevision = 0, saving = false;
+  let pendingToggle, toggleRevision = 0, liveActive = false;
   settings.addEventListener('input', () => {editing = true; editRevision++;});
   settings.querySelector('#live-save').onclick = async () => {
     if (saving) return;
@@ -33,13 +34,16 @@ export function mountLiveVoiceControls(root, invoke) {
       if (show && expanded) settings.open = true;
     },
     async toggle() {
-      if (toggling) return;
-      toggling = true;
+      const action = liveActive ? 'stop' : 'start';
+      if (pendingToggle && !(pendingToggle === 'start' && action === 'stop')) return;
+      pendingToggle = action;
+      const revision = ++toggleRevision;
       try {await invoke('live.toggle');}
-      catch (error) {result.textContent = error.message; settings.open = true;}
-      finally {toggling = false;}
+      catch (error) {if (revision === toggleRevision) {result.textContent = error.message; settings.open = true;}}
+      finally {if (revision === toggleRevision) pendingToggle = undefined;}
     },
     render(live = {}) {
+      liveActive = live.active === true;
       settings.querySelector('summary').textContent=live.configured?'Live 实时语音设置 · 已配置':'Live 实时语音设置';
       key.placeholder=live.configured?'已安全保存；留空保留现有密钥':'仅在本机加密保存';
       if (!editing) {workspace.value = live.workspaceId ?? ''; hotkey.value = live.hotkey ?? 'F8'; consent.checked = Boolean(live.configured);}

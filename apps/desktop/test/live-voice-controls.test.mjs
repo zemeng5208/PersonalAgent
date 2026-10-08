@@ -129,3 +129,28 @@ test('default F8 remains selected and reserved F9 keeps its stable disabled valu
   assert.equal(reserved.disabled, true);
   assert.match(reserved.textContent, /记事本写入确认/);
 });
+
+
+test('a host-published active session permits explicit stop while its start receipt is pending',async t=>{
+  const operations=[];const f=fixture(t,()=>{const op=deferred();operations.push(op);return op.promise;});
+  f.controls.render({configured:true,active:false,status:'idle'});const starting=f.controls.toggle();
+  await f.controls.toggle();assert.equal(operations.length,1,'duplicate start before active publication stays gated');
+  f.controls.render({configured:true,active:true,status:'connecting'});const stopping=f.controls.toggle();
+  assert.equal(operations.length,2,'a host-published connecting session can be stopped');
+  await f.controls.toggle();assert.equal(operations.length,2,'duplicate stop stays gated');
+  f.controls.render({configured:true,active:false,status:'idle'});await f.controls.toggle();assert.equal(operations.length,2,'stop receipt still pending cannot begin another session');
+  operations[0].reject(Error('older start was cancelled'));await starting;
+  assert.equal(f.settings.open,false,'cancelled old start cannot reopen newer stop UI');assert.equal(f.fields['live-config-result'].textContent,'');
+  await f.controls.toggle();assert.equal(operations.length,2,'old start finally cannot unlock pending stop');
+  operations[1].resolve();await stopping;const retry=f.controls.toggle();assert.equal(operations.length,3);operations[2].resolve();await retry;
+});
+
+test('current stop failure stays visible and permits only explicit retry after settlement',async t=>{
+  const operations=[];const f=fixture(t,()=>{const op=deferred();operations.push(op);return op.promise;});
+  f.controls.render({configured:true,active:false});const starting=f.controls.toggle();
+  f.controls.render({configured:true,active:true,status:'connecting'});const stopping=f.controls.toggle();assert.equal(operations.length,2);
+  operations[1].reject(Error('current stop failed'));await stopping;
+  assert.equal(f.settings.open,true);assert.equal(f.fields['live-config-result'].textContent,'current stop failed');
+  operations[0].reject(Error('older cancelled start'));await starting;assert.equal(f.fields['live-config-result'].textContent,'current stop failed');
+  const retry=f.controls.toggle();assert.equal(operations.length,3);operations[2].resolve();await retry;
+});
