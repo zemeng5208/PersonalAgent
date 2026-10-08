@@ -110,3 +110,14 @@ MOD-28 保持 `in_progress`。接口状态以[接口目录](../interfaces/CURREN
 固定0a6abb72ec157407cd115b4826a2ecf51be1d342/treefafa73c1c68c317facf9f368fdfc1ba4dfe78cc7，原npm run check实际13229/968c83→068f90/exit0，03:24:02.381800Z至03:32:30.531926Z，Node24.15/实际CPU0–3/原期限断言。34组2593项2543通过、0失败0取消、50跳过；Cognition307/307、Desktop683/672通过11跳过、Runtime439/439、Calendar47/44通过3跳过、root integration22/22；build/type/generated/architecture/contracts实际执行。完整raw3367行255471字节SHA86feac67a0f027ac88083b65839817da17e202eed40294bc819a63d9f55d66d1；root独立逐组核全部七字段、固定producer和原记录，9a7e88c3905dc65d75313ef8b82c42c7886f48172db32196971a21f844900d3a。
 
 以上覆盖原十二包及本轮八包；原旧完整失败和隔离结果各自保留，不解释他人模块失败根因。随后仅本文记录实际结果，发布时核全source/test/config/generated与0a6abb相同，不为DOC另跑绿检查。真实现场步骤已列入自有Voice/Goal交接，仍待用户和zemeng实际读回；没有批准或合并。后续新具体缺口须独立证据和新检查，不以本轮通过覆盖未来源码。
+
+### 12:30续接第二批自有修复
+
+八包已普通推送原PR #302至e942c16，原生head/body、全部150文件名和远端Git tree精确读回。随后四项新源码按原文件归属继续整合；前述2593完整检查及e942的Windows结果不覆盖本批，须固定本批源码另执行一次原完整检查。
+
+- ProactiveDecision只在请求内部使用精确UTF-16顺序比较Fact ID，替代可能将不同Unicode ID视为相同的locale比较；合法引用反序仍合并同一版本，不规范化、去重或改变返回引用顺序。原四个affected文件49/49，三个独立Node locale公开消费者结果一致；原生产投影仍单Fact、其他构造仍syntheticMvp，未证明生产多Fact、Task或云效果。冻结d31d7ad1。
+- 晚到任务阻止退出、之后显式成功配置新Voice时，成功发布新宿主后重置其清理归属。下次退出实际取消新pending识别；初始化失败和旧清理未知原守卫不改。原八个affected文件69/69，原main/实际Config文件、VoiceManager、Wake、Mic、PCM公开组合验证；ASR/app/设备端口Fake，capture此前已确认关闭，不声称设备泄漏或物理验收。冻结77cdf89c。
+- Mail检查点先在局部Map完成原校验与克隆，全部成功后再发布，坏行或克隆失败不留下可在修复后重新持久化的前缀。原四个affected文件61/61、六独立Node/真实JSON文件的空与有效替换及重启读回；旧测试字节、null拒绝、瞬态过滤、摘要与key均保留，无新增迁移或缓存首次miss。原公开batchTail串行入口保留；并行首次load边界另以原/新消费者核对。坏行与可信repair为合成输入，未证明生产检查点、真实邮箱、Task或云效果。冻结12ae4b0f。
+- Goal宿主仅对原公开getApproval的相同身份、任务、工具、revision和状态附上原expiresAt，NOT_FOUND保守，其余读取错误传播，不泄露scopes或原参数。有效未来审批保留原动作，缺失/无效/到期禁用并隐藏；当前任务计时器和点击门禁阻止迟到批准，close/changeView清理、旧回调不能清新timer，较新draft反馈保留。原两完整affected文件20/20；实际Runtime/SQLite与原完整HTTP/CSP页面从合法待审批到原10分钟期限+1ms，刷新/重开仍过期，原审批整行未改、Task waiting/revision4、Graph/tool/respond均0。注入时钟与只读FakeIPC明确，非真实批准、云或物理Electron验收。冻结c75a614b；首轮19/20计时器失败保留后修复，portable旧清单4/6路径连续、2个源路径更正到既有冻结副本，原c937/e566不覆盖，不重测。
+
+本批各原正式失败、夹具/脚本错误、完整affected和新公开消费者分别保留，不将父测试聚合失败当作多个缺陷。root与三个GPT-6.1 Sol执行线继续独立核对源、回执和真实现场步骤；只沿原PR提交，不批准或合并。实际固定head与新完整结果在发生后追加，整体MVP与真实现场验收仍未完成。
