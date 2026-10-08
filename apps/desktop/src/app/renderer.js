@@ -52,11 +52,13 @@ else {
   expand.title='放大到工作区';expand.setAttribute('aria-label','放大到工作区');
   expand.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6m0-6-7 7M10 20H4v-6m0 6 7-7"/></svg>';
   root.querySelector('#close').before(expand);
-  expand.onclick=()=>invoke('workspace.open').catch(error=>{root.querySelector('#error').textContent=error.message;});
+  expand.onclick=()=>invoke('workspace.open').catch(error=>{setFeedback(error.message);});
   let current,pending=false,lastTaskSignature='',draftRevision=0;const likedTasks=new Set();
   const approvalDecisions=new Map();
   let approvalExpiryTimer;
-  const report=e=>root.querySelector('#error').textContent=typeof e==='string'?e:e.message;
+  let errorFeedbackRevision=0;
+  const setFeedback=value=>{errorFeedbackRevision++;root.querySelector('#error').textContent=value;};
+  const report=e=>setFeedback(typeof e==='string'?e:e.message);
   const form=root.querySelector('form'),input=root.querySelector('textarea'),thread=root.querySelector('.thread'),tasksNode=root.querySelector('#tasks');
   const liveControls=mountLiveVoiceControls(root,invoke);
   const proactiveControls=mountProactiveControls(root.querySelector('.thread'),invoke);
@@ -87,6 +89,7 @@ else {
     const operation=current?.wake?.phase==='listening'?'voice.wake.disable':'voice.wake.enable';
     wakePending=true;renderWake(current);
     const operationVersion=updateVersion;
+    const feedbackRevision=errorFeedbackRevision;
     let readVersion;
     try{
       await invoke(operation);
@@ -94,8 +97,9 @@ else {
       readVersion=updateVersion;
       const data=await invoke('snapshot');
       if(wakeClosed||readVersion!==updateVersion)return;
-      render(data);root.querySelector('#error').textContent='';
-    }catch(error){if(!wakeClosed&&(readVersion??operationVersion)===updateVersion)report(error);}
+      render(data,{preserveFeedback:feedbackRevision!==errorFeedbackRevision});
+    }catch(error){if(!wakeClosed&&(readVersion??operationVersion)===updateVersion
+      && feedbackRevision===errorFeedbackRevision)report(error);}
     finally{wakePending=false;if(!wakeClosed)renderWake(current);}
   };
   const removeDictation=bridge?.onDictation?.(result=>{
@@ -136,7 +140,7 @@ else {
     setSisPending(true);
     try { const result=await invoke('voice.configure',{region:sisRegion.value,projectId:sisProject.value.trim(),
       iamToken:sisToken.value,tokenExpiresAt:sisExpiry.value.trim()});
-      sisToken.value='';sisSettings.open=false;root.querySelector('#error').textContent=result.connected?'':'SIS 配置已保存；等待 Competition Runtime 接通后启用语音'; }
+      sisToken.value='';sisSettings.open=false;setFeedback(result.connected?'':'SIS 配置已保存；等待 Competition Runtime 接通后启用语音'); }
     catch(err){sisToken.value='';report(err);}
     finally{setSisPending(false);}
   };
@@ -175,7 +179,7 @@ else {
     void liveControls.toggle();
   }else if(!pending)form.requestSubmit();});
   document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(!modelMenu.hidden){closeModel();return;}if(!bellMenu.hidden){closeBell();return;}invoke('panel.hide').catch(report);});
-  form.onsubmit=async e=>{e.preventDefault();if(pending||sendBtn.disabled||!input.value.trim())return;const submittedRevision=draftRevision;pending=true;setSendMode(true);try{await invoke('task.submit',input.value);if(draftRevision===submittedRevision)input.value='';requestAnimationFrame(()=>{thread.scrollTop=thread.scrollHeight;});root.querySelector('#error').textContent='';}catch(err){report(err);}finally{pending=false;setSendMode(Boolean(input.value.trim()));}};
+  form.onsubmit=async e=>{e.preventDefault();if(pending||sendBtn.disabled||!input.value.trim())return;const submittedRevision=draftRevision;pending=true;setSendMode(true);try{await invoke('task.submit',input.value);if(draftRevision===submittedRevision)input.value='';requestAnimationFrame(()=>{thread.scrollTop=thread.scrollHeight;});setFeedback('');}catch(err){report(err);}finally{pending=false;setSendMode(Boolean(input.value.trim()));}};
   const stopButton=root.querySelector('#stop');
   // Stopping playback never sends task.cancel to Runtime.
   stopButton.onclick=async()=>{window.speechSynthesis?.cancel();try{const result=await invoke('voice.stop');if(!result?.stopped)report(result?.reason??'语音供应商尚未连接');}catch(err){report(err);}};
@@ -187,7 +191,7 @@ else {
     const state=current?.voice?.status;
     const action=state==='listening'?'voice.record.finish':'voice.record.start';
     talkButton.disabled=true;
-    try{await invoke(action);if(!wakeClosed&&feedbackRevision===talkFeedbackRevision&&current?.voice?.status!=='error')root.querySelector('#error').textContent='';}
+    try{await invoke(action);if(!wakeClosed&&feedbackRevision===talkFeedbackRevision&&current?.voice?.status!=='error')setFeedback('');}
     catch(err){if(!wakeClosed&&feedbackRevision===talkFeedbackRevision)report(err);}
     finally{if(!wakeClosed&&feedbackRevision===talkFeedbackRevision)talkButton.disabled=Boolean(current?.live?.active)||wakeBlocksCapture(current)||!current?.voice?.experimental||!['unavailable','error','listening','awaiting_speech'].includes(current?.voice?.status);}
   };
@@ -231,7 +235,7 @@ else {
       approvalDecisions.set(id,'submitted');syncApprovalButtons();}
     catch(error){approvalDecisions.delete(id);report(error);syncApprovalButtons();}
   });
-  render=data=>{updateVersion++;current=data;const task=currentTask(data.tasks);const connectionNode=root.querySelector('#connection');connectionNode.textContent=data.fakeModel?data.connection+' · Fake Model':data.connection;const liveStates={connecting:'正在连接',reconnecting:'正在续接',listening:'正在聆听',speaking:'正在回答',working:'正在处理任务',stopping:'正在关闭',error:'连接失败'};root.querySelector('#state').textContent=data.live?.active?(liveStates[data.live.status]??'Live 已开启'):task?stateNames[task.state]:'待机';
+  render=(data,{preserveFeedback=false}={})=>{updateVersion++;current=data;const task=currentTask(data.tasks);const connectionNode=root.querySelector('#connection');connectionNode.textContent=data.fakeModel?data.connection+' · Fake Model':data.connection;const liveStates={connecting:'正在连接',reconnecting:'正在续接',listening:'正在聆听',speaking:'正在回答',working:'正在处理任务',stopping:'正在关闭',error:'连接失败'};root.querySelector('#state').textContent=data.live?.active?(liveStates[data.live.status]??'Live 已开启'):task?stateNames[task.state]:'待机';
     liveControls.render(data.live);
     renderWake(data);
     if(!data.live?.active&&!task&&data.wake?.phase==='listening')root.querySelector('#state').textContent='唤醒聆听中';
@@ -255,7 +259,7 @@ else {
     const voiceFailure=data.voice?.status==='error'?data.voice.failure:null;
     const voiceFailureStage=voiceFailureStages[voiceFailure?.stage]??'处理';
     const voiceError=data.voice?.status==='error'?`语音${voiceFailureStage}失败：${voiceFailure?.message??data.voice.reason??'语音处理失败'}`:'';
-    root.querySelector('#error').textContent=data.connectionError||voiceError;
+    if(!preserveFeedback)setFeedback(data.connectionError||voiceError);
     const modelReady=data.model?.status==='ready';
     // Thinking controls are a local test surface.  They must remain draggable
     // even while the provider is unconfigured or its connection test failed;

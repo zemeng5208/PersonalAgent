@@ -7,8 +7,13 @@ import ts from 'typescript';
 const source = await readFile(new URL('../src/app/renderer.js', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('renderer.js', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
 let handler;
+const feedbackDependencies = new Map();
 function visit(node) {
   if (ts.isBinaryExpression(node) && node.left.getText(ast) === 'talkButton.onclick') handler = node.right.getText(ast);
+  if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)
+    && ['errorFeedbackRevision', 'setFeedback'].includes(node.name.text)) {
+    feedbackDependencies.set(node.name.text, node.getText(ast));
+  }
   ts.forEachChild(node, visit);
 }
 visit(ast);
@@ -28,6 +33,7 @@ function fixture() {
     updateVersion: 0, talkFeedbackRevision: 0, wakeClosed: false,
     wakeBlocksCapture: () => false, report: value => {error.textContent = value.message;},
     invoke(name) {const pending = deferred(); calls.push({name, ...pending}); return pending.promise;}});
+  for (const declaration of feedbackDependencies.values()) vm.runInContext(`let ${declaration};`, context);
   const click = vm.runInContext(`(${handler})`, context);
   return {context, error, button, calls, click, snapshot(status, message = '') {
     context.updateVersion++;
