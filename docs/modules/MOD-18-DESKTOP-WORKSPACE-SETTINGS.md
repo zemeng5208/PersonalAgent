@@ -183,7 +183,8 @@ cc4c0651770f707f1b66e0ad8cdbc4caf6665602ae548ece783505012c4e95df。
 
 原正式行为before33a541为4pass2fail，修后90a684为6/6 actual0。原消费者before
 52300/194609 actual1保持；after60342/17e63d actual0，真实服务closed/stop回执held时
-run disabled，native click及dispatched click都0run IPC；release后仍disabled且停用可用。
+run disabled，native click及dispatched click都0run IPC；held期间已启用Skill仍可停用，
+release后run仍disabled。
 SQLite readonly task/toolrecord/grant均0，main DB字节不变；十个具体compiled出口稳定，
 不称全build或PID/真实设备验收。最初loader/cleanup错误只保留历史。源码与完整消费者/
 四截图、原失败及22hash独立只读核对；根在全仓d3cb结束后整合，本增量另作固定HEAD
