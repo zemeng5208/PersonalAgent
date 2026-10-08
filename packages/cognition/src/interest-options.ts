@@ -204,9 +204,11 @@ export class LayaInterestDecisionService {
         && built.policy.expiresAt !== undefined && current < time(built.policy.expiresAt)
         && currentPolicy.expiresAt !== undefined && current < time(currentPolicy.expiresAt)));
     const selected = model.state === 'selected' && fresh ? offered : undefined;
-    const evidence = [...built.policy.evidence].sort((a, b) =>
-      JSON.stringify([a.id, a.topicId, a.sourceId, a.sourceRevision]).localeCompare(
-        JSON.stringify([b.id, b.topicId, b.sourceId, b.sourceRevision])));
+    const evidence = [...built.policy.evidence].sort((a, b) => {
+      const left = JSON.stringify([a.id, a.topicId, a.sourceId, a.sourceRevision]);
+      const right = JSON.stringify([b.id, b.topicId, b.sourceId, b.sourceRevision]);
+      return left < right ? -1 : left > right ? 1 : 0;
+    });
     const binding = {topicId: evaluated.topicId, evidence, source: built.policy.source ?? null,
       scope: {id: evaluated.scope.id, revision: evaluated.scope.revision},
       optionRefs: built.options.map(option => ({id: option.id, revision: option.revision})),
