@@ -1486,3 +1486,46 @@ test('an unchosen legacy ancestor intent retains its original task and exact sco
     assert.equal(calls.layaCalls, 1); assert.equal(store.read().revision, 5);
   } finally {binding.close(); await rm(paths.directory, {recursive: true, force: true});}
 });
+
+test('a full Goal impact beyond the optional repair bound retains recheck while the 100-target boundary still repairs', async () => {
+  for (const count of [100, 101]) {
+    const paths = await workspace(), calls = state({handoff: false});
+    let binding = open(paths, calls);
+    try {
+      let store = binding.application.runtime.bindCoordinationStore(graphNamespace);
+      const {kind: _kind, ...input} = node('large-impact-goal', 'goal', []);
+      createGoal(store, 0, input);
+      const ids = Array.from({length: count}, (_, index) => `large-plan-${index}`);
+      for (const id of ids) store.append(store.read().revision, node(id, 'plan', [ref(input.id)]));
+      reviseGoal(store, count + 1, 1, {...input, summary: 'Clarified Goal with existing consumers'});
+      const original = store.read();
+      const request = {expectedGraphRevision: count + 2,
+        previousGoal: ref(input.id), currentGoal: ref(input.id, 2)};
+      const first = (await binding.host.consumeAndReview({...context(), at, limit: 1, afterGraphRevision: 0})).reviews[0];
+      assert.equal(first.task.state, 'succeeded', 'a bounded optional candidate must not block the full review');
+      assert.deepEqual(first.review.affected.map(item => item.node.id), ids);
+      assert.equal(first.review.affected.length, count);
+      assert.ok(first.review.affected.every(item => item.action === 'RECHECK'));
+      assert.equal(calls.layaCalls, 1);
+      if (count === 100) {
+        assert.equal(first.review.action, 'REVISE');
+        assert.deepEqual(first.review.options.map(option => option.id), ['recheck', 'defer', 'revise']);
+        assert.equal(first.review.selectedOption.repair.changes.length, 100);
+      } else {
+        assert.equal(first.review.action, 'RECHECK');
+        assert.deepEqual(first.review.options.map(option => option.id), ['recheck', 'defer']);
+        assert.ok(first.review.options.every(option => option.action === 'RECHECK' && !option.repair));
+      }
+      assert.deepEqual(store.read(), original);
+      assert.equal(calls.dispatchAttempts, 0);
+      binding.close(); binding = open(paths, calls);
+      store = binding.application.runtime.bindCoordinationStore(graphNamespace);
+      const replay = await binding.host.reviewGoalRevision(request, {...context(), at});
+      assert.equal(replay.task.taskId, first.task.taskId);
+      assert.deepEqual(replay.review, first.review);
+      assert.equal((await binding.host.consumeAndReview({...context(), at, limit: 1, afterGraphRevision: 0})).reviews.length, 0);
+      assert.equal(calls.layaCalls, 1); assert.equal(calls.dispatchAttempts, 0);
+      assert.deepEqual(store.read(), original);
+    } finally {binding.close(); await rm(paths.directory, {recursive: true, force: true});}
+  }
+});

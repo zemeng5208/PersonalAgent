@@ -493,7 +493,9 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
           ...(subject ? {subjectGoal: {id: subject.id, revision: subject.revision}} : {}),
           options: [], semanticReviewRequired: true};
         if (scope.items.length || subject) {
-          const candidate = trigger.kind === 'expiry' || subject ? undefined : buildMinimalRepairCandidate(snapshot, request.at, {
+          // The optional candidate has a 100-target bound; larger full scopes
+          // still choose between the original recheck and defer approaches.
+          const candidate = trigger.kind === 'expiry' || subject || scope.items.length > 100 ? undefined : buildMinimalRepairCandidate(snapshot, request.at, {
             expectedGraphRevision: snapshot.revision, targets: scope.items.map(item => item.node),
           });
           result.options = subject ? [
