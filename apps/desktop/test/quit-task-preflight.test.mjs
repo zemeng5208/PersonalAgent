@@ -115,3 +115,96 @@ test('unknown SIS release stays blocked and does not repeat permanent disposal',
   assert.equal(f.calls.filter(call => call === 'voice-dispose').length, 1);
   assert.equal(f.context.runtimeError, '语音资源释放未确认');
 });
+
+// Original initialization/config/record functions; replace only dynamic imports with explicit Fake factories.
+function reconfigurationFixture() {
+  const f = fixture(), inputs = [], asr = [], panel = {isVisible: () => true, webContents: {id: 9}};
+  const oldDispose = f.voiceInput.dispose;
+  let oldDisposed = false;
+  f.voiceInput.dispose = async () => {if (oldDisposed) return;oldDisposed = true;
+    await oldDispose();f.context.runtimeApplication.activeTaskCount = 1;};
+  f.wakeVoice.disable = async () => {};
+  let configuration = {region: 'cn-north-4', projectId: 'synthetic-old'}, failInitialization = false;
+  Object.assign(f.context, {panel, competitionMode: true, client: {}, voiceConfigurationPending: false,
+    voicePcmSource: undefined, sisPlaybackHost: undefined, panelHiding: false, voiceInitializationFailure: null,
+    sisConfigHost: {snapshot: () => ({configured: true}), current: () => configuration,
+      configure(value) {configuration = value;f.calls.push('configure');}},
+    desktopHost: {logVoicePlayback() {}}, taskGoals: new Map(), conversations: {add() {assert.fail('No Task');}},
+    createDesktopSisPlaybackHost: () => ({async dispose() {f.calls.push('new-playback-dispose');}}),
+    createDesktopWakeVoiceHost: () => ({hasActive: () => false, snapshot: () => ({phase: 'disabled'}), async disable() {},
+      async dispose() {f.calls.push('new-wake-dispose');}}),
+    fakeVoiceImport: async () => ({createVoicePcmFrameSourcePort: () => ({async dispose() {f.calls.push('new-source-dispose');}}),
+      createHuaweiSisRecognitionPort: () => ({}), createHuaweiSisOutputPort: () => ({})}),
+    fakeInputImport: async () => ({createDesktopVoiceInput() {
+      if (failInitialization) throw Error('synthetic voice initialization failure');
+      const controller = new AbortController();asr.push(controller);
+      let active = false;
+      const input = {hasActive: () => active, async beginCapture() {active = true;return {status: 'listening'};},
+        async finishCapture() {return {status: 'recognizing'};},
+        async dispose() {f.calls.push('new-voice-dispose');controller.abort();active = false;}};
+      inputs.push(input);return input;
+    }}),
+  });
+  const initialization = declaration('initializeSisVoice')
+    .replace("await import('@personal-agent/voice')", 'await fakeVoiceImport()')
+    .replace("await import('./voice-input.js')", 'await fakeInputImport()');
+  vm.runInContext(initialization, f.context);
+  let configure, record;
+  const find = node => {
+    if (ts.isIfStatement(node)) {
+      const expression = node.expression.getText(ast);
+      if (expression === "name === 'voice.configure' || name === 'voice.login'") configure = node.getText(ast);
+      if (expression === "name.startsWith('voice.record.') || name === 'voice.play'") record = node.getText(ast);
+    }
+    ts.forEachChild(node, find);
+  };
+  find(ast);assert.ok(configure && record);
+  const action = vm.runInContext(`(async function(sender,name,payload){${configure}\n${record}})`, f.context);
+  return {...f, get exited() {return f.exited;}, inputs, asr,
+    invoke: (name, payload) => action(panel, name, payload),
+    fail(value) {failInitialization = value;},
+    async refuseLateQuit() {
+      f.app.quit();await tick();await tick();await tick();
+      assert.equal(f.exited, false);assert.match(f.context.runtimeError, /活动任务/);
+      f.context.runtimeApplication.activeTaskCount = 0;
+    },
+  };
+}
+
+test('a legitimate reconfiguration after late refused quit disposes the new voice and aborts its pending recognition', async () => {
+  const f = reconfigurationFixture();await f.refuseLateQuit();
+  await f.invoke('voice.configure', {region: 'cn-north-4', projectId: 'synthetic-new'});
+  await f.invoke('voice.record.start');await f.invoke('voice.record.finish');
+  assert.equal(f.inputs[0].hasActive(), true);assert.equal(f.asr[0].signal.aborted, false);
+  f.app.quit();await tick();await tick();await tick();
+  assert.equal(f.exited, true);assert.equal(f.asr[0].signal.aborted, true);
+  assert.equal(f.inputs[0].hasActive(), false);
+  assert.equal(f.calls.filter(call => call === 'voice-dispose').length, 1);
+  assert.equal(f.calls.filter(call => call === 'new-voice-dispose').length, 1);
+  assert.ok(f.calls.indexOf('new-voice-dispose') < f.calls.indexOf('runtime-close'));
+});
+
+test('failed reinitialization retains the old quit cleanup receipt and permits only a later successful new host cleanup', async () => {
+  const f = reconfigurationFixture();await f.refuseLateQuit();
+  const oldReceipt = f.context.voiceDisposal;f.fail(true);
+  await assert.rejects(() => f.invoke('voice.configure', {region: 'cn-north-4', projectId: 'synthetic-new'}),
+    /SIS 配置已保存，但语音适配器启动失败/);
+  assert.equal(f.context.voiceInput, undefined);assert.equal(f.inputs.length, 0);
+  assert.equal(f.context.voiceDisposal, oldReceipt);assert.equal(f.context.voiceDisposed, true);
+  assert.equal(f.calls.filter(call => call === 'new-source-dispose').length, 1);
+  assert.equal(f.exited, false);
+  f.fail(false);await f.invoke('voice.configure', {region: 'cn-north-4', projectId: 'synthetic-retry'});
+  await f.invoke('voice.record.start');await f.invoke('voice.record.finish');
+  f.app.quit();await tick();await tick();await tick();
+  assert.equal(f.asr[0].signal.aborted, true);assert.equal(f.exited, true);
+  assert.equal(f.calls.filter(call => call === 'new-voice-dispose').length, 1);
+});
+
+test('unknown old voice cleanup still refuses reconfiguration and never publishes a replacement', async () => {
+  const f = reconfigurationFixture();f.context.wakeVoice = undefined;
+  f.context.voiceInput = undefined;f.context.sisPlaybackHost = {};
+  f.context.voiceDisposalFailed = true;
+  await assert.rejects(() => f.invoke('voice.configure', {region: 'cn-north-4', projectId: 'synthetic-new'}), /释放未确认/);
+  assert.equal(f.inputs.length, 0);assert.equal(f.calls.includes('configure'), false);
+  assert.equal(f.context.voiceDisposalFailed, true);
+});

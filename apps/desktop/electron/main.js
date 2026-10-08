@@ -2639,6 +2639,9 @@ async function initializeSisVoice() {
     voicePcmSource = source;
     sisPlaybackHost = playback;
     wakeVoice = wake;
+    voiceDisposed = false;
+    voiceDisposal = undefined;
+    voiceDisposalFailed = false;
     wakeQuitHandled = false;
     wakeQuitUnknown = false;
     wakeDisposal = undefined;
