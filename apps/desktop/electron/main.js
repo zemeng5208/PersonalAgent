@@ -2864,6 +2864,13 @@ app.whenReady().then(async () => {
     if (runtimeStartup.snapshot().state === 'starting') {
       event.preventDefault(); runtimeError = 'Runtime 正在连接，请稍后退出'; publish(); return;
     }
+    if ((runtimeApplication?.activeTaskCount ?? 0) > 0) {
+      event.preventDefault();
+      app.isQuitting = false;
+      runtimeError = 'Runtime 仍有活动任务；请先等待完成或停止任务后再退出';
+      publish();
+      return;
+    }
     if (wakeVoice && !wakeQuitHandled) {
       event.preventDefault();
       wakeDisposal ??= disposeWakeForQuit();
