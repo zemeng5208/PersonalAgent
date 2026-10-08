@@ -542,3 +542,5 @@ allow_once markup 有入口；cloud panel 仍可见，通知各一次、infer1/F
 未点击审批、未执行修复，重建仍无云许可；Fake Laya/HTTP/credential 和合成 Graph
 明确标记，不是 Electron/真实 IPC/云或物理 Windows 验收。诊断 loader/compiled drift
 失败保留；前1f548完整检查不覆盖本增量，根后续固定源码再验证。
+
+证据路径精确更正：原before-v2清单8项中7项原路径连续保持；生成的extracted fixture路径被after生成器复用，99fc2f6/9020B变为426d17a/9268B。原before JSON/log/DB/producer及final21项未变，旧清单未重写。以冻结原testbase和纯AST提取逻辑在独立路径严格重建原99fc字节（638e66/0），保存两版；这不是原路径连续保留或重跑原测试。补充manifest b9b2d985cbbd707225e25e08a92e660ccabb6788fc05e5e827543655d4e7863e，4项逐hash核；D独审4d6b6975确认。

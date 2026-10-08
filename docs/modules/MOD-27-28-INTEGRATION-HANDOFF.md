@@ -78,3 +78,7 @@ PR #37 CI 后续修正：2026-09-10 的 run 34430658413 在 npm ci 因缺少两�
 MOD-28 保持 `in_progress`。接口状态以[接口目录](../interfaces/CURRENT_INTERFACE_CATALOG.md)
 公布的子集为准；本次源码核对不冻结新接口，也不把合成绑定、实际 SQLite 持久读回或
 一轮根检查记为真实 Calendar、私人 Memory、云或 Evidence 整体通过。
+
+## 固定九项整合批次完整检查（2026-10-08 续接）
+
+固定68fb1563ef73457dab1747e6eb15c08e6c32010a/tree8d6fa5b8ac47ff8d095d8c8dca0bd2f001f14bb0，Node24.15/4CPU原npm run check，01:19:57.495576Z至01:28:21.974862Z，实际session34257/dccf1d→dac3e6/exit0。34组2523项2473通过、0失败0取消、50跳过；Desktop647/636通过11跳过、Runtime439/439、Cognition273/273、Calendar47/44通过3跳过、root integration22/22。raw249163字节SHA5af62dc48f62442cf5dd9a22da3c63f6736c7951e0a52b038de76a9cff56e286；A独立完整raw+固定source核实4dd26739620a9d2249593f49db071ca711b20b1b900bbcb8d4707ec81342a0b3。原1f548整仓Calendar失败和同head隔离8/8仍完整保留，后来此批通过不能解释旧失败原因。此完整结果不覆盖随后新增Laya reader取消、Live shortcut反馈或Mail cache排序；新源码固定后须另跑原完整检查。没有借用旧远端Windows CI结论。

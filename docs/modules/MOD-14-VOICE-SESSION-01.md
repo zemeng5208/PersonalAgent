@@ -431,3 +431,9 @@ fresh 独立已退出的 producer 进程存 pending1，再由原 main initialize
 这是本地 Node/文件的重启消费，不是 Electron、生产 userData、真实云或物理设备验收。
 原 shutdown 未调用 dispose 的静态交接仍未改变；unref timer 不证明退出阻断，durable
 cache 可由下次启动回补，不据静态遗漏宣称数据丢失。根新固定源码检查另记。
+
+## Live 快捷键失败后的当前重试反馈（2026-10-08 续接）
+
+旧快捷键首次失败后，成功热键或鼠标重试已listening/active，renderer仍拼接旧liveShortcut.reason。原main toggle共享操作revision、注册对象和自己错误token；当前同注册操作成功仅清自己旧错误，旧操作不能覆盖新F9保留原因/F24占用原因或新stop失败。原400ms门禁、active stop优先、配置/面板保护、原返回值与Error身份保持；不修改Host状态、未知资源释放或settings。fulfilled stop不构成设备释放验收。
+
+maina7dfd5a5/newtest61bc26dd，仅两文件。最终manifest-v2 d26e35f69b38461e7524534d1b481a0fd86bb65251b26369956a796f629b50bd，24+原12 artifacts核实；V1初选相同bytes但非最终producer的配置路径，保留V1，V2绑定finalJSON配置。固定Node24.15原12项6通过6失败2c1bbb/1→完整12/12 abedae/0。fresh原main/Host/完整HTTP/CSP renderer热键16990/896cb3/0、鼠标22492/a2f4bb/0均内嵌24.15，旧reason清空、listening/active，随后原stop各source/session关闭1、mic revoke2、Runtime0、页面错误0。window/IPC/Gateway/mic/source为显式Fake；并非真实Electron/Windows快捷键、物理音频或云验收。A独审cc5d3e1a确认范围、全文及所有证据。

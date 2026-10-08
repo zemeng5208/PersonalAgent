@@ -30,3 +30,9 @@ PR #92 的[设计文档](https://github.com/zemeng5208/PersonalAgent/pull/92)标
 一次合成 Fact 投影收据及 RECHECK 报告经此适配调用本机真实 multilingual Laya：缓存模型启动到 `/health` 就绪 12.4 秒，worker RSS 从 1661.2 MiB 到 1680.1 MiB；单次消费 385.5 ms，最终建议 `ESCALATE_AGENTARTS/low_confidence`，confidence 0.3024；服务和 worker 均读回已停止。可复现输入和调用保留在 `packages/cognition/examples/projected-fact-laya-probe.mjs`：先在可信本地会话启动绑定回环且启用一次性密钥的服务，再将 `LAYA_PORT`、`LAYA_API_KEY` 仅传给此进程执行该脚本。这个收据是合成的结构化宿主输出；本 PR 的模块验证不证明 Desktop 生产入口、决策质量或云端闭环。Desktop 接线及其服务生命周期由独立整合工作包验证。
 
 定向验证使用合成数据：通过本机现有 TypeScript 编译器严格检查 cognition 全部源码并单独编译三个新增源文件；`node --test --test-isolation=none packages/cognition/test/laya-decision.test.mjs packages/cognition/test/projected-fact-decision.test.mjs` 通过 14/14，覆盖重复合并、不同 source 同名事件归因、版本冲突、未校准标签升级、模型失败脱敏、deadline/取消、typed-choice 形状与回环鉴权、307 转发目标零命中，以及 Fact 因果关联、旧投影 revision 拒绝、namespace 对齐、空/无关事件生命周期和图谱 revision 拒绝。普通 `node --test` 在当前 Windows 沙箱因测试隔离子进程 `spawn EPERM` 失败，不能计作测试失败或通过。另有上述真实模型的合成接口与资源读回；未运行真实 AgentArts、全仓检查或桌面验收，没有公共接口冻结或迁移。
+
+## 有界响应拒绝后的流取消（2026-10-08 续接）
+
+旧公开 chooser 对超过65536字节的本地HTTP响应已返回abstain/unavailable/eligibleForRuntime=false，但超过原deadline及caller abort后流仍继续写入。仅在readSmallJson读取/大小错误路径发起不等待的reader.cancel，取消的同步异常或异步拒绝不替换原错误，finally releaseLock保持；批次共用同一读者。原65536限制、正常JSON、HTTP/模型/候选/授权/截止时间不变。
+
+冻结source002269ce/test1ee33346，manifest4209dade6d0b73c1f669ed80312c6aa72861da0081ba80798315b38c21a88b7f，25与原6 artifacts逐hash/bytes核实。原正式9项1通过8失败（包含父项汇总），实际12837/c024c0/1；修后原三个受影响文件47962/c26293/0，26/26，固定Node24.15启动。fresh真实回环HTTP公开服务97550/a1ceda/0保持同样弃权结果，返回时仍未立即关闭，截止时间观察closed=true、累计67585字节/ticks2后保持，允许在途写入。没有真实模型/云/Task/设备验收。独审A5b955679与De7154f38均通过；旧68fb完整检查不覆盖此增量。
