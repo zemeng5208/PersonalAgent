@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';
 import {test} from 'node:test';
 import {Client} from '@personal-agent/client';
-import {LayaActionChoiceService, selectGoalAncestorImpact} from '@personal-agent/cognition';
+import {LayaActionChoiceService, analyzeImpact, selectGoalAncestorImpact} from '@personal-agent/cognition';
 import {createGoal, reviseGoal} from '@personal-agent/goals/commands';
 import {toolArgumentsDigest} from '@personal-agent/tool-gateway';
 import {createRuntimeApplication} from '../dist/application.js';
@@ -1528,4 +1528,140 @@ test('a full Goal impact beyond the optional repair bound retains recheck while 
       assert.deepEqual(store.read(), original);
     } finally {binding.close(); await rm(paths.directory, {recursive: true, force: true});}
   }
+});
+
+
+test('public Fact expiry identity survives portable locale changes and new exact consumers remain new work', async () => {
+  // Explicit Collators in isolated workers are portable; no assertion that
+  // Windows adopts LC_ALL. A separate Linux producer tests actual defaults.
+  const worker = `
+    import {createRuntimeApplication,createProactiveCognitionHost} from ${JSON.stringify(new URL('../dist/application.js', import.meta.url).href)};
+    import {LayaActionChoiceService} from '@personal-agent/cognition';
+    import {join} from 'node:path';
+    const [directory,mode,locale]=process.argv.slice(1),collator=new Intl.Collator(locale);
+    String.prototype.localeCompare=function(other){return collator.compare(String(this),other);};
+    const namespace='synthetic-public-expiry-locale-reopen',baselineAt='2026-09-27T03:00:00.000Z',expiryAt='2026-09-27T04:00:00.000Z';
+    const ctx=time=>({at:time,deadline:new Date(Date.now()+60000).toISOString(),signal:new AbortController().signal});
+    const application=createRuntimeApplication({path:join(directory,'runtime.sqlite'),profile:'huawei_ict_agentarts'});
+    const facts=application.createCompetitionFactHost({memoryPath:join(directory,'memory.sqlite'),memoryNamespace:namespace+'-memory',graphNamespace:namespace,consumerKey:'public-expiry-locale'});
+    let inferences=0;
+    const chooser=new LayaActionChoiceService({infer:async payload=>{
+      inferences++;const ids=Object.keys(payload.questions.action.criteria),chosen=ids[0];
+      return {answers:{action:{choice:chosen,probabilities:Object.fromEntries(ids.map(id=>[id,id===chosen?0.98:0.02/(ids.length-1)])),answer_confidence:0.98,confidence:0.5}}};
+    }});
+    const host=createProactiveCognitionHost({application,facts,graphNamespace:namespace,bindingVersion:'public-expiry-locale-v1',chooser});
+    const store=application.runtime.bindCoordinationStore(namespace);
+    const append=id=>store.append(store.read().revision,{id,kind:'plan',summary:'Retain Plan content',reason:'Synthetic public consumer',sourceRef:'synthetic/public-Plan',
+      sensitivity:'public',state:'active',dependencies:[{id:store.read().history[0].id,revision:1}],validFrom:baselineAt,validUntil:'2099-01-01T00:00:00.000Z'});
+    try {
+      if(mode==='create'){
+        facts.recordPublicSource({vaultId:'public-demo',path:'meeting.md',factId:'meeting/update',sourceRevision:'a'.repeat(64),line:1,
+          summary:'Public schedule with announced expiry',observedAt:'2026-09-25T00:00:00.000Z',validFrom:'2026-09-25T00:00:00.000Z',validUntil:expiryAt,expectedFactRevision:null},ctx(baselineAt));
+        await host.consumeAndReview({...ctx(baselineAt),limit:10,afterGraphRevision:0});append('ä-plan');append('z-plan');
+      }
+      if(mode==='expand')append('new-plan');
+      const batch=await host.consumeAndReview({...ctx(expiryAt),limit:10,afterGraphRevision:1});
+      const rows=application.runtime.listTasks({conversationId:'proactive-cognition:'+namespace,limit:100}).items
+        .map(task=>({task,intent:application.runtime.loadCheckpoint(task.taskId,'proactive-cognition-intent-v1'),review:host.readReview(task.taskId).review}))
+        .filter(row=>row.intent.trigger.kind==='expiry');
+      console.log(JSON.stringify({inferences,rows,returned:batch.reviews.map(row=>row.task.taskId),graphRevision:store.read().revision,nextGraphRevision:batch.nextGraphRevision}));
+    }finally{host.close();facts.close();application.close();}
+  `;
+  for (const [first, second] of [['en-US', 'sv-SE'], ['sv-SE', 'en-US']]) {
+    const paths = await workspace();
+    try {
+      const run = (mode, locale) => JSON.parse(execFileSync(process.execPath,
+        ['--input-type=module', '-e', worker, paths.directory, mode, locale],
+        {cwd: fileURLToPath(new URL('../../../', import.meta.url)), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']}).trim());
+      const initial = run('create', first), replay = run('reopen', second);
+      assert.equal(initial.inferences, 1); assert.equal(initial.rows.length, 1);
+      assert.equal(replay.inferences, 0, 'Exact expired Fact/consumer refs reuse the original choice after reopen');
+      assert.deepEqual(replay.rows, initial.rows); assert.deepEqual(replay.returned, [initial.rows[0].task.taskId]);
+      assert.equal(replay.graphRevision, 3); assert.equal(replay.nextGraphRevision, 1);
+      const expanded = run('expand', second);
+      assert.equal(expanded.inferences, 1); assert.equal(expanded.rows.length, 2);
+      assert.notEqual(expanded.rows[0].task.taskId, initial.rows[0].task.taskId);
+      assert.equal(expanded.rows[0].review.affected.length, 3);
+      assert.deepEqual(expanded.rows[1], initial.rows[0], 'New consumers never replace the prior exact scope or choice');
+      assert.equal(expanded.graphRevision, 4); assert.equal(expanded.nextGraphRevision, 1);
+    } finally {await rm(paths.directory, {recursive: true, force: true});}
+  }
+});
+
+
+test('trusted legacy expiry refs retain their task and do not take new-work priority at limit one', async () => {
+  const paths = await workspace(), calls = state({prepareUnavailable: true});
+  const binding = open(paths, calls), expiryAt = '2026-09-27T04:00:00.000Z';
+  try {
+    binding.facts.recordPublicSource({...source, sourceRevision: 'a'.repeat(64), line: 1,
+      summary: 'Public schedule with announced expiry', observedAt: '2026-09-25T00:00:00.000Z',
+      validFrom: '2026-09-25T00:00:00.000Z', validUntil: expiryAt, expectedFactRevision: null}, context());
+    await binding.host.consumeAndReview({...context(), at, limit: 10, afterGraphRevision: 0});
+    const store = binding.application.runtime.bindCoordinationStore(graphNamespace), fact = store.read().history[0];
+    for (const id of ['ä-plan', 'z-plan']) store.append(store.read().revision, node(id, 'plan', [ref(fact.id)]));
+    // Trusted interrupted-host INTENT uses the exact public expiry scope and
+    // older en-US ref ordering, including legal reversed reference fields.
+    const consumers = [{revision: 1, id: 'ä-plan'}, {revision: 1, id: 'z-plan'}];
+    const facts = [{revision: fact.revision, id: fact.id}];
+    assert.deepEqual(analyzeImpact(store.read(), expiryAt).items.map(item => item.node), consumers.map(({id, revision}) => ({id, revision})));
+    const trigger = {kind: 'expiry', input: {graphRevision: 3, facts, consumers}};
+    const intent = {version: 1, graphNamespace, bindingVersion: 'test-binding-v1', trigger, evaluatedAt: expiryAt};
+    const original = binding.application.runtime.submitTaskWithCheckpoint({goal: 'Synthetic interrupted public expiry review',
+      conversationId: 'proactive-cognition:' + graphNamespace,
+      idempotencyKey: 'proactive-cognition:' + toolArgumentsDigest({graphNamespace, bindingVersion: intent.bindingVersion,
+        trigger: {kind: 'expiry', facts, consumers}})}, 'proactive-cognition-intent-v1', intent);
+    const poll = limit => binding.host.consumeAndReview({...context(), at: expiryAt, limit, afterGraphRevision: 1});
+    const chosen = (await poll(1)).reviews[0];
+    assert.equal(chosen.task.taskId, original.taskId); assert.equal(calls.layaCalls, 1);
+    assert.equal(chosen.review.affected.length, 2); assert.equal(chosen.review.action, 'RECHECK');
+    assert.deepEqual(binding.application.runtime.loadCheckpoint(original.taskId, 'proactive-cognition-intent-v1'), intent);
+    const oldReview = structuredClone(chosen.review);
+    const {kind: _kind, ...goal} = node('pending-goal', 'goal', []);
+    createGoal(store, 3, goal);
+    const pendingGoal = await binding.host.reviewGoalCreated({expectedGraphRevision: 4, currentGoal: ref(goal.id)}, {...context(), at: expiryAt});
+    assert.equal(calls.layaCalls, 2);
+    const same = (await poll(1)).reviews;
+    assert.deepEqual(same.map(row => row.task.taskId), [pendingGoal.task.taskId], 'A historical expiry match is recorded work, so it cannot steal the older Goal recovery slot');
+    assert.equal(calls.layaCalls, 2); assert.deepEqual(binding.host.readReview(original.taskId).review, oldReview);
+    store.append(4, node('new-plan', 'plan', [ref(fact.id)]));
+    const expanded = (await poll(1)).reviews[0];
+    assert.notEqual(expanded.task.taskId, original.taskId);
+    assert.equal(expanded.review.affected.length, 3); assert.equal(calls.layaCalls, 3);
+    assert.deepEqual(binding.host.readReview(original.taskId).review, oldReview);
+    assert.deepEqual(binding.application.runtime.loadCheckpoint(original.taskId, 'proactive-cognition-intent-v1'), intent);
+    assert.equal(store.read().revision, 5);
+  } finally {binding.close(); await rm(paths.directory, {recursive: true, force: true});}
+});
+
+
+test('a failed trusted legacy expiry task stays terminal after canonical identity lookup', async () => {
+  const paths = await workspace(), calls = state({handoff: false,
+    prepareOptions: async () => {throw Error('Synthetic optional preparation failure');}});
+  const binding = open(paths, calls), expiryAt = '2026-09-27T04:00:00.000Z';
+  try {
+    binding.facts.recordPublicSource({...source, sourceRevision: 'a'.repeat(64), line: 1,
+      summary: 'Public schedule with announced expiry', observedAt: '2026-09-25T00:00:00.000Z',
+      validFrom: '2026-09-25T00:00:00.000Z', validUntil: expiryAt, expectedFactRevision: null}, context());
+    await binding.host.consumeAndReview({...context(), at, limit: 10, afterGraphRevision: 0});
+    const store = binding.application.runtime.bindCoordinationStore(graphNamespace), fact = store.read().history[0];
+    for (const id of ['ä-plan', 'z-plan']) store.append(store.read().revision, node(id, 'plan', [ref(fact.id)]));
+    const consumers = analyzeImpact(store.read(), expiryAt).items.map(item => item.node), facts = [ref(fact.id)];
+    const trigger = {kind: 'expiry', input: {graphRevision: 3, facts, consumers}};
+    const intent = {version: 1, graphNamespace, bindingVersion: 'test-binding-v1', trigger, evaluatedAt: expiryAt};
+    const original = binding.application.runtime.submitTaskWithCheckpoint({goal: 'Synthetic interrupted legacy expiry failure',
+      conversationId: 'proactive-cognition:' + graphNamespace,
+      idempotencyKey: 'proactive-cognition:' + toolArgumentsDigest({graphNamespace, bindingVersion: intent.bindingVersion,
+        trigger: {kind: 'expiry', facts, consumers}})}, 'proactive-cognition-intent-v1', intent);
+    const poll = () => binding.host.consumeAndReview({...context(), at: expiryAt, limit: 1, afterGraphRevision: 1});
+    const failed = (await poll()).reviews[0];
+    assert.equal(failed.task.taskId, original.taskId); assert.equal(failed.task.state, 'failed');
+    assert.equal(failed.review, undefined); assert.equal(calls.layaCalls, 0);
+    const replay = (await poll()).reviews[0];
+    assert.deepEqual(replay, failed); assert.equal(calls.layaCalls, 0);
+    const expiryRows = binding.application.runtime.listTasks({conversationId: 'proactive-cognition:' + graphNamespace, limit: 100}).items
+      .filter(task => binding.application.runtime.loadCheckpoint(task.taskId, 'proactive-cognition-intent-v1').trigger.kind === 'expiry');
+    assert.equal(expiryRows.length, 1);
+    assert.deepEqual(binding.application.runtime.loadCheckpoint(original.taskId, 'proactive-cognition-intent-v1'), intent);
+    assert.equal(store.read().revision, 3);
+  } finally {binding.close(); await rm(paths.directory, {recursive: true, force: true});}
 });

@@ -205,9 +205,11 @@ function historicallyPlanned(snapshot: GraphSnapshot, goalId: string): boolean {
 const refKey = (ref: NodeRef): string => JSON.stringify([ref.id, ref.revision]);
 // Ancestor identity is an exact ref multiset, independent of process locale.
 // Canonicalize stored intents too so the existing fallback retains legacy IDs.
-// Leave all earlier trigger identities and their ordering contracts unchanged.
+// Leave earlier Goal trigger identities and their ordering contracts unchanged.
 const ancestorRefs = (refs: readonly NodeRef[]): NodeRef[] => refs.map(ref => ({id: ref.id, revision: ref.revision}))
   .sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : left.revision - right.revision);
+// Expiry uses the same exact multiset ordering, with its own legacy identity lookup.
+const expiryRefs = ancestorRefs;
 function expiredPublicFactScope(snapshot: GraphSnapshot, at: string): {facts: NodeRef[]; items: ImpactItem[]} {
   const current = new Map(snapshot.history.map(node => [node.id, node]));
   const expired = [...current.values()].filter(node => node.kind === 'fact' && node.state === 'active'
@@ -267,6 +269,9 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
       : trigger.kind === 'goal_ancestor' ? JSON.stringify([trigger.kind,
         trigger.input.currentGoal.id, trigger.input.currentGoal.revision,
         ancestorRefs(trigger.input.consumers).map(ref => [ref.id, ref.revision])]) : undefined;
+  const expiryIdentity = (trigger: Trigger): string | undefined => trigger.kind === 'expiry'
+    ? JSON.stringify([trigger.kind, expiryRefs(trigger.input.facts).map(ref => [ref.id, ref.revision]),
+      expiryRefs(trigger.input.consumers).map(ref => [ref.id, ref.revision])]) : undefined;
   const goalTasks = (context: MemoryReadContext, reviewedGoals?: Set<string>): Map<string, TaskSnapshot> => {
     const found = new Map<string, TaskSnapshot>();
     let beforeSequence: number | undefined;
@@ -295,7 +300,7 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
           }
         }
         if (intent.bindingVersion !== bindingVersion || intent.retryOf) continue;
-        const identity = goalIdentity(intent.trigger);
+        const identity = goalIdentity(intent.trigger) ?? expiryIdentity(intent.trigger);
         if (identity && !found.has(identity)) found.set(identity, task);
       }
       beforeSequence = page.nextBeforeSequence;
@@ -404,8 +409,8 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
   const review = async (trigger: Trigger, request: MemoryReadContext & {at: string},
     knownGoalTasks?: ReadonlyMap<string, TaskSnapshot>): Promise<ProactiveReviewReadback> => {
     open(); active(request); evaluationTime(request.at);
-    const identity = trigger.kind === 'expiry' ? {kind: trigger.kind, facts: trigger.input.facts,
-      consumers: trigger.input.consumers} : trigger.kind === 'goal_created' || trigger.kind === 'goal_unplanned'
+    const identity = trigger.kind === 'expiry' ? {kind: trigger.kind, facts: expiryRefs(trigger.input.facts),
+      consumers: expiryRefs(trigger.input.consumers)} : trigger.kind === 'goal_created' || trigger.kind === 'goal_unplanned'
         ? {kind: trigger.kind, currentGoal: trigger.input.currentGoal} : trigger.kind === 'goal'
           ? {kind: trigger.kind, previousGoal: trigger.input.previousGoal,
             currentGoal: trigger.input.currentGoal} : trigger.kind === 'goal_ancestor'
@@ -414,7 +419,7 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
     let key = 'proactive-cognition:' + toolArgumentsDigest({graphNamespace, bindingVersion, trigger: identity});
     let existing = runtime.findTaskByIdempotencyKey(key);
     if (!existing) {
-      const goalKey = goalIdentity(trigger);
+      const goalKey = goalIdentity(trigger) ?? expiryIdentity(trigger);
       if (goalKey) existing = (knownGoalTasks ?? goalTasks(request)).get(goalKey);
     }
     let retryOf: string | undefined;
@@ -594,16 +599,17 @@ export function createProactiveCognitionHost(options: ProactiveCognitionHostOpti
           : JSON.stringify(['goal', node.id, node.revision - 1, node.id, node.revision]));
         const expiry = expiredPublicFactScope(snapshot, request.at);
         const expiryTrigger = expiry.items.length ? {kind: 'expiry' as const, input: {
-          graphRevision: snapshot.revision, facts: expiry.facts,
-          consumers: expiry.items.map(item => item.node).sort((a, b) => refKey(a).localeCompare(refKey(b))),
+          graphRevision: snapshot.revision, facts: expiryRefs(expiry.facts),
+          consumers: expiryRefs(expiry.items.map(item => item.node)),
         }} : undefined;
         const unrecordedExpiry = expiryTrigger && !runtime.findTaskByIdempotencyKey('proactive-cognition:'
           + toolArgumentsDigest({graphNamespace, bindingVersion, trigger: {kind: 'expiry',
-            facts: expiryTrigger.input.facts, consumers: expiryTrigger.input.consumers}}));
+            facts: expiryTrigger.input.facts, consumers: expiryTrigger.input.consumers}}))
+          && !recorded.has(expiryIdentity(expiryTrigger)!);
         let expiryReviewed = false;
         const reviewExpiry = async (): Promise<void> => {
           if (!expiryTrigger || expiryReviewed || reviews.length >= request.limit) return;
-          reviews.push(await review(expiryTrigger, request));
+          reviews.push(await review(expiryTrigger, request, recorded));
           expiryReviewed = true;
         };
         const goals = [...heads.values()].filter(node => node.kind === 'goal'
