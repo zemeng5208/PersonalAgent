@@ -69,18 +69,22 @@ test('accepted unavailable repair receipt retains its handoff and unverified upd
 
 // Explicit Fake DOM with normal parent/descendant identity; innerHTML replaces actual test nodes.
 class Element {
-  constructor(tag) {this.tag=tag;this.children=[];this.dataset={};this.attributes={};this.listeners={};this.disabled=false;this._text='';}
+  constructor(tag) {this.tag=tag;this.children=[];this.dataset={};this.attributes={};this.listeners={};this.disabled=false;this.open=false;this._text='';}
   append(...nodes) {for(const node of nodes){node.parentNode=this;this.children.push(node);}}
   after(node) {node.parentNode=this.parentNode;const index=this.parentNode.children.indexOf(this);this.parentNode.children.splice(index+1,0,node);}
   setAttribute(name,value='') {
     this.attributes[name]=value;
     if(name==='class')this.className=value;
     if(name==='disabled')this.disabled=true;
+    if(name==='open')this.open=true;
     if(name.startsWith('data-'))this.dataset[name.slice(5).replace(/-([a-z])/g,(_,letter)=>letter.toUpperCase())]=value;
   }
   set textContent(value) {this._text=String(value);this.children=[];}
   get textContent() {return this._text+this.children.map(node=>node.textContent).join('');}
+  contains(node) {return node===this || this.children.some(child=>child.contains(node));}
+  focus(options) {globalThis.document.activeElement=this;this.lastFocusOptions=options;}
   set innerHTML(value) {
+    if(this.contains(globalThis.document.activeElement))globalThis.document.activeElement=null;
     for(const child of this.children)child.parentNode=null;
     this.children=[];this._text='';const stack=[this];
     for(const token of String(value).match(/<[^>]+>|[^<]+/g)??[]) {
@@ -455,4 +459,41 @@ test('retain local Goal preserves settings draft and excludes an overlapping ful
   assert.equal(form.elements.enabled.checked,false);assert.equal(form.querySelector('button').disabled,false);
   assert.match(container.querySelector('[data-local-feedback]').textContent,/已关闭目标云端许可/);
   assert.equal(container.querySelector('[data-feedback]').textContent,'有未保存的设置');
+});
+
+test('long Goal trigger uses native disclosure and preserves full escaped text outside the visible outcome',async t=>{
+  const ui=controls(t,async()=>{}),trigger='Synthetic dependency <b>& details '.repeat(30);
+  ui.render([{...localReview(),trigger}]);
+  const details=ui.list.querySelector('details[data-trigger-review]');assert.ok(details);
+  assert.equal(details.open,false);
+  assert.equal(details.querySelector('summary').textContent,'查看完整触发原因');
+  assert.equal(details.querySelector('.cognition-trigger').textContent,'触发原因：'+trigger.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'));
+  assert.equal(details.querySelector('.cognition-status'),null);assert.equal(details.querySelector('[data-action="apply-cognition"]'),null);
+  ui.render([{...localReview(),trigger:'Short original cause'}]);
+  assert.equal(ui.list.querySelector('details[data-trigger-review]'),null);
+  assert.match(ui.list.querySelector('.cognition-trigger').textContent,/Short original cause/);
+});
+
+test('long Goal trigger expansion follows actual native open state across snapshots and clears absent reviews',async t=>{
+  const ui=controls(t,async()=>{}),first={...localReview(),trigger:'First full synthetic trigger '.repeat(20)},second={...localReview(),reviewTaskId:'second-review',trigger:'Second full trigger '.repeat(30)};
+  ui.render([first,second]);let details=ui.list.querySelectorAll('details[data-trigger-review]');assert.equal(details.length,2);
+  details[0].open=true;details[1].open=false;ui.render([first,second]);details=ui.list.querySelectorAll('details[data-trigger-review]');
+  assert.equal(details[0].open,true);assert.equal(details[1].open,false);
+  details[0].open=false;details[1].open=true;ui.render([first,second]);details=ui.list.querySelectorAll('details[data-trigger-review]');
+  assert.equal(details[0].open,false);assert.equal(details[1].open,true);
+  ui.render([first]);ui.render([first,second]);assert.equal(ui.list.querySelectorAll('details[data-trigger-review]')[1].open,false);
+});
+
+
+test('long Goal trigger preserves only the focused native summary for the same current review',async t=>{
+  const ui=controls(t,async()=>{}),first={...localReview(),trigger:'Full synthetic trigger '.repeat(30)},second={...first,reviewTaskId:'second-review'};
+  ui.render([first,second]);let summaries=ui.list.querySelectorAll('summary');summaries[1].focus();
+  ui.render([second,first]);summaries=ui.list.querySelectorAll('summary');
+  assert.equal(document.activeElement,summaries[0]);assert.deepEqual(summaries[0].lastFocusOptions,{preventScroll:true});
+  ui.render([first]);assert.equal(document.activeElement,null);
+  ui.render([first,second]);assert.equal(document.activeElement,null);
+  ui.list.querySelector('summary').focus();ui.render([{...first,trigger:'Short reason'},second]);assert.equal(document.activeElement,null);
+  const outside=new Element('button');outside.focus();ui.render([first,second]);assert.equal(document.activeElement,outside);
+  const button=ui.button();button.focus();ui.render([first,second]);assert.equal(document.activeElement,null);
+  assert.equal(ui.list.querySelectorAll('summary').some(node=>node.lastFocusOptions),false);
 });

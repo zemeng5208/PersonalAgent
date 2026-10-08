@@ -69,6 +69,7 @@ export function mountProactiveControls(container, invoke, {settings = false} = {
   const cognitionPending = new Set();
   // Keep identified acceptance or uncertainty when a redraw replaces the action's DOM nodes.
   const cognitionOutcomes = new Map();
+  const triggerExpansion = new Map();
   const handoffPermissionFeedback = () => current?.cognition?.enabled === false
     ? {message:'目标分析已关闭，请先在设置中开启',label:'交给主智能体处理',locked:true}
     : current?.cognition?.cloudAllowed === false
@@ -233,12 +234,22 @@ export function mountProactiveControls(container, invoke, {settings = false} = {
       button.title = item.analysisTaskId ? '分析任务已受理，请查看任务状态' : item.kind !== 'system_pressure' ? '当前云端授权仅覆盖 CPU / 内存采样；此建议尚无已授权投影' : !snapshot?.cloudAnalysis ? '请在设置 → 电脑操控中开启云端分析' : !allowed ? '请先开启监控并完成必要授权' : '仅提交分析；实际执行仍需 Policy 校验';
     }
     if (reviewsList) {
+      // Capture the native state before replacing nodes; periodic snapshots must not close a reader's disclosure.
+      let focusedTriggerReview;
+      for(const details of reviewsList.querySelectorAll('details[data-trigger-review]')) {
+        triggerExpansion.set(details.dataset.triggerReview,details.open);
+        if(details.querySelector('summary')===document.activeElement)focusedTriggerReview=details.dataset.triggerReview;
+      }
+      const reviewIds=new Set(cognitionReviews.map(item=>item.reviewTaskId));
+      for(const id of triggerExpansion.keys()) if(!reviewIds.has(id)) triggerExpansion.delete(id);
       if (cognitionReviews.length > 0) {
         reviewsList.innerHTML = '<h3 class="cognition-review-title">目标与计划决策</h3>' + cognitionReviews.map(r => {
           const feedback = reviewFeedback(r);
           return `
           <article class="task cognition-review-card" data-review-id="${escape(r.reviewTaskId || '')}">
-            <p class="cognition-trigger assistant-message"><strong>触发原因：</strong>${escape(r.trigger || '事实或目标变更')}</p>
+            ${typeof r.trigger==='string' && r.trigger.length>320
+              ? `<details data-trigger-review="${escape(r.reviewTaskId || '')}" ${triggerExpansion.get(r.reviewTaskId) ? 'open' : ''}><summary>查看完整触发原因</summary><p class="cognition-trigger assistant-message"><strong>触发原因：</strong>${escape(r.trigger)}</p></details>`
+              : `<p class="cognition-trigger assistant-message"><strong>触发原因：</strong>${escape(r.trigger || '事实或目标变更')}</p>`}
             <p class="cognition-choice assistant-message"><strong>Laya 方案：</strong>${escape(r.choice || '本地决策建议')}</p>
             <p class="notice cognition-status"><strong>处理状态：</strong>${escape(feedback.message)}</p>
             <div class="cognition-actions">
@@ -253,6 +264,11 @@ export function mountProactiveControls(container, invoke, {settings = false} = {
         }).join('');
       } else {
         reviewsList.innerHTML = '';
+      }
+      if(focusedTriggerReview!==undefined) {
+        for(const details of reviewsList.querySelectorAll('details[data-trigger-review]')) {
+          if(details.dataset.triggerReview===focusedTriggerReview) {details.querySelector('summary').focus({preventScroll:true});break;}
+        }
       }
     }
   }
