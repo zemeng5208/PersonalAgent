@@ -2337,9 +2337,9 @@ async function action(event, name, payload) {
     const configuration = name === 'voice.login' ? await acquireHuaweiSisToken(payload) : payload;
     // A voice capture may have started while the IAM request was in flight.
     if (voiceInput?.hasActive() || liveVoice?.hasActive() || wakeVoice?.hasActive()) throw Error('请先结束当前语音会话再更新 SIS 配置');
+    sisConfigHost.configure(configuration ?? {});
     await stopWakeVoice(true);
     wakeVoice = undefined;
-    sisConfigHost.configure(configuration ?? {});
     if (voiceInput) {
       try { await voiceInput.dispose(); }
       catch {
