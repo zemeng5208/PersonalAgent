@@ -1,14 +1,22 @@
 # 开发计划与进度
 
-更新：2026-10-07 · 当前基线：main@4d15f063 · 项目主要负责人：zemeng / zemeng5208 · 整体 MVP：in_progress；本轮完成同步、接手登记与清理，不宣称真实全链已验收
+更新：2026-10-08 · 本轮审查基线：main@efbfbdd2 · 项目主要负责人：zemeng / zemeng5208 · 整体 MVP：in_progress；代码集成、CI 与真实服务/设备验收分别记录
 
 本文维护工作状态，需求以 PRD 为准，当前交付顺序以[华为 ICT AgentArts Competition Profile](competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)为先。模块负责人和独占目录唯一登记在 [模块分工](MODULE_ASSIGNMENTS.md)，契约见[公共开发协议](DEVELOPMENT_PROTOCOL.md)，逐接口冻结和可用性见[当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md)。`goo122` 负责共享底座、公共协议、Runtime、工具、知识与记忆；`zemeng` 负责 Competition Profile、AgentArts、核心认知和桌面执行；`Potatos498` 独立负责 MOD-20～26、MOD-34/35/38 及业务接线；三人各自验证和交付，不等待另一人的 PR 批准。历史作者与证据保留。Local Profile 只作为可选保留，不进入当前比赛退出条件。阶段不代表承诺日期；正式排期需根据比赛时间、团队人数和接口验证结果确定。
 
-### 2026-10-07 分工重置
+### 2026-10-08 最新状态与本轮集成
+
+- 分工 PR #299/#300 已合并：zemeng 保持核心、AgentArts 和桌面执行；goo122 负责 MOD-33/36/37，Potatos498 负责 MOD-34/35/38。三人独立交付和自审，不恢复指定人员审批或集中验收门槛。
+- #298 已合并 Windows Job helper CI 执行；#301 已合并失败 GitHub job 空日志拒绝；#303 已合并代码预审 diff 缓存的 Evidence 保留；#304/#305 已合并私人记忆控件刷新及控制器关闭后拒绝来源访问。审查基线 efbfbdd2 的 Foundation run 37731330132 成功。
+- #302 交付核心认知恢复、Goal/Fact 绑定、Desktop 状态/语音生命周期及 AgentArts 参数与观测接线。本轮整合最新 main，保留双方进度及私人记忆修复；实际合并和检查状态以该 PR 与 Git 为准，不把原 head 的 CI 成功冒充整合后检查。
+- #291 为 MOD-34 真实验收草稿；相对当前 main 只新增 `brokenAcceptanceAnchor` 验收锚点，没有待集成产品修复，继续保留为不合并的验收证据。
+- 真实 Competition 同批 Golden Path、请求级部署版本/trace/usage/费用、发布回退、物理 ASR/TTS/Live/Wake、Windows F9/UIA/DPI，以及业务账号和私人记忆确认写入/重启/删除仍按各包记录分别验收。历史合成或只读回执不提升这些状态；MOD-37 和未选社交平台未因本轮合并自动开工。
+
+### 2026-10-07 分工重置（历史登记）
 
 用户继续负责 zemeng 核心认知、AgentArts 和桌面执行主线；goo122 负责基础运行时/知识记忆，Potatos 负责业务能力及 CI/测试/Issue 修复链。DEV-WORKFLOWS 六项由 goo122（33/36/37）与 Potatos（34/35/38）各三项，zemeng 专注核心与 AgentArts，不集中代验。取消集中验收、指定他人 PR 批准和唯一集成槽；各自按公开契约、必要检查和自审独立交付。具体目录及跨模块修改规则以 MODULE_ASSIGNMENTS 为准。本修订覆盖同日较早的临时全部接手安排；远端 main 已核对无强制审批规则，本轮未修改远端权限或保护设置。
 
-### 2026-10-07 当前项目状态与接续入口
+### 2026-10-07 项目状态与接续入口（历史快照）
 
 - 已 fetch/prune 并同步主目录和当前工作树到 `4d15f06312745c45412c3d9caf6086fa16a99436`。该 head 的 Foundation run `37563282512` 已完成且结论 success；本轮没有重跑全仓、真实模型或桌面验收。
 - #294 已于该 head 进入 main；#297 已于 `813fb727` 进入 main。旧“等待集成”描述已修正。新增修改仍需对应检查与负责人自审，同行评审按需进行。
