@@ -5,6 +5,7 @@ import {spawnSync} from 'node:child_process';
 import {test} from 'node:test';
 import {ProactiveDecisionService} from '../dist/proactive-decision.js';
 import {LayaDecisionModel, LocalLayaHttpTransport} from '../dist/laya-decision.js';
+import {LocalLayaBatchHttpTransport} from '../dist/laya-batch-transport.js';
 
 const event = (overrides = {}) => ({
   eventId: 'change-1', source: 'synthetic-calendar',
@@ -201,4 +202,50 @@ test('real fetch rejects a redirect before POST data reaches another local serve
     await Promise.all([new Promise(resolve => source.close(resolve)),
       new Promise(resolve => redirected.close(resolve))]);
   }
+});
+
+test('oversized single and batch responses stop their producers without awaiting or replacing cancellation errors', async t => {
+  for (const Transport of [LocalLayaHttpTransport, LocalLayaBatchHttpTransport]) {
+    for (const mode of ['pending', 'throw', 'reject']) await t.test(`${Transport.name} ${mode}`, async () => {
+      let cancellations = 0;
+      const response = new Response(new ReadableStream({start(controller) {
+        controller.enqueue(new Uint8Array(32768)); controller.enqueue(new Uint8Array(32769));
+      }, cancel() {
+        cancellations++;
+        if (mode === 'throw') throw Error('Synthetic cancellation failure');
+        return mode === 'reject' ? Promise.reject(Error('Synthetic cancellation failure')) : new Promise(() => {});
+      }}));
+      const transport = new Transport(8765, () => 'local-test-token', async () => response);
+      const operation = Transport === LocalLayaBatchHttpTransport ? 'inferBatch' : 'infer';
+      await assert.rejects(transport[operation]({model: 'multilingual', state: {events: []}, questions: {}},
+        new AbortController().signal), /^Error: Oversized Laya response$/);
+      assert.equal(cancellations, 1, 'the rejected oversized response must stop its producer');
+      assert.equal(response.body.locked, false);
+    });
+  }
+});
+
+test('single and batch responses still accept exactly 65536 bytes without cancellation', async () => {
+  for (const Transport of [LocalLayaHttpTransport, LocalLayaBatchHttpTransport]) {
+    let cancellations = 0;
+    const response = new Response(new ReadableStream({start(controller) {
+      controller.enqueue(new TextEncoder().encode(' '.repeat(65534) + '{}')); controller.close();
+    }, cancel() {cancellations++;}}));
+    const transport = new Transport(8765, () => 'local-test-token', async () => response);
+    const operation = Transport === LocalLayaBatchHttpTransport ? 'inferBatch' : 'infer';
+    assert.deepEqual(await transport[operation]({model: 'multilingual', state: {events: []}, questions: {}},
+      new AbortController().signal), {});
+    assert.equal(cancellations, 0); assert.equal(response.body.locked, false);
+  }
+});
+
+test('a reader failure retains its original error when cancellation throws synchronously', async () => {
+  const original = Error('Synthetic read failure'); let cancellations = 0, releases = 0;
+  const transport = new LocalLayaHttpTransport(8765, () => 'local-test-token', async () => ({ok: true,
+    body: {getReader: () => ({read: async () => {throw original;},
+      cancel: () => {cancellations++; throw Error('Synthetic cancellation failure');},
+      releaseLock: () => {releases++;}})}}));
+  await assert.rejects(transport.infer({model: 'multilingual', state: {events: []}, questions: {}},
+    new AbortController().signal), error => error === original);
+  assert.equal(cancellations, 1); assert.equal(releases, 1);
 });
