@@ -36,9 +36,10 @@ const summary = await readAgentArtsTrace({
 
 ```js
 // sdk、readCredentials、traceId、deadline、signal 已由获授权宿主准备。
+const traceReader = await import('./tests/manual/agentarts/support/read-platform-trace.mjs');
 const {createAgentArtsTraceAuthorizer} = await import('./tests/manual/agentarts/support/sdk-trace-authorizer.mjs');
 const authorize = createAgentArtsTraceAuthorizer({sdk, readCredentials});
-const summary = await readAgentArtsTrace({traceId, deadline, signal, authorize});
+const traceSummary = await traceReader.readAgentArtsTrace({traceId, deadline, signal, authorize});
 ```
 
 适配仅接受原固定区域/GET/安全 TraceID/空 query 与 body/三个原请求头，取凭据前校验。

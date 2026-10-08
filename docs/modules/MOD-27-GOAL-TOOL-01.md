@@ -391,3 +391,69 @@ before/after：原两卡同 id 和旧 handoff receipt 均恢复，重建后 loca
 日志 SHA256 3afda5190a65e169d20caa13ed2df6e0830c38035e09b67c8526ebebe67c20bc。
 独立审核冻结10artifact及原读回链，未改变 Runtime producer/Plan expiry/稳定 review
 重新分析合同。本节 Desktop 检查与上节 d654 完整2476项分别记载，不挪用整仓覆盖。
+
+## 已受理但丢失回执的卡片恢复（2026-10-08 续接）
+
+实际原Client/Runtime受理任务后，明确Fake delivery仅丢submit回执，Runtime已有原
+idempotency任务和HANDOFF checkpoint，Desktop marker却未写，重建后原卡缺task反馈。
+record在marker确实不存在时，仅对同namespace/binding的四类Goal intent读取持久HANDOFF，
+严格reviewTaskId/selectionDigest/exportPolicyVersion/确定性commandId，再通过public
+findTaskByIdempotencyKey核task conversation/goal。原Desktop marker优先，present-malformed
+不被fallback替换；不重发、重推理、写marker或恢复当前许可。过期dispatch deadline不
+抹掉已经受理的历史task receipt，created/running/succeeded分别按实际任务显示。
+
+host/test EXACT2首批冻结manifest SHA256
+04d12636e92ccbf24103b877f6ec2307c262e8f7a432d011588ca6f4c5f4a30e，sourcefc536133/test8d9770f4。
+最终immutable原源码回归1pass3fail，修后60931/47e4fe actual0、22/22。原公开Goal/Policy
+两confirmed工具写入、SQLite/原Client/实际Runtime的after320b4e actual0：恢复精确受理
+task及原KEEP两卡，1infer/1FakeHTTP、private省略1、defaultgrantfalse，marker仍不存在。
+这是同Runtime重建Desktop的故障注入，不是真实IPC故障/Runtime重开/云验收；Task succeeded
+也不说明所有step已终态或Graph已更新。首两个held-helper中断actual1及原before24.19
+均留历史，最终正式/after使用Node24.15。28artifact核实后另保存将随根构建变化的旧
+compiled producer原字节；此记录不依赖它之后仍停留在旧版本。
+
+同一after原观测还显示未重建时卡片仍缺task反馈。第二个最窄增量只在handoff await抛错
+后一次readonly record(readReview)+onUpdate，并原样抛出同一错误；内部读回/通知失败也
+不替换原错，正常路径不重复record/submitRepair。原源码新增两回归1fail1pass，最终
+55204/527633 actual0、24/24；新public after03e418 actual0，同进程卡片已有精确受理
+task/status，同时原丢回执Error仍交调用者，infer/send均1、graph4/两卡/私有省略保持。
+未受理的普通拒绝不伪造task；关闭/撤销不恢复permit，原已受理任务的reconcile返回合同
+保持。冻结manifest SHA256 64c60540e864f95b733ff2c4c52a418395f6aaaf0b3dda0d9a5a1409f74aa8aa，
+source2f395759/test25524830。17artifact明确消费者实际仍加载旧compiled bf211而非仅凭
+新TS版本，后续根完整check另验证已集成新producer；初helper误判撤销后应reject的actual1
+保留，不把原API合法受理返回改成失败。
+
+## 祖先复查身份不依赖系统语言（2026-10-08 续接）
+
+原默认localeCompare让相同Unicode Plan refs在en-US与sv-SE进程中顺序不同，真实SQLite
+重开后同graph5/Goal3创建第二ancestor task并再次infer，旧choice未被改写。仅ancestor
+消费者按code-unit id/numeric revision复制排序，新scope和旧INTENT identity及scope比较
+双方canonical，保精确集合/重复项数与原ref字符串；既有fallback恢复原task/INTENT/choice，
+不写旧数据，不改consecutive/Fact/expiry/CAS/隐私/许可/limit合同。
+
+producer/test EXACT2冻结manifest SHA256
+241a303fcea5f743adc48aa3d97f92687c571739dd44db76e690e91920f2657d，source818e6553/test746a860c。
+新增回归旧源码59d5c5 actual1；修后新2/2、受影响文件40/40及Runtimebuild actual0。
+正式双向worker明示Intl.Collator注入；另一未选择的legacy INTENT恢复原id且chooser一次。
+原失败DB保留两task。新独立DB用精确旧compiled producer经public GoalHost在en-US保存
+原1task，fixed sv-SE真实进程/SQLite重开eac6c3 actual0：同fc3b50c0 task、INTENT/review
+逐字不变，graph5/ancestor1、idle[]、infer0/dispatch0。公开工具context/Plans/Laya明确
+Fake/合成，无Policyledger、真实云或Windows默认locale验收；30artifact及两DB独立只读核对。
+
+## 完整 Goal 影响范围超过可选修复候选上限（2026-10-08 续接）
+
+原公开 Goal 工具合法更新被101个 Plan 引用的 Goal，完整 publicImpact 已有101条 RECHECK，
+但默认可选结构修复候选的100-target上限使自动复查 task failed，尚未进入语义选择。
+仅在完整 scope 超过100项时跳过该可选候选，仍以全部精确 affected 提供原 recheck/defer；
+100项边界保留原 revise 候选。未截断 scope、拆任务或提高公共修复上限，custom
+prepareOptions、身份、CAS、隐私与许可合同保持。既有 failed task 仍为终态，本修复
+防止新的合法范围失败，不迁移旧失败数据，也不新增自动重试。
+
+producer/test EXACT2 manifest SHA256
+d4e9a8191f96ab1c0c58709e4ac2d08b5627f2cb5499ae9d7e5f56b2672597ba，source02dde507/testaa3245a4。
+旧源码新增100/101边界回归 b2faee actual1；修后84c5a3 actual0，包括真实SQLite重开后
+同task/choice及推理一次；受影响文件1f4fcc 41/41、Runtime build9a5283 actual0。
+fresh公开工具 after bb0c34 actual0：graph103、完整101 affected、仅recheck/defer、
+infer1/dispatch0。原failed DB及全部11个before artifact逐字保留，32artifact独立核实。
+工具context/Plan/FakeLaya为受控消费者，不称Desktop投影、Policyledger、真实云或设备
+验收通过；后续根固定HEAD完整check另行记载。

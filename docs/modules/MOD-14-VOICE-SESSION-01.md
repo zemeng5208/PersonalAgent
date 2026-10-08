@@ -350,3 +350,29 @@ tree `ac79880812fbd7608a713cc90acfc1a225c56599` 后，受影响 Desktop typechec
 工作区测试实际 exit0：587 项、576 通过、0 失败/取消、11 跳过，Node v24.15.0、
 两核执行，完成于 2026-10-07 20:12:29 UTC。日志 `core-desktop122-live-aggregate-check.log`；
 不据此宣称整个仓库、Windows CI 或真实场景已通过。
+
+## 已保存 Live 快捷键的设置恢复（2026-10-08 续接）
+
+原 ConfigHost 支持 F1–F24，原 select 只有 F1–F12；实际合成 F24 保存后重建 Host，
+snapshot 仍 F24，但原 HTML select 为空，普通留空 key 保存被原 main/config 校验拒绝。
+仅控件选项扩至24并设置稳定 value，保持默认F8、F9禁用/记事本提示与原保存/pending逻辑；
+controls/test EXACT2冻结 manifest SHA256
+a8cfd12d9f4354d7a73cdd7aa7a427caa125f82478283a54098fcf2a3dd73070。
+原 UI d33996 actual1，新增两项正式回归原源码5pass2fail、修后7/7 actual0；原 panel/main/
+ConfigHost after62ef71 actual0，F24 正常显示与保存，持久字节不变，0Live/音频/Runtime/云。
+F13及F8/F9正式行为同时核对，未修改 main/config/CSS/许可。IPC、safeStorage及
+globalShortcut明确Fake，不证明Windows物理快捷键、Electron加密或真实Live验收。
+
+## 迟到手动录音回执的反馈顺序（2026-10-08 续接）
+
+原手动录音start已成功，FakeIPC hold其回执；用户仍可及时finish。Fake ASR失败已由
+当前finish显示主红字后，旧start成功却清空该区域，mic-state仍失败；原d63fb6 actual1。
+仅 talk handler 增加动作序号及关闭保护：旧手动动作的success/error/finally不覆盖新动作；
+当前success保留Host error，当前failure仍可报告，不以总pending或snapshot版本拦及时finish。
+它不保证任意较新snapshot都抑制旧failure，其他handler与权限/Task合同保持。
+renderer/new行为test EXACT2冻结manifest SHA256
+de713722aa4230a58b1d95947997fd29887578b56f31d22c6f415d1e9c41e24b。
+正式before2pass4fail、修后6/6 actual0；原消费者58c8ce actual0，先核当前finish主红字
+再放旧start仍保相同错误。6400B PCM清空、context closed/track ended/Host release verified，
+0dictation/Runtime/cloud，明确Fake-device/IPC/ASR，未宣称物理设备/SIS/Windows通过。
+源码与正式/raw消费者及截图独立审核，本节之后根在新固定head执行必要完整检查。
