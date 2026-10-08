@@ -138,7 +138,7 @@ function checkLifecycle(signal: AbortSignal, deadlineMs: number): void {
   if (Date.now() >= deadlineMs) throw new DecisionError('TIMEOUT');
 }
 function versionKey(event: DecisionEvent): string {
-  const facts = [...event.facts].sort((a, b) => a.id.localeCompare(b.id));
+  const facts = [...event.facts].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   return JSON.stringify([event.source, event.eventId, facts, event.goal?.ref ?? null,
     event.plan ?? null, event.authorization.state, event.authorization.revision]);
 }

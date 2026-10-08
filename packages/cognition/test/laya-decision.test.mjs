@@ -17,6 +17,43 @@ const event = (overrides = {}) => ({
 const request = events => ({events, deadline: new Date(Date.now() + 5_000).toISOString(),
   signal: new AbortController().signal});
 
+test('reordered exact Unicode Fact refs merge one version without normalizing IDs or output order', async () => {
+  const facts = [{id: '\u00e5', revision: 1}, {id: 'a\u030a', revision: 2}];
+  const events = [event({facts}), event({facts: [...facts].reverse()})];
+  const before = structuredClone(events);
+  const calls = [];
+  const service = new ProactiveDecisionService({async choose(unique) {
+    calls.push(structuredClone(unique));
+    return unique.map(() => ({intervention: 'REMIND', confidence: 0.9}));
+  }});
+  const result = await service.decide(request(events));
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], [before[0]]);
+  assert.deepEqual(result.map(item => [item.intervention, item.reason]),
+    [['REMIND', 'model'], ['MERGE', 'rule_duplicate']]);
+  assert.deepEqual(result.map(item => item.facts), before.map(item => item.facts));
+  assert.deepEqual(events, before);
+});
+
+test('exact Unicode version merging still rejects changed bindings and duplicate Fact IDs before the model', async t => {
+  const facts = [{id: '\u00e5', revision: 1}, {id: 'a\u030a', revision: 2}];
+  const changes = {
+    revision: {facts: [{...facts[0], revision: 3}, facts[1]]},
+    observation: {observation: 'Different synthetic observation'},
+    authorization: {authorization: {state: 'granted', revision: 1}},
+    goal: {goal: {ref: {id: 'goal-1', revision: 3}, summary: '准备比赛演示'}},
+    plan: {plan: {id: 'plan-1', revision: 5}},
+    duplicate: {facts: [facts[0], {...facts[0], revision: 2}]},
+  };
+  for (const [name, changed] of Object.entries(changes)) await t.test(name, async () => {
+    let calls = 0;
+    const service = new ProactiveDecisionService({async choose() {calls++; return [];}});
+    const events = [event({facts}), event({facts, ...changed})];
+    await assert.rejects(() => service.decide(request(events)), {code: 'INVALID_ARGUMENT'});
+    assert.equal(calls, 0);
+  });
+});
+
 test('same version is merged before one model call; changed authorization cannot share its decision', async () => {
   const calls = [];
   const service = new ProactiveDecisionService({async choose(events) {
