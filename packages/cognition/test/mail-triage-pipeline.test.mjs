@@ -6,7 +6,48 @@ import {
   DEFAULT_MAIL_LABELS,
   CognitionError,
   LayaTriageService,
+  prepareTriageDispatch,
 } from '../dist/index.js';
+
+test('checkpoint receipts bind the exact label order accepted by public triage dispatch', async () => {
+  const labels = {work: 'Synthetic work', news: 'Synthetic news'};
+  const reordered = {news: 'Synthetic news', work: 'Synthetic work'};
+  const messages = [{source: 'synthetic-mail', messageId: 'label-order',
+    sourceRevision: 'rev1', text: 'Synthetic routine work update'}];
+  let saved = {};
+  const checkpoint = {load: () => saved, save: value => {saved = structuredClone(value);}};
+  const inference = createMockInference();
+  const classify = currentLabels => new MailTriagePipeline({inference, labels: currentLabels, checkpoint})
+    .processBatch({messages, deadline: new Date(Date.now() + 10000).toISOString(),
+      signal: new AbortController().signal});
+  const dispatch = (currentLabels, result) => prepareTriageDispatch({namespace: 'synthetic/order',
+    messages, labels: currentLabels, results: result.results});
+  const first = await classify(labels);
+  assert.equal(dispatch(labels, first).groups.length, 1);
+  const sameOrder = await classify(labels);
+  assert.equal(sameOrder.cachedCount, 1);
+  assert.equal(inference.calls.length, 1);
+  assert.deepEqual(sameOrder.results, first.results);
+  assert.deepEqual(dispatch(labels, sameOrder), dispatch(labels, first));
+  const changedOrder = await classify(reordered);
+  assert.doesNotThrow(() => dispatch(reordered, changedOrder));
+  assert.equal(changedOrder.newlyClassifiedCount, 1);
+  assert.equal(changedOrder.cachedCount, 0);
+  assert.equal(inference.calls.length, 2);
+  assert.deepEqual(changedOrder.results[0].receipt.candidateLabels, Object.keys(reordered));
+  assert.notEqual(changedOrder.results[0].receipt.criteriaDigest, first.results[0].receipt.criteriaDigest);
+  assert.throws(() => dispatch(reordered, first), /Invalid local triage dispatch/);
+  const restarted = await classify(reordered);
+  assert.equal(restarted.cachedCount, 1);
+  assert.equal(inference.calls.length, 2);
+  assert.deepEqual(restarted.results, changedOrder.results);
+  assert.deepEqual(dispatch(reordered, restarted), dispatch(reordered, changedOrder));
+  const restoredOrder = await classify(labels);
+  assert.equal(restoredOrder.cachedCount, 1);
+  assert.equal(inference.calls.length, 2);
+  assert.deepEqual(restoredOrder.results, first.results);
+  assert.equal(Object.keys(saved).length, 2);
+});
 
 test('legal mixed-case labels reuse their exact checkpoint across portable locale ordering', async () => {
   const moduleUrl = new URL('../dist/index.js', import.meta.url).href;

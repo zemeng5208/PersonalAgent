@@ -188,6 +188,7 @@ export class MailTriagePipeline {
       minimumAnswerProbability: this.minimum,
       minimumMargin: this.margin,
       labels: sortedLabels,
+      criteriaDigest: hash(JSON.stringify(this.labels)),
     }));
   }
 
