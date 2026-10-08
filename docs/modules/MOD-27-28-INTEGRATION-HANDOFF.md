@@ -121,3 +121,9 @@ MOD-28 保持 `in_progress`。接口状态以[接口目录](../interfaces/CURREN
 - Goal宿主仅对原公开getApproval的相同身份、任务、工具、revision和状态附上原expiresAt，NOT_FOUND保守，其余读取错误传播，不泄露scopes或原参数。有效未来审批保留原动作，缺失/无效/到期禁用并隐藏；当前任务计时器和点击门禁阻止迟到批准，close/changeView清理、旧回调不能清新timer，较新draft反馈保留。原两完整affected文件20/20；实际Runtime/SQLite与原完整HTTP/CSP页面从合法待审批到原10分钟期限+1ms，刷新/重开仍过期，原审批整行未改、Task waiting/revision4、Graph/tool/respond均0。注入时钟与只读FakeIPC明确，非真实批准、云或物理Electron验收。冻结c75a614b；首轮19/20计时器失败保留后修复，portable旧清单4/6路径连续、2个源路径更正到既有冻结副本，原c937/e566不覆盖，不重测。
 
 本批各原正式失败、夹具/脚本错误、完整affected和新公开消费者分别保留，不将父测试聚合失败当作多个缺陷。root与三个GPT-6.1 Sol执行线继续独立核对源、回执和真实现场步骤；只沿原PR提交，不批准或合并。实际固定head与新完整结果在发生后追加，整体MVP与真实现场验收仍未完成。
+
+### 第二批固定源码的完整检查实际结果
+
+固定5a914851733e8df0854a9586acaf1e7493b1c1cd/tree675495396e586e6415a263f8208901d836b78d15，原npm run check实际92996/9d606e→8e9231/exit0，03:58:46.980177Z至04:09:52.674357Z，Node24.15/CPU0–3/原期限断言。34组2613项2563通过、0失败0取消、50跳过；Cognition320/320、Desktop690/679通过11跳过、Runtime439/439、Calendar47/44通过3跳过、root integration22/22；原build/type/generated/architecture/contracts全部执行。完整raw257325字节SHAb3602a0b770352cbd9c6010f1dd2a14a11f576160ef89f051ebf3a53adcfa4e0；root及三执行线分别独立核原日志、全七字段、原50跳过边界、固定21文件和原启动回执。
+
+Mail并行首次load候选经原、新公开batchTail入口及真实async屏障分别核实：仅load1，两批全结果与两条JSON持久记录一致、随后重放infer0，无新增并行回归，未为该候选改源。只在本文追加已发生的完整结果，发布头与上述固定source/test/config/generated逐blob相同，不为DOC重跑绿检查；此前0a6/e942及历史失败各自保留。真实现场验收步骤已明确交给用户、zemeng及对应协作者；本轮停止不表示整体MVP完成，不批准或合并。
