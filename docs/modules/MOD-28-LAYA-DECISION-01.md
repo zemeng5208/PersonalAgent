@@ -36,3 +36,9 @@ PR #92 的[设计文档](https://github.com/zemeng5208/PersonalAgent/pull/92)标
 旧公开 chooser 对超过65536字节的本地HTTP响应已返回abstain/unavailable/eligibleForRuntime=false，但超过原deadline及caller abort后流仍继续写入。仅在readSmallJson读取/大小错误路径发起不等待的reader.cancel，取消的同步异常或异步拒绝不替换原错误，finally releaseLock保持；批次共用同一读者。原65536限制、正常JSON、HTTP/模型/候选/授权/截止时间不变。
 
 冻结source002269ce/test1ee33346，manifest4209dade6d0b73c1f669ed80312c6aa72861da0081ba80798315b38c21a88b7f，25与原6 artifacts逐hash/bytes核实。原正式9项1通过8失败（包含父项汇总），实际12837/c024c0/1；修后原三个受影响文件47962/c26293/0，26/26，固定Node24.15启动。fresh真实回环HTTP公开服务97550/a1ceda/0保持同样弃权结果，返回时仍未立即关闭，截止时间观察closed=true、累计67585字节/ticks2后保持，允许在途写入。没有真实模型/云/Task/设备验收。独审A5b955679与De7154f38均通过；旧68fb完整检查不覆盖此增量。
+
+## 邮件标签配置摘要的跨语言稳定性（2026-10-08 续接）
+
+合法自定义ASCII大小写标签i-work/I-work在en-US与tr-TR排序不同，原相同邮件和持久checkpoint重开再次infer1；默认小写内置标签没有该已证后果。仅configDigest的标签tuple排序改用精确codeunit比较，不改大小写/描述、模型候选原顺序、criteriaDigest、策略、阈值、事务/cursor或截止时间。旧mixedcase checkpoint不迁移；升级时旧顺序不同的配置可能每条邮件一次cache miss/新分类，旧记录仍保留，不能冒作升级无重复推理。
+
+source1231220b/test28acbae1，manifest76be03ab04187bbc2998802498463a9b63c4771adcb20a5af9d0f6daa59eaf95，18+原7 artifacts核实。固定Node24.15原formal52588/4c0fb3/1，calls1 expected0；受影响三个完整文件51343/b2b0bb/0，32/32。fresh独立Node进程公开JSON checkpoint en-US→tr-TR b1d9bb/0，后一进程infer0/cache1/new0且全result/cache一致、仅1key；显式原生Intl.Collator隔离，不是OS系统语言切换。原bad2key checkpoint保留；Fake inference/合成邮件，不构成真实邮箱、Task、通知、云或账户验收。必要最终固定源码完整检查另记。
