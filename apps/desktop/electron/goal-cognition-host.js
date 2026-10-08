@@ -5,6 +5,8 @@ import {parseCoordinationRepairCandidate} from '@personal-agent/coordination';
 import {isDeepStrictEqual} from 'node:util';
 
 const VERSION='desktop-goal-analysis-v1';
+// Match the existing AgentArts coordination goal contract; never trim a reviewed scope.
+const GOAL_EXPORT_MAX_CHARS=16_000;
 const MARKER='desktop-goal-cognition-review';
 const HANDOFF_TASK_MARKER='desktop-goal-cognition-handoff-task-v1';
 const REPAIR_TASK_MARKER='desktop-goal-cognition-repair-task-v1';
@@ -136,13 +138,13 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
   }
   let cognition;
   const handoff={
-    async prepare(review) {return project(review);},
+    async prepare(review) {const projected=project(review);return exportLimit(projected)?undefined:projected;},
     read:commandId=>application.runtime.findTaskByIdempotencyKey(commandId),
     async dispatch(request,input) {
       if (input.signal.aborted) throw Error('目标分析已取消');
       const review=cognition.readReview(request.reviewTaskId).review;
       const projected=review && project(review);
-      if (!projected || toolArgumentsDigest(review)!==request.selectionDigest
+      if (!projected || exportLimit(projected) || toolArgumentsDigest(review)!==request.selectionDigest
         || projected.exportPolicyVersion!==request.exportPolicyVersion || projected.goal!==request.goal
         || Date.parse(request.deadline)<=now()) throw Error('目标分析范围或授权已经变化');
       outgoing.set(request.commandId,{...request,generation});
@@ -305,7 +307,27 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
       beforeSequence=page.nextBeforeSequence;
     } while (beforeSequence!==undefined);
   }
+  function exportLimit(projected) {
+    return typeof projected?.goal==='string' && projected.goal.length>GOAL_EXPORT_MAX_CHARS
+      ? {state:'blocked',reason:'goal_text_limit',chars:projected.goal.length,maxChars:GOAL_EXPORT_MAX_CHARS} : undefined;
+  }
+  function cloudExport(value) {
+    if(value.handoff?.state==='submitted') {
+      // Describe the immutable accepted projection, without reviving its task or grant.
+      const saved=application.runtime.loadCheckpoint(value.task.taskId,'proactive-cognition-handoff-v1');
+      const task=application.runtime.getTask(value.handoff.task.taskId);
+      if(task.state==='failed' && saved?.reviewTaskId===value.task.taskId && saved.exportPolicyVersion===VERSION
+        && saved.selectionDigest===toolArgumentsDigest(value.review) && saved.goal===task.goal) return exportLimit(saved);
+      return;
+    }
+    // Original project() retains current consent, selection and exact graph-revision gates.
+    if(!['pending','expired'].includes(value.handoff?.state)) return exportLimit(project(value.review));
+  }
   function execution(value) {
+    let blocked;try {blocked=cloudExport(value);} catch {}
+    if(blocked && value.handoff?.state!=='submitted') return {state:'unavailable',cloudExport:blocked,
+      executionStatus:'完整目标投影超出云端上限，方案保留在本地，尚未提交'};
+
     if (value.handoff?.state!=='submitted') return {state:value.handoff?.state??value.review?.selection?.state??'local',
       executionStatus:value.handoff?.state==='pending'?'编排受理结果待核实，尚未确认执行'
         :value.review?.selection?.state==='review'?'等待复核，尚未执行':'本地决策建议，尚未执行'};
@@ -319,7 +341,7 @@ export function createDesktopGoalCognitionHost({application,client,facts,namespa
       succeeded:'AgentArts 编排任务已完成；目标更新尚未核实',failed:'编排任务失败，未确认目标更新',
       cancelled:'编排任务已取消，未确认目标更新'};
     let verified={};try {if(local) verified=verifiedRepair(value,local);} catch {}
-    return {state:task.state,taskId:task.taskId,...(local?{sourceTaskId:value.handoff.task.taskId}:{}),
+    return {state:task.state,taskId:task.taskId,...(blocked?{cloudExport:blocked}:{}),...(local?{sourceTaskId:value.handoff.task.taskId}:{}),
       executionStatus:labels[task.state]??'编排任务已受理，执行结果尚未核实',...verified,
       ...(task.state==='succeeded' && verified.executionVerified && verified.graphUpdateVerified?{status:'applied'}:{})};
   }

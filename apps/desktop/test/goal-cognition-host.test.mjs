@@ -27,7 +27,7 @@ async function terminal(application,id) {
   }
   throw Error('Synthetic task did not settle');
 }
-async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCredentialRead=false,uncertain=false,unavailableInitially=false,newGoal=false,holdFetch=false,controlledRepair=false,onTaskCallback=()=>{}}={}) {
+async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCredentialRead=false,uncertain=false,unavailableInitially=false,newGoal=false,holdFetch=false,controlledRepair=false,onTaskCallback=()=>{},largeScope=false}={}) {
   const root=fileURLToPath(new URL('../../../.cache/desktop-goal-cognition/',import.meta.url));
   await mkdir(root,{recursive:true});const directory=await mkdtemp(path.join(root,'case-'));
   let host,layaCalls=0,goalWrites=0,updateCalls=0,releaseFetch,time=Date.now(),unavailable=unavailableInitially;const sent=[],announced=[];
@@ -58,9 +58,14 @@ async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCred
   store.append(0,node('private-source','fact',[],'PRIVATE_SOURCE_SENTINEL','private'));
   store.append(1,node('goal','goal',[ref('private-source')],'原目标','private'));
   if(!newGoal) {
+    if(largeScope) {
+      for(let i=0;i<101;i++) store.append(store.read().revision,node('large-plan-'+i,'plan',[ref('goal')],'Synthetic dependent Plan'));
+      store.append(store.read().revision,node('goal','goal',[ref('private-source')],'修改后的目标','private'));
+    } else {
     store.append(2,node('decision','decision',[ref('goal')],'关联决策'));
     store.append(3,node('plan','plan',[ref('decision')],'关联计划'));
     store.append(4,node('goal','goal',[ref('private-source')],'修改后的目标','private'));
+    }
   }
   const sourceTask=application.runtime.submitTask({goal:'Synthetic completed goal edit',conversationId:'host-fixture',idempotencyKey:'synthetic-goal-edit'});
   await application.runtime.runTask(sourceTask.taskId,async()=>({resultSummary:'Synthetic goal receipt'}),
@@ -77,7 +82,7 @@ async function fixture(t,{revokeDuringCredentialRead=false,changeGraphDuringCred
   const chooser=new LayaActionChoiceService({infer:async payload=>{
     layaCalls++;
     if(unavailable) throw Error('Synthetic temporary Laya outage');
-    const keys=Object.keys(payload.questions.action.criteria),selected=newGoal?keys[0]:keys.at(-1);
+    const keys=Object.keys(payload.questions.action.criteria),selected=largeScope?keys.find(key=>JSON.parse(payload.questions.action.criteria[key]).description.startsWith('Ask AgentArts to retain')):newGoal?keys[0]:keys.at(-1);
     const probability=uncertain?1/keys.length:0.98;
     return {answers:{action:{choice:selected,probabilities:Object.fromEntries(keys.map(key=>[key,key===selected?probability:(1-probability)/(keys.length-1)])),
       answer_confidence:probability,confidence:0.5}}};
@@ -857,4 +862,28 @@ test('historical local repair metadata rejects malformed markers and a foreign t
   assert.deepEqual(runtime.loadCheckpoint(pending.taskId,'local-repair-intent'),intent);
   assert.deepEqual((await f.client.call('approval.list',{taskId:pending.taskId})).items,pending.approvals);
   assert.equal(f.store.read().revision,5);assert.equal(f.sent.length,1);assert.equal(f.layaCalls(),1);
+});
+
+
+test('complete oversized Goal projection stays local without a handoff journal or accepted task',async t=>{
+  const f=await fixture(t,{largeScope:true});
+  assert.ok(f.host().snapshot().reviews.every(item=>item.cloudExport===undefined));
+  f.host().configure({enabled:true,cloudAllowed:true});await f.host().tick();
+  const card=f.host().snapshot().reviews.find(item=>item.selected==='defer');assert.ok(card);
+  assert.equal(card.cloudExport?.state,'blocked');assert.equal(card.cloudExport?.reason,'goal_text_limit');
+  assert.equal(card.cloudExport.maxChars,16000);assert.ok(card.cloudExport.chars>16000);
+  assert.equal(card.taskId,undefined);assert.equal(f.announced.length,0);assert.equal(f.sent.length,0);
+  const runtime=f.application.runtime,review=runtime.loadCheckpoint(card.reviewTaskId,'proactive-cognition-review-v1');
+  assert.equal(review.affected.length,101);assert.equal(runtime.loadCheckpoint(card.reviewTaskId,'proactive-cognition-handoff-v1'),undefined);
+  const response=await f.host().applyDecision(card.reviewTaskId);assert.equal(response.status,'unavailable');
+  assert.equal(response.cloudExport.state,'blocked');assert.equal(response.taskId,undefined);
+  assert.equal(f.announced.length,0);assert.equal(f.sent.length,0);assert.equal(f.store.read().revision,104);
+  assert.deepEqual(runtime.loadCheckpoint(card.reviewTaskId,'proactive-cognition-review-v1'),review);
+  f.store.append(f.store.read().revision,node('goal','goal',[ref('private-source')],'Later Goal revision','private'));
+  const outdated=f.host().snapshot().reviews.find(item=>item.reviewTaskId===card.reviewTaskId);
+  assert.equal(outdated.sourceOutdated,true);assert.equal(outdated.cloudExport,undefined);
+  f.host().configure({enabled:true,cloudAllowed:false});
+  assert.equal(f.host().snapshot().reviews.find(item=>item.reviewTaskId===card.reviewTaskId).cloudExport,undefined);
+  const restored=f.restart();assert.equal(restored.snapshot().enabled,false);assert.equal(restored.snapshot().cloudAllowed,false);
+  assert.equal(restored.snapshot().reviews.find(item=>item.reviewTaskId===card.reviewTaskId).taskId,undefined);
 });

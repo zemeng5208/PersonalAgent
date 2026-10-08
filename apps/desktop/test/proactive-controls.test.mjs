@@ -393,3 +393,66 @@ test('a source revision change after dispatch cannot replace an unknown submissi
   assert.match(ui.status(),/提交结果待核实/);await ui.click();assert.equal(calls,1);
   ui.render([{...accepted(),sourceOutdated:true}]);assert.match(ui.status(),/已受理/);
 });
+
+
+test('validated oversized export feedback identifies the complete bound and keeps old receipt locks',()=>{
+  const cloudExport={state:'blocked',reason:'goal_text_limit',chars:24338,maxChars:16000};
+  const feedback=cognitionReviewFeedback({state:'local',cloudExport});
+  assert.match(feedback.message,/24338.*16000/);assert.match(feedback.message,/本地/);
+  assert.equal(feedback.locked,true);assert.equal(feedback.label,'云端内容超出上限');
+  for(const state of ['failed','pending','waiting_reconciliation']) {
+    const old={state,taskId:'old-accepted',cloudExport};
+    assert.equal(cognitionReviewFeedback(old).locked,true);
+    assert.equal(cognitionReviewFeedback(old).label,'已交给主智能体');
+  }
+  for(const cloudExport of [false,{state:'blocked',reason:'goal_text_limit',chars:16000,maxChars:16000},
+    {state:'blocked',reason:'goal_text_limit',chars:24338,maxChars:17000},
+    {state:'blocked',reason:'unknown',chars:24338,maxChars:16000}]) {
+    assert.equal(cognitionReviewFeedback({state:'local',cloudExport}).locked,false);
+  }
+});
+
+test('retain local Goal revokes only cloud permission using authoritative configuration readback',async t=>{
+  const calls=[],reply=deferred();
+  const ui=controls(t,(name,payload)=>{calls.push({name,payload});return reply.promise;});
+  ui.render([{...localReview(),cloudExport:{state:'blocked',reason:'goal_text_limit',chars:24338,maxChars:16000}}]);
+  const button=ui.list.querySelector('[data-action="retain-local-cognition"]');assert.ok(button);
+  const work=ui.list.emit('click',{target:button});
+  assert.deepEqual(calls,[{name:'proactive.configure',payload:{goalAnalysis:true,goalCloudAnalysis:false}}]);
+  assert.doesNotMatch(ui.status(),/已关闭目标云端许可/);
+  reply.resolve({enabled:true,cloudAnalysis:true,cognition:{enabled:true,cloudAllowed:false,reviews:[]}});await work;
+  assert.match(ui.list.parentNode.querySelector('[data-local-feedback]').textContent,/已关闭目标云端许可/);
+});
+
+
+test('retain local Goal requires confirmed false permission and prefers a newer host snapshot',async t=>{
+  const item={...localReview(),cloudExport:{state:'blocked',reason:'goal_text_limit',chars:24338,maxChars:16000}};
+  for(const reply of [false,{}, {cognition:{enabled:true,cloudAllowed:true}}, {cognition:{enabled:true,cloudAllowed:'false'}}]) {
+    const ui=controls(t,async()=>reply);ui.render([item]);
+    await ui.list.emit('click',{target:ui.list.querySelector('[data-action="retain-local-cognition"]')});
+    const text=ui.list.parentNode.querySelector('[data-local-feedback]').textContent;
+    assert.match(text,/尚未核实/);assert.doesNotMatch(text,/已关闭目标云端许可/);
+  }
+  for(const newer of [{enabled:true,cloudAllowed:true},{enabled:false,cloudAllowed:false},{enabled:true,cloudAllowed:false}]) {
+    const reply=deferred(),ui=controls(t,()=>reply.promise);ui.render([item]);
+    const work=ui.list.emit('click',{target:ui.list.querySelector('[data-action="retain-local-cognition"]')});
+    ui.render([item],newer);
+    reply.resolve({cognition:{enabled:true,cloudAllowed:false,reviews:[item]}});await work;
+    assert.match(ui.list.parentNode.querySelector('[data-local-feedback]').textContent,
+      newer.enabled && !newer.cloudAllowed ? /已关闭目标云端许可/ : /尚未核实/);
+  }
+});
+
+test('retain local Goal preserves settings draft and excludes an overlapping full settings save',async t=>{
+  const item={...localReview(),cloudExport:{state:'blocked',reason:'goal_text_limit',chars:24338,maxChars:16000}},reply=deferred(),calls=[];
+  const original=globalThis.document;t.after(()=>globalThis.document=original);globalThis.document={createElement:tag=>new Element(tag)};
+  const container=new Element('main'),control=mountProactiveControls(container,(name,payload)=>{calls.push({name,payload});return reply.promise;},{settings:true});
+  const initial={enabled:true,cloudAnalysis:true,suggestions:[],cognition:{enabled:true,cloudAllowed:true,reviews:[item]}};control.render(initial);
+  const form=container.querySelector('form');form.elements.enabled.checked=false;await form.emit('change',{});
+  const list=container.querySelector('[data-cognition-reviews]'),work=list.emit('click',{target:list.querySelector('[data-action="retain-local-cognition"]')});
+  assert.equal(form.querySelector('button').disabled,true);await form.emit('submit',{preventDefault(){}});assert.equal(calls.length,1);
+  reply.resolve({...initial,cognition:{...initial.cognition,cloudAllowed:false}});await work;
+  assert.equal(form.elements.enabled.checked,false);assert.equal(form.querySelector('button').disabled,false);
+  assert.match(container.querySelector('[data-local-feedback]').textContent,/已关闭目标云端许可/);
+  assert.equal(container.querySelector('[data-feedback]').textContent,'有未保存的设置');
+});
