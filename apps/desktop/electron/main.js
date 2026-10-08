@@ -118,6 +118,8 @@ let dragOffset;
 let panelDragOrigin;
 let away = 0;
 let audioLevel = 0;
+let levelDecay;
+let lastVoiceLevelPublish = 0;
 let orbStateOverride = null;
 let connectionLabel = '未连接 Runtime';
 let runtimeError = '';
@@ -532,6 +534,28 @@ function snapshot(surface) {
       capture: microphoneCaptureHost?.snapshot() ?? {authorized: false, active: false, busy: false,
         subscriberCount: 0, lastRelease: {stopped: true, verified: false, reason: 'never_started'}}},
   };
+}
+
+function smoothAudioLevel(raw) {
+  const next = Math.max(0, Math.min(1, Number(raw) || 0));
+  audioLevel = next > audioLevel ? audioLevel + (next - audioLevel) * 0.75 : audioLevel * 0.55 + next * 0.45;
+}
+function armLevelDecay() {
+  clearTimeout(levelDecay);
+  levelDecay = setTimeout(function decay() {
+    audioLevel *= 0.75;
+    if (audioLevel < 0.02) { audioLevel = 0; publish(); return; }
+    publish();
+    levelDecay = setTimeout(decay, 120);
+  }, 180);
+  levelDecay?.unref?.();
+}
+function noteMicLevel(value) { smoothAudioLevel(value); armLevelDecay(); }
+function noteVoiceLevel(value) {
+  smoothAudioLevel(value);
+  armLevelDecay();
+  const nowMs = Date.now();
+  if (nowMs - lastVoiceLevelPublish > 80) { lastVoiceLevelPublish = nowMs; publish(); }
 }
 
 function publish() {
@@ -2576,6 +2600,7 @@ async function action(event, name, payload) {
     runtime.advance(payload); await pumpEvents(); return refresh(payload);
   }
   if (name === 'test.orbLevel' && fakeMode) {
+    clearTimeout(levelDecay); levelDecay = undefined;
     audioLevel = Math.max(0, Math.min(1, Number(payload) || 0)); publish(); return audioLevel;
   }
   if (name === 'test.orbState' && fakeMode) {
@@ -2751,6 +2776,7 @@ async function initializeLiveVoice() {
     createGateway: config => runtimeApplication.createLiveVoiceModel(config),
     createConsumer: createRuntimeClientTranscriptConsumer, client, onUpdate: publish,
     historyStore:createLiveHistoryFileStore(path.join(app.getPath('userData'),'live-history-recovery.json')),
+    onLevel: noteVoiceLevel,
     onTranscript: message => conversations.addLiveMessage(message),
     onTaskSubmitted: ({taskId, goal}) => {taskGoals.set(taskId, goal);conversations.add(taskId, 'panel', goal);},
     readContext: () => JSON.stringify({profile: 'huawei_ict_agentarts',
@@ -2786,7 +2812,7 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler(microphonePermissionGate.request);
   session.defaultSession.setPermissionCheckHandler(microphonePermissionGate.check);
   microphoneCaptureHost = createMicrophoneCaptureHost({permissionGate: microphonePermissionGate,
-    getPanel: () => panel});
+    getPanel: () => panel, onLevel: noteMicLevel});
   ipcMain.on('desktop:microphone-event', (event, message) => {
     if (microphoneCaptureHost.receive(event, message)) publish();
   });

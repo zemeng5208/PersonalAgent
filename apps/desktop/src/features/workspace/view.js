@@ -1,5 +1,5 @@
 import {Orb} from '../orb/orb.js';
-import {stateNames,isTerminal} from '../conversation/state.js';
+import {stateNames,isTerminal,visualOrbState} from '../conversation/state.js';
 import {mountConversationRail} from '../conversation/rail.js';
 import {resultText} from '../conversation/result-text.js';
 import {connectorCards} from './connectors.js';
@@ -34,8 +34,8 @@ export function mountWorkspace(root,invoke,escape){
   let activationTimer;
   window.addEventListener('unload',()=>{clearTimeout(activationTimer);orb.dispose();window.removeEventListener('preferences-changed',syncMotion);document.removeEventListener('visibilitychange',visibility);});
   orbButton.onclick=()=>{
-    clearTimeout(activationTimer);orbButton.setAttribute('aria-pressed','true');orbButton.classList.remove('orb-burst');void orbButton.offsetWidth;orbButton.classList.add('orb-burst');orb.setCohesion(0);orb.setLevel(1);
-    activationTimer=setTimeout(()=>{orbButton.setAttribute('aria-pressed','false');orbButton.classList.remove('orb-burst');orb.setCohesion(null);orb.setLevel(0);},1800);
+    clearTimeout(activationTimer);orbButton.setAttribute('aria-pressed','true');orb.playBreath(3.2);
+    activationTimer=setTimeout(()=>{activationTimer=0;orbButton.setAttribute('aria-pressed','false');},3200);
   };
   const report=error=>{root.querySelector('#workspace-error').textContent=error.message||String(error);};
   root.querySelectorAll('[data-window]').forEach(button=>button.onclick=()=>invoke(`workspace.${button.dataset.window}`).catch(report));
@@ -64,6 +64,8 @@ export function mountWorkspace(root,invoke,escape){
     }
     preferences.querySelector('label').hidden=!data.modelChoices?.length;
     current=data;current.tasks ||= [];
+    orb.setLevel(data.audioLevel??0);
+    orb.setState(visualOrbState(data));
     root.querySelector('#workspace-greeting').hidden=current.tasks.length>0;root.querySelector('#workspace-intro').hidden=current.tasks.length>0;root.querySelector('#workspace-welcome').classList.toggle('compact',current.tasks.length>0);
     const signature=JSON.stringify(data.tasks);
     if(signature!==lastSignature){

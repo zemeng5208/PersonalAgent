@@ -172,7 +172,7 @@ export function mountAdmin(root, invoke, escape) {
     const status = item.status === 'ready' ? '连接正常' : item.status === 'configured' ? '等待测试' : item.status === 'disabled' ? '已停用' : item.status === 'error' ? '连接失败' : '未配置';
     const modelName = item.provider === 'fake' ? item.label : configured ? item.model : '盘古大模型 2.0';
     const providerLine = item.provider === 'fake' ? '离线联调 · 不调用真实服务' : configured ? `Huawei Cloud · ${item.deployment || item.model}` : '尚未配置 Endpoint 与 API Key';
-    return `<div class="model-page"><div class="page-lead"><div><h2>模型</h2><p>使用自己的 API Key 管理 PersonalAgent 的模型。</p></div><button class="btn btn-primary" id="model-add">＋ ${configured ? '编辑模型' : '添加模型'}</button></div><div class="model-list" aria-label="模型列表"><div class="model-item"><span class="provider-mark" aria-hidden="true">P</span><span class="model-copy"><b>${escape(modelName)}</b><small>${escape(providerLine)}</small></span><span class="model-state">${badge(status, item.status)}</span><button class="model-more" id="model-more" aria-label="编辑模型">•••</button><label class="switch-control" title="${configured ? '启用或停用该模型' : '保存模型后可启用'}"><input id="model-enabled" type="checkbox" ${enabled ? 'checked' : ''} ${configured ? '' : 'disabled'}><span></span></label></div></div>${modelEditorOpen ? modelEditor(data) : '<p class="model-footnote">API Key 仅进入主进程，并由 Windows 安全存储加密；列表不会显示密钥内容。</p>'}</div>`;
+    return `<div class="model-page"><div class="page-lead"><div><h2>模型</h2><p>使用自己的 API Key 管理 PersonalAgent 的模型。</p></div><button class="btn btn-primary" id="model-add">＋ ${configured ? '编辑模型' : '添加模型'}</button></div><div class="model-list" aria-label="模型列表"><div class="model-item"><span class="provider-mark" aria-hidden="true">P</span><span class="model-copy"><b>${escape(modelName)}</b><small>${escape(providerLine)}</small></span><span class="model-state">${badge(status, item.status)}</span><button class="btn btn-sm model-more" id="model-more" aria-label="编辑模型">编辑</button><label class="switch-control" title="${configured ? '启用或停用该模型' : '保存模型后可启用'}"><input id="model-enabled" type="checkbox" ${enabled ? 'checked' : ''} ${configured ? '' : 'disabled'}><span></span></label></div></div>${modelEditorOpen ? modelEditor(data) : '<p class="model-footnote">API Key 仅进入主进程，并由 Windows 安全存储加密；列表不会显示密钥内容。</p>'}</div>`;
   }
 
   const settingRow = (title, detail, control, extra = '') => `<div class="setting-row ${extra}" data-setting-text="${escape(`${title} ${detail}`.toLowerCase())}"><span><b>${escape(title)}</b><small>${escape(detail)}</small></span><span class="setting-control">${control}</span></div>`;
@@ -262,27 +262,27 @@ export function mountAdmin(root, invoke, escape) {
   function memoryPage(data) {
     if (!data.privateMemory?.available) return featurePage(data, 'memory');
     const selected = data.privateMemory.vaultSelected;
-    const hits = memorySearch.hits.map((hit, index) => `<article class="sheet">
-      <p>${escape(hit.excerpt)}</p><small>${escape(hit.source.path)}:${hit.source.line}</small>
-      <label>拟保存的私人记忆<input data-memory-summary="${index}" maxlength="500"
+    const hits = memorySearch.hits.map((hit, index) => `<article class="sheet memory-hit">
+      <p class="memory-excerpt">${escape(hit.excerpt)}</p><small>${escape(hit.source.path)}:${hit.source.line}</small>
+      <label class="memory-field">拟保存的私人记忆<input data-memory-summary="${index}" maxlength="500"
         value="${escape(memorySummaries.get(index) ?? '')}" placeholder="逐条填写并确认摘要"></label>
-      <button class="btn btn-sm" data-memory-save="${index}" ${data.privateMemory.writeEnabled ? '' : 'disabled'}>检查并确认</button></article>`).join('');
-    const saved = savedMemory.facts.map((fact, index) => `<article class="sheet">
-      <p>${escape(fact.summary)}</p><small>${escape(fact.sourceRef)}</small>
+      <button class="btn" data-memory-save="${index}" ${data.privateMemory.writeEnabled ? '' : 'disabled'}>检查并确认</button></article>`).join('');
+    const saved = savedMemory.facts.map((fact, index) => `<article class="sheet memory-hit">
+      <p class="memory-excerpt">${escape(fact.summary)}</p><small>${escape(fact.sourceRef)}</small>
       <p class="muted">版本 ${escape(fact.ref.revision)}${fact.state === 'withdrawn' ? ' · 已撤回，后续任务不可消费' : ''}</p>
-      <button class="btn btn-sm" data-memory-delete="${index}">删除所有版本</button></article>`).join('');
-    return `<section class="feature-page"><div class="settings-heading"><h2>私人记忆</h2>
-      <p>只读检索本机 Vault；每条摘录或更正都需在原生对话框中确认。不会自动发送至云端。</p></div>
-      <div class="sheet"><button class="btn btn-sm" id="memory-select-vault">选择本机 Vault 文件夹</button>
+      <button class="btn btn-danger" data-memory-delete="${index}">删除所有版本</button></article>`).join('');
+    return `<section class="feature-page"><header class="settings-heading"><h2>私人记忆</h2>
+      <p>只读检索本机 Vault；每条摘录或更正都需在原生对话框中确认。不会自动发送至云端。</p></header>
+      <div class="sheet memory-card"><div class="memory-actions"><button class="btn" id="memory-select-vault">选择本机 Vault 文件夹</button></div>
       <p class="muted">${selected ? '已选择本机会话 Vault；重启后需重新选择。' : '尚未选择 Vault。'}</p>
-      <form id="memory-search-form"><input id="memory-query" type="search" maxlength="200"
+      <form id="memory-search-form" class="memory-search"><input id="memory-query" type="search" maxlength="200"
         value="${escape(memorySearch.query)}" placeholder="搜索摘录" ${selected ? '' : 'disabled'}>
-        <button class="btn btn-sm" ${selected ? '' : 'disabled'}>搜索</button></form>
+        <button class="btn" ${selected ? '' : 'disabled'}>搜索</button></form>
       <p role="status">${escape(data.privateMemory.writeEnabled ? memorySearch.status
         : '真实私人记忆写入等待完整删除保障验收；当前可只读检索及删除已保存记录。')}</p></div>${hits}
-      <div class="sheet"><button class="btn btn-sm" id="memory-list-saved">查看已保存记忆</button>
+      <div class="sheet memory-card"><div class="memory-actions"><button class="btn" id="memory-list-saved">查看已保存记忆</button></div>
       <p id="memory-saved-status" role="status">${escape(savedMemory.status)}</p>${saved}
-      ${savedMemory.nextCursor ? '<button class="btn btn-sm" id="memory-list-next">下一页</button>' : ''}</div>
+      ${savedMemory.nextCursor ? '<button class="btn" id="memory-list-next">下一页</button>' : ''}</div>
       ${memorySearch.truncated ? '<p class="muted">结果已截断，请缩小搜索范围。</p>' : ''}</section>`;
   }
 
