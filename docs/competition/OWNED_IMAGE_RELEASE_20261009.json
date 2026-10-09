@@ -56,8 +56,8 @@
     "publishedAmd64Container": "16/16",
     "productionEntry": "9 synthetic TLS loopback model requests; verified TLS, no external network or real model account",
     "reviewGateUnit": "6/6",
-    "restoredSkillResource": "Skills 12/12 and affected Runtime 9/9 passed after restoring functional fixtures and the fixed-digest Skill body",
-    "initialRemoteCI": "Failed on 8 Runtime tests because a documentation banner changed a fixed-digest Skill; corrected in the PR without altering the published image allowlist. Final remote status is tracked on the PR.",
+    "restoredSkillResource": "Skills 12/12, affected Runtime 9/9 and integration 24/24 passed after restoring all 9 functional Skill/sample assets. Architecture, contracts, typechecks and all workspace tests passed during the local full check before the final integration-only correction.",
+    "initialRemoteCI": "Failed on 8 Runtime tests because a documentation banner changed a fixed-digest Skill; later local integration caught 2 fixed-citation line shifts. All functional assets restored without changing assertions or published image content. Final remote status is tracked on the PR.",
     "design": "39 modules, 22 chapters, four SVGs, offline Wiki handoff, zero broken local links or duplicate IDs"
   },
   "unverified": [

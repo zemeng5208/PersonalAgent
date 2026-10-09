@@ -2,7 +2,7 @@
   "date": "2026-10-09",
   "scope": "Existing repository Markdown documentation plus the current owned-image work package",
   "scanned": 260,
-  "navigationUpdated": 251,
+  "navigationUpdated": 250,
   "templateUpdatedSeparately": ".github/pull_request_template.md",
   "substantiveCanonicalUpdates": [
     "README.md",
@@ -18,7 +18,7 @@
   ],
   "historicalEvidence": "Preserved; current requirements and implementation status are linked explicitly. Navigation updates are not new acceptance evidence.",
   "exclusionReason": "Functional Skill bodies and sample fixtures preserve their original content and digest; documentation is updated in adjacent README and canonical design documents.",
-  "excludedRuntimeAssets": ["apps/desktop/fixtures/demo-vault/README.md","apps/desktop/fixtures/demo-vault/meeting.md","apps/desktop/fixtures/demo-vault/project.md","apps/desktop/fixtures/demo-vault/sources.md","packages/knowledge/demo-vault/公开资料.md","packages/knowledge/demo-vault/来源.md","packages/skills/workspace-reference-summary/SKILL.md","tests/fixtures/world-state/README.md"],
+  "excludedRuntimeAssets": ["apps/desktop/fixtures/demo-vault/README.md","apps/desktop/fixtures/demo-vault/meeting.md","apps/desktop/fixtures/demo-vault/project.md","apps/desktop/fixtures/demo-vault/sources.md","packages/knowledge/demo-vault/公开资料.md","packages/knowledge/demo-vault/来源.md","packages/skills/workspace-reference-summary/SKILL.md","tests/fixtures/world-state/README.md","docs/demo/knowledge/vault/starbridge.md"],
   "files": [
     "AGENTS.md",
     "CONTRIBUTING.md",
@@ -90,7 +90,6 @@
     "docs/competition/MVP_EXECUTION_GOAL.md",
     "docs/demo/WORKSPACE-DEMO.md",
     "docs/demo/knowledge/README.md",
-    "docs/demo/knowledge/vault/starbridge.md",
     "docs/design/voice-first-proactive-agent-laya-proposal.md",
     "docs/interfaces/COMPETITION_PUBLIC_ENUMS.md",
     "docs/interfaces/CURRENT_INTERFACE_CATALOG.md",

@@ -18,6 +18,7 @@ new = ['apps/agentarts-runtime/README.md','packages/agentarts/README.md',
 files = sorted({p for p in tracked+new if p
                 and not p.startswith('docs/design/resident-developer-agent-20261008/')
                 and '/fixtures/' not in p and '/demo-vault/' not in p
+                and not p.startswith('docs/demo/knowledge/vault/')
                 and not p.endswith('/SKILL.md')})
 batch = int(sys.argv[1]) if len(sys.argv)>1 else 0
 size = 24

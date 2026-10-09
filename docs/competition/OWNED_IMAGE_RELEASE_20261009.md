@@ -28,7 +28,7 @@ docker pull ghcr.io/zemeng5208/personal-agent-owned@sha256:63743fbd69f6d86b30190
 
 完整本地 `npm run check` 通过；Runtime 集成 24/24、ARM64 实际容器 16/16、匿名拉取的 GHCR AMD64 容器 16/16、阅读门槛 6/6 通过。生产入口经合成 TLS 的 9 次回环模型请求通过，未访问真实付费模型。39 模块、四 SVG、离线阅读页及 Wiki 交接已检查，设计估算仍是原工程快照。
 
-首次远端 CI 发现全仓导航横幅误改固定摘要 Skill 资源，当前 PR 已恢复功能性 Skill/演示夹具原件并在文档生成器排除；Skills 12/12、受影响 Runtime 9/9 通过，没有更改固定摘要或放宽校验。该 Skill 不在镜像 allowlist 中，此文档修复不改变已发布镜像代码。最终远端 CI 状态以 PR 当前检查为准。
+首次远端 CI 发现全仓导航横幅误改固定摘要 Skill 资源；后续本地完整检查在前序全部阶段通过后，又发现公开演示源行号被横幅移动。当前 PR 已恢复 9 个功能性 Skill/演示夹具原件并在生成器排除；Skills 12/12、受影响 Runtime 9/9、完整集成 24/24 复测通过，没有更改固定摘要、引用行号断言或放宽校验。这些资源不在镜像 allowlist 中，此文档修复不改变已发布镜像代码。最终远端 CI 状态以 PR 当前检查为准。
 
 当前实际 [HTTP 接口](OWNED_IMAGE_INTERFACES.md) 为 `/ping` 和 `/invocations`。WSS 主通道/HTTPS 备用、Wiki 自动接入与完整常驻自主能力仍是目标设计；Wiki 具体实施交 goo122。华为新 deployment、真实模型/trace/usage/费用、评估和正式工具闭环仍待验收。
 
