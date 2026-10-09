@@ -1,5 +1,16 @@
 # 当前接口目录与冻结登记
 
+## 2026-10-09 自有镜像与 Wiki 状态补充
+
+自有镜像公开 HTTP `/ping`、`/invocations` 和 fast/world/plan/review 编排，复用 ModelGateway、Coordination 动态工具目录/继续轮次/修复候选；精确接口见 `../competition/OWNED_IMAGE_INTERFACES.md`。本地完整 check 与合成容器证据不能提升真实云状态，保持 provisional/真实 AgentArts unavailable。
+
+WSS 主通道、HTTPS 自动备用/恢复信封和 Wiki 自动同步均是目标设计，不能只凭图或 Schema 公布 capability。Wiki 来源适配/Memory 投影由 goo122 在 MOD-08/09 发布，复用既有公开端口；真实 Wiki/云端出机与端到端失效传播另验收。
+
+知识受控写入和固定 MCP/Skills已有受限增量，以当前公开源码/README为准；本文较旧历史矩阵不能抹去这些增量，也不能据存在代码冻结整个模块。合并确认是开发规则，不成为产品运行时授权或接口冻结证据。
+
+<!-- current-design-20261009 -->
+> 当前目标与协作规则（2026-10-09）：[完整设计](../design/resident-developer-agent-20261008/DESIGN.md) · [离线阅读/全部 SVG](../design/resident-developer-agent-20261008/index.html) · [两人确认与本机阅读门槛](../reviews/DESIGN_READING_GATE.md)。WSS 主通道、HTTPS 备用；Wiki 记忆由 goo122 接入。goo122 与 Potatos498 均确认后才可按授权合并，禁止强制合并/管理员绕过。设计不等于已实现；本文历史验收与作者记录保留，旧合并规则以当前门槛为准。
+
 版本：1.3 · 日期：2026-09-27 · 基线提交：`9c40a0853b8db9e05e91c978e35d8e1a40788b39`
 
 协议负责人：`goo122` · 核心认知与 AgentArts 消费负责人：`zemeng` · 连接器消费负责人：`Potatos498`（2026-10-07 三人独立交付重置）
@@ -7,6 +18,11 @@
 2026-10-07 协作规则修订：接口变更由实施者提供契约、兼容说明、自审和消费验证；不以指定协作者的 PR 批准为冻结或交付门槛。本文历史的非作者评审记录保留为事实，不再构成新工作的人员等待条件。
 
 ## 1. 目的
+
+2026-10-08 自有云端镜像工作包（[记录](../modules/AGENTARTS-OWNED-IMAGE-MIGRATION.md)）：
+新编排包复用既有 ModelPort/Coordination 应用 JSON；HTTP 受信可选头 `X-PA-Deadline` 传递原期限，旧平台可忽略。
+普通 confirmed 续答仅在含 repairContext 时进入修复提示；Schema 和冻结集合未改变。
+本地 HTTP/Fake/文件验证不提升 AgentArts 真实 deployment、trace、评估或整链冻结状态。
 
 本文是当前跨模块接口的唯一状态登记。它回答四个不同问题：
 

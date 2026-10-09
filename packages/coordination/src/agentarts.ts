@@ -987,7 +987,8 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
     }
     const query = continuation === undefined
       ? availableTools === undefined ? goal : JSON.stringify({goal, availableTools})
-      : this.repairCandidateVersion === '1.0'
+      : this.repairCandidateVersion === '1.0' && asPlainObject(continuation.result)
+        && Object.prototype.hasOwnProperty.call(continuation.result, 'repairContext')
         ? candidateContinuationQuery(continuation)
         : JSON.stringify({continuation});
     if (continuation === undefined && availableTools !== undefined
@@ -1039,6 +1040,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
           'x-hw-agentarts-session-id': sessionId,
           'X-Invoke-Mode': this.invokeMode,
           'X-Request-Id': requestId,
+          'X-PA-Deadline': deadline,
         },
         body: JSON.stringify(this.workflowGoalInput === undefined
           ? {query}

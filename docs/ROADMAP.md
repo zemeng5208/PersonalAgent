@@ -1,10 +1,28 @@
 # 开发计划与进度
 
+## 2026-10-09 当前工作包与合并规则
+
+自有镜像工作包 `codex/agentarts-owned-image`：提交 `packages/agentarts`、`apps/agentarts-runtime`、Coordination 必要接线及接口/构建/测试/脱敏清单。完整常驻设计及 Wiki 接入交接同步；Wiki 自动接入由 goo122 后续实现。WSS、备用切换、领域校准与真实 AgentArts Golden Path 尚未完成，不提高整体 MOD 状态。
+
+已在该工作树执行完整 `npm run check` 并成功；新增阅读门槛6项测试成功。容器重建、GHCR 发布、Actions 工件与 PR 状态另保存实际证据，不把发布时间或已推送当 done。
+
+2026-10-09 已读回 main 保护：两次审批、最新推送批准、旧审批失效、必要 check/design-read-confirmations、管理员受保护、禁止强推/删除。goo122 与 Potatos498 两人均需当前版本本机阅读声明。2026-10-07 自审可合并政策已被覆盖，禁止强制合并、--admin、绕过检查或直接推 main。
+
+模块表维持原工作包事实；当前设计估算和历史台账 done 的口径不同。新镜像不是独立云电脑，公开发布也不等于华为部署/验收。
+
+<!-- current-design-20261009 -->
+> 当前目标与协作规则（2026-10-09）：[完整设计](design/resident-developer-agent-20261008/DESIGN.md) · [离线阅读/全部 SVG](design/resident-developer-agent-20261008/index.html) · [两人确认与本机阅读门槛](reviews/DESIGN_READING_GATE.md)。WSS 主通道、HTTPS 备用；Wiki 记忆由 goo122 接入。goo122 与 Potatos498 均确认后才可按授权合并，禁止强制合并/管理员绕过。设计不等于已实现；本文历史验收与作者记录保留，旧合并规则以当前门槛为准。
+
 更新：2026-10-08 · 本轮审查基线：main@efbfbdd2 · 项目主要负责人：zemeng / zemeng5208 · 整体 MVP：in_progress；代码集成、CI 与真实服务/设备验收分别记录
 
 本文维护工作状态，需求以 PRD 为准，当前交付顺序以[华为 ICT AgentArts Competition Profile](competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)为先。模块负责人和独占目录唯一登记在 [模块分工](MODULE_ASSIGNMENTS.md)，契约见[公共开发协议](DEVELOPMENT_PROTOCOL.md)，逐接口冻结和可用性见[当前接口目录](interfaces/CURRENT_INTERFACE_CATALOG.md)。`goo122` 负责共享底座、公共协议、Runtime、工具、知识与记忆；`zemeng` 负责 Competition Profile、AgentArts、核心认知和桌面执行；`Potatos498` 独立负责 MOD-20～26、MOD-34/35/38 及业务接线；三人各自验证和交付，不等待另一人的 PR 批准。历史作者与证据保留。Local Profile 只作为可选保留，不进入当前比赛退出条件。阶段不代表承诺日期；正式排期需根据比赛时间、团队人数和接口验证结果确定。
 
 ### 2026-10-08 最新状态与本轮集成
+
+- 自有 AgentArts ARM64 镜像迁移在隔离分支 `codex/agentarts-owned-image` 处于 `in_progress`，尚未集成：
+  云端角色/HTTP 服务、受信原期限与普通续接修复已实现；8个工作流和3个多智能体原始导出已保存并清点。
+  重启后 Docker/WSL 已正常运行，ARM64 镜像已构建；容器测试16/16、生产入口合成 HTTPS 传输验证通过。
+  剩余资产迁移、SWR/AgentArts 部署及真实云/独立宿主验收未完成，详见 [工作包](modules/AGENTARTS-OWNED-IMAGE-MIGRATION.md)。
 
 - 分工 PR #299/#300 已合并：zemeng 保持核心、AgentArts 和桌面执行；goo122 负责 MOD-33/36/37，Potatos498 负责 MOD-34/35/38。三人独立交付和自审，不恢复指定人员审批或集中验收门槛。
 - #298 已合并 Windows Job helper CI 执行；#301 已合并失败 GitHub job 空日志拒绝；#303 已合并代码预审 diff 缓存的 Evidence 保留；#304/#305 已合并私人记忆控件刷新及控制器关闭后拒绝来源访问。审查基线 efbfbdd2 的 Foundation run 37731330132 成功。

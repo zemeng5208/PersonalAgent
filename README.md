@@ -1,5 +1,14 @@
 # PersonalAgent
 
+## 2026-10-09 当前交付与目标设计
+
+当前工作包同时提交自有 AgentArts 镜像源码、公开接口与必要接线，完整常驻自主设计和 Wiki 记忆交接。镜像实际为 HTTP `/ping`、`/invocations`；WSS 主通道/HTTPS 备用、Wiki 自动接入和完整常驻监管仍是待实现目标。构建、GHCR 发布、PR 合并与真实华为验收分别记录。
+
+使用入口：[当前设计与状态](docs/CURRENT_DESIGN_CONTEXT.md)、[镜像接口](docs/competition/OWNED_IMAGE_INTERFACES.md)、[GHCR 分享](docs/competition/OWNED_IMAGE_SHARING.md)。Wiki 由 goo122 实施；两位协作者必须在自己的电脑阅读当前设计并确认/审批，禁止强制合并或管理员绕过。下文 2026-10-07 的提交和验收记录是历史基线。
+
+<!-- current-design-20261009 -->
+> 当前目标与协作规则（2026-10-09）：[完整设计](docs/design/resident-developer-agent-20261008/DESIGN.md) · [离线阅读/全部 SVG](docs/design/resident-developer-agent-20261008/index.html) · [两人确认与本机阅读门槛](docs/reviews/DESIGN_READING_GATE.md)。WSS 主通道、HTTPS 备用；Wiki 记忆由 goo122 接入。goo122 与 Potatos498 均确认后才可按授权合并，禁止强制合并/管理员绕过。设计不等于已实现；本文历史验收与作者记录保留，旧合并规则以当前门槛为准。
+
 面向 Windows 的持续型私人 Agent 助理：以动态悬浮球为入口，结合版本化个人世界状态、AgentArts 云端编排、平台连接器与受控电脑操作，提供主动提示和有限自动执行。
 
 项目参加**华为 ICT 大赛创新赛道**，选择“基于华为云 AgentArts 智能体开发平台的 Agent 设计和应用”赛题。[Huawei ICT AgentArts Competition Profile](docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md) 是当前唯一实施和验收优先级：AgentArts 必须真实承担智能体构建、编排、评估和部署。通用 Local Profile 及现有 `runAgent()`、`ModelGateway`、盘古/自有模型代码只作为可选基线留存，当前不新增能力，也不构成比赛退出条件。本地 Runtime 始终拥有授权、真实执行、读回和 Evidence。
