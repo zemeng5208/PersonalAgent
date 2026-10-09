@@ -9,6 +9,23 @@ import {createMemoryLearningHost} from '../electron/memory-learning-host.js';
 import {memoryLearningControlsHtml, mountMemoryLearningControls} from '../src/features/admin/memory-learning-controls.js';
 
 const context = () => ({deadline: new Date(Date.now() + 60_000).toISOString(), signal: new AbortController().signal});
+
+test('unchanged learning host snapshots preserve the native form and its draft',()=>{
+  const draft={value:'reference-a.md'};
+  let replacements=0,html='';
+  const root={get innerHTML(){return html;},set innerHTML(value){
+    replacements++;html=value;draft.value='';
+  },addEventListener(){}};
+  const status={learningAvailable:true};
+  const controls=mountMemoryLearningControls(root,{status,refs:[],invoke:async()=>{}});
+  draft.value='reference-a.md';
+  for(let i=0;i<3;i++)controls.update({status:{...status},refs:[]});
+  assert.equal(replacements,1);
+  assert.equal(draft.value,'reference-a.md');
+  controls.update({status:{learningAvailable:false},refs:[]});
+  assert.equal(replacements,2);
+  controls.dispose();
+});
 async function fixture(t, options = {}) {
   const parent = fileURLToPath(new URL('../../../.cache/memory-learning-tests/', import.meta.url));
   await mkdir(parent, {recursive: true});
