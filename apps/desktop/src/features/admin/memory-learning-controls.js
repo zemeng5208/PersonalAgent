@@ -45,7 +45,13 @@ export function mountMemoryLearningControls(root, {invoke, status, refs = [], on
   const events = new AbortController();
   let busy = false;
   let disposed = false;
-  const render = () => { if (!disposed) root.innerHTML = memoryLearningControlsHtml(state); };
+  let renderedHtml;
+  const render = () => {
+    if (disposed) return;
+    const html=memoryLearningControlsHtml(state);
+    if (html===renderedHtml) return;
+    root.innerHTML=html;renderedHtml=html;
+  };
   render();
   root.addEventListener('click', async event => {
     const button = event.target.closest('button');
