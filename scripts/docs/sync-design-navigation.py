@@ -15,7 +15,10 @@ tracked = subprocess.check_output(['git','ls-files','-z','--','*.md'],cwd=ROOT).
 new = ['apps/agentarts-runtime/README.md','packages/agentarts/README.md',
        'docs/adr/0012-owned-agentarts-image.md','docs/adr/0013-resident-agent-wiki-wss.md',
        'docs/modules/AGENTARTS-OWNED-IMAGE-MIGRATION.md','docs/reviews/DESIGN_READING_GATE.md']
-files = sorted({p for p in tracked+new if p and not p.startswith('docs/design/resident-developer-agent-20261008/')})
+files = sorted({p for p in tracked+new if p
+                and not p.startswith('docs/design/resident-developer-agent-20261008/')
+                and '/fixtures/' not in p and '/demo-vault/' not in p
+                and not p.endswith('/SKILL.md')})
 batch = int(sys.argv[1]) if len(sys.argv)>1 else 0
 size = 24
 chosen = files[batch*size:(batch+1)*size]

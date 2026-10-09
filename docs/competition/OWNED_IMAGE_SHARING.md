@@ -1,6 +1,6 @@
 # 协作者使用 GHCR 预览镜像
 
-2026-10-09。代码、接口和设计通过 PR 分享；镜像通过 `ghcr.io/zemeng5208/personal-agent-owned` 分享。预览发布不合并 main，也不表示华为云已验收。精确 tag/digest 和 Actions 证据见后续发布记录，不能提前把流程说明当发布成功。
+2026-10-09。代码、接口和设计已提交 [PR #317](https://github.com/zemeng5208/PersonalAgent/pull/317)；GHCR 镜像与 ARM64/AMD64 离线包已发布，见 [精确标签/摘要/下载/验证记录](OWNED_IMAGE_RELEASE_20261009.md)。已验证匿名 Docker 拉取成功，两位协作者不需共享凭据。预览发布不合并 main，也不表示华为云已验收。
 
 ## 获取与本地运行
 
@@ -24,13 +24,13 @@ docker run --rm --name personal-agent-preview -p 127.0.0.1:8080:8080 --env-file 
 
 ## 仓库可下载的离线副本
 
-发布 Actions 同时上传 ARM64 `.tar` 工件。若个人 GHCR 读取暂未配置，可使用自己的仓库权限从对应 Actions run 下载 `owned-agentarts-arm64-<source-commit>`，然后：
+推荐从 [GitHub 预发布页](https://github.com/zemeng5208/PersonalAgent/releases/tag/agentarts-preview-157d5769) 下载对应架构 `.tar`。发布 Actions 也保留 ARM64 工件至 2027-01-07，可使用仓库权限从对应 Actions run 下载 `owned-agentarts-arm64-<source-commit>`，然后：
 
 ```powershell
 docker load --input personal-agent-owned-arm64.tar
 ```
 
-下载与加载不需要共享模型密钥；镜像仍需自己的运行配置。这是确实生成后才能使用的工件，来源、哈希与 run URL 以发布记录为准。
+下载与加载不需要共享模型密钥；镜像仍需自己的运行配置。上述附件已实际生成，来源、哈希与 run URL 见发布记录。
 
 ## 边界与协作
 

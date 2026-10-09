@@ -91,7 +91,7 @@ Plan 内部报告另含 preserved/rechecked/revised/removed_steps、dependency_u
 
 main 远端已设置两次审批、最新推送后的批准、过期审批作废、必需 `check` 与 `design-read-confirmations` 检查、管理员同样受约束、禁止强推/删除。goo122 和 Potatos498 必须各自在本机打开当前设计并提交版本绑定的阅读确认及审批；不能强制合并。远端无法独立证明物理阅读，采用本人 GitHub 账号声明与本机文件摘要校验，见 [阅读门槛](../reviews/DESIGN_READING_GATE.md)。
 
-发布采用仓库 Actions 的临时 `packages: write` 令牌；用户的现有 GitHub 登录没有包写入 scope，不复制个人凭据。镜像固定 source commit 标签，生成 ARM64/AMD64 manifest 和可下载离线工件。实际 PR、digest 与发布证据将在发布完成后写入独立记录，不能把流程配置当成功发布。
+发布采用仓库 Actions 的临时 `packages: write` 令牌；用户的现有 GitHub 登录没有包写入 scope，不复制个人凭据。源码、接口和文档已提交 [PR #317](https://github.com/zemeng5208/PersonalAgent/pull/317)，GHCR 固定 source commit 镜像已发布并匿名拉取验证，ARM64/AMD64 离线包已导出。实际 tag、digest、Actions、预发布附件及校验和见 [发布记录](../competition/OWNED_IMAGE_RELEASE_20261009.md)。新增本机容器两架构各 16/16 与生产 TLS 9 次回环模型请求通过；预览不等于真实华为验收。
 
 当前实际接口仍为 HTTP；WSS 主通道/HTTPS 备用、Wiki 接入和完整常驻自主能力是详细设计，Wiki 具体实施归 goo122。真实华为 deployment/模型/trace/评估仍待验收。
 
