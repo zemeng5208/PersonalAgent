@@ -3,7 +3,7 @@
 <!-- current-design-20261009 -->
 > 当前目标与协作规则（2026-10-09）：[完整设计](../design/resident-developer-agent-20261008/DESIGN.md) · [离线阅读/全部 SVG](../design/resident-developer-agent-20261008/index.html) · [两人确认与本机阅读门槛](../reviews/DESIGN_READING_GATE.md)。WSS 主通道、HTTPS 备用；Wiki 记忆由 goo122 接入。goo122 与 Potatos498 均确认后才可按授权合并，禁止强制合并/管理员绕过。设计不等于已实现；本文历史验收与作者记录保留，旧合并规则以当前门槛为准。
 
-日期：2026-10-08；状态：`in_progress`；负责人：zemeng。
+初始日期：2026-10-08；当前更新：2026-10-09；状态：`in_progress`；负责人：zemeng。
 目标：`huawei_ict_agentarts`。工作树：`D:\PersonalAgent\.worktrees\agentarts-owned-image`，
 分支 `codex/agentarts-owned-image`，基线 `origin/main@e86bac53`。
 本包涉及 MOD-29/30/31 的云编排与既有 Coordination 消费接线。
@@ -14,20 +14,22 @@
 
 owned-1.1完整World/Plan报告已实现严格源版本、互斥分类、依赖及Review一致性检查；现有candidate1.0无法执行的删除/新增步骤/工具动作明确拒绝，缺连续事实前后版本返回RECHECK。旧资产逐项对应与仍未等价职责见[迁移矩阵](AGENTARTS-OWNED-IMAGE-PARITY.md)，下文10-08静态缺口保留历史含义。
 
-本地真实TLS回环10场景通过（显式Fake模型），服务21/21、客户端/Runtime与旧回归187/187及独立契约6/6通过；后续显式地址配置与相邻Desktop测试34/34，WS客户端18/18。完整根`npm run check`本轮退出0，末尾集成24/24；完整工具TLS联测与后续错误分类/重启窗口修复分别记录。新版ARM64本机构建产物21/21与生产入口合成TLS9次请求通过；GHCR新版本和真实华为运行时仍需各自证据，原HTTP预览不能代表新WSS镜像已发布。
+本地真实TLS回环10场景通过（显式Fake模型），服务21/21、客户端/Runtime与旧回归187/187及独立契约6/6通过；后续显式地址配置与相邻Desktop测试34/34，WS客户端18/18。完整根`npm run check`本轮退出0，末尾集成24/24；完整工具TLS联测与后续错误分类/重启窗口修复分别记录。新版GHCR源码`97aa51a6f32e0dffcca6436fba0d3b51d1851d8f`已发布，索引digest为`sha256:71fae973fa5925aa3ced6a465fe4573e2b9453d4acb1fef67d91076b14399f70`，[Actions 37953071877](https://github.com/zemeng5208/PersonalAgent/actions/runs/37953071877)成功。已发布AMD64/ARM64镜像分别独立通过容器21/21与生产入口合成TLS9次请求；来源、下载和验证范围见[新版发布记录](../competition/OWNED_IMAGE_WSS_RELEASE_20261009.md)、[新版预发布页](https://github.com/zemeng5208/PersonalAgent/releases/tag/agentarts-preview-97aa51a6)。这些验证使用合成模型端点，不证明真实华为运行时已验收。
 
-云控制台2026-10-09读回三个原运行时保留；贵阳一区SWR原无自有镜像/组织，已创建`zemeng5208-personal-agent`用于新ARM64包导入，未扩大委托权限。托管表单当前限时免费，默认委托`DefaultAgentArtsRuntimeAgency`、入网`defaultgw`、8080端口，环境/鉴权和公开WS路径仍需以新部署实际读回。自动status协调消费者未交付，unknown不自动恢复。
+云控制台2026-10-09读回三个原运行时保留；贵阳一区SWR私有组织`zemeng5208-personal-agent`已导入新版ARM64原包并读回唯一`sha-97aa51a6f32e0dffcca6436fba0d3b51d1851d8f`标签，未扩大委托权限。新托管表单准备8080、前缀路由及原`DefaultAgentArtsRuntimeAgency`/`defaultgw`，尚未提交创建新运行时；环境/鉴权、公开WS路径及公网Upgrade仍需以新部署实际读回。云端仅有界内存回执，`restartRecovery:false`；自动status协调消费者与持久云端恢复未交付，unknown不自动恢复。
 
 ## 实现与兼容
 
 - `packages/agentarts`：自有 fast/world/plan/review 编排、严格输入和模型输出校验、目录约束工具提案、原期限/取消、无内容角色回执。
-- `apps/agentarts-runtime`：8080 HTTP `/invocations`、`/ping`、受信模型装配、超时/断连/并发保护、Linux ARM64 Dockerfile 与 allowlist 镜像上下文。
+- `apps/agentarts-runtime`：8080 HTTP `/invocations`、`/ping`、受保护 `/invocation-status` 与 `/ws` WebSocket Upgrade，受信模型装配、超时/断连/共享并发保护、Linux ARM64/AMD64 镜像与 allowlist 上下文。
 - 复用 ModelGateway/ModelPort 和现有应用 JSON；没有新增任务库、工具宿主、审批、授权或本地 Evidence 路径。
-- Coordination 新增 `X-PA-Deadline`，只为含 repairContext 的续接添加候选提示；普通天气/文件续答不再误入修复。
+- Coordination 保留 `X-PA-Deadline` 与仅对 repairContext 续接添加候选提示；新增显式 WSS 配置、连接复用与受限 HTTPS 备用，已发送但结果未知时不备用重发，普通天气/文件续答不误入修复。
 - 无数据库迁移；输出仍由本地 Runtime 严格解析，Candidate 仍须预览、Policy、CAS 与读回。接口为 provisional，云端输出始终 unverified。
 - 同一服务可显式选择 `standalone-validation`，仅作为相同业务代码的独立验证入口，不在 Competition 失败后自动切换。
 
-## 当前云资产与原始导出
+## 2026-10-08 云资产与原始导出（历史阶段）
+
+以下保留当日清点与静态迁移判断；当前 owned-1.1 报告实现及仍未等价的职责以本文开头和 [逐项迁移矩阵](AGENTARTS-OWNED-IMAGE-PARITY.md) 为准，不沿用旧表宣称当前全量完成。
 
 控制台实时读回：单智能体 0、多智能体 3、工作流 8。工作流导出在浏览器工具中报告下载被取消，
 用户随后提供已下载原件 `workflow_[8]items_20261008203232.jsonl`。
@@ -77,7 +79,7 @@ Plan 内部报告另含 preserved/rechecked/revised/removed_steps、dependency_u
 当前代码对内部报告进行了收敛，尚不能仅凭最终 JSON 兼容就认定这些内部分析职责完全等价；
 继续入口是保留来源、直接/传递影响及保留/复核/移除步骤语义的逐项验证。
 
-## 验证与当前阻碍
+## 2026-10-08 验证与当时阻碍（历史阶段）
 
 - Node 24.15.0/npm 11.12.1 的 `build:owned-agent` 通过。
 - 核心/HTTP/续接针对性测试 22/22 通过：目录与 Schema、修复范围/版本/依赖/审查一致性、缺口、错误、原期限、取消、断连、慢上传及无回退。
@@ -101,9 +103,9 @@ Plan 内部报告另含 preserved/rechecked/revised/removed_steps、dependency_u
 
 main 远端已设置两次审批、最新推送后的批准、过期审批作废、必需 `check` 与 `design-read-confirmations` 检查、管理员同样受约束、禁止强推/删除。goo122 和 Potatos498 必须各自在本机打开当前设计并提交版本绑定的阅读确认及审批；不能强制合并。远端无法独立证明物理阅读，采用本人 GitHub 账号声明与本机文件摘要校验，见 [阅读门槛](../reviews/DESIGN_READING_GATE.md)。
 
-发布采用仓库 Actions 的临时 `packages: write` 令牌；用户的现有 GitHub 登录没有包写入 scope，不复制个人凭据。源码、接口和文档已提交 [PR #317](https://github.com/zemeng5208/PersonalAgent/pull/317)，GHCR 固定 source commit 镜像已发布并匿名拉取验证，ARM64/AMD64 离线包已导出。实际 tag、digest、Actions、预发布附件及校验和见 [发布记录](../competition/OWNED_IMAGE_RELEASE_20261009.md)。新增本机容器两架构各 16/16 与生产 TLS 9 次回环模型请求通过；预览不等于真实华为验收。
+发布采用仓库 Actions 的临时 `packages: write` 令牌；用户的现有 GitHub 登录没有包写入 scope，不复制个人凭据。源码、接口和文档已提交 [PR #317](https://github.com/zemeng5208/PersonalAgent/pull/317)。前一HTTP预览`157d5769`曾发布并匿名拉取验证，ARM64/AMD64离线包已导出；其历史tag、digest、Actions、附件及校验和见[旧发布记录](../competition/OWNED_IMAGE_RELEASE_20261009.md)。该旧镜像两架构各16/16与生产TLS9次回环请求通过，仅记录旧版本。
 
-本节记录前一HTTP预览镜像的发布；当前分支WSS实施增量见本文开头，不能沿用旧摘要证明新版已发布。Wiki接入和完整常驻自主能力仍待交付，Wiki具体实施归goo122。真实华为deployment/模型/trace/评估仍待验收。
+最新WSS预览`97aa51a6`的GHCR发布、独立镜像验证与下载入口见[新版发布记录](../competition/OWNED_IMAGE_WSS_RELEASE_20261009.md)及本文开头；旧摘要不能证明新版内容。Wiki接入和完整常驻自主能力仍待交付，Wiki具体实施归goo122。公网Upgrade、真实华为deployment/模型/trace/评估、自动status协调和持久云端恢复仍待验收或实现。
 
 ## 续跑入口与回滚
 

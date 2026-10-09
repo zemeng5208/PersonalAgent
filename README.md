@@ -2,7 +2,7 @@
 
 ## 2026-10-09 当前交付与目标设计
 
-当前工作包同时提交自有 AgentArts 镜像源码、公开接口与必要接线，完整常驻自主设计和 Wiki 记忆交接。当前分支已有 `/ws`、受保护状态查询、WSS 客户端与显式 HTTPS 备用，并接入本地 Runtime 的审批/工具/证据和未知结果防重发；公网 Upgrade、自动核实恢复、Wiki 自动接入和完整常驻监管仍待完成。详细实现及验证范围见 [接口说明](docs/competition/OWNED_IMAGE_INTERFACES.md)；构建、GHCR 发布、PR 合并与真实华为验收分别记录。
+当前工作包同时提交自有 AgentArts 镜像源码、公开接口与必要接线，完整常驻自主设计和 Wiki 记忆交接。`97aa51a6` 预览镜像已发布到 GHCR，提供 `/ws` 与受保护状态查询；当前源码已接线 WSS 客户端与显式 HTTPS 备用、本地 Runtime 的审批/工具/证据和未知结果防重发。已发布 AMD64/ARM64 镜像分别通过容器测试 21/21 与生产入口合成 TLS 9 次请求；公网 Upgrade、真实华为验收、自动 status 协调、持久云端恢复、Wiki 自动接入和完整常驻监管仍待完成。详细实现见 [接口说明](docs/competition/OWNED_IMAGE_INTERFACES.md)，固定来源、digest 与下载见 [新版发布记录](docs/competition/OWNED_IMAGE_WSS_RELEASE_20261009.md) 和 [GitHub 预发布页](https://github.com/zemeng5208/PersonalAgent/releases/tag/agentarts-preview-97aa51a6)；GHCR 发布、PR 合并与真实华为验收分别记录。
 
 使用入口：[当前设计与状态](docs/CURRENT_DESIGN_CONTEXT.md)、[镜像接口](docs/competition/OWNED_IMAGE_INTERFACES.md)、[GHCR 分享](docs/competition/OWNED_IMAGE_SHARING.md)。Wiki 由 goo122 实施；两位协作者必须在自己的电脑阅读当前设计并确认/审批，禁止强制合并或管理员绕过。下文 2026-10-07 的提交和验收记录是历史基线。
 
@@ -13,7 +13,7 @@
 
 项目参加**华为 ICT 大赛创新赛道**，选择“基于华为云 AgentArts 智能体开发平台的 Agent 设计和应用”赛题。[Huawei ICT AgentArts Competition Profile](docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md) 是当前唯一实施和验收优先级：AgentArts 必须真实承担智能体构建、编排、评估和部署。通用 Local Profile 及现有 `runAgent()`、`ModelGateway`、盘古/自有模型代码只作为可选基线留存，当前不新增能力，也不构成比赛退出条件。本地 Runtime 始终拥有授权、真实执行、读回和 Evidence。
 
-## 当前状态
+## 2026-10-07 历史基线
 
 截至 2026-10-07，本地已同步到 `main@4d15f063`，该提交的 Foundation CI（run 37563282512）已读回成功。项目主要负责人为 **zemeng / zemeng5208**，用户继续负责核心与 AgentArts，goo122 和 Potatos 各自独立负责基础与业务主线；[模块分工](docs/MODULE_ASSIGNMENTS.md) 是负责人和文件所有权的唯一登记。
 
@@ -26,7 +26,7 @@
 - [华为 ICT AgentArts Competition Profile](docs/competition/HUAWEI_ICT_AGENTARTS_PROFILE.md)：参赛主路径、比赛与可选 Local 边界、实施顺序和验收矩阵。
 - [产品需求 PRD](docs/PRD.md)：产品范围、需求编号、优先级和验收条件。
 - [架构设计](docs/ARCHITECTURE.md)：模块、进程、协议、数据与技术验证项。
-- [模块分工](docs/MODULE_ASSIGNMENTS.md)：主模块、DEV-WORKFLOWS 及独占工作面；三人各自负责完整交付，同行 PR 评审不作为默认等待门槛。
+- [模块分工](docs/MODULE_ASSIGNMENTS.md)：主模块、DEV-WORKFLOWS 及独占工作面；三人各自负责完整交付，当前合并须 goo122 与 Potatos498 两人完成本机阅读确认及审批，禁止强制合并或管理员绕过。
 - [公共开发协议](docs/DEVELOPMENT_PROTOCOL.md)：`goo122` 维护的任务、事件、工具、连接器契约与联调交付要求。
 - [当前接口目录](docs/interfaces/CURRENT_INTERFACE_CATALOG.md)：逐接口冻结状态、生产可用性、证据和未提供能力。
 - [协作开发规范](CONTRIBUTING.md)：任务分配、分支、PR、评审和完成标准。

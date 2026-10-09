@@ -1,6 +1,14 @@
 {
   "date": "2026-10-09",
   "scope": "Existing repository Markdown documentation plus the current owned-image work package",
+  "wssPublicationFollowup": {
+    "sourceCommit": "97aa51a6f32e0dffcca6436fba0d3b51d1851d8f",
+    "release": "https://github.com/zemeng5208/PersonalAgent/releases/tag/agentarts-preview-97aa51a6",
+    "updated": ["README.md", "docs/CURRENT_DESIGN_CONTEXT.md", "docs/competition/OWNED_IMAGE_SHARING.md", "docs/modules/AGENTARTS-OWNED-IMAGE-MIGRATION.md", "docs/competition/OWNED_IMAGE_RELEASE_20261009.md", "docs/competition/OWNED_IMAGE_RELEASE_20261009.json"],
+    "added": ["docs/competition/OWNED_IMAGE_WSS_RELEASE_20261009.md", "docs/competition/OWNED_IMAGE_WSS_RELEASE_20261009.json"],
+    "evidence": "Published AMD64 and ARM64 each passed 21/21 container tests and nine synthetic TLS model requests; SWR imported ARM64; real deployment and public WSS remain unverified.",
+    "originalScanCounts": "The counts below describe the earlier navigation synchronization, not the subsequent publication followup. Functional assets and historical source facts remain unchanged."
+  },
   "scanned": 260,
   "navigationUpdated": 250,
   "templateUpdatedSeparately": ".github/pull_request_template.md",

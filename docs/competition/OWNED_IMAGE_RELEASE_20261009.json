@@ -1,5 +1,7 @@
 {
   "schemaVersion": 1,
+  "historicalHttpPreview": true,
+  "newerWssRecord": "OWNED_IMAGE_WSS_RELEASE_20261009.json",
   "recordedAt": "2026-10-09T14:13:22Z",
   "profile": "huawei_ict_agentarts",
   "status": "preview-unmerged",

@@ -1,4 +1,6 @@
-# AgentArts 自有镜像预览发布记录
+# AgentArts HTTP 镜像历史预览发布记录
+
+此处保留 `157d5769` 的 HTTP 历史产物与当时验证。当前 WSS 版本为 `97aa51a6`，获取、接口与验证见 [新版发布记录](OWNED_IMAGE_WSS_RELEASE_20261009.md)；不要用本页旧镜像替代新版 WSS 验收。
 
 2026-10-09，Competition Profile `huawei_ict_agentarts`。本记录只说明镜像与文档工作包的实际 GitHub 发布，PR 尚未合并，真实华为部署验收未完成。
 
@@ -30,7 +32,7 @@ docker pull ghcr.io/zemeng5208/personal-agent-owned@sha256:63743fbd69f6d86b30190
 
 首次远端 CI 发现全仓导航横幅误改固定摘要 Skill 资源；后续本地完整检查在前序全部阶段通过后，又发现公开演示源行号被横幅移动。当前 PR 已恢复 9 个功能性 Skill/演示夹具原件并在生成器排除；Skills 12/12、受影响 Runtime 9/9、完整集成 24/24 复测通过，没有更改固定摘要、引用行号断言或放宽校验。这些资源不在镜像 allowlist 中，此文档修复不改变已发布镜像代码。最终远端 CI 状态以 PR 当前检查为准。
 
-当前实际 [HTTP 接口](OWNED_IMAGE_INTERFACES.md) 为 `/ping` 和 `/invocations`。WSS 主通道/HTTPS 备用、Wiki 自动接入与完整常驻自主能力仍是目标设计；Wiki 具体实施交 goo122。华为新 deployment、真实模型/trace/usage/费用、评估和正式工具闭环仍待验收。
+此旧产物接口为 HTTP `/ping` 和 `/invocations`。当时 WSS 主通道/HTTPS 备用尚未交付；后续 `97aa51a6` 已实现并独立发布，见新版记录及 [当前接口](OWNED_IMAGE_INTERFACES.md)。Wiki 自动接入与完整常驻自主能力仍待交付，Wiki 具体实施交 goo122。华为新 deployment、真实模型/trace/usage/费用、评估和正式工具闭环仍待验收。
 
 ## PR 与合并
 
