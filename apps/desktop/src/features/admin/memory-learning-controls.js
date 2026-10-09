@@ -1,6 +1,6 @@
 const escape = value => String(value ?? '').replace(/[&<>"']/g,
   char => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));
-const taskState = value => ({created:'已创建',running:'运行中',waiting_approval:'等待审批',
+const taskState = value => ({created:'已创建',running:'运行中',cancelling:'正在取消',waiting_approval:'等待审批',
   waiting_reconciliation:'等待结果核实',succeeded:'已完成',failed:'失败',cancelled:'已取消'}[value] ?? value);
 
 /** Only metadata and opaque references enter this independent admin component. */
