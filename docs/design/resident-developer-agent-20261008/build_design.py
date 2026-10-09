@@ -65,7 +65,7 @@ class SVG:
     def header(self,title,subtitle):
         self.text(50,72,title,40,'strong')
         self.text(50,119,subtitle,23,'muted')
-        self.text(50,158,'2026-10-09 Wiki 修订 · e86bac53 + 镜像工作包 · proposed 目标设计 · 完成度估算基线 2026-10-08',21,'muted')
+        self.text(50,158,'2026-10-09 Wiki / WSS / 完整报告增量 · provisional 本地实现 · 完成度估算基线仍为 2026-10-08',21,'muted')
 
     def save(self,name):
         xml='\n'.join(self.items+['</svg>'])
@@ -118,7 +118,7 @@ def overview():
         s.line(930,y,930,y+35)
     cloud = {m['id']:m for m in MODS if m['zone']=='cloud'}
     for mid,y,h,note in [
-        ('MOD-29',270,270,'输入校验、部署/身份、容器协议；公开 WSS 路径和新版本部署仍需实测。'),
+        ('MOD-29',270,270,'容器 /ws 本地 provisional；restartRecovery=false，公开网关与新版镜像待验收。'),
         ('MOD-04A',890,270,'公开模型包可复用；统一 Provider、取消与用量；模型不能签发权限。'),
         ('MOD-32',1200,270,'deployment/API/trace/评估/费用/回滚；平台成功不等于本地工具成功。'),
         ('MOD-10',1510,270,'横向研究：领域标注集、校准与训练；不作为每次调用必经步骤。')]:
@@ -128,21 +128,21 @@ def overview():
     s.rect(1890,580,850,270,'#edf3f8')
     module_card(s,cloud['MOD-30'],1910,598,399)
     module_card(s,cloud['MOD-31'],2321,598,399)
-    s.para(1910,803,'规划/复杂判断/多角色提案 → 本地校验 → 执行 → 工具结果继续轮次。',810,21,27)
+    s.para(1910,803,'完整World/Plan→Review→候选；缺来源RECHECK；工具仍由本地执行。',810,21,27)
     s.line(1820,692,1870,692,both=True)
     s.rect(1410,830,1320,50,'#e0effa',stroke='#78a9cf')
     s.text(1430,863,'WSS 主通道 ⇄ HTTPS 备用 · 同部署/同任务/同去重 · 可见降级',24,'strong')
     s.rect(1890,1820,850,270,'#fff4e6',stroke='#d6aa6c')
     s.text(1910,1858,'横向新增目标：尚未通过真实目标验收',25,'strong')
     for i,text in enumerate([
-        'WSS 实际链路 + HTTPS 备用切换与协调',
+        'WSS 公开网关 + 结果未知/重启协调消费',
         '持久无人监管授权 + 完整委派/监管闭环',
         'Laya 领域校准 + 任意命令强沙箱',
-        '真实云镜像 Golden Path + 旧工作流语义迁移']):
+        '新版云镜像 Golden Path + 迁移缺口验收']):
         s.text(1910,1906+i*44,text,22)
     s.rect(1890,2130,850,270,'#edf3f8')
-    s.text(1910,2170,'部署链：构建 → SWR → AgentArts → 验收',26,'strong')
-    s.para(1910,2210,'ARM64 / 8080；容器 /ws 可选与 POST /invocations。公开地址、代理 Upgrade、认证、连接寿命需真实验证。',810,22,33)
+    s.text(1910,2170,'构建 → GHCR 协作 → AgentArts 部署 → 验收',26,'strong')
+    s.para(1910,2210,'ARM64 / 8080；/ws 与 POST /invocations。华为拉取按平台配置，必要时 SWR；公开 Upgrade 与身份仍需实测。',810,22,33)
     s.para(1910,2321,'不打包用户数据/密钥；固定 tag + digest；新部署失败显式暂停或回滚。',810,22,33)
     s.rect(40,2460,2720,160,'#fff')
     s.text(60,2501,'贯穿设计：权限、信任、隐私、状态恢复与证据',28,'strong')
@@ -177,9 +177,9 @@ def lifecycle():
     s.path('M798,528 L825,528 L825,680 L832,680')
     box(1,800,'简单/确定性处理','保留、核实或局部候选；无变化结束本轮；不忙等')
     s.path('M1020,748 L1020,775 L622,775 L622,800',True)
-    box(3,800,'4. 需要语义编排','最小子图/版本/预算；WSS 主，HTTPS 备用')
+    box(3,800,'4. 需要语义编排','最小子图/版本/预算；WSS 主，未发送才 HTTPS 备用')
     s.path('M1020,748 L1020,775 L1410,775 L1410,800')
-    box(4,955,'5. 云端角色协作','规划/执行提案/验证/监管；只返回结构化候选')
+    box(4,955,'5. 云端角色协作','fast 或 World→Plan→Review；完整报告只形成候选')
     s.path('M1578,865 L1605,865 L1605,1016 L1612,1016')
     box(1,1120,'6. 本地重新核实','Schema/来源/工具/依赖；expectedRevision/CAS')
     s.path('M1800,1083 L1800,1102 L622,1102 L622,1120')
@@ -199,7 +199,7 @@ def lifecycle():
     s.path('M2580,1440 L2580,1426 L2778,1426 L2778,2020 L18,2020 L18,373 L52,373',True)
     s.rect(40,2050,2720,180,'#fff3e3',stroke='#d6aa6c')
     s.text(60,2093,'停止与恢复：所有分支共同遵守',28,'strong')
-    s.para(60,2135,'暂停先阻止新分派；取消传递到子任务并确认停止。断线先核对受理状态再切换传输。重启读取 checkpoint；授权已消费不重用。版本冲突重新核实；副作用未知进入协调，不把超时当“未执行”。',2660,25,37)
+    s.para(60,2135,'发送前持久意图；发送后未知进入 waiting_reconciliation，不改走备用重发。重启遇未清 checkpoint 阻止再发送。暂停/取消传递并确认停止；授权已消费不重用。当前防重发为本地 provisional，完整查询恢复与真实副作用核实另验收。',2660,25,37)
     s.rect(40,2260,2720,225,'#fff')
     s.text(60,2303,'一个完整示例：持续维护 PR 的 CI',28,'strong')
     s.para(60,2346,'真实 CI run 失败 → 影响对应 commit 的发布结论 → Laya 判断核实/定位 → AgentArts 编排测试定位与修复提案 → 本地 Policy 允许范围内补丁 → 运行相关测试并读回 diff → 记录证据 → 创建监管任务，等待新 CI 结果；出现新 commit 时旧评审自动失效。',2660,25,38)
@@ -222,7 +222,7 @@ def trust_transport():
             s.para(x+20,y+103+i*72,line,w-40,23,29)
     s.rect(40,825,2720,595,'#fff')
     s.text(60,870,'双通道状态：只有确认业务受理与执行结果后，才能安全切换',29,'strong')
-    nodes=[(80,940,420,'WSS_CONNECTING','握手/认证/能力协商'),(660,940,420,'WSS_READY','双向事件与继续轮次'),(1250,940,480,'RECONCILING','已受理？游标？未知副作用？'),(1920,940,700,'HTTPS_READY','POST + SSE/查询；显示备用与能力降低')]
+    nodes=[(80,940,420,'WSS_CONNECTING','握手/认证/能力协商'),(660,940,420,'WSS_READY','严格受理/结果与继续轮次'),(1250,940,480,'RECONCILING','已发送后未知；阻止重复发送'),(1920,940,700,'HTTPS_READY','同目标 POST；仅未发送连接失败可备用')]
     for x,y,w,title,body in nodes:
         s.rect(x,y,w,140,'#e7f0f8')
         s.text(x+20,y+42,title,26,'strong')
@@ -230,15 +230,15 @@ def trust_transport():
     s.line(500,1010,660,1010)
     s.line(1080,1010,1250,1010)
     s.text(1096,978,'断线',20)
-    s.line(1730,1010,1920,1010)
-    s.text(1740,978,'允许降级',20)
+    s.path('M290,940 L290,904 L2270,904 L2270,940',True)
+    s.text(1320,925,'invoke 从未发送才可自动备用',21)
     s.path('M2270,1080 L2270,1140 L870,1140 L870,1080',True)
-    s.text(1120,1175,'后台验证 WSS → 暂停新发送 → 协调 → 恢复主通道',24)
-    s.para(80,1230,'共同约束：同部署、同 taskId、同 idempotencyKey/payloadDigest、同授权、同 durable checkpoint；切换不能同时执行同一请求。SSE 断流续传能力需要实际协商，没有能力时只支持已核实的单轮继续。',2540,24,36)
-    s.text(80,1357,'两通道失败：OFFLINE_WAIT；认证失败：AUTH_REQUIRED；协议不兼容：UNSUPPORTED。',25,'strong')
+    s.text(1120,1175,'目标恢复：验证 WSS → 暂停新发送 → 核实 → 后续调用回主通道',24)
+    s.para(80,1230,'本地 provisional：0.1.0严格信封；发送前持久意图，未知结果/重启标记阻止重发。容器仅有界内存回执，restartRecovery=false；status unknown不能解释为未执行。HTTPS当前为单轮JSON事件数组，持久查询/游标恢复消费者待验收。',2540,24,36)
+    s.text(80,1378,'真实网关、凭据/Upgrade与恢复另验收；认证/协议失败不触发备用，也不切换产品 Profile。',25,'strong')
     s.rect(40,1460,2720,520,'#fff')
     s.text(60,1505,'发布链与各层验收：本地构建成功不能替代云端 Golden Path',29,'strong')
-    labels=[('受限构建','ARM64 / 锁依赖 / 非 root'),('SWR 与拉取','固定 tag + digest / 权限'),('AgentArts 部署','版本 / 身份 / /ws 与 HTTP'),('真实闭环','提案 → Policy → 工具 → 读回'),('评估与上线','领域评估 / 小范围 / 回滚')]
+    labels=[('受限构建','ARM64 / 锁依赖 / 非 root'),('GHCR 协作 / 拉取','固定digest；云端按平台配置'),('AgentArts 部署','版本 / 身份 / /ws 与 HTTP'),('真实闭环','提案 → Policy → 工具 → 读回'),('评估与上线','领域评估 / 小范围 / 回滚')]
     for i,(title,body) in enumerate(labels):
         x=70+i*540
         s.rect(x,1550,510,155,'#eef4fa')
@@ -371,7 +371,8 @@ def reader(text):
     handoff,_=markdown((HERE/'WIKI-MEMORY-HANDOFF.md').read_text(encoding='utf-8'),prefix='wiki')
     pictures.append('<section id="wiki-handoff"><h2>Wiki 接入实施交接 · goo122</h2>'+handoff+'</section>')
     template=template.replace('这里是设计交付','此页面展示目标设计').replace('这里只有设计交付','此页面展示目标设计')
-    template=template.replace('这里只交付设计，没有修改产品代码或部署云端。','此页面展示目标设计；现有镜像接口随 PR 提交，Wiki 自动接入仍由 goo122 实施。')
+    template=template.replace('这里只交付设计，没有修改产品代码或部署云端。','此页面展示目标设计与10-09本地 provisional 增量：WSS、防重发和完整报告已有局部代码验证；新版镜像/父集成/真实云端待验收。百分比保留10-08基线，Wiki仍由goo122实施。')
+    template=template.replace('<span>2026-10-08 快照</span>','<span>估算基线 2026-10-08</span><span>2026-10-09 本地增量</span>')
     template=template.replace('<a href="build_design.py">可编辑生成器</a>','<a href="build_design.py">可编辑生成器</a> · <a href="WIKI-MEMORY-HANDOFF.md">Wiki 交接</a>')
     page=template.replace('__PICTURES__',''.join(pictures)).replace('__CARDS__',''.join(cards)).replace('__NAV__',nav).replace('__CONTENT__',content)
     (HERE/'index.html').write_text(page,encoding='utf-8')

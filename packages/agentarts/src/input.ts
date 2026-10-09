@@ -52,9 +52,11 @@ export function parseAgentInput(query: unknown): AgentInput {
 export interface RepairRef {id: string; revision: number}
 export interface RepairTarget {node: RepairRef; summary?: string; requestedSummary?: string; requestedDependencies: RepairRef[]}
 export interface RepairContext {expectedGraphRevision: number; targets: RepairTarget[]; allowedDependencies: RepairRef[]}
+export interface RepairSource {node: RepairRef; kind: 'fact' | 'goal' | 'decision' | 'plan'; summary: string; state: 'active' | 'withdrawn'}
 function ref(value: unknown): RepairRef {
-  const item = record(value); exact(item, ['id', 'revision']); boundedText(item.id, 256);
-  if (!Number.isSafeInteger(item.revision) || (item.revision as number) < 0) invalid();
+  const item = record(value); exact(item, ['id', 'revision']); boundedText(item.id, 128);
+  if (/[\u0000-\u001f\u007f]/.test(item.id as string)
+    || !Number.isSafeInteger(item.revision) || (item.revision as number) < 1) invalid();
   return item as unknown as RepairRef;
 }
 const key = (value: RepairRef): string => JSON.stringify([value.id, value.revision]);
@@ -83,11 +85,13 @@ export function parseRepairContext(value: unknown, initial: boolean): RepairCont
   return {expectedGraphRevision: context.expectedGraphRevision as number, targets, allowedDependencies: allowed};
 }
 
-export function repairInput(input: AgentInput): {context: RepairContext; data: unknown; initial: boolean} | undefined {
+export function repairInput(input: AgentInput): {context: RepairContext; data: unknown; initial: boolean; sources: RepairSource[]} | undefined {
   if (input.kind === 'continuation') {
     const result = input.continuation.result;
     if (!result || typeof result !== 'object' || !Object.hasOwn(result, 'repairContext')) return undefined;
-    return {context: parseRepairContext(record(result).repairContext, false), data: input, initial: false};
+    // A context proves allowed references, not the text or provenance of a fact.
+    // Until a host source projection is present, a complete report must RECHECK.
+    return {context: parseRepairContext(record(result).repairContext, false), data: input, initial: false, sources: []};
   }
   if (!input.goal.startsWith('PersonalAgent 主动决策：')) return undefined;
   if (!input.goal.startsWith(GOAL_PREFIX)) invalid();
@@ -116,11 +120,16 @@ export function repairInput(input: AgentInput): {context: RepairContext; data: u
   for (const target of context.targets) {
     const node = nodes.get(key(target.node));
     if (!node || !['decision','plan'].includes(node.kind as string) || node.state !== 'active'
-      || node.summary !== target.summary) invalid();
+      || node.summary !== target.summary
+      || [...nodes.values()].some(other => other.id === node.id && (other.revision as number) > target.node.revision)) invalid();
   }
   for (const dependency of context.allowedDependencies) {
     const node = nodes.get(key(dependency));
-    if (!node || node.state !== 'active') invalid();
+    if (!node || node.state !== 'active'
+      || [...nodes.values()].some(other => other.id === node.id && (other.revision as number) > dependency.revision)) invalid();
   }
-  return {context, data: payload, initial: true};
+  const sources: RepairSource[] = [...nodes.values()]
+    .map(node => ({node: {id: node.id as string, revision: node.revision as number},
+      kind: node.kind as RepairSource['kind'], summary: node.summary as string, state: node.state as RepairSource['state']}));
+  return {context, data: payload, initial: true, sources};
 }

@@ -2,7 +2,7 @@
 
 ## 2026-10-09 当前交付与目标设计
 
-当前工作包同时提交自有 AgentArts 镜像源码、公开接口与必要接线，完整常驻自主设计和 Wiki 记忆交接。镜像实际为 HTTP `/ping`、`/invocations`；WSS 主通道/HTTPS 备用、Wiki 自动接入和完整常驻监管仍是待实现目标。构建、GHCR 发布、PR 合并与真实华为验收分别记录。
+当前工作包同时提交自有 AgentArts 镜像源码、公开接口与必要接线，完整常驻自主设计和 Wiki 记忆交接。当前分支已有 `/ws`、受保护状态查询、WSS 客户端与显式 HTTPS 备用，并接入本地 Runtime 的审批/工具/证据和未知结果防重发；公网 Upgrade、自动核实恢复、Wiki 自动接入和完整常驻监管仍待完成。详细实现及验证范围见 [接口说明](docs/competition/OWNED_IMAGE_INTERFACES.md)；构建、GHCR 发布、PR 合并与真实华为验收分别记录。
 
 使用入口：[当前设计与状态](docs/CURRENT_DESIGN_CONTEXT.md)、[镜像接口](docs/competition/OWNED_IMAGE_INTERFACES.md)、[GHCR 分享](docs/competition/OWNED_IMAGE_SHARING.md)。Wiki 由 goo122 实施；两位协作者必须在自己的电脑阅读当前设计并确认/审批，禁止强制合并或管理员绕过。下文 2026-10-07 的提交和验收记录是历史基线。
 

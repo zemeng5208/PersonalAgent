@@ -5,7 +5,7 @@
 <rect x="0" y="0" width="2800" height="2900" rx="0" fill="#f3f6fa" stroke="none"/>
 <text x="50" y="72" font-size="40" class="strong" text-anchor="start">PersonalAgent · 常驻自主开发者助手：完整模块架构</text>
 <text x="50" y="119" font-size="23" class="muted" text-anchor="start">电脑运行时无人监管：观察变化 → 可信决策 → 局部修复 → 委派执行与监管 → 实际读回</text>
-<text x="50" y="158" font-size="21" class="muted" text-anchor="start">2026-10-09 Wiki 修订 · e86bac53 + 镜像工作包 · proposed 目标设计 · 完成度估算基线 2026-10-08</text>
+<text x="50" y="158" font-size="21" class="muted" text-anchor="start">2026-10-09 Wiki / WSS / 完整报告增量 · provisional 本地实现 · 完成度估算基线仍为 2026-10-08</text>
 <rect x="40" y="190" width="1780" height="2230" rx="14" fill="#fff" stroke="#d5dfe8"/>
 <rect x="1870" y="190" width="890" height="2230" rx="14" fill="#fff" stroke="#d5dfe8"/>
 <text x="60" y="237" font-size="29" class="strong" text-anchor="start">本地电脑：可信宿主 + Runtime + 受限工具</text>
@@ -340,7 +340,8 @@
 <text x="1926" y="399" font-size="18" class="muted" text-anchor="start">zemeng</text>
 <text x="1926" y="424" font-size="17" class="muted" text-anchor="start">packages/agentarts；apps/agentarts-runtime</text>
 </g>
-<text x="1910" y="493" font-size="21" class="muted" text-anchor="start">输入校验、部署/身份、容器协议；公开 WSS 路径和新版本部署仍需实测。</text>
+<text x="1910" y="493" font-size="21" class="muted" text-anchor="start">容器 /ws 本地 provisional；restartRecovery=false，公开网关与新版镜像待验</text>
+<text x="1910" y="520" font-size="21" class="muted" text-anchor="start">收。</text>
 <rect x="1890" y="890" width="850" height="270" rx="14" fill="#edf3f8" stroke="#d5dfe8"/>
 <g data-module="MOD-04A">
 <rect x="1910" y="908" width="810" height="176" rx="14" fill="#fff" stroke="#276caa"/>
@@ -389,20 +390,20 @@
 <text x="2337" y="734" font-size="17" class="muted" text-anchor="start">AgentArts 角色编排；Runtime Subagent Hos</text>
 <text x="2337" y="755" font-size="17" class="muted" text-anchor="start">t 消费</text>
 </g>
-<text x="1910" y="803" font-size="21" class="muted" text-anchor="start">规划/复杂判断/多角色提案 → 本地校验 → 执行 → 工具结果继续轮次。</text>
+<text x="1910" y="803" font-size="21" class="muted" text-anchor="start">完整World/Plan→Review→候选；缺来源RECHECK；工具仍由本地执行。</text>
 <path d="M1820,692 L1870,692" fill="none" stroke="#52687d" stroke-width="3" marker-end="url(#arrow)" marker-start="url(#arrow)" />
 <rect x="1410" y="830" width="1320" height="50" rx="14" fill="#e0effa" stroke="#78a9cf"/>
 <text x="1430" y="863" font-size="24" class="strong" text-anchor="start">WSS 主通道 ⇄ HTTPS 备用 · 同部署/同任务/同去重 · 可见降级</text>
 <rect x="1890" y="1820" width="850" height="270" rx="14" fill="#fff4e6" stroke="#d6aa6c"/>
 <text x="1910" y="1858" font-size="25" class="strong" text-anchor="start">横向新增目标：尚未通过真实目标验收</text>
-<text x="1910" y="1906" font-size="22" class="" text-anchor="start">WSS 实际链路 + HTTPS 备用切换与协调</text>
+<text x="1910" y="1906" font-size="22" class="" text-anchor="start">WSS 公开网关 + 结果未知/重启协调消费</text>
 <text x="1910" y="1950" font-size="22" class="" text-anchor="start">持久无人监管授权 + 完整委派/监管闭环</text>
 <text x="1910" y="1994" font-size="22" class="" text-anchor="start">Laya 领域校准 + 任意命令强沙箱</text>
-<text x="1910" y="2038" font-size="22" class="" text-anchor="start">真实云镜像 Golden Path + 旧工作流语义迁移</text>
+<text x="1910" y="2038" font-size="22" class="" text-anchor="start">新版云镜像 Golden Path + 迁移缺口验收</text>
 <rect x="1890" y="2130" width="850" height="270" rx="14" fill="#edf3f8" stroke="#d5dfe8"/>
-<text x="1910" y="2170" font-size="26" class="strong" text-anchor="start">部署链：构建 → SWR → AgentArts → 验收</text>
-<text x="1910" y="2210" font-size="22" class="muted" text-anchor="start">ARM64 / 8080；容器 /ws 可选与 POST /invocations。公开地址、代理 Upgra</text>
-<text x="1910" y="2243" font-size="22" class="muted" text-anchor="start">de、认证、连接寿命需真实验证。</text>
+<text x="1910" y="2170" font-size="26" class="strong" text-anchor="start">构建 → GHCR 协作 → AgentArts 部署 → 验收</text>
+<text x="1910" y="2210" font-size="22" class="muted" text-anchor="start">ARM64 / 8080；/ws 与 POST /invocations。华为拉取按平台配置，必要时 SW</text>
+<text x="1910" y="2243" font-size="22" class="muted" text-anchor="start">R；公开 Upgrade 与身份仍需实测。</text>
 <text x="1910" y="2321" font-size="22" class="muted" text-anchor="start">不打包用户数据/密钥；固定 tag + digest；新部署失败显式暂停或回滚。</text>
 <rect x="40" y="2460" width="2720" height="160" rx="14" fill="#fff" stroke="#d5dfe8"/>
 <text x="60" y="2501" font-size="28" class="strong" text-anchor="start">贯穿设计：权限、信任、隐私、状态恢复与证据</text>

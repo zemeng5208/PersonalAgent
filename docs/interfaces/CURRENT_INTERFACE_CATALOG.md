@@ -2,9 +2,9 @@
 
 ## 2026-10-09 自有镜像与 Wiki 状态补充
 
-自有镜像公开 HTTP `/ping`、`/invocations` 和 fast/world/plan/review 编排，复用 ModelGateway、Coordination 动态工具目录/继续轮次/修复候选；精确接口见 `../competition/OWNED_IMAGE_INTERFACES.md`。本地完整 check 与合成容器证据不能提升真实云状态，保持 provisional/真实 AgentArts unavailable。
+自有镜像实现 HTTP `/ping`、`/invocations`、WS `/ws` 和受保护 `/invocation-status`，复用 ModelGateway、Coordination 动态工具目录/继续轮次/修复候选；精确接口见 [镜像接口](../competition/OWNED_IMAGE_INTERFACES.md)。传输0.1.0为独立provisional契约，不扩展本地wire冻结集合。本地check与合成容器证据不能提升真实云状态，真实AgentArts仍unavailable。
 
-WSS 主通道、HTTPS 自动备用/恢复信封和 Wiki 自动同步均是目标设计，不能只凭图或 Schema 公布 capability。Wiki 来源适配/Memory 投影由 goo122 在 MOD-08/09 发布，复用既有公开端口；真实 Wiki/云端出机与端到端失效传播另验收。
+WSS主通道、显式HTTPS备用、同会话复用、发送前持久身份与未知防重发已在本分支接线；公开网关路径、真实调用及自动status恢复消费者尚未验收/交付，不能公布生产capability。Wiki自动同步仍是设计：来源适配/Memory投影由goo122在MOD-08/09发布，复用既有公开端口；真实Wiki/云端出机与端到端失效传播另验收。
 
 知识受控写入和固定 MCP/Skills已有受限增量，以当前公开源码/README为准；本文较旧历史矩阵不能抹去这些增量，也不能据存在代码冻结整个模块。合并确认是开发规则，不成为产品运行时授权或接口冻结证据。
 

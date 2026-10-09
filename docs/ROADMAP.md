@@ -2,7 +2,7 @@
 
 ## 2026-10-09 当前工作包与合并规则
 
-自有镜像工作包 `codex/agentarts-owned-image`：提交 `packages/agentarts`、`apps/agentarts-runtime`、Coordination 必要接线及接口/构建/测试/脱敏清单。完整常驻设计及 Wiki 接入交接同步；Wiki 自动接入由 goo122 后续实现。WSS、备用切换、领域校准与真实 AgentArts Golden Path 尚未完成，不提高整体 MOD 状态。
+自有镜像工作包 `codex/agentarts-owned-image`：提交编排/HTTP/WS服务、传输契约、Coordination/Runtime/Desktop接线及接口/构建/测试/脱敏清单。WSS和显式HTTPS备用已有本分支实现与合成连接验证，发送前持久身份阻止未知自动重发；自动status协调、公开网关、领域校准和真实AgentArts Golden Path仍未完成，不提高整体MOD状态。完整常驻设计及Wiki交接同步；Wiki由goo122后续实现。旧8工作流/3控制器逐项见[迁移矩阵](modules/AGENTARTS-OWNED-IMAGE-PARITY.md)。
 
 已在该工作树执行完整 `npm run check` 并成功；新增阅读门槛6项测试成功。容器重建、GHCR 发布、Actions 工件与 PR 状态另保存实际证据，不把发布时间或已推送当 done。
 

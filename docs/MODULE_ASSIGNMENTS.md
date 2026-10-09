@@ -111,6 +111,8 @@ zemeng 必须优先交付 MOD-29/30/32 的 Competition Golden Path，并让模�
 为同一包修改根构建/锁文件及 Coordination 期限/续接接线，并提供消费验证；不覆盖 goo122 的协议/本地授权所有权。
 实际隔离工作树、接口影响与验收缺口见 [迁移工作包](modules/AGENTARTS-OWNED-IMAGE-MIGRATION.md)。
 
+2026-10-09同包WSS增量：zemeng在此隔离分支负责云HTTP/WS宿主及必要的Coordination、Runtime Application、Desktop消费接线；独立传输0.1.0契约由本包提供生成类型、兼容说明和消费验证，长期contracts/Runtime维护责任仍归goo122。Wiki接入仍由goo122负责，业务连接器仍由Potatos498独立交付。本次子智能体分工只用于开发，不进入产品授权或执行链；未合并/未真实云验收不能提高MOD整体状态。
+
 ## 5. Potatos498：业务连接器与当前工作顺序
 
 | ID | 模块 / 需求 | 主要维护目录 | 依赖 | 独立交付与验收 |

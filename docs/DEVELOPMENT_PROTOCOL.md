@@ -2,7 +2,7 @@
 
 ## 2026-10-09 双通道与 Wiki 契约增量
 
-WSS 主通道和 HTTPS 备用是同一 CloudAgentPort 的目标适配，不改变既有 TaskRuntime/wire 权限语义。当前已提交镜像 HTTP 接口详见 `competition/OWNED_IMAGE_INTERFACES.md`；新握手、游标、恢复和幂等信封仍 proposed，未经接口发布不能私设 DTO 或宣称 frozen。
+WSS 主通道和 HTTPS 备用是同一 CloudAgentPort 的适配，不改变既有 TaskRuntime/wire 权限语义。当前分支独立 `agentarts-transport` 0.1.0 已实现握手、调用身份/摘要、受理/终态和进程内状态查询，仍为 provisional；接口详见 `competition/OWNED_IMAGE_INTERFACES.md`。公开网关、持久云回执、自动核实恢复与游标续传未验收，不能私设 DTO 或宣称 frozen。
 
 Wiki 复用 KnowledgePort、MemoryQueryPort 和 FactChangeFeed；新增页面身份、source/config revision、引用失效、写后投影和去重契约由 goo122 发布。原始内容权限、索引权限和出机权限分开；断线/未知写入不盲重试，任务终态归 Runtime。
 

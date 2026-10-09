@@ -3,7 +3,9 @@
 ## 2026-10-09 当前目录增量
 
 - `packages/agentarts/`：公开契约消费与自有 fast/world/plan/review 编排，不包含本地工具宿主或任务库。
-- `apps/agentarts-runtime/`：HTTP 8080 部署入口、可信 Provider 配置、ARM64 Dockerfile 与裁剪镜像上下文；WSS 仍待实现。
+- `apps/agentarts-runtime/`：8080 HTTP/WS 部署入口、独立传输校验、受保护状态查询、可信 Provider 配置、ARM64/AMD64 Dockerfile 与裁剪镜像上下文；公网 WSS 另验收。
+- `packages/contracts/agentarts-transport`：独立 provisional 0.1.0 Schema/生成类型/严格帧解析；既有本地 wire 1.0.0 保持兼容。
+- `packages/coordination/src/agentarts-websocket.ts`：可信宿主会话连接、逐次凭据读取、发送边界核验与有限 HTTPS 备用；持久任务/核实状态仍归 Runtime。
 - `docs/design/resident-developer-agent-20261008/`：完整方案、四张 SVG、离线阅读、模块估算和 Wiki 交接，可编辑生成器一并保留。
 - `scripts/review/`：本机打开/声明、内容清单及两人 review 校验；不是产品 Policy 或运行时依赖。
 - `scripts/docs/`：文档导航同步生成器，保留历史事实。

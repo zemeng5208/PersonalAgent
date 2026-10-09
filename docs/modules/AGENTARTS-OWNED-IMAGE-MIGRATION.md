@@ -8,6 +8,16 @@
 分支 `codex/agentarts-owned-image`，基线 `origin/main@e86bac53`。
 本包涉及 MOD-29/30/31 的云编排与既有 Coordination 消费接线。
 
+## 2026-10-09 WSS实施增量（当前分支）
+
+新增同容器`/ws`与受保护`/invocation-status`，独立传输0.1.0公开Schema/生成类型，WS与HTTP共享并发限制。Coordination复用会话连接、逐次重读凭据；Runtime在发送前持久身份/摘要，未知等待核实并阻止重启重发；Desktop受信环境装配WSS与显式HTTPS备用，状态可见。备用只允许证明invoke未发送的连接失败，同一profile/目的地且不回退Local/Fake。接口与上线配置见[精确说明](../competition/OWNED_IMAGE_INTERFACES.md)、[ADR-0014](../adr/0014-agentarts-wss-transport.md)。
+
+owned-1.1完整World/Plan报告已实现严格源版本、互斥分类、依赖及Review一致性检查；现有candidate1.0无法执行的删除/新增步骤/工具动作明确拒绝，缺连续事实前后版本返回RECHECK。旧资产逐项对应与仍未等价职责见[迁移矩阵](AGENTARTS-OWNED-IMAGE-PARITY.md)，下文10-08静态缺口保留历史含义。
+
+本地真实TLS回环10场景通过（显式Fake模型），服务21/21、客户端/Runtime与旧回归187/187及独立契约6/6通过；后续显式地址配置与相邻Desktop测试34/34，WS客户端18/18。完整根`npm run check`本轮退出0，末尾集成24/24；完整工具TLS联测与后续错误分类/重启窗口修复分别记录。新版ARM64本机构建产物21/21与生产入口合成TLS9次请求通过；GHCR新版本和真实华为运行时仍需各自证据，原HTTP预览不能代表新WSS镜像已发布。
+
+云控制台2026-10-09读回三个原运行时保留；贵阳一区SWR原无自有镜像/组织，已创建`zemeng5208-personal-agent`用于新ARM64包导入，未扩大委托权限。托管表单当前限时免费，默认委托`DefaultAgentArtsRuntimeAgency`、入网`defaultgw`、8080端口，环境/鉴权和公开WS路径仍需以新部署实际读回。自动status协调消费者未交付，unknown不自动恢复。
+
 ## 实现与兼容
 
 - `packages/agentarts`：自有 fast/world/plan/review 编排、严格输入和模型输出校验、目录约束工具提案、原期限/取消、无内容角色回执。
@@ -93,7 +103,7 @@ main 远端已设置两次审批、最新推送后的批准、过期审批作废
 
 发布采用仓库 Actions 的临时 `packages: write` 令牌；用户的现有 GitHub 登录没有包写入 scope，不复制个人凭据。源码、接口和文档已提交 [PR #317](https://github.com/zemeng5208/PersonalAgent/pull/317)，GHCR 固定 source commit 镜像已发布并匿名拉取验证，ARM64/AMD64 离线包已导出。实际 tag、digest、Actions、预发布附件及校验和见 [发布记录](../competition/OWNED_IMAGE_RELEASE_20261009.md)。新增本机容器两架构各 16/16 与生产 TLS 9 次回环模型请求通过；预览不等于真实华为验收。
 
-当前实际接口仍为 HTTP；WSS 主通道/HTTPS 备用、Wiki 接入和完整常驻自主能力是详细设计，Wiki 具体实施归 goo122。真实华为 deployment/模型/trace/评估仍待验收。
+本节记录前一HTTP预览镜像的发布；当前分支WSS实施增量见本文开头，不能沿用旧摘要证明新版已发布。Wiki接入和完整常驻自主能力仍待交付，Wiki具体实施归goo122。真实华为deployment/模型/trace/评估仍待验收。
 
 ## 续跑入口与回滚
 

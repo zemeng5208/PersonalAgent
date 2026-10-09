@@ -29,7 +29,9 @@ try {
   const orchestrator = new OwnedAgentOrchestrator(models,integer('PA_AGENT_MAX_OUTPUT_TOKENS',2048),
     receipt => process.stdout.write(JSON.stringify(receipt)+'\n'));
   const authToken = process.env.PA_AGENT_INBOUND_TOKEN;
+  const wssAuthToken = process.env.PA_AGENT_WSS_AUTH_TOKEN;
   const server = createAgentServer({orchestrator,mode,...(authToken ? {authToken}:{}),
+    ...(wssAuthToken ? {wssAuthToken}:{}),
     workflowGoalInput:process.env.PA_AGENT_WORKFLOW_GOAL_INPUT,
     timeoutMs:integer('PA_AGENT_TIMEOUT_MS',60_000),maxConcurrency:integer('PA_AGENT_MAX_CONCURRENCY',8)});
   const port = integer('PORT',8080);

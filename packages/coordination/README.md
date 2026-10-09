@@ -8,7 +8,89 @@
 COMPETITION-PORTS-01 provides provisional, in-process `CoordinationPort.execute` and
 `CloudAgentPort.invoke` types. The consuming coordination package owns their shape.
 Runtime injects CoordinationPort; `AgentArtsCloudAgentPort` is the explicit,
-offline-testable HTTP implementation of the CloudAgentPort boundary.
+offline-testable HTTPS implementation with an explicitly configured WSS primary
+transport of the CloudAgentPort boundary.
+
+## 2026-10-09 WSS client increment (provisional)
+
+Trusted Competition composition can set `transport: 'wss'`,
+`websocketUrl: 'wss://<same-gateway>/runtimes/<runtimeName>/ws'`, and optionally
+`allowHttpsFallback: true`. WSS must use the same HTTPS origin and runtime as the
+existing invocation URL; the explicitly supplied URL may use only the exact
+`/runtimes/<runtimeName>/ws` or `/runtimes/<runtimeName>/invocations/ws` path.
+No public address is guessed and no alternative path is automatically probed.
+Credentials and query parameters are never placed in the URL. Omitted
+`transport` preserves the existing HTTPS behavior and configuration binding.
+The public gateway still needs a real Upgrade/authorization/deployment acceptance
+test; local socket tests do not prove that Huawei's public route supports WSS.
+The documented container `/ws` endpoint does not establish a public
+`/runtimes/<runtimeName>/ws` route. A `PREFIX_MATCH` ordinary-request mapping for
+`/runtimes/<runtimeName>/invocations/ws` does not prove WebSocket Upgrade support.
+Both public path candidates remain provisional pending real deployment evidence.
+
+The standalone provisional protocol is
+`@personal-agent/contracts/agentarts-transport` version `0.1.0`. A negotiated
+ready frame precedes an invoke; an accepted receipt precedes its result. The
+body carries the existing query or configured Workflow input, not Runtime
+methods or task authorization. Session/request/idempotency identity, canonical
+payload digest and the original deadline are validated. The returned events
+still pass the existing strict event/application parser, and outputs remain
+`unverified`. `accepted` and cloud `task_end` do not complete the local task.
+
+The seventh `AgentArtsCloudAgentPort` constructor argument accepts trusted
+WebSocket options: `authorizationProvider`, an optional test `factory`, `onState`,
+and synchronous `onDispatch`/`onTerminal` persistence callbacks. The outer
+AgentArts Authorization remains intact. A separate provider supplies the complete
+`X-PA-Agent-Token: Bearer ...` header for the image; absent that provider, WSS
+requires the outer value itself to be a Bearer header. Both credentials are read
+on every invocation. Reusable sockets are grouped by the hashed local session
+and an in-memory credential fingerprint; a changed credential replaces the
+connection. No original token is retained in the pool or persisted by this
+adapter. The actual socket library retains its handshake headers until release.
+
+After the asynchronous Upgrade and ready handshake, the adapter checks current
+tool availability again, then runs the synchronous continuation/export guard
+immediately before send. It never sends a query during the handshake. Default
+TLS verification remains enabled; redirects, compression and binary application
+frames are disabled. The same final guards run before an allowed HTTPS fallback.
+
+Automatic fallback requires an opt-in and a connection failure before any invoke
+was sent. HTTP 401/403, a rejected Upgrade, incompatible ready/protocol, and any
+post-send disconnection do not trigger a replay. State observations contain only
+`state`, hashed `sessionId`, and an optional `requestId`; `https_fallback` makes
+degradation visible to the trusted host. Observation failures do not change the
+invocation outcome. Cancellation sends a bound best-effort cancel and drops late
+results; this is not proof that remote work has stopped. The original deadline
+and cancellation result still take precedence.
+
+`createAgentArtsRuntimeApplication` exposes the corresponding options:
+`transport`, `websocketUrl`, `allowHttpsFallback`,
+`websocketAuthorizationProvider`, `websocketFactory`, and `onTransportState`.
+It synchronously saves `competition-cloud-inflight` identity/digest before send.
+A strict terminal receipt saves only `competition-cloud-received` correlation metadata;
+it does not clear the intent. Runtime clears it after durably consuming the parsed
+proposal in `competition-loop` or committing the original task's success. Missing
+consumption confirmation keeps the reconciliation hold. A locally classified unknown
+delivery/result enters `waiting_reconciliation` and saves
+`competition-cloud-unknown`. These existing Runtime checkpoints contain no query,
+token, or model text. Both an inflight intent and an unknown receipt prevent
+`resumeTask`/`resumeConfirmedTask` from resending after a restart, including when
+a local tool already has a confirmed receipt. The same protection covers an
+ambiguous attempted HTTPS fallback. No second task database is created.
+
+Call `AgentArtsCloudAgentPort.close()` to release pooled sessions. Runtime factory
+`application.close()` performs this disposal automatically. This increment
+provides reusable transport connections and bounded exchanges; it does not yet
+provide automatic status reconciliation, durable cloud receipt recovery across
+image restart, unsolicited cloud task execution, or the complete resident
+autonomy/supervision system. Cloud errors never select Local or Fake.
+
+Local verification: coordination tests cover reuse, credential replacement,
+post-handshake guards, visible fallback, authentication/protocol rejection,
+unknown delivery, cancellation, deadlines and strict event order. Runtime tests
+cover Competition consumption, checkpoint readback, restart/resume rejection,
+and a confirmed local tool followed by an unknown cloud continuation. These
+synthetic tests do not establish a real AgentArts Golden Path.
 
 Source status checked on 2026-10-07: main `4b5ec61` already contains the HTTP
 adapter, Workflow input, tool-proposal/candidate modes and Runtime consumers.

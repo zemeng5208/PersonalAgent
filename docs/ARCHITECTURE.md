@@ -6,7 +6,7 @@
 
 Wiki 知识正文经 MOD-08 受信适配，MOD-09 维护来源版本绑定的 Memory 投影与 FactChangeFeed；MOD-27/28 只用公开端口消费，变化驱动增量核实。跨正文文件与 SQLite 用可信记录恢复，不承诺天然原子事务。
 
-MOD-04B/29 的目标通信采用 WSS 主、HTTPS 备用，同部署/任务/幂等/授权语义；当前镜像仅实现 HTTP。AgentArts 负责语义编排，本地 Runtime 维护状态/权限/工具/读回/Evidence。Laya 是决策建议端口，强 OS 隔离、领域校准和完整监管尚未验收。
+MOD-04B/29 的通信采用 WSS 主、HTTPS 备用，同部署/任务/幂等/授权语义；当前分支已实现容器 `/ws` 和本地客户端，公网路由与 Upgrade 仍为 provisional，不能用旧 HTTP 预览证明新版已发布。发送意图持久化，未知结果先核实，工具回执不允许云续答盲发；决定见 [ADR-0014](adr/0014-agentarts-wss-transport.md)。AgentArts 负责语义编排，本地 Runtime 维护状态/权限/工具/读回/Evidence。Laya 是决策建议端口，强 OS 隔离、领域校准和完整监管尚未验收。
 
 39 个模块的位置、所有权、估算及缺口以完整设计和 MODULE_ASSIGNMENTS 为依据。图的箭头是目标职责，不允许 packages 反向导入 apps 或绕过 ToolGateway。
 

@@ -2,7 +2,7 @@
 
 首次设计：2026-10-08；修订：2026-10-09。状态：**目标方案／proposed**。目标 Profile：`huawei_ict_agentarts`。设计、模块估算与可编辑架构图不等于实现完成，不改变既有接口冻结状态。现有自有镜像代码/接口与分享流程随当前 PR 提交，真实发布及验收分别记录。
 
-设计修订：2026-10-09。新增 Wiki 记忆接入，由 goo122 具体实现；模块百分比保留 2026-10-08 的估算基线，不因文档新增而提高。另见项目协作规则：当前 PR 必须由 goo122 与 Potatos498 完成本机阅读确认与审批，禁止强制合并或绕过门槛。后续镜像构建/发布单独记录，不属于设计能力的完成证据。
+设计修订：2026-10-09。Wiki 记忆接入仍由 goo122 具体实现；本轮另同步 WSS、Runtime 防重发及完整角色报告的 provisional 本地实现。模块百分比和区间保留 2026-10-08 的估算基线，不因新增代码或文档自动提高。另见项目协作规则：当前 PR 必须由 goo122 与 Potatos498 完成本机阅读确认与审批，禁止强制合并或绕过门槛。新版镜像构建/发布、父集成与真实云验收单独记录。
 
 完成度估算代码基线：`e86bac53`，工作树为项目内 `.worktrees/agentarts-owned-image`，分支 `codex/agentarts-owned-image`。2026-10-08 快照观察了该工作树当时未提交的自有镜像迁移；其他工作树的未合并成果不计入。参考源码、README、接口目录、模块台账和验收记录；当前 PR 的代码/镜像验证另行记录，未获得新的真实云端运行证据。
 
@@ -20,7 +20,7 @@
 
 | 决策 | 目标行为 | 当前事实与限制 |
 | --- | --- | --- |
-| WSS 主通道、HTTPS 备用 | 同一 AgentArts 部署、同一协议语义、同一任务记录；可见降级 | 自有镜像目前是 HTTP 原型；WSS 与自动切换未实现 |
+| WSS 主通道、HTTPS 备用 | 同一 AgentArts 部署、同一协议语义、同一任务记录；可见降级 | 10-09 `/ws`、严格传输信封与WSS客户端已有 provisional 本地实现；仅invoke未发送的连接失败可备用，真实网关及完整恢复待验收 |
 | 本地 Runtime 是执行事实源 | 云端建议不能直接改变任务终态或本机权限 | 保持现有 Runtime/Application 边界 |
 | AgentArts 负责语义编排 | 云端规划、复杂判断、多角色、评估；不静默回退 Local Agent | 云端新镜像真实闭环待验收 |
 | Laya 提高决策可检验性 | 对合法候选做结构化选择、弃权、升级 | 当前实现保留 `calibrated:false`，不保证领域可靠性 |
@@ -29,6 +29,12 @@
 | 常驻复用现有 Runtime | 事件订阅、调度、持久状态统一管理 | 不假设独立 Windows 服务已经存在 |
 | 权限与沙箱独立 | 允许做什么与执行时能接触什么分别限制 | TS 类型、路径检查、超时不构成强 OS 沙箱 |
 | 记忆接入 Wiki | Wiki 承载长期知识正文，Memory 提供来源绑定的事实投影和检索；变化进入增量修复 | MOD-08/09 由 goo122 实现；自动 Wiki 整理/同步当前未交付 |
+
+### 2.1 2026-10-09 实施增量，独立于原估算
+
+本轮补齐了三类局部实现：容器 `/ws` 与传输 `0.1.0`；Coordination 的 WSS 优先与未发送时 HTTPS 备用；Runtime 发送前持久意图和结果未知时阻止重发。World/Plan 改为完整版本化内部报告，保留事实变化、影响、步骤分类与证据需求。它们保持 provisional，不改变既有 frozen 集合。
+
+局部测试已分别通过服务端21项、客户端16项、Runtime防重发3项，以及编排包18项。记录仅覆盖各自合成/Fake路径：父工作包的最终集成、新版镜像构建/发布与真实华为云端尚未完成。此前HTTP预览镜像的发布/容器结果不能证明这些新代码已经进入发布镜像。设计生成与XML校验不代替新的视觉检查或产品验收。
 
 ## 3. 总体架构与每个模块的位置
 
@@ -207,7 +213,7 @@ START → WSS_CONNECTING → WSS_READY
 
 降级策略由用户配置允许，不对每次连接失败再次询问。先停止新传输、确定当前请求是否已受理并核对游标，再切换；重连退避带抖动，避免风暴。恢复后新调用回主通道，已有请求按原协议收尾或协调，不在双通道同时执行同一请求。
 
-HTTPS 的事件恢复能力必须通过协商确认。若平台只提供单轮 POST/SSE，则本地保存继续上下文，以单轮请求推进；缺少独立查询时不能假装有断流续传。后台监管仍由本地调度触发；实时云主动推送在备用通道可能延迟或不可用，UI 显示能力降低。云 Runtime 弹性回收后可重新建立语义上下文，不能依赖其本地磁盘作为唯一记录。
+HTTPS 的事件恢复能力必须通过协商确认。若平台只提供单轮 POST/SSE，则本地保存继续上下文，以单轮请求推进；缺少独立查询时不能假装有断流续传。当前自有HTTP入口返回单次JSON事件数组，不是原生SSE或查询恢复能力。后台监管仍由本地调度触发；实时云主动推送在备用通道可能延迟或不可用，UI 显示能力降低。云 Runtime 弹性回收后可重新建立语义上下文，不能依赖其本地磁盘作为唯一记录。
 
 ### 10.2 同一业务信封（proposed，尚未冻结）
 
@@ -223,11 +229,23 @@ HTTPS 的事件恢复能力必须通过协商确认。若平台只提供单轮 P
 
 消息类别：握手与能力、调用与受理、进度、工具提案、工具结果/继续、取消与停止确认、状态快照/协调、错误、心跳。心跳证明连接活着，不证明任务有进展或执行成功。本文是设计分类，不宣称这些名称已进入现有 Schema。
 
+当前落地子集另外定义于 `packages/contracts/schema/agentarts-transport.json`，版本`0.1.0`，并非把上表全部字段或消息宣告为已实现。它包含ready/invoke/accepted/result/error/status/cancel等严格帧，绑定sessionId、requestId、idempotencyKey、payloadDigest、deadline与serverInstanceId；握手公布invoke/status/cancel/ephemeral-replay及`restartRecovery:false`。不存在持久seq/ack/resumeCursor或服务器重启续传能力。公共候选仍是原有text/tool_proposal/repair_candidate1.0，不因传输改变授权语义。
+
 ### 10.3 可靠交付与认证
 
 客户端只建立向外连接，不要求用户电脑开放公网端口。认证在可信主进程适配平台当前可用的机制，TLS 校验开启，凭据不放 URL、不进 Renderer 或普通日志。云端绑定租户、主体和部署，不能靠用户传入 taskId 越权查询别人的任务。
 
 复用 MOD-01/03 的数据库与执行日志扩展持久发送/接收记录，不能再造第二套任务库。采用至少一次消息投递与业务去重；任意外部副作用无法通用承诺 exactly-once。已确认结果可重放，未知写入先读回或进入协调。备用通道也必须保持这个规则。
+
+### 10.4 当前WSS实现的可靠性边界
+
+受信配置显式选择`transport:wss`、同网关/同runtime的`websocketUrl`及`allowHttpsFallback`，未配置保留旧HTTPS消费兼容。WSS内层宿主Bearer凭据与平台IAM分开，客户端主进程持有，服务器要求独立宿主令牌；未配置不开放`/ws`。TLS证书、公网Upgrade、代理寿命、身份与凭据失效仍需真实部署核实。
+
+只在invoke从未发送的连接失败时自动改走同目标HTTPS。只要尝试过发送，即使没收到accepted，也视为可能受理；断线、超时或结果未知不能重发同一动作或通过备用重新开始。严格status/终结回执需要匹配原身份与摘要，认证/协议错误不能当作可降级网络失败。
+
+容器使用有界、带期限的内存回执，校验同标识不得替换输入与deadline，结束结果只在当前实例/缓存存活期内重放；不是云端第二套任务事实源。实例重启或回执过期后unknown不表示未执行。连接断开会请求取消原调用，但本地取消或关闭连接不证明外部副作用已停止。
+
+Runtime在实际发送前同步持久化`competition-cloud-inflight`身份/摘要意图；匹配终结回执只记录`competition-cloud-received`身份/摘要，不立即清除意图。只有严格解析的提案已持久进入原`competition-loop`，或原任务已由TaskRuntime持久提交succeeded，才能解除防重发标记；收到结果与本地消费之间崩溃仍等待核实。结果未知另外记录`competition-cloud-unknown`并进入waiting_reconciliation，继续或重启遇到未清意图/未知标记会阻止新发送。三个新checkpoint不保存云payload、模型正文或凭据。当前提供的是保守防重发，不是已完成的公开协调UI、服务器持久续传或自动查询恢复消费者；完成核实、原状态恢复与整链重启读回仍需组合验收。
 
 ## 11. 云镜像内部与平台职责
 
@@ -235,9 +253,21 @@ HTTPS 的事件恢复能力必须通过协商确认。若平台只提供单轮 P
 
 云镜像不包含 Desktop、用户数据库、仓库全量源码、`.env` 或个人导出文件。代码包通过公开导出复用，凭据由运行时安全注入。当前 `personal-agent-owned:20261008` 已有 ARM64 本地构建和受限验证；这不是 SWR 上传、AgentArts 部署或真实模型/工具验收。
 
+2026-10-09 WSS与完整报告增量当前仅在工作树代码中验证。此前GHCR/GitHub发布的HTTP预览仍按其固定source commit/digest记录，新代码必须重新构建并逐项核实，不能沿用旧镜像测试声明新版已发布。
+
 AgentArts 保留真实构建/Agent/Workflow 编排、部署版本与评估职责。迁移旧 8 个工作流和 3 个多 Agent 时需要逐项核对输入输出语义、错误、世界报告、继续轮次、角色与停止行为，不能把名字相同当作迁移完成。导出文件可能含认证元数据，只使用脱敏后的契约与清单。
 
 运行时生命周期由平台决定；官方文档提示弹性回收和本地磁盘临时性。可靠业务记录保留在本地，云端无状态或采用经批准的外部持久服务。当前不新增另一套云端个人任务事实源。[高代码运行时说明](https://support.huaweicloud.com/highcode-agentarts/agentarts_10_029.html)
+
+### 11.1 World/Plan完整职责与公共候选边界
+
+新版提示词`owned-1.1`输出`reportVersion:1.1`的完整内部World/Plan报告。World保留observed_facts、changed_facts、affected_items及KEEP/RECHECK/REVISE，引用宿主提供的精确事实/Goal前后版本和原summary；推断、缺项、陈旧版本或无连续变化不放行修复。direct/transitive是模型影响分析标签，现有投影不含完整旧依赖边，仍须本地图谱预览确认。
+
+Plan分别记录preserved/rechecked/revised/removed步骤、dependency_updates、evidence_required、missing_information和local_next_actions。步骤分类互斥，影响目标不可遗漏；未列出的无关目标默认保留。确定修订映射原repair_candidate1.0的node/summary/reason，依赖固定采用宿主requestedDependencies；Review不能替换或遗漏方案。
+
+保留不产生写入，待复核条件未满足时RECHECK；删除、新节点或后续工具动作没有现有候选表达，明确返回不支持/缺口，不能伪装成摘要变化。证据需求只说明未来可信本地核实要求，不生成Evidence或声称已满足。旧compact报告兼容仅保留原消费，不自动回退提示词；完整版本不能混用。confirmed继续轮次仅有repairContext时缺来源原文与前后版本，完整World必须RECHECK，等待宿主公开来源投影契约。
+
+完整8个Workflow、3个Controller迁移矩阵见`docs/modules/AGENTARTS-OWNED-IMAGE-PARITY.md`。MVP协调器的空绑定不计实现；角色语义迁移不等于平台Controller原生绑定、真实模型、评估或本地工具闭环已经通过。
 
 ## 12. 业务连接器与开发者工作流
 
@@ -298,11 +328,11 @@ MOD-20~26 负责效率、邮件、订阅、通知、研究、天气与可选社�
 
 ## 16. 部署、镜像分享与协作者协作
 
-推荐分享源代码、锁文件、构建说明、契约/接口目录和 SWR 镜像的固定 tag + digest。镜像归档 tar 可以用于离线交付，但单独给镜像不包含源码协作、权限配置、运行参数或验收依据。个人凭据和原始导出文件不作为协作包内容。
+协作者分享使用用户已选择的GitHub/GHCR：源代码、锁文件、构建说明、契约/接口目录和镜像固定tag+digest；GitHub Release的镜像归档tar供离线交付。单独给镜像不包含源码协作、权限配置、运行参数或验收依据。个人凭据和原始导出文件不作为协作包内容。
 
 云发布步骤：确认 ARM64/协议 → 构建受限上下文 → 扫描敏感文件 → 推送 SWR → 确认 AgentArts 拉取权限 → 部署版本 → WSS/HTTPS 实际握手与调用 → 真实工具闭环 → 评估 → 小范围启用 → 记录回滚入口。固定依赖版本，镜像以非 root 运行；更换镜像不自动迁移本地数据库或扩大工具权限。
 
-回滚选择上一可用 deployment/image，客户端协商其 capabilities。协议或数据迁移不兼容时暂停，而不是隐式降级另一产品 profile。保留旧部署直到新版本验收；实施发布需按对应授权进行，本轮只是方案。
+回滚选择上一可用 deployment/image，客户端协商其 capabilities。协议或数据迁移不兼容时暂停，而不是隐式降级另一产品 profile。保留旧部署直到新版本验收；GHCR协作发布不能代替华为云镜像拉取权限、Deployment与真实链路验收，平台要求时另外通过SWR部署。
 
 goo122 负责底座、协议、Policy/网关、模型与知识记忆及 33/36/37；zemeng 负责协调、目标认知、AgentArts、Desktop/Windows/语音与编程工具；Potatos498 独立负责 20~26、34/35/38 的业务接线和验收。实施工作包需有唯一负责人和文件所有权，公共变更说明兼容影响；本设计不自动委派或开新任务。
 
@@ -341,10 +371,10 @@ goo122 负责底座、协议、Policy/网关、模型与知识记忆及 33/36/37
 | 模块 | 负责人 / 位置 | 估算与区间 | 五项得分 | 依据与主要剩余缺口 |
 | --- | --- | --- | --- | --- |
 | MOD-01 工程与存储底座 | goo122<br>packages/storage；根配置 | **85%**；75–95% | 20 / 30 / 20 / 10 / 5 | 依据：packages/storage；docs/ROADMAP.md<br>缺口：常驻长时间运行、升级保留数据和跨重启队列需联合验收。 |
-| MOD-02 公共契约与客户端 | goo122<br>packages/contracts；packages/client；packages/testkit | **75%**；65–85% | 20 / 25 / 20 / 5 / 5 | 依据：packages/contracts；docs/DEVELOPMENT_PROTOCOL.md<br>缺口：WSS/HTTPS 共用信封、能力协商和断线恢复契约未交付；现有冻结子集不能自动扩展。 |
-| MOD-03 任务 Runtime | goo122<br>apps/runtime/src/application；Runtime 核心 | **75%**；60–80% | 20 / 25 / 20 / 5 / 5 | 依据：apps/runtime；docs/ARCHITECTURE.md<br>缺口：持续目标租约、传输切换、未知副作用协调、无人监管恢复需要组合验收。 |
+| MOD-02 公共契约与客户端 | goo122<br>packages/contracts；packages/client；packages/testkit | **75%**；65–85% | 20 / 25 / 20 / 5 / 5 | 依据：packages/contracts/schema/agentarts-transport.json；docs/DEVELOPMENT_PROTOCOL.md<br>缺口：10-09 传输0.1.0严格信封/能力已有 provisional 本地实现；真实网关认证、重启恢复与消费端组合待验收，不能扩展旧 frozen 子集。 |
+| MOD-03 任务 Runtime | goo122<br>apps/runtime/src/application；Runtime 核心 | **75%**；60–80% | 20 / 25 / 20 / 5 / 5 | 依据：apps/runtime/src/application/agentarts.ts；apps/runtime/src/application/coordination.ts；docs/ARCHITECTURE.md<br>缺口：10-09 发送前持久意图/结果未知防重发已有 provisional 本地接线；真实网关和重启恢复消费者、持续租约及无人监管组合待验收。 |
 | MOD-04A 模型网关与 Provider | goo122<br>packages/models；云镜像通过公开导出消费 | **70%**；60–80% | 20 / 25 / 15 / 5 / 5 | 依据：packages/models；docs/modules/MOD-04A-LIVE-RESPONSE-RECOVERY-20261008.md<br>缺口：自有镜像中的真实模型与工具提案闭环未证实；不能把文字 JSON 提案视为原生工具调用。 |
-| MOD-04B 协调与云端口 | zemeng<br>packages/coordination；Runtime CloudAgentPort 消费方 | **55%**；40–70% | 15 / 20 / 15 / 0 / 5 | 依据：packages/coordination/src/agentarts.ts；docs/adr/0012-owned-agentarts-image.md<br>缺口：WSS 主通道、HTTPS 备用和语义一致恢复尚未接线。 |
+| MOD-04B 协调与云端口 | zemeng<br>packages/coordination；Runtime CloudAgentPort 消费方 | **55%**；40–70% | 15 / 20 / 15 / 0 / 5 | 依据：packages/coordination/src/agentarts-websocket.ts；packages/coordination/src/agentarts.ts；docs/adr/0012-owned-agentarts-image.md<br>缺口：10-09 WSS主通道与invoke未发送时HTTPS备用已有 provisional 本地实现；已发送未知结果禁止重发，真实网关/完整恢复消费待验收。 |
 | MOD-05 Policy 与工具网关 | goo122<br>packages/policy；packages/tool-gateway；packages/connector-host | **55%**；40–70% | 20 / 20 / 10 / 0 / 5 | 依据：packages/policy；packages/tool-gateway；docs/interfaces/CURRENT_INTERFACE_CATALOG.md<br>缺口：持久无人值守授权、撤销竞态、跨传输去重与强隔离组合验收不足。 |
 | MOD-06 本地 MCP | goo122<br>packages/mcp；可信宿主的固定 stdio 服务 | **55%**；40–70% | 15 / 20 / 10 / 5 / 5 | 依据：packages/mcp/README.md；docs/modules/MOD-06-07-MVP.md<br>缺口：已有受限只读参考服务；任意服务、写操作及通用恢复不在已证实范围。 |
 | MOD-07 Skills 执行 | goo122<br>packages/skills；固定 reference-summary Bundle | **50%**；35–65% | 15 / 20 / 10 / 0 / 5 | 依据：packages/skills/README.md；docs/modules/MOD-06-07-MVP.md<br>缺口：已有固定受限 Skill；任意脚本/下载运行、完整审批恢复与云端消费未验收。 |
@@ -369,8 +399,8 @@ goo122 负责底座、协议、Policy/网关、模型与知识记忆及 33/36/37
 | MOD-26 可选社交连接器 | Potatos498<br>待选择平台后在 packages/connectors 扩展 | **0%**；0% | 0 / 0 / 0 / 0 / 0 | 依据：docs/MODULE_ASSIGNMENTS.md；docs/ROADMAP.md<br>缺口：未确定平台、未开工；属于可选扩展，不阻塞开发者核心路径。 |
 | MOD-27 目标与世界状态图 | zemeng<br>packages/goals；版本化 Goal/Fact/Decision/Plan | **65%**；50–80% | 20 / 20 / 15 / 5 / 5 | 依据：packages/goals；docs/modules/MOD-27-28-INTEGRATION-HANDOFF.md<br>缺口：CAS/图基础已有；真实源 provenance、监管节点和完整影响传播待完成。 |
 | MOD-28 持续认知与 Laya | zemeng<br>packages/cognition；Laya Action Choice/Repair | **55%**；40–70% | 20 / 20 / 10 / 0 / 5 | 依据：packages/cognition/src/laya-action-choice.ts；docs/modules/MOD-28-LAYA-DECISION-01.md<br>缺口：代码保留 calibrated:false；用户配置、领域校准、真实 AgentArts 修复和监管闭环未完成。 |
-| MOD-29 AgentArts 基础与镜像 | zemeng<br>packages/agentarts；apps/agentarts-runtime | **45%**；30–60% | 15 / 20 / 10 / 0 / 0 | 依据：docs/adr/0012-owned-agentarts-image.md；docs/modules/AGENTARTS-OWNED-IMAGE-MIGRATION.md<br>缺口：自有镜像本地构建/受限验收已有；SWR 部署、公开 WSS 路径与认证需真实验证。 |
-| MOD-30 云工作流与单 Agent | zemeng<br>apps/agentarts-runtime；编排与继续轮次 | **50%**；35–65% | 15 / 20 / 10 / 0 / 5 | 依据：apps/agentarts-runtime；docs/modules/AGENTARTS-OWNED-IMAGE-MIGRATION.md<br>缺口：旧工作流语义迁移、真实模型工具提案、版本化增量修复未完成云验收。 |
+| MOD-29 AgentArts 基础与镜像 | zemeng<br>packages/agentarts；apps/agentarts-runtime | **45%**；30–60% | 15 / 20 / 10 / 0 / 0 | 依据：apps/agentarts-runtime/src/websocket-transport.mjs；docs/adr/0012-owned-agentarts-image.md；docs/modules/AGENTARTS-OWNED-IMAGE-MIGRATION.md<br>缺口：10-09 容器/ws与有界内存回执为 provisional；restartRecovery=false。新版镜像/真实部署、公开WSS路径与认证待验收。 |
+| MOD-30 云工作流与单 Agent | zemeng<br>apps/agentarts-runtime；编排与继续轮次 | **50%**；35–65% | 15 / 20 / 10 / 0 / 5 | 依据：packages/agentarts/src/index.ts；docs/modules/AGENTARTS-OWNED-IMAGE-PARITY.md；docs/modules/AGENTARTS-OWNED-IMAGE-MIGRATION.md<br>缺口：10-09 完整World/Plan内部职责已有受限版本化实现；缺来源RECHECK，删除/新步骤/动作不在既有候选协议；真实模型及云修复闭环待验收。 |
 | MOD-31 多 Agent 与评估 | zemeng<br>AgentArts 角色编排；Runtime Subagent Host 消费 | **35%**；20–50% | 10 / 15 / 5 / 0 / 5 | 依据：apps/runtime/src/application；docs/MODULE_ASSIGNMENTS.md<br>缺口：有委派基础；执行/验证/监管角色完整授权衰减与真实云评估仍缺。 |
 | MOD-32 云 API/Trace/运维 | zemeng<br>AgentArts API；tests/manual/agentarts；云观测 | **30%**；15–45% | 10 / 10 / 5 / 0 / 5 | 依据：tests/manual/agentarts；docs/modules/AGENTARTS-OWNED-IMAGE-MIGRATION.md<br>缺口：新镜像部署版本、真实 Trace/用量、传输降级与回滚尚未完整验收。 |
 | MOD-33 GitHub 能力 | goo122<br>packages/connectors/github | **75%**；65–85% | 20 / 25 / 20 / 5 / 5 | 依据：packages/connectors/github；docs/MODULE_ASSIGNMENTS.md<br>缺口：已有受限真实读取与 Fake；PR/写操作的长期授权和结果核实仍需验收。 |

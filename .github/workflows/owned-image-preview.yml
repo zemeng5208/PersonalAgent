@@ -28,6 +28,8 @@ jobs:
       - run: npm install --global npm@11.12.1
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm run build:owned-agent
+      - name: Verify owned transport and orchestration before publishing
+        run: node --test packages/contracts/test/agentarts-transport.test.mjs packages/agentarts/test/*.test.mjs apps/agentarts-runtime/test/*.test.mjs
       - name: Generate allowlist context
         id: context
         run: |

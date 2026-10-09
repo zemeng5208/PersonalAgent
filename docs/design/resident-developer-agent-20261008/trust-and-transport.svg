@@ -5,7 +5,7 @@
 <rect x="0" y="0" width="2800" height="2040" rx="0" fill="#f3f6fa" stroke="none"/>
 <text x="50" y="72" font-size="40" class="strong" text-anchor="start">信任与连接 · 双通道恢复 · 发布与验收</text>
 <text x="50" y="119" font-size="23" class="muted" text-anchor="start">WSS 是主通道；HTTPS 是同一 AgentArts 的备用；切换传输不增加权限</text>
-<text x="50" y="158" font-size="21" class="muted" text-anchor="start">2026-10-09 Wiki 修订 · e86bac53 + 镜像工作包 · proposed 目标设计 · 完成度估算基线 2026-10-08</text>
+<text x="50" y="158" font-size="21" class="muted" text-anchor="start">2026-10-09 Wiki / WSS / 完整报告增量 · provisional 本地实现 · 完成度估算基线仍为 2026-10-08</text>
 <rect x="40" y="210" width="870" height="580" rx="14" fill="#fff" stroke="#d5dfe8"/>
 <text x="60" y="253" font-size="28" class="strong" text-anchor="start">A. 用户与本地可信边界</text>
 <rect x="940" y="210" width="870" height="580" rx="14" fill="#fff" stroke="#d5dfe8"/>
@@ -37,22 +37,23 @@
 <text x="100" y="1028" font-size="23" class="muted" text-anchor="start">握手/认证/能力协商</text>
 <rect x="660" y="940" width="420" height="140" rx="14" fill="#e7f0f8" stroke="#d5dfe8"/>
 <text x="680" y="982" font-size="26" class="strong" text-anchor="start">WSS_READY</text>
-<text x="680" y="1028" font-size="23" class="muted" text-anchor="start">双向事件与继续轮次</text>
+<text x="680" y="1028" font-size="23" class="muted" text-anchor="start">严格受理/结果与继续轮次</text>
 <rect x="1250" y="940" width="480" height="140" rx="14" fill="#e7f0f8" stroke="#d5dfe8"/>
 <text x="1270" y="982" font-size="26" class="strong" text-anchor="start">RECONCILING</text>
-<text x="1270" y="1028" font-size="23" class="muted" text-anchor="start">已受理？游标？未知副作用？</text>
+<text x="1270" y="1028" font-size="23" class="muted" text-anchor="start">已发送后未知；阻止重复发送</text>
 <rect x="1920" y="940" width="700" height="140" rx="14" fill="#e7f0f8" stroke="#d5dfe8"/>
 <text x="1940" y="982" font-size="26" class="strong" text-anchor="start">HTTPS_READY</text>
-<text x="1940" y="1028" font-size="23" class="muted" text-anchor="start">POST + SSE/查询；显示备用与能力降低</text>
+<text x="1940" y="1028" font-size="23" class="muted" text-anchor="start">同目标 POST；仅未发送连接失败可备用</text>
 <path d="M500,1010 L660,1010" fill="none" stroke="#52687d" stroke-width="3" marker-end="url(#arrow)"  />
 <path d="M1080,1010 L1250,1010" fill="none" stroke="#52687d" stroke-width="3" marker-end="url(#arrow)"  />
 <text x="1096" y="978" font-size="20" class="" text-anchor="start">断线</text>
-<path d="M1730,1010 L1920,1010" fill="none" stroke="#52687d" stroke-width="3" marker-end="url(#arrow)"  />
-<text x="1740" y="978" font-size="20" class="" text-anchor="start">允许降级</text>
+<path d="M290,940 L290,904 L2270,904 L2270,940" fill="none" stroke="#52687d" stroke-width="3" marker-end="url(#arrow)" stroke-dasharray="9 7"/>
+<text x="1320" y="925" font-size="21" class="" text-anchor="start">invoke 从未发送才可自动备用</text>
 <path d="M2270,1080 L2270,1140 L870,1140 L870,1080" fill="none" stroke="#52687d" stroke-width="3" marker-end="url(#arrow)" stroke-dasharray="9 7"/>
-<text x="1120" y="1175" font-size="24" class="" text-anchor="start">后台验证 WSS → 暂停新发送 → 协调 → 恢复主通道</text>
-<text x="80" y="1230" font-size="24" class="muted" text-anchor="start">共同约束：同部署、同 taskId、同 idempotencyKey/payloadDigest、同授权、同 durable checkpoint；切换不能同时执行同一请求。SSE 断流续传能力需要实际协商，没有能力时只支持已核实的单轮继续。</text>
-<text x="80" y="1357" font-size="25" class="strong" text-anchor="start">两通道失败：OFFLINE_WAIT；认证失败：AUTH_REQUIRED；协议不兼容：UNSUPPORTED。</text>
+<text x="1120" y="1175" font-size="24" class="" text-anchor="start">目标恢复：验证 WSS → 暂停新发送 → 核实 → 后续调用回主通道</text>
+<text x="80" y="1230" font-size="24" class="muted" text-anchor="start">本地 provisional：0.1.0严格信封；发送前持久意图，未知结果/重启标记阻止重发。容器仅有界内存回执，restartRecovery=false；status unknown不能解释为未执行。HTTPS当前为单轮JSON事件数组，持久查询/游标恢复消费者待</text>
+<text x="80" y="1266" font-size="24" class="muted" text-anchor="start">验收。</text>
+<text x="80" y="1378" font-size="25" class="strong" text-anchor="start">真实网关、凭据/Upgrade与恢复另验收；认证/协议失败不触发备用，也不切换产品 Profile。</text>
 <rect x="40" y="1460" width="2720" height="520" rx="14" fill="#fff" stroke="#d5dfe8"/>
 <text x="60" y="1505" font-size="29" class="strong" text-anchor="start">发布链与各层验收：本地构建成功不能替代云端 Golden Path</text>
 <rect x="70" y="1550" width="510" height="155" rx="14" fill="#eef4fa" stroke="#d5dfe8"/>
@@ -60,8 +61,8 @@
 <text x="88" y="1635" font-size="23" class="muted" text-anchor="start">ARM64 / 锁依赖 / 非 root</text>
 <path d="M580,1625 L610,1625" fill="none" stroke="#52687d" stroke-width="3" marker-end="url(#arrow)"  />
 <rect x="610" y="1550" width="510" height="155" rx="14" fill="#eef4fa" stroke="#d5dfe8"/>
-<text x="628" y="1592" font-size="27" class="strong" text-anchor="start">SWR 与拉取</text>
-<text x="628" y="1635" font-size="23" class="muted" text-anchor="start">固定 tag + digest / 权限</text>
+<text x="628" y="1592" font-size="27" class="strong" text-anchor="start">GHCR 协作 / 拉取</text>
+<text x="628" y="1635" font-size="23" class="muted" text-anchor="start">固定digest；云端按平台配置</text>
 <path d="M1120,1625 L1150,1625" fill="none" stroke="#52687d" stroke-width="3" marker-end="url(#arrow)"  />
 <rect x="1150" y="1550" width="510" height="155" rx="14" fill="#eef4fa" stroke="#d5dfe8"/>
 <text x="1168" y="1592" font-size="27" class="strong" text-anchor="start">AgentArts 部署</text>
