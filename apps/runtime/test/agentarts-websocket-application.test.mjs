@@ -287,6 +287,34 @@ test('post-send disconnect enters waiting_reconciliation and persists only corre
   } finally { reopened.app.close(); await rm(directory, {recursive: true, force: true}); }
 });
 
+test('cancelling after WSS dispatch keeps the unresolved invocation in reconciliation', async () => {
+  const h = factory(':memory:', (frame, socket) => {
+    if (frame.type === 'invoke') socket.accepted(frame);
+  });
+  try {
+    const client = new Client(h.app); await client.connect();
+    const {taskId} = await client.call('task.submit', {goal: 'Synthetic cancelled invocation', conversationId: 'wss'},
+      {idempotencyKey: 'wss-runtime-cancel-unknown'});
+    for (let i = 0; i < 200 && !h.sockets[0]?.sent.some(frame => frame.type === 'invoke'); i++) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(h.sockets[0]?.sent.some(frame => frame.type === 'invoke'), true);
+    await client.call('task.cancel', {taskId, reason: 'Synthetic cancellation'});
+    const task = await waitState(h.app, taskId, ['waiting_reconciliation', 'cancelled', 'failed']);
+    assert.equal(task.state, 'waiting_reconciliation'); assert.equal(task.error.code, 'RESULT_UNKNOWN');
+    const inflight = h.app.runtime.loadCheckpoint(taskId, 'competition-cloud-inflight');
+    const unknown = h.app.runtime.loadCheckpoint(taskId, 'competition-cloud-unknown');
+    assert.equal(unknown.requestId, inflight.requestId); assert.equal(unknown.payloadDigest, inflight.payloadDigest);
+    assert.equal(inflight.accepted, true); assert.equal(unknown.accepted, true);
+    assert.equal(h.sockets[0].sent.filter(frame => frame.type === 'invoke').length, 1);
+    assert.equal(h.sockets[0].sent.filter(frame => frame.type === 'cancel').length, 1);
+    assert.throws(() => h.app.resumeTask(taskId), {code: 'RESULT_UNKNOWN'});
+    assert.equal(h.fetches.length, 0);
+    for (let i = 0; i < 200 && h.app.activeTaskCount; i++) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(h.app.activeTaskCount, 0);
+  } finally { h.app.close(); }
+});
+
 test('a confirmed local tool receipt cannot resend an unknown cloud continuation, including an interrupted-send intent', async t => {
   for (const inputHooks of [false, true]) await t.test(`inputHooks=${inputHooks}`, async () => {
   let executions = 0, invocations = 0;

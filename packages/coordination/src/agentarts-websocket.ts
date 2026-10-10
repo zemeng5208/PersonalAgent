@@ -73,6 +73,7 @@ interface Pending {
   accepted: boolean;
   resolve(response: AgentArtsResponse): void;
   reject(error: unknown): void;
+  afterAccepted(receipt: AgentArtsUnknownReceipt): void;
   afterTerminal(receipt: AgentArtsUnknownReceipt): void;
   cleanup(): void;
 }
@@ -95,6 +96,8 @@ export interface AgentArtsSendGuards {
   beforeCatalog?(): Promise<void>;
   /** No await separates this guard from the invoke frame or HTTPS fetch. */
   beforeSend(receipt?: AgentArtsUnknownReceipt): void;
+  /** Persist the server admission before a later cancellation can lose that fact. */
+  afterAccepted?(receipt: AgentArtsUnknownReceipt): void;
   /** Transport receipt only; the Runtime must durably consume the application result before clearing intent. */
   afterTerminal?(receipt: AgentArtsUnknownReceipt): void;
 }
@@ -222,6 +225,7 @@ export class AgentArtsWebSocketTransport {
         if (frame.type === 'accepted') {
           if (!pending.sent || pending.accepted || frame.deadline !== pending.deadline) throw failProtocol();
           pending.accepted = true;
+          pending.afterAccepted({...pending.receipt, accepted: true});
           return;
         }
         if (frame.type === 'result') {
@@ -292,6 +296,7 @@ export class AgentArtsWebSocketTransport {
           reject(new ProtocolError('CANCELLED', 'AgentArts request cancelled'));
         };
         const pending: Pending = {receipt, deadline, sent: false, accepted: false, resolve, reject,
+          afterAccepted: receipt => guards.afterAccepted?.(receipt),
           afterTerminal: receipt => guards.afterTerminal?.(receipt),
           cleanup: () => init.signal.removeEventListener('abort', abort)};
         if (selected.pending.has(requestId)) { reject(failProtocol()); return; }

@@ -48,6 +48,8 @@ export interface AgentArtsWebSocketOptions {
   onState?: (state: AgentArtsTransportState) => void;
   /** Trusted local persistence, synchronously committed before send. Never a remote claim. */
   onDispatch?: (request: CoordinationRequest, receipt: AgentArtsUnknownReceipt) => void;
+  /** Persist the server's acceptance before a later cancellation can lose that fact. */
+  onAccepted?: (request: CoordinationRequest, receipt: AgentArtsUnknownReceipt) => void;
   /** Delivery receipt only; Runtime consumption must be durable before a send intent can clear. */
   onTerminal?: (request: CoordinationRequest, receipt: AgentArtsUnknownReceipt) => void;
 }
@@ -994,6 +996,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
   private readonly websocketAuthorizationProvider: AgentArtsAuthorizationProvider | undefined;
   private readonly allowHttpsFallback: boolean;
   private readonly onWebSocketDispatch: AgentArtsWebSocketOptions['onDispatch'];
+  private readonly onWebSocketAccepted: AgentArtsWebSocketOptions['onAccepted'];
   private readonly onWebSocketTerminal: AgentArtsWebSocketOptions['onTerminal'];
   private closed = false;
 
@@ -1031,7 +1034,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
     if (websocketOptions?.onState !== undefined && typeof websocketOptions.onState !== 'function') {
       invalid('AgentArts WebSocket observer is invalid');
     }
-    for (const callback of [websocketOptions?.onDispatch, websocketOptions?.onTerminal]) {
+    for (const callback of [websocketOptions?.onDispatch, websocketOptions?.onAccepted, websocketOptions?.onTerminal]) {
       if (callback !== undefined && typeof callback !== 'function') invalid('AgentArts WebSocket persistence callback is invalid');
     }
     this.gatewayOrigin = validated.gatewayOrigin;
@@ -1049,6 +1052,7 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
     this.allowHttpsFallback = validated.allowHttpsFallback;
     this.websocketAuthorizationProvider = websocketOptions?.authorizationProvider;
     this.onWebSocketDispatch = websocketOptions?.onDispatch;
+    this.onWebSocketAccepted = websocketOptions?.onAccepted;
     this.onWebSocketTerminal = websocketOptions?.onTerminal;
     this.websocket = validated.websocketUrl === undefined ? undefined
       : new AgentArtsWebSocketTransport(validated.websocketUrl, websocketOptions?.factory, websocketOptions?.onState);
@@ -1184,6 +1188,13 @@ export class AgentArtsCloudAgentPort implements CloudAgentPort {
         }
       }
       stage = 'transport';
+      },
+      afterAccepted: receipt => {
+        const accepted: unknown = this.onWebSocketAccepted?.(sendRequest, receipt);
+        if (accepted !== undefined) {
+          void Promise.resolve(accepted).catch(() => undefined);
+          throw new ProtocolError('EXTERNAL_FAILURE', 'AgentArts acceptance receipt must be persisted synchronously');
+        }
       },
       afterTerminal: receipt => {
         const terminal: unknown = this.onWebSocketTerminal?.(sendRequest, receipt);

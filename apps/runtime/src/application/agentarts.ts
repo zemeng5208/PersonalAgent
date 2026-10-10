@@ -10,7 +10,7 @@ import {
 } from '@personal-agent/coordination';
 import {ProtocolError} from '@personal-agent/contracts';
 import {createHash} from 'node:crypto';
-import {recordCompetitionCloudReceipt} from './coordination.js';
+import {recordCompetitionCloudAcceptance, recordCompetitionCloudReceipt} from './coordination.js';
 import {
   createRuntimeApplication,
   type RuntimeApplication,
@@ -110,6 +110,9 @@ export function createAgentArtsRuntimeApplication(
         onDispatch: (request, receipt) => {
           application.runtime.saveCheckpoint(request.taskId, 'competition-cloud-inflight', receipt);
           application.runtime.saveCheckpoint(request.taskId, 'competition-cloud-received', null);
+        },
+        onAccepted: (request, receipt) => {
+          recordCompetitionCloudAcceptance(application.runtime, request.taskId, receipt);
         },
         onTerminal: (request, receipt) => {
           recordCompetitionCloudReceipt(application.runtime, request.taskId, receipt);

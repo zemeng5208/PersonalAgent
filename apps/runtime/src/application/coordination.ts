@@ -15,6 +15,22 @@ function sameCloudInvocation(left: AgentArtsUnknownReceipt | undefined | null,
     && left.idempotencyKey === right.idempotencyKey && left.payloadDigest === right.payloadDigest;
 }
 
+function markCompetitionCloudUnknown(runtime: TaskRuntime, taskId: string,
+  receipt?: AgentArtsUnknownReceipt): boolean {
+  const inflight = runtime.loadCheckpoint(taskId, 'competition-cloud-inflight') as AgentArtsUnknownReceipt | undefined;
+  if (!inflight) return false;
+  const received = runtime.loadCheckpoint(taskId, 'competition-cloud-received') as AgentArtsUnknownReceipt | undefined;
+  const unknown = receipt ?? (sameCloudInvocation(inflight, received) ? received : inflight);
+  if (!sameCloudInvocation(inflight, unknown)) return false;
+  runtime.saveCheckpoint(taskId, 'competition-cloud-unknown', {...unknown});
+  const state = runtime.getTask(taskId).state;
+  if (state === 'running' || state === 'cancelling') {
+    runtime.transitionTask(taskId, 'waiting_reconciliation', {error: {code: 'RESULT_UNKNOWN',
+      message: 'Cloud invocation delivery or result is unknown; reconcile before sending again', retryable: false}});
+  }
+  return true;
+}
+
 /** A transport receipt is not proof that the application consumed its result. */
 export function recordCompetitionCloudReceipt(runtime: TaskRuntime, taskId: string,
   receipt: AgentArtsUnknownReceipt): void {
@@ -25,6 +41,16 @@ export function recordCompetitionCloudReceipt(runtime: TaskRuntime, taskId: stri
   // Correlation metadata only. Inflight survives application parsing, host hooks
   // and the crash window before the Runtime-owned result/checkpoint commit.
   runtime.saveCheckpoint(taskId, 'competition-cloud-received', {...receipt});
+}
+
+/** Persist the server admission so cancellation preserves the strongest known receipt. */
+export function recordCompetitionCloudAcceptance(runtime: TaskRuntime, taskId: string,
+  receipt: AgentArtsUnknownReceipt): void {
+  const inflight = runtime.loadCheckpoint(taskId, 'competition-cloud-inflight') as AgentArtsUnknownReceipt | undefined | null;
+  if (receipt.accepted !== true || !sameCloudInvocation(inflight, receipt)) {
+    throw new ProtocolError('RESULT_UNKNOWN', 'Cloud acceptance is not bound to the original send intent');
+  }
+  runtime.saveCheckpoint(taskId, 'competition-cloud-inflight', {...receipt});
 }
 
 /** Call only after the corresponding parsed loop state or task success is durable. */
@@ -165,7 +191,9 @@ async function exchange(
   }
   let onAbort: () => void = () => {};
   const cancelled = new Promise<never>((_resolve, reject) => {
-    onAbort = () => reject(new ProtocolError('CANCELLED', 'Coordination request cancelled'));
+    onAbort = () => reject(markCompetitionCloudUnknown(runtime, taskId)
+      ? new ProtocolError('RESULT_UNKNOWN', 'Original cloud invocation requires reconciliation')
+      : new ProtocolError('CANCELLED', 'Coordination request cancelled'));
     context.signal.addEventListener('abort', onAbort, {once: true});
     if (context.signal.aborted) onAbort();
   });
@@ -192,11 +220,7 @@ async function exchange(
           if (error instanceof AgentArtsResultUnknownError) {
             // Identity/digest only: never persist a cloud payload, credential or
             // model response. The same loop cannot automatically resend it.
-            runtime.saveCheckpoint(taskId, 'competition-cloud-unknown', error.receipt);
-            if (runtime.getTask(taskId).state === 'running') {
-              runtime.transitionTask(taskId, 'waiting_reconciliation', {error: {code: 'RESULT_UNKNOWN',
-                message: 'Cloud invocation delivery or result is unknown; reconcile before sending again', retryable: false}});
-            }
+            markCompetitionCloudUnknown(runtime, taskId, error.receipt);
             throw new ProtocolError('RESULT_UNKNOWN', 'Original cloud invocation requires reconciliation');
           }
           // Adapter errors may contain credentials or private response bodies.
