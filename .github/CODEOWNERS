@@ -1,0 +1,3 @@
+# Both reviewers are mandatory in project policy and the version-bound check.
+# GitHub CODEOWNERS alone only requires one owner; it is not the two-person gate.
+* @goo122 @Potatos498
