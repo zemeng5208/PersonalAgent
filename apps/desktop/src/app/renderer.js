@@ -1,6 +1,6 @@
 import {conversationTimeline} from '../features/conversation/timeline.js';
 import {Orb} from '../features/orb/orb.js';
-import {orbState,stateNames,isTerminal,currentTask} from '../features/conversation/state.js';
+import {stateNames,isTerminal,currentTask,visualOrbState} from '../features/conversation/state.js';
 import {mountAdmin} from '../features/admin/view.js';
 import {mountWorkspace} from '../features/workspace/view.js';
 import {applyPreferences} from '../ui/preferences.js';
@@ -42,7 +42,7 @@ if(mode==='orb') {
   button.addEventListener('pointerup',finish);button.addEventListener('pointercancel',()=>{if(drag)invoke('orb.dragEnd');start=null;drag=false;});
   button.addEventListener('lostpointercapture',()=>{if(drag)invoke('orb.dragEnd');start=null;drag=false;});
   button.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();invoke('orb.open');}});
-  render=data=>{const task=currentTask(data.tasks);orb.setLevel(data.audioLevel??0);orb.setState(data.orbStateOverride??orbState(task));button.setAttribute('aria-label',`PersonalAgent · ${stateNames[task?.state]??'待机'}`);};
+  render=data=>{const task=currentTask(data.tasks);orb.setLevel(data.audioLevel??0);orb.setState(visualOrbState(data));button.setAttribute('aria-label',`PersonalAgent · ${stateNames[task?.state]??'待机'}`);};
 } else if(mode==='admin') render=mountAdmin(root,invoke,escape);
 else if(mode==='workspace') render=mountWorkspace(root,invoke,escape);
 else {

@@ -11,3 +11,14 @@ export const isTerminal = task => ['succeeded','failed','cancelled'].includes(ta
 export function currentTask(tasks) {
   return tasks.findLast(task => !isTerminal(task)) ?? tasks.at(-1);
 }
+const LIVE_VOICE = new Set(['listening', 'speaking', 'connecting', 'reconnecting']);
+/** Task motion wins over Live. Live speech follows the microphone and playback level. */
+export function visualOrbState(data) {
+  const tasks = Array.isArray(data?.tasks) ? data.tasks : [];
+  const base = data?.orbStateOverride ?? orbState(currentTask(tasks));
+  if (base === 'thinking' || base === 'executing' || base === 'error') return base;
+  const live = data?.live;
+  if (live?.active && live.status === 'working') return 'executing';
+  if (live?.active && LIVE_VOICE.has(live.status)) return 'listening';
+  return base;
+}
