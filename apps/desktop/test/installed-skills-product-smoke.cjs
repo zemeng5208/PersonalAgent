@@ -5,8 +5,10 @@ const {_electron}=require('playwright');
 (async()=>{
   const cache=path.resolve(__dirname,'../../../.cache/installed-skills-product');fs.mkdirSync(cache,{recursive:true});
   const fixture=fs.mkdtempSync(path.join(cache,'case-')),userData=path.join(fixture,'user-data');
-  const source=path.resolve(__dirname,'../../../examples/skills/meeting-outline');
-  const original=fs.readFileSync(path.join(source,'SKILL.md'),'utf8');
+  const example=path.resolve(__dirname,'../../../examples/skills/meeting-outline');
+  const original=fs.readFileSync(path.join(example,'SKILL.md'),'utf8'),source=path.join(fixture,'meeting-outline');
+  fs.mkdirSync(path.join(source,'references'),{recursive:true});fs.writeFileSync(path.join(source,'SKILL.md'),original);
+  fs.writeFileSync(path.join(source,'references/guide.md'),'<img src=x onerror="window.resourceExecuted=true">\n公开指南');
   const environment=Object.fromEntries(['SystemRoot','WINDIR','TEMP','TMP','USERPROFILE','HOMEDRIVE','HOMEPATH','APPDATA','LOCALAPPDATA','PATH','COMSPEC'].filter(key=>process.env[key]).map(key=>[key,process.env[key]]));
   Object.assign(environment,{PA_RUNTIME_PROFILE:'huawei_ict_agentarts',PA_USER_DATA_DIR:userData});
   const executablePath=process.env.PA_SKILL_SMOKE_ELECTRON || path.resolve(__dirname,'../../../node_modules/electron/dist/electron.exe');
@@ -35,11 +37,18 @@ const {_electron}=require('playwright');
     await admin.locator('[data-skill="install"]').click();await admin.waitForSelector('[data-skill="preview"]');
     await admin.locator('[data-skill="preview"]').click();
     await admin.waitForFunction(()=>document.querySelector('[data-skill-preview]').textContent.includes('会议目标'));
+    assert.ok(await admin.locator('[data-skill-goal]').evaluate(element=>element.getBoundingClientRect().width>300),'actual task field is usable');
+    await admin.locator('[data-skill="resource"]').click();
+    await admin.waitForFunction(()=>document.querySelector('[data-skill-preview]').textContent.includes('公开指南'));
+    assert.equal(await admin.locator('[data-skill-preview] img').count(),0);
+    assert.equal(await admin.evaluate(()=>window.resourceExecuted===true),false);
     await admin.locator('[data-skill="enable"]').click();
     await admin.waitForFunction(()=>document.querySelector('[data-skill="enable"]').textContent==='停用');
     assert.equal(await admin.locator('[data-skill="run"]').isDisabled(),true);
     const saved=JSON.parse(fs.readFileSync(path.join(userData,'installed-skills.json'),'utf8'));
     assert.equal(saved.entries.length,1);assert.equal(saved.entries[0].enabled,true);
+    const deniedResource=await orb.evaluate(selected=>window.desktop.invoke('skill.resource',{...selected,path:'references/guide.md'}),
+      {name:saved.entries[0].name,digest:saved.entries[0].digest});assert.equal(deniedResource.ok,false);
     const rejected=await admin.evaluate(selected=>window.desktop.invoke('skill.run',{...selected,goal:'Public offline probe'}),
       {name:saved.entries[0].name,digest:saved.entries[0].digest});
     assert.equal(rejected.ok,false,'unconfigured Runtime cannot dispatch a Skill');
@@ -52,6 +61,7 @@ const {_electron}=require('playwright');
     await instance.admin.waitForFunction(()=>document.querySelector('[data-skill-list]').textContent.includes('尚未安装'));
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(userData,'installed-skills.json'),'utf8')).entries,[]);
     assert.equal(fs.readFileSync(path.join(source,'SKILL.md'),'utf8'),original);
+    assert.equal(fs.readFileSync(path.join(example,'SKILL.md'),'utf8'),original);
     console.log(JSON.stringify({state:'passed',main:'actual product',preload:'actual IPC',renderer:'actual admin',
       nativeDialogs:'explicit synthetic',runtimeConfigured:false,cloudCalls:0,sourceUnchanged:true,restart:true}));
   } finally {await instance?.app.close();}

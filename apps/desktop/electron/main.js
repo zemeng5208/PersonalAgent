@@ -2520,6 +2520,7 @@ async function action(event, name, payload) {
     if(sender!==admin || !competitionMode || !installedSkillsHost) throw Error('Skill 安装仅在正式管理后台可用');
     if(name==='skill.install') return installedSkillsHost.install();
     if(name==='skill.preview') return installedSkillsHost.preview(payload);
+    if(name==='skill.resource') return installedSkillsHost.previewResource(payload);
     if(name==='skill.enable') return installedSkillsHost.setEnabled(payload);
     if(name==='skill.uninstall') return installedSkillsHost.uninstall(payload);
     throw Error('不支持的 Skill 操作');

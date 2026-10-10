@@ -14,6 +14,8 @@ function fixture() {
   const root=mkdtempSync(path.join(cache,'case-')),source=path.join(root,'meeting-outline');mkdirSync(source);
   writeFileSync(path.join(source,'SKILL.md'),'---\nname: meeting-outline\ndescription: Public fixture outline\n---\nUse three bullet points.\n');
   mkdirSync(path.join(source,'scripts'));writeFileSync(path.join(source,'scripts','never-run.js'),'throw Error("MUST NOT RUN");');
+  mkdirSync(path.join(source,'references'));writeFileSync(path.join(source,'references','guide.md'),'<img src=x onerror=alert(1)>\nPublic UTF-8 指南');
+  writeFileSync(path.join(source,'binary.bin'),Buffer.from([0xff,0x00]));writeFileSync(path.join(source,'control.txt'),'\u0000text');writeFileSync(path.join(source,'large.txt'),'x'.repeat(65537));
   const store=openLocalSkillStore(path.join(root,'installed.json')),candidate=readLocalSkillDirectory(source);
   const confirmations=[],requests=[];let host,confirmAllowed=true,credentialRead=()=>{},fetchReply;
   const app=createAgentArtsRuntimeApplication({path:path.join(root,'runtime.sqlite'),
@@ -50,6 +52,13 @@ test('install, preview, enable and use reach original SQLite Runtime/HTTP adapte
   assert.equal(f.host.snapshot().items[0].enabled,false);
   await assert.rejects(f.host.prepareRun({...selected,goal:'public'}));assert.equal(f.requests.length,0);
   assert.match(f.host.preview(selected).instructions,/three bullet points/);assert.equal(f.requests.length,0);
+  assert.match(f.host.previewResource({...selected,path:'scripts/never-run.js'}).text,/MUST NOT RUN/);
+  const resource=f.host.previewResource({...selected,path:'references/guide.md'});
+  assert.match(resource.text,/Public UTF-8 指南/);assert.match(resource.digest,/^[a-f0-9]{64}$/);
+  writeFileSync(path.join(f.source,'references','guide.md'),'changed original');
+  assert.equal(f.host.previewResource({...selected,path:resource.path}).text,resource.text);
+  for(const path of ['../SKILL.md',f.source,'binary.bin','control.txt','large.txt']) assert.throws(()=>f.host.previewResource({...selected,path}));
+  assert.throws(()=>f.host.previewResource({...selected,path:resource.path,extra:true}));assert.equal(f.requests.length,0);
   await f.host.setEnabled({...selected,enabled:true});f.confirm(false);
   assert.deepEqual(await f.host.prepareRun({...selected,goal:'public'}),{cancelled:true});assert.equal(f.requests.length,0);
   f.confirm(true);const taskId=await run(f),task=await settle(f.app,taskId);
@@ -57,6 +66,7 @@ test('install, preview, enable and use reach original SQLite Runtime/HTTP adapte
   assert.equal(f.requests.length,1);const transmitted=f.requests[0].query;
   assert.match(transmitted,/Use three bullet points/);assert.equal(transmitted.includes(f.source),false);
   assert.equal(transmitted.includes('MUST NOT RUN'),false);assert.equal(f.app.runtime.readToolExecutions(taskId).length,0);
+  assert.equal(transmitted.includes('Public UTF-8 指南'),false);
   assert.equal(f.app.runtime.loadCheckpoint(taskId,'desktop-installed-skill-v1').digest,f.candidate.digest);
   const historyProbe=f.app.runtime.submitTask({goal:'Next public goal',conversationId:'desktop-workspace',idempotencyKey:'history-probe'});
   const context=f.app.readConversationContext({taskId:historyProbe.taskId,conversationId:'desktop-workspace',
@@ -69,6 +79,7 @@ test('install, preview, enable and use reach original SQLite Runtime/HTTP adapte
   const runConsent=f.confirmations.find(item=>item.action==='run');assert.match(runConsent.detail,/Use three bullet points/);
   const reopened=f.make();assert.throws(()=>reopened.assertTask(taskId));reopened.close();
   await f.host.uninstall(selected);assert.deepEqual(f.store.list(),[]);assert.equal(f.requests.length,1);
+  assert.throws(()=>f.host.previewResource({...selected,path:resource.path}));
 });
 for(const action of ['disable','uninstall']) test(`${action} during asynchronous credential lookup prevents adapter dispatch and invalidates old task after reinstall/re-enable`,async t=>{
   const f=fixture();t.after(()=>{f.host.close();f.app.close();});await f.host.install();

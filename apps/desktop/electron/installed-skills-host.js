@@ -53,6 +53,16 @@ export function createInstalledSkillsHost({store,selectDirectory,confirm,runtime
     preview(input) {const selected=ref(input),entry=store.read(selected.name,selected.digest);
       return {name:entry.name,version:entry.version,digest:entry.digest,instructions:localSkillInstructions(entry),
         resources:entry.files.map(file=>file.path)};},
+    previewResource(input) {
+      const selected=ref(input),entry=store.read(selected.name,selected.digest);
+      if(Object.keys(input).some(key=>!['name','digest','path'].includes(key)) || typeof input.path!=='string') throw Error('请选择安装快照中的资源');
+      const file=entry.files.find(file=>file.path===input.path);
+      if(!file)throw Error('安装资源不存在');
+      const bytes=Buffer.from(file.content,'base64');if(bytes.length>65536)throw Error('仅预览最多 64 KiB 的普通 UTF-8 文本');let text;
+      try {text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);} catch {throw Error('资源不是 UTF-8 文本');}
+      if(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(text)) throw Error('仅预览最多 64 KiB 的普通 UTF-8 文本');
+      return {path:file.path,digest:file.digest,text};
+    },
     async setEnabled(input) {return mutate(async()=>{
       const selected=ref(input);
       if(Object.keys(input).some(key=>!['name','digest','enabled'].includes(key)) || typeof input.enabled!=='boolean') throw Error('Skill 启停参数无效');

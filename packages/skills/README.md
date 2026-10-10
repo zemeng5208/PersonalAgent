@@ -12,7 +12,7 @@
 
 Desktop “插件 → 本机 Skills”提供安装、查看、启停、使用、卸载。通用 Skill 使用完整 SKILL.md 作为不可信任务参考，接入既有 Competition 任务；不是将 Markdown 转为任意可执行脚本。用户每次原生确认发送完整说明与本次任务后才可出机，工具仍受已有注册、Policy 和 ToolGateway 限制。allowed-tools 不授权；scripts/references/assets 保存为安装快照，但本轮只发送 SKILL.md，不自动加载资源或执行脚本。依赖这些资源/脚本的 Skill 不能据此宣称完整可执行。
 
-说明预览纯本地，无云请求。实际使用需要已配置 AgentArts；本轮仅显式合成 HTTP、原生确认回调及真实 Runtime/SQLite 验证，云验收继续暂缓。详见 [安装使用说明与验收](../../docs/modules/MOD-07-LOCAL-INSTALLATION-20261009.md)、[ADR-0008](../../docs/adr/0008-local-skill-installation.md)。
+说明及安装资源预览纯本地，无云请求。资源只从精确版本的安装快照读取，最多 64 KiB 普通 UTF-8 文本；二进制、控制字符、越界路径和卸载版本拒绝，脚本仅作文字展示。实际使用需要已配置 AgentArts；本轮仅显式合成 HTTP、原生确认回调及真实 Runtime/SQLite 验证，云验收继续暂缓。详见 [安装使用说明与验收](../../docs/modules/MOD-07-LOCAL-INSTALLATION-20261009.md)、[ADR-0008](../../docs/adr/0008-local-skill-installation.md)。
 
 ## 公开入口
 

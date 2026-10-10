@@ -19,6 +19,7 @@ const {_electron}=require('playwright');
       if(action==='skill.install'){window.value.items=[{...item}];controls.render(window.value,[],true);return {installed:true,enabled:false};}
       if(action==='skill.enable'){window.value.items[0].enabled=input.enabled;controls.render(window.value,[],true);return {enabled:input.enabled};}
       if(action==='skill.preview')return {instructions:'<img src=x onerror="window.xssExecuted=true">',resources:['SKILL.md','scripts/never-run.js']};
+      if(action==='skill.resource')return {path:input.path,digest:'b'.repeat(64),text:'\\x3cscript>window.xssExecuted=true\\x3c/script>'};
       if(action==='skill.run')return new Promise(resolve=>{window.resolveRun=()=>resolve({taskId:'synthetic-renderer-task'});});
       if(action==='skill.uninstall'){window.value.items=[];controls.render(window.value,[],true);return {uninstalled:true};}
       throw Error('Unknown fixture action');
@@ -44,6 +45,9 @@ const {_electron}=require('playwright');
     await page.locator('[data-skill="preview"]').click();
     await page.waitForFunction(()=>document.querySelector('[data-skill-preview]').textContent.includes('<img'));
     assert.equal(await page.locator('[data-skill-preview] img').count(),0);assert.equal(await page.evaluate(()=>window.xssExecuted),false);
+    await page.locator('[data-skill="resource"]').click();
+    await page.waitForFunction(()=>document.querySelector('[data-skill-preview]').textContent.includes('<script>'));
+    assert.equal(await page.locator('[data-skill-preview] script').count(),0);assert.equal(await page.evaluate(()=>window.xssExecuted),false);
     await page.locator('[data-skill="enable"]').click();
     await page.waitForFunction(()=>window.value.items[0].enabled===true);
     await page.locator('[data-skill="run"]').click();await page.waitForFunction(()=>!!window.resolveRun);
@@ -53,6 +57,7 @@ const {_electron}=require('playwright');
     assert.equal(await page.locator('[data-skill-goal]').inputValue(),'Public renderer goal');
     await page.locator('[data-skill="uninstall"]').click();await page.waitForFunction(()=>window.value.items.length===0);
     assert.equal(await page.locator('[data-skill-preview]').textContent(),'');assert.deepEqual(errors,[]);
+    assert.equal(await page.locator('[data-skill-resources]').isVisible(),false);
     console.log(JSON.stringify({state:'passed',renderer:'actual Electron DOM',bridge:'explicit synthetic',nativePicker:false,cloudCalls:0}));
   } finally {await app.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

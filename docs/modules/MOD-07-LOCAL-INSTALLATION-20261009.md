@@ -8,7 +8,7 @@
 
 1. 打开管理后台 **插件 → 本机 Skills → 安装本机 Skill**。在本机选择包含 SKILL.md 的文件夹，不选 SKILL.md 单文件。
 2. 确认名称、版本、文件数量与 SHA；首次安装默认为停用。原 Skill 文件保持不变。
-3. 点击 **查看说明**，全文和资源名显示在本地预览中，没有云请求。
+3. 点击 **查看说明**，自动展开全文和资源名。选择资源后点击 **查看资源**，可以本地预览安装快照中最多 64 KiB 的普通 UTF-8 文本；二进制、控制字符、超限文本及卸载版本明确拒绝。脚本只显示为文字，不执行；两个预览操作均无云请求。
 4. 点击 **启用**，原生确认后允许被用户选择使用；不是工具授权。
 5. 填写 **本次任务**，点击 **使用此 Skill**。AgentArts 未配置或 Runtime 未连接时使用按钮禁用，安装管理仍可使用；已配置时仍会先原生显示本次任务和完整 SKILL.md，确认后才提交原 Competition 任务，可能计费。取消确认不提交任务。
 6. 在 **任务监控/安全** 查看原 Runtime 状态、审批与停止。受理不等于成功，失败不回退 Local/Fake。真实云执行本轮未验收。
@@ -54,3 +54,13 @@ Electron 验证均已通过：
 仓库标准 `npm run test:runtime-application-smoke --workspace=@personal-agent/desktop` 通过：既有 Local Profile 的本机合成 HTTP 服务，7 个模型请求、2 个取消，不是比赛或真实盘古验收；没有新增 Local 实现。日志 `.cache/skill-runtime-application-smoke.log`。`npm run test:smoke --workspace=@personal-agent/desktop` 的显式 Fake 窗口测试在 `electron-smoke.cjs:78` 第二次点击 `#model` 时被 `#model-menu/#model-notice` 遮挡，30 秒超时；该测试及对应 panel 文件与 main 无差异，本工作包保留失败与 `.cache/skill-standard-smoke.log`，未修改断言或顺带修复模型菜单。两个 Skill 专项 Electron 验证不受此失败影响。标准测试通过被忽略的 node_modules/dist 链接复用既有 Electron，未修改共享运行时。
 
 剩余：实际原生目录选择/确认和真实 AgentArts 使用待独立验收，带外部脚本/引用资源的完整执行尚未实现；MCP/Skill 整模块不标 done、不冻结通用接口。用户已于 2026-10-10 授权提交、推送并创建独立 PR；交付状态以 Git/PR 为准，仍需非作者评审与授权集成。
+
+## 2026-10-10 后续进展
+
+- 已提交 `da8bc937` 并创建 [PR #318](https://github.com/zemeng5208/PersonalAgent/pull/318)；该 head 的两个 Foundation 均 SUCCESS，尚无非作者评审，未合并。
+- 已补齐纯本地资源预览、自动展开说明及任务输入框宽度/预览换行，仍保持原 Competition 任务与 Policy 边界；资源不自动进入云任务。增量最终 `npm run check` 退出码 0：2643 项、2618 通过、25 跳过、0 失败，包含 22 项根集成测试；日志 `.cache/skill-resource-check-final.log`。两项 Skill 专项 Electron 验证及宿主 4/4 通过。
+- 实际原生界面：Computer Use 操作独立 Competition userData，打开插件页并打开真实“选择包含 SKILL.md 的 Skill 文件夹”对话框；没有替换 dialog 回调。工具对原生对话框返回 `element ... is not available in cached app state`，坐标/快捷键后焦点仍在搜索框，未完成目录选定和安装确认。因此仅确认入口/对话框可打开，不提升安装/启停/卸载为原生验收通过。
+- 原生实例未生成 installed-skills.json，SQLite 无工具执行与审批，只有启动时 Knowledge Watch Root Task（created）。原始 Skill/Vault 不变，未提交 Skill 使用或开展云验收；测试实例已关闭，诊断与独立数据保留在 `.cache/skill-native-acceptance-20261010/`。
+- MCP 模块本轮 4/4 通过，包括实际官方 filesystem stdio 的工具发现/读取，经原 Gateway/Policy；模型/云服务不参与。仍只支持现有固定只读映射，不能据此宣称任意 MCP 服务或云端消费完成。
+- 资源增量的宿主 4/4、两项 Electron 验证通过；包括原始资源修改不改变快照、二进制/控制字符/超限/越界/多余字段拒绝、卸载失效、HTML 纯文本展示、非管理窗口拒绝、输入框实际宽度与资源不进入任务发送。日志 `.cache/skill-resource-tests-final.log`、`.cache/skill-resource-ui-smoke-final.log`、`.cache/skill-resource-product-smoke.log`。首轮 UI 夹具的闭合 script 提前结束测试页面，已修正夹具编码，原断言保留。
+- 增量完整门禁初跑出现 coding-tools 的 3 项合成目录替换 `EPERM rename`；另换临时目录复跑原 Git 文件又在不同用例失败，单项在当前/旧工作树通过。必要的验证修复仅在 `packages/coding-tools/test/git-tools.test.mjs` 合成 copy→root 替换处对 Windows EPERM 最多等待 950 ms，其它平台/错误和持续失败原样抛出；生产 Git 写入、范围与断言不改。修复后该文件 30/30。最终门禁使用 `.worktrees/.cache/skill-verification-temp-20261010` 和既有 .NET SDK 8，进程环境不修改系统设置；失败及复验日志保留为 `.cache/skill-resource-check.log`、`.cache/skill-resource-git-*.log`。
