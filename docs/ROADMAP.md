@@ -108,8 +108,8 @@
 | MOD-04A | Local Profile 可选模型层 | review | `goo122` / 历史 PR #10、#11、#26 已合并；ModelGateway、Pangu 文本 Provider、JSON 提案适配离线通过；代码保留，但新增 Local 能力不进入当前比赛优先级 |
 | MOD-04B | Competition Coordination；Local Agent 可选 | review | `zemeng` / PR #36、#49、#72（Workflow 输入）、#80（continuation 边界）均已进入 main（2026-09-30 台账核对），离线审批工具循环已验证；真实 AgentArts 调用和多 Agent 结果仍未验收 |
 | MOD-05 | M1/M2 | review | goo122 / PR #7、#26、#49 已合并；任务级 SQLite 授权、参数绑定、审批恢复、工具 Evidence、幂等重放和 Competition 离线工具循环已验证；跨任务持续授权、真实 SecretStore 和真实写入恢复尚未完成 |
-| MOD-06 | M2 | todo | 未启动 |
-| MOD-07 | M2 | todo | 未启动 |
+| MOD-06 | M2 | in_progress | main 已有固定官方 filesystem stdio、受控只读映射与断连生命周期，详见 [MCP/Skill MVP](modules/MOD-06-07-MVP.md)；保持 provisional，不含任意服务/写工具；原生与真实云完整消费仍待验收 |
+| MOD-07 | M2 | in_progress | main 已有固定版本化参考摘要、受控调用及 Runtime/SQLite 审批恢复；本机 SKILL.md 安装/启停/使用/卸载及安装资源本地预览增量进入 [PR #318](https://github.com/zemeng5208/PersonalAgent/pull/318)，详见 [安装使用记录](modules/MOD-07-LOCAL-INSTALLATION-20261009.md)。未集成、原生完整安装及真实云未验收，不标 done，不含任意脚本引擎 |
 | MOD-08 | M2 | in_progress | `goo122` / PR #93～#95、#97、#98 已经非作者评审并合并；只读端口、脱机及 Obsidian 只读适配器、Policy 检索工具和公开演示资料的 Competition Fake 审批链均完成离线验收。真实私人 Vault 授权/验收、生产注册、可安装插件、私人结果出机控制和 LLM Wiki 未完成 |
 | MOD-09 | M1.6/M4 | in_progress | `goo122` 保留在途范围，P7/P8 剩余按当前分工交接；#209/#210、经 #210 集成的 #211、#270/P8 生产桥及 #280 已进入 main，#284 的同步门禁修复及实际 Runtime 父/子副本回归经 #285 评审后进入 main。#289 已合并实际官方 MCP 与 SQLite 审批的学习验证/回滚/重启/删除验收和内部错误码失败持久化修复。#294 撤回后管理及删除恢复已合并到 main@4d15f063。2026-10-07 原生只读检索、取消确认及重启零事实通过；控件刷新修复已完成本地验收，提交及 PR 状态以 Git 为准，Desktop 453 通过/2 跳过，见 [本次记录](modules/MOD-09-NATIVE-READONLY-20261007.md)。真实来源具体摘要确认及持久生命周期、原生写入/管理、完整 parent→child 许可与云消费仍待验收；详见 [收口验收矩阵](modules/MOD-09-PA020-MVP-PRODUCTION.md#2026-10-06-收口验收矩阵2026-10-07-更新)；不能将本地通过记为整个模块 done |
 | MOD-10 | M4 后研究，无交付日期承诺 | todo | 未启动 |

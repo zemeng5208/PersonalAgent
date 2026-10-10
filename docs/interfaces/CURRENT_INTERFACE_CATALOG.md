@@ -198,8 +198,8 @@ Core Runtime Profile 1 **不包含**模型工具调用、工具执行、持续�
 | 语音 | `voice.start` / `voice.stop`、ASR/TTS 流和设备适配 | session/wake/transcript consumer 仍在冲突的堆叠分支，main 无生产提供者；真实供应商、流协议和设备验收未提供 | MOD-14/15 `zemeng` |
 | 知识 | `KnowledgePort`、Obsidian/LLM Wiki | PR #93～#95、#97、#98 已合并：provisional `KnowledgePort`、脱机及 Obsidian 只读适配器、显式 `knowledge.search` ToolGateway/Policy 接线、公开演示资料的 Fake Competition 审批链已完成离线验收。真实 Vault 授权/验收、生产 Runtime 注册、可安装插件、私人结果云端发送控制和 LLM Wiki 仍 unavailable | MOD-08 `goo122` |
 | 记忆 | 生产 `MemoryQueryPort` / `FactChangeFeed` 提供者、确认消费、修正/删除 | PR #89、#90、#91 已合并 provisional 端口、Fake、SQLite 恢复与确认后原子激活投影；DEP02 仅新增可信组合和显式撤回版本，生产 Runtime capability、自动触发、真实来源及撤回证明仍未提供 | MOD-09 `goo122` |
-| MCP | 本地 MCP Host/Client 端口 | 对应 package、注册适配和真实调用未提供 | MOD-06 `goo122` |
-| Skills | 本地 Skill 加载/版本/执行端口 | 对应 package 和闭环未提供 | MOD-07 `goo122` |
+| MCP | 任意/远程服务与写工具 | main 已有 packages/mcp 固定官方只读 stdio 子集，provisional；通用服务配置与写工具未提供 | MOD-06 `goo122` |
+| Skills | 任意脚本引擎及真实云端使用 | main 已有 packages/skills 固定参考摘要；本机 SKILL.md 安装、资源本地预览和 Competition 使用增量在未合并 [PR #318](https://github.com/zemeng5208/PersonalAgent/pull/318)，见 [安装记录](../modules/MOD-07-LOCAL-INSTALLATION-20261009.md)，不冻结；原生完整安装、任意脚本与真实云验收未提供 | MOD-07 `goo122` |
 | 决策 | 目标/事实/决策图谱的生产集成 | main 已有版本图及 SQLite/Fake 原子 `appendBatch`；自动事实投影、真实事实来源与生产消费未完成 | MOD-27 `zemeng`，存储 `goo122` |
 | 认知 | 事件驱动的完整计划修复 | main 已有离线影响分析与显式修复预览/提交，并通过原子 `appendBatch` 写入；事实变化流、自动投影和真实 Evidence 未完成 | MOD-28 `zemeng` |
 | AgentArts | Competition Profile 的真实身份、Agent/Workflow、MaaS/模型、知识、MCP/Skill、工具提案与多 Agent | main 已有 provisional adapter 和离线工具循环；Workflow 输入仍在堆叠分支，没有成功 deployment/API/trace 与真实 MCP/Skill 读回 | MOD-29～31 `zemeng` |
